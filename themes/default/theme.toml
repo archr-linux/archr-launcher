@@ -1,0 +1,23 @@
+# Colors accept #rrggbb or #rrggbbaa (optional alpha).
+# Near-black screen background.
+background = "#14171c"
+# Off-white primary text.
+text = "#eeeef0"
+# Soft accent behind the selected row.
+highlight_bg = "#94b8b0"
+# Dark text on the accent for contrast.
+highlight_text = "#14171c"
+# Dim gray secondary text.
+dim_text = "#89919b"
+# Optional font file relative to this directory; omit for the system default.
+# font = "fonts/menu.ttf"
+# Text size as a fraction of screen height (about 24px at 640x480).
+font_size = 0.05
+# Outer margin as a fraction of screen height (about 19px at 640x480).
+margin = 0.04
+# List width as a fraction of screen width.
+list_width = 0.58
+# Cover rectangle on the right; x/w use screen width, y/h use screen height.
+cover = { x = 0.64, y = 0.20, w = 0.32, h = 0.60 }
+# System selection: list or carousel (rendered as list in v1).
+system_screen = "list"
