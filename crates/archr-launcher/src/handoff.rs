@@ -30,7 +30,8 @@ pub fn launch_command(
     )
 }
 
-fn launch_command_with(
+/// Build the same command with an explicit executable (root-isolated PC runs).
+pub fn launch_command_with(
     bin: &Path,
     rom: &Path,
     system: &str,

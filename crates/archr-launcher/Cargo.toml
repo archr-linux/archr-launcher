@@ -4,6 +4,9 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+archr-config = { path = "../archr-config" }
+archr-ui = { path = "../archr-ui" }
+sdl2 = { version = "0.38", features = ["ttf", "image"] }
 archr-index = { path = "../archr-index" }
 log = "0.4"
 serde = { version = "1", features = ["derive"] }

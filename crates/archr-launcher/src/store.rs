@@ -1,4 +1,8 @@
-use std::{collections::HashSet, io, path::Path};
+use std::{
+    collections::{HashMap, HashSet},
+    io,
+    path::Path,
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -13,6 +17,8 @@ const MAX_RECENT: usize = 30;
 pub struct Store {
     favorites: Vec<String>,
     recent: Vec<String>,
+    imported_systems: Vec<String>,
+    imported_times: HashMap<String, u64>,
 }
 
 impl Store {
@@ -57,9 +63,41 @@ impl Store {
     }
 
     pub fn push_recent(&mut self, key: &str) {
+        self.imported_times.remove(key);
         self.recent.retain(|recent| recent != key);
         self.recent.insert(0, key.to_owned());
         self.recent.truncate(MAX_RECENT);
+    }
+
+    /// Import ES metadata once per system, only after its games are loaded.
+    /// Launcher history stays ahead of imported entries; ES entries retain UTC order.
+    pub fn import_games(&mut self, system: &str, games: &[archr_index::Game]) -> bool {
+        if self.imported_systems.iter().any(|name| name == system) {
+            return false;
+        }
+        self.imported_systems.push(system.to_owned());
+        for game in games {
+            let Some(path) = game.path.to_str() else {
+                continue;
+            };
+            let key = format!("{system}/{path}");
+            if game.favorite && !self.is_favorite(&key) {
+                self.favorites.push(key.clone());
+            }
+            if let Some(time) = game.last_played {
+                if !self.recent.contains(&key) {
+                    self.recent.push(key.clone());
+                    self.imported_times.insert(key, time);
+                }
+            }
+        }
+        self.recent.sort_by_key(|key| {
+            std::cmp::Reverse(self.imported_times.get(key).copied().unwrap_or(u64::MAX))
+        });
+        self.recent.truncate(MAX_RECENT);
+        self.imported_times
+            .retain(|key, _| self.recent.contains(key));
+        true
     }
 
     pub fn is_favorite(&self, key: &str) -> bool {

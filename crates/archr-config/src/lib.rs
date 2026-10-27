@@ -32,6 +32,13 @@ impl SystemCfg {
             .map(String::from)
     }
 
+    /// Game then system scope only, for keys whose fallback is es_systems.cfg.
+    pub fn get_local(&self, system: &str, rom: Option<&str>, key: &str) -> Option<String> {
+        rom.and_then(|name| self.entry(&rom_key(system, name, key)))
+            .or_else(|| self.entry(&format!("{system}.{key}")))
+            .map(String::from)
+    }
+
     /// Re-read under the shared shell lock and atomically replace one entry.
     ///
     /// A live lock holder is retried for up to ten seconds. Dead PID locks are
