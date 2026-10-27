@@ -332,6 +332,54 @@ fn unknown_keys_are_ignored() {
 }
 
 #[test]
+fn oversized_theme_returns_builtin() {
+    let mut source = String::from("margin = 0.2\n#");
+    source.push_str(&" ".repeat(64 * 1024 - source.len()));
+    assert_eq!(load(&source).margin, 0.2);
+    source.push(' ');
+    assert_eq!(load(&source), Theme::builtin());
+}
+
+#[cfg(unix)]
+#[test]
+fn font_symlinks_cannot_escape_theme_dir() {
+    use std::os::unix::fs::symlink;
+
+    let root = TempDir::new().unwrap();
+    let theme_dir = root.path().join("night");
+    let outside = root.path().join("night-external");
+    fs::create_dir(&outside).unwrap();
+    fs::write(outside.join("menu.ttf"), b"external font").unwrap();
+    write_theme(&theme_dir, "font = 'linked.ttf'\nmargin = 0.2");
+    symlink(outside.join("menu.ttf"), theme_dir.join("linked.ttf")).unwrap();
+    symlink(&outside, theme_dir.join("linked-dir")).unwrap();
+    for font in ["linked.ttf", "linked-dir/menu.ttf"] {
+        write_theme(&theme_dir, &format!("font = '{font}'\nmargin = 0.2"));
+        let theme = Theme::load(&theme_dir);
+        assert_eq!(theme.font, None, "{font}");
+        assert_eq!(theme.margin, 0.2);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn font_symlinks_within_theme_and_symlinked_theme_dir_are_allowed() {
+    use std::os::unix::fs::symlink;
+
+    let root = TempDir::new().unwrap();
+    let theme_dir = root.path().join("night");
+    write_theme(&theme_dir, "font = 'linked.ttf'");
+    fs::write(theme_dir.join("menu.ttf"), b"local font").unwrap();
+    symlink("menu.ttf", theme_dir.join("linked.ttf")).unwrap();
+    let alias = root.path().join("alias");
+    symlink(&theme_dir, &alias).unwrap();
+    assert_eq!(
+        Theme::load(&alias).font,
+        Some(fs::canonicalize(theme_dir.join("menu.ttf")).unwrap())
+    );
+}
+
+#[test]
 fn syntax_errors_and_invalid_utf8_return_builtin() {
     assert_eq!(load("margin = 0.2\ntext = ["), Theme::builtin());
     let dir = TempDir::new().unwrap();
@@ -363,6 +411,9 @@ fn warnings_report_invalid_fields_and_one_syntax_error() {
     });
     WARNINGS.with(|warnings| warnings.borrow_mut().clear());
     load("margin = 0.2\ntext = [");
+    WARNINGS.with(|warnings| assert_eq!(warnings.borrow().len(), 1));
+    WARNINGS.with(|warnings| warnings.borrow_mut().clear());
+    load(&format!("margin = 0.2\n#{}", " ".repeat(64 * 1024)));
     WARNINGS.with(|warnings| assert_eq!(warnings.borrow().len(), 1));
     WARNINGS.with(|warnings| warnings.borrow_mut().clear());
     load("background = 'bad'\nfont_size = 'bad'\nmargin = nan\nlist_width = 2.0\ncover = {}\nsystem_screen = 'bad'\nfont = '../bad.ttf'");

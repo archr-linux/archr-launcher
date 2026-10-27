@@ -1,9 +1,12 @@
 use serde::{de::DeserializeOwned, Deserialize};
 use std::{
     fs,
+    io::{self, Read},
     path::{Component, Path, PathBuf},
     sync::OnceLock,
 };
+
+const MAX_THEME_BYTES: u64 = 64 * 1024;
 
 /// Renderer-independent color, with straight (unpremultiplied) alpha.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -83,11 +86,12 @@ impl Theme {
     }
 
     /// Load `dir/theme.toml`, inheriting missing or invalid fields individually.
-    /// Syntax or I/O errors return the entire builtin theme with one warning.
+    /// Syntax, I/O, oversized, or non-regular-file errors return the entire
+    /// builtin theme with one warning.
     pub fn load(dir: &Path) -> Self {
         let mut theme = Self::builtin();
         let path = dir.join("theme.toml");
-        let source = match fs::read_to_string(&path) {
+        let source = match read_theme(&path) {
             Ok(source) => source,
             Err(error) => {
                 log::warn!(
@@ -140,6 +144,27 @@ impl Theme {
         theme.font = raw.font.and_then(|font| resolve_font(dir, &font));
         theme
     }
+}
+
+fn read_theme(path: &Path) -> io::Result<String> {
+    let file = fs::File::open(path)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() || metadata.len() > MAX_THEME_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "theme must be a regular file of at most 64 KiB",
+        ));
+    }
+    // The file can grow after metadata was read; bound the actual read too.
+    let mut source = String::new();
+    file.take(MAX_THEME_BYTES + 1).read_to_string(&mut source)?;
+    if source.len() as u64 > MAX_THEME_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "theme exceeds 64 KiB",
+        ));
+    }
+    Ok(source)
 }
 
 /// User themes take precedence as a whole; fields inherit from the builtin,
@@ -271,11 +296,20 @@ fn resolve_font(dir: &Path, value: &str) -> Option<PathBuf> {
         log::warn!("Invalid theme font path {value:?}; using system default");
         return None;
     }
-    match dir.join(path).canonicalize() {
-        Ok(resolved) if resolved.is_file() => Some(resolved),
+    let canonical_dir = match dir.canonicalize() {
+        Ok(dir) => dir,
+        Err(error) => {
+            log::warn!("Cannot resolve theme font directory: {error}; using system default");
+            return None;
+        }
+    };
+    match canonical_dir.join(path).canonicalize() {
+        Ok(resolved) if resolved.starts_with(&canonical_dir) && resolved.is_file() => {
+            Some(resolved)
+        }
         result => {
             log::warn!(
-                "Theme font {value:?} is not an accessible file ({result:?}); using system default"
+                "Theme font {value:?} is outside the theme directory or not an accessible file ({result:?}); using system default"
             );
             None
         }
