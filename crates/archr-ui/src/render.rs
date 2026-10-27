@@ -1,123 +1,53 @@
-//! SDL window, fractional layout and a bounded rendered-text texture cache.
+//! Grafite presentation at 640×480, scaled by height, with event-driven idle.
 use crate::{
+    motion::Tween,
+    primitives::{self, Shadow},
     state::{App, DataSource, QuickItem, Screen},
+    status::Status,
+    text::{color, Align, Face, Style, TextCache},
     theme::{Rect01, Rgba, Theme},
 };
 use sdl2::{
     image::{InitFlag, Sdl2ImageContext},
-    pixels::Color,
     rect::Rect,
-    render::{Canvas, Texture, TextureCreator},
-    ttf::{Font, Sdl2TtfContext},
+    render::{BlendMode, Canvas, Texture, TextureCreator},
+    ttf::Sdl2TtfContext,
     video::{Window, WindowContext},
 };
 use std::{
-    collections::VecDeque,
     path::{Path, PathBuf},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-struct TextCache<'font, 'texture> {
-    font: Font<'font, 'static>,
-    creator: &'texture TextureCreator<WindowContext>,
-    entries: VecDeque<(String, Rgba, Texture<'texture>)>,
+struct ListMotion {
+    key: String,
+    scroll: Tween,
+    pill: Tween,
 }
-impl TextCache<'_, '_> {
-    fn draw(
-        &mut self,
-        canvas: &mut Canvas<Window>,
-        text: &str,
-        color: Rgba,
-        x: i32,
-        y: i32,
-    ) -> Result<(), String> {
-        let text = display_text(text);
-        if text.is_empty() {
-            return Ok(());
+impl ListMotion {
+    fn new() -> Self {
+        Self {
+            key: String::new(),
+            scroll: Tween::new(0., Duration::from_millis(90)),
+            pill: Tween::new(0., Duration::from_millis(90)),
         }
-        let index = self
-            .entries
-            .iter()
-            .position(|(key, rgba, _)| key == &text && *rgba == color);
-        let entry = match index {
-            Some(index) => self.entries.remove(index).expect("located cache entry"),
-            None => {
-                let limit = canvas
-                    .info()
-                    .max_texture_width
-                    .min(canvas.output_size()?.0)
-                    .max(1);
-                let display = self.fit(&text, limit)?;
-                if display.is_empty() {
-                    return Ok(());
-                }
-                let surface = self
-                    .font
-                    .render(&display)
-                    .blended(sdl_color(color))
-                    .map_err(|error| error.to_string())?;
-                let texture = self
-                    .creator
-                    .create_texture_from_surface(surface)
-                    .map_err(|error| error.to_string())?;
-                (text, color, texture)
-            }
-        };
-        let size = entry.2.query();
-        canvas.copy(&entry.2, None, Rect::new(x, y, size.width, size.height))?;
-        self.entries.push_back(entry);
-        while self.entries.len() > 128 {
-            self.entries.pop_front();
-        }
-        Ok(())
-    }
-    fn fit(&self, text: &str, limit: u32) -> Result<String, String> {
-        let mut display = text.to_owned();
-        while !display.is_empty()
-            && self
-                .font
-                .size_of(&display)
-                .map_err(|error| error.to_string())?
-                .0
-                > limit
-        {
-            display.pop();
-        }
-        Ok(display)
-    }
-    fn centered(
-        &mut self,
-        canvas: &mut Canvas<Window>,
-        text: &str,
-        color: Rgba,
-        panel: Rect,
-    ) -> Result<(), String> {
-        let limit = panel
-            .width()
-            .saturating_sub(16)
-            .min(canvas.info().max_texture_width);
-        let text = self.fit(&display_text(text), limit)?;
-        if text.is_empty() {
-            return Ok(());
-        }
-        let (width, height) = self
-            .font
-            .size_of(&text)
-            .map_err(|error| error.to_string())?;
-        self.draw(
-            canvas,
-            &text,
-            color,
-            panel.x() + (panel.width() - width) as i32 / 2,
-            panel.y() + (panel.height() as i32 - height as i32) / 2,
-        )
     }
 }
-
 pub struct Ui<'font, 'texture> {
     pub sdl: sdl2::Sdl,
     pub canvas: Canvas<Window>,
     _image: Sdl2ImageContext,
     text: Option<TextCache<'font, 'texture>>,
+    shadow: Option<Shadow<'texture>>,
+    status: Option<Status>,
+    list: ListMotion,
+    menu_pill: Tween,
+    menu_open: bool,
+    cover_key: Option<PathBuf>,
+    cover_visible: bool,
+    cover_fade: Tween,
+    animating: bool,
+    scale: f32,
     pub loading: bool,
     pub banner: Option<String>,
     pub screenshot: Option<PathBuf>,
@@ -132,28 +62,38 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         if !windowed {
             builder.fullscreen_desktop();
         }
-        let window = builder.build().map_err(|error| error.to_string())?;
-        let mut renderer = window.into_canvas();
-        // Only the explicitly requested dummy test driver lacks acceleration.
-        renderer = if video.current_video_driver() == "dummy" {
+        let window = builder.build().map_err(|e| e.to_string())?;
+        let renderer = window.into_canvas();
+        let mut canvas = if video.current_video_driver() == "dummy" {
             renderer.software()
         } else {
             renderer.accelerated().present_vsync()
-        };
-        let canvas = renderer.build().map_err(|error| error.to_string())?;
+        }
+        .build()
+        .map_err(|e| e.to_string())?;
+        canvas.set_blend_mode(BlendMode::Blend);
         let image = sdl2::image::init(InitFlag::PNG | InitFlag::JPG)?;
         Ok(Self {
             sdl,
             canvas,
             _image: image,
             text: None,
+            shadow: None,
+            status: None,
+            list: ListMotion::new(),
+            menu_pill: Tween::new(0., Duration::from_millis(90)),
+            menu_open: false,
+            cover_key: None,
+            cover_visible: false,
+            cover_fade: Tween::new(0., Duration::from_millis(120)),
+            animating: false,
+            scale: height as f32 / 480.,
             loading: false,
             banner: None,
             screenshot: None,
             transition: None,
         })
     }
-
     pub fn configure(
         &mut self,
         ttf: &'font Sdl2TtfContext,
@@ -161,38 +101,133 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         theme: &Theme,
         root: Option<&Path>,
     ) -> Result<(), String> {
-        let (_, height) = self.canvas.output_size()?;
-        let size = (height as f32 * theme.font_size).round().clamp(8., 128.) as u16;
-        let mut fonts = Vec::new();
-        if let Some(font) = &theme.font {
-            fonts.push(font.clone());
-        }
-        for font in [
-            "/usr/share/fonts/liberation/LiberationSans-Regular.ttf",
-            "/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed.ttf",
-        ] {
-            if let Some(root) = root {
-                fonts.push(root.join(font.trim_start_matches('/')));
+        self.scale = self.canvas.output_size()?.1 as f32 / 480.;
+        let defaults = |mono: bool| {
+            let names = if mono {
+                [
+                    "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
+                    "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+                    "/usr/share/fonts/liberation/LiberationMono-Regular.ttf",
+                ]
+            } else {
+                [
+                    "/usr/share/fonts/liberation/LiberationSans-Regular.ttf",
+                    "/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed.ttf",
+                    "/usr/share/fonts/TTF/DejaVuSans.ttf",
+                ]
+            };
+            let mut paths = Vec::new();
+            for name in names {
+                if let Some(root) = root {
+                    paths.push(root.join(name.trim_start_matches('/')));
+                }
+                paths.push(PathBuf::from(name));
             }
-            fonts.push(PathBuf::from(font));
-        }
-        for path in fonts {
-            if let Ok(font) = ttf.load_font(path, size) {
-                self.text = Some(TextCache {
-                    font,
-                    creator,
-                    entries: VecDeque::new(),
-                });
-                return Ok(());
+            paths
+        };
+        let mut paths: [Vec<PathBuf>; 5] = std::array::from_fn(|i| defaults(i == 2 || i == 3));
+        for (i, preferred) in [
+            &theme.font,
+            &theme.font_semibold,
+            &theme.font_mono,
+            &theme.font_mono_medium,
+            &theme.font,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            if let Some(font) = preferred {
+                paths[i].insert(0, font.clone());
             }
         }
-        Err("Nenhuma fonte disponível (tema, Liberation Sans ou DejaVu Sans).".to_owned())
+        // A theme with one face remains valid; use that face before host fallbacks.
+        if theme.font_semibold.is_none() {
+            if let Some(font) = &theme.font {
+                paths[1].insert(0, font.clone());
+            }
+        }
+        if theme.font_mono_medium.is_none() {
+            if let Some(font) = &theme.font_mono {
+                paths[3].insert(0, font.clone());
+            }
+        }
+        let mut text = TextCache::new(ttf, creator, paths);
+        text.measure("ARCHR", Face::Semibold, self.px(12.) as u16)?;
+        self.text = Some(text);
+        self.shadow = Some(Shadow::new(creator)?);
+        self.status = Some(Status::new(root, Instant::now()));
+        Ok(())
     }
-
     pub fn page_size(&self, theme: &Theme) -> usize {
-        (0.72 / (theme.font_size * 1.45)).floor().max(1.) as usize
+        ((1. - theme.header_height - theme.footer_height - 0.04) / (theme.row_height + 2. / 480.))
+            .floor()
+            .max(1.) as usize
     }
-
+    /// Called before applying input: finish old targets, never queue gestures.
+    pub fn snap_animations(&mut self) {
+        self.list.scroll.snap();
+        self.list.pill.snap();
+        self.menu_pill.snap();
+        self.cover_fade.snap();
+    }
+    pub fn animating(&self) -> bool {
+        self.animating
+    }
+    /// Timer work, separate from rendering; sysfs refresh is rate limited.
+    pub fn tick(&mut self) -> bool {
+        self.status.as_mut().is_some_and(|s| s.poll(Instant::now()))
+    }
+    fn px(&self, value: f32) -> i32 {
+        (value * self.scale).round().max(1.) as i32
+    }
+    fn label(
+        &mut self,
+        text: &str,
+        face: Face,
+        size: f32,
+        c: Rgba,
+        panel: Rect,
+        align: Align,
+    ) -> Result<(), String> {
+        let size = self.px(size).clamp(8, 128) as u16;
+        self.text.as_mut().ok_or("Fonte não inicializada")?.draw(
+            &mut self.canvas,
+            text,
+            Style {
+                face,
+                size,
+                color: c,
+            },
+            panel,
+            align,
+        )
+    }
+    fn measure(&mut self, text: &str, face: Face, size: f32) -> Result<u32, String> {
+        let size = self.px(size).clamp(8, 128) as u16;
+        self.text
+            .as_mut()
+            .ok_or("Fonte não inicializada")?
+            .measure(text, face, size)
+    }
+    fn rounded(
+        &mut self,
+        rect: Rect,
+        radius: f32,
+        fill: Rgba,
+        border: Option<Rgba>,
+    ) -> Result<(), String> {
+        primitives::rounded(&mut self.canvas, rect, radius, fill, border)
+    }
+    fn shadow(&mut self, rect: Rect) -> Result<(), String> {
+        if let Some(shadow) = &self.shadow {
+            shadow.draw(&mut self.canvas, rect, self.scale)?;
+        }
+        Ok(())
+    }
+    fn divider(&mut self, x: i32, y: i32, w: u32, c: Rgba) -> Result<(), String> {
+        self.canvas.set_draw_color(color(c));
+        self.canvas.fill_rect(Rect::new(x, y, w, 1))
+    }
     pub fn draw(
         &mut self,
         app: &App,
@@ -201,184 +236,834 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         cover: Option<&Texture<'_>>,
     ) -> Result<(), String> {
         let (width, height) = self.canvas.output_size()?;
-        let margin = (theme.margin * height as f32).round() as i32;
-        let line = (theme.font_size * height as f32 * 1.45).round().max(1.) as i32;
-        self.canvas.set_draw_color(sdl_color(theme.background));
+        self.scale = height as f32 / 480.;
+        let now = Instant::now();
+        self.canvas.set_draw_color(color(theme.background));
         self.canvas.clear();
-        let title = match &app.screen {
-            Screen::Systems => "Sistemas".to_owned(),
-            Screen::Games { system } => system_title(system, data),
-            Screen::QuickMenu { .. } => "Menu rápido".to_owned(),
-        };
-        self.label(&title, theme.text, margin, margin)?;
-        let start = app.cursor / app.page_size.max(1) * app.page_size.max(1);
-        let rows: Vec<String> = match &app.screen {
-            Screen::Systems | Screen::QuickMenu { .. } => app
-                .system_rows(data)
-                .iter()
-                .skip(start)
-                .take(app.page_size)
-                .map(|name| system_title(name, data))
-                .collect(),
-            Screen::Games { system } => data
-                .games(system)
-                .iter()
-                .skip(start)
-                .take(app.page_size)
-                .map(|game| format!("{}{}", if game.favorite { "* " } else { "" }, game.name))
-                .collect(),
-        };
-        let is_games = matches!(app.screen, Screen::Games { .. });
-        let list_width = if is_games {
-            (theme.list_width * width as f32).round() as u32
-        } else {
-            width.saturating_sub(margin.max(0) as u32 * 2)
-        };
-        let top = margin + line * 2;
-        self.canvas.set_clip_rect(Rect::new(
-            margin,
-            top,
-            list_width.max(1),
-            (height as i32 - top - line * 2).max(1) as u32,
-        ));
-        for (offset, row) in rows.iter().enumerate() {
-            let y = top + offset as i32 * line;
-            let selected =
-                start + offset == app.cursor && !matches!(app.screen, Screen::QuickMenu { .. });
-            if selected {
-                self.canvas.set_draw_color(sdl_color(theme.highlight_bg));
-                self.canvas
-                    .fill_rect(Rect::new(margin, y, list_width.max(1), line as u32))?;
-            }
-            self.label(
-                row,
-                if selected {
-                    theme.highlight_text
-                } else {
-                    theme.text
-                },
-                margin + 6,
-                y,
-            )?;
+        let (backdrop, cursor) = app.backdrop();
+        self.header(backdrop, cursor, data, theme, width, height)?;
+        self.list(app, backdrop, cursor, data, theme, width, height, now)?;
+        if let Screen::Games { system } = backdrop {
+            self.cover(system, cursor, data, theme, cover, width, height, now)?;
         }
-        if self.loading {
-            self.label("Carregando...", theme.dim_text, margin + 6, top)?;
-        } else if rows.is_empty() {
-            self.label("Nenhum jogo encontrado", theme.dim_text, margin + 6, top)?;
-        }
-        self.canvas.set_clip_rect(None);
-        if let Some(cover) = cover {
-            let rect = pixels(theme.cover, width, height);
-            let size = cover.query();
-            let scale = (rect.width() as f32 / size.width as f32)
-                .min(rect.height() as f32 / size.height as f32);
-            let w = (size.width as f32 * scale).round().max(1.) as u32;
-            let h = (size.height as f32 * scale).round().max(1.) as u32;
-            self.canvas.copy(
-                cover,
-                None,
-                Rect::new(
-                    rect.x() + (rect.width() - w) as i32 / 2,
-                    rect.y() + (rect.height() - h) as i32 / 2,
-                    w,
-                    h,
-                ),
-            )?;
-        }
+        self.footer(app, data, theme, width, height)?;
         if matches!(app.screen, Screen::QuickMenu { .. }) {
-            self.canvas.set_draw_color(sdl_color(theme.highlight_bg));
-            self.canvas.fill_rect(Rect::new(
-                margin,
-                top,
-                width.saturating_sub(margin.max(0) as u32 * 2),
-                line as u32 * 6,
-            ))?;
-            for (index, item) in app.quick_menu_items(data).iter().enumerate() {
-                let label = match item {
-                    QuickItem::Core { emulator, core } => {
-                        format!("L/R Núcleo: {emulator} / {core}")
-                    }
-                    QuickItem::Settings => "Configurações".to_owned(),
-                    QuickItem::Suspend => "Suspender".to_owned(),
-                    QuickItem::Reboot => "Reiniciar".to_owned(),
-                    QuickItem::Shutdown => "Desligar".to_owned(),
-                };
-                self.label(
-                    &format!("{} {label}", if index == app.cursor { ">" } else { " " }),
-                    theme.highlight_text,
-                    margin + 8,
-                    top + index as i32 * line,
-                )?;
-            }
+            self.menu(app, data, theme, width, height, now)?;
+        } else {
+            self.menu_open = false;
         }
         if let Some(banner) = self.banner.clone() {
-            let y = height as i32 - line * 4;
-            self.canvas.set_draw_color(sdl_color(theme.highlight_bg));
-            self.canvas
-                .fill_rect(Rect::new(0, y, width, line as u32 * 3))?;
-            for (offset, part) in banner.split('\n').take(3).enumerate() {
-                self.label(part, theme.highlight_text, margin, y + offset as i32 * line)?;
-            }
+            self.notice(&banner, theme, width, height)?;
         }
-        self.label(
-            "A abrir · B voltar · X favorito · Y menu",
-            theme.dim_text,
-            margin,
-            height as i32 - line - margin,
-        )?;
-        if let Some(message) = &self.transition {
-            let panel_width = width.saturating_sub(margin.max(0) as u32 * 2).max(1);
-            let panel_height = (line as u32 * 3).min(height).max(1);
-            let panel = Rect::new(
-                (width - panel_width) as i32 / 2,
-                (height - panel_height) as i32 / 2,
-                panel_width,
-                panel_height,
-            );
-            self.canvas.set_draw_color(sdl_color(theme.highlight_bg));
-            self.canvas.fill_rect(panel)?;
-            self.canvas.set_clip_rect(panel);
-            self.text
-                .as_mut()
-                .ok_or("Fonte não inicializada")?
-                .centered(&mut self.canvas, message, theme.highlight_text, panel)?;
-            self.canvas.set_clip_rect(None);
+        if let Some(message) = self.transition.clone() {
+            self.notice(&message, theme, width, height)?;
         }
-        // Explicit PC debug capture only; ordinary frames never touch the disk.
+        self.animating = self.list.scroll.active(now)
+            || self.list.pill.active(now)
+            || self.menu_pill.active(now)
+            || self.cover_fade.active(now);
+        // The explicit SNAPSHOT debug mode is the only draw-time disk access.
         if let Some(path) = self.screenshot.take() {
             let rgba = self
                 .canvas
                 .read_pixels(None, sdl2::pixels::PixelFormatEnum::RGBA32)?;
             image::save_buffer(path, &rgba, width, height, image::ColorType::Rgba8)
-                .map_err(|error| error.to_string())?;
+                .map_err(|e| e.to_string())?;
         }
         self.canvas.present();
         Ok(())
     }
-    fn label(&mut self, text: &str, color: Rgba, x: i32, y: i32) -> Result<(), String> {
-        self.text.as_mut().ok_or("Fonte não inicializada")?.draw(
-            &mut self.canvas,
-            text,
-            color,
-            x,
-            y,
-        )
+    fn header(
+        &mut self,
+        screen: &Screen,
+        cursor: usize,
+        data: &dyn DataSource,
+        theme: &Theme,
+        width: u32,
+        height: u32,
+    ) -> Result<(), String> {
+        let h = (theme.header_height * height as f32).round() as u32;
+        let pad = self.px(24.);
+        let status = self.status.as_ref().map(|s| (s.clock.clone(), s.battery));
+        let mut right = width as i32 - pad;
+        if let Some((clock, battery)) = status {
+            if let Some(b) = battery {
+                let text = format!("{}%", b.percent);
+                let w = self.measure(&text, Face::Mono, 13.)?;
+                self.label(
+                    &text,
+                    Face::Mono,
+                    13.,
+                    theme.muted,
+                    Rect::new(right - w as i32, 0, w, h),
+                    Align::Left,
+                )?;
+                right -= w as i32 + self.px(6.);
+                let battery = Rect::new(
+                    right - self.px(22.),
+                    h as i32 / 2 - self.px(6.),
+                    self.px(18.) as u32,
+                    self.px(12.) as u32,
+                );
+                self.rounded(
+                    battery,
+                    self.px(2.) as f32,
+                    theme.background,
+                    Some(theme.muted),
+                )?;
+                let fill_width = (self.px(13.) as f32 * f32::from(b.percent) / 100.).round() as u32;
+                if fill_width > 0 {
+                    self.rounded(
+                        Rect::new(
+                            battery.x() + self.px(2.),
+                            battery.y() + self.px(2.),
+                            fill_width,
+                            self.px(8.) as u32,
+                        ),
+                        self.scale,
+                        theme.muted,
+                        None,
+                    )?;
+                }
+                let nub = Rect::new(
+                    battery.right() + self.px(1.),
+                    battery.y() + self.px(4.),
+                    self.px(2.) as u32,
+                    self.px(4.) as u32,
+                );
+                self.rounded(nub, self.scale, theme.muted, None)?;
+                if b.charging {
+                    let bolt = Rect::new(
+                        battery.x() + self.px(5.),
+                        battery.y() - self.px(1.),
+                        self.px(8.) as u32,
+                        self.px(14.) as u32,
+                    );
+                    primitives::lightning(&mut self.canvas, bolt, theme.highlight_text)?;
+                }
+                right = battery.x() - self.px(14.);
+            }
+            let w = self.measure(&clock, Face::Mono, 13.)?;
+            self.label(
+                &clock,
+                Face::Mono,
+                13.,
+                theme.muted,
+                Rect::new(right - w as i32, 0, w, h),
+                Align::Left,
+            )?;
+            right -= w as i32 + self.px(20.);
+        }
+        if let Screen::Games { system } = screen {
+            let title = system_title(system, data);
+            let pos = format!(
+                "{}/{}",
+                if data.games(system).is_empty() {
+                    0
+                } else {
+                    cursor + 1
+                },
+                data.games(system).len()
+            );
+            let pw = self.measure(&pos, Face::Mono, 13.)?;
+            let title_w = self
+                .measure(&title, Face::Semibold, 15.)?
+                .min((right - pad - self.px(10.) - pw as i32).max(1) as u32);
+            self.label(
+                &title,
+                Face::Semibold,
+                15.,
+                theme.text,
+                Rect::new(pad, 0, title_w, h),
+                Align::Left,
+            )?;
+            self.label(
+                &pos,
+                Face::Mono,
+                13.,
+                theme.muted,
+                Rect::new(pad + title_w as i32 + self.px(10.), 0, pw, h),
+                Align::Left,
+            )?;
+        } else {
+            let mut x = pad;
+            for glyph in ["A", "R", "C", "H", "R"] {
+                let w = self.measure(glyph, Face::Semibold, 12.)?;
+                self.label(
+                    glyph,
+                    Face::Semibold,
+                    12.,
+                    theme.text,
+                    Rect::new(x, 0, w, h),
+                    Align::Left,
+                )?;
+                x += w as i32 + self.px(1.);
+            }
+        }
+        Ok(())
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn list(
+        &mut self,
+        app: &App,
+        screen: &Screen,
+        cursor: usize,
+        data: &dyn DataSource,
+        theme: &Theme,
+        width: u32,
+        height: u32,
+        now: Instant,
+    ) -> Result<(), String> {
+        let systems = app.system_rows(data);
+        let (key, len, collections, is_games) = match screen {
+            Screen::Games { system } => (system.clone(), data.games(system).len(), 0, true),
+            _ => (
+                "@systems".to_owned(),
+                systems.len(),
+                systems.iter().take_while(|s| s.starts_with('@')).count(),
+                false,
+            ),
+        };
+        let top = (theme.header_height * height as f32).round() as i32 + self.px(6.);
+        let margin = (theme.margin * height as f32).round() as i32;
+        let bottom =
+            height as i32 - (theme.footer_height * height as f32).round() as i32 - self.px(6.);
+        let list_width = if is_games {
+            (theme.list_width * width as f32).round() as u32
+        } else {
+            width.saturating_sub(margin.max(0) as u32 * 2)
+        }
+        .max(1);
+        let row = ((if is_games {
+            theme.game_row_height
+        } else {
+            theme.row_height
+        }) * height as f32)
+            .round();
+        let selected = ((if is_games {
+            theme.game_selected_height
+        } else {
+            theme.selected_height
+        }) * height as f32)
+            .round();
+        let extra = selected - row;
+        let gap = self.px(2.) as f32;
+        let separator = if collections > 0 {
+            self.px(15.) as f32
+        } else {
+            0.
+        };
+        let y_of =
+            |i: usize| i as f32 * (row + gap) + if i >= collections { separator } else { 0. };
+        let target = y_of(cursor);
+        let available = (bottom - top).max(1) as f32;
+        let total = len as f32 * (row + gap) + separator + extra;
+        let mut scroll = self.list.scroll.target;
+        if target < scroll {
+            scroll = target;
+        }
+        if target + selected > scroll + available {
+            scroll = target + selected - available;
+        }
+        scroll = scroll.clamp(0., (total - available).max(0.));
+        if self.list.key != key {
+            self.list.key = key;
+            self.list.scroll.retarget(scroll, now);
+            self.list.scroll.snap();
+            self.list.pill.retarget(target, now);
+            self.list.pill.snap();
+        } else {
+            self.list.scroll.retarget(scroll, now);
+            self.list.pill.retarget(target, now);
+        }
+        let offset = self.list.scroll.value(now);
+        self.canvas.set_clip_rect(Rect::new(
+            margin,
+            top,
+            list_width,
+            (bottom - top).max(1) as u32,
+        ));
+        if len > 0 {
+            let pill = Rect::new(
+                margin,
+                top + (self.list.pill.value(now) - offset).round() as i32,
+                list_width,
+                selected.max(1.) as u32,
+            );
+            self.rounded(
+                pill,
+                theme.radius_item * height as f32,
+                theme.highlight_bg,
+                None,
+            )?;
+        }
+        if collections > 0 {
+            let y = top
+                + (collections as f32 * (row + gap) + self.px(6.) as f32 - offset
+                    + if cursor < collections { extra } else { 0. })
+                .round() as i32;
+            self.divider(
+                margin + self.px(14.),
+                y,
+                list_width.saturating_sub(self.px(28.) as u32),
+                theme.border,
+            )?;
+        }
+        // Visit only potentially visible rows, even in a ten-thousand-game list.
+        let first = ((offset - separator - extra).max(0.) / (row + gap)).floor() as usize;
+        let last = ((offset + available) / (row + gap)).ceil() as usize + 1;
+        for i in first..len.min(last) {
+            let y = top + (y_of(i) + if i > cursor { extra } else { 0. } - offset).round() as i32;
+            let rh = if i == cursor { selected } else { row }.max(1.) as u32;
+            if y + rh as i32 <= top || y >= bottom {
+                continue;
+            }
+            let selected = i == cursor;
+            let distance = i.abs_diff(cursor);
+            let c = if selected {
+                theme.highlight_text
+            } else if i < collections {
+                theme.muted
+            } else if distance >= 4 {
+                theme.dim_text
+            } else if distance >= 3 {
+                theme.text_secondary
+            } else {
+                theme.text
+            };
+            let face = if selected {
+                Face::Semibold
+            } else {
+                Face::Regular
+            };
+            let size = theme.font_size * 480. - if is_games { 1. } else { 0. }
+                + if selected { 1. } else { 0. };
+            let mut x = margin + self.px(14.);
+            let mut right = margin + list_width as i32 - self.px(14.);
+            let name = if let Screen::Games { system } = screen {
+                let game = &data.games(system)[i];
+                if game.favorite {
+                    let star = Rect::new(
+                        right - self.px(14.),
+                        y + (rh as i32 - self.px(14.)) / 2,
+                        self.px(14.) as u32,
+                        self.px(14.) as u32,
+                    );
+                    primitives::star(
+                        &mut self.canvas,
+                        star,
+                        if selected {
+                            theme.highlight_text
+                        } else {
+                            theme.highlight_bg
+                        },
+                        true,
+                    )?;
+                    right -= self.px(24.);
+                }
+                game.name.clone()
+            } else {
+                let name = systems.get(i).expect("visible system row");
+                let count = if name.starts_with('@') {
+                    data.collection_len(name)
+                } else {
+                    data.systems()
+                        .iter()
+                        .find(|s| s.name == *name)
+                        .map_or(0, |s| s.game_count as usize)
+                };
+                let count = count.to_string();
+                let cw = self.measure(
+                    &count,
+                    if selected {
+                        Face::MonoMedium
+                    } else {
+                        Face::Mono
+                    },
+                    13.,
+                )?;
+                self.label(
+                    &count,
+                    if selected {
+                        Face::MonoMedium
+                    } else {
+                        Face::Mono
+                    },
+                    13.,
+                    if selected {
+                        theme.accent_text_secondary
+                    } else {
+                        theme.dim_text
+                    },
+                    Rect::new(right - cw as i32, y, cw, rh),
+                    Align::Right,
+                )?;
+                right -= cw as i32 + self.px(14.);
+                if name.starts_with('@') {
+                    let icon = Rect::new(
+                        x,
+                        y + (rh as i32 - self.px(16.)) / 2,
+                        self.px(16.) as u32,
+                        self.px(16.) as u32,
+                    );
+                    if name == "@favorites" {
+                        primitives::star(
+                            &mut self.canvas,
+                            icon,
+                            if selected {
+                                theme.highlight_text
+                            } else {
+                                theme.highlight_bg
+                            },
+                            false,
+                        )?;
+                    } else {
+                        primitives::clock_icon(&mut self.canvas, icon, c)?;
+                    }
+                    x += self.px(26.);
+                }
+                system_title(name, data)
+            };
+            self.label(
+                &name,
+                face,
+                size,
+                c,
+                Rect::new(x, y, (right - x).max(1) as u32, rh),
+                Align::Left,
+            )?;
+        }
+        if len == 0 {
+            self.label(
+                if self.loading {
+                    "Carregando…"
+                } else {
+                    "Nenhum jogo encontrado"
+                },
+                Face::Regular,
+                16.,
+                theme.muted,
+                Rect::new(
+                    margin + self.px(14.),
+                    top,
+                    list_width.saturating_sub(self.px(28.) as u32).max(1),
+                    self.px(38.) as u32,
+                ),
+                Align::Left,
+            )?;
+        }
+        self.canvas.set_clip_rect(None);
+        Ok(())
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn cover(
+        &mut self,
+        system: &str,
+        cursor: usize,
+        data: &dyn DataSource,
+        theme: &Theme,
+        cover: Option<&Texture<'_>>,
+        width: u32,
+        height: u32,
+        now: Instant,
+    ) -> Result<(), String> {
+        let rect = pixels(theme.cover, width, height);
+        self.shadow(rect)?;
+        self.rounded(
+            rect,
+            theme.radius_card * height as f32 * 0.75,
+            theme.surface,
+            Some(theme.border),
+        )?;
+        let game = data.games(system).get(cursor);
+        let key = game.map(|g| g.path.clone());
+        if self.cover_key != key {
+            self.cover_key = key;
+            self.cover_visible = false;
+            self.cover_fade = Tween::new(0., Duration::from_millis(120));
+        }
+        if let Some(cover) = cover {
+            if !self.cover_visible {
+                self.cover_visible = true;
+                self.cover_fade.retarget(1., now);
+            }
+            let size = cover.query();
+            let scale = ((rect.width().saturating_sub(2)) as f32 / size.width as f32)
+                .min((rect.height().saturating_sub(2)) as f32 / size.height as f32);
+            let w = (size.width as f32 * scale).round().max(1.) as u32;
+            let h = (size.height as f32 * scale).round().max(1.) as u32;
+            let dst = Rect::new(
+                rect.x() + (rect.width() - w) as i32 / 2,
+                rect.y() + (rect.height() - h) as i32 / 2,
+                w,
+                h,
+            );
+            primitives::cover(
+                &mut self.canvas,
+                cover,
+                dst,
+                (theme.radius_card * height as f32 * 0.75 - 1.).max(0.),
+                (self.cover_fade.value(now) * 255.).round() as u8,
+            )?;
+        } else {
+            self.cover_visible = false;
+            self.label(
+                &system_title(system, data),
+                Face::Regular,
+                13.,
+                theme.dim_text,
+                Rect::new(
+                    rect.x() + self.px(12.),
+                    rect.y(),
+                    rect.width().saturating_sub(self.px(24.) as u32).max(1),
+                    rect.height(),
+                ),
+                Align::Center,
+            )?;
+        }
+        if let Some(game) = game {
+            let mut parts = Vec::new();
+            if let Some(year) = game.year {
+                parts.push(year.to_string());
+            }
+            if let Some(players) = &game.players {
+                parts.push(format!(
+                    "{players} {}",
+                    if players == "1" {
+                        "jogador"
+                    } else {
+                        "jogadores"
+                    }
+                ));
+            }
+            let played = game.last_played.map(relative_played).unwrap_or_default();
+            let pw = self.measure(&played, Face::Regular, 12.)?;
+            let h = self.px(20.) as u32;
+            let y = rect.bottom() + self.px(9.);
+            let gap = if pw > 0 { self.px(8.) as u32 } else { 0 };
+            self.label(
+                &parts.join(" · "),
+                Face::Regular,
+                12.,
+                theme.muted,
+                Rect::new(rect.x(), y, rect.width().saturating_sub(pw + gap).max(1), h),
+                Align::Left,
+            )?;
+            self.label(
+                &played,
+                Face::Regular,
+                12.,
+                theme.muted,
+                Rect::new(rect.right() - pw as i32, y, pw.max(1), h),
+                Align::Right,
+            )?;
+        }
+        Ok(())
+    }
+    fn footer(
+        &mut self,
+        app: &App,
+        data: &dyn DataSource,
+        theme: &Theme,
+        width: u32,
+        height: u32,
+    ) -> Result<(), String> {
+        let h = (theme.footer_height * height as f32).round().max(1.) as u32;
+        let y = height as i32 - h as i32;
+        self.divider(0, y, width, theme.border)?;
+        let hints: &[(&str, &str)] = match app.screen {
+            Screen::Systems => &[("A", "Abrir"), ("Y", "Menu")],
+            Screen::Games { .. } => &[
+                ("A", "Jogar"),
+                ("B", "Voltar"),
+                ("X", "Favorito"),
+                ("Y", "Menu"),
+            ],
+            _ => &[("A", "Escolher"), ("B", "Fechar")],
+        };
+        let left = self.hints(hints, theme, width, y, h)?;
+        if matches!(app.screen, Screen::Systems) {
+            let systems = data.systems().iter().filter(|s| s.game_count > 0).count();
+            let games = data
+                .systems()
+                .iter()
+                .map(|s| u64::from(s.game_count))
+                .sum::<u64>();
+            self.label(
+                &format!("{systems} sistemas · {games} jogos"),
+                Face::Regular,
+                13.,
+                theme.muted,
+                Rect::new(self.px(24.), y, (left - self.px(40.)).max(1) as u32, h),
+                Align::Left,
+            )?;
+        }
+        Ok(())
+    }
+    fn hints(
+        &mut self,
+        hints: &[(&str, &str)],
+        theme: &Theme,
+        width: u32,
+        y: i32,
+        h: u32,
+    ) -> Result<i32, String> {
+        let mut right = width as i32 - self.px(24.);
+        for &(button, label) in hints.iter().rev() {
+            let w = self.measure(label, Face::Regular, 13.)?;
+            self.label(
+                label,
+                Face::Regular,
+                13.,
+                theme.muted,
+                Rect::new(right - w as i32, y, w, h),
+                Align::Left,
+            )?;
+            right -= w as i32 + self.px(6.) + self.px(20.);
+            let badge = Rect::new(
+                right,
+                y + (h as i32 - self.px(20.)) / 2,
+                self.px(20.) as u32,
+                self.px(20.) as u32,
+            );
+            self.rounded(badge, self.px(10.) as f32, theme.badge, None)?;
+            self.label(button, Face::Button, 11., theme.text, badge, Align::Glyph)?;
+            right -= self.px(16.);
+        }
+        Ok(right + self.px(16.))
+    }
+    fn scrim(&mut self, theme: &Theme, width: u32, height: u32) -> Result<(), String> {
+        self.canvas.set_draw_color(color(theme.scrim));
+        self.canvas.fill_rect(Rect::new(0, 0, width, height))
+    }
+    fn menu(
+        &mut self,
+        app: &App,
+        data: &dyn DataSource,
+        theme: &Theme,
+        width: u32,
+        height: u32,
+        now: Instant,
+    ) -> Result<(), String> {
+        self.scrim(theme, width, height)?;
+        let items = app.quick_menu_items(data);
+        let has_core = matches!(items.first(), Some(QuickItem::Core { .. }));
+        let panel_h = self.px(if has_core { 300. } else { 256. }) as u32;
+        let panel_w = (self.px(340.) as u32)
+            .min(width.saturating_sub(self.px(32.) as u32))
+            .max(1);
+        let panel = Rect::new(
+            (width - panel_w) as i32 / 2,
+            // Optical centering: the approved modal sits 20px above center.
+            ((height.saturating_sub(panel_h)) as i32 / 2 - self.px(20.)).max(0),
+            panel_w,
+            panel_h,
+        );
+        self.shadow(panel)?;
+        self.rounded(
+            panel,
+            theme.radius_card * height as f32,
+            theme.surface_elevated,
+            Some(theme.border),
+        )?;
+        let (title, subtitle) = if let Screen::QuickMenu {
+            system: Some(system),
+            game: Some(game),
+        } = &app.screen
+        {
+            (
+                data.games(system)
+                    .get(*game)
+                    .map(|g| g.name.clone())
+                    .unwrap_or_else(|| "Menu rápido".into()),
+                system_title(system, data),
+            )
+        } else {
+            ("Menu rápido".into(), "ARCHR".into())
+        };
+        let x = panel.x() + self.px(24.);
+        let content_w = panel.width().saturating_sub(self.px(48.) as u32).max(1);
+        self.label(
+            &title,
+            Face::Semibold,
+            16.,
+            theme.text,
+            Rect::new(x, panel.y() + self.px(16.), content_w, self.px(24.) as u32),
+            Align::Left,
+        )?;
+        self.label(
+            &subtitle,
+            Face::Regular,
+            12.,
+            theme.muted,
+            Rect::new(x, panel.y() + self.px(40.), content_w, self.px(16.) as u32),
+            Align::Left,
+        )?;
+        let top = panel.y() + self.px(64.);
+        let row = self.px(42.);
+        let divider_index = if has_core { 2 } else { 1 };
+        let core_extra = if has_core { self.px(4.) } else { 0 };
+        let separator = self.px(10.);
+        let offset = |index: usize| {
+            index as i32 * row
+                + if index > 0 { core_extra } else { 0 }
+                + if index >= divider_index { separator } else { 0 }
+        };
+        let target = offset(app.cursor) as f32;
+        self.menu_pill.retarget(target, now);
+        if !self.menu_open {
+            self.menu_pill.snap();
+            self.menu_open = true;
+        }
+        let pill = Rect::new(
+            panel.x() + self.px(12.),
+            top + self.menu_pill.value(now).round() as i32,
+            panel.width().saturating_sub(self.px(24.) as u32).max(1),
+            self.px(if has_core && app.cursor == 0 {
+                44.
+            } else {
+                40.
+            }) as u32,
+        );
+        self.rounded(
+            pill,
+            theme.radius_item * height as f32,
+            theme.highlight_bg,
+            None,
+        )?;
+        for (index, item) in items.iter().enumerate() {
+            let y = top + offset(index);
+            let item_height = self.px(if has_core && index == 0 { 44. } else { 40. }) as u32;
+            if index == divider_index {
+                self.divider(x, y - self.px(6.), content_w, theme.border)?;
+            }
+            let selected = index == app.cursor;
+            let c = if selected {
+                theme.highlight_text
+            } else {
+                theme.text
+            };
+            let label = match item {
+                QuickItem::Core { .. } => "Núcleo",
+                QuickItem::Settings => "Configurações",
+                QuickItem::Suspend => "Suspender",
+                QuickItem::Reboot => "Reiniciar",
+                QuickItem::Shutdown => "Desligar",
+            };
+            let face = if selected {
+                Face::Semibold
+            } else {
+                Face::Regular
+            };
+            let mut label_width = content_w;
+            if let QuickItem::Core { core, .. } = item {
+                let core = if core.is_empty() { "Padrão" } else { core };
+                let space = self.px(8.);
+                let lw = self.measure("L", Face::Mono, 12.)?;
+                let rw = self.measure("R", Face::Mono, 12.)?;
+                let cw = self.measure(core, Face::Regular, 15.)?.min(content_w / 2);
+                let end = panel.right() - self.px(24.);
+                let cc = if selected {
+                    theme.accent_text_secondary
+                } else {
+                    theme.muted
+                };
+                self.label(
+                    "R",
+                    Face::Mono,
+                    12.,
+                    cc,
+                    Rect::new(end - rw as i32, y, rw, item_height),
+                    Align::Left,
+                )?;
+                self.label(
+                    core,
+                    Face::Regular,
+                    15.,
+                    c,
+                    Rect::new(end - rw as i32 - space - cw as i32, y, cw, item_height),
+                    Align::Right,
+                )?;
+                self.label(
+                    "L",
+                    Face::Mono,
+                    12.,
+                    cc,
+                    Rect::new(
+                        end - rw as i32 - space * 2 - cw as i32 - lw as i32,
+                        y,
+                        lw,
+                        item_height,
+                    ),
+                    Align::Left,
+                )?;
+                label_width = content_w
+                    .saturating_sub(cw + lw + rw + (space * 3) as u32)
+                    .max(1);
+            }
+            self.label(
+                label,
+                face,
+                15.,
+                c,
+                Rect::new(x, y, label_width, item_height),
+                Align::Left,
+            )?;
+        }
+        let footer = (theme.footer_height * height as f32).round().max(1.) as u32;
+        self.hints(
+            &[("A", "Escolher"), ("B", "Fechar")],
+            theme,
+            width,
+            height as i32 - footer as i32,
+            footer,
+        )?;
+        Ok(())
+    }
+    fn notice(
+        &mut self,
+        message: &str,
+        theme: &Theme,
+        width: u32,
+        height: u32,
+    ) -> Result<(), String> {
+        self.scrim(theme, width, height)?;
+        let lines: Vec<_> = message.split('\n').take(3).collect();
+        let w = (self.px(380.) as u32)
+            .min(width.saturating_sub(self.px(48.) as u32))
+            .max(1);
+        let h = self.px(64. + lines.len() as f32 * 24.) as u32;
+        let panel = Rect::new(
+            (width - w) as i32 / 2,
+            (height.saturating_sub(h)) as i32 / 2,
+            w,
+            h,
+        );
+        self.shadow(panel)?;
+        self.rounded(
+            panel,
+            theme.radius_card * height as f32,
+            theme.surface_elevated,
+            Some(theme.border),
+        )?;
+        for (i, line) in lines.iter().enumerate() {
+            self.label(
+                line,
+                Face::Semibold,
+                16.,
+                theme.text,
+                Rect::new(
+                    panel.x() + self.px(24.),
+                    panel.y() + self.px(32. + i as f32 * 24.),
+                    w.saturating_sub(self.px(48.) as u32).max(1),
+                    self.px(24.) as u32,
+                ),
+                Align::Center,
+            )?;
+        }
+        Ok(())
     }
 }
-
-fn display_text(text: &str) -> String {
-    text.chars()
-        .take(160)
-        .map(|character| {
-            if character == '\0' {
-                '\u{fffd}'
-            } else {
-                character
-            }
-        })
-        .collect()
-}
-
 pub fn pixels(rect: Rect01, width: u32, height: u32) -> Rect {
     Rect::new(
         (rect.x * width as f32).round() as i32,
@@ -387,9 +1072,6 @@ pub fn pixels(rect: Rect01, width: u32, height: u32) -> Rect {
         (rect.h * height as f32).round().max(1.) as u32,
     )
 }
-fn sdl_color(color: Rgba) -> Color {
-    Color::RGBA(color.r, color.g, color.b, color.a)
-}
 fn system_title(name: &str, data: &dyn DataSource) -> String {
     match name {
         "@favorites" => "Favoritos".to_owned(),
@@ -397,8 +1079,19 @@ fn system_title(name: &str, data: &dyn DataSource) -> String {
         _ => data
             .systems()
             .iter()
-            .find(|system| system.name == name)
-            .map(|system| system.fullname.clone())
+            .find(|s| s.name == name)
+            .map(|s| s.fullname.clone())
             .unwrap_or_else(|| name.to_owned()),
+    }
+}
+fn relative_played(timestamp: u64) -> String {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    match now.saturating_sub(timestamp) / 86400 {
+        0 => "hoje".to_owned(),
+        1 => "há 1 dia".to_owned(),
+        days => format!("há {days} dias"),
     }
 }

@@ -46,6 +46,7 @@ version = "0.1.0"
 dependencies = [
  "archr-index",
  "image",
+ "libc",
  "log",
  "quick-xml",
  "sdl2",

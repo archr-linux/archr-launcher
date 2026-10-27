@@ -1,23 +1,39 @@
-# Colors accept #rrggbb or #rrggbbaa (optional alpha).
-# Near-black screen background.
-background = "#14171c"
-# Off-white primary text.
-text = "#eeeef0"
-# Soft accent behind the selected row.
-highlight_bg = "#94b8b0"
-# Dark text on the accent for contrast.
-highlight_text = "#14171c"
-# Dim gray secondary text.
-dim_text = "#89919b"
-# Optional font file relative to this directory; omit for the system default.
-# font = "fonts/menu.ttf"
-# Text size as a fraction of screen height (about 24px at 640x480).
-font_size = 0.05
-# Outer margin as a fraction of screen height (about 19px at 640x480).
-margin = 0.04
-# List width as a fraction of screen width.
-list_width = 0.58
-# Cover rectangle on the right; x/w use screen width, y/h use screen height.
-cover = { x = 0.64, y = 0.20, w = 0.32, h = 0.60 }
-# System selection: list or carousel (rendered as list in v1).
+# Grafite. Every field is optional and inherits individually from the builtin.
+# Colors are #RRGGBB or #RRGGBBAA; accent/highlight_bg, accent_text/highlight_text
+# and dim/dim_text are aliases (the new spelling takes precedence).
+background = "#0B0F14"
+surface = "#11161C"
+surface_elevated = "#161C23"
+border = "#1C232C"
+badge = "#1C2530"
+text = "#E6EDF3"
+text_secondary = "#C5CFDA"
+muted = "#9BA7B4"
+dim = "#6B7785"
+accent = "#1E88FF"
+accent_text = "#FFFFFF"
+accent_text_secondary = "#CFE4FF"
+scrim = "#05080B99"
+
+# Official static Inter 4.1 and JetBrains Mono 2.304, under the adjacent OFLs.
+# Paths stay relative to the theme; missing fonts use Liberation/DejaVu.
+font = "fonts/Inter-Regular.ttf"
+font_semibold = "fonts/Inter-SemiBold.ttf"
+font_mono = "fonts/JetBrainsMono-Regular.ttf"
+font_mono_medium = "fonts/JetBrainsMono-Medium.ttf"
+
+# Dimensions are screen-height fractions (reference: 480px).
+font_size = 0.035416667 # 17px interface; games use 16px, selected +1px
+margin = 0.033333333 # 16px
+radius_item = 0.020833333 # 10px
+radius_card = 0.033333333 # 16px; cover uses 12px
+header_height = 0.091666667 # 44px
+footer_height = 0.1 # 48px
+row_height = 0.079166667 # 38px systems
+selected_height = 0.091666667 # 44px systems
+game_row_height = 0.075 # 36px games
+game_selected_height = 0.0875 # 42px games
+# Widths/x use screen-width fractions; y/heights use screen-height fractions.
+list_width = 0.590625 # 378px, plus 16px gap to the cover
+cover = { x = 0.640625, y = 0.1125, w = 0.328125, h = 0.583333333 }
 system_screen = "list"

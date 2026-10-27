@@ -44,6 +44,16 @@ impl Script {
             deadline: now + Duration::from_secs(30),
         })
     }
+    /// A terminal button exits before the next script poll. Its immediately
+    /// following SNAPSHOT belongs to the feedback frame presented before exit.
+    pub fn take_terminal_snapshot(&mut self) -> bool {
+        if matches!(self.steps.front(), Some(Step::Snapshot)) {
+            self.steps.pop_front();
+            true
+        } else {
+            false
+        }
+    }
     pub fn poll(&mut self, ready: bool) -> Result<Option<Step>, String> {
         let now = Instant::now();
         if now > self.deadline {

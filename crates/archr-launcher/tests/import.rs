@@ -12,6 +12,8 @@ fn metadata_is_imported_once_without_resurrecting_removed_favorites() {
         image: None,
         video: None,
         favorite: true,
+        year: None,
+        players: None,
         last_played: Some(123),
     }];
     assert!(store.import_games("nes", &games));

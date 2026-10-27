@@ -17,7 +17,7 @@ use crate::{scan_system_with_mapper, Game, SystemDef};
 
 const MAGIC: &[u8; 4] = b"ALAX";
 const HEADER_BYTES: u64 = 8;
-pub const CACHE_VERSION: u32 = 2;
+pub const CACHE_VERSION: u32 = 3;
 /// Maximum overview file size, including the header (1 MiB).
 pub const MAX_OVERVIEW_BYTES: u64 = 1024 * 1024;
 /// Maximum per-system cache file size, including the header (32 MiB).

@@ -17,6 +17,8 @@ pub(crate) struct Metadata {
     pub video: String,
     pub favorite: bool,
     pub last_played: Option<u64>,
+    pub year: Option<u16>,
+    pub players: Option<String>,
 }
 
 impl Metadata {
@@ -29,6 +31,15 @@ impl Metadata {
             b"thumbnail" => self.thumbnail = text.to_owned(),
             b"video" => self.video = text.to_owned(),
             b"favorite" => self.favorite = text == "true",
+            b"releasedate" => {
+                self.year = text
+                    .get(..4)
+                    .and_then(|s| s.parse().ok())
+                    .filter(|y| (1000..=9999).contains(y))
+            }
+            b"players" => {
+                self.players = (!text.is_empty()).then(|| text.chars().take(32).collect())
+            }
             b"lastplayed" => self.last_played = parse_last_played(text),
             _ => {}
         }
@@ -38,7 +49,15 @@ impl Metadata {
 fn known_field(name: &[u8]) -> bool {
     matches!(
         name,
-        b"path" | b"name" | b"image" | b"thumbnail" | b"video" | b"favorite" | b"lastplayed"
+        b"path"
+            | b"name"
+            | b"image"
+            | b"thumbnail"
+            | b"video"
+            | b"favorite"
+            | b"lastplayed"
+            | b"releasedate"
+            | b"players"
     )
 }
 

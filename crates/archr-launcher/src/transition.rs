@@ -16,10 +16,11 @@ pub fn apply(
     theme: &Theme,
     outcome: Option<Outcome>,
     controllers: &str,
+    cover: Option<&sdl2::render::Texture<'_>>,
 ) -> Result<bool, String> {
     ui.transition = message(outcome.as_ref(), library);
     if ui.transition.is_some() {
-        ui.draw(app, library, theme, None)?; // draw includes present, before any flush
+        ui.draw(app, library, theme, cover)?; // draw includes present, before any flush
     }
     let result = match outcome {
         Some(outcome) => library.handle(outcome, controllers),
@@ -30,7 +31,7 @@ pub fn apply(
         Ok(exit) => Ok(exit),
         Err(error) => {
             ui.banner = Some(error);
-            ui.draw(app, library, theme, None)?;
+            ui.draw(app, library, theme, cover)?;
             Ok(false)
         }
     }
@@ -97,6 +98,7 @@ mod tests {
             &theme,
             Some(Outcome::Action(SessionAction::OpenSettings)),
             "",
+            None,
         )
         .unwrap();
         assert!(!exit, "failed handoff must return to the event loop");
@@ -111,8 +113,8 @@ mod tests {
             .unwrap()
             .convert_format(sdl2::pixels::PixelFormatEnum::RGBA32)
             .unwrap();
-        let color = theme.highlight_bg;
-        let offset = 240 * image.pitch() as usize + 25 * 4;
+        let color = theme.surface_elevated;
+        let offset = 220 * image.pitch() as usize + 140 * 4;
         image.with_lock(|bytes| {
             assert_eq!(
                 &bytes[offset..offset + 4],
@@ -128,7 +130,16 @@ mod tests {
         fs::create_dir(paths.store.join("store.toml")).unwrap();
         for outcome in [Some(Outcome::Action(SessionAction::Shutdown)), None] {
             ui.banner = None;
-            assert!(!apply(&mut ui, &App::new(10), &mut library, &theme, outcome, "").unwrap());
+            assert!(!apply(
+                &mut ui,
+                &App::new(10),
+                &mut library,
+                &theme,
+                outcome,
+                "",
+                None
+            )
+            .unwrap());
             assert!(ui.banner.is_some());
             assert!(ui.transition.is_none());
         }
@@ -141,7 +152,8 @@ mod tests {
             &mut library,
             &theme,
             Some(Outcome::Action(SessionAction::OpenSettings)),
-            ""
+            "",
+            None
         )
         .unwrap());
         assert_eq!(
@@ -176,6 +188,8 @@ mod tests {
             image: None,
             video: None,
             favorite: false,
+            year: None,
+            players: None,
             last_played: None,
         }]);
         assert_eq!(

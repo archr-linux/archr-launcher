@@ -80,6 +80,8 @@ fn games(count: usize) -> Vec<Game> {
             image: None,
             video: None,
             favorite: false,
+            year: None,
+            players: None,
             last_played: None,
         })
         .collect()
@@ -663,4 +665,23 @@ fn consecutive_l_cycles_all_cores_and_wraps_with_unchanged_data() {
             ("retroarch", "bsnes"),
         ],
     );
+}
+
+#[test]
+fn quick_menu_preserves_the_collection_backdrop_and_cursor() {
+    let mut data = FakeData::library();
+    data.collections();
+    let mut app = in_games("@favorites", 1);
+    app.handle(Button::Y, &data);
+    assert_eq!(
+        app.backdrop(),
+        (
+            &Screen::Games {
+                system: "@favorites".into()
+            },
+            1
+        )
+    );
+    app.handle(Button::B, &data);
+    assert_eq!(app.backdrop(), (&app.screen, 1));
 }

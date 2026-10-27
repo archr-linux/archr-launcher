@@ -52,7 +52,9 @@ ARCHR_LAUNCHER_ROOT=crates/archr-index/tests/data \
 ```
 
 `SNAPSHOT` exige `ARCHR_LAUNCHER_SCREENSHOT=/caminho/frame.png` e grava o próximo
-frame antes do present. Essa captura é a única opção de depuração que faz I/O
+frame antes do present. Imediatamente após um botão terminal, como em
+`A,A,SNAPSHOT`, captura o overlay “Abrindo…” antes do handoff e da saída.
+Essa captura é a única opção de depuração que faz I/O
 no desenho. Sem display, os mesmos fluxos podem rodar com
 `SDL_VIDEODRIVER=offscreen` (ou `dummy`).
 
@@ -85,6 +87,33 @@ no desenho. Sem display, os mesmos fluxos podem rodar com
   escritas sem bloquear o event loop.
 - Falhas do jogo são lidas de `last-exit`, exibidas por alguns segundos e
   apontam para `/var/log/exec.log`, usado por `runemu.sh`.
+
+## Tema Grafite
+
+Instale a pasta `themes/default/` inteira em
+`/usr/share/archr-launcher/themes/default/`, incluindo `fonts/` e as duas licenças
+OFL. Os TTF estáticos são dos releases oficiais Inter 4.1 e JetBrains Mono
+2.304; não entram no binário. Sem os arquivos, permanece o fallback para
+Liberation/DejaVu. Para experimentar o tema no PC com `ARCHR_LAUNCHER_ROOT`,
+copie essa pasta para `ROOT/usr/share/archr-launcher/themes/default/`.
+
+Todos os tokens de `theme.toml` são opcionais, com fallback individual.
+`accent`, `accent_text` e `dim` também aceitam os nomes antigos `highlight_bg`,
+`highlight_text` e `dim_text`; os novos nomes têm precedência. Fontes continuam
+restritas a arquivos dentro da pasta do tema. Raios/alturas/margens escalam pela
+altura da tela; o retângulo da capa e a largura da lista usam frações conforme
+os comentários do tema. O menu mantém o posicionamento óptico da maquete.
+
+A bateria usa `ROOT/sys/class/power_supply/battery/{capacity,status}`, quando
+há prefixo; sem capacidade válida, o indicador fica oculto. A leitura ocorre
+no timer, no máximo a cada 30 s; o relógio usa a hora local e atualiza por
+minuto. Seleção/rolagem animam por 90 ms e capas por 120 ms. Nova entrada
+conclui os alvos anteriores imediatamente. Somente durante essas animações
+há apresentações contínuas com vsync; parado, o desenho continua por eventos.
+
+Ano (`releasedate`), jogadores (`players`) e último uso do gamelist aparecem
+sob a capa quando disponíveis. O índice de jogos passa à versão 3 para esses
+metadados; caches anteriores são descartados e refeitos pelo worker.
 
 ## Verificação
 

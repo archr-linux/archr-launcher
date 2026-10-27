@@ -420,3 +420,17 @@ fn missing_system_dir_yields_empty_not_error() {
     let directory = tempfile::tempdir().unwrap();
     assert!(scan_system(&system(&directory.path().join("missing"))).is_empty());
 }
+
+#[test]
+fn gamelist_supplies_optional_year_and_players_for_cover_caption() {
+    let dir = tempfile::tempdir().unwrap();
+    touch(dir.path(), "Kirby.sfc");
+    fs::write(dir.path().join("gamelist.xml"), "<gameList><game><path>./Kirby.sfc</path><releasedate>19960321T000000</releasedate><players>1-2</players></game></gameList>").unwrap();
+    let games = scan_system(&system(dir.path()));
+    assert_eq!(games[0].year, Some(1996));
+    assert_eq!(games[0].players.as_deref(), Some("1-2"));
+    fs::write(dir.path().join("gamelist.xml"), "<gameList><game><path>./Kirby.sfc</path><releasedate>oops</releasedate><players></players></game></gameList>").unwrap();
+    let games = scan_system(&system(dir.path()));
+    assert_eq!(games[0].year, None);
+    assert_eq!(games[0].players, None);
+}

@@ -103,6 +103,7 @@ fn run() -> Result<(), String> {
     let mut banner_until = Instant::now() + Duration::from_secs(8);
     loop {
         controllers.poll_mappings();
+        dirty |= ui.tick() || ui.animating();
         let selected_system = if app.screen == Screen::Systems {
             app.system_rows(&library).get(app.cursor).cloned()
         } else {
@@ -167,7 +168,7 @@ fn run() -> Result<(), String> {
                 }
             }
         }
-        if let Some(event) = events.wait_event_timeout(if button.is_some() {
+        if let Some(event) = events.wait_event_timeout(if button.is_some() || ui.animating() {
             0
         } else {
             repeat.wait_ms(Instant::now())
@@ -206,6 +207,7 @@ fn run() -> Result<(), String> {
                 &theme,
                 None,
                 &controllers.configuration(),
+                selected.as_ref().and_then(|path| covers.get(path)),
             )? {
                 return Ok(());
             }
@@ -216,12 +218,14 @@ fn run() -> Result<(), String> {
         }
         button = button.or_else(|| repeat.poll(Instant::now()));
         if let Some(button) = button {
+            ui.snap_animations();
             let outcome = app.handle(button, &library);
             if matches!(outcome, Outcome::Launch { .. } | Outcome::Action(_))
                 && library.pending_writes > 0
             {
                 deferred = Some(outcome);
             } else {
+                arm_terminal_snapshot(&mut ui, &mut script, &outcome)?;
                 if transition::apply(
                     &mut ui,
                     &app,
@@ -229,6 +233,7 @@ fn run() -> Result<(), String> {
                     &theme,
                     Some(outcome),
                     &controllers.configuration(),
+                    selected.as_ref().and_then(|path| covers.get(path)),
                 )? {
                     return Ok(());
                 }
@@ -239,6 +244,7 @@ fn run() -> Result<(), String> {
         if library.pending_writes == 0 {
             if let Some(outcome) = deferred.take() {
                 if !library.write_failed {
+                    arm_terminal_snapshot(&mut ui, &mut script, &outcome)?;
                     if transition::apply(
                         &mut ui,
                         &app,
@@ -246,6 +252,7 @@ fn run() -> Result<(), String> {
                         &theme,
                         Some(outcome),
                         &controllers.configuration(),
+                        selected.as_ref().and_then(|path| covers.get(path)),
                     )? {
                         return Ok(());
                     }
@@ -257,16 +264,17 @@ fn run() -> Result<(), String> {
     }
 }
 fn cover_paths(app: &App, data: &dyn DataSource) -> (Option<PathBuf>, Vec<PathBuf>) {
-    let Screen::Games { system } = &app.screen else {
+    let (screen, cursor) = app.backdrop();
+    let Screen::Games { system } = screen else {
         return (None, Vec::new());
     };
     let games = data.games(system);
-    let selected = games.get(app.cursor).and_then(|game| game.image.clone());
+    let selected = games.get(cursor).and_then(|game| game.image.clone());
     let mut paths = Vec::new();
     if let Some(path) = &selected {
         paths.push(path.clone());
     }
-    for index in app.cursor.saturating_sub(2)..=app.cursor.saturating_add(2) {
+    for index in cursor.saturating_sub(2)..=cursor.saturating_add(2) {
         if let Some(path) = games.get(index).and_then(|game| game.image.clone()) {
             if !paths.contains(&path) {
                 paths.push(path);
@@ -274,6 +282,25 @@ fn cover_paths(app: &App, data: &dyn DataSource) -> (Option<PathBuf>, Vec<PathBu
         }
     }
     (selected, paths)
+}
+
+fn arm_terminal_snapshot(
+    ui: &mut Ui<'_, '_>,
+    script: &mut Option<script::Script>,
+    outcome: &Outcome,
+) -> Result<(), String> {
+    if matches!(outcome, Outcome::Launch { .. } | Outcome::Action(_))
+        && script
+            .as_mut()
+            .is_some_and(script::Script::take_terminal_snapshot)
+    {
+        ui.screenshot = Some(
+            std::env::var_os("ARCHR_LAUNCHER_SCREENSHOT")
+                .map(PathBuf::from)
+                .ok_or("SNAPSHOT exige ARCHR_LAUNCHER_SCREENSHOT")?,
+        );
+    }
+    Ok(())
 }
 
 fn init_logging() {

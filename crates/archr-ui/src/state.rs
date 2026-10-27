@@ -100,6 +100,16 @@ impl App {
         }
     }
 
+    /// The undimmed screen beneath a modal, including collection identity.
+    pub fn backdrop(&self) -> (&Screen, usize) {
+        if matches!(self.screen, Screen::QuickMenu { .. }) {
+            if let Some((screen, cursor)) = self.history.last() {
+                return (screen, *cursor);
+            }
+        }
+        (&self.screen, self.cursor)
+    }
+
     /// Shared row ordering for navigation and rendering.
     pub fn system_rows(&self, data: &dyn DataSource) -> Vec<String> {
         ["@favorites", "@recent"]

@@ -14,3 +14,8 @@ pub mod controllers;
 pub mod render;
 
 pub mod joystick_mapping;
+
+pub mod motion;
+mod primitives;
+pub mod status;
+mod text;

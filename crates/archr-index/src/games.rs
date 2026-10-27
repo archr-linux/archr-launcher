@@ -20,6 +20,8 @@ pub struct Game {
     pub video: Option<PathBuf>,
     pub favorite: bool,
     pub last_played: Option<u64>,
+    pub year: Option<u16>,
+    pub players: Option<String>,
 }
 
 /// Remove balanced region/revision groups, retaining the stem if only tags remain.
@@ -110,6 +112,8 @@ pub fn scan_system_with_mapper(sys: &SystemDef, mapper: &dyn Fn(&Path) -> PathBu
                 video,
                 favorite: entry.is_some_and(|entry| entry.favorite),
                 last_played: entry.and_then(|entry| entry.last_played),
+                year: entry.and_then(|entry| entry.year),
+                players: entry.and_then(|entry| entry.players.clone()),
             }
         })
         .collect();

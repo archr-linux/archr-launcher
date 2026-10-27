@@ -20,14 +20,24 @@ fn builtin_parses() {
     assert_eq!(theme.font, None);
     assert!(theme.background.r < 32 && theme.background.g < 32 && theme.background.b < 32);
     assert!(theme.text.r > 220 && theme.text.g > 220 && theme.text.b > 220);
-    assert!((theme.font_size - 0.05).abs() < 0.01);
-    assert!((theme.margin - 0.04).abs() < 0.01);
-    assert!((theme.list_width - 0.58).abs() < 0.01);
+    assert!((theme.font_size - 17.0 / 480.0).abs() < 0.01);
+    assert!((theme.margin - 16.0 / 480.0).abs() < 0.01);
+    assert!((theme.list_width - 378.0 / 640.0).abs() < 0.01);
     assert!(theme.cover.x >= theme.list_width);
     assert!(theme.cover.x + theme.cover.w <= 1.0);
     assert!(theme.cover.y + theme.cover.h <= 1.0);
     let shipped = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../themes/default");
-    assert_eq!(Theme::load(&shipped), theme);
+    let mut installed = Theme::load(&shipped);
+    for font in [
+        &mut installed.font,
+        &mut installed.font_semibold,
+        &mut installed.font_mono,
+        &mut installed.font_mono_medium,
+    ] {
+        assert!(font.as_ref().is_some_and(|p| p.is_file()));
+        *font = None;
+    }
+    assert_eq!(installed, theme);
 }
 
 #[test]
@@ -436,4 +446,40 @@ fn warnings_report_invalid_fields_and_one_syntax_error() {
             );
         }
     });
+}
+
+#[test]
+fn grafite_tokens_inherit_independently_and_legacy_accent_still_works() {
+    let theme = load("surface = '#010203'\nsurface_elevated = false\nradius_item = 0.03\nheader_height = nan\naccent = '#112233'\nfont_mono = '../escape.ttf'");
+    assert_eq!(
+        theme.surface,
+        Rgba {
+            r: 1,
+            g: 2,
+            b: 3,
+            a: 255
+        }
+    );
+    assert_eq!(theme.surface_elevated, Theme::builtin().surface_elevated);
+    assert_eq!(theme.radius_item, 0.03);
+    assert_eq!(theme.header_height, Theme::builtin().header_height);
+    assert_eq!(
+        theme.highlight_bg,
+        Rgba {
+            r: 0x11,
+            g: 0x22,
+            b: 0x33,
+            a: 255
+        }
+    );
+    assert_eq!(theme.font_mono, None);
+    assert_eq!(
+        load("highlight_bg = '#123456'").highlight_bg,
+        Rgba {
+            r: 0x12,
+            g: 0x34,
+            b: 0x56,
+            a: 255
+        }
+    );
 }

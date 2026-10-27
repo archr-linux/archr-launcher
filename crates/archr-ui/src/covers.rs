@@ -158,6 +158,8 @@ impl<'a> CoverCache<'a> {
                 texture
                     .update(None, &thumb.rgba, thumb.width as usize * 4)
                     .map_err(|error| error.to_string())?;
+                texture.set_blend_mode(sdl2::render::BlendMode::Blend);
+                texture.set_scale_mode(sdl2::render::ScaleMode::Linear);
                 Ok(texture)
             });
             let texture = match texture {
