@@ -48,6 +48,7 @@ pub(crate) fn load_gamelist(system_dir: &Path) -> Result<HashMap<PathBuf, Metada
     let mut reader =
         Reader::from_reader(BufReader::new(File::open(system_dir.join("gamelist.xml"))?));
     reader.config_mut().expand_empty_elements = true;
+    reader.config_mut().check_comments = true;
     let mut buffer = Vec::new();
     let mut stack: Vec<Vec<u8>> = Vec::new();
     let mut found_root = false;

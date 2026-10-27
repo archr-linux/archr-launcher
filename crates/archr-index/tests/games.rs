@@ -237,6 +237,7 @@ fn folder_media_priority_and_all_supported_suffixes() {
         "images/Game.jpeg",
         "images/Game-image.png",
         "images/Game-image.jpg",
+        "images/Game-image.jpeg",
     ];
     for candidate in candidates {
         touch(directory.path(), candidate);
@@ -317,6 +318,23 @@ fn malformed_xml_is_ignored_atomically() {
             "accepted XML: {xml}"
         );
     }
+}
+
+#[test]
+fn malformed_comments_discard_the_entire_gamelist() {
+    let directory = tempfile::tempdir().unwrap();
+    touch(directory.path(), "Game (USA).sfc");
+    let image = touch(directory.path(), "media/images/Game (USA).png");
+    fs::write(directory.path().join("gamelist.xml"),
+        "<gameList><game><path>Game (USA).sfc</path><name>Wrong</name><favorite>true</favorite><lastplayed>20240102T030405</lastplayed></game><!-- invalid -- comment --></gameList>")
+        .unwrap();
+
+    let games = scan_system(&system(directory.path()));
+    assert_eq!(games.len(), 1);
+    assert_eq!(games[0].name, "Game");
+    assert_eq!(games[0].image, Some(image));
+    assert!(!games[0].favorite);
+    assert_eq!(games[0].last_played, None);
 }
 
 #[test]

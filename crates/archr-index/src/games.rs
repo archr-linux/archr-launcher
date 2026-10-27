@@ -1,10 +1,16 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::gamelist::{game_path_key, load_gamelist, resolve_path};
 use crate::SystemDef;
+
+#[cfg(test)]
+std::thread_local! {
+    static MEDIA_DIRECTORY_READS: std::cell::RefCell<std::collections::HashMap<PathBuf, usize>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Game {
@@ -67,7 +73,7 @@ pub fn scan_system(sys: &SystemDef) -> Vec<Game> {
     let mut ancestors = HashSet::from([root]);
     scan_directory(&sys.path, sys, 0, false, &mut ancestors, &mut paths);
     let metadata = load_gamelist(&sys.path).unwrap_or_default();
-    let media = MediaLookup::new(&sys.path);
+    let mut media = MediaLookup::new(&sys.path);
     let mut games: Vec<_> = paths
         .into_iter()
         .map(|path| {
@@ -77,17 +83,19 @@ pub fn scan_system(sys: &SystemDef) -> Vec<Game> {
             } else {
                 game_path_key(&path).and_then(|key| metadata.get(&key))
             };
-            let referenced =
-                |text: &str| resolve_path(&sys.path, text).filter(|path| path.is_file());
             let name = entry
                 .filter(|entry| !entry.name.is_empty())
                 .map(|entry| entry.name.clone())
                 .unwrap_or_else(|| clean_name(&stem.to_string_lossy()));
             let image = entry
-                .and_then(|entry| referenced(&entry.image).or_else(|| referenced(&entry.thumbnail)))
+                .and_then(|entry| {
+                    media
+                        .referenced(&entry.image)
+                        .or_else(|| media.referenced(&entry.thumbnail))
+                })
                 .or_else(|| media.image(stem));
             let video = entry
-                .and_then(|entry| referenced(&entry.video))
+                .and_then(|entry| media.referenced(&entry.video))
                 .or_else(|| media.video(stem));
             Game {
                 path,
@@ -178,77 +186,141 @@ fn scan_directory(
     }
 }
 
-struct MediaDirectory {
-    path: PathBuf,
-    filenames: HashSet<OsString>,
-}
-
-impl MediaDirectory {
-    fn read(path: PathBuf) -> Self {
-        // One directory read per scan, never one stat per game/candidate.
-        let filenames = fs::read_dir(&path)
-            .into_iter()
-            .flatten()
-            .flatten()
-            .filter(|entry| {
-                entry.file_type().is_ok_and(|kind| {
-                    kind.is_file() || (kind.is_symlink() && entry.path().is_file())
-                })
-            })
-            .map(|entry| entry.file_name())
-            .collect();
-        Self { path, filenames }
-    }
-
-    fn find(&self, stem: &OsStr, suffixes: &[&str]) -> Option<PathBuf> {
-        suffixes.iter().find_map(|suffix| {
-            let mut filename = stem.to_os_string();
-            filename.push(suffix);
-            self.filenames
-                .contains(&filename)
-                .then(|| self.path.join(filename))
-        })
-    }
-}
-
 struct MediaLookup {
-    images: [MediaDirectory; 5],
-    videos: [MediaDirectory; 2],
+    system_dir: PathBuf,
+    directories: HashMap<PathBuf, HashSet<OsString>>,
 }
 
 impl MediaLookup {
     fn new(system_dir: &Path) -> Self {
         Self {
-            images: [
-                "media/images",
-                "media/covers",
-                "media/boxart",
-                "media/thumbnails",
-                "images",
-            ]
-            .map(|directory| MediaDirectory::read(system_dir.join(directory))),
-            videos: ["media/videos", "videos"]
-                .map(|directory| MediaDirectory::read(system_dir.join(directory))),
+            system_dir: system_dir.to_owned(),
+            directories: HashMap::new(),
         }
     }
 
-    fn image(&self, stem: &OsStr) -> Option<PathBuf> {
-        self.images
-            .iter()
-            .enumerate()
-            .find_map(|(index, directory)| {
-                let suffixes: &[&str] = if index == 4 {
-                    &[".png", ".jpg", ".jpeg", "-image.png", "-image.jpg"]
-                } else {
-                    &[".png", ".jpg", ".jpeg"]
-                };
-                directory.find(stem, suffixes)
+    fn contains_file(&mut self, path: &Path) -> bool {
+        let Some(parent) = path.parent().and_then(game_path_key) else {
+            return false;
+        };
+        let Some(filename) = path.file_name() else {
+            return false;
+        };
+        // References and folder fallbacks share one lazy snapshot per parent,
+        // including misses. Only symlinks need a stat while listing the folder.
+        self.directories
+            .entry(parent)
+            .or_insert_with_key(|parent| {
+                #[cfg(test)]
+                MEDIA_DIRECTORY_READS.with(|counts| {
+                    *counts.borrow_mut().entry(parent.clone()).or_default() += 1;
+                });
+                fs::read_dir(parent)
+                    .into_iter()
+                    .flatten()
+                    .flatten()
+                    .filter(|entry| {
+                        entry.file_type().is_ok_and(|kind| {
+                            kind.is_file() || (kind.is_symlink() && entry.path().is_file())
+                        })
+                    })
+                    .map(|entry| entry.file_name())
+                    .collect()
             })
+            .contains(filename)
     }
 
-    fn video(&self, stem: &OsStr) -> Option<PathBuf> {
-        self.videos[0]
-            .find(stem, &[".mp4"])
-            .or_else(|| self.videos[1].find(stem, &["-video.mp4"]))
+    fn referenced(&mut self, text: &str) -> Option<PathBuf> {
+        let path = resolve_path(&self.system_dir, text)?;
+        self.contains_file(&path).then_some(path)
+    }
+
+    fn find(&mut self, directory: &str, stem: &OsStr, suffixes: &[&str]) -> Option<PathBuf> {
+        suffixes.iter().find_map(|suffix| {
+            let mut filename = stem.to_os_string();
+            filename.push(suffix);
+            let path = self.system_dir.join(directory).join(filename);
+            self.contains_file(&path).then_some(path)
+        })
+    }
+
+    fn image(&mut self, stem: &OsStr) -> Option<PathBuf> {
+        [
+            "media/images",
+            "media/covers",
+            "media/boxart",
+            "media/thumbnails",
+            "images",
+        ]
+        .into_iter()
+        .find_map(|directory| {
+            let suffixes: &[&str] = if directory == "images" {
+                &[
+                    ".png",
+                    ".jpg",
+                    ".jpeg",
+                    "-image.png",
+                    "-image.jpg",
+                    "-image.jpeg",
+                ]
+            } else {
+                &[".png", ".jpg", ".jpeg"]
+            };
+            self.find(directory, stem, suffixes)
+        })
+    }
+
+    fn video(&mut self, stem: &OsStr) -> Option<PathBuf> {
+        self.find("media/videos", stem, &[".mp4"])
+            .or_else(|| self.find("videos", stem, &["-video.mp4"]))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn two_games_share_media_directory_listings_for_references_and_fallbacks() {
+        MEDIA_DIRECTORY_READS.with(|counts| counts.borrow_mut().clear());
+        let directory = tempfile::tempdir().unwrap();
+        let system_dir = directory.path().join("snes");
+        let images = system_dir.join("media/images");
+        let shared = directory.path().join("shared");
+        fs::create_dir_all(&images).unwrap();
+        fs::create_dir(&shared).unwrap();
+        for path in [
+            system_dir.join("First.sfc"),
+            system_dir.join("Second.sfc"),
+            images.join("chosen.png"),
+            images.join("Second.jpg"),
+            shared.join("clip.mp4"),
+        ] {
+            fs::write(path, []).unwrap();
+        }
+        let clip = shared.join("clip.mp4");
+        fs::write(system_dir.join("gamelist.xml"), format!(
+            "<gameList><game><path>First.sfc</path><image>./media/images/chosen.png</image><video>{0}</video></game><game><path>Second.sfc</path><image>./media/images/missing.png</image><thumbnail>./media/images/missing-thumb.png</thumbnail><video>{0}</video></game></gameList>",
+            clip.display()))
+            .unwrap();
+        let sys = SystemDef {
+            name: "snes".into(),
+            fullname: "Super Nintendo".into(),
+            path: system_dir,
+            extensions: vec![".sfc".into()],
+            emulators: Vec::new(),
+        };
+
+        let games = scan_system(&sys);
+
+        assert_eq!(games.len(), 2);
+        assert_eq!(games[0].image, Some(images.join("chosen.png")));
+        assert_eq!(games[1].image, Some(images.join("Second.jpg")));
+        assert!(games.iter().all(|game| game.video.as_ref() == Some(&clip)));
+        MEDIA_DIRECTORY_READS.with(|counts| {
+            let counts = counts.borrow();
+            assert_eq!(counts.get(&images), Some(&1));
+            assert_eq!(counts.get(&shared), Some(&1));
+        });
     }
 }
