@@ -93,13 +93,19 @@ fn stale_lock_with_nonexistent_pid_is_taken_over() {
 }
 
 #[test]
-fn invalid_pid_lock_is_taken_over() {
+fn old_invalid_pid_lock_is_taken_over() {
     let dir = tempdir().unwrap();
     let path = dir.path().join("system.cfg");
     let lock = dir.path().join(".system.cfg.lock");
     fs::write(&path, "snes.core=old\n").unwrap();
     for contents in [b"not-a-pid\n".as_slice(), b"", b"\xff"] {
         fs::write(&lock, contents).unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&lock)
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(5))
+            .unwrap();
         SystemCfg::set_and_save(&path, &lock, "snes.core", "new").unwrap();
         assert!(!lock.exists());
     }
