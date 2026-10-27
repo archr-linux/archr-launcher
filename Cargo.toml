@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/archr-config"]
+members = ["crates/archr-config", "crates/archr-index"]
 resolver = "2"
 
 [workspace.package]
