@@ -182,3 +182,85 @@ Francês, alemão, chinês simplificado e japonês ficam para a fase 2. A extens
 uma fonte CJK lazy está marcada em `crates/archr-ui/src/text.rs`; nenhuma fonte CJK
 é aberta agora. Tempo relativo usa meses aproximados de 30 dias e anos de 365 dias,
 e datas futuras aparecem como “agora”.
+
+## Instalação no ArchR
+
+O pacote `projects/ArchR/packages/ui/archr-launcher/package.mk` no repositório
+`distribution` compila para aarch64 com o cargo/rust do próprio build, ao lado
+do EmulationStation. Instala os dois executáveis em `/usr/bin`, a unidade em
+`/usr/lib/systemd/system`, o tema completo (quatro TTF e licenças OFL) e os
+catálogos em `/usr/share/archr-launcher/`. A unidade **não é habilitada** pelo
+pacote: o ES continua como padrão.
+
+O download segue o padrão `archr-splash`: arquivo do GitHub fixado por commit.
+O `PKG_VERSION` inicial é um placeholder de integração: antes de um build remoto,
+substitua-o pelo hash publicado que inclui `session/` e este perfil de release.
+Para desenvolvimento, a partir da raiz de `distribution`:
+
+```sh
+ARCHR_LAUNCHER_SOURCE_DIR=/caminho/absoluto/archr-launcher \
+  PROJECT=ArchR DEVICE=RK3326 ARCH=aarch64 scripts/build archr-launcher
+```
+
+Esse override usa o suporte nativo `file://` do build para copiar um snapshot
+da árvore local, sem `.git`, caches e `target/`; não usa `PKG_SOURCE_DIR`, que
+apenas renomeia a pasta extraída. Os arquivos de código, sessão, temas e locales
+entram no stamp de unpack, invalidando o snapshot quando mudam. Mantenha o mesmo
+override nas etapas de build/instalação da imagem. Sem override, usa o commit
+remoto. O projeto ainda precisa declarar a licença do código; por enquanto o
+pacote registra `unknown`, sem alterar as licenças OFL das fontes.
+
+Depois de incluir o pacote na imagem, para optar pela sessão, altere **somente**
+a linha `UI_SERVICE` em `/storage/.config/profile.d/090-ui_service`, preservando
+as demais opções (inclusive `MALI_WAYLAND_AFBC`):
+
+```sh
+UI_SERVICE="sway.service archr-launcher-session.service"
+```
+
+Reinicie o aparelho para aplicar. Para voltar ao ES, restaure
+`UI_SERVICE="sway.service essway.service"` e reinicie. Não habilite as duas UIs
+simultaneamente e não use `systemctl enable` para contornar o seletor.
+
+A sessão carrega `/etc/profile` uma vez em Bash, pois os profiles da distro
+contêm funções Bash, e usa `exec` para substituí-lo pelo supervisor POSIX sh.
+Preserva os exports dos quirks/usuário e configura Wayland, SDL e o locale já
+gerado pelo ES, sem chamar `es_settings`: esse script também gera locales,
+reinicia `tz-data`, importa o ambiente do systemd e escolhe o alvo do hotkey.
+A espera por sway reproduz a do `start_es.sh`: socket Wayland + IPC com saída
+ativa, polling de 100 ms, teto de 10 s. Sem compositor pronto após o teto,
+tenta iniciar a UI e deixa o backoff lidar com uma falha.
+
+O hotkey de saída (`input_sense`) lê `/tmp/.process-kill-data` e executa
+`killall` com seu conteúdo. No menu, a sessão grava `archr-launcher`, nunca o
+nome do supervisor. Antes do jogo, remove o alvo do menu; `runemu.sh` e seus
+wrappers definem os processos reais (`retroarch retroarch32`, `-9 mupen64plus`,
+etc.). Não definir `runemu.sh` como alvo: ele precisa sobreviver para restaurar
+serviços, governador e demais estados. Seu `quit()` ainda grava
+`emulationstation`; a próxima volta da sessão troca esse alvo por
+`archr-launcher`. Nenhum desses scripts da distro foi modificado.
+
+Cada `next` é lido sem reinterpretar escapes e removido antes da execução;
+`last-exit` recebe o código decimal via arquivo temporário + rename. O log fica
+em `/var/log/archr-launcher-session.log`, truncado ao atingir 256 KiB. Somente
+eventos do supervisor entram nesse arquivo; stdout/stderr dos filhos seguem
+para o journal da unidade, evitando crescimento sem limite durante um jogo.
+O log específico do jogo continua em
+`/var/log/exec.log`. `archr-settings` é opcional e, se ausente, volta ao menu.
+
+Validação hermética no PC, sem serviços/dispositivos reais:
+
+```sh
+sh session/test-session.sh
+SESSION_TEST_SHELL=dash dash session/test-session.sh
+# BusyBox: aponte SESSION_TEST_SHELL para um symlink chamado sh para busybox.
+SESSION_TEST_SHELL=/caminho/busybox-bin/sh busybox sh session/test-session.sh
+```
+
+Os doubles de launcher, runemu, systemctl e swaymsg ficam no PATH temporário.
+As variáveis `ARCHR_SESSION_*` de caminhos, shell, profile, sleep e espera só são
+consultadas com `ARCHR_SESSION_TEST=1`; não são configuração da sessão instalada.
+Os testes também validam o bridge de profile Bash para sh e o alvo do hotkey;
+com Python 3 disponível, criam sockets locais para testar sway pronto. Testes
+com RetroArch, standalone, ports e medição da primeira tela continuam sendo
+validações no aparelho, não substituídas pelos testes do host.

@@ -1,0 +1,19 @@
+[Unit]
+Description=ArchR launcher session with Sway
+Requires=sway.service
+After=sway.service
+RequiresMountsFor=/storage
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+Environment=HOME=/storage
+EnvironmentFile=/etc/profile
+ExecStart=/usr/bin/archr-launcher-session
+WorkingDirectory=/storage
+Restart=always
+RestartSec=1
+
+[Install]
+WantedBy=archr.target

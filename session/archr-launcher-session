@@ -1,0 +1,151 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Alternate ArchR UI session; runemu.sh retains ownership of game hotkeys.
+
+# ArchR's /etc/profile contains Bash functions and loads device/user quirks.
+# Source it in Bash once, then replace that process with this POSIX supervisor.
+# Do NOT source es_settings: it regenerates locales, restarts tz-data, imports
+# the manager environment and sets the EmulationStation kill target.
+if [ "${1-}" != --profile-loaded ]; then
+    profile=/etc/profile
+    session_shell=/bin/sh
+    if [ "${ARCHR_SESSION_TEST:-0}" = 1 ]; then
+        profile=${ARCHR_SESSION_PROFILE:?}
+        session_shell=${ARCHR_SESSION_SHELL:?}
+    fi
+    exec /usr/bin/bash -c '
+        . "$1"
+        # Functions such as get_setting do not survive exec into POSIX sh.
+        # Reuse generated ES locales, but never run localedef on UI startup.
+        locale=$(get_setting system.language)
+        if [ -n "$locale" ]; then
+            unset I18NPATH LANG LANGUAGE LOCPATH
+            export LANG="$locale.UTF-8" LANGUAGE="$locale.UTF-8"
+            export LOCPATH=/storage/.config/emulationstation/locale
+        fi
+        exec "$2" "$3" --profile-loaded
+    ' archr-session "$profile" "$session_shell" "$0"
+fi
+
+run_dir=/run/archr-launcher
+launcher=/usr/bin/archr-launcher
+settings=/usr/bin/archr-settings
+log_file=/var/log/archr-launcher-session.log
+kill_file=/tmp/.process-kill-data
+sway_attempts=100
+sleep_bin=sleep
+# Overrides are only for hermetic host tests, never read in normal operation.
+if [ "${ARCHR_SESSION_TEST:-0}" = 1 ]; then
+    run_dir=${ARCHR_SESSION_RUN_DIR:?}
+    launcher=${ARCHR_SESSION_LAUNCHER:?}
+    settings=${ARCHR_SESSION_SETTINGS:?}
+    log_file=${ARCHR_SESSION_LOG:?}
+    kill_file=${ARCHR_SESSION_KILL_FILE:?}
+    sway_attempts=${ARCHR_SESSION_SWAY_ATTEMPTS:-100}
+    sleep_bin=${ARCHR_SESSION_SLEEP:?}
+fi
+
+# Same UI exports as 001-functions, 050-sway.conf and es_settings. Quirk exports
+# already arrived through /etc/profile; keep them, including GPU/SDL overrides.
+export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/var/run/0-runtime-dir}
+export WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-wayland-1}
+export SWAYSOCK=${SWAYSOCK:-$XDG_RUNTIME_DIR/sway-ipc.0.sock}
+export SDL_VIDEODRIVER=${SDL_VIDEODRIVER:-wayland}
+export SDL_AUDIODRIVER=pulseaudio
+export SDL_GAMECONTROLLERCONFIG_FILE=${SDL_GAMECONTROLLERCONFIG_FILE:-/storage/.config/SDL-GameControllerDB/gamecontrollerdb.txt}
+export XKB_CONFIG_ROOT=${XKB_CONFIG_ROOT:-/usr/share/X11/xkb}
+
+mkdir -p "$run_dir" || exit 1
+chmod 0755 "$run_dir" || exit 1
+: >>"$log_file" || exit 1
+
+cap_log() {
+    # This file contains supervisor events only. Child output goes to the
+    # service's journal (and runemu's exec.log), so a long-running child cannot
+    # grow it past the cap between events.
+    if [ "$(wc -c <"$log_file")" -ge 262144 ]; then
+        : >"$log_file"
+    fi
+}
+
+session_log() {
+    cap_log
+    printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >>"$log_file"
+    cap_log
+}
+
+# Match start_es.sh: Wayland socket AND an active output, 100 ms, at most 10 s.
+i=0
+while [ "$i" -lt "$sway_attempts" ]; do
+    sock=
+    for candidate in "$XDG_RUNTIME_DIR"/sway-ipc.*.sock; do
+        if [ -S "$candidate" ]; then
+            sock=$candidate
+            break
+        fi
+    done
+    if [ -S "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" ] && [ -n "$sock" ] &&
+        swaymsg -s "$sock" -t get_outputs 2>/dev/null | grep -q '"active": true'; then
+        break
+    fi
+    "$sleep_bin" 0.1
+    i=$((i + 1))
+done
+session_log 'Starting launcher session'
+
+while :; do
+    cap_log
+    # input_sense uses killall with this file, never a PID or a process group.
+    # The launcher and supervisor have different names; do not target the latter.
+    printf '%s\n' archr-launcher >"$kill_file"
+    "$launcher"
+    launcher_status=$?
+    cap_log
+    if [ ! -f "$run_dir/next" ]; then
+        if [ "$launcher_status" -ne 0 ]; then
+            session_log "Launcher exited with $launcher_status; retrying in 1 s"
+            "$sleep_bin" 1
+        fi
+        continue
+    fi
+
+    line=
+    IFS= read -r line <"$run_dir/next"
+    # Consume before executing, so a crash cannot replay a game or power action.
+    rm -f "$run_dir/next" || exit 1
+    case "$line" in
+        'game '*)
+            command=${line#game }
+            # runemu clears then sets the actual emulator target; its wrappers
+            # may refine it (e.g. -9 mupen64plus). Never overwrite it mid-game.
+            rm -f "$kill_file"
+            session_log 'Starting game'
+            sh -c "$command"
+            game_status=$?
+            session_log "Game exited with $game_status"
+            printf '%s\n' "$game_status" >"$run_dir/last-exit.tmp" &&
+                mv -f "$run_dir/last-exit.tmp" "$run_dir/last-exit" || exit 1
+            ;;
+        'action shutdown')
+            session_log 'Action shutdown'
+            systemctl poweroff
+            ;;
+        'action reboot')
+            session_log 'Action reboot'
+            systemctl reboot
+            ;;
+        'action suspend')
+            session_log 'Action suspend'
+            systemctl suspend
+            ;;
+        'action settings')
+            if [ -f "$settings" ] && [ -x "$settings" ]; then
+                session_log 'Action settings'
+                "$settings"
+            else
+                session_log 'archr-settings unavailable; returning to launcher'
+            fi
+            ;;
+        *) session_log 'Unknown instruction; ignoring' ;;
+    esac
+done
