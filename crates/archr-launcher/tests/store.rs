@@ -56,6 +56,39 @@ fn recent_dedups_and_caps_at_30() {
 }
 
 #[test]
+fn load_deduplicates_in_order_and_caps_recent_at_30() {
+    let dir = tempdir().unwrap();
+    let mut keys = vec![
+        "snes/game0.zip".to_owned(),
+        "snes/game1.zip".to_owned(),
+        "snes/game0.zip".to_owned(),
+        "snes/game1.zip".to_owned(),
+    ];
+    keys.extend((2..31).map(|n| format!("snes/game{n}.zip")));
+    assert_eq!(keys.len(), 33);
+    let list = keys
+        .iter()
+        .map(|key| format!("'{key}'"))
+        .collect::<Vec<_>>()
+        .join(",");
+    fs::write(
+        dir.path().join("store.toml"),
+        format!("favorites = [{list}]\nrecent = [{list}]\n"),
+    )
+    .unwrap();
+
+    let store = Store::load(dir.path());
+    let expected_favorites: Vec<_> = (0..31).map(|n| format!("snes/game{n}.zip")).collect();
+    let expected_recent: Vec<_> = (0..30).map(|n| format!("snes/game{n}.zip")).collect();
+    assert_eq!(store.favorites(), expected_favorites);
+    assert_eq!(store.recent(), expected_recent);
+    store.save(dir.path()).unwrap();
+    let reloaded = Store::load(dir.path());
+    assert_eq!(reloaded.favorites(), expected_favorites);
+    assert_eq!(reloaded.recent(), expected_recent);
+}
+
+#[test]
 fn missing_invalid_oversized_and_nonregular_store_are_empty() {
     let dir = tempdir().unwrap();
     let path = dir.path().join("store.toml");

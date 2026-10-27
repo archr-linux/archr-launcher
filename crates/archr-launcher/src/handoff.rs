@@ -12,13 +12,14 @@ pub enum NextCmd {
 }
 
 /// Build the existing ES runemu contract; every argument is a POSIX shell word.
+/// Returns `InvalidInput` if the ROM path is not valid UTF-8.
 pub fn launch_command(
     rom: &Path,
     system: &str,
     core: &str,
     emulator: &str,
     controllers: &str,
-) -> String {
+) -> io::Result<String> {
     launch_command_with(
         Path::new("/usr/bin/runemu.sh"),
         rom,
@@ -36,27 +37,39 @@ fn launch_command_with(
     core: &str,
     emulator: &str,
     controllers: &str,
-) -> String {
+) -> io::Result<String> {
+    let rom = rom.to_str().ok_or_else(|| {
+        io::Error::new(io::ErrorKind::InvalidInput, "ROM path must be valid UTF-8")
+    })?;
+    let bin = bin.to_str().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "executable path must be valid UTF-8",
+        )
+    })?;
     let quote = |argument: &str| format!("'{}'", argument.replace('\'', "'\\''"));
     // Keep the fixed production executable literal; quote test executable paths.
-    let bin = if bin == Path::new("/usr/bin/runemu.sh") {
-        "/usr/bin/runemu.sh".to_owned()
+    let bin = if bin == "/usr/bin/runemu.sh" {
+        bin.to_owned()
     } else {
-        quote(&bin.to_string_lossy())
+        quote(bin)
     };
-    format!(
+    Ok(format!(
         "{} {} {} {} {} {}",
         bin,
-        quote(&rom.to_string_lossy()),
+        quote(rom),
         quote(&format!("-P{system}")),
         quote(&format!("--core={core}")),
         quote(&format!("--emulator={emulator}")),
         quote(&format!("--controllers={controllers}")),
-    )
+    ))
 }
 
 /// Publish exactly one supervisor instruction, rejecting multiline or NUL data
 /// before creating or replacing anything on disk.
+///
+/// The supervisor must read the line with `IFS= read -r line` to preserve shell
+/// escapes. For a game, strip the `game ` prefix and run `sh -c "$command"`.
 pub fn write_next(run_dir: &Path, cmd: &NextCmd) -> io::Result<()> {
     let line = match cmd {
         NextCmd::Game(command) => {
@@ -95,6 +108,26 @@ mod tests {
     use std::{fs, os::unix::fs::PermissionsExt, process::Command};
 
     #[test]
+    fn launch_command_rejects_non_utf8_binary_path() {
+        use std::{ffi::OsStr, os::unix::ffi::OsStrExt};
+
+        let bin = Path::new(OsStr::from_bytes(b"/bin/runemu\xff.sh"));
+        assert_eq!(
+            launch_command_with(
+                bin,
+                Path::new("game.zip"),
+                "snes",
+                "snes9x",
+                "retroarch",
+                "pad"
+            )
+            .unwrap_err()
+            .kind(),
+            io::ErrorKind::InvalidInput
+        );
+    }
+
+    #[test]
     fn launch_command_survives_quotes_spaces_dollar_parens() {
         let dir = tempfile::Builder::new()
             .prefix("launcher ' $ (test) ")
@@ -111,7 +144,8 @@ mod tests {
             "core's $value (x)",
             "retro arch",
             "player 1 \"pad\"; $(echo injected) 'two'",
-        );
+        )
+        .unwrap();
         let result = Command::new("sh").arg("-c").arg(command).output().unwrap();
         assert!(
             result.status.success(),

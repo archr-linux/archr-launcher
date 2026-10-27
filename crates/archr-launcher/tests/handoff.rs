@@ -13,12 +13,26 @@ use tempfile::tempdir;
 #[test]
 fn launch_command_quotes_every_argument_and_preserves_es_flags() {
     assert_eq!(
-        launch_command(Path::new("/rom dir/Tom's $Game (USA).zip"), "snes", "snes9x", "retroarch", "player 1 \"pad\""),
+        launch_command(Path::new("/rom dir/Tom's $Game (USA).zip"), "snes", "snes9x", "retroarch", "player 1 \"pad\"").unwrap(),
         "/usr/bin/runemu.sh '/rom dir/Tom'\\''s $Game (USA).zip' '-Psnes' '--core=snes9x' '--emulator=retroarch' '--controllers=player 1 \"pad\"'"
     );
     assert_eq!(
-        launch_command(Path::new(""), "", "", "", ""),
+        launch_command(Path::new(""), "", "", "", "").unwrap(),
         "/usr/bin/runemu.sh '' '-P' '--core=' '--emulator=' '--controllers='"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn launch_command_rejects_non_utf8_rom_path() {
+    use std::{ffi::OsStr, os::unix::ffi::OsStrExt};
+
+    let rom = Path::new(OsStr::from_bytes(b"/roms/game\xff.zip"));
+    assert_eq!(
+        launch_command(rom, "snes", "snes9x", "retroarch", "pad")
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::InvalidInput
     );
 }
 
@@ -51,7 +65,8 @@ fn next_rejects_newline_or_nul_in_every_game_argument() {
         for index in 0..5 {
             let mut args = ["game.zip", "snes", "snes9x", "retroarch", "pad"];
             args[index] = bad;
-            let command = launch_command(Path::new(args[0]), args[1], args[2], args[3], args[4]);
+            let command =
+                launch_command(Path::new(args[0]), args[1], args[2], args[3], args[4]).unwrap();
             assert_eq!(
                 write_next(&dir, &NextCmd::Game(command))
                     .unwrap_err()

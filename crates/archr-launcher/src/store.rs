@@ -1,4 +1,4 @@
-use std::{io, path::Path};
+use std::{collections::HashSet, io, path::Path};
 
 use serde::{Deserialize, Serialize};
 
@@ -20,11 +20,18 @@ impl Store {
     pub fn load(dir: &Path) -> Self {
         let path = dir.join("store.toml");
         let result = read_bounded(&path, MAX_STORE_BYTES).and_then(|source| {
-            toml::from_str(&source)
+            toml::from_str::<Self>(&source)
                 .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
         });
         match result {
-            Ok(store) => store,
+            Ok(mut store) => {
+                for keys in [&mut store.favorites, &mut store.recent] {
+                    let mut seen = HashSet::new();
+                    keys.retain(|key| seen.insert(key.clone()));
+                }
+                store.recent.truncate(MAX_RECENT);
+                store
+            }
             Err(error) => {
                 log::warn!(
                     "Cannot load store {}: {error}; using empty store",
