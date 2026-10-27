@@ -127,6 +127,13 @@ pub fn button_event(
     repeat: &mut Repeat,
 ) -> Option<Button> {
     match *event {
+        Event::ControllerButtonDown { which, .. }
+        | Event::ControllerButtonUp { which, .. }
+        | Event::ControllerAxisMotion { which, .. }
+            if !controllers.accepts_controller(which) =>
+        {
+            return None
+        }
         Event::JoyButtonDown { which, .. }
         | Event::JoyButtonUp { which, .. }
         | Event::JoyHatMotion { which, .. }
@@ -172,7 +179,10 @@ fn mapped_button(event: &Event, controllers: &Controllers) -> Option<Button> {
         Event::JoyButtonDown { .. }
         | Event::JoyButtonUp { .. }
         | Event::JoyHatMotion { .. }
-        | Event::JoyAxisMotion { .. } => controllers.map_raw(event),
+        | Event::JoyAxisMotion { .. }
+        | Event::ControllerButtonDown { .. }
+        | Event::ControllerButtonUp { .. }
+        | Event::ControllerAxisMotion { .. } => controllers.map_device_event(event),
         _ => map_event(event),
     }
 }

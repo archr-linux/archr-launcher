@@ -66,13 +66,19 @@ pub fn clean_name(file_stem: &str) -> String {
 /// Scan at most three subdirectory levels. Missing/unreadable inputs are
 /// optional: malformed gamelists fall back atomically to names and folder media.
 pub fn scan_system(sys: &SystemDef) -> Vec<Game> {
+    scan_system_with_mapper(sys, &Path::to_owned)
+}
+
+/// Resolve metadata paths before touching the filesystem (e.g. a PC ROOT).
+/// The system directory itself must already be resolved by the caller.
+pub fn scan_system_with_mapper(sys: &SystemDef, mapper: &dyn Fn(&Path) -> PathBuf) -> Vec<Game> {
     let Ok(root) = sys.path.canonicalize() else {
         return Vec::new();
     };
     let mut paths = Vec::new();
     let mut ancestors = HashSet::from([root]);
     scan_directory(&sys.path, sys, 0, false, &mut ancestors, &mut paths);
-    let metadata = load_gamelist(&sys.path).unwrap_or_default();
+    let metadata = load_gamelist(&sys.path, mapper).unwrap_or_default();
     let mut media = MediaLookup::new(&sys.path);
     let mut games: Vec<_> = paths
         .into_iter()
@@ -90,12 +96,12 @@ pub fn scan_system(sys: &SystemDef) -> Vec<Game> {
             let image = entry
                 .and_then(|entry| {
                     media
-                        .referenced(&entry.image)
-                        .or_else(|| media.referenced(&entry.thumbnail))
+                        .referenced(&entry.image, mapper)
+                        .or_else(|| media.referenced(&entry.thumbnail, mapper))
                 })
                 .or_else(|| media.image(stem));
             let video = entry
-                .and_then(|entry| media.referenced(&entry.video))
+                .and_then(|entry| media.referenced(&entry.video, mapper))
                 .or_else(|| media.video(stem));
             Game {
                 path,
@@ -232,8 +238,8 @@ impl MediaLookup {
             .contains(filename)
     }
 
-    fn referenced(&mut self, text: &str) -> Option<PathBuf> {
-        let path = resolve_path(&self.system_dir, text)?;
+    fn referenced(&mut self, text: &str, mapper: &dyn Fn(&Path) -> PathBuf) -> Option<PathBuf> {
+        let path = mapper(&resolve_path(&self.system_dir, text)?);
         self.contains_file(&path).then_some(path)
     }
 

@@ -21,6 +21,7 @@ impl FakeData {
                 fullname: name.to_uppercase(),
                 game_count: count,
                 dir_mtime: 0,
+                source_fingerprint: 0,
             });
             data.games.insert(name.into(), games(count as usize));
         }

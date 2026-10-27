@@ -3,7 +3,7 @@ use sdl2::{
     controller::GameController, joystick::Joystick, GameControllerSubsystem, JoystickSubsystem,
 };
 
-use crate::{input::map_event, joystick_mapping::RawMappings, state::Button};
+use crate::{joystick_mapping::RawMappings, state::Button};
 use std::{
     io::Read,
     path::PathBuf,
@@ -74,25 +74,29 @@ impl Controllers {
             self.loading = None;
         }
     }
-    pub fn map_raw(&self, event: &sdl2::event::Event) -> Option<Button> {
+    pub fn map_device_event(&self, event: &sdl2::event::Event) -> Option<Button> {
         let which = match *event {
             sdl2::event::Event::JoyButtonDown { which, .. }
             | sdl2::event::Event::JoyButtonUp { which, .. }
             | sdl2::event::Event::JoyHatMotion { which, .. }
-            | sdl2::event::Event::JoyAxisMotion { which, .. } => which,
+            | sdl2::event::Event::JoyAxisMotion { which, .. }
+            | sdl2::event::Event::ControllerButtonDown { which, .. }
+            | sdl2::event::Event::ControllerButtonUp { which, .. }
+            | sdl2::event::Event::ControllerAxisMotion { which, .. } => which,
             _ => return None,
         };
         let device = self
             .devices
             .iter()
-            .find(|device| device.joystick.instance_id() == which && device.controller.is_none())?;
-        let guid = device.joystick.guid().to_string();
-        if self.mappings.contains(&guid) {
-            self.mappings.map(&guid, event)
-        } else {
-            map_event(event)
-        }
+            .find(|device| device.joystick.instance_id() == which)?;
+        self.mappings.map_device(
+            &device.joystick.guid().to_string(),
+            &device.joystick.name(),
+            device.controller.is_some(),
+            event,
+        )
     }
+
     pub fn refresh(&mut self) {
         self.devices.clear();
         for index in 0..self.joysticks.num_joysticks().unwrap_or(0) {
@@ -117,9 +121,29 @@ impl Controllers {
         }
     }
     pub fn accepts_raw(&self, instance: u32) -> bool {
-        self.devices
-            .iter()
-            .any(|device| device.joystick.instance_id() == instance && device.controller.is_none())
+        if self.loading.is_some() {
+            return false;
+        }
+        self.devices.iter().any(|device| {
+            device.joystick.instance_id() == instance
+                && (device.controller.is_none()
+                    || self.mappings.contains_device(
+                        &device.joystick.guid().to_string(),
+                        &device.joystick.name(),
+                    ))
+        })
+    }
+    pub fn accepts_controller(&self, instance: u32) -> bool {
+        if self.loading.is_some() {
+            return false;
+        }
+        self.devices.iter().any(|device| {
+            device.joystick.instance_id() == instance
+                && device.controller.is_some()
+                && !self
+                    .mappings
+                    .contains_device(&device.joystick.guid().to_string(), &device.joystick.name())
+        })
     }
     pub fn configuration(&self) -> String {
         controller_arguments(

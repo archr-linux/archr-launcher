@@ -5,7 +5,7 @@ mod gamelist;
 pub mod games;
 pub mod systems;
 
-pub use games::{clean_name, scan_system, Game};
+pub use games::{clean_name, scan_system, scan_system_with_mapper, Game};
 
 pub use systems::{load_systems, Core, Emulator, SystemDef};
 

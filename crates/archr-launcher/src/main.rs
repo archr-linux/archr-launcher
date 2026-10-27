@@ -152,7 +152,7 @@ fn run() -> Result<(), String> {
             {
                 match step {
                     script::Step::Button(b) => button = Some(b),
-                    script::Step::Quit => return Ok(()),
+                    script::Step::Quit => return library.finish(),
                     script::Step::Snapshot => {
                         ui.screenshot = Some(
                             std::env::var_os("ARCHR_LAUNCHER_SCREENSHOT")
@@ -171,11 +171,11 @@ fn run() -> Result<(), String> {
             repeat.wait_ms(Instant::now())
         }) {
             match event {
-                Event::Quit { .. } if windowed => return Ok(()),
+                Event::Quit { .. } if windowed => return library.finish(),
                 Event::KeyDown {
                     keycode: Some(Keycode::Escape),
                     ..
-                } if windowed => return Ok(()),
+                } if windowed => return library.finish(),
                 Event::JoyDeviceAdded { .. } | Event::JoyDeviceRemoved { .. } => {
                     controllers.refresh();
                     repeat.clear();

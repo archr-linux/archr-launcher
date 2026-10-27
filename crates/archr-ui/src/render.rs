@@ -30,7 +30,17 @@ impl TextCache<'_, '_> {
         x: i32,
         y: i32,
     ) -> Result<(), String> {
-        let text: String = text.chars().take(160).collect();
+        let text: String = text
+            .chars()
+            .take(160)
+            .map(|character| {
+                if character == '\0' {
+                    '\u{fffd}'
+                } else {
+                    character
+                }
+            })
+            .collect();
         if text.is_empty() {
             return Ok(());
         }

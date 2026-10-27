@@ -5,7 +5,7 @@ use sdl2::event::Event;
 use std::collections::HashMap;
 
 #[derive(Default)]
-pub struct RawMappings(HashMap<String, Vec<Binding>>);
+pub struct RawMappings(HashMap<String, Vec<Binding>>, HashMap<String, String>);
 struct Binding {
     button: Button,
     kind: String,
@@ -21,10 +21,21 @@ impl RawMappings {
             match reader.read_event().map_err(|error| error.to_string())? {
                 Xml::Start(element) if element.name().as_ref() == b"inputConfig" => {
                     let attrs = attributes(&element)?;
-                    guid = attrs
-                        .get("deviceGUID")
-                        .filter(|_| attrs.get("type").is_some_and(|kind| kind == "joystick"))
-                        .cloned();
+                    guid = if attrs.get("type").is_some_and(|kind| kind == "joystick") {
+                        attrs
+                            .get("deviceGUID")
+                            .filter(|guid| !guid.is_empty())
+                            .cloned()
+                            .or_else(|| attrs.get("deviceName").map(|name| format!("name:{name}")))
+                    } else {
+                        None
+                    };
+                    if let Some(key) = &guid {
+                        mappings.0.entry(key.clone()).or_default();
+                    }
+                    if let (Some(name), Some(key)) = (attrs.get("deviceName"), &guid) {
+                        mappings.1.insert(name.clone(), key.clone());
+                    }
                 }
                 Xml::Empty(element) | Xml::Start(element)
                     if element.name().as_ref() == b"input" =>
@@ -38,8 +49,8 @@ impl RawMappings {
                         "b" => Some(Button::B),
                         "x" => Some(Button::X),
                         "y" => Some(Button::Y),
-                        "leftshoulder" | "left" => Some(Button::L),
-                        "rightshoulder" | "right" => Some(Button::R),
+                        "leftshoulder" | "left" | "pageup" => Some(Button::L),
+                        "rightshoulder" | "right" | "pagedown" => Some(Button::R),
                         "up" => Some(Button::Up),
                         "down" => Some(Button::Down),
                         "start" => Some(Button::Start),
@@ -65,6 +76,47 @@ impl RawMappings {
                 Xml::Eof => return Ok(mappings),
                 _ => {}
             }
+        }
+    }
+    fn key<'a>(&'a self, guid: &'a str, name: &str) -> Option<&'a str> {
+        if self.0.contains_key(guid) {
+            Some(guid)
+        } else {
+            self.1
+                .get(name)
+                .filter(|key| self.0.contains_key(*key))
+                .map(String::as_str)
+        }
+    }
+    pub fn contains_device(&self, guid: &str, name: &str) -> bool {
+        self.key(guid, name).is_some()
+    }
+    /// ES takes precedence, including on SDL GameControllers. Exactly one event
+    /// stream is accepted for each device, so SDL's raw/native duplicates vanish.
+    pub fn map_device(
+        &self,
+        guid: &str,
+        name: &str,
+        controller: bool,
+        event: &Event,
+    ) -> Option<Button> {
+        let raw = matches!(
+            event,
+            Event::JoyButtonDown { .. }
+                | Event::JoyButtonUp { .. }
+                | Event::JoyAxisMotion { .. }
+                | Event::JoyHatMotion { .. }
+        );
+        if let Some(key) = self.key(guid, name) {
+            if raw {
+                self.map(key, event)
+            } else {
+                None
+            }
+        } else if raw != controller {
+            crate::input::map_event(event)
+        } else {
+            None
         }
     }
     pub fn contains(&self, guid: &str) -> bool {

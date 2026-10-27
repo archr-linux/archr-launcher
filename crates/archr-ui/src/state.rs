@@ -70,6 +70,10 @@ pub trait DataSource {
     fn systems(&self) -> &[SystemEntry];
     /// Accepts real system names and the @favorites / @recent collections.
     fn games(&self, system: &str) -> &[Game];
+    /// Collection presence/count need not load or resolve any game metadata.
+    fn collection_len(&self, collection: &str) -> usize {
+        self.games(collection).len()
+    }
     /// Resolves a displayed row to its real system and game index, including
     /// identity mappings for real systems. None makes game actions no-ops.
     fn origin(&self, system: &str, game: usize) -> Option<(String, usize)>;
@@ -100,7 +104,7 @@ impl App {
     pub fn system_rows(&self, data: &dyn DataSource) -> Vec<String> {
         ["@favorites", "@recent"]
             .into_iter()
-            .filter(|name| !data.games(name).is_empty())
+            .filter(|name| data.collection_len(name) > 0)
             .map(str::to_owned)
             .chain(
                 data.systems()

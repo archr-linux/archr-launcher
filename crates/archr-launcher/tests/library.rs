@@ -53,6 +53,14 @@ fn warm_overview_precedes_worker_and_collection_origins_are_real() {
     assert!(library.games("@favorites").is_empty());
     assert!(!paths.cache.join("systems").exists());
     library.start();
+    wait(&mut library, |library| library.ready);
+    assert!(
+        library.games("nes").is_empty(),
+        "overview must not load Store-referenced systems"
+    );
+    assert!(!paths.cache.join("systems").exists());
+    assert_eq!(App::new(10).system_rows(&library), ["@favorites", "nes"]);
+    library.ensure("@favorites");
     wait(&mut library, |library| {
         library.games("@favorites").len() == 1
     });
@@ -81,6 +89,8 @@ fn core_lock_is_waited_in_worker_not_in_ui_call() {
     let (_dir, paths) = fixture();
     let mut library = Library::initial(paths.clone());
     library.start();
+    wait(&mut library, |library| library.ready);
+    library.ensure("nes");
     wait(&mut library, |library| !library.games("nes").is_empty());
     fs::create_dir_all(paths.lock.parent().unwrap()).unwrap();
     fs::write(&paths.lock, std::process::id().to_string()).unwrap();
@@ -104,4 +114,44 @@ fn core_lock_is_waited_in_worker_not_in_ui_call() {
     assert!(fs::read_to_string(paths.config)
         .unwrap()
         .contains("nes[\"A.nes\"].core=fceumm"));
+}
+
+#[test]
+fn action_flushes_latest_favorites_before_publishing_next() {
+    use archr_launcher::state::SessionAction;
+    let (_dir, paths) = fixture();
+    let mut library = Library::initial(paths.clone());
+    library.start();
+    wait(&mut library, |library| library.ready);
+    library.ensure("nes");
+    wait(&mut library, |library| !library.games("nes").is_empty());
+    library
+        .handle(
+            Outcome::ToggleFavorite {
+                system: "nes".into(),
+                game: 0,
+            },
+            "",
+        )
+        .unwrap();
+    assert!(library
+        .handle(Outcome::Action(SessionAction::OpenSettings), "")
+        .unwrap());
+    assert!(paths.run.join("next").exists());
+    assert!(Store::load(&paths.store).favorites().is_empty());
+}
+#[test]
+fn failed_final_store_flush_does_not_publish_next() {
+    use archr_launcher::state::SessionAction;
+    let (_dir, paths) = fixture();
+    let mut library = Library::initial(paths.clone());
+    library.start();
+    wait(&mut library, |library| library.ready);
+    // No game import/save has been queued. Force every store rename to fail.
+    fs::remove_file(paths.store.join("store.toml")).unwrap();
+    fs::create_dir(paths.store.join("store.toml")).unwrap();
+    assert!(library
+        .handle(Outcome::Action(SessionAction::OpenSettings), "")
+        .is_err());
+    assert!(!paths.run.join("next").exists());
 }

@@ -12,7 +12,7 @@ const MAX_STORE_BYTES: u64 = 256 * 1024;
 const MAX_RECENT: usize = 30;
 
 /// Launcher-owned favorites and recents, keyed by `system/rom-path` verbatim.
-#[derive(Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Store {
     favorites: Vec<String>,

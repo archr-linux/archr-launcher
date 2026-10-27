@@ -2,6 +2,7 @@
 use crate::{
     handoff::{launch_command_with, write_next, NextCmd},
     paths::Paths,
+    persistence::StoreWriter,
     state::{DataSource, Outcome},
     store::Store,
     worker::{self, Update, Work, Worker},
@@ -25,9 +26,12 @@ pub struct Library {
     games: HashMap<String, Vec<Game>>,
     origins: HashMap<String, Vec<(String, usize)>>,
     requested: HashSet<String>,
+    urgent: HashSet<String>,
+    collections: HashSet<String>,
     config: Option<SystemCfg>,
     overrides: HashMap<(String, String), (String, String)>,
     store: Store,
+    store_writer: Option<StoreWriter>,
     worker: Option<Worker>,
 }
 impl Library {
@@ -51,6 +55,7 @@ impl Library {
                     fullname: system.fullname.clone(),
                     game_count: 1,
                     dir_mtime: 0,
+                    source_fingerprint: 0,
                 })
                 .collect(),
         });
@@ -66,27 +71,84 @@ impl Library {
             games: HashMap::new(),
             origins: HashMap::new(),
             requested: HashSet::new(),
+            urgent: HashSet::new(),
+            collections: HashSet::new(),
             config: None,
             overrides: HashMap::new(),
             store: Store::default(),
+            store_writer: None,
             worker: None,
         }
     }
     pub fn start(&mut self) {
+        self.store_writer = Some(StoreWriter::new(self.paths.store.clone()));
         self.worker = Some(worker::start(self.paths.clone(), self.definitions.clone()));
     }
     pub fn ensure(&mut self, system: &str) {
-        if !self.ready || system.starts_with('@') || self.requested.contains(system) {
+        if !self.ready {
+            return;
+        }
+        if system.starts_with('@') {
+            let Some(keys) = self.collection_keys(system) else {
+                return;
+            };
+            let names: Vec<_> = keys
+                .iter()
+                .filter_map(|key| key.split_once('/').map(|(name, _)| name.to_owned()))
+                .collect();
+            let entered = self.collections.insert(system.to_owned());
+            for name in names {
+                self.ensure_system(&name, true);
+            }
+            if entered {
+                self.refresh_collections();
+            }
+        } else {
+            self.ensure_system(system, false);
+        }
+    }
+    fn ensure_system(&mut self, system: &str, background: bool) {
+        if self.games.contains_key(system)
+            || (if background {
+                &self.requested
+            } else {
+                &self.urgent
+            })
+            .contains(system)
+        {
             return;
         }
         if let Some(worker) = &self.worker {
-            if worker.send.send(Work::Games(system.to_owned())).is_ok() {
+            if worker
+                .send
+                .send(Work::Games {
+                    name: system.to_owned(),
+                    background,
+                })
+                .is_ok()
+            {
                 self.requested.insert(system.to_owned());
+                if !background {
+                    self.urgent.insert(system.to_owned());
+                }
             }
         }
     }
+    fn collection_keys(&self, name: &str) -> Option<&[String]> {
+        match name {
+            "@favorites" => Some(self.store.favorites()),
+            "@recent" => Some(self.store.recent()),
+            _ => None,
+        }
+    }
     pub fn loading(&self, system: &str) -> bool {
-        !system.starts_with('@') && !self.games.contains_key(system)
+        if let Some(keys) = self.collection_keys(system) {
+            keys.iter()
+                .filter_map(|key| key.split_once('/'))
+                .any(|(name, _)| !self.games.contains_key(name))
+        } else {
+            !self.games.contains_key(system)
+        }
     }
     pub fn poll(&mut self) -> bool {
         let mut changed = false;
@@ -116,10 +178,7 @@ impl Library {
                 }
                 Update::Games(system, games) => {
                     if self.store.import_games(&system, &games) {
-                        if let Err(error) = self.store.save(&self.paths.store) {
-                            self.banner =
-                                Some(format!("Não foi possível importar favoritos: {error}"));
-                        }
+                        self.queue_store();
                     }
                     self.games.insert(system, games);
                 }
@@ -138,17 +197,13 @@ impl Library {
             }
             changed = true;
         }
+        while let Some(error) = self.store_writer.as_ref().and_then(StoreWriter::error) {
+            self.banner = Some(format!(
+                "Não foi possível salvar favoritos/histórico: {error}"
+            ));
+            changed = true;
+        }
         if changed {
-            let names: Vec<_> = self
-                .store
-                .favorites()
-                .iter()
-                .chain(self.store.recent())
-                .filter_map(|key| key.split_once('/').map(|(system, _)| system.to_owned()))
-                .collect();
-            for name in names {
-                self.ensure(&name);
-            }
             self.refresh_collections();
         }
         changed
@@ -159,9 +214,7 @@ impl Library {
             Outcome::ToggleFavorite { system, game } => {
                 let key = self.game_key(&system, game).ok_or("Jogo não encontrado")?;
                 self.store.toggle_favorite(&key);
-                self.store
-                    .save(&self.paths.store)
-                    .map_err(|error| error.to_string())?;
+                self.queue_store();
                 self.refresh_collections();
             }
             Outcome::SetCore {
@@ -215,20 +268,41 @@ impl Library {
                 .map_err(|error| error.to_string())?;
                 let key = self.game_key(&system, game).ok_or("Jogo não encontrado")?;
                 self.store.push_recent(&key);
-                self.store
-                    .save(&self.paths.store)
-                    .map_err(|error| error.to_string())?;
+                self.flush_store()?;
                 write_next(&self.paths.run, &NextCmd::Game(command))
                     .map_err(|error| error.to_string())?;
                 return Ok(true);
             }
             Outcome::Action(action) => {
+                self.flush_store()?;
                 write_next(&self.paths.run, &NextCmd::Action(action))
                     .map_err(|error| error.to_string())?;
                 return Ok(true);
             }
         }
         Ok(false)
+    }
+    fn queue_store(&self) {
+        if let Some(writer) = &self.store_writer {
+            writer.queue(self.store.clone());
+        }
+    }
+    /// Windowed close also waits for queued favorite/import snapshots.
+    pub fn finish(&self) -> Result<(), String> {
+        if self.ready {
+            self.flush_store()
+        } else {
+            Ok(())
+        }
+    }
+    fn flush_store(&self) -> Result<(), String> {
+        if !self.ready {
+            return Err("Biblioteca ainda carregando".to_owned());
+        }
+        self.store_writer
+            .as_ref()
+            .ok_or("Persistência não inicializada")?
+            .flush(self.store.clone())
     }
     fn game_key(&self, system: &str, index: usize) -> Option<String> {
         self.games(system)
@@ -252,6 +326,9 @@ impl Library {
             ("@favorites", self.store.favorites()),
             ("@recent", self.store.recent()),
         ] {
+            if !self.collections.contains(name) {
+                continue;
+            }
             let mut collection = Vec::new();
             let mut origins = Vec::new();
             for key in keys {
@@ -276,6 +353,9 @@ impl Library {
 impl DataSource for Library {
     fn systems(&self) -> &[SystemEntry] {
         &self.overview.systems
+    }
+    fn collection_len(&self, collection: &str) -> usize {
+        self.collection_keys(collection).map_or(0, <[String]>::len)
     }
     fn games(&self, system: &str) -> &[Game] {
         self.games

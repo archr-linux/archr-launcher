@@ -13,11 +13,11 @@ use std::time::UNIX_EPOCH;
 use bincode::Options;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
-use crate::{scan_system, Game, SystemDef};
+use crate::{scan_system_with_mapper, Game, SystemDef};
 
 const MAGIC: &[u8; 4] = b"ALAX";
 const HEADER_BYTES: u64 = 8;
-pub const CACHE_VERSION: u32 = 1;
+pub const CACHE_VERSION: u32 = 2;
 /// Maximum overview file size, including the header (1 MiB).
 pub const MAX_OVERVIEW_BYTES: u64 = 1024 * 1024;
 /// Maximum per-system cache file size, including the header (32 MiB).
@@ -33,10 +33,10 @@ pub struct SystemEntry {
     pub name: String,
     pub fullname: String,
     pub game_count: u32,
-    /// Maximum modification time in nanoseconds since the Unix epoch across the
-    /// system directory, gamelist.xml, and supported media directories. Obtained
-    /// with stat calls only; nested ROM directory changes are not detected in v1.
+    /// Latest source modification time in nanoseconds, from stat calls only.
     pub dir_mtime: u64,
+    /// Also covers the system path and extensions, without changing dir_mtime.
+    pub source_fingerprint: u64,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -53,17 +53,69 @@ pub fn load_overview(cache_dir: &Path) -> Option<Overview> {
 /// Scan every system, including empty/missing ones (which receive a zero count).
 /// This is background work, not part of the startup path.
 pub fn build_overview(systems: &[SystemDef]) -> Overview {
-    Overview {
+    refresh_overview(
+        &Overview {
+            systems: Vec::new(),
+        },
+        systems,
+    )
+    .0
+}
+
+/// Stat unchanged systems without scanning. Definition/path/extension changes,
+/// added/removed systems and changed directory/media mtimes invalidate entries.
+pub fn refresh_overview(old: &Overview, systems: &[SystemDef]) -> (Overview, bool) {
+    refresh_overview_with_mapper(old, systems, &Path::to_owned)
+}
+pub fn refresh_overview_with_mapper(
+    old: &Overview,
+    systems: &[SystemDef],
+    mapper: &dyn Fn(&Path) -> PathBuf,
+) -> (Overview, bool) {
+    let overview = Overview {
         systems: systems
             .iter()
-            .map(|sys| SystemEntry {
-                name: sys.name.clone(),
-                fullname: sys.fullname.clone(),
-                dir_mtime: fingerprint(&sys.path).unwrap_or(0),
-                game_count: u32::try_from(scan_system(sys).len()).unwrap_or(u32::MAX),
+            .map(|sys| {
+                let previous = old.systems.iter().find(|entry| entry.name == sys.name);
+                let current = overview_fingerprint(sys);
+                let count = previous
+                    .filter(|entry| current == Some(entry.source_fingerprint))
+                    .map(|entry| entry.game_count)
+                    .unwrap_or_else(|| {
+                        u32::try_from(scan_system_with_mapper(sys, mapper).len())
+                            .unwrap_or(u32::MAX)
+                    });
+                SystemEntry {
+                    name: sys.name.clone(),
+                    fullname: sys.fullname.clone(),
+                    game_count: count,
+                    dir_mtime: fingerprint(&sys.path).unwrap_or(0),
+                    source_fingerprint: current.unwrap_or(0),
+                }
             })
             .collect(),
+    };
+    let changed = overview != *old;
+    (overview, changed)
+}
+fn overview_fingerprint(sys: &SystemDef) -> Option<u64> {
+    let stamp = fingerprint(&sys.path).or_else(|| {
+        fs::symlink_metadata(&sys.path)
+            .err()
+            .filter(|error| error.kind() == io::ErrorKind::NotFound)
+            .map(|_| 0)
+    })?;
+    let mut hash = 0xcbf29ce484222325u64;
+    for bytes in std::iter::once(sys.path.as_os_str().as_encoded_bytes())
+        .chain(sys.extensions.iter().map(|extension| extension.as_bytes()))
+        .chain(std::iter::once(stamp.to_le_bytes().as_slice()))
+    {
+        for byte in bytes {
+            hash = (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3);
+        }
+        hash = (hash ^ 255).wrapping_mul(0x100000001b3);
     }
+    Some(hash)
 }
 
 /// Atomically replace the overview, creating the cache directory if necessary.
@@ -79,6 +131,13 @@ pub fn save_overview(cache_dir: &Path, overview: &Overview) -> io::Result<()> {
 /// Otherwise scan and best-effort rewrite the cache; write errors never hide ROMs.
 /// Changes inside nested ROM subfolders are not detected by the v1 fingerprint.
 pub fn load_games(cache_dir: &Path, sys: &SystemDef) -> Vec<Game> {
+    load_games_with_mapper(cache_dir, sys, &Path::to_owned)
+}
+pub fn load_games_with_mapper(
+    cache_dir: &Path,
+    sys: &SystemDef,
+    mapper: &dyn Fn(&Path) -> PathBuf,
+) -> Vec<Game> {
     let path = cache_dir.join("systems").join(system_filename(&sys.name));
     let dir_mtime = fingerprint(&sys.path);
     if let Some(current) = dir_mtime {
@@ -89,7 +148,7 @@ pub fn load_games(cache_dir: &Path, sys: &SystemDef) -> Vec<Game> {
         }
     }
 
-    let games = scan_system(sys);
+    let games = scan_system_with_mapper(sys, mapper);
     if let Some(dir_mtime) = dir_mtime {
         let cached = GameCache { dir_mtime, games };
         // A read-only/full/unavailable cache is not an indexing failure.

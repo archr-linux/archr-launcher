@@ -46,13 +46,19 @@ impl SystemCfg {
     /// PID publication. The lock is released on success and I/O errors, provided
     /// it still contains our PID.
     pub fn set_and_save(path: &Path, lock: &Path, entry_key: &str, value: &str) -> io::Result<()> {
-        Self::set_and_save_with_timeout(path, lock, entry_key, value, LOCK_TIMEOUT)
+        Self::set_many_and_save(path, lock, &[(entry_key, value)])
+    }
+
+    /// Apply all entries under one lock and publish them with one atomic rename.
+    pub fn set_many_and_save(path: &Path, lock: &Path, entries: &[(&str, &str)]) -> io::Result<()> {
+        Self::set_many_with_timeout(path, lock, entries, LOCK_TIMEOUT)
     }
 
     fn entry(&self, key: &str) -> Option<&str> {
         self.lines.iter().find_map(|line| entry_value(line, key))
     }
 
+    #[cfg(test)]
     fn set_and_save_with_timeout(
         path: &Path,
         lock: &Path,
@@ -60,24 +66,34 @@ impl SystemCfg {
         value: &str,
         timeout: Duration,
     ) -> io::Result<()> {
+        Self::set_many_with_timeout(path, lock, &[(entry_key, value)], timeout)
+    }
+
+    fn set_many_with_timeout(
+        path: &Path,
+        lock: &Path,
+        entries: &[(&str, &str)],
+        timeout: Duration,
+    ) -> io::Result<()> {
         let _guard = PidLock::acquire(lock, timeout)?;
         let mut cfg = Self::load(path)?;
-        if let Some(line) = cfg
-            .lines
-            .iter_mut()
-            .find(|line| entry_value(line, entry_key).is_some())
-        {
-            let (_, ending) = split_line_ending(line);
-            *line = format!("{entry_key}={value}{ending}");
-        } else {
-            if let Some(last) = cfg.lines.last_mut() {
-                if !last.ends_with('\n') {
-                    last.push('\n');
+        for &(entry_key, value) in entries {
+            if let Some(line) = cfg
+                .lines
+                .iter_mut()
+                .find(|line| entry_value(line, entry_key).is_some())
+            {
+                let (_, ending) = split_line_ending(line);
+                *line = format!("{entry_key}={value}{ending}");
+            } else {
+                if let Some(last) = cfg.lines.last_mut() {
+                    if !last.ends_with('\n') {
+                        last.push('\n');
+                    }
                 }
+                cfg.lines.push(format!("{entry_key}={value}\n"));
             }
-            cfg.lines.push(format!("{entry_key}={value}\n"));
         }
-
         let mut temporary = tempfile::NamedTempFile::new_in(containing_directory(path))?;
         for line in &cfg.lines {
             temporary.write_all(line.as_bytes())?;

@@ -25,6 +25,7 @@ fn overview() -> Overview {
             fullname: "Super Nintendo".into(),
             game_count: 42,
             dir_mtime: 1_700_000_000_123_456_789,
+            source_fingerprint: 0,
         }],
     }
 }

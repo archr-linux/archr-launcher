@@ -20,11 +20,14 @@ para validar navegação, imagens e o contrato do supervisor, sem iniciar emulad
 Teclado: Enter abre, Backspace volta, X favorita, Y abre o menu, PgUp/PgDn
 ou esquerda/direita mudam de página/núcleo, cima/baixo selecionam. Escape fecha
 somente em modo janela. Direções mantidas repetem após 300 ms e depois a cada
-80 ms. Pads mapeados usam SDL GameController; pads sem mapeamento usam
-`es_input.cfg`, quando disponível, ou o fallback convencional de botões/eixo/hat.
+80 ms. Uma entrada de `es_input.cfg` com GUID ou nome correspondente tem
+prioridade, inclusive para pads reconhecidos como SDL GameController: nesses
+pads só os eventos raw são usados, sem duplicar os eventos GameController.
+Sem entrada ES, usa SDL GameController ou o fallback de botões/eixo/hat.
 
 `ARCHR_LAUNCHER_ROOT` prefixa os caminhos absolutos, inclusive os caminhos de
-ROMs de `es_systems.cfg`, `/usr/bin/runemu.sh`, `/run/archr-launcher` e
+ROMs de `es_systems.cfg`, ROMs/mídias absolutos do gamelist (antes dos testes
+de existência), `/usr/bin/runemu.sh`, `/run/archr-launcher` e
 `/tmp/.system.cfg.lock`. Assim uma execução de teste não grava a trava nem o
 handoff do host. As fontes padrão tentam primeiro o prefixo, depois as fontes
 do host. Isso facilita testes, mas não é uma sandbox de segurança.
@@ -60,8 +63,11 @@ no desenho. Sem display, os mesmos fluxos podem rodar com
 - `archr-launcher`: caminhos, adaptação da biblioteca, workers e handoff.
 - A primeira apresentação usa somente o overview em cache; sem cache, mostra
   os nomes de todos os sistemas, ainda sem contagens. Workers só iniciam após
-  essa apresentação. A reconstrução do overview não bloqueia a carga do sistema
-  selecionado. Jogos e coleções usam os caches por sistema sob demanda.
+  essa apresentação. O overview reutiliza contagens quando os fingerprints
+  baratos (path/extensões/mtimes) não mudaram e só salva quando há alterações.
+  A atualização não bloqueia a carga do sistema selecionado. As coleções aparecem
+  pelas chaves do Store; jogos são resolvidos só ao entrar na coleção. Pedidos
+  de sistema selecionado têm prioridade sobre resoluções de coleção enfileiradas.
 - Favoritos/histórico do ES são importados uma vez por sistema, quando sua lista
   é carregada. As coleções preservam o sistema e índice reais de cada jogo.
 - Miniaturas são decodificadas/redimensionadas em worker e salvas em
@@ -69,8 +75,12 @@ no desenho. Sem display, os mesmos fluxos podem rodar com
   arquivo `.size` invalida a miniatura quando o tamanho do retângulo muda.
   Somente a seleção e até dois vizinhos de cada lado são pedidos; até 16
   texturas de capa e 128 texturas de texto ficam em memória.
-- Escritas de núcleo são serializadas em worker sob a trava do `system.cfg`.
-  Um lançamento aguarda essas escritas sem bloquear o event loop.
+- Favoritos/importações são gravados por um writer serializado que coalesce
+  snapshots pendentes. O snapshot final é confirmado antes de publicar `next`
+  em lançamento/ação; fechar a janela também aguarda a gravação final.
+- Escritas de núcleo são serializadas em worker; emulador e núcleo são publicados
+  juntos, sob uma única trava/rename do `system.cfg`. Um lançamento aguarda essas
+  escritas sem bloquear o event loop.
 - Falhas do jogo são lidas de `last-exit`, exibidas por alguns segundos e
   apontam para `/var/log/exec.log`, usado por `runemu.sh`.
 

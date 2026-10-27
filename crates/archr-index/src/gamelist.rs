@@ -44,7 +44,10 @@ fn known_field(name: &[u8]) -> bool {
 
 /// Stream the complete document before returning any metadata. A parse error
 /// discards every entry, including entries preceding the malformed section.
-pub(crate) fn load_gamelist(system_dir: &Path) -> Result<HashMap<PathBuf, Metadata>, IndexError> {
+pub(crate) fn load_gamelist(
+    system_dir: &Path,
+    mapper: &dyn Fn(&Path) -> PathBuf,
+) -> Result<HashMap<PathBuf, Metadata>, IndexError> {
     let mut reader =
         Reader::from_reader(BufReader::new(File::open(system_dir.join("gamelist.xml"))?));
     reader.config_mut().expand_empty_elements = true;
@@ -92,6 +95,7 @@ pub(crate) fn load_gamelist(system_dir: &Path) -> Result<HashMap<PathBuf, Metada
                     game.set(&stack[2], &text);
                 } else if in_game && stack.len() == 2 && !game.path.is_empty() {
                     if let Some(path) = resolve_path(system_dir, &game.path)
+                        .map(|path| mapper(&path))
                         .filter(|path| path.exists())
                         .and_then(|path| game_path_key(&path))
                     {
