@@ -1,4 +1,4 @@
-//! SDL 2.0.18 geometry primitives and one startup-generated 9-slice shadow.
+//! Cached SDL 2.0.18 meshes and one startup-generated 9-slice shadow.
 use crate::{text::color, theme::Rgba};
 use sdl2::{
     pixels::{Color, PixelFormatEnum},
@@ -6,9 +6,16 @@ use sdl2::{
     render::{BlendMode, Canvas, ScaleMode, Texture, TextureCreator, Vertex},
     video::{Window, WindowContext},
 };
-use std::f32::consts::{FRAC_PI_2, PI, TAU};
+use std::{
+    collections::VecDeque,
+    f32::consts::{FRAC_PI_2, PI, TAU},
+    sync::OnceLock,
+};
 
 type Point = (f32, f32);
+const SEGMENTS: usize = 8;
+const POINTS: usize = (SEGMENTS + 1) * 4;
+const CACHE_SIZE: usize = 128;
 fn vertex(p: Point, c: Color, uv: Point) -> Vertex {
     Vertex {
         position: FPoint::new(p.0, p.1),
@@ -16,7 +23,20 @@ fn vertex(p: Point, c: Color, uv: Point) -> Vertex {
         tex_coord: FPoint::new(uv.0, uv.1),
     }
 }
-fn outline(rect: Rect, radius: f32) -> Vec<Point> {
+fn corner_arcs() -> &'static [[Point; SEGMENTS + 1]; 4] {
+    static ARCS: OnceLock<[[Point; SEGMENTS + 1]; 4]> = OnceLock::new();
+    ARCS.get_or_init(|| {
+        std::array::from_fn(|corner| {
+            std::array::from_fn(|step| {
+                let angle = -FRAC_PI_2
+                    + corner as f32 * FRAC_PI_2
+                    + step as f32 * FRAC_PI_2 / SEGMENTS as f32;
+                (angle.cos(), angle.sin())
+            })
+        })
+    })
+}
+fn outline(rect: Rect, radius: f32) -> [Point; POINTS] {
     let (x, y, w, h) = (
         rect.x() as f32,
         rect.y() as f32,
@@ -24,200 +44,285 @@ fn outline(rect: Rect, radius: f32) -> Vec<Point> {
         rect.height() as f32,
     );
     let r = radius.min(w / 2.).min(h / 2.).max(0.);
-    let mut points = Vec::with_capacity(36);
-    for (cx, cy, a) in [
-        (x + w - r, y + r, -FRAC_PI_2),
-        (x + w - r, y + h - r, 0.),
-        (x + r, y + h - r, FRAC_PI_2),
-        (x + r, y + r, PI),
-    ] {
-        for step in 0..=8 {
-            let angle = a + step as f32 * FRAC_PI_2 / 8.;
-            points.push((cx + r * angle.cos(), cy + r * angle.sin()));
+    let centers = [
+        (x + w - r, y + r),
+        (x + w - r, y + h - r),
+        (x + r, y + h - r),
+        (x + r, y + r),
+    ];
+    let arcs = corner_arcs();
+    std::array::from_fn(|i| {
+        let corner = i / (SEGMENTS + 1);
+        let (dx, dy) = arcs[corner][i % (SEGMENTS + 1)];
+        (centers[corner].0 + r * dx, centers[corner].1 + r * dy)
+    })
+}
+struct Mesh {
+    vertices: Vec<Vertex>,
+    indices: Vec<u16>,
+}
+impl Mesh {
+    fn new() -> Self {
+        Self {
+            vertices: Vec::with_capacity(160),
+            indices: Vec::with_capacity(512),
         }
     }
-    points
-}
-fn fan(
-    points: &[Point],
-    c: Color,
-    texture: Option<&Texture<'_>>,
-    rect: Rect,
-) -> (Vec<Vertex>, Vec<u16>) {
-    let center = (
-        rect.x() as f32 + rect.width() as f32 / 2.,
-        rect.y() as f32 + rect.height() as f32 / 2.,
-    );
-    let uv = |p: Point| {
-        (
-            (p.0 - rect.x() as f32) / rect.width() as f32,
-            (p.1 - rect.y() as f32) / rect.height() as f32,
-        )
-    };
-    let mut vertices = vec![vertex(center, c, uv(center))];
-    vertices.extend(
-        points
-            .iter()
-            .map(|&p| vertex(p, c, if texture.is_some() { uv(p) } else { (0., 0.) })),
-    );
-    let mut indices = Vec::with_capacity(points.len() * 3);
-    for i in 0..points.len() {
-        indices.extend([0, (i + 1) as u16, ((i + 1) % points.len() + 1) as u16]);
+    fn clear(&mut self) {
+        self.vertices.clear();
+        self.indices.clear();
     }
-    (vertices, indices)
-}
-fn fill(canvas: &mut Canvas<Window>, rect: Rect, radius: f32, c: Rgba) -> Result<(), String> {
-    let (vertices, indices) = fan(&outline(rect, radius), color(c), None, rect);
-    canvas.render_geometry(&vertices, None, indices.as_slice())
-}
-pub(crate) fn rounded(
-    canvas: &mut Canvas<Window>,
-    rect: Rect,
-    radius: f32,
-    fill_color: Rgba,
-    border: Option<Rgba>,
-) -> Result<(), String> {
-    // A transparent one-pixel geometry fringe smooths the silhouette without
-    // an extra render target or per-frame rasterization/blur.
-    let points = outline(rect, radius);
-    let expanded = Rect::new(
-        rect.x() - 1,
-        rect.y() - 1,
-        rect.width() + 2,
-        rect.height() + 2,
-    );
-    let outer = outline(expanded, radius + 1.);
-    let edge = border.unwrap_or(fill_color);
-    let mut vertices = Vec::with_capacity(points.len() * 2);
-    for (&p, &q) in points.iter().zip(&outer) {
-        vertices.push(vertex(p, color(edge), (0., 0.)));
-        vertices.push(vertex(q, Color::RGBA(edge.r, edge.g, edge.b, 0), (0., 0.)));
+    fn fan(&mut self, points: &[Point], c: Color, rect: Rect, textured: bool) {
+        let base = self.vertices.len() as u16;
+        let center = (
+            rect.x() as f32 + rect.width() as f32 / 2.,
+            rect.y() as f32 + rect.height() as f32 / 2.,
+        );
+        self.vertices.push(vertex(center, c, (0.5, 0.5)));
+        self.vertices.extend(points.iter().map(|&p| {
+            vertex(
+                p,
+                c,
+                if textured {
+                    (
+                        (p.0 - rect.x() as f32) / rect.width() as f32,
+                        (p.1 - rect.y() as f32) / rect.height() as f32,
+                    )
+                } else {
+                    (0., 0.)
+                },
+            )
+        }));
+        for i in 0..points.len() {
+            self.indices.extend([
+                base,
+                base + (i + 1) as u16,
+                base + ((i + 1) % points.len() + 1) as u16,
+            ]);
+        }
     }
-    let mut indices = Vec::with_capacity(points.len() * 6);
-    for i in 0..points.len() {
-        let a = (i * 2) as u16;
-        let b = ((i + 1) % points.len() * 2) as u16;
-        indices.extend([a, a + 1, b, b, a + 1, b + 1]);
+    fn line(&mut self, from: Point, to: Point, width: f32, c: Rgba) {
+        let (dx, dy) = (to.0 - from.0, to.1 - from.1);
+        let length = dx.hypot(dy).max(0.01);
+        let (nx, ny) = (-dy / length * width / 2., dx / length * width / 2.);
+        let base = self.vertices.len() as u16;
+        self.vertices.extend(
+            [
+                (from.0 + nx, from.1 + ny),
+                (to.0 + nx, to.1 + ny),
+                (to.0 - nx, to.1 - ny),
+                (from.0 - nx, from.1 - ny),
+            ]
+            .map(|p| vertex(p, color(c), (0., 0.))),
+        );
+        self.indices
+            .extend([base, base + 1, base + 2, base, base + 2, base + 3]);
     }
-    canvas.render_geometry(&vertices, None, indices.as_slice())?;
-    fill(canvas, rect, radius, border.unwrap_or(fill_color))?;
-    if border.is_some() && rect.width() > 2 && rect.height() > 2 {
-        fill(
-            canvas,
+    fn rounded(&mut self, rect: Rect, radius: f32, fill: Rgba, border: Option<Rgba>) {
+        let points = outline(rect, radius);
+        let outer = outline(
             Rect::new(
+                rect.x() - 1,
+                rect.y() - 1,
+                rect.width() + 2,
+                rect.height() + 2,
+            ),
+            radius + 1.,
+        );
+        let edge = border.unwrap_or(fill);
+        for (&p, &q) in points.iter().zip(&outer) {
+            self.vertices.push(vertex(p, color(edge), (0., 0.)));
+            self.vertices
+                .push(vertex(q, Color::RGBA(edge.r, edge.g, edge.b, 0), (0., 0.)));
+        }
+        for i in 0..POINTS {
+            let a = (i * 2) as u16;
+            let b = ((i + 1) % POINTS * 2) as u16;
+            self.indices.extend([a, a + 1, b, b, a + 1, b + 1]);
+        }
+        self.fan(&points, color(edge), rect, false);
+        if border.is_some() && rect.width() > 2 && rect.height() > 2 {
+            let inner = Rect::new(
                 rect.x() + 1,
                 rect.y() + 1,
                 rect.width() - 2,
                 rect.height() - 2,
-            ),
-            (radius - 1.).max(0.),
-            fill_color,
-        )?;
-    }
-    Ok(())
-}
-pub(crate) fn cover(
-    canvas: &mut Canvas<Window>,
-    texture: &Texture<'_>,
-    rect: Rect,
-    radius: f32,
-    alpha: u8,
-) -> Result<(), String> {
-    let (vertices, indices) = fan(
-        &outline(rect, radius),
-        Color::RGBA(255, 255, 255, alpha),
-        Some(texture),
-        rect,
-    );
-    canvas.render_geometry(&vertices, Some(texture), indices.as_slice())
-}
-pub(crate) fn line(
-    canvas: &mut Canvas<Window>,
-    from: Point,
-    to: Point,
-    width: f32,
-    c: Rgba,
-) -> Result<(), String> {
-    let (dx, dy) = (to.0 - from.0, to.1 - from.1);
-    let length = dx.hypot(dy).max(0.01);
-    let (nx, ny) = (-dy / length * width / 2., dx / length * width / 2.);
-    let vertices = [
-        (from.0 + nx, from.1 + ny),
-        (to.0 + nx, to.1 + ny),
-        (to.0 - nx, to.1 - ny),
-        (from.0 - nx, from.1 - ny),
-    ]
-    .map(|p| vertex(p, color(c), (0., 0.)));
-    canvas.render_geometry(&vertices, None, &[0_u16, 1, 2, 0, 2, 3])
-}
-pub(crate) fn star(
-    canvas: &mut Canvas<Window>,
-    rect: Rect,
-    c: Rgba,
-    filled: bool,
-) -> Result<(), String> {
-    let center = (
-        rect.x() as f32 + rect.width() as f32 / 2.,
-        rect.y() as f32 + rect.height() as f32 / 2.,
-    );
-    let radius = rect.width().min(rect.height()) as f32 / 2.;
-    let points: Vec<_> = (0..10)
-        .map(|i| {
-            let a = -FRAC_PI_2 + i as f32 * PI / 5.;
-            let r = radius * if i % 2 == 0 { 1. } else { 0.46 };
-            (center.0 + r * a.cos(), center.1 + r * a.sin())
-        })
-        .collect();
-    if filled {
-        let (vertices, indices) = fan(&points, color(c), None, rect);
-        canvas.render_geometry(&vertices, None, indices.as_slice())
-    } else {
-        for i in 0..10 {
-            line(canvas, points[i], points[(i + 1) % 10], 1.4, c)?;
+            );
+            self.fan(
+                &outline(inner, (radius - 1.).max(0.)),
+                color(fill),
+                inner,
+                false,
+            );
         }
-        Ok(())
+    }
+    fn star(&mut self, rect: Rect, c: Rgba, filled: bool) {
+        static STAR: OnceLock<[Point; 10]> = OnceLock::new();
+        let unit = STAR.get_or_init(|| {
+            std::array::from_fn(|i| {
+                let a = -FRAC_PI_2 + i as f32 * PI / 5.;
+                let r = if i % 2 == 0 { 1. } else { 0.46 };
+                (r * a.cos(), r * a.sin())
+            })
+        });
+        let center = (
+            rect.x() as f32 + rect.width() as f32 / 2.,
+            rect.y() as f32 + rect.height() as f32 / 2.,
+        );
+        let r = rect.width().min(rect.height()) as f32 / 2.;
+        let points = unit.map(|p| (center.0 + r * p.0, center.1 + r * p.1));
+        if filled {
+            self.fan(&points, color(c), rect, false);
+        } else {
+            for i in 0..10 {
+                self.line(points[i], points[(i + 1) % 10], 1.4, c);
+            }
+        }
+    }
+    fn clock(&mut self, rect: Rect, c: Rgba) {
+        static CIRCLE: OnceLock<[Point; 24]> = OnceLock::new();
+        let unit = CIRCLE.get_or_init(|| {
+            std::array::from_fn(|i| {
+                let a = i as f32 * TAU / 24.;
+                (a.cos(), a.sin())
+            })
+        });
+        let (cx, cy) = (
+            rect.x() as f32 + rect.width() as f32 / 2.,
+            rect.y() as f32 + rect.height() as f32 / 2.,
+        );
+        let r = rect.width() as f32 / 2. - 1.;
+        let points = unit.map(|p| (cx + r * p.0, cy + r * p.1));
+        for i in 0..24 {
+            self.line(points[i], points[(i + 1) % 24], 1.3, c);
+        }
+        self.line((cx, cy - r * 0.55), (cx, cy), 1.3, c);
+        self.line((cx, cy), (cx + r * 0.4, cy + r * 0.25), 1.3, c);
+    }
+    fn lightning(&mut self, rect: Rect, c: Rgba) {
+        let (x, y, w, h) = (
+            rect.x() as f32,
+            rect.y() as f32,
+            rect.width() as f32,
+            rect.height() as f32,
+        );
+        self.vertices.extend(
+            [
+                (x + w * 0.65, y),
+                (x + w * 0.1, y + h * 0.55),
+                (x + w * 0.48, y + h * 0.55),
+                (x + w * 0.35, y + h),
+                (x + w * 0.9, y + h * 0.4),
+                (x + w * 0.52, y + h * 0.4),
+            ]
+            .map(|p| vertex(p, color(c), (0., 0.))),
+        );
+        self.indices.extend([0, 1, 2, 0, 2, 5, 2, 3, 4, 2, 4, 5]);
+    }
+    fn draw(
+        &self,
+        canvas: &mut Canvas<Window>,
+        texture: Option<&Texture<'_>>,
+    ) -> Result<(), String> {
+        canvas.render_geometry(&self.vertices, texture, self.indices.as_slice())
     }
 }
-pub(crate) fn clock_icon(canvas: &mut Canvas<Window>, rect: Rect, c: Rgba) -> Result<(), String> {
-    let (cx, cy) = (
-        rect.x() as f32 + rect.width() as f32 / 2.,
-        rect.y() as f32 + rect.height() as f32 / 2.,
-    );
-    let r = rect.width() as f32 / 2. - 1.;
-    for i in 0..24 {
-        let a = i as f32 * TAU / 24.;
-        let b = (i + 1) as f32 * TAU / 24.;
-        line(
-            canvas,
-            (cx + r * a.cos(), cy + r * a.sin()),
-            (cx + r * b.cos(), cy + r * b.sin()),
-            1.3,
-            c,
-        )?;
-    }
-    line(canvas, (cx, cy - r * 0.55), (cx, cy), 1.3, c)?;
-    line(canvas, (cx, cy), (cx + r * 0.4, cy + r * 0.25), 1.3, c)
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Key {
+    Rounded(Rect, u32, Rgba, Option<Rgba>),
+    Cover(Rect, u32),
+    Star(Rect, Rgba, bool),
+    Clock(Rect, Rgba),
+    Lightning(Rect, Rgba),
 }
-pub(crate) fn lightning(canvas: &mut Canvas<Window>, rect: Rect, c: Rgba) -> Result<(), String> {
-    let (x, y, w, h) = (
-        rect.x() as f32,
-        rect.y() as f32,
-        rect.width() as f32,
-        rect.height() as f32,
-    );
-    let points = [
-        (x + w * 0.65, y),
-        (x + w * 0.1, y + h * 0.55),
-        (x + w * 0.48, y + h * 0.55),
-        (x + w * 0.35, y + h),
-        (x + w * 0.9, y + h * 0.4),
-        (x + w * 0.52, y + h * 0.4),
-    ];
-    let vertices: Vec<_> = points
-        .iter()
-        .map(|&p| vertex(p, color(c), (0., 0.)))
-        .collect();
-    canvas.render_geometry(&vertices, None, &[0_u16, 1, 2, 0, 2, 5, 2, 3, 4, 2, 4, 5])
+/// Per-renderer bounded LRU: static badges, battery pieces and icons are hits;
+/// evicted meshes donate their Vec allocations to the next moving-pill mesh.
+pub(crate) struct Geometry {
+    meshes: VecDeque<(Key, Mesh)>,
+}
+impl Geometry {
+    pub fn new() -> Self {
+        corner_arcs();
+        Self {
+            meshes: VecDeque::with_capacity(CACHE_SIZE),
+        }
+    }
+    fn mesh(&mut self, key: Key) -> &mut Mesh {
+        if let Some(index) = self.meshes.iter().position(|(k, _)| *k == key) {
+            let hit = self.meshes.remove(index).expect("located mesh");
+            self.meshes.push_back(hit);
+        } else {
+            let mut mesh = if self.meshes.len() == CACHE_SIZE {
+                self.meshes.pop_front().expect("full mesh cache").1
+            } else {
+                Mesh::new()
+            };
+            mesh.clear();
+            match key {
+                Key::Rounded(rect, r, fill, border) => {
+                    mesh.rounded(rect, f32::from_bits(r), fill, border)
+                }
+                Key::Cover(rect, r) => {
+                    mesh.fan(&outline(rect, f32::from_bits(r)), Color::WHITE, rect, true)
+                }
+                Key::Star(rect, c, filled) => mesh.star(rect, c, filled),
+                Key::Clock(rect, c) => mesh.clock(rect, c),
+                Key::Lightning(rect, c) => mesh.lightning(rect, c),
+            }
+            self.meshes.push_back((key, mesh));
+        }
+        &mut self.meshes.back_mut().expect("cached mesh").1
+    }
+    pub fn rounded(
+        &mut self,
+        canvas: &mut Canvas<Window>,
+        rect: Rect,
+        radius: f32,
+        fill: Rgba,
+        border: Option<Rgba>,
+    ) -> Result<(), String> {
+        self.mesh(Key::Rounded(rect, radius.to_bits(), fill, border))
+            .draw(canvas, None)
+    }
+    pub fn cover(
+        &mut self,
+        canvas: &mut Canvas<Window>,
+        texture: &Texture<'_>,
+        rect: Rect,
+        radius: f32,
+        alpha: u8,
+    ) -> Result<(), String> {
+        let mesh = self.mesh(Key::Cover(rect, radius.to_bits()));
+        for vertex in &mut mesh.vertices {
+            vertex.color.a = alpha;
+        }
+        mesh.draw(canvas, Some(texture))
+    }
+    pub fn star(
+        &mut self,
+        canvas: &mut Canvas<Window>,
+        rect: Rect,
+        c: Rgba,
+        filled: bool,
+    ) -> Result<(), String> {
+        self.mesh(Key::Star(rect, c, filled)).draw(canvas, None)
+    }
+    pub fn clock_icon(
+        &mut self,
+        canvas: &mut Canvas<Window>,
+        rect: Rect,
+        c: Rgba,
+    ) -> Result<(), String> {
+        self.mesh(Key::Clock(rect, c)).draw(canvas, None)
+    }
+    pub fn lightning(
+        &mut self,
+        canvas: &mut Canvas<Window>,
+        rect: Rect,
+        c: Rgba,
+    ) -> Result<(), String> {
+        self.mesh(Key::Lightning(rect, c)).draw(canvas, None)
+    }
 }
 pub(crate) struct Shadow<'a>(Texture<'a>);
 impl<'a> Shadow<'a> {
@@ -281,5 +386,43 @@ impl<'a> Shadow<'a> {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn cached_meshes_retain_buffers_and_recycle_evicted_storage() {
+        let mut geometry = Geometry::new();
+        let color = Rgba {
+            r: 30,
+            g: 136,
+            b: 255,
+            a: 255,
+        };
+        let key = |x| Key::Rounded(Rect::new(x, 10, 20, 20), 10f32.to_bits(), color, None);
+        let first = geometry.mesh(key(0));
+        let pointers = (first.vertices.as_ptr(), first.indices.as_ptr());
+        let hit = geometry.mesh(key(0));
+        assert_eq!((hit.vertices.as_ptr(), hit.indices.as_ptr()), pointers);
+        for i in 1..CACHE_SIZE {
+            geometry.mesh(key(i as i32));
+        }
+        let recycled = geometry.mesh(key(CACHE_SIZE as i32));
+        assert_eq!(
+            (recycled.vertices.as_ptr(), recycled.indices.as_ptr()),
+            pointers
+        );
+        assert_eq!(geometry.meshes.len(), CACHE_SIZE);
+        assert!(std::ptr::eq(corner_arcs(), corner_arcs()));
+        for icon in [
+            Key::Star(Rect::new(0, 0, 16, 16), color, true),
+            Key::Clock(Rect::new(0, 0, 16, 16), color),
+            Key::Lightning(Rect::new(0, 0, 8, 14), color),
+        ] {
+            let first = geometry.mesh(icon).vertices.as_ptr();
+            assert_eq!(geometry.mesh(icon).vertices.as_ptr(), first);
+        }
     }
 }

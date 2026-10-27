@@ -34,7 +34,8 @@ pub(crate) enum Align {
     Glyph,
 }
 struct Entry<'a> {
-    text: String,
+    source: String,
+    width: u32,
     face: Face,
     size: u16,
     color: Rgba,
@@ -105,16 +106,27 @@ impl<'font, 'texture> TextCache<'font, 'texture> {
         } else {
             panel.width().min(maximum)
         };
-        let text = ellipsis(self.font(style.face, style.size)?, &sanitize(text), limit)?;
-        if text.is_empty() {
-            return Ok(());
+        // Only the first 512 codepoints can reach layout. Keep a bounded raw
+        // prefix as the lookup key: no sanitizing, measuring or fitting on hits.
+        let mut end = text.len().min(512 * 4);
+        while !text.is_char_boundary(end) {
+            end -= 1;
         }
+        let source = &text[..end];
         let index = self.entries.iter().position(|e| {
-            e.text == text && e.face == style.face && e.size == style.size && e.color == style.color
+            e.source == source
+                && e.width == limit
+                && e.face == style.face
+                && e.size == style.size
+                && e.color == style.color
         });
         let entry = if let Some(index) = index {
             self.entries.remove(index).expect("located text")
         } else {
+            let text = ellipsis(self.font(style.face, style.size)?, &sanitize(source), limit)?;
+            if text.is_empty() {
+                return Ok(());
+            }
             let surface = self
                 .font(style.face, style.size)?
                 .render(&text)
@@ -152,7 +164,8 @@ impl<'font, 'texture> TextCache<'font, 'texture> {
                 .create_texture_from_surface(surface)
                 .map_err(|e| e.to_string())?;
             Entry {
-                text,
+                source: source.to_owned(),
+                width: limit,
                 face: style.face,
                 size: style.size,
                 color: style.color,
@@ -241,5 +254,75 @@ mod tests {
         assert!(font.size_of(&fitted).unwrap().0 <= 180);
         assert_eq!(ellipsis(&font, "Kirby", 180).unwrap(), "Kirby");
         assert_eq!(ellipsis(&font, "Kirby", 1).unwrap(), "");
+    }
+    #[test]
+    fn fitted_texture_hit_needs_no_font_sanitizing_or_layout() {
+        std::env::set_var("SDL_VIDEODRIVER", "dummy");
+        let sdl = sdl2::init().unwrap();
+        let video = sdl.video().unwrap();
+        let window = video.window("cache", 160, 80).build().unwrap();
+        let mut canvas = window.into_canvas().software().build().unwrap();
+        let creator = canvas.texture_creator();
+        let ttf = sdl2::ttf::init().unwrap();
+        let mut paths: [Vec<PathBuf>; 5] = std::array::from_fn(|_| vec![]);
+        paths[0].push(PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../themes/default/fonts/Inter-Regular.ttf"
+        )));
+        let mut cache = TextCache::new(&ttf, &creator, paths);
+        let style = Style {
+            face: Face::Regular,
+            size: 13,
+            color: Rgba {
+                r: 255,
+                g: 255,
+                b: 255,
+                a: 255,
+            },
+        };
+        let panel = Rect::new(0, 0, 80, 20);
+        let source = "Very\0 long source text that must be fitted";
+        cache
+            .draw(&mut canvas, source, style, panel, Align::Left)
+            .unwrap();
+        cache.fonts.clear();
+        cache.paths = std::array::from_fn(|_| vec![]);
+        // With font loading deliberately unavailable, a fitted-texture hit
+        // must still render. Any measure/ellipsis call would fail here.
+        cache
+            .draw(&mut canvas, source, style, panel, Align::Left)
+            .unwrap();
+        assert_eq!(cache.entries.len(), 1);
+        assert!(cache.fonts.is_empty());
+        assert!(cache
+            .draw(
+                &mut canvas,
+                source,
+                style,
+                Rect::new(0, 0, 81, 20),
+                Align::Left
+            )
+            .is_err());
+        assert!(cache
+            .draw(&mut canvas, "another source", style, panel, Align::Left)
+            .is_err());
+        for changed in [
+            Style { size: 14, ..style },
+            Style {
+                face: Face::Semibold,
+                ..style
+            },
+            Style {
+                color: Rgba {
+                    r: 200,
+                    ..style.color
+                },
+                ..style
+            },
+        ] {
+            assert!(cache
+                .draw(&mut canvas, source, changed, panel, Align::Left)
+                .is_err());
+        }
     }
 }

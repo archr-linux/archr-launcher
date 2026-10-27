@@ -13,7 +13,7 @@ dim = "#6B7785"
 accent = "#1E88FF"
 accent_text = "#FFFFFF"
 accent_text_secondary = "#CFE4FF"
-scrim = "#05080B99"
+scrim = "#05080B99" # notices; quick menu uses 1.2x opacity (~0.72)
 
 # Official static Inter 4.1 and JetBrains Mono 2.304, under the adjacent OFLs.
 # Paths stay relative to the theme; missing fonts use Liberation/DejaVu.

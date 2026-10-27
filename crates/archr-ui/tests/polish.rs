@@ -29,18 +29,58 @@ fn battery_is_prefixed_optional_and_not_reread_inside_thirty_seconds() {
     fs::write(battery.join("status"), "Charging\n").unwrap();
     let now = Instant::now();
     let mut status = Status::new(Some(root.path()), now);
+    assert_eq!(
+        status.battery, None,
+        "no sysfs read before the first present"
+    );
+    status.poll(now + Duration::from_secs(90));
+    assert_eq!(status.battery, None);
+    status.start();
+    status.start(); // idempotent: never spawn a second poller
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while status.battery.is_none() {
+        status.poll(Instant::now());
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(1));
+    }
     let value = status.battery.unwrap();
     assert_eq!(value.percent, 87);
     assert!(value.charging);
     fs::write(battery.join("capacity"), "12").unwrap();
-    assert!(!status.refresh_battery(now + Duration::from_secs(29)));
-    assert_eq!(status.battery.unwrap().percent, 87);
-    assert!(status.refresh_battery(now + Duration::from_secs(30)));
-    assert_eq!(status.battery.unwrap().percent, 12);
-    fs::write(battery.join("capacity"), "999").unwrap();
-    assert!(status.refresh_battery(now + Duration::from_secs(60)));
+    status.poll(now + Duration::from_secs(90));
+    assert_eq!(
+        status.battery.unwrap().percent,
+        87,
+        "render ticks cannot trigger sysfs reads"
+    );
+}
+
+#[test]
+fn slow_sysfs_worker_never_blocks_construction_polling_or_drop() {
+    use std::{ffi::CString, os::unix::ffi::OsStrExt, sync::mpsc, thread};
+    let root = tempfile::tempdir().unwrap();
+    let battery = root.path().join("sys/class/power_supply/battery");
+    fs::create_dir_all(&battery).unwrap();
+    let path = battery.join("capacity");
+    let name = CString::new(path.as_os_str().as_bytes()).unwrap();
+    // SAFETY: name is a live NUL-terminated path in our private test directory.
+    assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+    let (release, gate) = mpsc::channel();
+    let writer = thread::spawn(move || {
+        let _ = gate.recv_timeout(Duration::from_millis(200));
+        fs::write(path, "87").unwrap();
+    });
+    let began = Instant::now();
+    let mut status = Status::new(Some(root.path()), began);
+    status.start();
+    for _ in 0..10 {
+        status.poll(Instant::now());
+    }
+    assert!(began.elapsed() < Duration::from_millis(100));
     assert_eq!(status.battery, None);
-    fs::remove_file(battery.join("capacity")).unwrap();
-    assert!(!status.refresh_battery(now + Duration::from_secs(90)));
-    assert_eq!(status.battery, None);
+    let began = Instant::now();
+    drop(status); // do not join a worker blocked inside sysfs
+    assert!(began.elapsed() < Duration::from_millis(100));
+    release.send(()).unwrap();
+    writer.join().unwrap();
 }

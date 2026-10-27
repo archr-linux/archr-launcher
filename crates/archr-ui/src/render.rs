@@ -1,7 +1,7 @@
 //! Grafite presentation at 640×480, scaled by height, with event-driven idle.
 use crate::{
     motion::Tween,
-    primitives::{self, Shadow},
+    primitives::{Geometry, Shadow},
     state::{App, DataSource, QuickItem, Screen},
     status::Status,
     text::{color, Align, Face, Style, TextCache},
@@ -39,6 +39,7 @@ pub struct Ui<'font, 'texture> {
     _image: Sdl2ImageContext,
     text: Option<TextCache<'font, 'texture>>,
     shadow: Option<Shadow<'texture>>,
+    geometry: Geometry,
     status: Option<Status>,
     list: ListMotion,
     menu_pill: Tween,
@@ -79,6 +80,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             _image: image,
             text: None,
             shadow: None,
+            geometry: Geometry::new(),
             status: None,
             list: ListMotion::new(),
             menu_pill: Tween::new(0., Duration::from_millis(90)),
@@ -216,7 +218,8 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         fill: Rgba,
         border: Option<Rgba>,
     ) -> Result<(), String> {
-        primitives::rounded(&mut self.canvas, rect, radius, fill, border)
+        self.geometry
+            .rounded(&mut self.canvas, rect, radius, fill, border)
     }
     fn shadow(&mut self, rect: Rect) -> Result<(), String> {
         if let Some(shadow) = &self.shadow {
@@ -271,6 +274,9 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 .map_err(|e| e.to_string())?;
         }
         self.canvas.present();
+        if let Some(status) = &mut self.status {
+            status.start();
+        }
         Ok(())
     }
     fn header(
@@ -339,7 +345,8 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                         self.px(8.) as u32,
                         self.px(14.) as u32,
                     );
-                    primitives::lightning(&mut self.canvas, bolt, theme.highlight_text)?;
+                    self.geometry
+                        .lightning(&mut self.canvas, bolt, theme.highlight_text)?;
                 }
                 right = battery.x() - self.px(14.);
             }
@@ -549,7 +556,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                         self.px(14.) as u32,
                         self.px(14.) as u32,
                     );
-                    primitives::star(
+                    self.geometry.star(
                         &mut self.canvas,
                         star,
                         if selected {
@@ -607,7 +614,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                         self.px(16.) as u32,
                     );
                     if name == "@favorites" {
-                        primitives::star(
+                        self.geometry.star(
                             &mut self.canvas,
                             icon,
                             if selected {
@@ -618,7 +625,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                             false,
                         )?;
                     } else {
-                        primitives::clock_icon(&mut self.canvas, icon, c)?;
+                        self.geometry.clock_icon(&mut self.canvas, icon, c)?;
                     }
                     x += self.px(26.);
                 }
@@ -698,7 +705,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 w,
                 h,
             );
-            primitives::cover(
+            self.geometry.cover(
                 &mut self.canvas,
                 cover,
                 dst,
@@ -832,8 +839,18 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         }
         Ok(right + self.px(16.))
     }
-    fn scrim(&mut self, theme: &Theme, width: u32, height: u32) -> Result<(), String> {
-        self.canvas.set_draw_color(color(theme.scrim));
+    fn scrim(
+        &mut self,
+        theme: &Theme,
+        width: u32,
+        height: u32,
+        strength: f32,
+    ) -> Result<(), String> {
+        let scrim = Rgba {
+            a: (f32::from(theme.scrim.a) * strength).round().min(255.) as u8,
+            ..theme.scrim
+        };
+        self.canvas.set_draw_color(color(scrim));
         self.canvas.fill_rect(Rect::new(0, 0, width, height))
     }
     fn menu(
@@ -845,7 +862,8 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         height: u32,
         now: Instant,
     ) -> Result<(), String> {
-        self.scrim(theme, width, height)?;
+        // The mockup combines a dimmed backdrop and its base scrim.
+        self.scrim(theme, width, height, 1.2)?;
         let items = app.quick_menu_items(data);
         let has_core = matches!(items.first(), Some(QuickItem::Core { .. }));
         let panel_h = self.px(if has_core { 300. } else { 256. }) as u32;
@@ -1027,7 +1045,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         width: u32,
         height: u32,
     ) -> Result<(), String> {
-        self.scrim(theme, width, height)?;
+        self.scrim(theme, width, height, 1.0)?;
         let lines: Vec<_> = message.split('\n').take(3).collect();
         let w = (self.px(380.) as u32)
             .min(width.saturating_sub(self.px(48.) as u32))

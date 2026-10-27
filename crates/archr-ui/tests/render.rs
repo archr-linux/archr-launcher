@@ -104,6 +104,10 @@ fn grafite_layout_motion_glyphs_and_untrusted_text_render_offscreen() {
         .canvas
         .read_pixels(None, sdl2::pixels::PixelFormatEnum::RGBA32)
         .unwrap();
+    assert!(
+        rgba[2] <= 14,
+        "quick-menu backdrop needs roughly 72% scrim opacity"
+    );
     let offset = (140 * 640 + 170) * 4;
     assert_eq!(
         &rgba[offset..offset + 3],

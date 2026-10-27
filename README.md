@@ -102,14 +102,18 @@ Todos os tokens de `theme.toml` são opcionais, com fallback individual.
 `highlight_text` e `dim_text`; os novos nomes têm precedência. Fontes continuam
 restritas a arquivos dentro da pasta do tema. Raios/alturas/margens escalam pela
 altura da tela; o retângulo da capa e a largura da lista usam frações conforme
-os comentários do tema. O menu mantém o posicionamento óptico da maquete.
+os comentários do tema. O menu mantém o posicionamento óptico da maquete e
+reforça a opacidade do scrim em 20% (0,60 → aproximadamente 0,72), sem alterar
+os avisos.
 
 A bateria usa `ROOT/sys/class/power_supply/battery/{capacity,status}`, quando
-há prefixo; sem capacidade válida, o indicador fica oculto. A leitura ocorre
-no timer, no máximo a cada 30 s; o relógio usa a hora local e atualiza por
-minuto. Seleção/rolagem animam por 90 ms e capas por 120 ms. Nova entrada
-conclui os alvos anteriores imediatamente. Somente durante essas animações
-há apresentações contínuas com vsync; parado, o desenho continua por eventos.
+há prefixo; sem capacidade válida, o indicador fica oculto. Um worker começa
+depois da primeira apresentação e faz a leitura no máximo a cada 30 s; até
+chegar a primeira amostra, a bateria fica oculta. O desenho só consulta um
+snapshot atômico, sem esperar pelo sysfs. O relógio usa a hora local e atualiza
+por minuto. Seleção/rolagem animam por 90 ms e capas por 120 ms. Nova entrada
+conclui os alvos anteriores imediatamente. Somente durante essas animações há
+apresentações contínuas com vsync; parado, o desenho continua por eventos.
 
 Ano (`releasedate`), jogadores (`players`) e último uso do gamelist aparecem
 sob a capa quando disponíveis. O índice de jogos passa à versão 3 para esses
@@ -122,6 +126,17 @@ cargo test
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 ```
+
+Benchmark manual da seleção no PC, com aquecimento e amostras a ~60 Hz:
+
+```sh
+cargo test -p archr-ui --test animation_timing -- --ignored --nocapture
+cargo test --release -p archr-ui --test animation_timing -- --ignored --nocapture
+```
+
+Imprime mediana/p95 de `tick + draw + present` durante a animação, descartando
+os quatro primeiros gestos. O backend offscreen não espera vblank; o intervalo
+de amostragem de 16 ms fica fora da medição.
 
 O teste de janela usa SDL offscreen e cobre navegação, captura de frame,
 favorito, troca de núcleo, consumo de `last-exit` e publicação de `next`.
