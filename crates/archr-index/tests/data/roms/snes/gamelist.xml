@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+<gameList>
+  <game>
+    <path>./Super Mario World (USA) [!].SFC</path>
+    <name>Super Mario World Deluxe</name>
+    <image>./media/images/mario.png</image>
+    <video>./media/videos/mario.mp4</video>
+    <favorite>true</favorite>
+    <lastplayed>20240102T030405</lastplayed>
+  </game>
+  <game>
+    <path>./Chrono Trigger (USA).sfc</path>
+    <image>./missing.png</image>
+  </game>
+  <game>
+    <path>./no-longer-present.sfc</path>
+    <name>Removed game</name>
+  </game>
+</gameList>
