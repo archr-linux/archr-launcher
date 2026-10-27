@@ -25,6 +25,10 @@ name = "archr-launcher"
 version = "0.1.0"
 dependencies = [
  "archr-index",
+ "log",
+ "serde",
+ "tempfile",
+ "toml",
 ]
 
 [[package]]
