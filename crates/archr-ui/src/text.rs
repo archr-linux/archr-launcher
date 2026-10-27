@@ -1,4 +1,7 @@
 //! Bounded text textures, lazily loaded font faces, and measured ellipsis.
+// TODO(CJK): add a lazy per-glyph fallback font here (Noto Sans CJK subset or
+// image-provided font), loaded only for a CJK locale or an uncovered glyph.
+// Keep phase-1 Latin/Cyrillic startup free of CJK font I/O and memory costs.
 use crate::theme::Rgba;
 use sdl2::{
     pixels::{Color, PixelFormatEnum},
@@ -69,7 +72,7 @@ impl<'font, 'texture> TextCache<'font, 'texture> {
             let mut font = paths
                 .iter()
                 .find_map(|path| self.ttf.load_font(path, size).ok())
-                .ok_or("Nenhuma fonte disponível (tema, Liberation Sans ou DejaVu Sans).")?;
+                .ok_or("error.font")?;
             // The compact bold badges are synthesized from Regular. Other
             // faces prefer the official static semibold/medium weights.
             if matches!(face, Face::Button)

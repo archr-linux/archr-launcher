@@ -5,6 +5,7 @@ use archr_index::{
     cache::{self, Overview},
     load_systems, Game, SystemDef,
 };
+use archr_ui::i18n::Message;
 use std::{
     collections::{HashSet, VecDeque},
     fs,
@@ -28,7 +29,7 @@ pub enum Update {
         systems: Vec<SystemDef>,
         config: Option<SystemCfg>,
         store: Store,
-        banner: Option<String>,
+        banner: Option<Message>,
     },
     Overview(Overview),
     Games(String, Vec<Game>),
@@ -41,7 +42,7 @@ pub struct Worker {
 
 pub fn definitions(paths: &Paths) -> Result<Vec<SystemDef>, String> {
     let mut systems = load_systems(&paths.systems)
-        .map_err(|error| format!("Não foi possível ler es_systems.cfg: {error}"))?;
+        .map_err(|error| format!("Cannot read es_systems.cfg: {error}"))?;
     for system in &mut systems {
         system.path = paths.remap(&system.path);
     }
@@ -55,15 +56,17 @@ pub fn start(paths: Paths, initial: Vec<SystemDef>) -> Worker {
         let (systems, mut banner) = if initial.is_empty() {
             match definitions(&paths) {
                 Ok(systems) => (systems, None),
-                Err(error) => (Vec::new(), Some(error)),
+                Err(error) => {
+                    log::warn!("Cannot load systems: {error}");
+                    (Vec::new(), Some(Message::new("error.systems")))
+                }
             }
         } else {
             (initial, None)
         };
         if let Some(code) = read_last_exit(&paths.run).filter(|code| *code != 0) {
-            banner = Some(format!(
-                "O jogo terminou com erro (código {code}).\nLog: /var/log/exec.log"
-            ));
+            log::warn!("Game exited with code {code}; log: /var/log/exec.log");
+            banner = Some(Message::new("error.game_exit").with("code", code));
         }
         match fs::remove_file(paths.run.join("last-exit")) {
             Err(error) if error.kind() != std::io::ErrorKind::NotFound => {

@@ -3,7 +3,7 @@ use archr_launcher::{
     library::Library,
     state::{App, DataSource, Outcome, SessionAction},
 };
-use archr_ui::{render::Ui, Theme};
+use archr_ui::{i18n::I18n, render::Ui, Theme};
 
 /// Blocking durability work is allowed only at a terminal transition: present
 /// immediate feedback first, then flush Store and publish the durable handoff.
@@ -18,7 +18,7 @@ pub fn apply(
     controllers: &str,
     cover: Option<&sdl2::render::Texture<'_>>,
 ) -> Result<bool, String> {
-    ui.transition = message(outcome.as_ref(), library);
+    ui.transition = message(outcome.as_ref(), library, &ui.catalog);
     if ui.transition.is_some() {
         ui.draw(app, library, theme, cover)?; // draw includes present, before any flush
     }
@@ -30,29 +30,37 @@ pub fn apply(
     match result {
         Ok(exit) => Ok(exit),
         Err(error) => {
-            ui.banner = Some(error);
+            log::warn!("Operation failed: {error}");
+            ui.banner = Some(ui.catalog.text(if error.starts_with("error.") {
+                &error
+            } else {
+                "error.operation"
+            }));
             ui.draw(app, library, theme, cover)?;
             Ok(false)
         }
     }
 }
-fn message(outcome: Option<&Outcome>, data: &dyn DataSource) -> Option<String> {
+fn message(outcome: Option<&Outcome>, data: &dyn DataSource, catalog: &I18n) -> Option<String> {
     Some(match outcome {
-        None => "Fechando…".to_owned(),
-        Some(Outcome::Launch { system, game }) => format!(
-            "Abrindo {}…",
-            data.games(system)
-                .get(*game)
-                .map(|game| game.name.as_str())
-                .unwrap_or("jogo")
+        None => catalog.text("notice.closing"),
+        Some(Outcome::Launch { system, game }) => catalog.format(
+            "notice.opening",
+            &[(
+                "game",
+                &data
+                    .games(system)
+                    .get(*game)
+                    .map(|game| game.name.clone())
+                    .unwrap_or_else(|| catalog.text("notice.game")),
+            )],
         ),
-        Some(Outcome::Action(action)) => match action {
-            SessionAction::Shutdown => "Desligando…",
-            SessionAction::Reboot => "Reiniciando…",
-            SessionAction::Suspend => "Suspendendo…",
-            SessionAction::OpenSettings => "Abrindo configurações…",
-        }
-        .to_owned(),
+        Some(Outcome::Action(action)) => catalog.text(match action {
+            SessionAction::Shutdown => "notice.shutdown",
+            SessionAction::Reboot => "notice.reboot",
+            SessionAction::Suspend => "notice.suspend",
+            SessionAction::OpenSettings => "notice.settings",
+        }),
         _ => return None,
     })
 }
@@ -198,23 +206,27 @@ mod tests {
                     system: "nes".into(),
                     game: 0
                 }),
-                &data
+                &data,
+                &I18n::default()
             )
             .as_deref(),
-            Some("Abrindo Super Mario…")
+            Some("Opening Super Mario…")
         );
         for (action, expected) in [
-            (SessionAction::Shutdown, "Desligando…"),
-            (SessionAction::Reboot, "Reiniciando…"),
-            (SessionAction::Suspend, "Suspendendo…"),
-            (SessionAction::OpenSettings, "Abrindo configurações…"),
+            (SessionAction::Shutdown, "Powering off…"),
+            (SessionAction::Reboot, "Restarting…"),
+            (SessionAction::Suspend, "Going to sleep…"),
+            (SessionAction::OpenSettings, "Opening settings…"),
         ] {
             assert_eq!(
-                message(Some(&Outcome::Action(action)), &data).as_deref(),
+                message(Some(&Outcome::Action(action)), &data, &I18n::default()).as_deref(),
                 Some(expected)
             );
         }
-        assert_eq!(message(None, &data).as_deref(), Some("Fechando…"));
-        assert_eq!(message(Some(&Outcome::None), &data), None);
+        assert_eq!(
+            message(None, &data, &I18n::default()).as_deref(),
+            Some("Closing…")
+        );
+        assert_eq!(message(Some(&Outcome::None), &data, &I18n::default()), None);
     }
 }

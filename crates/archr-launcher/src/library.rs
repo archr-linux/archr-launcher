@@ -12,13 +12,14 @@ use archr_index::{
     cache::{self, Overview, SystemEntry},
     Game, SystemDef,
 };
+use archr_ui::i18n::Message;
 use std::collections::{HashMap, HashSet};
 
 pub struct Library {
     pub paths: Paths,
     pub ready: bool,
     pub counts_known: bool,
-    pub banner: Option<String>,
+    pub banner: Option<Message>,
     pub pending_writes: usize,
     pub write_failed: bool,
     overview: Overview,
@@ -44,7 +45,10 @@ impl Library {
         } else {
             match worker::definitions(&paths) {
                 Ok(defs) => (defs, None),
-                Err(error) => (Vec::new(), Some(error)),
+                Err(error) => {
+                    log::warn!("Cannot load systems: {error}");
+                    (Vec::new(), Some(Message::new("error.systems")))
+                }
             }
         };
         let overview = cached.unwrap_or_else(|| Overview {
@@ -188,8 +192,8 @@ impl Library {
                         Ok(config) => self.config = config,
                         Err(error) => {
                             self.overrides.remove(&(system, rom));
-                            self.banner =
-                                Some(format!("Não foi possível salvar o núcleo:\n{error}"));
+                            log::warn!("Cannot save core: {error}");
+                            self.banner = Some(Message::new("error.core_save"));
                             self.write_failed = true;
                         }
                     }
@@ -198,9 +202,8 @@ impl Library {
             changed = true;
         }
         while let Some(error) = self.store_writer.as_ref().and_then(StoreWriter::error) {
-            self.banner = Some(format!(
-                "Não foi possível salvar favoritos/histórico: {error}"
-            ));
+            log::warn!("Cannot save favorites/history: {error}");
+            self.banner = Some(Message::new("error.store_save"));
             changed = true;
         }
         if changed {
@@ -212,7 +215,7 @@ impl Library {
         match outcome {
             Outcome::None => {}
             Outcome::ToggleFavorite { system, game } => {
-                let key = self.game_key(&system, game).ok_or("Jogo não encontrado")?;
+                let key = self.game_key(&system, game).ok_or("error.game_missing")?;
                 self.store.toggle_favorite(&key);
                 self.queue_store();
                 self.refresh_collections();
@@ -228,7 +231,7 @@ impl Library {
                     .get(game)
                     .and_then(|game| game.path.file_name())
                     .and_then(|name| name.to_str())
-                    .ok_or("Nome da ROM inválido")?
+                    .ok_or("error.rom_name")?
                     .to_owned();
                 self.overrides.insert(
                     (system.clone(), rom.clone()),
@@ -236,7 +239,7 @@ impl Library {
                 );
                 self.worker
                     .as_ref()
-                    .ok_or("Índice não inicializado")?
+                    .ok_or("error.index")?
                     .send
                     .send(Work::Core {
                         system,
@@ -252,11 +255,9 @@ impl Library {
                 let rom = &self
                     .games(&system)
                     .get(game)
-                    .ok_or("Jogo não encontrado")?
+                    .ok_or("error.game_missing")?
                     .path;
-                let (emulator, core) = self
-                    .current_core(&system, game)
-                    .ok_or("Nenhum emulador/núcleo configurado")?;
+                let (emulator, core) = self.current_core(&system, game).ok_or("error.no_core")?;
                 let command = launch_command_with(
                     &self.paths.at("/usr/bin/runemu.sh"),
                     rom,
@@ -266,7 +267,7 @@ impl Library {
                     controllers,
                 )
                 .map_err(|error| error.to_string())?;
-                let key = self.game_key(&system, game).ok_or("Jogo não encontrado")?;
+                let key = self.game_key(&system, game).ok_or("error.game_missing")?;
                 self.store.push_recent(&key);
                 self.flush_store()?;
                 write_next(&self.paths.run, &NextCmd::Game(command))
@@ -297,11 +298,11 @@ impl Library {
     }
     fn flush_store(&self) -> Result<(), String> {
         if !self.ready {
-            return Err("Biblioteca ainda carregando".to_owned());
+            return Err("error.loading".to_owned());
         }
         self.store_writer
             .as_ref()
-            .ok_or("Persistência não inicializada")?
+            .ok_or("error.persistence")?
             .flush(self.store.clone())
     }
     fn game_key(&self, system: &str, index: usize) -> Option<String> {

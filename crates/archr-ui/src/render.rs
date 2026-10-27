@@ -1,5 +1,6 @@
 //! Grafite presentation at 640×480, scaled by height, with event-driven idle.
 use crate::{
+    i18n::I18n,
     motion::Tween,
     primitives::{Geometry, Shadow},
     state::{App, DataSource, QuickItem, Screen},
@@ -49,6 +50,7 @@ pub struct Ui<'font, 'texture> {
     cover_fade: Tween,
     animating: bool,
     scale: f32,
+    pub catalog: I18n,
     pub loading: bool,
     pub banner: Option<String>,
     pub screenshot: Option<PathBuf>,
@@ -90,6 +92,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             cover_fade: Tween::new(0., Duration::from_millis(120)),
             animating: false,
             scale: height as f32 / 480.,
+            catalog: I18n::default(),
             loading: false,
             banner: None,
             screenshot: None,
@@ -154,7 +157,18 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             }
         }
         let mut text = TextCache::new(ttf, creator, paths);
-        text.measure("ARCHR", Face::Semibold, self.px(12.) as u16)?;
+        text.measure(
+            &self.catalog.text("systems.title"),
+            Face::Semibold,
+            self.px(12.) as u16,
+        )
+        .map_err(|error| {
+            if error.starts_with("error.") {
+                self.catalog.text(&error)
+            } else {
+                error
+            }
+        })?;
         self.text = Some(text);
         self.shadow = Some(Shadow::new(creator)?);
         self.status = Some(Status::new(root, Instant::now()));
@@ -192,24 +206,41 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         align: Align,
     ) -> Result<(), String> {
         let size = self.px(size).clamp(8, 128) as u16;
-        self.text.as_mut().ok_or("Fonte não inicializada")?.draw(
-            &mut self.canvas,
-            text,
-            Style {
-                face,
-                size,
-                color: c,
-            },
-            panel,
-            align,
-        )
+        self.text
+            .as_mut()
+            .ok_or_else(|| self.catalog.text("error.font_init"))?
+            .draw(
+                &mut self.canvas,
+                text,
+                Style {
+                    face,
+                    size,
+                    color: c,
+                },
+                panel,
+                align,
+            )
+            .map_err(|error| {
+                if error.starts_with("error.") {
+                    self.catalog.text(&error)
+                } else {
+                    error
+                }
+            })
     }
     fn measure(&mut self, text: &str, face: Face, size: f32) -> Result<u32, String> {
         let size = self.px(size).clamp(8, 128) as u16;
         self.text
             .as_mut()
-            .ok_or("Fonte não inicializada")?
+            .ok_or_else(|| self.catalog.text("error.font_init"))?
             .measure(text, face, size)
+            .map_err(|error| {
+                if error.starts_with("error.") {
+                    self.catalog.text(&error)
+                } else {
+                    error
+                }
+            })
     }
     fn rounded(
         &mut self,
@@ -362,7 +393,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             right -= w as i32 + self.px(20.);
         }
         if let Screen::Games { system } = screen {
-            let title = system_title(system, data);
+            let title = system_title(system, data, &self.catalog);
             let pos = format!(
                 "{}/{}",
                 if data.games(system).is_empty() {
@@ -394,7 +425,8 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             )?;
         } else {
             let mut x = pad;
-            for glyph in ["A", "R", "C", "H", "R"] {
+            for glyph in self.catalog.text("systems.title").chars() {
+                let glyph = &glyph.to_string();
                 let w = self.measure(glyph, Face::Semibold, 12.)?;
                 self.label(
                     glyph,
@@ -629,7 +661,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                     }
                     x += self.px(26.);
                 }
-                system_title(name, data)
+                system_title(name, data, &self.catalog)
             };
             self.label(
                 &name,
@@ -642,11 +674,13 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         }
         if len == 0 {
             self.label(
-                if self.loading {
-                    "Carregando…"
+                &self.catalog.text(if self.loading {
+                    "loading"
+                } else if is_games {
+                    "empty.games"
                 } else {
-                    "Nenhum jogo encontrado"
-                },
+                    "empty.systems"
+                }),
                 Face::Regular,
                 16.,
                 theme.muted,
@@ -715,7 +749,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         } else {
             self.cover_visible = false;
             self.label(
-                &system_title(system, data),
+                &system_title(system, data, &self.catalog),
                 Face::Regular,
                 13.,
                 theme.dim_text,
@@ -734,16 +768,20 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 parts.push(year.to_string());
             }
             if let Some(players) = &game.players {
-                parts.push(format!(
-                    "{players} {}",
-                    if players == "1" {
-                        "jogador"
-                    } else {
-                        "jogadores"
-                    }
-                ));
+                parts.push(self.catalog.players(players));
             }
-            let played = game.last_played.map(relative_played).unwrap_or_default();
+            let played = game
+                .last_played
+                .map(|timestamp| {
+                    self.catalog.relative_time(
+                        timestamp,
+                        SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs(),
+                    )
+                })
+                .unwrap_or_default();
             let pw = self.measure(&played, Face::Regular, 12.)?;
             let h = self.px(20.) as u32;
             let y = rect.bottom() + self.px(9.);
@@ -778,17 +816,17 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         let h = (theme.footer_height * height as f32).round().max(1.) as u32;
         let y = height as i32 - h as i32;
         self.divider(0, y, width, theme.border)?;
-        let hints: &[(&str, &str)] = match app.screen {
-            Screen::Systems => &[("A", "Abrir"), ("Y", "Menu")],
+        let hint_keys: &[(&str, &str)] = match app.screen {
+            Screen::Systems => &[("A", "hint.open"), ("Y", "hint.menu")],
             Screen::Games { .. } => &[
-                ("A", "Jogar"),
-                ("B", "Voltar"),
-                ("X", "Favorito"),
-                ("Y", "Menu"),
+                ("A", "hint.play"),
+                ("B", "hint.back"),
+                ("X", "hint.favorite"),
+                ("Y", "hint.menu"),
             ],
-            _ => &[("A", "Escolher"), ("B", "Fechar")],
+            _ => &[("A", "hint.choose"), ("B", "hint.close")],
         };
-        let left = self.hints(hints, theme, width, y, h)?;
+        let left = self.hints(hint_keys, theme, width, y, h)?;
         if matches!(app.screen, Screen::Systems) {
             let systems = data.systems().iter().filter(|s| s.game_count > 0).count();
             let games = data
@@ -797,7 +835,27 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 .map(|s| u64::from(s.game_count))
                 .sum::<u64>();
             self.label(
-                &format!("{systems} sistemas · {games} jogos"),
+                &self.catalog.format(
+                    "library.summary",
+                    &[
+                        (
+                            "systems",
+                            &self.catalog.plural(
+                                "systems.count",
+                                systems as f64,
+                                &[("count", &systems.to_string())],
+                            ),
+                        ),
+                        (
+                            "games",
+                            &self.catalog.plural(
+                                "games.count",
+                                games as f64,
+                                &[("count", &games.to_string())],
+                            ),
+                        ),
+                    ],
+                ),
                 Face::Regular,
                 13.,
                 theme.muted,
@@ -816,7 +874,9 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         h: u32,
     ) -> Result<i32, String> {
         let mut right = width as i32 - self.px(24.);
-        for &(button, label) in hints.iter().rev() {
+        for &(button, key) in hints.iter().rev() {
+            let label = self.catalog.text(key);
+            let label = label.as_str();
             let w = self.measure(label, Face::Regular, 13.)?;
             self.label(
                 label,
@@ -893,11 +953,14 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 data.games(system)
                     .get(*game)
                     .map(|g| g.name.clone())
-                    .unwrap_or_else(|| "Menu rápido".into()),
-                system_title(system, data),
+                    .unwrap_or_else(|| self.catalog.text("menu.title")),
+                system_title(system, data, &self.catalog),
             )
         } else {
-            ("Menu rápido".into(), "ARCHR".into())
+            (
+                self.catalog.text("menu.title"),
+                self.catalog.text("systems.title"),
+            )
         };
         let x = panel.x() + self.px(24.);
         let content_w = panel.width().saturating_sub(self.px(48.) as u32).max(1);
@@ -962,12 +1025,14 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 theme.text
             };
             let label = match item {
-                QuickItem::Core { .. } => "Núcleo",
-                QuickItem::Settings => "Configurações",
-                QuickItem::Suspend => "Suspender",
-                QuickItem::Reboot => "Reiniciar",
-                QuickItem::Shutdown => "Desligar",
+                QuickItem::Core { .. } => "menu.core",
+                QuickItem::Settings => "menu.settings",
+                QuickItem::Suspend => "menu.suspend",
+                QuickItem::Reboot => "menu.reboot",
+                QuickItem::Shutdown => "menu.shutdown",
             };
+            let label = self.catalog.text(label);
+            let label = label.as_str();
             let face = if selected {
                 Face::Semibold
             } else {
@@ -975,7 +1040,8 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             };
             let mut label_width = content_w;
             if let QuickItem::Core { core, .. } = item {
-                let core = if core.is_empty() { "Padrão" } else { core };
+                let default_core = self.catalog.text("menu.default");
+                let core = if core.is_empty() { &default_core } else { core };
                 let space = self.px(8.);
                 let lw = self.measure("L", Face::Mono, 12.)?;
                 let rw = self.measure("R", Face::Mono, 12.)?;
@@ -1030,7 +1096,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         }
         let footer = (theme.footer_height * height as f32).round().max(1.) as u32;
         self.hints(
-            &[("A", "Escolher"), ("B", "Fechar")],
+            &[("A", "hint.choose"), ("B", "hint.close")],
             theme,
             width,
             height as i32 - footer as i32,
@@ -1090,26 +1156,15 @@ pub fn pixels(rect: Rect01, width: u32, height: u32) -> Rect {
         (rect.h * height as f32).round().max(1.) as u32,
     )
 }
-fn system_title(name: &str, data: &dyn DataSource) -> String {
+fn system_title(name: &str, data: &dyn DataSource, catalog: &I18n) -> String {
     match name {
-        "@favorites" => "Favoritos".to_owned(),
-        "@recent" => "Recentes".to_owned(),
+        "@favorites" => catalog.text("collections.favorites"),
+        "@recent" => catalog.text("collections.recent"),
         _ => data
             .systems()
             .iter()
             .find(|s| s.name == name)
             .map(|s| s.fullname.clone())
             .unwrap_or_else(|| name.to_owned()),
-    }
-}
-fn relative_played(timestamp: u64) -> String {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    match now.saturating_sub(timestamp) / 86400 {
-        0 => "hoje".to_owned(),
-        1 => "há 1 dia".to_owned(),
-        days => format!("há {days} dias"),
     }
 }

@@ -143,3 +143,36 @@ favorito, troca de núcleo, consumo de `last-exit` e publicação de `next`.
 Os testes puros cobrem miniaturas por caminho/mtime, limites de cache, bindings,
 coleções e resolução de núcleos. A meta de 0,3 s precisa ser medida no RK3326;
 uma medição no PC não substitui a sonda no aparelho.
+
+## Idiomas
+
+Instale `locales/*.toml` em `/usr/share/archr-launcher/locales/` (também sob
+`ARCHR_LAUNCHER_ROOT` nos testes de PC). A v1 inclui `en`, `pt_BR`, `es` e `ru`.
+O inglês também fica embutido como reserva, sem depender dos arquivos instalados.
+A configuração `system.language` é consultada no snapshot já carregado na abertura;
+sem essa chave, usa `LANG`. Não há uma segunda leitura de configuração para idioma.
+O código completo tem prioridade, seguido da língua e do inglês; `pt` também
+resolve para o catálogo brasileiro. Sufixos de `LANG` (`.UTF-8`, `@modifier`) são
+ignorados, e hífen/underscore são aceitos no código. Uma chave ausente usa o inglês
+embutido e, se também não existir nele, mostra a própria chave. O aviso é emitido
+no máximo uma vez por chave durante a execução. Diagnósticos técnicos ficam no
+log; os banners usam mensagens traduzidas.
+
+Os catálogos são TOML plano: chaves pontuadas devem estar entre aspas, por exemplo
+`"hint.open" = "Abrir"`. Para plurais, use uma tabela inline com categorias CLDR:
+`"games.count" = { one = "{count} jogo", other = "{count} jogos" }`.
+`other` é obrigatório; russo também usa `few` e `many`. Interpolação por `{name}`
+não reinterpreta os valores inseridos. Arquivos precisam ser regulares, não podem
+ser links simbólicos e têm limite de 64 KiB; falhas usam o próximo fallback.
+
+Novos idiomas são descobertos pelo nome do arquivo, sem lista fixa no carregador.
+Para acrescentar um idioma, copie todas as chaves do inglês, traduza os textos e
+adicione a regra cardinal em `crates/archr-ui/src/i18n.rs` se necessário. Os testes
+conferem chaves, categorias, placeholders, larguras das dicas/menu e cobertura
+cirílica dos quatro TTF distribuídos. As traduções ainda precisam de revisão
+por falantes dos idiomas antes de fechar a versão.
+
+Francês, alemão, chinês simplificado e japonês ficam para a fase 2. A extensão para
+uma fonte CJK lazy está marcada em `crates/archr-ui/src/text.rs`; nenhuma fonte CJK
+é aberta agora. Tempo relativo usa meses aproximados de 30 dias e anos de 365 dias,
+e datas futuras aparecem como “agora”.

@@ -10,6 +10,7 @@ use archr_launcher::{
 use archr_ui::{
     controllers::Controllers,
     covers::CoverCache,
+    i18n::I18n,
     input::{button_event, Repeat},
     render::Ui,
     resolve_theme,
@@ -32,6 +33,16 @@ fn main() {
 }
 fn run() -> Result<(), String> {
     let began = Instant::now();
+    let paths = Paths::new(std::env::var_os("ARCHR_LAUNCHER_ROOT").map(PathBuf::from));
+    let config = SystemCfg::load(&paths.config).ok();
+    let language = config
+        .as_ref()
+        .and_then(|cfg| cfg.get_local("system", None, "language"));
+    let catalog = I18n::load(
+        &paths.at("/usr/share/archr-launcher/locales"),
+        language.as_deref(),
+        std::env::var("LANG").ok().as_deref(),
+    );
     let mut windowed = false;
     let mut script_source = None;
     let mut args = std::env::args().skip(1);
@@ -39,33 +50,29 @@ fn run() -> Result<(), String> {
         match arg.as_str() {
             "--windowed" => windowed = true,
             "--script" => {
-                script_source = Some(
-                    args.next()
-                        .ok_or("--script exige uma sequência de botões")?,
-                )
+                script_source = Some(args.next().ok_or(catalog.text("cli.script_required"))?)
             }
             "--help" => {
-                println!("archr-launcher [--windowed]");
+                println!("{}", catalog.text("cli.usage"));
                 return Ok(());
             }
-            _ => return Err(format!("Argumento desconhecido: {arg}")),
+            _ => return Err(catalog.format("cli.unknown_argument", &[("arg", &arg)])),
         }
     }
     if script_source.is_some() && !windowed {
-        return Err("--script exige --windowed".to_owned());
+        return Err(catalog.text("cli.windowed_required"));
     }
     let mut script = script_source
         .as_deref()
-        .map(script::Script::parse)
+        .map(|source| script::Script::parse(source, &catalog))
         .transpose()?;
-    let paths = Paths::new(std::env::var_os("ARCHR_LAUNCHER_ROOT").map(PathBuf::from));
     // No per-system index, controller enumeration or cover work before present.
     let ttf;
     let creator;
     let mut ui = Ui::new(640, 480, windowed)?;
     ttf = sdl2::ttf::init().map_err(|error| error.to_string())?;
     creator = ui.canvas.texture_creator();
-    let config = SystemCfg::load(&paths.config).ok();
+    ui.catalog = catalog;
     let name = config
         .as_ref()
         .and_then(|cfg| cfg.get("launcher", None, "theme"))
@@ -79,7 +86,7 @@ fn run() -> Result<(), String> {
     ui.configure(&ttf, &creator, &theme, paths.root.as_deref())?;
     let mut library = Library::initial(paths.clone());
     let mut app = App::new(ui.page_size(&theme));
-    ui.banner = library.banner.take();
+    ui.banner = library.banner.take().map(|m| m.render(&ui.catalog));
     ui.draw(&app, &library, &theme, None)?;
     eprintln!(
         "archr-launcher: first frame {} ms ({} system rows)",
@@ -122,7 +129,7 @@ fn run() -> Result<(), String> {
             dirty = true;
         }
         if let Some(banner) = library.banner.take() {
-            ui.banner = Some(banner);
+            ui.banner = Some(banner.render(&ui.catalog));
             banner_until = Instant::now() + Duration::from_secs(8);
             dirty = true;
         }
@@ -150,9 +157,10 @@ fn run() -> Result<(), String> {
         let mut button = None;
         let mut close_requested = false;
         if let Some(driver) = &mut script {
-            if let Some(step) =
-                driver.poll(library.ready && !ui.loading && library.pending_writes == 0)?
-            {
+            if let Some(step) = driver.poll(
+                library.ready && !ui.loading && library.pending_writes == 0,
+                &ui.catalog,
+            )? {
                 match step {
                     script::Step::Button(b) => button = Some(b),
                     script::Step::Quit => close_requested = true,
@@ -160,7 +168,7 @@ fn run() -> Result<(), String> {
                         ui.screenshot = Some(
                             std::env::var_os("ARCHR_LAUNCHER_SCREENSHOT")
                                 .map(PathBuf::from)
-                                .ok_or("SNAPSHOT exige ARCHR_LAUNCHER_SCREENSHOT")?,
+                                .ok_or(ui.catalog.text("cli.snapshot_required"))?,
                         );
                         dirty = true;
                     }
@@ -297,7 +305,7 @@ fn arm_terminal_snapshot(
         ui.screenshot = Some(
             std::env::var_os("ARCHR_LAUNCHER_SCREENSHOT")
                 .map(PathBuf::from)
-                .ok_or("SNAPSHOT exige ARCHR_LAUNCHER_SCREENSHOT")?,
+                .ok_or(ui.catalog.text("cli.snapshot_required"))?,
         );
     }
     Ok(())
