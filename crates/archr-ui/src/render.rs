@@ -30,17 +30,7 @@ impl TextCache<'_, '_> {
         x: i32,
         y: i32,
     ) -> Result<(), String> {
-        let text: String = text
-            .chars()
-            .take(160)
-            .map(|character| {
-                if character == '\0' {
-                    '\u{fffd}'
-                } else {
-                    character
-                }
-            })
-            .collect();
+        let text = display_text(text);
         if text.is_empty() {
             return Ok(());
         }
@@ -51,22 +41,12 @@ impl TextCache<'_, '_> {
         let entry = match index {
             Some(index) => self.entries.remove(index).expect("located cache entry"),
             None => {
-                let mut display = text.clone();
                 let limit = canvas
                     .info()
                     .max_texture_width
                     .min(canvas.output_size()?.0)
                     .max(1);
-                while !display.is_empty()
-                    && self
-                        .font
-                        .size_of(&display)
-                        .map_err(|error| error.to_string())?
-                        .0
-                        > limit
-                {
-                    display.pop();
-                }
+                let display = self.fit(&text, limit)?;
                 if display.is_empty() {
                     return Ok(());
                 }
@@ -90,6 +70,47 @@ impl TextCache<'_, '_> {
         }
         Ok(())
     }
+    fn fit(&self, text: &str, limit: u32) -> Result<String, String> {
+        let mut display = text.to_owned();
+        while !display.is_empty()
+            && self
+                .font
+                .size_of(&display)
+                .map_err(|error| error.to_string())?
+                .0
+                > limit
+        {
+            display.pop();
+        }
+        Ok(display)
+    }
+    fn centered(
+        &mut self,
+        canvas: &mut Canvas<Window>,
+        text: &str,
+        color: Rgba,
+        panel: Rect,
+    ) -> Result<(), String> {
+        let limit = panel
+            .width()
+            .saturating_sub(16)
+            .min(canvas.info().max_texture_width);
+        let text = self.fit(&display_text(text), limit)?;
+        if text.is_empty() {
+            return Ok(());
+        }
+        let (width, height) = self
+            .font
+            .size_of(&text)
+            .map_err(|error| error.to_string())?;
+        self.draw(
+            canvas,
+            &text,
+            color,
+            panel.x() + (panel.width() - width) as i32 / 2,
+            panel.y() + (panel.height() as i32 - height as i32) / 2,
+        )
+    }
 }
 
 pub struct Ui<'font, 'texture> {
@@ -100,6 +121,7 @@ pub struct Ui<'font, 'texture> {
     pub loading: bool,
     pub banner: Option<String>,
     pub screenshot: Option<PathBuf>,
+    pub transition: Option<String>,
 }
 impl<'font, 'texture> Ui<'font, 'texture> {
     pub fn new(width: u32, height: u32, windowed: bool) -> Result<Self, String> {
@@ -128,6 +150,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             loading: false,
             banner: None,
             screenshot: None,
+            transition: None,
         })
     }
 
@@ -303,6 +326,24 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             margin,
             height as i32 - line - margin,
         )?;
+        if let Some(message) = &self.transition {
+            let panel_width = width.saturating_sub(margin.max(0) as u32 * 2).max(1);
+            let panel_height = (line as u32 * 3).min(height).max(1);
+            let panel = Rect::new(
+                (width - panel_width) as i32 / 2,
+                (height - panel_height) as i32 / 2,
+                panel_width,
+                panel_height,
+            );
+            self.canvas.set_draw_color(sdl_color(theme.highlight_bg));
+            self.canvas.fill_rect(panel)?;
+            self.canvas.set_clip_rect(panel);
+            self.text
+                .as_mut()
+                .ok_or("Fonte não inicializada")?
+                .centered(&mut self.canvas, message, theme.highlight_text, panel)?;
+            self.canvas.set_clip_rect(None);
+        }
         // Explicit PC debug capture only; ordinary frames never touch the disk.
         if let Some(path) = self.screenshot.take() {
             let rgba = self
@@ -323,6 +364,19 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             y,
         )
     }
+}
+
+fn display_text(text: &str) -> String {
+    text.chars()
+        .take(160)
+        .map(|character| {
+            if character == '\0' {
+                '\u{fffd}'
+            } else {
+                character
+            }
+        })
+        .collect()
 }
 
 pub fn pixels(rect: Rect01, width: u32, height: u32) -> Rect {

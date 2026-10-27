@@ -1,5 +1,6 @@
 //! SDL integration. Disk scanning and locked config updates run in workers.
 mod script;
+mod transition;
 use archr_config::SystemCfg;
 use archr_launcher::{
     library::Library,
@@ -146,13 +147,14 @@ fn run() -> Result<(), String> {
             dirty = false;
         }
         let mut button = None;
+        let mut close_requested = false;
         if let Some(driver) = &mut script {
             if let Some(step) =
                 driver.poll(library.ready && !ui.loading && library.pending_writes == 0)?
             {
                 match step {
                     script::Step::Button(b) => button = Some(b),
-                    script::Step::Quit => return library.finish(),
+                    script::Step::Quit => close_requested = true,
                     script::Step::Snapshot => {
                         ui.screenshot = Some(
                             std::env::var_os("ARCHR_LAUNCHER_SCREENSHOT")
@@ -171,11 +173,11 @@ fn run() -> Result<(), String> {
             repeat.wait_ms(Instant::now())
         }) {
             match event {
-                Event::Quit { .. } if windowed => return library.finish(),
+                Event::Quit { .. } if windowed => close_requested = true,
                 Event::KeyDown {
                     keycode: Some(Keycode::Escape),
                     ..
-                } if windowed => return library.finish(),
+                } if windowed => close_requested = true,
                 Event::JoyDeviceAdded { .. } | Event::JoyDeviceRemoved { .. } => {
                     controllers.refresh();
                     repeat.clear();
@@ -195,6 +197,23 @@ fn run() -> Result<(), String> {
                 }
             }
         }
+        if close_requested {
+            deferred = None;
+            if transition::apply(
+                &mut ui,
+                &app,
+                &mut library,
+                &theme,
+                None,
+                &controllers.configuration(),
+            )? {
+                return Ok(());
+            }
+            dirty = true;
+            banner_until = Instant::now() + Duration::from_secs(8);
+            repeat.clear();
+            continue;
+        }
         button = button.or_else(|| repeat.poll(Instant::now()));
         if let Some(button) = button {
             let outcome = app.handle(button, &library);
@@ -203,21 +222,35 @@ fn run() -> Result<(), String> {
             {
                 deferred = Some(outcome);
             } else {
-                match library.handle(outcome, &controllers.configuration()) {
-                    Ok(true) => return Ok(()),
-                    Ok(false) => {}
-                    Err(error) => {
-                        ui.banner = Some(error);
-                        banner_until = Instant::now() + Duration::from_secs(8);
-                    }
+                if transition::apply(
+                    &mut ui,
+                    &app,
+                    &mut library,
+                    &theme,
+                    Some(outcome),
+                    &controllers.configuration(),
+                )? {
+                    return Ok(());
                 }
+                banner_until = Instant::now() + Duration::from_secs(8);
             }
             dirty = true;
         }
         if library.pending_writes == 0 {
             if let Some(outcome) = deferred.take() {
-                if !library.write_failed && library.handle(outcome, &controllers.configuration())? {
-                    return Ok(());
+                if !library.write_failed {
+                    if transition::apply(
+                        &mut ui,
+                        &app,
+                        &mut library,
+                        &theme,
+                        Some(outcome),
+                        &controllers.configuration(),
+                    )? {
+                        return Ok(());
+                    }
+                    dirty = true;
+                    banner_until = Instant::now() + Duration::from_secs(8);
                 }
             }
         }

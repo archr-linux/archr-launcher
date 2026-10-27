@@ -78,6 +78,8 @@ no desenho. Sem display, os mesmos fluxos podem rodar com
 - Favoritos/importações são gravados por um writer serializado que coalesce
   snapshots pendentes. O snapshot final é confirmado antes de publicar `next`
   em lançamento/ação; fechar a janela também aguarda a gravação final.
+  Antes desse trabalho terminal, apresenta um overlay de status centralizado.
+  Falhas na gravação/handoff cancelam a saída e aparecem no banner.
 - Escritas de núcleo são serializadas em worker; emulador e núcleo são publicados
   juntos, sob uma única trava/rename do `system.cfg`. Um lançamento aguarda essas
   escritas sem bloquear o event loop.
