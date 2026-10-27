@@ -21,6 +21,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "archr-launcher"
+version = "0.1.0"
+dependencies = [
+ "archr-index",
+]
+
+[[package]]
 name = "archr-ui"
 version = "0.1.0"
 dependencies = [
