@@ -200,16 +200,18 @@ impl MediaLookup {
     }
 
     fn contains_file(&mut self, path: &Path) -> bool {
-        let Some(parent) = path.parent().and_then(game_path_key) else {
+        let Some(parent) = path.parent() else {
             return false;
         };
         let Some(filename) = path.file_name() else {
             return false;
         };
+        // Keep parent traversal intact: a symlink before `..` changes its target.
+        // Path hashing/equality already ignores harmless `.` components.
         // References and folder fallbacks share one lazy snapshot per parent,
         // including misses. Only symlinks need a stat while listing the folder.
         self.directories
-            .entry(parent)
+            .entry(parent.to_owned())
             .or_insert_with_key(|parent| {
                 #[cfg(test)]
                 MEDIA_DIRECTORY_READS.with(|counts| {
@@ -279,6 +281,45 @@ impl MediaLookup {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn media_references_preserve_symlink_parent_traversal() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        let system_dir = directory.path().join("snes");
+        let external = directory.path().join("external");
+        fs::create_dir(&system_dir).unwrap();
+        fs::create_dir_all(external.join("nested")).unwrap();
+        symlink(external.join("nested"), system_dir.join("linked")).unwrap();
+        for name in ["Game.sfc", "Thumb.sfc"] {
+            fs::write(system_dir.join(name), []).unwrap();
+        }
+        for name in ["cover.png", "thumb.jpg", "clip.mp4"] {
+            fs::write(external.join(name), []).unwrap();
+        }
+        fs::write(system_dir.join("gamelist.xml"),
+            "<gameList><game><path>Game.sfc</path><image>./linked/../cover.png</image><video>./linked/../clip.mp4</video></game><game><path>Thumb.sfc</path><thumbnail>./linked/../thumb.jpg</thumbnail></game></gameList>")
+            .unwrap();
+        let sys = SystemDef {
+            name: "snes".into(),
+            fullname: "Super Nintendo".into(),
+            path: system_dir.clone(),
+            extensions: vec![".sfc".into()],
+            emulators: Vec::new(),
+        };
+
+        let games = scan_system(&sys);
+
+        assert_eq!(games.len(), 2);
+        assert_eq!(games[0].image, Some(system_dir.join("linked/../cover.png")));
+        assert_eq!(games[0].video, Some(system_dir.join("linked/../clip.mp4")));
+        assert_eq!(games[1].image, Some(system_dir.join("linked/../thumb.jpg")));
+        MEDIA_DIRECTORY_READS.with(|counts| {
+            assert_eq!(counts.borrow().get(&system_dir.join("linked/..")), Some(&1));
+        });
+    }
 
     #[test]
     fn two_games_share_media_directory_listings_for_references_and_fallbacks() {
