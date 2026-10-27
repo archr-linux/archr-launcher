@@ -150,40 +150,33 @@ struct PidLock {
 }
 
 impl PidLock {
-    fn reclaim(path: &Path, stale_contents: &[u8]) -> io::Result<()> {
-        let nanos = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
-        let mut prefix = path.file_name().unwrap_or_default().to_os_string();
-        prefix.push(format!(".stale.{}.{nanos}.", std::process::id()));
-        // Reserve a unique quarantine name; rename replaces only our placeholder.
-        let renamed = tempfile::Builder::new()
-            .prefix(&prefix)
-            .tempfile_in(containing_directory(path))?
-            .into_temp_path();
-        match fs::rename(path, &renamed) {
-            Ok(()) => {}
+    fn reclaim_if_stale(path: &Path) -> io::Result<()> {
+        let mut helper_path = path.as_os_str().to_os_string();
+        helper_path.push(".reclaim");
+        let helper = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(Path::new(&helper_path))?;
+        // Keep this file permanently so all reclaimers lock the same inode.
+        // Closing the handle releases the advisory lock on every return path.
+        helper.lock()?;
+        let snapshot = match LockSnapshot::read(path) {
+            Ok(snapshot) => snapshot,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
             Err(error) => return Err(error),
-        }
-        let still_stale = LockSnapshot::read(&renamed)
-            .and_then(|snapshot| Ok(snapshot.contents == stale_contents && snapshot.is_stale()?));
-        if !matches!(still_stale, Ok(true)) {
-            // Another reclaimer may already have replaced the judged stale lock.
-            // Never overwrite a newer owner when restoring a displaced successor.
-            match fs::hard_link(&renamed, path) {
+        };
+        // Discard any earlier stale judgment: another reclaimer may have
+        // removed the old lock and a live owner may already have replaced it.
+        if snapshot.is_stale()? {
+            match fs::remove_file(path) {
                 Ok(()) => {}
-                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
-                Err(error) => {
-                    // Preserve the displaced file if restoration itself fails.
-                    let _ = renamed.keep();
-                    return Err(error);
-                }
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
             }
         }
-        renamed.close()?;
-        still_stale.map(|_| ())
+        Ok(())
     }
 
     fn acquire(path: &Path, timeout: Duration) -> io::Result<Self> {
@@ -216,7 +209,7 @@ impl PidLock {
                         Err(error) => return Err(error),
                     };
                     if snapshot.is_stale()? {
-                        Self::reclaim(path, &snapshot.contents)?;
+                        Self::reclaim_if_stale(path)?;
                         continue;
                     }
                 }
@@ -285,7 +278,8 @@ mod tests {
 
         assert_eq!(fs::read_to_string(&path).unwrap(), "snes.core=new\n");
         assert!(!lock.exists());
-        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+        assert!(dir.path().join(".system.cfg.lock.reclaim").exists());
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 2);
     }
 
     #[test]
@@ -307,19 +301,91 @@ mod tests {
     }
 
     #[test]
-    fn reclaimer_restores_a_live_successor_of_the_judged_stale_lock() {
+    fn competing_reclaimers_rejudge_after_the_first_acquires() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::{mpsc, Barrier};
+
         let dir = tempdir().unwrap();
         let lock = dir.path().join(".system.cfg.lock");
-        let stale = b"4294967295\n";
-        fs::write(&lock, stale).unwrap();
-        let judged_contents = fs::read(&lock).unwrap();
-        let successor = format!("{}\n", std::process::id());
-        fs::write(&lock, &successor).unwrap();
+        fs::write(&lock, "4294967295\n").unwrap();
+        let both_judged_stale = Barrier::new(2);
+        let holders = AtomicUsize::new(0);
+        let (acquired_tx, acquired_rx) = mpsc::channel();
+        let (checked_tx, checked_rx) = mpsc::channel();
 
-        PidLock::reclaim(&lock, &judged_contents).unwrap();
+        thread::scope(|scope| {
+            let lock = &lock;
+            let both_judged_stale = &both_judged_stale;
+            let holders = &holders;
+            let first = scope.spawn(move || {
+                assert!(LockSnapshot::read(lock).unwrap().is_stale().unwrap());
+                both_judged_stale.wait();
+                PidLock::reclaim_if_stale(lock).unwrap();
+                let guard = PidLock::acquire(lock, Duration::from_millis(100)).unwrap();
+                assert_eq!(holders.fetch_add(1, Ordering::SeqCst), 0);
+                acquired_tx.send(()).unwrap();
+                checked_rx.recv().unwrap();
+                assert_eq!(holders.fetch_sub(1, Ordering::SeqCst), 1);
+                drop(guard);
+            });
+            let second = scope.spawn(move || {
+                assert!(LockSnapshot::read(lock).unwrap().is_stale().unwrap());
+                both_judged_stale.wait();
+                acquired_rx.recv().unwrap();
 
-        assert_eq!(fs::read_to_string(&lock).unwrap(), successor);
+                PidLock::reclaim_if_stale(lock).unwrap();
+                let result = PidLock::acquire(lock, Duration::from_millis(30));
+                if result.is_ok() {
+                    assert_eq!(
+                        holders.fetch_add(1, Ordering::SeqCst),
+                        0,
+                        "overlapping owners"
+                    );
+                }
+                assert_eq!(result.err().unwrap().kind(), io::ErrorKind::TimedOut);
+                assert_eq!(holders.load(Ordering::SeqCst), 1);
+                assert_eq!(
+                    fs::read_to_string(lock).unwrap(),
+                    format!("{}\n", std::process::id())
+                );
+                checked_tx.send(()).unwrap();
+            });
+            first.join().unwrap();
+            second.join().unwrap();
+        });
+
+        assert_eq!(holders.load(Ordering::SeqCst), 0);
+        assert!(!lock.exists());
+        let helper = fs::File::open(dir.path().join(".system.cfg.lock.reclaim")).unwrap();
+        helper.try_lock().unwrap();
         assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn reclaim_helper_is_kept_and_unlocked_when_main_lock_is_gone() {
+        let dir = tempdir().unwrap();
+        let lock = dir.path().join(".system.cfg.lock");
+
+        PidLock::reclaim_if_stale(&lock).unwrap();
+
+        assert!(!lock.exists());
+        let helper = fs::File::open(dir.path().join(".system.cfg.lock.reclaim")).unwrap();
+        helper.try_lock().unwrap();
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn reclaim_helper_unlocks_on_read_error_without_removing_main_lock() {
+        let dir = tempdir().unwrap();
+        let lock = dir.path().join(".system.cfg.lock");
+        fs::create_dir(&lock).unwrap();
+
+        assert!(PidLock::reclaim_if_stale(&lock).is_err());
+
+        assert!(lock.is_dir());
+        let helper = fs::File::open(dir.path().join(".system.cfg.lock.reclaim")).unwrap();
+        helper.try_lock().unwrap();
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 2);
     }
 
     #[test]
