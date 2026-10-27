@@ -1,4 +1,5 @@
 use std::fs::{self, File, FileTimes};
+use std::io::{Seek, SeekFrom, Write};
 use std::path::Path;
 use std::time::{Duration, UNIX_EPOCH};
 
@@ -315,4 +316,107 @@ fn unsafe_system_names_stay_inside_cache_without_collisions() {
         .iter()
         .all(|entry| entry.as_ref().unwrap().file_type().unwrap().is_file()));
     assert!(!cache.join("escape.bin").exists());
+}
+
+fn cache_header() -> Vec<u8> {
+    let mut bytes = b"ALAX".to_vec();
+    bytes.extend_from_slice(&CACHE_VERSION.to_le_bytes());
+    bytes
+}
+
+// A sparse, valid UTF-8 string keeps oversized fixtures cheap to create. The
+// zero-filled hole is part of a complete payload, not invalid trailing padding.
+fn write_sparse_string(path: &Path, prefix: &[u8], length: u64, suffix: &[u8]) {
+    let mut file = File::create(path).unwrap();
+    file.write_all(prefix).unwrap();
+    file.write_all(&length.to_le_bytes()).unwrap();
+    file.seek(SeekFrom::Current(i64::try_from(length).unwrap()))
+        .unwrap();
+    file.write_all(suffix).unwrap();
+}
+
+#[test]
+fn oversized_overview_is_ignored_without_removing_the_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("overview.bin");
+    let mut prefix = cache_header();
+    // One system: name, empty fullname, zero count, zero fingerprint.
+    prefix.extend_from_slice(&1_u64.to_le_bytes());
+    write_sparse_string(&path, &prefix, 1024 * 1024, &[0; 20]);
+    let original_len = fs::metadata(&path).unwrap().len();
+    assert!(load_overview(dir.path()).is_none());
+    assert_eq!(fs::metadata(&path).unwrap().len(), original_len);
+}
+
+#[test]
+fn oversized_system_cache_is_ignored_and_rebuilt() {
+    let dir = tempfile::tempdir().unwrap();
+    let roms = dir.path().join("roms");
+    fs::create_dir(&roms).unwrap();
+    fs::write(roms.join("Game.sfc"), []).unwrap();
+    let sys = system(&roms);
+    let cache = dir.path().join("cache");
+    load_games(&cache, &sys);
+    let path = cache.join("systems/snes.bin");
+    let mut prefix = fs::read(&path).unwrap()[..16].to_vec(); // Header + fingerprint.
+    prefix.extend_from_slice(&1_u64.to_le_bytes()); // One game.
+    prefix.extend_from_slice(&10_u64.to_le_bytes());
+    prefix.extend_from_slice(b"Cached.sfc");
+    // Huge name, no image/video/last_played, not favorite.
+    write_sparse_string(&path, &prefix, 32 * 1024 * 1024, &[0; 4]);
+    let games = load_games(&cache, &sys);
+    assert_eq!(games.len(), 1);
+    assert_eq!(games[0].path, roms.join("Game.sfc"));
+    assert!(fs::metadata(&path).unwrap().len() < 1024);
+}
+
+#[test]
+fn huge_overview_vector_and_string_lengths_are_ignored() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("overview.bin");
+    // These tiny payloads claim enormous allocations but have no element data.
+    for lengths in [vec![u64::MAX], vec![1, u64::MAX], vec![1, 0, u64::MAX]] {
+        let mut bytes = cache_header();
+        for length in lengths {
+            bytes.extend_from_slice(&length.to_le_bytes());
+        }
+        fs::write(&path, bytes).unwrap();
+        assert!(load_overview(dir.path()).is_none());
+    }
+}
+
+#[test]
+fn huge_system_vector_and_string_lengths_are_ignored_and_rebuilt() {
+    let dir = tempfile::tempdir().unwrap();
+    let roms = dir.path().join("roms");
+    fs::create_dir(&roms).unwrap();
+    fs::write(roms.join("Game.sfc"), []).unwrap();
+    let sys = system(&roms);
+    let cache = dir.path().join("cache");
+    let expected = load_games(&cache, &sys);
+    let path = cache.join("systems/snes.bin");
+    let original = fs::read(&path).unwrap();
+    // Game vector, game path string, then game name string.
+    for lengths in [vec![u64::MAX], vec![1, u64::MAX], vec![1, 0, u64::MAX]] {
+        let mut bytes = original[..16].to_vec();
+        for length in lengths {
+            bytes.extend_from_slice(&length.to_le_bytes());
+        }
+        fs::write(&path, bytes).unwrap();
+        assert_eq!(load_games(&cache, &sys), expected);
+        assert_eq!(fs::read(&path).unwrap(), original);
+    }
+}
+
+#[test]
+fn oversized_overview_write_preserves_existing_cache() {
+    let dir = tempfile::tempdir().unwrap();
+    save_overview(dir.path(), &overview()).unwrap();
+    let path = dir.path().join("overview.bin");
+    let original = fs::read(&path).unwrap();
+    let mut oversized = overview();
+    oversized.systems[0].name = "x".repeat(1024 * 1024);
+    assert!(save_overview(dir.path(), &oversized).is_err());
+    assert_eq!(fs::read(path).unwrap(), original);
+    assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
 }
