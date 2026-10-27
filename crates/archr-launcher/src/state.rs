@@ -82,6 +82,7 @@ pub struct App {
     pub cursor: usize,
     pub page_size: usize,
     history: Vec<(Screen, usize)>,
+    selected_core: Option<(String, String)>,
 }
 
 impl App {
@@ -91,6 +92,7 @@ impl App {
             cursor: 0,
             page_size,
             history: Vec::new(),
+            selected_core: None,
         }
     }
 
@@ -109,15 +111,15 @@ impl App {
             .collect()
     }
 
-    pub fn quick_menu_items(&self, data: &dyn DataSource) -> Vec<QuickItem> {
+    pub fn quick_menu_items(&self, _data: &dyn DataSource) -> Vec<QuickItem> {
         let Screen::QuickMenu { system, game } = &self.screen else {
             return Vec::new();
         };
         let mut items = Vec::new();
-        if let (Some(system), Some(game)) = (system, game) {
+        if system.is_some() && game.is_some() {
             // Preserve the Core row even when no current pair is available.
             // Empty strings represent unknown values rather than a made-up default.
-            let (emulator, core) = data.current_core(system, *game).unwrap_or_default();
+            let (emulator, core) = self.selected_core.clone().unwrap_or_default();
             items.push(QuickItem::Core { emulator, core });
         }
         items.extend([
@@ -129,8 +131,8 @@ impl App {
         items
     }
 
-    /// Returns effects for the caller to apply. In particular, the caller must
-    /// persist SetCore in the data source before handling the next button.
+    /// Returns effects for the caller to apply. Core selection is tracked locally
+    /// while the quick menu is open, independently of persistence timing.
     pub fn handle(&mut self, b: Button, data: &dyn DataSource) -> Outcome {
         let len = match &self.screen {
             Screen::Systems => self.system_rows(data).len(),
@@ -183,10 +185,13 @@ impl App {
                     match b {
                         Button::A => return Outcome::Launch { system, game },
                         Button::X => return Outcome::ToggleFavorite { system, game },
-                        Button::Y => self.enter(Screen::QuickMenu {
-                            system: Some(system),
-                            game: Some(game),
-                        }),
+                        Button::Y => {
+                            self.selected_core = data.current_core(&system, game);
+                            self.enter(Screen::QuickMenu {
+                                system: Some(system),
+                                game: Some(game),
+                            });
+                        }
                         _ => unreachable!(),
                     }
                 }
@@ -210,7 +215,7 @@ impl App {
                     }
                     (Button::L | Button::R, Some(QuickItem::Core { .. })) => {
                         if let (Some(system), Some(game)) = (system, game) {
-                            return Self::cycle_core(b, system, game, data);
+                            return self.cycle_core(b, system, game, data);
                         }
                     }
                     _ => {}
@@ -220,19 +225,27 @@ impl App {
         Outcome::None
     }
 
-    fn cycle_core(b: Button, system: String, game: usize, data: &dyn DataSource) -> Outcome {
+    fn cycle_core(
+        &mut self,
+        b: Button,
+        system: String,
+        game: usize,
+        data: &dyn DataSource,
+    ) -> Outcome {
         let cores = data.cores(&system);
         if cores.is_empty() {
             return Outcome::None;
         }
-        let current = data.current_core(&system, game);
-        let index = cores.iter().position(|pair| Some(pair) == current.as_ref());
+        let index = cores
+            .iter()
+            .position(|pair| Some(pair) == self.selected_core.as_ref());
         let next = match (b, index) {
             (Button::R, Some(index)) => (index + 1) % cores.len(),
             (Button::L, Some(0)) | (Button::L, None) => cores.len() - 1,
             (Button::L, Some(index)) => index - 1,
             _ => 0,
         };
+        self.selected_core = Some(cores[next].clone());
         let (emulator, core) = cores[next].clone();
         Outcome::SetCore {
             system,

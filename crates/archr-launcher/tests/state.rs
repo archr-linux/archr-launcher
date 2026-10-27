@@ -597,3 +597,69 @@ fn reserved_and_unmapped_buttons_do_nothing() {
         assert_eq!(app.screen, Screen::Systems);
     }
 }
+
+fn assert_core_sequence_without_data_changes(button: Button, expected: &[(&str, &str)]) {
+    let mut data = FakeData::library();
+    data.cores.insert(
+        "snes".into(),
+        vec![
+            pair("retroarch", "snes9x"),
+            pair("standalone", "native"),
+            pair("retroarch", "bsnes"),
+        ],
+    );
+    let mut app = in_games("snes", 7);
+    app.handle(Button::Y, &data);
+    let mut outcomes = Vec::new();
+    let mut displayed = Vec::new();
+    for _ in expected {
+        outcomes.push(app.handle(button, &data));
+        displayed.push(app.quick_menu_items(&data)[0].clone());
+    }
+    for (outcome, &(emulator, core)) in outcomes.into_iter().zip(expected) {
+        assert_eq!(
+            outcome,
+            Outcome::SetCore {
+                system: "snes".into(),
+                game: 7,
+                emulator: emulator.into(),
+                core: core.into(),
+            }
+        );
+    }
+    for (item, &(emulator, core)) in displayed.into_iter().zip(expected) {
+        assert_eq!(
+            item,
+            QuickItem::Core {
+                emulator: emulator.into(),
+                core: core.into(),
+            }
+        );
+    }
+}
+
+#[test]
+fn consecutive_r_cycles_all_cores_and_wraps_with_unchanged_data() {
+    assert_core_sequence_without_data_changes(
+        Button::R,
+        &[
+            ("standalone", "native"),
+            ("retroarch", "bsnes"),
+            ("retroarch", "snes9x"),
+            ("standalone", "native"),
+        ],
+    );
+}
+
+#[test]
+fn consecutive_l_cycles_all_cores_and_wraps_with_unchanged_data() {
+    assert_core_sequence_without_data_changes(
+        Button::L,
+        &[
+            ("retroarch", "bsnes"),
+            ("standalone", "native"),
+            ("retroarch", "snes9x"),
+            ("retroarch", "bsnes"),
+        ],
+    );
+}
