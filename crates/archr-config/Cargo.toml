@@ -1,0 +1,7 @@
+[package]
+name = "archr-config"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+tempfile = "3"
