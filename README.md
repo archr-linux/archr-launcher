@@ -148,15 +148,21 @@ uma medição no PC não substitui a sonda no aparelho.
 
 Instale `locales/*.toml` em `/usr/share/archr-launcher/locales/` (também sob
 `ARCHR_LAUNCHER_ROOT` nos testes de PC). A v1 inclui `en`, `pt_BR`, `es` e `ru`.
-O inglês também fica embutido como reserva, sem depender dos arquivos instalados.
+Os quatro catálogos ficam embutidos no binário: esses idiomas não consultam
+arquivos de locale antes da primeira tela, mesmo quando há arquivos instalados.
+Somente códigos que não resolvem para um idioma embutido consultam o diretório
+externo (novos idiomas ou catálogos personalizados); esse caminho raro é síncrono.
+O inglês embutido continua sendo a reserva final.
 A configuração `system.language` é consultada no snapshot já carregado na abertura;
 sem essa chave, usa `LANG`. Não há uma segunda leitura de configuração para idioma.
 O código completo tem prioridade, seguido da língua e do inglês; `pt` também
-resolve para o catálogo brasileiro. Sufixos de `LANG` (`.UTF-8`, `@modifier`) são
+resolve para o catálogo brasileiro, assim como `pt_PT`, `pt_AO` e demais regiões. Sufixos de `LANG` (`.UTF-8`, `@modifier`) são
 ignorados, e hífen/underscore são aceitos no código. Uma chave ausente usa o inglês
 embutido e, se também não existir nele, mostra a própria chave. O aviso é emitido
 no máximo uma vez por chave durante a execução. Diagnósticos técnicos ficam no
-log; os banners usam mensagens traduzidas.
+log; os banners usam mensagens traduzidas. Uso, argumentos e erros do driver
+`--script` são sempre em inglês e são processados antes de carregar configuração
+ou catálogos.
 
 Os catálogos são TOML plano: chaves pontuadas devem estar entre aspas, por exemplo
 `"hint.open" = "Abrir"`. Para plurais, use uma tabela inline com categorias CLDR:

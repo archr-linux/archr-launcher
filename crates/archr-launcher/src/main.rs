@@ -33,6 +33,29 @@ fn main() {
 }
 fn run() -> Result<(), String> {
     let began = Instant::now();
+    let mut windowed = false;
+    let mut script_source = None;
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--windowed" => windowed = true,
+            "--script" => {
+                script_source = Some(args.next().ok_or("--script requires a button sequence")?)
+            }
+            "--help" => {
+                println!("archr-launcher [--windowed]");
+                return Ok(());
+            }
+            _ => return Err(format!("Unknown argument: {arg}")),
+        }
+    }
+    if script_source.is_some() && !windowed {
+        return Err("--script requires --windowed".to_owned());
+    }
+    let mut script = script_source
+        .as_deref()
+        .map(script::Script::parse)
+        .transpose()?;
     let paths = Paths::new(std::env::var_os("ARCHR_LAUNCHER_ROOT").map(PathBuf::from));
     let config = SystemCfg::load(&paths.config).ok();
     let language = config
@@ -43,29 +66,6 @@ fn run() -> Result<(), String> {
         language.as_deref(),
         std::env::var("LANG").ok().as_deref(),
     );
-    let mut windowed = false;
-    let mut script_source = None;
-    let mut args = std::env::args().skip(1);
-    while let Some(arg) = args.next() {
-        match arg.as_str() {
-            "--windowed" => windowed = true,
-            "--script" => {
-                script_source = Some(args.next().ok_or(catalog.text("cli.script_required"))?)
-            }
-            "--help" => {
-                println!("{}", catalog.text("cli.usage"));
-                return Ok(());
-            }
-            _ => return Err(catalog.format("cli.unknown_argument", &[("arg", &arg)])),
-        }
-    }
-    if script_source.is_some() && !windowed {
-        return Err(catalog.text("cli.windowed_required"));
-    }
-    let mut script = script_source
-        .as_deref()
-        .map(|source| script::Script::parse(source, &catalog))
-        .transpose()?;
     // No per-system index, controller enumeration or cover work before present.
     let ttf;
     let creator;
@@ -157,10 +157,9 @@ fn run() -> Result<(), String> {
         let mut button = None;
         let mut close_requested = false;
         if let Some(driver) = &mut script {
-            if let Some(step) = driver.poll(
-                library.ready && !ui.loading && library.pending_writes == 0,
-                &ui.catalog,
-            )? {
+            if let Some(step) =
+                driver.poll(library.ready && !ui.loading && library.pending_writes == 0)?
+            {
                 match step {
                     script::Step::Button(b) => button = Some(b),
                     script::Step::Quit => close_requested = true,
@@ -168,7 +167,7 @@ fn run() -> Result<(), String> {
                         ui.screenshot = Some(
                             std::env::var_os("ARCHR_LAUNCHER_SCREENSHOT")
                                 .map(PathBuf::from)
-                                .ok_or(ui.catalog.text("cli.snapshot_required"))?,
+                                .ok_or("SNAPSHOT requires ARCHR_LAUNCHER_SCREENSHOT")?,
                         );
                         dirty = true;
                     }
@@ -305,7 +304,7 @@ fn arm_terminal_snapshot(
         ui.screenshot = Some(
             std::env::var_os("ARCHR_LAUNCHER_SCREENSHOT")
                 .map(PathBuf::from)
-                .ok_or(ui.catalog.text("cli.snapshot_required"))?,
+                .ok_or("SNAPSHOT requires ARCHR_LAUNCHER_SCREENSHOT")?,
         );
     }
     Ok(())

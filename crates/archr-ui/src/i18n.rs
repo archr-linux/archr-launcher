@@ -9,6 +9,15 @@ use std::{
 };
 
 const ENGLISH: &str = include_str!("../../../locales/en.toml");
+const EMBEDDED: &[(&str, &str)] = &[
+    ("en", ENGLISH),
+    ("pt_BR", include_str!("../../../locales/pt_BR.toml")),
+    ("es", include_str!("../../../locales/es.toml")),
+    ("ru", include_str!("../../../locales/ru.toml")),
+];
+// Portuguese users in any region are better served by Brazilian Portuguese
+// than English until additional Portuguese catalogs are shipped.
+const LANGUAGE_ALIASES: &[(&str, &str)] = &[("pt", "pt_BR")];
 const MAX_BYTES: u64 = 64 * 1024;
 type Catalog = BTreeMap<String, Entry>;
 
@@ -35,19 +44,30 @@ impl Default for I18n {
     }
 }
 impl I18n {
-    /// Call once with the already loaded system.language; LANG is used only
-    /// when that key is absent. New language files need no registry entry.
+    /// Reuse the startup config snapshot; LANG is used only without the key.
+    /// Resolve all shipped languages in memory, before any filesystem access.
+    /// Only non-embedded languages/custom catalog codes consult `dir`.
     pub fn load(dir: &Path, configured: Option<&str>, lang_env: Option<&str>) -> Self {
         let mut result = Self::default();
         let code = normalize(configured.or(lang_env).unwrap_or("en"));
         let base = code.split('_').next().unwrap_or("en");
-        // Portuguese is shipped as pt_BR, also serving the bare pt locale.
-        let candidates = [
-            code.as_str(),
-            base,
-            if base == "pt" { "pt_BR" } else { "en" },
-            "en",
-        ];
+        let mut candidates = vec![code.as_str(), base];
+        if let Some((_, target)) = LANGUAGE_ALIASES.iter().find(|(alias, _)| *alias == base) {
+            candidates.push(target);
+        }
+        // Resolve the complete shipped-language chain first: es_MX and ru_RU
+        // must not even probe external files before falling back to es and ru.
+        for candidate in &candidates {
+            if let Some((language, source)) =
+                EMBEDDED.iter().find(|(language, _)| language == candidate)
+            {
+                result.language = (*language).to_owned();
+                if *language != "en" {
+                    result.catalog = parse(source).expect("valid embedded catalog");
+                }
+                return result;
+            }
+        }
         let mut tried = HashSet::new();
         for candidate in candidates {
             if !tried.insert(candidate) {
@@ -60,7 +80,7 @@ impl I18n {
                 Ok(catalog) => {
                     result.language = candidate.to_owned();
                     result.catalog = catalog;
-                    break;
+                    return result;
                 }
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {}
                 Err(error) => log::warn!(
@@ -69,7 +89,7 @@ impl I18n {
                 ),
             }
         }
-        result
+        result // embedded English fallback; never open en.toml
     }
     pub fn language(&self) -> &str {
         &self.language

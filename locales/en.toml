@@ -41,13 +41,6 @@
 "error.game_exit" = "Game exited with error ({code}).\nLog: /var/log/exec.log"
 "error.font" = "No usable UI font found"
 "error.font_init" = "UI font is not initialized"
-"cli.script_required" = "--script requires a button sequence"
-"cli.unknown_argument" = "Unknown argument: {arg}"
-"cli.windowed_required" = "--script requires --windowed"
-"cli.snapshot_required" = "SNAPSHOT requires ARCHR_LAUNCHER_SCREENSHOT"
-"cli.invalid_button" = "Invalid script button: {button}"
-"cli.script_timeout" = "Script timed out after 30 seconds"
-"cli.usage" = "archr-launcher [--windowed]"
 "time.now" = "now"
 "time.yesterday" = "yesterday"
 "systems.count" = { one = "{count} system", other = "{count} systems" }

@@ -41,13 +41,6 @@
 "error.game_exit" = "O jogo terminou com erro ({code}).\nLog: /var/log/exec.log"
 "error.font" = "Nenhuma fonte disponível"
 "error.font_init" = "Fonte não inicializada"
-"cli.script_required" = "--script exige uma sequência de botões"
-"cli.unknown_argument" = "Argumento desconhecido: {arg}"
-"cli.windowed_required" = "--script exige --windowed"
-"cli.snapshot_required" = "SNAPSHOT exige ARCHR_LAUNCHER_SCREENSHOT"
-"cli.invalid_button" = "Botão de script inválido: {button}"
-"cli.script_timeout" = "O script excedeu 30 segundos"
-"cli.usage" = "archr-launcher [--windowed]"
 "time.now" = "agora"
 "time.yesterday" = "ontem"
 "systems.count" = { one = "{count} sistema", other = "{count} sistemas" }

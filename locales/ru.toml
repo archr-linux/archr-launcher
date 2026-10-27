@@ -22,7 +22,7 @@
 "notice.closing" = "Закрытие…"
 "notice.shutdown" = "Выключение…"
 "notice.reboot" = "Перезагрузка…"
-"notice.suspend" = "Переход в сон…"
+"notice.suspend" = "Переход в спящий режим…"
 "notice.settings" = "Открытие настроек…"
 "loading" = "Загрузка…"
 "empty.games" = "Игры не найдены"
@@ -41,13 +41,6 @@
 "error.game_exit" = "Игра завершилась с ошибкой ({code}).\nЖурнал: /var/log/exec.log"
 "error.font" = "Нет доступного шрифта"
 "error.font_init" = "Шрифт не загружен"
-"cli.script_required" = "--script требует последовательность кнопок"
-"cli.unknown_argument" = "Неизвестный аргумент: {arg}"
-"cli.windowed_required" = "--script требует --windowed"
-"cli.snapshot_required" = "SNAPSHOT требует ARCHR_LAUNCHER_SCREENSHOT"
-"cli.invalid_button" = "Недопустимая кнопка сценария: {button}"
-"cli.script_timeout" = "Сценарий превысил 30 секунд"
-"cli.usage" = "archr-launcher [--windowed]"
 "time.now" = "сейчас"
 "time.yesterday" = "вчера"
 "systems.count" = { one = "{count} система", few = "{count} системы", many = "{count} систем", other = "{count} системы" }
@@ -57,4 +50,4 @@
 "time.hours" = { one = "{count} ч. назад", few = "{count} ч. назад", many = "{count} ч. назад", other = "{count} ч. назад" }
 "time.days" = { one = "{count} дн. назад", few = "{count} дн. назад", many = "{count} дн. назад", other = "{count} дн. назад" }
 "time.months" = { one = "{count} мес. назад", few = "{count} мес. назад", many = "{count} мес. назад", other = "{count} мес. назад" }
-"time.years" = { one = "{count} г. назад", few = "{count} г. назад", many = "{count} л. назад", other = "{count} г. назад" }
+"time.years" = { one = "{count} год назад", few = "{count} года назад", many = "{count} лет назад", other = "{count} года назад" }

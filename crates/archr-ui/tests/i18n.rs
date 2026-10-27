@@ -51,17 +51,17 @@ fn resolution_full_language_environment_and_english() {
         assert_eq!(i.language(), want);
     }
     let dir = tempfile::tempdir().unwrap();
-    fs::write(dir.path().join("es.toml"), "\"hint.open\" = \"Base\"").unwrap();
+    fs::write(dir.path().join("fr.toml"), "\"hint.open\" = \"Base\"").unwrap();
     fs::write(
-        dir.path().join("es_MX.toml"),
+        dir.path().join("fr_CA.toml"),
         "\"hint.open\" = \"Regional\"",
     )
     .unwrap();
-    let i = I18n::load(dir.path(), Some("es_MX"), None);
+    let i = I18n::load(dir.path(), Some("fr_CA"), None);
     assert_eq!(i.text("hint.open"), "Regional");
-    fs::remove_file(dir.path().join("es_MX.toml")).unwrap();
+    fs::remove_file(dir.path().join("fr_CA.toml")).unwrap();
     assert_eq!(
-        I18n::load(dir.path(), Some("es_MX"), None).text("hint.open"),
+        I18n::load(dir.path(), Some("fr_CA"), None).text("hint.open"),
         "Base"
     );
     // New catalogs are discoverable without a hardcoded language allowlist.
@@ -76,11 +76,11 @@ fn resolution_full_language_environment_and_english() {
 fn interpolation_fallback_and_missing_keys() {
     let dir = tempfile::tempdir().unwrap();
     fs::write(
-        dir.path().join("es.toml"),
+        dir.path().join("xx.toml"),
         "\"notice.opening\" = \"Abriendo {game}…\"",
     )
     .unwrap();
-    let i = I18n::load(dir.path(), Some("es"), None);
+    let i = I18n::load(dir.path(), Some("xx"), None);
     assert_eq!(
         i.format("notice.opening", &[("game", "A {game} {other}")]),
         "Abriendo A {game} {other}…"
@@ -101,22 +101,23 @@ fn malformed_and_unsafe_catalogs_fall_back_to_english() {
         "\"games.count\" = { one = 12, other = 'x' }",
         "\"games.count\" = { one = 'x' }",
     ] {
-        fs::write(dir.path().join("ru.toml"), source).unwrap();
+        fs::write(dir.path().join("xx.toml"), source).unwrap();
         assert_eq!(
-            I18n::load(dir.path(), Some("ru"), None).text("hint.open"),
+            I18n::load(dir.path(), Some("xx"), None).text("hint.open"),
             "Open"
         );
     }
-    fs::write(dir.path().join("ru.toml"), "x".repeat(65537)).unwrap();
-    assert_eq!(I18n::load(dir.path(), Some("ru"), None).language(), "en");
-    fs::remove_file(dir.path().join("ru.toml")).unwrap();
-    std::os::unix::fs::symlink(locales().join("ru.toml"), dir.path().join("ru.toml")).unwrap();
-    assert_eq!(I18n::load(dir.path(), Some("ru"), None).language(), "en");
+    fs::write(dir.path().join("xx.toml"), "x".repeat(65537)).unwrap();
+    assert_eq!(I18n::load(dir.path(), Some("xx"), None).language(), "en");
+    fs::remove_file(dir.path().join("xx.toml")).unwrap();
+    std::os::unix::fs::symlink(locales().join("ru.toml"), dir.path().join("xx.toml")).unwrap();
+    assert_eq!(I18n::load(dir.path(), Some("xx"), None).language(), "en");
 }
 
 #[test]
 fn every_catalog_has_exactly_the_english_keys_categories_and_placeholders() {
     let english: toml::Table = toml::from_str(include_str!("../../../locales/en.toml")).unwrap();
+    assert!(english.keys().all(|key| !key.starts_with("cli.")));
     for code in ["pt_BR", "es", "ru"] {
         let source = fs::read_to_string(locales().join(format!("{code}.toml"))).unwrap();
         let other: toml::Table = toml::from_str(&source).unwrap();
@@ -172,9 +173,9 @@ fn relative_time_and_player_ranges_use_the_catalog() {
         (86400, "вчера"),
         (3 * 86400, "3 дн. назад"),
         (30 * 86400, "1 мес. назад"),
-        (365 * 86400, "1 г. назад"),
-        (2 * 365 * 86400, "2 г. назад"),
-        (5 * 365 * 86400, "5 л. назад"),
+        (365 * 86400, "1 год назад"),
+        (2 * 365 * 86400, "2 года назад"),
+        (5 * 365 * 86400, "5 лет назад"),
     ] {
         assert_eq!(i.relative_time(100, 100 + elapsed), want);
     }
@@ -202,8 +203,8 @@ fn missing_translation_logs_one_warning_per_key() {
     log::set_logger(&LOGGER).unwrap();
     log::set_max_level(log::LevelFilter::Warn);
     let dir = tempfile::tempdir().unwrap();
-    fs::write(dir.path().join("ru.toml"), "\"hint.open\" = 'Открыть'").unwrap();
-    let i = I18n::load(dir.path(), Some("ru"), None);
+    fs::write(dir.path().join("xx.toml"), "\"hint.open\" = 'Открыть'").unwrap();
+    let i = I18n::load(dir.path(), Some("xx"), None);
     for _ in 0..3 {
         assert_eq!(i.text("test.unique_missing_key"), "test.unique_missing_key");
         assert_eq!(i.text("menu.shutdown"), "Power off");
@@ -233,16 +234,16 @@ fn nonregular_and_invalid_utf8_catalogs_never_block_or_leak() {
         time::{Duration, Instant},
     };
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("ru.toml");
+    let path = dir.path().join("xx.toml");
     fs::create_dir(&path).unwrap();
     assert_eq!(
-        I18n::load(dir.path(), Some("ru"), None).text("hint.open"),
+        I18n::load(dir.path(), Some("xx"), None).text("hint.open"),
         "Open"
     );
     fs::remove_dir(&path).unwrap();
     fs::write(&path, [0xff, 0xfe]).unwrap();
     assert_eq!(
-        I18n::load(dir.path(), Some("ru"), None).text("hint.open"),
+        I18n::load(dir.path(), Some("xx"), None).text("hint.open"),
         "Open"
     );
     fs::remove_file(&path).unwrap();
@@ -251,8 +252,44 @@ fn nonregular_and_invalid_utf8_catalogs_never_block_or_leak() {
     assert_eq!(unsafe { libc::mkfifo(cpath.as_ptr(), 0o600) }, 0);
     let began = Instant::now();
     assert_eq!(
-        I18n::load(dir.path(), Some("ru"), None).text("hint.open"),
+        I18n::load(dir.path(), Some("xx"), None).text("hint.open"),
         "Open"
     );
     assert!(began.elapsed() < Duration::from_millis(100));
+}
+
+#[test]
+fn shipped_languages_are_embedded_and_ignore_external_overrides() {
+    let dir = tempfile::tempdir().unwrap();
+    for (code, want) in [
+        ("en_US", "Open"),
+        ("pt_BR", "Abrir"),
+        ("es_MX", "Abrir"),
+        ("ru_RU", "Открыть"),
+    ] {
+        // No locale directory exists at all on the fast path.
+        let i = I18n::load(&dir.path().join("absent"), Some(code), None);
+        assert_eq!(i.text("hint.open"), want, "{code}");
+        for name in [code, code.split('_').next().unwrap()] {
+            fs::write(
+                dir.path().join(format!("{name}.toml")),
+                "\"hint.open\" = 'Unexpected override'",
+            )
+            .unwrap();
+        }
+        assert_eq!(
+            I18n::load(dir.path(), Some(code), None).text("hint.open"),
+            want
+        );
+    }
+}
+
+#[test]
+fn portuguese_language_alias_serves_all_regions_from_brazilian_catalog() {
+    let dir = tempfile::tempdir().unwrap();
+    for code in ["pt", "pt_PT", "pt_AO", "pt_BR", "pt-PT.UTF-8"] {
+        let i = I18n::load(dir.path(), Some(code), None);
+        assert_eq!(i.language(), "pt_BR", "{code}");
+        assert_eq!(i.text("hint.play"), "Jogar");
+    }
 }

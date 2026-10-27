@@ -1,6 +1,5 @@
 //! Hidden PC-only navigation driver. Tokens are buttons, WAIT or QUIT.
 use archr_launcher::state::Button;
-use archr_ui::i18n::I18n;
 use std::{
     collections::VecDeque,
     time::{Duration, Instant},
@@ -18,7 +17,7 @@ pub struct Script {
     deadline: Instant,
 }
 impl Script {
-    pub fn parse(source: &str, catalog: &I18n) -> Result<Self, String> {
+    pub fn parse(source: &str) -> Result<Self, String> {
         let mut steps = VecDeque::new();
         for token in source.split([',', ' ']).filter(|token| !token.is_empty()) {
             steps.push_back(match token.to_ascii_uppercase().as_str() {
@@ -35,7 +34,7 @@ impl Script {
                 "WAIT" => Step::Wait,
                 "SNAPSHOT" => Step::Snapshot,
                 "QUIT" => Step::Quit,
-                _ => return Err(catalog.format("cli.invalid_button", &[("button", token)])),
+                _ => return Err(format!("Invalid script button: {token}")),
             });
         }
         let now = Instant::now();
@@ -55,10 +54,10 @@ impl Script {
             false
         }
     }
-    pub fn poll(&mut self, ready: bool, catalog: &I18n) -> Result<Option<Step>, String> {
+    pub fn poll(&mut self, ready: bool) -> Result<Option<Step>, String> {
         let now = Instant::now();
         if now > self.deadline {
-            return Err(catalog.text("cli.script_timeout"));
+            return Err("Script timed out after 30 seconds".to_owned());
         }
         if !ready || now < self.next {
             return Ok(None);

@@ -1,67 +1,78 @@
 use std::{fs, process::Command};
 
 #[test]
-fn startup_uses_system_language_and_root_catalog_before_lang_environment() {
+fn cli_bootstrap_is_english_only_and_does_not_read_config_or_catalogs() {
+    use std::{
+        ffi::CString,
+        os::unix::ffi::OsStrExt,
+        time::{Duration, Instant},
+    };
     let root = tempfile::tempdir().unwrap();
-    let catalogs = root.path().join("usr/share/archr-launcher/locales");
     let config = root
         .path()
         .join("storage/.config/system/configs/system.cfg");
-    fs::create_dir_all(&catalogs).unwrap();
+    let catalogs = root.path().join("usr/share/archr-launcher/locales");
     fs::create_dir_all(config.parent().unwrap()).unwrap();
-    for (code, label) in [
-        ("en", "English"),
-        ("es", "Español"),
-        ("ru", "Русский"),
-        ("pt_BR", "Português"),
-    ] {
-        fs::write(
-            catalogs.join(format!("{code}.toml")),
-            format!("\"cli.usage\" = \"{label}\"\n"),
-        )
-        .unwrap();
+    fs::create_dir_all(&catalogs).unwrap();
+    // Either config or catalog I/O would block the bootstrap on these FIFOs.
+    for path in [&config, &catalogs.join("fr.toml")] {
+        let name = CString::new(path.as_os_str().as_bytes()).unwrap();
+        // SAFETY: name is a live NUL-terminated path in our private fixture.
+        assert_eq!(unsafe { libc_mkfifo(name.as_ptr(), 0o600) }, 0);
     }
-    let run = |lang: &str, argument: &str| {
-        Command::new(env!("CARGO_BIN_EXE_archr-launcher"))
+    for (args, want, success) in [
+        (vec!["--help"], "archr-launcher [--windowed]", true),
+        (vec!["--invalid"], "Unknown argument: --invalid", false),
+        (
+            vec!["--script"],
+            "--script requires a button sequence",
+            false,
+        ),
+        (
+            vec!["--script", "QUIT"],
+            "--script requires --windowed",
+            false,
+        ),
+        (
+            vec!["--windowed", "--script", "INVALID"],
+            "Invalid script button: INVALID",
+            false,
+        ),
+    ] {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_archr-launcher"))
             .env("ARCHR_LAUNCHER_ROOT", root.path())
-            .env("LANG", lang)
-            .arg(argument)
-            .output()
-            .unwrap()
-    };
-    for (value, want) in [
-        ("ru_RU", "Русский\n"),
-        ("es_MX", "Español\n"),
-        ("pt_BR", "Português\n"),
-        ("en_US", "English\n"),
-        ("xx", "English\n"),
-    ] {
-        // global.language is deliberately different: system.language is exact.
-        let source = format!("# fixture\nglobal.language=es\nsystem.language={value}\n");
-        fs::write(&config, &source).unwrap();
-        let result = run("es_MX.UTF-8", "--help");
-        assert!(result.status.success(), "{value}");
-        assert_eq!(String::from_utf8(result.stdout).unwrap(), want);
-        assert_eq!(
-            fs::read_to_string(&config).unwrap(),
-            source,
-            "startup is read-only"
+            .env("LANG", "fr_FR.UTF-8")
+            .args(args)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            if child.try_wait().unwrap().is_some() {
+                break;
+            }
+            if Instant::now() >= deadline {
+                child.kill().unwrap();
+                child.wait().unwrap();
+                panic!("CLI bootstrap blocked on fixture I/O");
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let output = child.wait_with_output().unwrap();
+        assert_eq!(output.status.success(), success);
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
         );
+        assert!(text.contains(want), "{text}");
+        assert!(!text.contains("Cannot read catalog"), "{text}");
     }
-    fs::write(&config, "global.language=es\n").unwrap();
-    assert_eq!(
-        String::from_utf8(run("ru_RU.UTF-8", "--help").stdout).unwrap(),
-        "Русский\n"
-    );
-    fs::write(&config, "system.language=ru_RU\n").unwrap();
-    fs::copy(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../locales/ru.toml"),
-        catalogs.join("ru.toml"),
-    )
-    .unwrap();
-    let error = run("en_US.UTF-8", "--invalid");
-    assert!(!error.status.success());
-    assert!(String::from_utf8(error.stderr)
-        .unwrap()
-        .contains("Неизвестный аргумент: --invalid"));
+}
+
+// Avoid a new launcher dependency just for this POSIX fixture.
+unsafe extern "C" {
+    #[link_name = "mkfifo"]
+    fn libc_mkfifo(path: *const std::os::raw::c_char, mode: u32) -> std::os::raw::c_int;
 }
