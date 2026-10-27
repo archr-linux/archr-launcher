@@ -12,7 +12,7 @@ std::thread_local! {
         std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Game {
     pub path: PathBuf,
     pub name: String,

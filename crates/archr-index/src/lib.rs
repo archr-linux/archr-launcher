@@ -1,5 +1,6 @@
 //! System definitions and game indexing for the launcher.
 
+pub mod cache;
 mod gamelist;
 pub mod games;
 pub mod systems;
