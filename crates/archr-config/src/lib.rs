@@ -150,7 +150,20 @@ struct PidLock {
 }
 
 impl PidLock {
-    fn reclaim_if_stale(path: &Path) -> io::Result<()> {
+    fn check_deadline(path: &Path, deadline: Instant) -> io::Result<()> {
+        if Instant::now() >= deadline {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                format!(
+                    "timed out waiting for configuration lock {}",
+                    path.display()
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    fn reclaim_if_stale(path: &Path, deadline: Instant) -> io::Result<()> {
         let mut helper_path = path.as_os_str().to_os_string();
         helper_path.push(".reclaim");
         let helper = fs::OpenOptions::new()
@@ -161,7 +174,17 @@ impl PidLock {
             .open(Path::new(&helper_path))?;
         // Keep this file permanently so all reclaimers lock the same inode.
         // Closing the handle releases the advisory lock on every return path.
-        helper.lock()?;
+        loop {
+            Self::check_deadline(path, deadline)?;
+            match helper.try_lock() {
+                Ok(()) => break,
+                Err(fs::TryLockError::WouldBlock) => thread::sleep(
+                    LOCK_RETRY_INTERVAL.min(deadline.saturating_duration_since(Instant::now())),
+                ),
+                Err(fs::TryLockError::Error(error)) => return Err(error),
+            }
+        }
+        Self::check_deadline(path, deadline)?;
         let snapshot = match LockSnapshot::read(path) {
             Ok(snapshot) => snapshot,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
@@ -180,20 +203,12 @@ impl PidLock {
     }
 
     fn acquire(path: &Path, timeout: Duration) -> io::Result<Self> {
-        let started = Instant::now();
+        let deadline = Instant::now() + timeout;
         let pid = std::process::id();
         let mut published = tempfile::NamedTempFile::new_in(containing_directory(path))?;
         writeln!(published, "{pid}")?;
         loop {
-            if started.elapsed() >= timeout {
-                return Err(io::Error::new(
-                    io::ErrorKind::TimedOut,
-                    format!(
-                        "timed out waiting for configuration lock {}",
-                        path.display()
-                    ),
-                ));
-            }
+            Self::check_deadline(path, deadline)?;
             // Publish a complete PID in one no-clobber filesystem operation.
             match fs::hard_link(published.path(), path) {
                 Ok(()) => {
@@ -209,13 +224,15 @@ impl PidLock {
                         Err(error) => return Err(error),
                     };
                     if snapshot.is_stale()? {
-                        Self::reclaim_if_stale(path)?;
+                        Self::reclaim_if_stale(path, deadline)?;
                         continue;
                     }
                 }
                 Err(error) => return Err(error),
             }
-            thread::sleep(LOCK_RETRY_INTERVAL.min(timeout.saturating_sub(started.elapsed())));
+            thread::sleep(
+                LOCK_RETRY_INTERVAL.min(deadline.saturating_duration_since(Instant::now())),
+            );
         }
     }
 }
@@ -320,7 +337,8 @@ mod tests {
             let first = scope.spawn(move || {
                 assert!(LockSnapshot::read(lock).unwrap().is_stale().unwrap());
                 both_judged_stale.wait();
-                PidLock::reclaim_if_stale(lock).unwrap();
+                PidLock::reclaim_if_stale(lock, Instant::now() + Duration::from_millis(100))
+                    .unwrap();
                 let guard = PidLock::acquire(lock, Duration::from_millis(100)).unwrap();
                 assert_eq!(holders.fetch_add(1, Ordering::SeqCst), 0);
                 acquired_tx.send(()).unwrap();
@@ -333,7 +351,8 @@ mod tests {
                 both_judged_stale.wait();
                 acquired_rx.recv().unwrap();
 
-                PidLock::reclaim_if_stale(lock).unwrap();
+                PidLock::reclaim_if_stale(lock, Instant::now() + Duration::from_millis(100))
+                    .unwrap();
                 let result = PidLock::acquire(lock, Duration::from_millis(30));
                 if result.is_ok() {
                     assert_eq!(
@@ -362,11 +381,57 @@ mod tests {
     }
 
     #[test]
+    fn held_reclaim_helper_obeys_the_original_acquisition_deadline() {
+        use std::sync::mpsc;
+
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("system.cfg");
+        let lock = dir.path().join(".system.cfg.lock");
+        fs::write(&path, "snes.core=old\n").unwrap();
+        fs::write(&lock, "4294967295\n").unwrap();
+        let blocker = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(dir.path().join(".system.cfg.lock.reclaim"))
+            .unwrap();
+        blocker.lock().unwrap();
+        let timeout = Duration::from_millis(30);
+        let (completed_tx, completed_rx) = mpsc::channel();
+
+        thread::scope(|scope| {
+            let started = Instant::now();
+            let worker = scope.spawn(|| {
+                let result =
+                    SystemCfg::set_and_save_with_timeout(&path, &lock, "snes.core", "new", timeout);
+                completed_tx.send(result).unwrap();
+            });
+            let while_held = completed_rx.recv_timeout(Duration::from_millis(250));
+            let elapsed = started.elapsed();
+            let contents_while_held = fs::read_to_string(&lock).unwrap();
+            // Unblock even the old implementation so a regression fails, not hangs.
+            blocker.unlock().unwrap();
+            worker.join().unwrap();
+
+            let error = while_held
+                .expect("acquisition must finish while the helper is still held")
+                .unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+            assert!(elapsed >= timeout);
+            assert_eq!(contents_while_held, "4294967295\n");
+        });
+
+        assert_eq!(fs::read_to_string(&path).unwrap(), "snes.core=old\n");
+        assert_eq!(fs::read_to_string(&lock).unwrap(), "4294967295\n");
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 3);
+    }
+
+    #[test]
     fn reclaim_helper_is_kept_and_unlocked_when_main_lock_is_gone() {
         let dir = tempdir().unwrap();
         let lock = dir.path().join(".system.cfg.lock");
 
-        PidLock::reclaim_if_stale(&lock).unwrap();
+        PidLock::reclaim_if_stale(&lock, Instant::now() + Duration::from_millis(100)).unwrap();
 
         assert!(!lock.exists());
         let helper = fs::File::open(dir.path().join(".system.cfg.lock.reclaim")).unwrap();
@@ -380,7 +445,9 @@ mod tests {
         let lock = dir.path().join(".system.cfg.lock");
         fs::create_dir(&lock).unwrap();
 
-        assert!(PidLock::reclaim_if_stale(&lock).is_err());
+        assert!(
+            PidLock::reclaim_if_stale(&lock, Instant::now() + Duration::from_millis(100)).is_err()
+        );
 
         assert!(lock.is_dir());
         let helper = fs::File::open(dir.path().join(".system.cfg.lock.reclaim")).unwrap();
