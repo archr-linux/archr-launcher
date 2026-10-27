@@ -58,3 +58,16 @@ Segue a identidade do sistema e do site arch-r.io (DESIGN.md do site): uma únic
 ## Tema
 
 O `theme.toml` ganha os tokens acima, `font`, `font_mono`, raios (`radius_item`, `radius_card`) e as alturas; cada campo continua com fallback individual para o padrão embutido. Temas antigos (só com os campos da v1) continuam válidos.
+
+## Idiomas (Task 8c)
+
+Pedido do Douglas em 2026-10-27: o launcher é multi-idioma desde a v1.
+
+- **Fase 1 (v1):** inglês, português do Brasil, espanhol e russo. **Fase 2:** francês, alemão, chinês (simplificado) e japonês.
+- O idioma vem de `system.language` no `system.cfg` (valores como `en_US`, `pt_BR`, `es`, `es_MX`, `ru_RU`, a mesma chave que o ES e os scripts usam). Resolução: código completo (`pt_BR`), depois só a língua (`pt`), depois inglês. Sem a chave, `LANG`, depois inglês.
+- Catálogos em TOML por idioma (`locales/<código>.toml`), chave → texto, instalados em `/usr/share/archr-launcher/locales/`; o inglês também vai embutido no binário como reserva. Chave ausente num idioma cai no inglês, chave ausente no inglês mostra a própria chave (e um aviso no log). Mesma leitura limitada e segura dos temas.
+- Plurais por idioma ("1 jogo / 2 jogos"; o russo tem três formas: 1, 2-4, 5+ com as exceções de 11-14), com regras próprias pequenas, sem dependência pesada.
+- Interpolação simples por nome: `"Abrindo {game}…"`.
+- Todos os textos da interface passam pelo catálogo: barra superior, rótulos das coleções, dicas de botão, menu rápido, avisos, erros e "há 3 dias" (tempo relativo). Nomes de sistemas vêm do `es_systems.cfg` e de jogos do gamelist, sem tradução.
+- Fontes: Inter e JetBrains Mono cobrem latim e cirílico (fase 1). Para chinês e japonês (fase 2), uma fonte de reserva só carregada quando o idioma pedir ou quando aparecer um caractere fora da fonte principal (por exemplo um nome de jogo em japonês), para não custar memória nem tempo de abertura a quem não usa: Noto Sans CJK (subconjunto) ou a fonte CJK que a imagem já tiver.
+- Traduções revisadas por quem fala o idioma antes de fechar a versão; o texto do código e as chaves ficam em inglês.
