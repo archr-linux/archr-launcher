@@ -1464,12 +1464,12 @@ fn library_summary(data: &dyn DataSource, catalog: &I18n) -> String {
     let systems = data
         .systems()
         .iter()
-        .filter(|s| !s.name.starts_with('@') && s.game_count > 0)
+        .filter(|s| !s.name.starts_with('@') && s.game_count > 0 && !data.is_tools(&s.name))
         .count();
     let games = data
         .systems()
         .iter()
-        .filter(|s| !s.name.starts_with('@'))
+        .filter(|s| !s.name.starts_with('@') && !data.is_tools(&s.name))
         .map(|s| u64::from(s.game_count))
         .sum::<u64>();
     let count = |key, n: u64| catalog.plural(key, n as f64, &[("count", &n.to_string())]);
@@ -1711,6 +1711,40 @@ fn font_paths(theme: &Theme, root: Option<&Path>) -> [Vec<PathBuf>; 4] {
 mod tests {
     use super::*;
 
+    #[test]
+    fn tools_are_neither_systems_nor_games_in_the_library_summary() {
+        struct Data(Vec<archr_index::cache::SystemEntry>);
+        impl DataSource for Data {
+            fn systems(&self) -> &[archr_index::cache::SystemEntry] {
+                &self.0
+            }
+            fn games(&self, _: &str) -> &[archr_index::Game] {
+                &[]
+            }
+            fn origin(&self, _: &str, _: usize) -> Option<(String, usize)> {
+                None
+            }
+            fn cores(&self, _: &str) -> Vec<(String, String)> {
+                vec![]
+            }
+            fn current_core(&self, _: &str, _: usize) -> Option<(String, String)> {
+                None
+            }
+            fn is_tools(&self, system: &str) -> bool {
+                system == "tools"
+            }
+        }
+        let entry = |name: &str, game_count| archr_index::cache::SystemEntry {
+            name: name.into(),
+            fullname: name.into(),
+            game_count,
+            dir_mtime: 0,
+            source_fingerprint: 0,
+        };
+        let data = Data(vec![entry("nes", 3), entry("tools", 7)]);
+        let catalog = I18n::load(Path::new("/nonexistent"), Some("en"), None);
+        assert_eq!(library_summary(&data, &catalog), "1 system · 3 games");
+    }
     #[test]
     fn move_status_fits_beside_its_hints_in_every_locale_without_ellipsis() {
         let _sdl = crate::SDL_TEST_LOCK.lock().unwrap();

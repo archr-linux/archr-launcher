@@ -433,6 +433,8 @@ fn panel_labels(
         catalog.text("moonlight.description")
     } else if name.starts_with('@') {
         count("games.count", games)
+    } else if data.is_tools(name) {
+        count("tools.count", games)
     } else {
         catalog.format(
             "panel.stats",

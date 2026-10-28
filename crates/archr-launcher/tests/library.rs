@@ -435,7 +435,13 @@ fn systems_without_emulators_launch_their_catalog_command() {
         system: system.into(),
         game: 0,
     };
+    assert!(library.is_tools("tools") && !library.is_tools("music"));
     assert!(library.handle(launch("tools"), "pad").unwrap());
+    assert_eq!(
+        library.collection_len("@recent"),
+        0,
+        "tools are not recents"
+    );
     let rom = tools.join("Mount NFS.sh");
     assert_eq!(
         fs::read_to_string(paths.run.join("next")).unwrap(),

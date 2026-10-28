@@ -297,8 +297,10 @@ impl Library {
             Outcome::Launch { system, game } => {
                 let command = self.launch_command(&system, game, controllers)?;
                 let key = self.game_key(&system, game).ok_or("error.game_missing")?;
-                self.store.push_recent(&key);
-                self.refresh_collection("@recent");
+                if !self.is_tools(&system) {
+                    self.store.push_recent(&key);
+                    self.refresh_collection("@recent");
+                }
                 self.flush_store()?;
                 write_next(&self.paths.run, &command).map_err(|error| error.to_string())?;
                 return Ok(true);
@@ -447,6 +449,10 @@ impl DataSource for Library {
     }
     fn system_order(&self) -> &[String] {
         self.store.order()
+    }
+    fn is_tools(&self, system: &str) -> bool {
+        self.definition(system)
+            .is_some_and(|def| def.emulators.is_empty() && !def.command.is_empty())
     }
     fn favorite_count(&self, system: &str) -> usize {
         self.store
