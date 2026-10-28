@@ -169,7 +169,7 @@ fn assert_button_ink_is_centered(rgba: &[u8]) {
         }
     }
     assert_eq!(centers.len(), 4);
-    for center in centers {
+    for (letter, center) in ['A', 'B', 'X', 'Y'].into_iter().zip(centers) {
         let mut bounds = (640, 480, 0, 0);
         for y in 446..466 {
             for x in (center as usize - 9)..=(center as usize + 9) {
@@ -184,12 +184,17 @@ fn assert_button_ink_is_centered(rgba: &[u8]) {
         assert!(bounds.2 >= bounds.0, "button has visible ink");
         let ink_x = (bounds.0 + bounds.2) as f32 / 2.;
         let ink_y = (bounds.1 + bounds.3) as f32 / 2.;
+        println!(
+            "BADGE_FINAL_CENTER {letter} dx={:.3}px dy={:.3}px",
+            ink_x - center,
+            ink_y - 455.5
+        );
         assert!(
-            (ink_x - center).abs() <= 0.5,
+            (ink_x - center).abs() <= 0.25,
             "horizontal glyph center {ink_x} vs {center}"
         );
         assert!(
-            (ink_y - 455.5).abs() <= 0.5,
+            (ink_y - 455.5).abs() <= 0.25,
             "vertical glyph center {ink_y} vs 455.5"
         );
     }

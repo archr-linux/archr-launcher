@@ -106,6 +106,11 @@ os comentários do tema. O menu mantém o posicionamento óptico da maquete e
 reforça a opacidade do scrim em 20% (0,60 → aproximadamente 0,72), sem alterar
 os avisos.
 
+Os badges A/B/X/Y são compostos uma vez na configuração, com círculo e letra
+em 4× (80×80 → 20×20), Inter SemiBold real, centro pela caixa de tinta e
+filtragem linear. O cache inclui letra, tamanhos e cores; os quadros seguintes
+só copiam a textura. Temas sem peso próprio usam bold sintetizado também em 4×.
+
 A bateria usa `ROOT/sys/class/power_supply/battery/{capacity,status}`, quando
 há prefixo; sem capacidade válida, o indicador fica oculto. Um worker começa
 depois da primeira apresentação e faz a leitura no máximo a cada 30 s; até

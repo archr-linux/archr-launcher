@@ -2,11 +2,14 @@
 // TODO(CJK): add a lazy per-glyph fallback font here (Noto Sans CJK subset or
 // image-provided font), loaded only for a CJK locale or an uncovered glyph.
 // Keep phase-1 Latin/Cyrillic startup free of CJK font I/O and memory costs.
-use crate::theme::Rgba;
+use crate::{
+    badges::{self, BadgeKey, SUPERSAMPLE},
+    theme::Rgba,
+};
 use sdl2::{
-    pixels::{Color, PixelFormatEnum},
+    pixels::Color,
     rect::Rect,
-    render::{Canvas, Texture, TextureCreator},
+    render::{BlendMode, Canvas, ScaleMode, Texture, TextureCreator},
     ttf::{Font, FontStyle, Sdl2TtfContext},
     video::{Window, WindowContext},
 };
@@ -21,7 +24,6 @@ pub(crate) enum Face {
     Semibold,
     Mono,
     MonoMedium,
-    Button,
 }
 #[derive(Clone, Copy)]
 pub(crate) struct Style {
@@ -34,7 +36,6 @@ pub(crate) enum Align {
     Left,
     Center,
     Right,
-    Glyph,
 }
 struct Entry<'a> {
     source: String,
@@ -43,20 +44,20 @@ struct Entry<'a> {
     size: u16,
     color: Rgba,
     texture: Texture<'a>,
-    ink: Rect,
 }
 pub(crate) struct TextCache<'font, 'texture> {
     ttf: &'font Sdl2TtfContext,
     creator: &'texture TextureCreator<WindowContext>,
-    paths: [Vec<PathBuf>; 5],
+    paths: [Vec<PathBuf>; 4],
     fonts: HashMap<(Face, u16), Font<'font, 'static>>,
     entries: VecDeque<Entry<'texture>>,
+    badges: VecDeque<(BadgeKey, Texture<'texture>)>,
 }
 impl<'font, 'texture> TextCache<'font, 'texture> {
     pub fn new(
         ttf: &'font Sdl2TtfContext,
         creator: &'texture TextureCreator<WindowContext>,
-        paths: [Vec<PathBuf>; 5],
+        paths: [Vec<PathBuf>; 4],
     ) -> Self {
         Self {
             ttf,
@@ -64,6 +65,7 @@ impl<'font, 'texture> TextCache<'font, 'texture> {
             paths,
             fonts: HashMap::new(),
             entries: VecDeque::new(),
+            badges: VecDeque::with_capacity(16),
         }
     }
     fn font(&mut self, face: Face, size: u16) -> Result<&Font<'font, 'static>, String> {
@@ -73,19 +75,89 @@ impl<'font, 'texture> TextCache<'font, 'texture> {
                 .iter()
                 .find_map(|path| self.ttf.load_font(path, size).ok())
                 .ok_or("error.font")?;
-            // The compact bold badges are synthesized from Regular. Other
-            // faces prefer the official static semibold/medium weights.
-            if matches!(face, Face::Button)
-                || (matches!(face, Face::Semibold | Face::MonoMedium)
-                    && paths
-                        .first()
-                        .is_some_and(|p| p.to_string_lossy().contains("Regular")))
-            {
-                font.set_style(FontStyle::BOLD);
+            // Inspect the loaded face, not its filename: legacy themes may
+            // rename a regular TTF, or fall back when a preferred face is absent.
+            // Inter's static SemiBold has a legacy style of "Regular", but its
+            // family name identifies the real weight. Never embolden it twice.
+            if matches!(face, Face::Semibold | Face::MonoMedium) {
+                let weight = format!(
+                    "{} {}",
+                    font.face_family_name().unwrap_or_default(),
+                    font.face_style_name().unwrap_or_default()
+                )
+                .to_ascii_lowercase();
+                if !font.get_style().contains(FontStyle::BOLD)
+                    && !["bold", "demi", "medium"]
+                        .iter()
+                        .any(|name| weight.contains(name))
+                {
+                    font.set_style(FontStyle::BOLD);
+                }
             }
             self.fonts.insert((face, size), font);
         }
         Ok(self.fonts.get(&(face, size)).expect("loaded face"))
+    }
+    fn badge(&mut self, key: BadgeKey) -> Result<&Texture<'texture>, String> {
+        if let Some(index) = self.badges.iter().position(|(k, _)| *k == key) {
+            let hit = self.badges.remove(index).expect("located badge");
+            self.badges.push_back(hit);
+        } else {
+            let surface = badges::render(
+                self.font(Face::Semibold, key.size * SUPERSAMPLE as u16)?,
+                key,
+            )?;
+            let mut texture = self
+                .creator
+                .create_texture_from_surface(surface)
+                .map_err(|e| e.to_string())?;
+            texture.set_blend_mode(BlendMode::Blend);
+            texture.set_scale_mode(ScaleMode::Linear);
+            if self.badges.len() == 16 {
+                self.badges.pop_front();
+            }
+            self.badges.push_back((key, texture));
+        }
+        Ok(&self.badges.back().expect("cached badge").1)
+    }
+    pub fn prepare_badges(
+        &mut self,
+        diameter: u32,
+        size: u16,
+        background: Rgba,
+        foreground: Rgba,
+    ) -> Result<(), String> {
+        for letter in ['A', 'B', 'X', 'Y'] {
+            self.badge(BadgeKey {
+                letter,
+                diameter,
+                size,
+                background,
+                foreground,
+            })?;
+        }
+        Ok(())
+    }
+    pub fn draw_badge(
+        &mut self,
+        canvas: &mut Canvas<Window>,
+        letter: char,
+        size: u16,
+        background: Rgba,
+        foreground: Rgba,
+        panel: Rect,
+    ) -> Result<(), String> {
+        canvas.copy(
+            self.badge(BadgeKey {
+                letter,
+                diameter: panel.width(),
+                size,
+                background,
+                foreground,
+            })?,
+            None,
+            panel,
+        )
     }
     pub fn measure(&mut self, text: &str, face: Face, size: u16) -> Result<u32, String> {
         self.font(face, size)?
@@ -134,34 +206,7 @@ impl<'font, 'texture> TextCache<'font, 'texture> {
                 .font(style.face, style.size)?
                 .render(&text)
                 .blended(color(style.color))
-                .map_err(|e| e.to_string())?
-                .convert_format(PixelFormatEnum::RGBA32)?;
-            // Keep the real ink bounds, not the TTF line box. Button glyphs use
-            // this source rectangle so A/B/X/Y are optically centered.
-            let (w, h, pitch) = (surface.width(), surface.height(), surface.pitch() as usize);
-            let mut bounds = (w, h, 0, 0);
-            surface.with_lock(|bytes| {
-                for y in 0..h {
-                    for x in 0..w {
-                        if bytes[y as usize * pitch + x as usize * 4 + 3] != 0 {
-                            bounds.0 = bounds.0.min(x);
-                            bounds.1 = bounds.1.min(y);
-                            bounds.2 = bounds.2.max(x + 1);
-                            bounds.3 = bounds.3.max(y + 1);
-                        }
-                    }
-                }
-            });
-            let ink = if bounds.2 > bounds.0 {
-                Rect::new(
-                    bounds.0 as i32,
-                    bounds.1 as i32,
-                    bounds.2 - bounds.0,
-                    bounds.3 - bounds.1,
-                )
-            } else {
-                Rect::new(0, 0, 1, 1)
-            };
+                .map_err(|e| e.to_string())?;
             let texture = self
                 .creator
                 .create_texture_from_surface(surface)
@@ -173,15 +218,10 @@ impl<'font, 'texture> TextCache<'font, 'texture> {
                 size: style.size,
                 color: style.color,
                 texture,
-                ink,
             }
         };
         let query = entry.texture.query();
-        let (src, w, h) = if matches!(align, Align::Glyph) {
-            (Some(entry.ink), entry.ink.width(), entry.ink.height())
-        } else {
-            (None, query.width, query.height)
-        };
+        let (w, h) = (query.width, query.height);
         let dx = match align {
             Align::Left => 0,
             Align::Right => panel.width().saturating_sub(w) as i32,
@@ -190,7 +230,7 @@ impl<'font, 'texture> TextCache<'font, 'texture> {
         let dy = (panel.height() as i32 - h as i32) / 2;
         canvas.copy(
             &entry.texture,
-            src,
+            None,
             Rect::new(panel.x() + dx, panel.y() + dy, w, h),
         )?;
         self.entries.push_back(entry);
@@ -259,7 +299,7 @@ mod tests {
         assert_eq!(ellipsis(&font, "Kirby", 1).unwrap(), "");
     }
     #[test]
-    fn fitted_texture_hit_needs_no_font_sanitizing_or_layout() {
+    fn prepared_text_and_badge_hits_need_no_font_loading_or_layout() {
         std::env::set_var("SDL_VIDEODRIVER", "dummy");
         let sdl = sdl2::init().unwrap();
         let video = sdl.video().unwrap();
@@ -267,10 +307,14 @@ mod tests {
         let mut canvas = window.into_canvas().software().build().unwrap();
         let creator = canvas.texture_creator();
         let ttf = sdl2::ttf::init().unwrap();
-        let mut paths: [Vec<PathBuf>; 5] = std::array::from_fn(|_| vec![]);
+        let mut paths: [Vec<PathBuf>; 4] = std::array::from_fn(|_| vec![]);
         paths[0].push(PathBuf::from(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../themes/default/fonts/Inter-Regular.ttf"
+        )));
+        paths[1].push(PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../themes/default/fonts/Inter-SemiBold.ttf"
         )));
         let mut cache = TextCache::new(&ttf, &creator, paths);
         let style = Style {
@@ -288,6 +332,26 @@ mod tests {
         cache
             .draw(&mut canvas, source, style, panel, Align::Left)
             .unwrap();
+        let background = Rgba {
+            r: 28,
+            g: 37,
+            b: 48,
+            a: 255,
+        };
+        cache
+            .prepare_badges(20, 11, background, style.color)
+            .unwrap();
+        assert_eq!(cache.badges.len(), 4);
+        assert_eq!(
+            cache.font(Face::Semibold, 44).unwrap().get_style(),
+            FontStyle::NORMAL,
+            "the shipped SemiBold must not be synthetically emboldened"
+        );
+        for (_, texture) in &cache.badges {
+            let q = texture.query();
+            assert_eq!((q.width, q.height), (80, 80));
+            assert_eq!(texture.scale_mode(), ScaleMode::Linear);
+        }
         cache.fonts.clear();
         cache.paths = std::array::from_fn(|_| vec![]);
         // With font loading deliberately unavailable, a fitted-texture hit
@@ -295,6 +359,54 @@ mod tests {
         cache
             .draw(&mut canvas, source, style, panel, Align::Left)
             .unwrap();
+        for letter in ['A', 'B', 'X', 'Y'] {
+            cache
+                .draw_badge(
+                    &mut canvas,
+                    letter,
+                    11,
+                    background,
+                    style.color,
+                    Rect::new(0, 0, 20, 20),
+                )
+                .unwrap();
+        }
+        let badge = BadgeKey {
+            letter: 'A',
+            diameter: 20,
+            size: 11,
+            background,
+            foreground: style.color,
+        };
+        // Every visual input is part of the key, never a stale texture hit.
+        for changed in [
+            BadgeKey {
+                letter: 'Z',
+                ..badge
+            },
+            BadgeKey {
+                diameter: 21,
+                ..badge
+            },
+            BadgeKey { size: 12, ..badge },
+            BadgeKey {
+                background: Rgba {
+                    r: 64,
+                    ..background
+                },
+                ..badge
+            },
+            BadgeKey {
+                foreground: Rgba {
+                    r: 64,
+                    ..style.color
+                },
+                ..badge
+            },
+        ] {
+            assert!(cache.badge(changed).is_err());
+        }
+        assert_eq!(cache.badges.len(), 4);
         assert_eq!(cache.entries.len(), 1);
         assert!(cache.fonts.is_empty());
         assert!(cache
@@ -327,5 +439,24 @@ mod tests {
                 .draw(&mut canvas, source, changed, panel, Align::Left)
                 .is_err());
         }
+        let root = tempfile::tempdir().unwrap();
+        let body = root.path().join("body.ttf");
+        std::fs::copy(
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../themes/default/fonts/Inter-Regular.ttf"
+            ),
+            &body,
+        )
+        .unwrap();
+        cache.paths[1].push(body);
+        assert!(
+            cache
+                .font(Face::Semibold, 44)
+                .unwrap()
+                .get_style()
+                .contains(FontStyle::BOLD),
+            "a regular-only fallback needs synthesized bold at 4× regardless of filename"
+        );
     }
 }

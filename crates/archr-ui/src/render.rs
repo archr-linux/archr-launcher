@@ -130,13 +130,12 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             }
             paths
         };
-        let mut paths: [Vec<PathBuf>; 5] = std::array::from_fn(|i| defaults(i == 2 || i == 3));
+        let mut paths: [Vec<PathBuf>; 4] = std::array::from_fn(|i| defaults(i == 2 || i == 3));
         for (i, preferred) in [
             &theme.font,
             &theme.font_semibold,
             &theme.font_mono,
             &theme.font_mono_medium,
-            &theme.font,
         ]
         .into_iter()
         .enumerate()
@@ -169,6 +168,12 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 error
             }
         })?;
+        text.prepare_badges(
+            self.px(20.) as u32,
+            self.px(11.).clamp(8, 128) as u16,
+            theme.badge,
+            theme.text,
+        )?;
         self.text = Some(text);
         self.shadow = Some(Shadow::new(creator)?);
         self.status = Some(Status::new(root, Instant::now()));
@@ -816,15 +821,15 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         let h = (theme.footer_height * height as f32).round().max(1.) as u32;
         let y = height as i32 - h as i32;
         self.divider(0, y, width, theme.border)?;
-        let hint_keys: &[(&str, &str)] = match app.screen {
-            Screen::Systems => &[("A", "hint.open"), ("Y", "hint.menu")],
+        let hint_keys: &[(char, &str)] = match app.screen {
+            Screen::Systems => &[('A', "hint.open"), ('Y', "hint.menu")],
             Screen::Games { .. } => &[
-                ("A", "hint.play"),
-                ("B", "hint.back"),
-                ("X", "hint.favorite"),
-                ("Y", "hint.menu"),
+                ('A', "hint.play"),
+                ('B', "hint.back"),
+                ('X', "hint.favorite"),
+                ('Y', "hint.menu"),
             ],
-            _ => &[("A", "hint.choose"), ("B", "hint.close")],
+            _ => &[('A', "hint.choose"), ('B', "hint.close")],
         };
         let left = self.hints(hint_keys, theme, width, y, h)?;
         if matches!(app.screen, Screen::Systems) {
@@ -867,7 +872,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
     }
     fn hints(
         &mut self,
-        hints: &[(&str, &str)],
+        hints: &[(char, &str)],
         theme: &Theme,
         width: u32,
         y: i32,
@@ -893,8 +898,18 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 self.px(20.) as u32,
                 self.px(20.) as u32,
             );
-            self.rounded(badge, self.px(10.) as f32, theme.badge, None)?;
-            self.label(button, Face::Button, 11., theme.text, badge, Align::Glyph)?;
+            let size = self.px(11.).clamp(8, 128) as u16;
+            self.text
+                .as_mut()
+                .ok_or_else(|| self.catalog.text("error.font_init"))?
+                .draw_badge(
+                    &mut self.canvas,
+                    button,
+                    size,
+                    theme.badge,
+                    theme.text,
+                    badge,
+                )?;
             right -= self.px(16.);
         }
         Ok(right + self.px(16.))
@@ -1096,7 +1111,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         }
         let footer = (theme.footer_height * height as f32).round().max(1.) as u32;
         self.hints(
-            &[("A", "hint.choose"), ("B", "hint.close")],
+            &[('A', "hint.choose"), ('B', "hint.close")],
             theme,
             width,
             height as i32 - footer as i32,
