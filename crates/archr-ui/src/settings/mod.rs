@@ -399,6 +399,8 @@ pub struct Settings {
     pub wifi_ssid: String,
     pub wifi_hidden: bool,
     pub access_ip: String,
+    /// The single USB port hosts a device, so gadget mode is refused.
+    pub usb_busy: bool,
     pub scrape: Scrape,
     /// Sliders in flight: last confirmed value and the newest unsent one.
     pub slides: BTreeMap<Id, (String, Option<String>)>,
@@ -428,6 +430,7 @@ impl Default for Settings {
             wifi_ssid: String::new(),
             wifi_hidden: false,
             access_ip: String::new(),
+            usb_busy: false,
             scrape: Scrape::default(),
             slides: BTreeMap::new(),
         }
@@ -489,6 +492,7 @@ impl Settings {
         Some(match row.id {
             Id::Ssh if !ip.is_empty() => format!("settings.ssh_at|ip={ip}"),
             Id::Http if !ip.is_empty() => format!("settings.http_at|ip={ip}"),
+            Id::UsbMode if self.usb_busy => "settings.usb_in_use".into(),
             Id::ScraperAccount if self.scrape.verifying => "settings.verifying".into(),
             Id::ScraperAccount if self.scrape.user.is_empty() => "settings.not_signed_in".into(),
             Id::ScraperAccount if self.scrape.threads > 0 => format!(
@@ -901,5 +905,16 @@ mod dismiss_tests {
         };
         state.handle(Button::Down);
         assert!(state.error.is_none());
+    }
+    #[test]
+    fn busy_usb_port_explains_itself_in_the_row_subtitle() {
+        let row = pages::SERVICES
+            .iter()
+            .find(|r| r.id == Id::UsbMode)
+            .unwrap();
+        let mut state = Settings::default();
+        assert_eq!(state.subtitle(row).as_deref(), Some("settings.usb_detail"));
+        state.usb_busy = true;
+        assert_eq!(state.subtitle(row).as_deref(), Some("settings.usb_in_use"));
     }
 }

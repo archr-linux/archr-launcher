@@ -395,6 +395,7 @@ impl Worker {
                     state.options = loaded.options;
                     state.labels = loaded.labels;
                     state.access_ip = loaded.access_ip;
+                    state.usb_busy = loaded.usb_busy;
                     state.info = loaded.info;
                     state.error = loaded.error;
                     state.scrape.available = loaded.scrape.available;
@@ -410,7 +411,10 @@ impl Worker {
                 }
                 Reply::Set(id, result) => {
                     if let Err(error) = &result {
-                        log::warn!("Setting {} failed: {error}", id.key());
+                        log::warn!("Setting {id:?} failed: {error}");
+                    }
+                    if id == Id::UsbMode {
+                        state.usb_busy = matches!(&result, Err(e) if e == "settings.usb_busy");
                     }
                     if id == Id::Language {
                         language = result.as_ref().ok().cloned();

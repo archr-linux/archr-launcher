@@ -20,6 +20,17 @@ fn wifi_error(error: String) -> String {
         "settings.wifi_connect_failed".into()
     }
 }
+/// usbgadget exits 3 when the single OTG port hosts a device (Wi-Fi dongle or
+/// gamepad) and when the gadget was never prepared; both leave the value as is.
+pub(super) fn usb_error(error: &str) -> String {
+    if !error.contains("exit status: 3") {
+        error.into()
+    } else if error.contains("not configured") {
+        "settings.usb_unprepared".into()
+    } else {
+        "settings.usb_busy".into()
+    }
+}
 pub(super) fn scrape_outcome(stop: Stop) -> &'static str {
     match stop {
         Stop::Completed => "settings.scrape_done",
@@ -91,6 +102,21 @@ impl Backend {
             Err(error) => log::warn!("Wi-Fi reconnect not started: {error}"),
         }
     }
+    /// The OTG port already serves a downstream device: the same sysfs state
+    /// usbgadget checks before it refuses to leave host mode.
+    fn usb_busy(&self) -> bool {
+        let Some(udc) = fs::read_dir(self.paths.at("/sys/class/udc"))
+            .ok()
+            .and_then(|dir| dir.filter_map(Result::ok).map(|e| e.file_name()).min())
+        else {
+            return false;
+        };
+        let state = format!(
+            "/sys/class/udc/{}/device/usb1/1-0:1.0/usb1-port1/state",
+            udc.to_string_lossy()
+        );
+        self.read(&state).contains("configured")
+    }
     /// `archr-keyboard list-*` prints "code Name" lines.
     pub(super) fn keyboard_names(&self, args: &[&str]) -> Vec<(String, String)> {
         self.command("archr-keyboard", args)
@@ -113,6 +139,7 @@ impl Backend {
         if let Ok(mode) = self.command("usbgadget", &[]) {
             state.values.insert(Id::UsbMode, mode);
         }
+        state.usb_busy = self.usb_busy();
         state.access_ip = self.address();
         keyboard_choices(
             state,
@@ -251,7 +278,10 @@ impl Backend {
                     }
                     Ok(value.into())
                 }
-                Id::UsbMode => self.command("usbgadget", &[value]).map(|_| value.into()),
+                Id::UsbMode => self
+                    .command("usbgadget", &[value])
+                    .map(|_| value.into())
+                    .map_err(|e| usb_error(&e)),
                 Id::KeyboardLayout | Id::KeyboardVariant => {
                     let cfg = self.cfg()?;
                     let layout = if id == Id::KeyboardLayout {
