@@ -138,6 +138,7 @@ fn message(outcome: Option<&Outcome>, data: &dyn DataSource, catalog: &I18n) -> 
                     .unwrap_or_else(|| catalog.text("notice.game")),
             )],
         ),
+        Some(Outcome::Netplay(join)) => catalog.format("notice.opening", &[("game", &join.game)]),
         Some(Outcome::Action(action)) => catalog.text(match action {
             SessionAction::Shutdown => "notice.shutdown",
             SessionAction::Reboot => "notice.reboot",

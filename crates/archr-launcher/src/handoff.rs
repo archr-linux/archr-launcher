@@ -59,6 +59,51 @@ pub fn launch_command_with(
     ))
 }
 
+/// Lobby join: the runemu contract plus the ES netplay arguments
+/// `--connect IP --port PORT --nick NICK`. The room's address and the nickname
+/// come from the network or the user, so they are exported and only referenced.
+/// runemu.sh parses its arguments by substring: an address with `--` is refused
+/// and the nickname cannot contain one.
+pub fn netplay_command(
+    bin: &Path,
+    rom: &Path,
+    game: (&str, &str, &str, &str),
+    peer: (&str, u16, &str),
+) -> io::Result<String> {
+    let (system, core, emulator, controllers) = game;
+    let (ip, port, nick) = peer;
+    let valid = !ip.is_empty()
+        && !ip.contains("--")
+        && ip
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b".:-_".contains(&b));
+    if !valid || port == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "invalid netplay address",
+        ));
+    }
+    let mut nick: String = nick.chars().filter(|c| !c.is_control()).collect();
+    while nick.contains("--") {
+        nick = nick.replace("--", "-");
+    }
+    let base = launch_command_with(bin, rom, system, core, emulator, controllers)?;
+    let mut command = String::new();
+    for (name, value) in [
+        ("ARCHR_NP_IP", ip),
+        ("ARCHR_NP_PORT", &port.to_string()),
+        ("ARCHR_NP_NICK", &nick),
+    ] {
+        command.push_str(&assignment(name, value));
+    }
+    command.push_str("export ARCHR_NP_IP ARCHR_NP_PORT ARCHR_NP_NICK; ");
+    command.push_str(&base);
+    command.push_str(
+        " --connect \"$ARCHR_NP_IP\" --port \"$ARCHR_NP_PORT\" --nick \"$ARCHR_NP_NICK\"",
+    );
+    Ok(command)
+}
+
 /// Expand a catalog `<command>` for a system without emulators.
 ///
 /// File names never enter the template: the values are exported as

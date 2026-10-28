@@ -4,6 +4,7 @@ mod transition;
 use archr_config::SystemCfg;
 use archr_launcher::{
     library::Library,
+    netplay,
     paths::Paths,
     state::{App, DataSource, Outcome, Screen},
     wifi,
@@ -13,6 +14,7 @@ use archr_ui::{
     covers::CoverCache,
     i18n::I18n,
     input::{button_event, Repeat},
+    netplay::{Effect, Lobby},
     render::{prepare_first_frame, Ui},
     startup::StartupTrace,
     startup_phase, theme_dir, Theme,
@@ -82,7 +84,7 @@ fn run(
     let ttf = sdl2::ttf::init().map_err(|error| error.to_string())?;
     startup_phase!(trace, "TTF_Init");
     let creator;
-    let (mut ui, (theme, theme_path, catalog, mut library, prepared)) =
+    let (mut ui, (theme, theme_path, catalog, mut library, prepared, netplay_on)) =
         std::thread::scope(|scope| {
             let (sized, size) = std::sync::mpsc::sync_channel(1);
             let paths = &paths;
@@ -135,7 +137,11 @@ fn run(
                     prepared.prepare_notice(&banner.render(&catalog), &theme, size)?;
                 }
                 startup_phase!(trace, "CPU assets ready");
-                Ok((theme, theme_path, catalog, library, prepared))
+                let netplay_on = config
+                    .as_ref()
+                    .and_then(|cfg| cfg.get_setting("netplay", None, None))
+                    .is_some_and(|value| value == "1");
+                Ok((theme, theme_path, catalog, library, prepared, netplay_on))
             });
             let sdl = sdl2::init()?;
             let video = sdl.video()?;
@@ -161,6 +167,7 @@ fn run(
     ui.theme_dir = theme_path;
     ui.configure_prepared(&creator, prepared, paths.root.as_deref())?;
     let mut app = App::new(ui.page_size(&theme));
+    app.netplay = netplay_on;
     ui.banner = library.banner.take().map(|m| m.render(&ui.catalog));
     ui.draw(&app, &library, &theme, None)?;
     eprintln!(
@@ -171,6 +178,7 @@ fn run(
     library.start();
     let (width, height) = ui.canvas.output_size()?;
     let mut settings = archr_launcher::settings::Runtime::new(paths.clone());
+    let mut rooms = netplay::Runtime::new(paths.clone());
     let mut covers = CoverCache::new(
         &creator,
         paths.cache.join("thumbs"),
@@ -214,6 +222,9 @@ fn run(
                 Some(&language),
                 None,
             );
+        }
+        if let Some(lobby) = &mut ui.lobby {
+            dirty |= rooms.poll(lobby);
         }
         dirty |= ui.tick() || ui.animating();
         let selected_system = if app.screen == Screen::Systems {
@@ -330,13 +341,22 @@ fn run(
         } else if let Some(button) = button.or_else(|| repeat.poll(Instant::now())) {
             ui.snap_animations();
 
-            let requested = if settings.active {
+            let requested = if ui.lobby.is_some() {
+                lobby_input(&mut ui.lobby, &mut rooms, button)
+            } else if settings.active {
                 settings.handle(button)
             } else {
                 app.handle(button, &library)
             };
             let requested = if requested == Outcome::Settings {
                 settings.open();
+                Outcome::None
+            } else {
+                requested
+            };
+            let requested = if requested == Outcome::OpenNetplay {
+                ui.lobby = Some(Lobby::default());
+                rooms.refresh();
                 Outcome::None
             } else {
                 requested
@@ -351,7 +371,10 @@ fn run(
                 }
                 outcome = Some(Outcome::None);
             } else {
-                let terminal = matches!(requested, Outcome::Launch { .. } | Outcome::Action(_));
+                let terminal = matches!(
+                    requested,
+                    Outcome::Launch { .. } | Outcome::Netplay(_) | Outcome::Action(_)
+                );
                 if terminal && (library.pending_writes > 0 || settings.mutations_pending()) {
                     deferred = Some(requested);
                 } else {
@@ -390,6 +413,23 @@ fn run(
         }
     }
 }
+/// Lobby input: closing and refreshing are local; a chosen room becomes a terminal outcome.
+fn lobby_input(
+    lobby: &mut Option<Lobby>,
+    rooms: &mut netplay::Runtime,
+    button: archr_launcher::state::Button,
+) -> Outcome {
+    match lobby.as_mut().map(|lobby| lobby.handle(button)) {
+        Some(Effect::Close) => {
+            *lobby = None;
+            rooms.close();
+        }
+        Some(Effect::Refresh) => rooms.refresh(),
+        Some(Effect::Join(join)) => return Outcome::Netplay(join),
+        _ => {}
+    }
+    Outcome::None
+}
 fn cover_paths(app: &App, data: &dyn DataSource) -> (Option<PathBuf>, Vec<PathBuf>) {
     let (screen, cursor) = app.backdrop();
     let Screen::Games { system } = screen else {
@@ -416,10 +456,12 @@ fn arm_terminal_snapshot(
     script: &mut Option<script::Script>,
     outcome: &Outcome,
 ) -> Result<(), String> {
-    if matches!(outcome, Outcome::Launch { .. } | Outcome::Action(_))
-        && script
-            .as_mut()
-            .is_some_and(script::Script::take_terminal_snapshot)
+    if matches!(
+        outcome,
+        Outcome::Launch { .. } | Outcome::Netplay(_) | Outcome::Action(_)
+    ) && script
+        .as_mut()
+        .is_some_and(script::Script::take_terminal_snapshot)
     {
         ui.screenshot = Some(
             std::env::var_os("ARCHR_LAUNCHER_SCREENSHOT")

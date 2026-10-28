@@ -14,6 +14,7 @@ use crate::{
     HintButton,
 };
 mod hub;
+mod netplay;
 
 use sdl2::{
     rect::Rect,
@@ -301,6 +302,8 @@ pub struct Ui<'font, 'texture> {
     pub loading: bool,
     pub banner: Option<String>,
     pub screenshot: Option<PathBuf>,
+    /// Open Netplay lobby; it replaces the browsing screens while present.
+    pub lobby: Option<crate::netplay::Lobby>,
     pub transition: Option<String>,
     /// Active theme directory; its `systems/` folder holds console images.
     pub theme_dir: Option<PathBuf>,
@@ -375,6 +378,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             list: ListMotion::new(),
             menu_pill: Tween::new(0., Duration::from_millis(90)),
             menu_open: false,
+            lobby: None,
             cover_key: None,
             cover_visible: false,
             cover_fade: Tween::new(0., Duration::from_millis(120)),
@@ -565,7 +569,12 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         } = self.frame;
         self.canvas.set_draw_color(color(theme.background));
         self.canvas.clear();
-        if let Some(settings) = settings {
+        if let Some(lobby) = self.lobby.take() {
+            let drawn = self.lobby_page(&lobby, theme);
+            self.lobby = Some(lobby);
+            drawn?;
+            self.animating = false;
+        } else if let Some(settings) = settings {
             self.settings_page(settings, theme)?;
             self.animating = false; // Static applying label; completion marks the frame dirty.
         } else {
@@ -1304,6 +1313,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             let c = selection(selected, theme.text, theme.highlight_text);
             let label = match item {
                 QuickItem::Settings => "settings.title",
+                QuickItem::Netplay => "netplay.menu",
                 QuickItem::Core => "menu.core",
                 QuickItem::Move => "menu.move",
                 QuickItem::RestoreOrder => "menu.restore_order",

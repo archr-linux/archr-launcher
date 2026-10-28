@@ -1,6 +1,6 @@
 //! Lazy library adapter for the navigation model.
 use crate::{
-    handoff::{catalog_command, launch_command_with, write_next},
+    handoff::{catalog_command, launch_command_with, netplay_command, write_next},
     paths::Paths,
     persistence::StoreWriter,
     state::{App, DataSource, Outcome},
@@ -229,7 +229,7 @@ impl Library {
     }
     pub fn handle(&mut self, outcome: Outcome, controllers: &str) -> Result<bool, String> {
         match outcome {
-            Outcome::None | Outcome::Settings => {}
+            Outcome::None | Outcome::Settings | Outcome::OpenNetplay => {}
             Outcome::ToggleFavorite { system, game } => {
                 let key = self.game_key(&system, game).ok_or("error.game_missing")?;
                 self.store.toggle_favorite(&key);
@@ -276,6 +276,21 @@ impl Library {
                 let key = self.game_key(&system, game).ok_or("error.game_missing")?;
                 self.store.push_recent(&key);
                 self.refresh_collection("@recent");
+                self.flush_store()?;
+                write_next(&self.paths.run, &command).map_err(|error| error.to_string())?;
+                return Ok(true);
+            }
+            Outcome::Netplay(join) => {
+                let nickname = self
+                    .config
+                    .as_ref()
+                    .and_then(|config| config.get_setting("netplay.nickname", None, None))
+                    .unwrap_or_else(|| "ArchR Player".to_owned());
+                let runemu = self.paths.at("/usr/bin/runemu.sh");
+                let game = (&*join.system, &*join.core, &*join.emulator, controllers);
+                let peer = (&*join.ip, join.port, &*nickname);
+                let command = netplay_command(&runemu, &join.rom, game, peer)
+                    .map_err(|error| error.to_string())?;
                 self.flush_store()?;
                 write_next(&self.paths.run, &command).map_err(|error| error.to_string())?;
                 return Ok(true);

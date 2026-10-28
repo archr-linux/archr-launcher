@@ -14,6 +14,7 @@ pub mod input;
 pub mod state;
 
 pub mod controllers;
+pub mod netplay;
 
 pub mod render;
 
