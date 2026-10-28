@@ -73,6 +73,7 @@ fn run(
     // SDL_ttf's global FreeType library is initialized before the worker and
     // remains alive until every handed-over font is dropped. Only the worker
     // uses TTF until join; video/window/EGL stay on this thread throughout.
+    archr_ui::apply_text_env();
     let ttf = sdl2::ttf::init().map_err(|error| error.to_string())?;
     startup_phase!(trace, "TTF_Init");
     let creator;
