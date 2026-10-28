@@ -9,7 +9,7 @@ use crate::{
     startup::StartupTrace,
     startup_phase,
     state::{App, DataSource, QuickItem, Screen},
-    status::Status,
+    status::{Battery, Status},
     text::{color, Align, Face, Style, TextCache},
     theme::{Rect01, Rgba, Theme},
 };
@@ -126,7 +126,7 @@ impl ListMotion {
 }
 struct StatusLayout {
     pill: Rect,
-    wifi: Option<Rect>,
+    wifi: Rect,
     clock: Rect,
     battery: Option<Rect>,
     percent: Option<Rect>,
@@ -138,13 +138,13 @@ fn status_layout(
     scale: f32,
     clock_width: u32,
     percent_width: Option<u32>,
-    wifi: bool,
 ) -> StatusLayout {
     let px = |v: f32| (v * scale).round().max(1.) as u32;
     let width = px(12.) * 2
         + clock_width
-        + if wifi { px(16.) + px(12.) } else { 0 }
-        + percent_width.map_or(0, |w| px(12.) + px(22.) + px(6.) + w);
+        + px(16.)
+        + px(12.)
+        + percent_width.map_or(0, |w| px(12.) + px(24.) + px(6.) + w);
     let center = header_height as i32 / 2;
     let pill = Rect::new(
         right - width as i32,
@@ -162,10 +162,23 @@ fn status_layout(
     };
     StatusLayout {
         pill,
-        wifi: panel(wifi.then_some(px(16.)), px(16.), px(12.)),
+        wifi: panel(Some(px(16.)), px(16.), px(12.)).expect("wifi indicator always visible"),
         clock: panel(Some(clock_width), px(16.), px(12.)).expect("clock is always visible"),
-        battery: panel(percent_width.map(|_| px(22.)), px(12.), px(6.)),
+        battery: panel(percent_width.map(|_| px(24.)), px(24.), px(6.)),
         percent: panel(percent_width, px(16.), 0),
+    }
+}
+
+fn battery_glyph(battery: Battery) -> Glyph {
+    if battery.charging {
+        Glyph::BatteryCharging
+    } else {
+        match battery.percent {
+            0 => Glyph::Battery,
+            1..=25 => Glyph::BatteryLow,
+            26..=69 => Glyph::BatteryMedium,
+            _ => Glyph::BatteryFull,
+        }
     }
 }
 
@@ -188,6 +201,7 @@ pub struct Ui<'font, 'texture> {
     cover_fade: Tween,
     animating: bool,
     first_present: bool,
+    deferred_icons: bool,
     frame: Frame,
     pub catalog: I18n,
     pub loading: bool,
@@ -270,6 +284,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             cover_fade: Tween::new(0., Duration::from_millis(120)),
             animating: false,
             first_present: false,
+            deferred_icons: false,
             frame: Frame::new(width, height),
             catalog: I18n::default(),
             loading: false,
@@ -418,6 +433,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
     }
     fn icon(&mut self, glyph: Glyph, panel: Rect, ink: Rgba) -> Result<(), String> {
         if !self.first_present {
+            self.deferred_icons = true;
             return Ok(());
         }
         let text = self
@@ -473,12 +489,14 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             || self.menu_pill.active(now)
             || self.cover_fade.active(now);
         // Explicit debug readback; normal rendering does no disk I/O.
-        if let Some(path) = self.screenshot.take() {
-            let rgba = self
-                .canvas
-                .read_pixels(None, sdl2::pixels::PixelFormatEnum::RGBA32)?;
-            image::save_buffer(path, &rgba, width, height, image::ColorType::Rgba8)
-                .map_err(|e| e.to_string())?;
+        if !self.deferred_icons {
+            if let Some(path) = self.screenshot.take() {
+                let rgba = self
+                    .canvas
+                    .read_pixels(None, sdl2::pixels::PixelFormatEnum::RGBA32)?;
+                image::save_buffer(path, &rgba, width, height, image::ColorType::Rgba8)
+                    .map_err(|e| e.to_string())?;
+            }
         }
         startup_phase!(self.startup, "first frame draw");
         self.canvas.present();
@@ -491,6 +509,10 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         }
         if let Some(status) = &mut self.status {
             status.start();
+        }
+        if std::mem::take(&mut self.deferred_icons) {
+            // Complete a first frame that needed icons immediately after first present.
+            return self.draw(app, data, theme, cover);
         }
         Ok(())
     }
@@ -516,59 +538,36 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 .as_deref()
                 .map(|s| self.measure(s, Face::Mono, 13.))
                 .transpose()?;
-            let layout =
-                status_layout(right, h, self.frame.scale, clock_width, percent_width, wifi);
+            let layout = status_layout(right, h, self.frame.scale, clock_width, percent_width);
             self.rounded(
                 layout.pill,
                 layout.pill.height() as f32 / 2.,
                 theme.surface,
                 Some(theme.border),
             )?;
-            if let Some(icon) = layout.wifi {
-                self.icon(Glyph::Wifi, icon, theme.highlight_bg)?;
-            }
+            self.icon(
+                if wifi { Glyph::Wifi } else { Glyph::WifiOff },
+                layout.wifi,
+                if wifi {
+                    theme.highlight_bg
+                } else {
+                    theme.muted
+                },
+            )?;
             self.label(&clock, (Face::Mono, 13., theme.muted), layout.clock)?;
             if let (Some(b), Some(icon), Some(panel), Some(text)) =
                 (battery, layout.battery, layout.percent, percent)
             {
                 self.label(&text, (Face::Mono, 13., theme.muted), panel)?;
-                let battery = Rect::new(icon.x(), icon.y(), self.px(19.) as u32, icon.height());
-                self.rounded(
-                    battery,
-                    self.px(2.) as f32,
-                    theme.surface,
-                    Some(theme.muted),
+                self.icon(
+                    battery_glyph(b),
+                    icon,
+                    if b.charging {
+                        theme.highlight_bg
+                    } else {
+                        theme.muted
+                    },
                 )?;
-                let fill_width = (self.px(15.) as f32 * f32::from(b.percent) / 100.).round() as u32;
-                if fill_width > 0 {
-                    self.rounded(
-                        Rect::new(
-                            battery.x() + self.px(2.),
-                            battery.y() + self.px(2.),
-                            fill_width,
-                            self.px(8.) as u32,
-                        ),
-                        self.frame.scale,
-                        theme.muted,
-                        None,
-                    )?;
-                }
-                let nub = Rect::new(
-                    battery.right() + self.px(1.),
-                    battery.y() + self.px(4.),
-                    self.px(2.) as u32,
-                    self.px(4.) as u32,
-                );
-                self.rounded(nub, self.frame.scale, theme.muted, None)?;
-                if b.charging {
-                    let bolt = Rect::new(
-                        battery.x() + self.px(5.),
-                        battery.y() + self.px(1.),
-                        self.px(10.) as u32,
-                        self.px(10.) as u32,
-                    );
-                    self.icon(Glyph::Lightning, bolt, theme.highlight_bg)?;
-                }
             }
             right = layout.pill.x() - self.px(20.);
         }
@@ -1488,50 +1487,79 @@ mod tests {
     }
 
     #[test]
+    fn battery_glyph_tracks_charge_and_level() {
+        for (percent, expected) in [
+            (0, Glyph::Battery),
+            (1, Glyph::BatteryLow),
+            (25, Glyph::BatteryLow),
+            (26, Glyph::BatteryMedium),
+            (69, Glyph::BatteryMedium),
+            (70, Glyph::BatteryFull),
+            (100, Glyph::BatteryFull),
+        ] {
+            assert_eq!(
+                battery_glyph(crate::status::Battery {
+                    percent,
+                    charging: false
+                }),
+                expected
+            );
+            assert_eq!(
+                battery_glyph(crate::status::Battery {
+                    percent,
+                    charging: true
+                }),
+                Glyph::BatteryCharging
+            );
+        }
+    }
+
+    #[test]
     fn status_pill_orders_centers_and_hides_optional_items() {
         for scale in [1., 2.] {
-            for wifi in [false, true] {
-                for percent_width in [None, Some(24)] {
-                    let layout = status_layout(
-                        (616. * scale) as i32,
-                        (44. * scale) as u32,
-                        scale,
-                        (39. * scale) as u32,
-                        percent_width.map(|w| (w as f32 * scale) as u32),
-                        wifi,
-                    );
-                    assert_eq!(layout.pill.right(), (616. * scale) as i32);
-                    assert_eq!(layout.pill.height(), (26. * scale) as u32);
-                    assert_eq!(layout.wifi.is_some(), wifi);
-                    assert_eq!(layout.battery.is_some(), percent_width.is_some());
-                    assert_eq!(layout.percent.is_some(), percent_width.is_some());
-                    let mut right = layout.pill.x() + (12. * scale) as i32;
-                    for rect in [
-                        layout.wifi,
-                        Some(layout.clock),
-                        layout.battery,
-                        layout.percent,
-                    ]
-                    .into_iter()
-                    .flatten()
-                    {
-                        assert!(
-                            rect.x() >= right,
-                            "status items overlap or are out of order"
-                        );
-                        assert_eq!(rect.center().y(), (22. * scale) as i32);
-                        right = rect.right();
-                    }
-                    assert_eq!(right + (12. * scale) as i32, layout.pill.right());
+            for percent_width in [None, Some(24)] {
+                let layout = status_layout(
+                    (616. * scale) as i32,
+                    (44. * scale) as u32,
+                    scale,
+                    (39. * scale) as u32,
+                    percent_width.map(|w| (w as f32 * scale) as u32),
+                );
+                assert_eq!(layout.pill.right(), (616. * scale) as i32);
+                assert_eq!(layout.pill.height(), (26. * scale) as u32);
+                assert_eq!(layout.wifi.width(), (16. * scale) as u32);
+                assert_eq!(layout.battery.is_some(), percent_width.is_some());
+                if let Some(battery) = layout.battery {
+                    assert_eq!(battery.width(), (24. * scale) as u32);
                 }
+                assert_eq!(layout.percent.is_some(), percent_width.is_some());
+                let mut right = layout.pill.x() + (12. * scale) as i32;
+                for rect in [
+                    Some(layout.wifi),
+                    Some(layout.clock),
+                    layout.battery,
+                    layout.percent,
+                ]
+                .into_iter()
+                .flatten()
+                {
+                    assert!(
+                        rect.x() >= right,
+                        "status items overlap or are out of order"
+                    );
+                    assert_eq!(rect.center().y(), (22. * scale) as i32);
+                    right = rect.right();
+                }
+                assert_eq!(right + (12. * scale) as i32, layout.pill.right());
             }
         }
-        let on = status_layout(616, 44, 1., 39, Some(24), true);
-        let off = status_layout(616, 44, 1., 39, Some(24), false);
-        assert_eq!(on.pill.width(), 155);
-        assert_eq!(off.pill.width(), 127);
-        assert_eq!(on.clock.x() - on.wifi.unwrap().right(), 12);
-        assert_eq!(on.battery.unwrap().x() - on.clock.right(), 12);
-        assert_eq!(on.percent.unwrap().x() - on.battery.unwrap().right(), 6);
+        let layout = status_layout(616, 44, 1., 39, Some(24));
+        assert_eq!(layout.pill.width(), 157);
+        assert_eq!(layout.clock.x() - layout.wifi.right(), 12);
+        assert_eq!(layout.battery.unwrap().x() - layout.clock.right(), 12);
+        assert_eq!(
+            layout.percent.unwrap().x() - layout.battery.unwrap().right(),
+            6
+        );
     }
 }

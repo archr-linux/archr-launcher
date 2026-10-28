@@ -200,7 +200,7 @@ fn assert_button_ink_is_centered(rgba: &[u8]) {
 }
 
 #[test]
-fn hub_icons_wait_until_after_first_present() {
+fn first_hub_draw_shows_icons_after_first_present() {
     let _guard = SDL_LOCK.lock().unwrap();
     std::env::set_var("SDL_VIDEODRIVER", "offscreen");
     let ttf;
@@ -227,11 +227,14 @@ fn hub_icons_wait_until_after_first_present() {
         .canvas
         .read_pixels(None, sdl2::pixels::PixelFormatEnum::RGBA32)
         .unwrap();
+    let icon = (130..178).flat_map(|y| (126..174).map(move |x| (y * 640 + x) * 4));
     assert!(
-        first
-            .chunks_exact(4)
-            .zip(second.chunks_exact(4))
-            .any(|(a, b)| a != b),
-        "icons appear only after first present"
+        icon.into_iter()
+            .any(|at| first[at..at + 3] == [255, 255, 255]),
+        "first completed draw must show the Recent icon"
+    );
+    assert_eq!(
+        first, second,
+        "immediate post-present repaint should already be complete"
     );
 }

@@ -158,8 +158,8 @@ enum Key {
     Rounded(Rect, u32, Rgba, Option<Rgba>),
     Cover(Rect, u32),
 }
-/// Per-renderer bounded LRU: static badges, battery pieces and icons are hits;
-/// evicted meshes donate their Vec allocations to the next moving-pill mesh.
+/// Per-renderer bounded LRU for panels and cover meshes. Evicted meshes
+/// donate their Vec allocations to the next moving-pill mesh.
 pub(crate) struct Geometry {
     meshes: VecDeque<(Key, Mesh)>,
 }
