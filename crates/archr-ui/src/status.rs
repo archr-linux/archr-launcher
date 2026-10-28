@@ -1,5 +1,6 @@
 //! Cached status: only the status worker touches sysfs. It starts after
 //! present; the render thread consumes a typed snapshot without waiting.
+//! Battery is re-read every 2 s, the radio every 30 s; only changes publish.
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -8,6 +9,9 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+/// Charger plug/unplug must show promptly; two small sysfs reads every 2 s.
+const BATTERY_REFRESH: Duration = Duration::from_secs(2);
+/// Everything else (the Wi-Fi radio) is refreshed slowly or on an explicit signal.
 const REFRESH: Duration = Duration::from_secs(30);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Battery {
@@ -23,7 +27,7 @@ impl BatterySource {
         if now < self.next_read {
             return None;
         }
-        self.next_read = now + REFRESH;
+        self.next_read = now + BATTERY_REFRESH;
         Some((|| {
             let percent = fs::read_to_string(self.path.join("capacity"))
                 .ok()?
@@ -40,7 +44,7 @@ impl BatterySource {
         })())
     }
 }
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, PartialEq)]
 struct Snapshot {
     battery: Option<Battery>,
     wifi: bool,
@@ -65,16 +69,27 @@ impl Worker {
                     path: path.join("sys/class/power_supply/battery"),
                     next_read: Instant::now(),
                 };
+                let mut snapshot = Snapshot::default();
+                let mut next_wifi = Instant::now();
                 loop {
-                    let battery = source
-                        .poll(Instant::now())
-                        .unwrap_or_else(|| published.lock().expect("status snapshot").battery);
-                    *published.lock().expect("status snapshot") = Snapshot {
-                        battery,
-                        wifi: wifi_on(&path),
-                    };
-                    match stopped.recv_timeout(REFRESH) {
-                        Ok(Signal::Refresh) | Err(mpsc::RecvTimeoutError::Timeout) => {}
+                    let now = Instant::now();
+                    let mut next = snapshot;
+                    if let Some(battery) = source.poll(now) {
+                        next.battery = battery;
+                    }
+                    if now >= next_wifi {
+                        next.wifi = wifi_on(&path);
+                        next_wifi = now + REFRESH;
+                    }
+                    // Publish only real changes; the render thread redraws on them.
+                    if next != snapshot {
+                        snapshot = next;
+                        *published.lock().expect("status snapshot") = snapshot;
+                    }
+                    let wake = source.next_read.min(next_wifi);
+                    match stopped.recv_timeout(wake.saturating_duration_since(Instant::now())) {
+                        Ok(Signal::Refresh) => next_wifi = Instant::now(),
+                        Err(mpsc::RecvTimeoutError::Timeout) => {}
                         Ok(Signal::Stop) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
                     }
                 }
@@ -267,7 +282,43 @@ mod tests {
     }
 
     #[test]
-    fn worker_source_is_optional_and_throttled_for_thirty_seconds() {
+    fn charger_changes_reach_the_pill_within_one_battery_period() {
+        let root = tempfile::tempdir().unwrap();
+        let battery = root.path().join("sys/class/power_supply/battery");
+        fs::create_dir_all(&battery).unwrap();
+        fs::write(battery.join("capacity"), "50").unwrap();
+        fs::write(battery.join("status"), "Discharging").unwrap();
+        let mut status = Status::new(Some(root.path()), Instant::now());
+        status.start();
+        // Redraw requests not explained by a minute change of the clock.
+        let poll = |status: &mut Status| {
+            let clock = status.clock.clone();
+            usize::from(status.poll(Instant::now()) && status.clock == clock)
+        };
+        let wait = |status: &mut Status, charging: bool| {
+            let deadline = Instant::now() + BATTERY_REFRESH + Duration::from_secs(1);
+            let mut redraws = 0;
+            while status.battery.map(|b| b.charging) != Some(charging) {
+                assert!(Instant::now() < deadline, "charger state not picked up");
+                std::thread::sleep(Duration::from_millis(5));
+                redraws += poll(status);
+            }
+            redraws
+        };
+        assert_eq!(wait(&mut status, false), 1);
+        fs::write(battery.join("status"), "Charging").unwrap();
+        // Exactly one redraw per real change; idle polls in between request none.
+        assert_eq!(wait(&mut status, true), 1);
+        for _ in 0..50 {
+            std::thread::sleep(Duration::from_millis(5));
+            assert_eq!(poll(&mut status), 0);
+        }
+        fs::write(battery.join("status"), "Discharging").unwrap();
+        assert_eq!(wait(&mut status, false), 1);
+    }
+
+    #[test]
+    fn battery_source_is_optional_and_throttled_to_two_seconds() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().to_owned();
         fs::write(path.join("capacity"), "87").unwrap();
@@ -285,11 +336,14 @@ mod tests {
             }))
         );
         fs::write(path.join("capacity"), "12").unwrap();
-        assert_eq!(source.poll(now + Duration::from_secs(29)), None);
-        assert_eq!(source.poll(now + REFRESH).unwrap().unwrap().percent, 12);
+        assert_eq!(source.poll(now + Duration::from_millis(1999)), None);
+        assert_eq!(
+            source.poll(now + BATTERY_REFRESH).unwrap().unwrap().percent,
+            12
+        );
         fs::write(path.join("capacity"), "999").unwrap();
-        assert_eq!(source.poll(now + REFRESH * 2), Some(None));
+        assert_eq!(source.poll(now + BATTERY_REFRESH * 2), Some(None));
         fs::remove_file(path.join("capacity")).unwrap();
-        assert_eq!(source.poll(now + REFRESH * 3), Some(None));
+        assert_eq!(source.poll(now + BATTERY_REFRESH * 3), Some(None));
     }
 }
