@@ -24,6 +24,18 @@ pub const SERVICES: &[Row] = &[
     described(Id::Channel, "settings.channel", "settings.channel_detail"),
 ];
 pub const GAMES: &[Row] = &[
+    row(Id::Emulator, "settings.emulator", Kind::Value).under(super::games::SYSTEM_SECTION),
+    row(Id::Core, "settings.core", Kind::Value),
+    row(Id::Ratio, "settings.ratio", Kind::Value),
+    row(Id::Filter, "settings.filter", Kind::Value),
+    described(
+        Id::Autosave,
+        "settings.autosave",
+        "settings.autosave_detail",
+    )
+    .kind(Kind::Toggle),
+    row(Id::StateSlot, "settings.state_slot", Kind::Value),
+    row(Id::GameSystem, "settings.other_system", Kind::Action).under("settings.other"),
     row(Id::NetplayLink, "settings.netplay", Kind::Action),
     row(Id::ScraperLink, "settings.scraper", Kind::Action),
 ];
@@ -102,6 +114,7 @@ impl Settings {
         match self.page() {
             Page::Keyboard => Some(self.keyboard_input(button)),
             Page::Wifi => self.wifi_input(button),
+            Page::Games => self.games_input(button),
             _ => None,
         }
     }

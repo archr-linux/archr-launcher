@@ -1,6 +1,6 @@
 //! Shared, bounded settings layout. The common text cache only sees fitted lines.
 use super::*;
-use crate::settings::{Id, Kind, Page, Row, Settings, CATEGORIES};
+use crate::settings::{games::SYSTEM_SECTION, Id, Kind, Page, Row, Settings, CATEGORIES};
 #[path = "render/information.rs"]
 mod information;
 #[path = "render/network.rs"]
@@ -40,7 +40,8 @@ fn placements(page: Page, rows: &[Row]) -> Vec<Placement> {
                 top += SECTION_HEIGHT;
             }
             let height = match page {
-                Page::Netplay => 34.,
+                Page::Games if row.subtitle.is_some() => 40.,
+                Page::Netplay | Page::Games => 34.,
                 Page::Services => 38.,
                 _ if row.subtitle.is_some() => 46.,
                 _ => 40.,
@@ -571,7 +572,14 @@ impl View<'_, '_, '_> {
                     continue;
                 }
                 if let Some(section) = position.section {
-                    let heading = self.tr(section).to_uppercase();
+                    // The Games page names the system its rows configure.
+                    let name = state.games.fullname();
+                    let heading = if section == SYSTEM_SECTION && !name.is_empty() {
+                        name.to_owned()
+                    } else {
+                        self.tr(section)
+                    }
+                    .to_uppercase();
                     self.text(
                         (28., y - SECTION_HEIGHT, right - 40., SECTION_HEIGHT),
                         &heading,
