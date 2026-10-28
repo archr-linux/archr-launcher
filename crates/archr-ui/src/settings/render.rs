@@ -90,6 +90,56 @@ impl Scroll {
         self.tween.value(now)
     }
 }
+/// How long a message stays up, and the fade that removes it.
+const BANNER_TIME: Duration = Duration::from_secs(4);
+const BANNER_FADE: Duration = Duration::from_millis(150);
+/// The visible message: fades out on a timer or when the state drops it, and
+/// a different message shows at once and restarts the timer.
+pub(super) struct Banner {
+    shown: Option<(Option<Id>, String)>,
+    since: Instant,
+    pub(super) fade: Tween,
+}
+impl Default for Banner {
+    fn default() -> Self {
+        Self {
+            shown: None,
+            since: Instant::now(),
+            fade: Tween::new(0., BANNER_FADE),
+        }
+    }
+}
+impl Banner {
+    /// Opacity (0..=1) to draw `error` with this frame.
+    fn alpha(&mut self, error: Option<&(Option<Id>, String)>, now: Instant) -> f32 {
+        match error {
+            Some(error) if self.shown.as_ref() != Some(error) => {
+                self.shown = Some(error.clone());
+                self.since = now;
+                self.fade.retarget(1., now);
+                self.fade.snap();
+            }
+            Some(_) if now.saturating_duration_since(self.since) >= BANNER_TIME => {
+                self.fade.retarget(0., now)
+            }
+            Some(_) => {}
+            None => {
+                self.fade.retarget(0., now);
+                if !self.fade.active(now) {
+                    self.shown = None;
+                }
+            }
+        }
+        self.fade.value(now)
+    }
+    /// A frame is due while fading or while the timer is still running.
+    pub(super) fn busy(&self, now: Instant) -> bool {
+        self.fade.active(now)
+            || (self.shown.is_some()
+                && self.fade.target > 0.
+                && now.saturating_duration_since(self.since) < BANNER_TIME + BANNER_FADE)
+    }
+}
 type Bounds = (f32, f32, f32, f32);
 struct View<'a, 'ttf, 'tex> {
     ui: &'a mut Ui<'ttf, 'tex>,
@@ -359,10 +409,16 @@ impl View<'_, '_, '_> {
             }
             page => self.rows_at(state, &rows, &placements(page, &rows), RIGHT)?,
         }
-        if let Some((id, error)) = state.error.as_ref().filter(|(id, _)| {
+        let error = state.error.as_ref().filter(|(id, _)| {
             !matches!(state.page(), Page::Info | Page::InfoDetail(_))
                 && (id.is_none() || rows.iter().any(|r| Some(r.id) == *id))
-        }) {
+        });
+        let alpha = self.ui.settings_banner.alpha(error, self.ui.frame.now);
+        if let Some((id, error)) = self.ui.settings_banner.shown.clone().filter(|_| alpha > 0.) {
+            let fade = |c: Rgba| Rgba {
+                a: (f32::from(c.a) * alpha) as u8,
+                ..c
+            };
             let bounds = if state.page() == Page::Root {
                 (386., 318., 230., 110.)
             } else if state.page() == Page::Keyboard {
@@ -370,16 +426,25 @@ impl View<'_, '_, '_> {
             } else {
                 (24., 384., 592., 40.)
             };
-            self.panel(bounds, false)?;
+            self.ui.rounded(
+                self.rect(bounds),
+                self.ui.px(10.) as f32,
+                fade(self.theme.surface),
+                Some(fade(self.theme.border)),
+            )?;
             let (x, y, w, h) = bounds;
             // Known failures arrive as locale keys; anything else stays generic.
             let message = if error.starts_with("settings.") {
-                self.tr(error)
+                self.tr(&error)
             } else {
                 log::debug!("Settings error on {id:?}: {error}");
                 self.tr("settings.failed")
             };
-            self.label((x + 12., y + 4., w - 24., h - 8.), &message, 13.)?;
+            self.text(
+                (x + 12., y + 4., w - 24., h - 8.),
+                &message,
+                (13., fade(self.theme.text), Align::Left),
+            )?;
         }
         let footer = FOOTER;
         self.ui.divider(
@@ -727,3 +792,41 @@ mod capture_tests;
 #[cfg(test)]
 #[path = "../../tests/support/settings_scroll.rs"]
 mod scroll_tests;
+#[cfg(test)]
+mod banner_tests {
+    use super::*;
+    fn error(text: &str) -> Option<(Option<Id>, String)> {
+        Some((None, text.into()))
+    }
+    #[test]
+    fn message_fades_after_four_seconds_and_a_new_one_restarts_the_timer() {
+        let (mut banner, t0) = (Banner::default(), Instant::now());
+        let first = error("settings.failed");
+        assert_eq!(banner.alpha(first.as_ref(), t0), 1.);
+        let late = t0 + Duration::from_millis(3900);
+        assert_eq!(banner.alpha(first.as_ref(), late), 1.);
+        // A different message replaces it at full opacity and restarts the clock.
+        let second = error("settings.wifi_timeout");
+        assert_eq!(banner.alpha(second.as_ref(), late), 1.);
+        let later = late + Duration::from_millis(3900);
+        assert_eq!(banner.alpha(second.as_ref(), later), 1.);
+        // Past the timer the message fades, then stays gone while the state keeps it.
+        let gone = later + Duration::from_millis(300);
+        banner.alpha(second.as_ref(), gone);
+        let end = gone + BANNER_FADE + Duration::from_millis(10);
+        assert_eq!(banner.alpha(second.as_ref(), end), 0.);
+        assert!(!banner.busy(end));
+        assert_eq!(banner.alpha(second.as_ref(), end), 0.);
+    }
+    #[test]
+    fn input_dropping_the_message_fades_it_out_early() {
+        let (mut banner, t0) = (Banner::default(), Instant::now());
+        banner.alpha(error("settings.failed").as_ref(), t0);
+        let now = t0 + Duration::from_millis(500);
+        banner.alpha(None, now);
+        assert!(banner.busy(now));
+        let end = now + BANNER_FADE + Duration::from_millis(10);
+        assert_eq!(banner.alpha(None, end), 0.);
+        assert!(banner.shown.is_none());
+    }
+}

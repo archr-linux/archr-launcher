@@ -697,6 +697,8 @@ impl Settings {
                 _ => Effect::None,
             };
         }
+        // Any navigation input dismisses the last message.
+        self.error = None;
         if let Some(effect) = self.information_input(button) {
             return effect;
         }
@@ -885,5 +887,19 @@ mod tests {
         assert_eq!(state.settle(Id::Volume, Err("pactl".into())), None);
         assert_eq!(state.value(Id::Volume), "75");
         assert_eq!(state.error, Some((Some(Id::Volume), "pactl".into())));
+    }
+}
+#[cfg(test)]
+mod dismiss_tests {
+    use super::*;
+    #[test]
+    fn any_input_dismisses_the_message() {
+        let mut state = Settings {
+            loading: false,
+            error: Some((None, "settings.failed".into())),
+            ..Settings::default()
+        };
+        state.handle(Button::Down);
+        assert!(state.error.is_none());
     }
 }

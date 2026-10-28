@@ -294,6 +294,7 @@ pub struct Ui<'font, 'texture> {
     list: ListMotion,
     menu_pill: Tween,
     settings_scroll: settings_render::Scroll,
+    settings_banner: settings_render::Banner,
     menu_open: bool,
     cover_key: Option<PathBuf>,
     cover_visible: bool,
@@ -382,6 +383,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             list: ListMotion::new(),
             menu_pill: Tween::new(0., Duration::from_millis(90)),
             settings_scroll: settings_render::Scroll::default(),
+            settings_banner: settings_render::Banner::default(),
             menu_open: false,
             lobby: None,
             cover_key: None,
@@ -588,7 +590,8 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             self.animating = false;
         } else if let Some(settings) = settings {
             self.settings_page(settings, theme)?;
-            self.animating = self.settings_scroll.tween.active(now);
+            self.animating =
+                self.settings_scroll.tween.active(now) || self.settings_banner.busy(now);
         } else {
             let (backdrop, cursor) = app.backdrop();
             self.header(backdrop, cursor, data, theme)?;
