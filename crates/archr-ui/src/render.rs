@@ -208,6 +208,8 @@ pub struct Ui<'font, 'texture> {
     pub transition: Option<String>,
     /// Active theme directory; its `systems/` folder holds console images.
     pub theme_dir: Option<PathBuf>,
+    /// Root-mapped installed icon directory (separate from the selected theme).
+    pub system_icons_dir: Option<PathBuf>,
 }
 impl<'font, 'texture> Ui<'font, 'texture> {
     pub fn new(width: u32, height: u32, windowed: bool) -> Result<Self, String> {
@@ -289,6 +291,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             screenshot: None,
             transition: None,
             theme_dir: None,
+            system_icons_dir: None,
         })
     }
     pub fn configure(
@@ -323,7 +326,12 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             startup_phase!(self.startup, "shadow texture");
         }
         let mut text = TextCache::from_prepared(creator, prepared)?;
-        text.icon_theme_dir = self.theme_dir.clone();
+        text.icon_loader = crate::icons::IconLoader::new(
+            self.theme_dir.as_deref(),
+            self.system_icons_dir
+                .as_deref()
+                .unwrap_or_else(|| Path::new("/usr/share/archr-launcher/themes/default/icons")),
+        );
         self.text = Some(text);
         self.status = Some(Status::new(root, Instant::now()));
         startup_phase!(self.startup, "status initialization");
@@ -487,9 +495,9 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             || self.cover_fade.active(now);
         // Explicit debug readback; normal rendering does no disk I/O.
         if let Some(path) = self.screenshot.take() {
-                let rgba = self
-                    .canvas
-                    .read_pixels(None, sdl2::pixels::PixelFormatEnum::RGBA32)?;
+            let rgba = self
+                .canvas
+                .read_pixels(None, sdl2::pixels::PixelFormatEnum::RGBA32)?;
             image::save_buffer(path, &rgba, width, height, image::ColorType::Rgba8)
                 .map_err(|e| e.to_string())?;
         }

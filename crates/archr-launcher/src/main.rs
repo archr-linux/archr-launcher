@@ -149,6 +149,7 @@ fn run(
     creator = ui.canvas.texture_creator();
     ui.catalog = catalog;
     ui.theme_dir = theme_path;
+    ui.system_icons_dir = Some(paths.at("/usr/share/archr-launcher/themes/default/icons"));
     ui.configure_prepared(&creator, prepared, paths.root.as_deref())?;
     let mut app = App::new(ui.page_size(&theme));
     ui.banner = library.banner.take().map(|m| m.render(&ui.catalog));

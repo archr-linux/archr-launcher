@@ -251,7 +251,7 @@ pub(crate) struct TextCache<'font, 'texture> {
     entries: VecDeque<Entry<'texture>>,
     badges: VecDeque<(BadgeKey, Texture<'texture>)>,
     icons: HashMap<(Glyph, u32), Texture<'texture>>,
-    pub(crate) icon_theme_dir: Option<PathBuf>,
+    pub(crate) icon_loader: icons::IconLoader,
 }
 impl<'font, 'texture> TextCache<'font, 'texture> {
     pub fn from_prepared(
@@ -266,7 +266,10 @@ impl<'font, 'texture> TextCache<'font, 'texture> {
             entries: VecDeque::new(),
             badges: VecDeque::with_capacity(16),
             icons: HashMap::new(),
-            icon_theme_dir: None,
+            icon_loader: icons::IconLoader::new(
+                None,
+                std::path::Path::new("/usr/share/archr-launcher/themes/default/icons"),
+            ),
         };
         for (source, width, style, surface) in prepared.entries {
             let texture = creator
@@ -346,7 +349,9 @@ impl<'font, 'texture> TextCache<'font, 'texture> {
     ) -> Result<(), String> {
         let key = (glyph, panel.width());
         if !self.icons.contains_key(&key) {
-            let surface = icons::render(glyph, panel.width(), self.icon_theme_dir.as_deref())?;
+            let Some(surface) = self.icon_loader.render(glyph, panel.width()) else {
+                return Ok(());
+            };
             startup_phase!(
                 self.startup,
                 "icon rasterization [glyph={glyph:?}; size={}px]",
