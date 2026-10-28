@@ -261,7 +261,10 @@ fn run(
         }
         let mut outcome = None;
         closing |= close_requested;
-        close_requested = closing && !settings.busy();
+        if closing {
+            settings.close();
+        }
+        close_requested = closing && !settings.mutations_pending();
         if closing {
             button = None;
             repeat.clear();
@@ -295,7 +298,7 @@ fn run(
                 outcome = Some(Outcome::None);
             } else {
                 let terminal = matches!(requested, Outcome::Launch { .. } | Outcome::Action(_));
-                if terminal && (library.pending_writes > 0 || settings.busy()) {
+                if terminal && (library.pending_writes > 0 || settings.mutations_pending()) {
                     deferred = Some(requested);
                 } else {
                     if terminal {
@@ -306,7 +309,10 @@ fn run(
             }
             dirty = true;
         }
-        if !close_requested && outcome.is_none() && library.pending_writes == 0 && !settings.busy()
+        if !close_requested
+            && outcome.is_none()
+            && library.pending_writes == 0
+            && !settings.mutations_pending()
         {
             outcome = deferred.take().filter(|_| !library.write_failed);
         }
