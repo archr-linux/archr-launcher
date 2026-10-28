@@ -312,28 +312,17 @@ impl View<'_, '_, '_> {
         Ok(())
     }
     fn root(&mut self, state: &Settings) -> Result<(), String> {
-        let glyphs = [
-            Glyph::Wifi,
-            Glyph::Sound,
-            Glyph::Games,
-            Glyph::Games,
-            Glyph::Globe,
-            Glyph::Palette,
-            Glyph::Trophy,
-            Glyph::Gear,
-            Glyph::Storage,
-        ];
-        for (n, (page, _)) in CATEGORIES.iter().enumerate() {
+        for (n, (page, _, glyph)) in CATEGORIES.iter().enumerate() {
             let key = page.title();
             let y = 66. + n as f32 * 40.;
             let selected = n == state.cursor;
             let ink = self.ink(selected);
             self.panel((24., y, 346., 38.), selected)?;
             self.ui
-                .icon(glyphs[n], self.rect((38., y + 10., 18., 18.)), ink)?;
+                .icon(*glyph, self.rect((38., y + 10., 18., 18.)), ink)?;
             self.text((68., y, 282., 38.), &self.tr(key), (15., ink, Align::Left))?;
         }
-        let (page, detail) = CATEGORIES[state.cursor.min(CATEGORIES.len() - 1)];
+        let (page, detail, _) = CATEGORIES[state.cursor.min(CATEGORIES.len() - 1)];
         let key = page.title();
         self.panel((386., 66., 230., 240.), false)?;
         self.label((402., 82., 198., 64.), &self.tr(key), 18.)?;

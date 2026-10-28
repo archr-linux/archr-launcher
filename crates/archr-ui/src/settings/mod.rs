@@ -1,5 +1,5 @@
 //! Declarative settings pages and pure navigation. Effects belong to the host.
-use crate::{state::Button, HintButton};
+use crate::{icons::Glyph, state::Button, HintButton};
 use std::collections::BTreeMap;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -161,22 +161,41 @@ const REGION: &[Row] = &[
     row(Id::Language, "settings.language", Kind::Value),
     row(Id::Timezone, "settings.timezone", Kind::Value),
 ];
-pub const CATEGORIES: &[(Page, &str)] = &[
-    (Page::Soon("settings.network"), "settings.network_detail"),
-    (Page::Sound, "settings.sound_detail"),
-    (Page::Soon("settings.controls"), "settings.controls_detail"),
-    (Page::Soon("settings.games"), "settings.games_detail"),
-    (Page::Region, "settings.region_detail"),
+/// Navigation, detail copy and shared icon identity have one source of truth.
+pub(crate) const CATEGORIES: &[(Page, &str, Glyph)] = &[
+    (
+        Page::Soon("settings.network"),
+        "settings.network_detail",
+        Glyph::Wifi,
+    ),
+    (Page::Sound, "settings.sound_detail", Glyph::Sound),
+    (
+        Page::Soon("settings.controls"),
+        "settings.controls_detail",
+        Glyph::Games,
+    ),
+    (
+        Page::Soon("settings.games"),
+        "settings.games_detail",
+        Glyph::Play,
+    ),
+    (Page::Region, "settings.region_detail", Glyph::Globe),
     (
         Page::Soon("settings.appearance"),
         "settings.appearance_detail",
+        Glyph::Palette,
     ),
     (
         Page::Soon("settings.achievements"),
         "settings.achievements_detail",
+        Glyph::Trophy,
     ),
-    (Page::System, "settings.system_detail"),
-    (Page::Soon("settings.storage"), "settings.storage_detail"),
+    (Page::System, "settings.system_detail", Glyph::Gear),
+    (
+        Page::Soon("settings.storage"),
+        "settings.storage_detail",
+        Glyph::Storage,
+    ),
 ];
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Effect {
@@ -383,5 +402,15 @@ impl Settings {
             _ => {}
         }
         Effect::None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn controls_and_games_use_distinct_shared_glyphs() {
+        assert_eq!(CATEGORIES[2].2, Glyph::Games);
+        assert_eq!(CATEGORIES[3].2, Glyph::Play);
     }
 }

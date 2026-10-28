@@ -7,6 +7,7 @@ use std::f32::consts::{PI, TAU};
 pub(crate) enum Glyph {
     Recent,
     Games,
+    Play,
     Tools,
     Gear,
     Download,
@@ -35,6 +36,7 @@ fn arc(cx: f32, cy: f32, radius: f32, from: f32, to: f32) -> Path {
 fn paths(glyph: Glyph) -> Vec<Path> {
     let circle = |cx, cy, r| arc(cx, cy, r, 0., TAU);
     match glyph {
+        Glyph::Play => vec![vec![(7., 4.), (20., 12.), (7., 20.), (7., 4.)]],
         Glyph::Sound => vec![
             vec![
                 (3., 9.),
