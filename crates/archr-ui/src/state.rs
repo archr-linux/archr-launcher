@@ -1,6 +1,8 @@
 //! Screen transitions and controller input, independent of rendering and SDL.
 
 use archr_index::{cache::SystemEntry, Game};
+#[path = "state_hub.rs"]
+mod hub;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Button {
@@ -19,6 +21,11 @@ pub enum Button {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Screen {
     Systems,
+    StartHub {
+        row: usize,
+        tile: usize,
+        shortcut: usize,
+    },
     Games {
         system: String,
     },
@@ -38,6 +45,7 @@ pub enum SessionAction {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Outcome {
     None,
+    ToggleWifi(bool),
     Launch {
         system: String,
         game: usize,
@@ -148,7 +156,22 @@ impl App {
     /// Returns effects for the caller to apply. Core selection is tracked locally
     /// while the quick menu is open, independently of persistence timing.
     pub fn handle(&mut self, b: Button, data: &dyn DataSource) -> Outcome {
+        self.handle_with_wifi(b, data, false)
+    }
+    pub fn handle_with_wifi(&mut self, b: Button, data: &dyn DataSource, wifi: bool) -> Outcome {
+        if matches!(self.screen, Screen::Systems) && b == Button::Start {
+            self.screen = Screen::StartHub {
+                row: 0,
+                tile: 0,
+                shortcut: 0,
+            };
+            return Outcome::None;
+        }
+        if matches!(self.screen, Screen::StartHub { .. }) {
+            return self.handle_hub(b, data, wifi);
+        }
         let len = match &self.screen {
+            Screen::StartHub { .. } => unreachable!(),
             Screen::Systems => Self::system_rows(data).len(),
             Screen::Games { system } => data.games(system).len(),
             Screen::QuickMenu { .. } => self.quick_menu_items(data).len(),
@@ -184,6 +207,7 @@ impl App {
                 Button::Y => self.enter(Screen::QuickMenu { game: None }),
                 _ => {}
             },
+            Screen::StartHub { .. } => unreachable!(),
             Screen::Games { system } => match b {
                 Button::B => self.back(),
                 Button::A | Button::X | Button::Y => {

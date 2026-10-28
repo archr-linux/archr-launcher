@@ -281,7 +281,7 @@ impl Library {
                 write_next(&self.paths.run, &command).map_err(|error| error.to_string())?;
                 return Ok(true);
             }
-            Outcome::Action(_) => return Err("error.operation".to_owned()),
+            Outcome::Action(_) | Outcome::ToggleWifi(_) => return Err("error.operation".to_owned()),
         }
         Ok(false)
     }

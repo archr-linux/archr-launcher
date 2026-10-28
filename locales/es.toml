@@ -50,3 +50,17 @@
 "time.days" = { one = "hace {count} día", other = "hace {count} días" }
 "time.months" = { one = "hace {count} mes", other = "hace {count} meses" }
 "time.years" = { one = "hace {count} año", other = "hace {count} años" }
+"start.title" = "Menú Inicio"
+"start.recent" = "Recientes"
+"start.games" = "Juegos"
+"start.tools" = "Herramientas"
+"start.settings" = "Ajustes"
+"start.update" = "Actualización"
+"start.wifi" = "Wi-Fi"
+"start.suspend" = "Suspender"
+"start.reboot" = "Reiniciar"
+"start.shutdown" = "Apagar"
+"start.on" = "activado"
+"start.off" = "desactivado"
+"start.wifi_state" = "Wi-Fi · {state}"
+"start.soon_label" = "{name} · Próximamente"

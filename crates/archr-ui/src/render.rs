@@ -11,6 +11,8 @@ use crate::{
     text::{color, Align, Face, Style, TextCache},
     theme::{Rect01, Rgba, Theme},
 };
+#[path = "hub.rs"]
+mod hub;
 use sdl2::{
     image::{InitFlag, Sdl2ImageContext},
     rect::Rect,
@@ -363,6 +365,12 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         startup_phase!(self.startup, "status initialization");
         Ok(())
     }
+    pub fn wifi_enabled(&self) -> bool {
+        self.status.as_ref().is_some_and(|s| s.wifi)
+    }
+    pub fn wifi_refresh_signal(&self) -> Option<impl FnOnce() + Send + 'static> {
+        self.status.as_ref().and_then(|s| s.refresh_signal())
+    }
     pub fn page_size(&self, theme: &Theme) -> usize {
         ((1. - theme.header_height - theme.footer_height - 0.04) / (theme.row_height + 2. / 480.))
             .floor()
@@ -475,11 +483,15 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         self.canvas.clear();
         let (backdrop, cursor) = app.backdrop();
         self.header(backdrop, cursor, data, theme)?;
-        self.list(backdrop, cursor, data, theme)?;
-        if let Screen::Games { system } = backdrop {
-            self.cover(system, cursor, data, theme, cover)?;
-        }
-        self.footer(app, data, theme)?;
+        if matches!(app.screen, Screen::StartHub { .. }) {
+            self.hub(app, data, theme)?;
+        } else {
+            self.list(backdrop, cursor, data, theme)?;
+            if let Screen::Games { system } = backdrop {
+                self.cover(system, cursor, data, theme, cover)?;
+            }
+            self.footer(app, data, theme)?;
+        };
         if matches!(app.screen, Screen::QuickMenu { .. }) {
             self.menu(app, data, theme)?;
         } else {

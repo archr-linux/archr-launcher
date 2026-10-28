@@ -242,15 +242,40 @@ fn run(
             repeat.clear();
         } else if let Some(button) = button.or_else(|| repeat.poll(Instant::now())) {
             ui.snap_animations();
-            let requested = app.handle(button, &library);
-            let terminal = matches!(requested, Outcome::Launch { .. } | Outcome::Action(_));
-            if terminal && library.pending_writes > 0 {
-                deferred = Some(requested);
-            } else {
-                if terminal {
-                    deferred = None;
+            let requested = app.handle_with_wifi(button, &library, ui.wifi_enabled());
+            if let Outcome::ToggleWifi(enable) = requested {
+                let refresh = ui.wifi_refresh_signal();
+                if let Err(error) = std::thread::Builder::new()
+                    .name("launcher-wifi".into())
+                    .spawn(move || {
+                        let result = std::process::Command::new("/usr/bin/wifictl")
+                            .arg(if enable { "enable" } else { "disable" })
+                            .status();
+                        if !result.is_ok_and(|status| status.success()) {
+                            log::warn!(
+                                "wifictl {} failed",
+                                if enable { "enable" } else { "disable" }
+                            );
+                        }
+                        if let Some(refresh) = refresh {
+                            refresh();
+                        }
+                    })
+                {
+                    log::warn!("Cannot start Wi-Fi worker: {error}");
+                    ui.banner = Some(ui.catalog.text("error.operation"));
                 }
-                outcome = Some(requested);
+                outcome = Some(Outcome::None);
+            } else {
+                let terminal = matches!(requested, Outcome::Launch { .. } | Outcome::Action(_));
+                if terminal && library.pending_writes > 0 {
+                    deferred = Some(requested);
+                } else {
+                    if terminal {
+                        deferred = None;
+                    }
+                    outcome = Some(requested);
+                }
             }
             dirty = true;
         }
