@@ -4,7 +4,6 @@
 // Keep phase-1 Latin/Cyrillic startup free of CJK font I/O and memory costs.
 use crate::{
     badges::{self, BadgeKey, SUPERSAMPLE},
-    raster_cache::RasterCache,
     startup::StartupTrace,
     startup_phase,
     theme::Rgba,
@@ -13,6 +12,8 @@ use sdl2::{
     pixels::Color,
     rect::Rect,
     render::{BlendMode, Canvas, ScaleMode, Texture, TextureCreator},
+    rwops::RWops,
+    surface::Surface,
     ttf::{Font, FontStyle, Sdl2TtfContext},
     video::{Window, WindowContext},
 };
@@ -49,67 +50,62 @@ struct Entry<'a> {
 struct FontFace<'font> {
     path: PathBuf,
     font: Font<'font, 'static>,
+    // Declared after font: the RWops/font is destroyed before its backing bytes.
+    _bytes: Box<[u8]>,
     size: u16,
     style: FontStyle,
     synthesize_bold: bool,
 }
 
-pub(crate) struct TextCache<'font, 'texture> {
+struct Fonts<'font> {
     startup: StartupTrace,
-    first_rasterization: StartupTrace,
     ttf: &'font Sdl2TtfContext,
-    creator: &'texture TextureCreator<WindowContext>,
     paths: [Vec<PathBuf>; 4],
     fonts: Vec<FontFace<'font>>,
-    resolved: HashMap<(Face, u16), usize>,
-    pub share_fonts: bool,
-    pub raster_cache: Option<RasterCache>,
-    entries: VecDeque<Entry<'texture>>,
-    badges: VecDeque<(BadgeKey, Texture<'texture>)>,
+    resolved: HashMap<Face, usize>,
 }
-impl<'font, 'texture> TextCache<'font, 'texture> {
-    pub fn new(
-        ttf: &'font Sdl2TtfContext,
-        creator: &'texture TextureCreator<WindowContext>,
-        paths: [Vec<PathBuf>; 4],
-    ) -> Self {
+impl<'font> Fonts<'font> {
+    fn new(ttf: &'font Sdl2TtfContext, paths: [Vec<PathBuf>; 4]) -> Self {
         Self {
             startup: StartupTrace::default(),
-            first_rasterization: StartupTrace::default(),
             ttf,
-            creator,
             paths,
             fonts: Vec::new(),
             resolved: HashMap::new(),
-            share_fonts: true,
-            raster_cache: None,
-            entries: VecDeque::new(),
-            badges: VecDeque::with_capacity(16),
         }
     }
-    pub fn trace_startup(&mut self, trace: StartupTrace) {
-        self.startup = trace;
-        self.first_rasterization = trace;
-    }
     fn font(&mut self, face: Face, size: u16) -> Result<&Font<'font, 'static>, String> {
-        let key = (face, if self.share_fonts { 0 } else { size });
+        let key = face;
         if !self.resolved.contains_key(&key) {
             for path in &self.paths[face as usize] {
                 let path = path.canonicalize().unwrap_or_else(|_| path.clone());
-                if let Some(index) = self.fonts.iter().position(|loaded| {
-                    loaded.path == path && (self.share_fonts || loaded.size == size)
-                }) {
+                if let Some(index) = self.fonts.iter().position(|loaded| loaded.path == path) {
                     self.resolved.insert(key, index);
                     break;
                 }
-                let font = self.ttf.load_font(&path, size);
+                let font = std::fs::read(&path)
+                    .map_err(|e| e.to_string())
+                    .and_then(|bytes| {
+                        let bytes = bytes.into_boxed_slice();
+                        if bytes.len() > i32::MAX as usize {
+                            return Err("Font exceeds SDL RWops size limit".into());
+                        }
+                        // SAFETY: the boxed allocation never moves or changes. FontFace
+                        // owns it and drops font (including RWops) first. The static
+                        // view stays private to that font, never escaping independently.
+                        let view =
+                            unsafe { std::slice::from_raw_parts(bytes.as_ptr(), bytes.len()) };
+                        self.ttf
+                            .load_font_from_rwops(RWops::from_bytes(view)?, size)
+                            .map(|font| (font, bytes))
+                    });
                 startup_phase!(
                     self.startup,
                     "font file open [path={}; face={face:?}; size={size}px; ok={}]",
                     path.display(),
                     font.is_ok()
                 );
-                let Ok(font) = font else { continue };
+                let Ok((font, bytes)) = font else { continue };
                 // Static Inter SemiBold reports legacy style Regular; inspect
                 // the family as well and never synthesize a shipped weight twice.
                 let weight = format!(
@@ -127,6 +123,7 @@ impl<'font, 'texture> TextCache<'font, 'texture> {
                 self.fonts.push(FontFace {
                     path,
                     font,
+                    _bytes: bytes,
                     size,
                     style,
                     synthesize_bold,
@@ -137,7 +134,7 @@ impl<'font, 'texture> TextCache<'font, 'texture> {
         let index = *self.resolved.get(&key).ok_or("error.font")?;
         let loaded = &mut self.fonts[index];
         if loaded.size != size {
-            // SAFETY: exclusively owned live handle, accessed only on the SDL thread.
+            // SAFETY: exclusively owned live handle, never accessed concurrently across the startup handover.
             if unsafe { sdl2::sys::ttf::TTF_SetFontSize(loaded.font.raw(), i32::from(size)) } != 0 {
                 return Err(sdl2::get_error());
             }
@@ -153,34 +150,151 @@ impl<'font, 'texture> TextCache<'font, 'texture> {
         }
         Ok(&loaded.font)
     }
+}
+
+/// CPU-only startup assets. No renderer, texture, or shared font handle.
+/// Constructed on one worker and consumed after joining it; TTF_Init/TTF_Quit
+/// stay outside that scope, and no other thread may use SDL_ttf while it runs.
+pub struct PreparedText<'font> {
+    fonts: Fonts<'font>,
+    entries: Vec<(String, u32, Style, Surface<'static>)>,
+    badges: Vec<(BadgeKey, Surface<'static>)>,
+    pub(crate) shadow: Option<Surface<'static>>,
+    first_rasterization: StartupTrace,
+}
+// SAFETY: only exclusively owned memory-backed fonts/RWops and owned CPU
+// surfaces cross threads. Their C APIs have no thread affinity. Nothing is
+// borrowed from SDL video, and the context outlives the joined worker/assets.
+unsafe impl Send for PreparedText<'_> {}
+
+impl<'font> PreparedText<'font> {
+    pub(crate) fn new(
+        ttf: &'font Sdl2TtfContext,
+        paths: [Vec<PathBuf>; 4],
+        trace: StartupTrace,
+    ) -> Self {
+        let mut fonts = Fonts::new(ttf, paths);
+        fonts.startup = trace;
+        Self {
+            fonts,
+            entries: Vec::new(),
+            badges: Vec::new(),
+            shadow: None,
+            first_rasterization: trace,
+        }
+    }
+    pub(crate) fn label(&mut self, source: &str, style: Style, width: u32) -> Result<(), String> {
+        let source = bounded_source(source);
+        if self
+            .entries
+            .iter()
+            .any(|(s, w, st, _)| s == source && *w == width && *st == style)
+        {
+            return Ok(());
+        }
+        let text = ellipsis(
+            self.fonts.font(style.face, style.size)?,
+            &sanitize(source),
+            width,
+        )?;
+        if text.is_empty() {
+            return Ok(());
+        }
+        let surface = self
+            .fonts
+            .font(style.face, style.size)?
+            .render(&text)
+            .blended(color(style.color))
+            .map_err(|e| e.to_string())?;
+        self.first_rasterization
+            .phase_once("first text rasterization");
+        self.entries
+            .push((source.to_owned(), width, style, surface));
+        Ok(())
+    }
+    pub(crate) fn measure(&mut self, text: &str, face: Face, size: u16) -> Result<u32, String> {
+        self.fonts
+            .font(face, size)?
+            .size_of(&sanitize(text))
+            .map(|s| s.0)
+            .map_err(|e| e.to_string())
+    }
+    pub(crate) fn badge(&mut self, key: BadgeKey) -> Result<(), String> {
+        let surface = badges::render(
+            self.fonts
+                .font(Face::Semibold, key.size * SUPERSAMPLE as u16)?,
+            key,
+        )?;
+        self.first_rasterization
+            .phase_once("first text rasterization");
+        self.badges.push((key, surface));
+        startup_phase!(self.fonts.startup, "badge {} [rasterized]", key.letter);
+        Ok(())
+    }
+}
+
+pub(crate) struct TextCache<'font, 'texture> {
+    startup: StartupTrace,
+    first_rasterization: StartupTrace,
+    fonts: Fonts<'font>,
+    creator: &'texture TextureCreator<WindowContext>,
+    entries: VecDeque<Entry<'texture>>,
+    badges: VecDeque<(BadgeKey, Texture<'texture>)>,
+}
+impl<'font, 'texture> TextCache<'font, 'texture> {
+    pub fn from_prepared(
+        creator: &'texture TextureCreator<WindowContext>,
+        prepared: PreparedText<'font>,
+    ) -> Result<Self, String> {
+        let mut cache = Self {
+            startup: prepared.fonts.startup,
+            first_rasterization: prepared.first_rasterization,
+            fonts: prepared.fonts,
+            creator,
+            entries: VecDeque::new(),
+            badges: VecDeque::with_capacity(16),
+        };
+        for (source, width, style, surface) in prepared.entries {
+            let texture = creator
+                .create_texture_from_surface(surface)
+                .map_err(|e| e.to_string())?;
+            cache.entries.push_back(Entry {
+                source,
+                style,
+                width,
+                texture,
+            });
+        }
+        for (key, surface) in prepared.badges {
+            let mut texture = creator
+                .create_texture_from_surface(surface)
+                .map_err(|e| e.to_string())?;
+            texture.set_blend_mode(BlendMode::Blend);
+            texture.set_scale_mode(ScaleMode::Linear);
+            cache.badges.push_back((key, texture));
+        }
+        startup_phase!(cache.startup, "CPU surfaces upload");
+        Ok(cache)
+    }
+    pub fn trace_startup(&mut self, trace: StartupTrace) {
+        self.startup = trace;
+        self.fonts.startup = trace;
+        self.first_rasterization = trace;
+    }
+    fn font(&mut self, face: Face, size: u16) -> Result<&Font<'font, 'static>, String> {
+        self.fonts.font(face, size)
+    }
     fn badge(&mut self, key: BadgeKey) -> Result<&Texture<'texture>, String> {
         if let Some(index) = self.badges.iter().position(|(k, _)| *k == key) {
             let hit = self.badges.remove(index).expect("located badge");
             self.badges.push_back(hit);
         } else {
-            let cache = self.raster_cache.clone();
-            let mut generate = || {
-                let surface = badges::render(
-                    self.font(Face::Semibold, key.size * SUPERSAMPLE as u16)?,
-                    key,
-                )?;
-                self.first_rasterization
-                    .phase_once("first text rasterization");
-                Ok(surface)
-            };
-            let (surface, hit) = if let Some(cache) = cache {
-                use std::hash::{Hash, Hasher};
-                let mut hash = std::collections::hash_map::DefaultHasher::new();
-                key.hash(&mut hash);
-                cache.surface(
-                    &format!("badge-{}-{:016x}", key.letter, hash.finish()),
-                    key.diameter * SUPERSAMPLE,
-                    key.diameter * SUPERSAMPLE,
-                    generate,
-                )?
-            } else {
-                (generate()?, false)
-            };
+            let surface = badges::render(
+                self.font(Face::Semibold, key.size * SUPERSAMPLE as u16)?,
+                key,
+            )?;
+            self.first_rasterization
+                .phase_once("first text rasterization");
             let mut texture = self
                 .creator
                 .create_texture_from_surface(surface)
@@ -191,32 +305,9 @@ impl<'font, 'texture> TextCache<'font, 'texture> {
                 self.badges.pop_front();
             }
             self.badges.push_back((key, texture));
-            startup_phase!(
-                self.startup,
-                "badge {} [{}]",
-                key.letter,
-                if hit { "PNG hit" } else { "rasterized" }
-            );
+            startup_phase!(self.startup, "badge {} [rasterized]", key.letter);
         }
         Ok(&self.badges.back().expect("cached badge").1)
-    }
-    pub fn prepare_badges(
-        &mut self,
-        diameter: u32,
-        size: u16,
-        background: Rgba,
-        foreground: Rgba,
-    ) -> Result<(), String> {
-        for letter in ['A', 'B', 'X', 'Y'] {
-            self.badge(BadgeKey {
-                letter,
-                diameter,
-                size,
-                background,
-                foreground,
-            })?;
-        }
-        Ok(())
     }
     pub fn draw_badge(
         &mut self,
@@ -263,15 +354,11 @@ impl<'font, 'texture> TextCache<'font, 'texture> {
         };
         // Only the first 512 codepoints can reach layout. Keep a bounded raw
         // prefix as the lookup key: no sanitizing, measuring or fitting on hits.
-        let mut end = text.len().min(512 * 4);
-        while !text.is_char_boundary(end) {
-            end -= 1;
-        }
-        let source = &text[..end];
+        let source = bounded_source(text);
         let index = self
             .entries
             .iter()
-            .position(|e| e.source == source && e.width == limit && e.style == style);
+            .position(|e| e.source == source && e.style == style && e.width == limit);
         let entry = if let Some(index) = index {
             self.entries.remove(index).expect("located text")
         } else {
@@ -279,6 +366,12 @@ impl<'font, 'texture> TextCache<'font, 'texture> {
             if text.is_empty() {
                 return Ok(());
             }
+            startup_phase!(
+                self.startup,
+                "text rasterization [face={:?}; size={}px]",
+                style.face,
+                style.size
+            );
             let surface = self
                 .font(style.face, style.size)?
                 .render(&text)
@@ -319,6 +412,13 @@ impl<'font, 'texture> TextCache<'font, 'texture> {
 }
 pub(crate) fn color(c: Rgba) -> Color {
     Color::RGBA(c.r, c.g, c.b, c.a)
+}
+fn bounded_source(text: &str) -> &str {
+    let mut end = text.len().min(512 * 4);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
 }
 fn sanitize(s: &str) -> String {
     s.chars()
@@ -390,7 +490,11 @@ mod tests {
         let mut paths: [Vec<PathBuf>; 4] = std::array::from_fn(|_| vec![]);
         paths[0].push(bundled_font("Inter-Regular"));
         paths[1].push(bundled_font("Inter-SemiBold"));
-        let mut cache = TextCache::new(&ttf, &creator, paths);
+        let mut cache = TextCache::from_prepared(
+            &creator,
+            PreparedText::new(&ttf, paths, StartupTrace::default()),
+        )
+        .unwrap();
         let style = Style {
             face: Face::Regular,
             size: 13,
@@ -412,9 +516,17 @@ mod tests {
             b: 48,
             a: 255,
         };
-        cache
-            .prepare_badges(20, 11, background, style.color)
-            .unwrap();
+        for letter in ['A', 'B', 'X', 'Y'] {
+            cache
+                .badge(BadgeKey {
+                    letter,
+                    diameter: 20,
+                    size: 11,
+                    background,
+                    foreground: style.color,
+                })
+                .unwrap();
+        }
         assert_eq!(cache.badges.len(), 4);
         assert_eq!(
             cache.font(Face::Semibold, 44).unwrap().get_style(),
@@ -436,9 +548,9 @@ mod tests {
                 reference.size_of("Ação Русский").unwrap()
             );
         }
-        cache.fonts.clear();
-        cache.resolved.clear();
-        cache.paths = std::array::from_fn(|_| vec![]);
+        cache.fonts.fonts.clear();
+        cache.fonts.resolved.clear();
+        cache.fonts.paths = std::array::from_fn(|_| vec![]);
         // With font loading deliberately unavailable, a fitted-texture hit
         // must still render. Any measure/ellipsis call would fail here.
         cache
@@ -493,7 +605,7 @@ mod tests {
         }
         assert_eq!(cache.badges.len(), 4);
         assert_eq!(cache.entries.len(), 1);
-        assert!(cache.fonts.is_empty());
+        assert!(cache.fonts.fonts.is_empty());
         assert!(cache
             .draw(
                 &mut canvas,
@@ -527,8 +639,8 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let body = root.path().join("body.ttf");
         std::fs::copy(bundled_font("Inter-Regular"), &body).unwrap();
-        cache.paths[0].push(body.clone());
-        cache.paths[1].push(body);
+        cache.fonts.paths[0].push(body.clone());
+        cache.fonts.paths[1].push(body);
         let regular_handle = cache.font(Face::Regular, 13).unwrap().raw();
         let semibold_handle = cache.font(Face::Semibold, 44).unwrap().raw();
         assert_eq!(
@@ -552,5 +664,51 @@ mod tests {
                 .contains(FontStyle::BOLD),
             "a regular-only fallback needs synthesized bold at 4× regardless of filename"
         );
+        // Read/open/rasterize on a scoped worker, then remove the source file.
+        // Resizing still works after handover because the face owns its bytes.
+        let path = cache.fonts.paths[0][0].clone();
+        let paths = std::array::from_fn(|_| vec![path.clone()]);
+        let prepared = std::thread::scope(|scope| {
+            scope
+                .spawn(|| {
+                    let mut prepared = PreparedText::new(&ttf, paths, StartupTrace::default());
+                    prepared.label(source, style, panel.width()).unwrap();
+                    prepared.badge(badge).unwrap();
+                    prepared
+                })
+                .join()
+                .unwrap()
+        });
+        std::fs::remove_file(path).unwrap();
+        let mut transferred = TextCache::from_prepared(&creator, prepared).unwrap();
+        for size in [13, 44, 17, 13] {
+            assert_eq!(
+                transferred
+                    .font(Face::Regular, size)
+                    .unwrap()
+                    .size_of("Bytes")
+                    .unwrap(),
+                load_font(&ttf, "Inter-Regular", size)
+                    .size_of("Bytes")
+                    .unwrap()
+            );
+        }
+        // CPU-prepared surfaces are usable without any font/layout fallback.
+        transferred.fonts.fonts.clear();
+        transferred.fonts.resolved.clear();
+        transferred.fonts.paths = std::array::from_fn(|_| vec![]);
+        transferred
+            .draw(&mut canvas, source, style, panel, Align::Left)
+            .unwrap();
+        transferred
+            .draw_badge(
+                &mut canvas,
+                'A',
+                11,
+                background,
+                style.color,
+                Rect::new(0, 0, 20, 20),
+            )
+            .unwrap();
     }
 }

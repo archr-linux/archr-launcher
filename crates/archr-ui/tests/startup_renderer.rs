@@ -3,7 +3,6 @@ use archr_ui::render::Ui;
 #[test]
 fn gles_window_matches_renderer_without_changing_requested_flags() {
     std::env::set_var("SDL_VIDEODRIVER", "offscreen");
-    std::env::remove_var("ARCHR_LAUNCHER_EXP");
     std::env::remove_var("SDL_RENDER_DRIVER");
     let ui = Ui::new(640, 480, true).unwrap();
     assert_eq!(ui.canvas.info().name, "opengles2");

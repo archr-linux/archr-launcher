@@ -39,42 +39,15 @@ A configuração de sistemas vem de
 O tema vem de `launcher.theme` em
 `/storage/.config/system/configs/system.cfg` (padrão `default`).
 
-## Experimentos de abertura (temporários)
+## Medição de abertura
 
-`ARCHR_LAUNCHER_EXP` é lida uma vez ao criar a UI. Ausente = todas as melhorias
-ligadas; vazia ou `none` = todas desligadas; uma lista liga **somente** os nomes
-informados. Nomes desconhecidos são erro. Remover estes controles após as medições.
-
-| Nome | Ligado | Desligado |
-| --- | --- | --- |
-| `nowinrecreate` | Janela OPENGL com perfil ES 2.0 desde a criação | Janela SDL sem flag OPENGL |
-| `gles2` | Hint `opengles2`, ES 2.0 sem depth/stencil/MSAA | Seleção padrão SDL |
-| `fontshare` | Um handle TTF por arquivo físico; troca tamanho/estilo | Um handle por arquivo e tamanho |
-| `badgecache` | PNG dos badges por tema/escala | Rasterização dos badges |
-| `shadowcache` | PNG da sombra nine-slice por tema/escala | Rasterização da sombra |
-| `lazyassets` | Apenas assets visíveis; sem SDL_image | Prepara A/B/X/Y e sombra, mede título e inicializa SDL_image |
-
-```sh
-# Todos ligados, com checkpoints cumulativos e uma linha com o conjunto ativo:
-ARCHR_LAUNCHER_TRACE=1 archr-launcher
-# Só janela correta + GLES2; os demais experimentos ficam desligados:
-ARCHR_LAUNCHER_TRACE=1 ARCHR_LAUNCHER_EXP=nowinrecreate,gles2 archr-launcher
-# Controle sem melhorias:
-ARCHR_LAUNCHER_TRACE=1 ARCHR_LAUNCHER_EXP=none archr-launcher
-```
-
-Um `SDL_RENDER_DRIVER` explícito continua tendo precedência sobre o hint.
-`dummy` não recebe flags/atributos GL. `nowinrecreate` configura também o perfil
-ES; a garantia de não passar pelo `SDL_RecreateWindow` do GLES2 depende de usar
-esse renderer (use `gles2` junto, ou force `SDL_RENDER_DRIVER=opengles2` nos dois
-lados do A/B). O custo do contexto pode migrar do checkpoint renderer para janela;
-compare sempre o tempo **até first present**, não só uma fase isolada.
-
-Meça 30 aberturas por variante em release, mesmo display/renderer e caches quentes.
-A/B de sombra deve omitir `lazyassets` ou medir a abertura do primeiro painel:
-sem painel visível, o trabalho da sombra já não ocorre antes do primeiro present.
-`fontshare` desligado mede a estratégia por tamanho; o HEAD 1aec48c já trocava
-os tamanhos por face lógica, mas ainda não compartilhava aliases do mesmo arquivo.
+`ARCHR_LAUNCHER_TRACE=1` emite checkpoints cumulativos até o primeiro present.
+Meça em release, no mesmo display/renderer e com caches quentes.
+Uma única thread prepara fontes em memória e surfaces de texto/badges enquanto
+SDL cria janela/EGL/renderer na thread principal. `worker join` marca a entrega;
+`CPU surfaces upload` registra o envio ao renderer. SDL_ttf é inicializado antes
+da thread e seus handles nunca são usados concorrentemente. Não há cache de
+badges/sombras em disco; a sombra e os badges fora da primeira tela são lazy.
 
 ## Navegação automatizada
 

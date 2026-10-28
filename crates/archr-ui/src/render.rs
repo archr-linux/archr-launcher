@@ -1,18 +1,19 @@
 //! Grafite presentation at 640×480, scaled by height, with event-driven idle.
+pub use crate::text::PreparedText;
 use crate::{
+    badges::BadgeKey,
     i18n::I18n,
     motion::Tween,
     primitives::{Geometry, Icon, Shadow},
-    raster_cache::RasterCache,
-    startup::{Experiments, StartupTrace},
+    startup::StartupTrace,
     startup_phase,
     state::{App, DataSource, QuickItem, Screen},
     status::Status,
     text::{color, Align, Face, Style, TextCache},
     theme::{Rect01, Rgba, Theme},
 };
+
 use sdl2::{
-    image::{InitFlag, Sdl2ImageContext},
     rect::Rect,
     render::{BlendMode, Canvas, Texture, TextureCreator},
     ttf::Sdl2TtfContext,
@@ -145,14 +146,11 @@ fn status_layout(
 
 pub struct Ui<'font, 'texture> {
     startup: StartupTrace,
-    experiments: Experiments,
     pub sdl: sdl2::Sdl,
     pub canvas: Canvas<Window>,
-    _image: Option<Sdl2ImageContext>,
     text: Option<TextCache<'font, 'texture>>,
     shadow: Option<Shadow<'texture>>,
     creator: Option<&'texture TextureCreator<WindowContext>>,
-    raster_cache: Option<RasterCache>,
     geometry: Geometry,
     status: Option<Status>,
     list: ListMotion,
@@ -179,19 +177,22 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         windowed: bool,
         trace: StartupTrace,
     ) -> Result<Self, String> {
-        let experiments = Experiments::from_env()?;
-        if trace.began().is_some() {
-            eprintln!("archr-launcher: experiments: [{}]", experiments.names());
-        }
         let sdl = sdl2::init()?;
         let video = sdl.video()?;
         startup_phase!(trace, "SDL_Init video");
+        Self::with_video(sdl, video, (width, height), windowed, trace)
+    }
+    pub fn with_video(
+        sdl: sdl2::Sdl,
+        video: sdl2::VideoSubsystem,
+        (width, height): (u32, u32),
+        windowed: bool,
+        trace: StartupTrace,
+    ) -> Result<Self, String> {
         let gl_window = video.current_video_driver() != "dummy";
-        if gl_window && experiments.enabled("gles2") {
+        if gl_window {
             // Normal priority preserves an explicit SDL_RENDER_DRIVER override.
             sdl2::hint::set("SDL_RENDER_DRIVER", "opengles2");
-        }
-        if gl_window && (experiments.enabled("gles2") || experiments.enabled("nowinrecreate")) {
             let gl = video.gl_attr();
             gl.set_context_profile(sdl2::video::GLProfile::GLES);
             gl.set_context_version(2, 0);
@@ -202,7 +203,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         }
         let mut builder = video.window("archr-launcher", width, height);
         builder.position_centered();
-        if gl_window && experiments.enabled("nowinrecreate") {
+        if gl_window {
             builder.opengl();
         }
         if !windowed {
@@ -220,24 +221,13 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         .map_err(|e| e.to_string())?;
         startup_phase!(trace, "renderer / GL context creation");
         canvas.set_blend_mode(BlendMode::Blend);
-        let image = if experiments.enabled("lazyassets") {
-            // Covers and screenshots use the Rust image codec, not SDL_image.
-            None
-        } else {
-            let image = sdl2::image::init(InitFlag::PNG | InitFlag::JPG)?;
-            startup_phase!(trace, "SDL_image init");
-            Some(image)
-        };
         Ok(Self {
             startup: trace,
-            experiments,
             sdl,
             canvas,
-            _image: image,
             text: None,
             shadow: None,
             creator: None,
-            raster_cache: None,
             geometry: {
                 let mut geometry = Geometry::new();
                 geometry.startup = trace;
@@ -267,98 +257,29 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         theme: &Theme,
         root: Option<&Path>,
     ) -> Result<(), String> {
+        self.configure_prepared(
+            creator,
+            PreparedText::new(ttf, font_paths(theme, root), self.startup),
+            root,
+        )
+    }
+    pub fn configure_prepared(
+        &mut self,
+        creator: &'texture TextureCreator<WindowContext>,
+        mut prepared: PreparedText<'font>,
+        root: Option<&Path>,
+    ) -> Result<(), String> {
         self.frame = Frame::from_size(self.canvas.output_size()?);
-        let defaults = |mono: bool| {
-            let names = if mono {
-                [
-                    "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
-                    "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
-                    "/usr/share/fonts/liberation/LiberationMono-Regular.ttf",
-                ]
-            } else {
-                [
-                    "/usr/share/fonts/liberation/LiberationSans-Regular.ttf",
-                    "/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed.ttf",
-                    "/usr/share/fonts/TTF/DejaVuSans.ttf",
-                ]
-            };
-            let mut paths = Vec::new();
-            for name in names {
-                if let Some(root) = root {
-                    paths.push(root.join(name.trim_start_matches('/')));
-                }
-                paths.push(PathBuf::from(name));
-            }
-            paths
-        };
-        let mut paths: [Vec<PathBuf>; 4] = std::array::from_fn(|i| defaults(i == 2 || i == 3));
-        for (i, preferred) in [
-            &theme.font,
-            &theme.font_semibold,
-            &theme.font_mono,
-            &theme.font_mono_medium,
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            if let Some(font) = preferred {
-                paths[i].insert(0, font.clone());
-            }
-        }
-        // A theme with one face remains valid; use that face before host fallbacks.
-        if theme.font_semibold.is_none() {
-            if let Some(font) = &theme.font {
-                paths[1].insert(0, font.clone());
-            }
-        }
-        if theme.font_mono_medium.is_none() {
-            if let Some(font) = &theme.font_mono {
-                paths[3].insert(0, font.clone());
-            }
-        }
         self.creator = Some(creator);
-        self.raster_cache =
-            if self.experiments.enabled("badgecache") || self.experiments.enabled("shadowcache") {
-                let dir = root
-                    .unwrap_or_else(|| Path::new("/"))
-                    .join("storage/.cache/archr-launcher");
-                Some(RasterCache::new(
-                    dir,
-                    RasterCache::theme_key(theme, self.frame.scale, &paths[1]),
-                ))
-            } else {
-                None
-            };
-        let mut text = TextCache::new(ttf, creator, paths);
-        text.share_fonts = self.experiments.enabled("fontshare");
-        text.raster_cache = self
-            .raster_cache
-            .clone()
-            .filter(|_| self.experiments.enabled("badgecache"));
-        text.trace_startup(self.startup);
-        self.shadow = None;
-        if !self.experiments.enabled("lazyassets") {
-            text.measure(
-                &self.catalog.text("systems.title"),
-                Face::Semibold,
-                self.px(12.) as u16,
-            )
-            .map_err(|e| localized_error(&self.catalog, e))?;
-            text.prepare_badges(
-                self.px(20.) as u32,
-                self.px(11.).clamp(8, 128) as u16,
-                theme.badge,
-                theme.text,
-            )?;
-            self.shadow = Some(Shadow::new(
-                creator,
-                self.raster_cache
-                    .as_ref()
-                    .filter(|_| self.experiments.enabled("shadowcache")),
-            )?);
+        self.shadow = prepared
+            .shadow
+            .take()
+            .map(|surface| Shadow::from_surface(creator, surface))
+            .transpose()?;
+        if self.shadow.is_some() {
             startup_phase!(self.startup, "shadow texture");
         }
-        self.text = Some(text);
+        self.text = Some(TextCache::from_prepared(creator, prepared)?);
         self.status = Some(Status::new(root, Instant::now()));
         startup_phase!(self.startup, "status initialization");
         Ok(())
@@ -442,12 +363,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
     fn panel(&mut self, rect: Rect, radius: f32, fill: Rgba, border: Rgba) -> Result<(), String> {
         if self.shadow.is_none() {
             if let Some(creator) = self.creator {
-                self.shadow = Some(Shadow::new(
-                    creator,
-                    self.raster_cache
-                        .as_ref()
-                        .filter(|_| self.experiments.enabled("shadowcache")),
-                )?);
+                self.shadow = Some(Shadow::new(creator)?);
                 startup_phase!(self.startup, "shadow texture");
             }
         }
@@ -495,7 +411,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             || self.list.pill.active(now)
             || self.menu_pill.active(now)
             || self.cover_fade.active(now);
-        // Explicit debug readback. Raster PNG I/O is limited to first asset use.
+        // Explicit debug readback; normal rendering does no disk I/O.
         if let Some(path) = self.screenshot.take() {
             let rgba = self
                 .canvas
@@ -768,20 +684,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 continue;
             }
             let selected = i == cursor;
-            let distance = i.abs_diff(cursor);
-            let c = if i < collections {
-                theme.muted
-            } else if distance >= 4 {
-                theme.dim_text
-            } else if distance >= 3 {
-                theme.text_secondary
-            } else {
-                theme.text
-            };
-            let c = selection(selected, c, theme.highlight_text);
-            let face = selection(selected, Face::Regular, Face::Semibold);
-            let size = theme.font_size * 480. - if is_games { 1. } else { 0. }
-                + if selected { 1. } else { 0. };
+            let (face, size, c) = row_style(theme, i, collections, cursor, is_games);
             let mut x = margin + self.px(14.);
             let mut right = margin + list_width as i32 - self.px(14.);
             let name = if let Screen::Games { system } = screen {
@@ -975,24 +878,8 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         };
         let left = self.hints(hint_keys, theme, width, y, h)?;
         if matches!(app.screen, Screen::Systems) {
-            let systems = data.systems().iter().filter(|s| s.game_count > 0).count();
-            let games = data
-                .systems()
-                .iter()
-                .map(|s| u64::from(s.game_count))
-                .sum::<u64>();
-            let count = |key, n: u64| {
-                self.catalog
-                    .plural(key, n as f64, &[("count", &n.to_string())])
-            };
             self.label(
-                &self.catalog.format(
-                    "library.summary",
-                    &[
-                        ("systems", &count("systems.count", systems as u64)),
-                        ("games", &count("games.count", games)),
-                    ],
-                ),
+                &library_summary(data, &self.catalog),
                 (Face::Regular, 13., theme.muted),
                 Rect::new(self.px(24.), y, (left - self.px(40.)).max(1) as u32, h),
             )?;
@@ -1225,6 +1112,245 @@ fn system_title(name: &str, data: &dyn DataSource, catalog: &I18n) -> String {
             .map(|s| s.fullname.clone())
             .unwrap_or_else(|| name.to_owned()),
     }
+}
+
+fn row_style(
+    theme: &Theme,
+    i: usize,
+    collections: usize,
+    cursor: usize,
+    games: bool,
+) -> (Face, f32, Rgba) {
+    let color = if i < collections {
+        theme.muted
+    } else if i.abs_diff(cursor) >= 4 {
+        theme.dim_text
+    } else if i.abs_diff(cursor) >= 3 {
+        theme.text_secondary
+    } else {
+        theme.text
+    };
+    (
+        selection(i == cursor, Face::Regular, Face::Semibold),
+        theme.font_size * 480. - if games { 1. } else { 0. } + if i == cursor { 1. } else { 0. },
+        selection(i == cursor, color, theme.highlight_text),
+    )
+}
+fn library_summary(data: &dyn DataSource, catalog: &I18n) -> String {
+    let systems = data.systems().iter().filter(|s| s.game_count > 0).count();
+    let games = data
+        .systems()
+        .iter()
+        .map(|s| u64::from(s.game_count))
+        .sum::<u64>();
+    let count = |key, n: u64| catalog.plural(key, n as f64, &[("count", &n.to_string())]);
+    catalog.format(
+        "library.summary",
+        &[
+            ("systems", &count("systems.count", systems as u64)),
+            ("games", &count("games.count", games)),
+        ],
+    )
+}
+
+/// First systems screen only: no SDL video calls, textures, sysfs or cover I/O.
+pub fn prepare_first_frame<'font>(
+    ttf: &'font Sdl2TtfContext,
+    theme: &Theme,
+    root: Option<&Path>,
+    catalog: &I18n,
+    data: &dyn DataSource,
+    (width, height): (u32, u32),
+    trace: StartupTrace,
+) -> Result<PreparedText<'font>, String> {
+    let frame = Frame::new(width, height);
+    let mut prepared = PreparedText::new(ttf, font_paths(theme, root), trace);
+    let style = |face, size, color| Style {
+        face,
+        size: frame.font_size(size),
+        color,
+    };
+    let mut label = |text: &str, (face, size, color), width: Option<u32>| -> Result<u32, String> {
+        let style = style(face, size, color);
+        let width = match width {
+            Some(w) => w,
+            None => prepared.measure(text, face, style.size)?,
+        };
+        prepared.label(text, style, width)?;
+        Ok(width)
+    };
+    label(
+        &Status::new(root, Instant::now()).clock,
+        (Face::Mono, 13., theme.muted),
+        None,
+    )?;
+    for glyph in catalog.text("systems.title").chars() {
+        label(&glyph.to_string(), (Face::Semibold, 12., theme.text), None)?;
+    }
+    let systems = App::system_rows(data);
+    let collections = systems.iter().take_while(|s| s.starts_with('@')).count();
+    let top = (theme.header_height * height as f32).round() as i32 + frame.px(6.);
+    let bottom =
+        height as i32 - (theme.footer_height * height as f32).round() as i32 - frame.px(6.);
+    let margin = (theme.margin * height as f32).round() as i32;
+    let list_width = width.saturating_sub(margin.max(0) as u32 * 2).max(1);
+    let row = (theme.row_height * height as f32).round();
+    let selected = (theme.selected_height * height as f32).round();
+    for (i, name) in systems.iter().enumerate() {
+        let y = top
+            + (i as f32 * (row + frame.px(2.) as f32)
+                + if i >= collections && collections > 0 {
+                    frame.px(15.) as f32
+                } else {
+                    0.
+                }
+                + if i > 0 { selected - row } else { 0. })
+            .round() as i32;
+        if y >= bottom {
+            break;
+        }
+        let count = if name.starts_with('@') {
+            data.collection_len(name)
+        } else {
+            data.systems()
+                .iter()
+                .find(|s| s.name == *name)
+                .map_or(0, |s| s.game_count as usize)
+        };
+        let count_width = label(
+            &count.to_string(),
+            (
+                selection(i == 0, Face::Mono, Face::MonoMedium),
+                13.,
+                selection(i == 0, theme.dim_text, theme.accent_text_secondary),
+            ),
+            None,
+        )?;
+        let x = margin
+            + frame.px(14.)
+            + if name.starts_with('@') {
+                frame.px(26.)
+            } else {
+                0
+            };
+        let right = margin + list_width as i32 - frame.px(14.) - count_width as i32 - frame.px(14.);
+        label(
+            &system_title(name, data, catalog),
+            row_style(theme, i, collections, 0, false),
+            Some((right - x).max(1) as u32),
+        )?;
+    }
+    if systems.is_empty() {
+        label(
+            &catalog.text("empty.systems"),
+            (Face::Regular, 16., theme.muted),
+            Some(list_width.saturating_sub(frame.px(28.) as u32).max(1)),
+        )?;
+    }
+    let mut right = width as i32 - frame.px(24.);
+    for key in ["hint.menu", "hint.open"] {
+        right -= label(&catalog.text(key), (Face::Regular, 13., theme.muted), None)? as i32
+            + frame.px(6.)
+            + frame.px(20.)
+            + frame.px(16.);
+    }
+    // hints() excludes the final inter-hint gap from its returned left edge.
+    label(
+        &library_summary(data, catalog),
+        (Face::Regular, 13., theme.muted),
+        Some((right + frame.px(16.) - frame.px(40.)).max(1) as u32),
+    )?;
+    for letter in ['Y', 'A'] {
+        prepared.badge(BadgeKey {
+            letter,
+            diameter: frame.px(20.) as u32,
+            size: frame.font_size(11.),
+            background: theme.badge,
+            foreground: theme.text,
+        })?;
+    }
+    Ok(prepared)
+}
+
+impl PreparedText<'_> {
+    /// Error banners are part of the initial frame too, including their shadow.
+    pub fn prepare_notice(
+        &mut self,
+        message: &str,
+        theme: &Theme,
+        (width, height): (u32, u32),
+    ) -> Result<(), String> {
+        let frame = Frame::new(width, height);
+        let panel_width = (frame.px(380.) as u32)
+            .min(width.saturating_sub(frame.px(48.) as u32))
+            .max(1);
+        let width = panel_width.saturating_sub(frame.px(48.) as u32).max(1);
+        for line in message.split('\n').take(3) {
+            self.label(
+                line,
+                Style {
+                    face: Face::Semibold,
+                    size: frame.font_size(16.),
+                    color: theme.text,
+                },
+                width,
+            )?;
+        }
+        self.shadow = Some(Shadow::surface()?);
+        Ok(())
+    }
+}
+
+fn font_paths(theme: &Theme, root: Option<&Path>) -> [Vec<PathBuf>; 4] {
+    let defaults = |mono: bool| {
+        let names = if mono {
+            [
+                "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
+                "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+                "/usr/share/fonts/liberation/LiberationMono-Regular.ttf",
+            ]
+        } else {
+            [
+                "/usr/share/fonts/liberation/LiberationSans-Regular.ttf",
+                "/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed.ttf",
+                "/usr/share/fonts/TTF/DejaVuSans.ttf",
+            ]
+        };
+        let mut paths = Vec::new();
+        for name in names {
+            if let Some(root) = root {
+                paths.push(root.join(name.trim_start_matches('/')));
+            }
+            paths.push(PathBuf::from(name));
+        }
+        paths
+    };
+    let mut paths: [Vec<PathBuf>; 4] = std::array::from_fn(|i| defaults(i == 2 || i == 3));
+    for (i, preferred) in [
+        &theme.font,
+        &theme.font_semibold,
+        &theme.font_mono,
+        &theme.font_mono_medium,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        if let Some(font) = preferred {
+            paths[i].insert(0, font.clone());
+        }
+    }
+    // A theme with one face remains valid; use that face before host fallbacks.
+    if theme.font_semibold.is_none() {
+        if let Some(font) = &theme.font {
+            paths[1].insert(0, font.clone());
+        }
+    }
+    if theme.font_mono_medium.is_none() {
+        if let Some(font) = &theme.font_mono {
+            paths[3].insert(0, font.clone());
+        }
+    }
+    paths
 }
 
 #[cfg(test)]

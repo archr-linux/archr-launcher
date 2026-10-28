@@ -7,7 +7,6 @@ fn startup(trace: Option<&str>) -> String {
         .env("ARCHR_LAUNCHER_ROOT", root.path())
         .env("SDL_VIDEODRIVER", "offscreen")
         .env_remove("ARCHR_LAUNCHER_TRACE")
-        .env("ARCHR_LAUNCHER_EXP", "none")
         .args(["--windowed", "--script", "Y,B,QUIT"]);
     if let Some(value) = trace {
         command.env("ARCHR_LAUNCHER_TRACE", value);
@@ -45,39 +44,62 @@ fn startup_trace_reports_ordered_phases_and_first_events_once() {
         })
         .collect();
     assert!(!phases.is_empty(), "{stderr}");
-    assert!(phases.windows(2).all(|pair| pair[0].1 <= pair[1].1));
     let position = |name| {
         phases
             .iter()
             .position(|(phase, _)| *phase == name)
             .unwrap_or_else(|| panic!("missing {name}: {stderr}"))
     };
-    let ordered = [
-        "args/paths",
-        "system.cfg read",
-        "locale selection",
-        "SDL_Init video",
-        "window creation",
-        "renderer / GL context creation",
-        "SDL_image init",
-        "TTF_Init",
-        "theme load",
-        "first text rasterization",
-        "badge A",
-        "badge B",
-        "badge X",
-        "badge Y",
-        "shadow texture",
-        "status initialization",
-        "overview cache read",
-        "system definitions read",
-        "first frame draw",
-        "first present",
-        "SDL joystick init",
-        "SDL gamecontroller init",
-    ];
-    let positions: Vec<_> = ordered.into_iter().map(position).collect();
-    assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+    for ordered in [
+        vec![
+            "args/paths",
+            "TTF_Init",
+            "SDL_Init video",
+            "window creation",
+            "renderer / GL context creation",
+            "worker join",
+            "CPU surfaces upload",
+            "status initialization",
+            "first frame draw",
+            "first present",
+            "SDL joystick init",
+            "SDL gamecontroller init",
+        ],
+        vec![
+            "TTF_Init",
+            "system.cfg read",
+            "locale selection",
+            "theme load",
+            "overview cache read",
+            "system definitions read",
+            "first text rasterization",
+            "badge Y",
+            "badge A",
+            "CPU assets ready",
+            "worker join",
+        ],
+    ] {
+        let positions: Vec<_> = ordered.into_iter().map(position).collect();
+        assert!(
+            positions.windows(2).all(|pair| pair[0] < pair[1]),
+            "{stderr}"
+        );
+        assert!(
+            positions
+                .windows(2)
+                .all(|pair| phases[pair[0]].1 <= phases[pair[1]].1),
+            "{stderr}"
+        );
+    }
+    let after_join = stderr
+        .split("startup worker join:")
+        .nth(1)
+        .unwrap()
+        .split("startup first present:")
+        .next()
+        .unwrap();
+    assert!(!after_join.contains("text rasterization"), "{after_join}");
+    assert!(!after_join.contains("font file open"), "{after_join}");
     for name in ["first text rasterization", "first present"] {
         assert_eq!(phases.iter().filter(|(phase, _)| *phase == name).count(), 1);
     }

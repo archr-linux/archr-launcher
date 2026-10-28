@@ -12,7 +12,7 @@ use archr_ui::{
     covers::CoverCache,
     i18n::I18n,
     input::{button_event, Repeat},
-    render::Ui,
+    render::{prepare_first_frame, Ui},
     resolve_theme,
     startup::StartupTrace,
     startup_phase,
@@ -70,38 +70,81 @@ fn run(
         .transpose()?;
     let paths = Paths::new(std::env::var_os("ARCHR_LAUNCHER_ROOT").map(PathBuf::from));
     startup_phase!(trace, "args/paths");
-    let config = SystemCfg::load(&paths.config).ok();
-    startup_phase!(trace, "system.cfg read");
-    let language = config
-        .as_ref()
-        .and_then(|cfg| cfg.get_local("system", None, "language"));
-    let catalog = I18n::load(
-        &paths.at("/usr/share/archr-launcher/locales"),
-        language.as_deref(),
-        std::env::var("LANG").ok().as_deref(),
-    );
-    startup_phase!(trace, "locale selection");
-    // No per-system index, controller enumeration or cover work before present.
-    let ttf;
-    let creator;
-    let mut ui = Ui::new_traced(640, 480, windowed, trace)?;
-    ttf = sdl2::ttf::init().map_err(|error| error.to_string())?;
+    // SDL_ttf's global FreeType library is initialized before the worker and
+    // remains alive until every handed-over font is dropped. Only the worker
+    // uses TTF until join; video/window/EGL stay on this thread throughout.
+    let ttf = sdl2::ttf::init().map_err(|error| error.to_string())?;
     startup_phase!(trace, "TTF_Init");
+    let creator;
+    let (mut ui, (theme, catalog, mut library, prepared)) = std::thread::scope(|scope| {
+        let (sized, size) = std::sync::mpsc::sync_channel(1);
+        let paths = &paths;
+        let ttf = &ttf;
+        let worker = scope.spawn(move || -> Result<_, String> {
+            let config = SystemCfg::load(&paths.config).ok();
+            startup_phase!(trace, "system.cfg read");
+            let language = config
+                .as_ref()
+                .and_then(|cfg| cfg.get_local("system", None, "language"));
+            let catalog = I18n::load(
+                &paths.at("/usr/share/archr-launcher/locales"),
+                language.as_deref(),
+                std::env::var("LANG").ok().as_deref(),
+            );
+            startup_phase!(trace, "locale selection");
+            let name = config
+                .as_ref()
+                .and_then(|cfg| cfg.get("launcher", None, "theme"))
+                .unwrap_or_else(|| "default".to_owned());
+            let mut theme = resolve_theme(
+                &paths.at("/storage/.config/archr-launcher/themes"),
+                &paths.at("/usr/share/archr-launcher/themes"),
+                &name,
+            );
+            theme.font = theme.font.as_deref().map(|font| paths.remap(font));
+            startup_phase!(trace, "theme load");
+            // No per-system scans, controller enumeration or cover work yet.
+            let library = Library::initial_traced(paths.clone(), trace);
+            let size = size
+                .recv()
+                .map_err(|_| "Video initialization failed".to_owned())?;
+            let mut prepared = prepare_first_frame(
+                ttf,
+                &theme,
+                paths.root.as_deref(),
+                &catalog,
+                &library,
+                size,
+                trace,
+            )?;
+            if let Some(banner) = &library.banner {
+                prepared.prepare_notice(&banner.render(&catalog), &theme, size)?;
+            }
+            startup_phase!(trace, "CPU assets ready");
+            Ok((theme, catalog, library, prepared))
+        });
+        let sdl = sdl2::init()?;
+        let video = sdl.video()?;
+        startup_phase!(trace, "SDL_Init video");
+        let size = if windowed {
+            (640, 480)
+        } else {
+            let mode = video.desktop_display_mode(0)?;
+            (mode.w.max(1) as u32, mode.h.max(1) as u32)
+        };
+        // A stopped receiver is reported by join, preserving the worker error.
+        let _ = sized.send(size);
+        let ui = Ui::with_video(sdl, video, (640, 480), windowed, trace);
+        // Always join, including window/renderer errors, before TTF can quit.
+        let assets = worker
+            .join()
+            .map_err(|_| "Startup worker panicked".to_owned())?;
+        startup_phase!(trace, "worker join");
+        Ok::<_, String>((ui?, assets?))
+    })?;
     creator = ui.canvas.texture_creator();
     ui.catalog = catalog;
-    let name = config
-        .as_ref()
-        .and_then(|cfg| cfg.get("launcher", None, "theme"))
-        .unwrap_or_else(|| "default".to_owned());
-    let mut theme = resolve_theme(
-        &paths.at("/storage/.config/archr-launcher/themes"),
-        &paths.at("/usr/share/archr-launcher/themes"),
-        &name,
-    );
-    theme.font = theme.font.as_deref().map(|font| paths.remap(font));
-    startup_phase!(trace, "theme load");
-    ui.configure(&ttf, &creator, &theme, paths.root.as_deref())?;
-    let mut library = Library::initial_traced(paths.clone(), trace);
+    ui.configure_prepared(&creator, prepared, paths.root.as_deref())?;
     let mut app = App::new(ui.page_size(&theme));
     ui.banner = library.banner.take().map(|m| m.render(&ui.catalog));
     ui.draw(&app, &library, &theme, None)?;
