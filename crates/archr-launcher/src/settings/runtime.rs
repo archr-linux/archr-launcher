@@ -44,9 +44,10 @@ impl Runtime {
             }
             self.worker.as_mut().expect("worker started").send(work)
         })();
+        self.state.scanning = self.worker.as_ref().is_some_and(Worker::scanning);
         if let Err(error) = result {
             log::warn!("Settings worker failed: {error}");
-            self.state.error = Some((self.state.pending, error));
+            self.state.fail(self.state.pending, error);
             self.state.pending = None;
             self.state.loading = false;
         }
@@ -137,10 +138,12 @@ impl Runtime {
         let wifi = self.active
             && self.state.page() == Page::Wifi
             && self.state.value(archr_ui::settings::Id::WifiSwitch) == "1";
-        if wifi && !self.closing && !self.busy() && now >= self.next_scan {
+        if wifi && !self.closing && !self.state.scanning && now >= self.next_scan {
             self.next_scan = now + SCAN_INTERVAL;
             self.send(Work::Scan);
+            dirty = true;
         }
+        self.state.scanning = self.worker.as_ref().is_some_and(Worker::scanning);
         let age = self
             .state
             .scanned
@@ -168,6 +171,7 @@ impl Runtime {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use archr_ui::settings::Id;
     use std::{fs, os::unix::fs::PermissionsExt};
     #[test]
     fn refresh_is_disposable_uses_two_second_interval_and_never_runs_ip() {
@@ -200,6 +204,112 @@ mod tests {
         runtime.next_info = Instant::now() - Duration::from_secs(1);
         runtime.poll();
         assert!(!runtime.busy());
+    }
+    #[test]
+    fn a_slow_scan_never_delays_the_wifi_switch() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::new(Some(dir.path().into()));
+        fs::create_dir_all(paths.config.parent().unwrap()).unwrap();
+        fs::create_dir_all(paths.lock.parent().unwrap()).unwrap();
+        fs::write(&paths.config, "wifi.enabled=1\n").unwrap();
+        let bin = dir.path().join("usr/bin");
+        fs::create_dir_all(&bin).unwrap();
+        let wifictl = bin.join("wifictl");
+        fs::write(
+            &wifictl,
+            "#!/bin/sh\n[ \"$1\" = scanlist ] && /bin/sleep 3\nexit 0\n",
+        )
+        .unwrap();
+        fs::set_permissions(&wifictl, fs::Permissions::from_mode(0o755)).unwrap();
+        let mut runtime = Runtime::new(paths);
+        runtime.active = true;
+        runtime.state.open(Page::Wifi);
+        runtime.state.values.insert(Id::WifiSwitch, "1".into());
+        runtime.poll();
+        assert!(runtime.state.scanning, "the scan started");
+        runtime.send(Work::Set(Id::WifiSwitch, "0".into()));
+        let began = Instant::now();
+        while runtime.state.value(Id::WifiSwitch) != "0" {
+            runtime.poll();
+            assert!(
+                began.elapsed() < Duration::from_millis(1500),
+                "switch waited"
+            );
+            thread_yield();
+        }
+        assert!(runtime.state.scanning, "the scan is still running");
+        // Its late, failed or successful reply neither raises an error nor lists networks.
+        while runtime.state.scanning {
+            runtime.poll();
+            thread_yield();
+        }
+        assert!(runtime.state.error.is_none() && runtime.state.networks.is_empty());
+        runtime.poll();
+        assert!(!runtime.state.scanning, "no scan after switching off");
+    }
+    /// wifictl whose first scan is slow and lists "Stale"; later ones list "Fresh".
+    fn scan_fixture() -> (tempfile::TempDir, Runtime) {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::new(Some(dir.path().into()));
+        fs::create_dir_all(paths.config.parent().unwrap()).unwrap();
+        fs::create_dir_all(paths.lock.parent().unwrap()).unwrap();
+        fs::write(&paths.config, "wifi.enabled=1\n").unwrap();
+        let bin = dir.path().join("usr/bin");
+        fs::create_dir_all(&bin).unwrap();
+        let wifictl = bin.join("wifictl");
+        fs::write(
+            &wifictl,
+            "#!/bin/sh\n[ \"$1\" = scanlist ] || exit 0\nn=$(/bin/cat \"$ARCHR_LAUNCHER_ROOT/n\" 2>/dev/null || echo 0)\n\
+             echo $((n + 1)) > \"$ARCHR_LAUNCHER_ROOT/n\"\n\
+             if [ $n = 0 ]; then /bin/sleep 1; printf 'Stale\\twpa2\\t50\\t0\\t0\\n'; else printf 'Fresh\\twpa2\\t50\\t0\\t0\\n'; fi\n",
+        )
+        .unwrap();
+        fs::set_permissions(&wifictl, fs::Permissions::from_mode(0o755)).unwrap();
+        let mut runtime = Runtime::new(paths);
+        runtime.active = true;
+        runtime.state.open(Page::Wifi);
+        runtime.state.values.insert(Id::WifiSwitch, "1".into());
+        runtime.poll();
+        assert!(runtime.state.scanning, "the scan started");
+        (dir, runtime)
+    }
+    fn ssids(runtime: &Runtime) -> Vec<&str> {
+        runtime
+            .state
+            .networks
+            .iter()
+            .map(|n| n.ssid.as_str())
+            .collect()
+    }
+    #[test]
+    fn a_scan_requested_during_a_scan_runs_when_it_ends() {
+        let (_dir, mut runtime) = scan_fixture();
+        // Connect or forget finished meanwhile and asks for a fresh list.
+        runtime.send(Work::Scan);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while ssids(&runtime) != ["Fresh"] {
+            runtime.poll();
+            assert!(
+                Instant::now() < deadline,
+                "no second scan: {:?}",
+                ssids(&runtime)
+            );
+            thread_yield();
+        }
+    }
+    #[test]
+    fn a_scan_started_before_a_wifi_toggle_is_discarded() {
+        let (_dir, mut runtime) = scan_fixture();
+        runtime.send(Work::Set(Id::WifiSwitch, "0".into()));
+        runtime.send(Work::Set(Id::WifiSwitch, "1".into()));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while ssids(&runtime) != ["Fresh"] {
+            runtime.poll();
+            assert!(!ssids(&runtime).contains(&"Stale"), "stale list shown");
+            assert!(runtime.state.error.is_none());
+            assert!(Instant::now() < deadline, "no fresh scan");
+            thread_yield();
+        }
     }
     fn thread_yield() {
         std::thread::sleep(Duration::from_millis(5));

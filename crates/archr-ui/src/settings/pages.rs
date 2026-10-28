@@ -117,7 +117,7 @@ impl Settings {
             return Effect::None;
         };
         if target == Id::WifiSwitch && !value.is_empty() && !wpa_valid(&value) {
-            self.error = Some((None, "settings.wpa_length".into()));
+            self.fail(None, "settings.wpa_length".into());
             return Effect::None;
         }
         self.keyboard = None;
@@ -185,7 +185,7 @@ impl Settings {
                     }
                     // EAP and WEP need credentials this screen cannot collect.
                     "8021x" | "wep" => {
-                        self.error = Some((None, "settings.wifi_unsupported".into()));
+                        self.fail(None, "settings.wifi_unsupported".into());
                     }
                     _ => self.open_keyboard(Id::WifiSwitch, Mode::Secret, String::new()),
                 }

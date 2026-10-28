@@ -421,3 +421,41 @@ fn stale_saved_audio_device_is_never_offered_and_one_sink_is_read_only() {
     }
     assert_eq!(state.hints().len(), 1);
 }
+#[test]
+fn usbgadget_exit_three_maps_to_specific_messages() {
+    let (dir, backend) = fixture();
+    script(&dir, "usbgadget", "exit 3");
+    assert_eq!(
+        backend.apply(Id::UsbMode, "network").unwrap_err(),
+        "settings.usb_busy"
+    );
+    script(
+        &dir,
+        "usbgadget",
+        "echo \"CDC gadget not configured. Run 'x prepare' first!\" >&2; exit 3",
+    );
+    assert_eq!(
+        backend.apply(Id::UsbMode, "network").unwrap_err(),
+        "settings.usb_unprepared"
+    );
+    script(&dir, "usbgadget", "exit 1");
+    assert!(backend
+        .apply(Id::UsbMode, "network")
+        .unwrap_err()
+        .contains("exit status: 1"));
+    script(&dir, "usbgadget", "exit 0");
+    assert_eq!(backend.apply(Id::UsbMode, "network").unwrap(), "network");
+}
+#[test]
+fn load_flags_a_busy_usb_port_from_the_same_sysfs_state_usbgadget_checks() {
+    let (dir, backend) = fixture();
+    script(&dir, "usbgadget", "echo disabled");
+    let root = dir.path().join("sys/class/udc/ff300000.usb");
+    fs::create_dir_all(&root).unwrap();
+    let port = root.join("device/usb1/1-0:1.0/usb1-port1");
+    fs::create_dir_all(&port).unwrap();
+    fs::write(port.join("state"), "configured\n").unwrap();
+    assert!(backend.load().unwrap().usb_busy);
+    fs::write(port.join("state"), "not attached\n").unwrap();
+    assert!(!backend.load().unwrap().usb_busy);
+}

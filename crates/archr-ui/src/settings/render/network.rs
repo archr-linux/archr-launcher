@@ -232,7 +232,7 @@ impl View<'_, '_, '_> {
             Some(Id::ScraperPassword) => "settings.sign_in_short",
             _ => "hint.confirm",
         };
-        let labels = (self.tr("settings.space"), self.tr(submit));
+        let labels = (self.tr("settings.space"), self.ui.catalog.text(submit));
         self.ui
             .keyboard_keys(keyboard, 129., (&labels.0, &labels.1), self.theme)
     }

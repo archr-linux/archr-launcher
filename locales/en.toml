@@ -51,6 +51,7 @@
 "time.yesterday" = "yesterday"
 "systems.count" = { one = "{count} system", other = "{count} systems" }
 "games.count" = { one = "{count} game", other = "{count} games" }
+"tools.count" = { one = "{count} tool", other = "{count} tools" }
 "favorites.count" = { one = "{count} favorite", other = "{count} favorites" }
 "panel.stats" = "{games} · {favorites}"
 "metadata.players" = { one = "{count} player", other = "{count} players" }
@@ -153,6 +154,9 @@
 "settings.channel" = "Channel"
 "settings.channel_detail" = "Same on all devices"
 "settings.usb_mode" = "USB function (gadget)"
+"settings.usb_busy" = "The USB port is in use (Wi-Fi or USB controller). Unplug the device to use the USB function."
+"settings.usb_in_use" = "USB port in use: unplug the device"
+"settings.usb_unprepared" = "The USB gadget is not set up on this system."
 "settings.usb_detail" = "When connected to a PC"
 "settings.netplay_enabled" = "Enable Netplay"
 "settings.nickname" = "Nickname"
@@ -262,6 +266,7 @@
 # Live system information
 "settings.details" = "Details"
 "settings.previous_next" = "Previous · next"
+"settings.refreshing" = "Updating…"
 "settings.updated_now" = "Updated just now"
 "settings.refresh_interval" = "Refreshes every 2 s"
 "settings.cpu_summary" = { one = "{model} · {count} core", other = "{model} · {count} cores" }

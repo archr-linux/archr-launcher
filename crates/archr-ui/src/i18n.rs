@@ -93,6 +93,10 @@ impl I18n {
     pub fn language(&self) -> &str {
         &self.language
     }
+    /// Whether `key` is a dotted catalog key (selected language or English).
+    pub fn has(&self, key: &str) -> bool {
+        key.contains('.') && (self.catalog.contains_key(key) || self.english.contains_key(key))
+    }
     pub fn text(&self, key: &str) -> String {
         self.lookup(key, None).to_owned()
     }

@@ -51,6 +51,7 @@
 "time.yesterday" = "ontem"
 "systems.count" = { one = "{count} sistema", other = "{count} sistemas" }
 "games.count" = { one = "{count} jogo", other = "{count} jogos" }
+"tools.count" = { one = "{count} ferramenta", other = "{count} ferramentas" }
 "favorites.count" = { one = "{count} favorito", other = "{count} favoritos" }
 "panel.stats" = "{games} · {favorites}"
 "metadata.players" = { one = "{count} jogador", other = "{count} jogadores" }
@@ -153,6 +154,9 @@
 "settings.channel" = "Canal"
 "settings.channel_detail" = "Igual em todos os aparelhos"
 "settings.usb_mode" = "Função USB (gadget)"
+"settings.usb_busy" = "A porta USB está em uso (Wi‑Fi ou controle USB). Desconecte o dispositivo para usar a função USB."
+"settings.usb_in_use" = "Porta USB em uso: desconecte o dispositivo"
+"settings.usb_unprepared" = "A função USB não está configurada neste sistema."
 "settings.usb_detail" = "Ao conectar no PC"
 "settings.netplay_enabled" = "Ativar Netplay"
 "settings.nickname" = "Apelido"
@@ -262,6 +266,7 @@
 # Live system information
 "settings.details" = "Detalhes"
 "settings.previous_next" = "Item anterior · próximo"
+"settings.refreshing" = "Atualizando…"
 "settings.updated_now" = "Atualizado agora"
 "settings.refresh_interval" = "Atualiza a cada 2 s"
 "settings.cpu_summary" = { one = "{model} · {count} núcleo", other = "{model} · {count} núcleos" }

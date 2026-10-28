@@ -102,6 +102,11 @@ pub trait DataSource {
     fn favorite_count(&self, _system: &str) -> usize {
         0
     }
+    /// A system launched by its catalog command, without emulators: its
+    /// entries are tools, not games.
+    fn is_tools(&self, _system: &str) -> bool {
+        false
+    }
     /// Saved system ids in user order; empty while the default order applies.
     fn system_order(&self) -> &[String] {
         &[]

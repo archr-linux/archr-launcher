@@ -190,7 +190,7 @@ impl Backend {
         if !errors.is_empty() {
             let error = errors.join("; ");
             log::warn!("Settings discovery failed: {error}");
-            state.error = Some((None, error));
+            state.fail(None, error);
         }
         Ok(state)
     }
@@ -324,22 +324,51 @@ enum Reply {
     Loaded(Result<Box<Settings>, String>),
     Set(Id, Result<String, String>),
     Info(Information),
-    Scan(Result<(Vec<archr_ui::settings::network::Network>, String), String>),
+    Scan(
+        u64,
+        Result<(Vec<archr_ui::settings::network::Network>, String), String>,
+    ),
     Connect(Result<(), String>),
     Forget(Result<(), String>),
     Variants(Vec<(String, String)>),
     Login(Result<(String, usize), String>),
     Scrape(Result<(archr_scraper::Job, Vec<String>), String>),
 }
+/// A radio scan takes ~20 s on the R36S: it runs on its own lane so it never
+/// delays the Wi-Fi switch or any other action.
+const SCAN_TIMEOUT: Duration = Duration::from_secs(45);
 pub struct Worker {
     tx: mpsc::Sender<Work>,
+    scans: mpsc::Sender<u64>,
     rx: mpsc::Receiver<Reply>,
     pending: usize,
+    scanning: bool,
+    /// A scan was requested while one ran: dispatch again when it ends.
+    rescan: bool,
+    /// Bumped on every Wi-Fi switch change; older scans' replies are stale.
+    generation: u64,
 }
 impl Worker {
     pub fn start(paths: Paths) -> Result<Self, String> {
         let (tx, requests) = mpsc::channel();
         let (results, rx) = mpsc::channel();
+        let (scans, scan_requests) = mpsc::channel();
+        let scan_results = results.clone();
+        let scan_paths = paths.clone();
+        thread::Builder::new()
+            .name("launcher-scan".into())
+            .spawn(move || {
+                let backend = Backend::new(scan_paths);
+                while let Ok(generation) = scan_requests.recv() {
+                    if scan_results
+                        .send(Reply::Scan(generation, backend.scan()))
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            })
+            .map_err(|e| e.to_string())?;
         thread::Builder::new()
             .name("launcher-settings".into())
             .spawn(move || {
@@ -349,7 +378,7 @@ impl Worker {
                         Work::Load => Reply::Loaded(backend.load().map(Box::new)),
                         Work::Set(id, value) => Reply::Set(id, backend.apply(id, &value)),
                         Work::Info => Reply::Info(backend.refresh_info()),
-                        Work::Scan => Reply::Scan(backend.scan()),
+                        Work::Scan => unreachable!("scans have their own lane"),
                         Work::Connect(ssid, password) => {
                             Reply::Connect(backend.connect(&ssid, &password))
                         }
@@ -368,12 +397,40 @@ impl Worker {
                 }
             })
             .map_err(|e| e.to_string())?;
-        Ok(Self { tx, rx, pending: 0 })
+        Ok(Self {
+            tx,
+            scans,
+            rx,
+            pending: 0,
+            scanning: false,
+            rescan: false,
+            generation: 0,
+        })
     }
     pub fn busy(&self) -> bool {
         self.pending > 0
     }
+    pub fn scanning(&self) -> bool {
+        self.scanning
+    }
+    fn scan(&mut self) -> Result<(), String> {
+        if self.scanning {
+            self.rescan = true;
+            return Ok(());
+        }
+        self.scans
+            .send(self.generation)
+            .map_err(|e| e.to_string())?;
+        self.scanning = true;
+        Ok(())
+    }
     pub(super) fn send(&mut self, work: Work) -> Result<(), String> {
+        if matches!(work, Work::Scan) {
+            return self.scan();
+        }
+        if matches!(work, Work::Set(Id::WifiSwitch, _)) {
+            self.generation += 1;
+        }
         self.tx.send(work).map_err(|e| e.to_string())?;
         self.pending += 1;
         Ok(())
@@ -388,13 +445,25 @@ impl Worker {
         let mut language = None;
         while let Ok(reply) = self.rx.try_recv() {
             changed = true;
-            self.pending = self.pending.saturating_sub(1);
+            if let Reply::Scan(generation, _) = &reply {
+                self.scanning = false;
+                let stale = *generation != self.generation;
+                if std::mem::take(&mut self.rescan) {
+                    let _ = self.scan();
+                }
+                if stale {
+                    continue;
+                }
+            } else {
+                self.pending = self.pending.saturating_sub(1);
+            }
             match reply {
                 Reply::Loaded(Ok(mut loaded)) => {
                     std::mem::swap(&mut state.values, &mut loaded.values);
                     state.options = loaded.options;
                     state.labels = loaded.labels;
                     state.access_ip = loaded.access_ip;
+                    state.usb_busy = loaded.usb_busy;
                     state.info = loaded.info;
                     state.error = loaded.error;
                     state.scrape.available = loaded.scrape.available;
@@ -405,12 +474,18 @@ impl Worker {
                 }
                 Reply::Loaded(Err(error)) => {
                     log::warn!("Loading settings failed: {error}");
-                    state.error = Some((None, error));
+                    state.fail(None, error);
                     state.loading = false;
                 }
                 Reply::Set(id, result) => {
+                    if id == Id::WifiSwitch {
+                        self.generation += 1;
+                    }
                     if let Err(error) = &result {
-                        log::warn!("Setting {} failed: {error}", id.key());
+                        log::warn!("Setting {id:?} failed: {error}");
+                    }
+                    if id == Id::UsbMode {
+                        state.usb_busy = matches!(&result, Err(e) if e == "settings.usb_busy");
                     }
                     if id == Id::Language {
                         language = result.as_ref().ok().cloned();
@@ -444,7 +519,7 @@ impl Worker {
                 Reply::Variants(names) => {
                     pages::keyboard_choices(state, Id::KeyboardVariant, names);
                 }
-                Reply::Scan(result) => match result {
+                Reply::Scan(_, result) => match result {
                     Ok((networks, address)) => {
                         // A late scan never repopulates a list the user switched off.
                         if state.value(Id::WifiSwitch) == "1" {
@@ -456,7 +531,11 @@ impl Worker {
                             state.cursor = state.cursor.min(state.wifi_rows() - 1);
                         }
                     }
-                    Err(error) => state.error = Some((None, error)),
+                    // A scan cut short by switching Wi-Fi off is not an error.
+                    Err(error) if state.value(Id::WifiSwitch) == "1" => {
+                        state.fail(None, error);
+                    }
+                    Err(_) => {}
                 },
                 Reply::Connect(result) | Reply::Forget(result) => {
                     state.connecting = None;
@@ -465,7 +544,7 @@ impl Worker {
                             state.error = None;
                             let _ = self.send(Work::Scan);
                         }
-                        Err(error) => state.error = Some((None, error)),
+                        Err(error) => state.fail(None, error),
                     }
                 }
                 Reply::Login(result) => {
@@ -477,7 +556,7 @@ impl Worker {
                             state.scrape.threads = threads;
                             state.error = None;
                         }
-                        Err(error) => state.error = Some((None, error)),
+                        Err(error) => state.fail(None, error),
                     }
                 }
                 Reply::Scrape(result) => {
@@ -489,7 +568,7 @@ impl Worker {
                             state.scrape.running = true;
                             *job = Some(started);
                         }
-                        Err(error) => state.error = Some((None, error)),
+                        Err(error) => state.fail(None, error),
                     }
                 }
             }

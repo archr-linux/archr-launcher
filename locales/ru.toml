@@ -51,6 +51,7 @@
 "time.yesterday" = "вчера"
 "systems.count" = { one = "{count} система", few = "{count} системы", many = "{count} систем", other = "{count} системы" }
 "games.count" = { one = "{count} игра", few = "{count} игры", many = "{count} игр", other = "{count} игры" }
+"tools.count" = { one = "{count} инструмент", few = "{count} инструмента", many = "{count} инструментов", other = "{count} инструмента" }
 "favorites.count" = { one = "{count} в избранном", few = "{count} в избранном", many = "{count} в избранном", other = "{count} в избранном" }
 "panel.stats" = "{games} · {favorites}"
 "metadata.players" = { one = "{count} игрок", few = "{count} игрока", many = "{count} игроков", other = "{count} игрока" }
@@ -153,6 +154,9 @@
 "settings.channel" = "Канал"
 "settings.channel_detail" = "Одинаковый у всех"
 "settings.usb_mode" = "Режим USB (gadget)"
+"settings.usb_busy" = "USB-порт занят (Wi‑Fi или USB-геймпад). Отключите устройство, чтобы использовать функцию USB."
+"settings.usb_in_use" = "USB-порт занят: отключите устройство"
+"settings.usb_unprepared" = "Функция USB не настроена в этой системе."
 "settings.usb_detail" = "При подключении к ПК"
 "settings.netplay_enabled" = "Включить Netplay"
 "settings.nickname" = "Имя игрока"
@@ -262,6 +266,7 @@
 # Live system information
 "settings.details" = "Подробнее"
 "settings.previous_next" = "Пред. · след."
+"settings.refreshing" = "Обновление…"
 "settings.updated_now" = "Обновлено сейчас"
 "settings.refresh_interval" = "Обновление каждые 2 с"
 "settings.cpu_summary" = { one = "{model} · {count} ядро", few = "{model} · {count} ядра", many = "{model} · {count} ядер", other = "{model} · {count} ядра" }

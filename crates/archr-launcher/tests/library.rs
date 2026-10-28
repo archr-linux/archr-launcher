@@ -430,12 +430,27 @@ fn systems_without_emulators_launch_their_catalog_command() {
     fs::create_dir_all(catalog.parent().unwrap()).unwrap();
     fs::write(&catalog, "<systemList><system><name>tools</name><fullname>Tools</fullname><path>/storage/.config/modules</path><extension>.sh</extension><command>/usr/bin/foot %ROM%</command></system><system><name>music</name><fullname>Music</fullname><path>/storage/roms/music</path><extension>.rom</extension></system></systemList>").unwrap();
     let paths = Paths::new(Some(dir.path().to_owned()));
+    let mut old = Store::default();
+    old.push_recent("tools/Old.sh");
+    old.push_recent("music/Song.rom");
+    old.save(&paths.store).unwrap();
     let mut library = ready(&paths, Some("tools"));
+    assert_eq!(
+        library.collection_len("@recent"),
+        1,
+        "old tool recents dropped"
+    );
     let launch = |system: &str| Outcome::Launch {
         system: system.into(),
         game: 0,
     };
+    assert!(library.is_tools("tools") && !library.is_tools("music"));
     assert!(library.handle(launch("tools"), "pad").unwrap());
+    assert_eq!(
+        library.collection_len("@recent"),
+        1,
+        "tools are not recents"
+    );
     let rom = tools.join("Mount NFS.sh");
     assert_eq!(
         fs::read_to_string(paths.run.join("next")).unwrap(),
@@ -454,4 +469,20 @@ fn systems_without_emulators_launch_their_catalog_command() {
         "error.no_core"
     );
     assert!(!paths.run.join("next").exists());
+}
+
+#[test]
+fn a_command_that_wraps_an_emulator_is_not_tools() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = Paths::new(Some(dir.path().to_owned()));
+    for name in ["ports", "other"] {
+        let roms = paths.at(&format!("/storage/roms/{name}"));
+        fs::create_dir_all(&roms).unwrap();
+        fs::write(roms.join("G.sh"), []).unwrap();
+    }
+    let catalog = paths.at("/storage/.config/archr/systems.cfg");
+    fs::create_dir_all(catalog.parent().unwrap()).unwrap();
+    fs::write(&catalog, "<systemList><system><name>ports</name><fullname>Ports</fullname><path>/storage/roms/ports</path><extension>.sh</extension><command>/usr/bin/runemu.sh %ROM% -P%SYSTEM%</command></system><system><name>other</name><fullname>Other</fullname><path>/storage/roms/other</path><extension>.sh</extension><command>/usr/bin/x --emu %EMULATOR% %ROM%</command></system></systemList>").unwrap();
+    let library = ready(&paths, None);
+    assert!(!library.is_tools("ports") && !library.is_tools("other"));
 }

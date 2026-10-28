@@ -116,6 +116,13 @@ impl Store {
             *entry = (*entry).max(time);
         }
         self.imported_times = times;
+        // Tools (a catalog command, no emulators) never belong in Recentes.
+        let before = self.recent.len();
+        self.recent.retain(|key| {
+            !key.split_once('/')
+                .is_some_and(|(name, _)| systems.iter().any(|s| s.name == name && is_tools(s)))
+        });
+        changed |= self.recent.len() != before;
         self.recent.truncate(MAX_RECENT);
         self.members = self.favorites.iter().cloned().collect();
         changed
@@ -126,6 +133,9 @@ impl Store {
     pub fn import_games(&mut self, system: &SystemDef, games: &[Game]) -> bool {
         if !self.imported_systems.insert(system.name.clone()) {
             return false;
+        }
+        if is_tools(system) {
+            return true;
         }
         for game in games {
             let Some(key) = game_key(system, &game.path) else {
@@ -190,6 +200,13 @@ impl Store {
     }
 }
 
+/// A catalog command that launches a program, not an emulator wrapper.
+pub(crate) fn is_tools(system: &SystemDef) -> bool {
+    !system.command.is_empty()
+        && system.emulators.is_empty()
+        && !system.command.contains("runemu.sh")
+        && !system.command.contains("%EMULATOR%")
+}
 pub fn game_key(system: &SystemDef, path: &Path) -> Option<String> {
     let relative = path.strip_prefix(&system.path).ok()?.to_str()?;
     Some(format!("{}/{relative}", system.name))

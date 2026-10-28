@@ -387,10 +387,14 @@ pub struct Settings {
     pub pending: Option<Id>,
     pub loading: bool,
     pub error: Option<(Option<Id>, String)>,
+    /// Bumped by every `fail`, so a repeated identical message restarts its timer.
+    pub error_seq: u64,
     pub reboot_prompt: bool,
     pub info: Information,
     pub networks: Vec<Network>,
     pub scanned: Option<Instant>,
+    /// A radio scan is running; the list shown meanwhile is the previous one.
+    pub scanning: bool,
     /// SSID being joined; input waits for the host's reply.
     pub connecting: Option<String>,
     pub confirm_forget: Option<String>,
@@ -399,6 +403,8 @@ pub struct Settings {
     pub wifi_ssid: String,
     pub wifi_hidden: bool,
     pub access_ip: String,
+    /// The single USB port hosts a device, so gadget mode is refused.
+    pub usb_busy: bool,
     pub scrape: Scrape,
     /// Sliders in flight: last confirmed value and the newest unsent one.
     pub slides: BTreeMap<Id, (String, Option<String>)>,
@@ -417,10 +423,12 @@ impl Default for Settings {
             pending: None,
             loading: true,
             error: None,
+            error_seq: 0,
             reboot_prompt: false,
             info: Information::default(),
             networks: Vec::new(),
             scanned: None,
+            scanning: false,
             connecting: None,
             confirm_forget: None,
             keyboard: None,
@@ -428,6 +436,7 @@ impl Default for Settings {
             wifi_ssid: String::new(),
             wifi_hidden: false,
             access_ip: String::new(),
+            usb_busy: false,
             scrape: Scrape::default(),
             slides: BTreeMap::new(),
         }
@@ -489,6 +498,7 @@ impl Settings {
         Some(match row.id {
             Id::Ssh if !ip.is_empty() => format!("settings.ssh_at|ip={ip}"),
             Id::Http if !ip.is_empty() => format!("settings.http_at|ip={ip}"),
+            Id::UsbMode if self.usb_busy => "settings.usb_in_use".into(),
             Id::ScraperAccount if self.scrape.verifying => "settings.verifying".into(),
             Id::ScraperAccount if self.scrape.user.is_empty() => "settings.not_signed_in".into(),
             Id::ScraperAccount if self.scrape.threads > 0 => format!(
@@ -651,6 +661,10 @@ impl Settings {
             .get(&id)
             .map_or(id.default_value(), String::as_str)
     }
+    pub fn fail(&mut self, id: Option<Id>, error: String) {
+        self.error = Some((id, error));
+        self.error_seq += 1;
+    }
     pub fn complete(&mut self, id: Id, result: Result<String, String>) {
         self.pending = None;
         match result {
@@ -659,7 +673,7 @@ impl Settings {
                 self.error = None;
                 self.reboot_prompt = id == Id::Gpu;
             }
-            Err(error) => self.error = Some((Some(id), error)),
+            Err(error) => self.fail(Some(id), error),
         }
     }
     /// A slider reply: returns the newest value still to apply, if any.
@@ -681,7 +695,7 @@ impl Settings {
             Err(error) => {
                 let (confirmed, _) = self.slides.remove(&id).expect("slide");
                 self.values.insert(id, confirmed);
-                self.error = Some((Some(id), error));
+                self.fail(Some(id), error);
             }
         }
         None
@@ -697,6 +711,8 @@ impl Settings {
                 _ => Effect::None,
             };
         }
+        // Any navigation input dismisses the last message.
+        self.error = None;
         if let Some(effect) = self.information_input(button) {
             return effect;
         }
@@ -885,5 +901,30 @@ mod tests {
         assert_eq!(state.settle(Id::Volume, Err("pactl".into())), None);
         assert_eq!(state.value(Id::Volume), "75");
         assert_eq!(state.error, Some((Some(Id::Volume), "pactl".into())));
+    }
+}
+#[cfg(test)]
+mod dismiss_tests {
+    use super::*;
+    #[test]
+    fn any_input_dismisses_the_message() {
+        let mut state = Settings {
+            loading: false,
+            error: Some((None, "settings.failed".into())),
+            ..Settings::default()
+        };
+        state.handle(Button::Down);
+        assert!(state.error.is_none());
+    }
+    #[test]
+    fn busy_usb_port_explains_itself_in_the_row_subtitle() {
+        let row = pages::SERVICES
+            .iter()
+            .find(|r| r.id == Id::UsbMode)
+            .unwrap();
+        let mut state = Settings::default();
+        assert_eq!(state.subtitle(row).as_deref(), Some("settings.usb_detail"));
+        state.usb_busy = true;
+        assert_eq!(state.subtitle(row).as_deref(), Some("settings.usb_in_use"));
     }
 }

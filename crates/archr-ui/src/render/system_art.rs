@@ -160,8 +160,8 @@ impl<'a> SystemArt<'a> {
         let dirs: Vec<_> = self.dirs.iter().map(PathBuf::as_path).collect();
         self.wanted = names
             .iter()
-            .filter(|name| !name.starts_with('@'))
-            .map(|name| candidates(&dirs, name))
+            .filter(|name| !name.starts_with('@') || **name == crate::moonlight::SYSTEM)
+            .map(|name| candidates(&dirs, name.trim_start_matches('@')))
             .collect();
     }
 
@@ -225,7 +225,7 @@ impl Ui<'_, '_> {
         let radius = self.px(14.) as f32;
         self.panel(rect, radius, theme.surface, theme.border)?;
         self.canvas.set_clip_rect(rect);
-        let collection = name.starts_with('@');
+        let collection = name.starts_with('@') && name != crate::moonlight::SYSTEM;
         let near: Vec<&str> = [Some(cursor), cursor.checked_sub(1), cursor.checked_add(1)]
             .into_iter()
             .flatten()
@@ -433,6 +433,8 @@ fn panel_labels(
         catalog.text("moonlight.description")
     } else if name.starts_with('@') {
         count("games.count", games)
+    } else if data.is_tools(name) {
+        count("tools.count", games)
     } else {
         catalog.format(
             "panel.stats",
