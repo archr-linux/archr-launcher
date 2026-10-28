@@ -174,20 +174,23 @@ pub(super) fn panel_rect(frame: Frame, theme: &Theme) -> Rect {
 
 impl Ui<'_, '_> {
     pub(super) fn ensure_art(&mut self) {
-        if self.art.is_some() {
-            return;
-        }
         let Some(creator) = self.creator else { return };
         let base = self.root.clone().unwrap_or_else(|| PathBuf::from("/"));
         let dirs = [
             Some(base.join("storage/.config/archr-launcher/systems")),
             self.theme_dir.as_ref().map(|dir| dir.join("systems")),
-        ];
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        if self.art.as_ref().is_some_and(|art| art.dirs == dirs) {
+            return;
+        }
         let size = (self.px(IMAGE_BOX.0) as u32, self.px(IMAGE_BOX.1) as u32);
         self.art = Some(SystemArt::new(
             creator,
             base.join("storage/.cache/archr-launcher/thumbs"),
-            dirs.into_iter().flatten().collect(),
+            dirs,
             size,
         ));
     }
@@ -496,6 +499,36 @@ mod tests {
             assert!(art.covers.get(&user.join("missing.png")).is_none());
             std::thread::yield_now();
         }
+    }
+
+    #[test]
+    fn artwork_invalidates_when_theme_or_configuration_changes() {
+        let _sdl = crate::SDL_TEST_LOCK.lock().unwrap();
+        std::env::set_var("SDL_VIDEODRIVER", "offscreen");
+        let (creator, ttf);
+        let mut ui = Ui::new(640, 480, true).unwrap();
+        creator = ui.canvas.texture_creator();
+        ttf = sdl2::ttf::init().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let theme = Theme::builtin();
+        ui.configure(&ttf, &creator, &theme, Some(root.path()))
+            .unwrap();
+        ui.ensure_art();
+        ui.art.as_mut().unwrap().want(&["nes"]);
+        ui.theme_dir = Some(root.path().join("new-theme"));
+        ui.ensure_art();
+        let art = ui.art.as_ref().unwrap();
+        assert_eq!(art.dirs[1], root.path().join("new-theme/systems"));
+        assert!(art.wanted.is_empty(), "old requests must be discarded");
+        ui.art.as_mut().unwrap().want(&["nes"]);
+        ui.configure(&ttf, &creator, &theme, Some(root.path()))
+            .unwrap();
+        assert!(
+            ui.art.is_none(),
+            "reconfiguration must discard textures and misses"
+        );
+        ui.ensure_art();
+        assert!(ui.art.as_ref().unwrap().wanted.is_empty());
     }
 
     #[test]

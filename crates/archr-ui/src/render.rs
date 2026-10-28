@@ -328,6 +328,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         }
         self.creator = Some(creator);
         self.root = root.map(Path::to_path_buf);
+        self.art = None;
         self.raster_cache =
             if self.experiments.enabled("badgecache") || self.experiments.enabled("shadowcache") {
                 let dir = root
