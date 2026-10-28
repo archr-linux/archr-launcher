@@ -145,6 +145,59 @@ impl Mesh {
             );
         }
     }
+    fn line(&mut self, from: Point, to: Point, width: f32, c: Rgba) {
+        let (dx, dy) = (to.0 - from.0, to.1 - from.1);
+        let length = dx.hypot(dy).max(0.01);
+        let (nx, ny) = (-dy / length * width / 2., dx / length * width / 2.);
+        let base = self.vertices.len() as u16;
+        self.vertices.extend(
+            [
+                (from.0 + nx, from.1 + ny),
+                (to.0 + nx, to.1 + ny),
+                (to.0 - nx, to.1 - ny),
+                (from.0 - nx, from.1 - ny),
+            ]
+            .map(|p| vertex(p, color(c), (0., 0.))),
+        );
+        self.indices
+            .extend([base, base + 1, base + 2, base, base + 2, base + 3]);
+    }
+    /// Dashed stroke centred 1 unit inside the rounded outline; a unit is 1/22
+    /// of the height, so the 44px row gets 2px strokes with 5px dashes.
+    fn dashed(&mut self, rect: Rect, radius: f32, c: Rgba) {
+        let unit = rect.height() as f32 / 22.;
+        let inset = (unit / 2.).round().max(1.) as i32;
+        let inner = Rect::new(
+            rect.x() + inset,
+            rect.y() + inset,
+            rect.width().saturating_sub(2 * inset as u32).max(1),
+            rect.height().saturating_sub(2 * inset as u32).max(1),
+        );
+        let points = outline(inner, radius - inset as f32);
+        let (mut drawing, mut left) = (true, 2.5 * unit);
+        for (&a, &b) in points.iter().zip(points.iter().cycle().skip(1)) {
+            let length = (b.0 - a.0).hypot(b.1 - a.1);
+            let at = |t: f32| {
+                (
+                    a.0 + (b.0 - a.0) * t / length,
+                    a.1 + (b.1 - a.1) * t / length,
+                )
+            };
+            let mut t = 0.;
+            while t < length {
+                let step = left.min(length - t);
+                if drawing {
+                    self.line(at(t), at(t + step), unit, c);
+                }
+                t += step;
+                left -= step;
+                if left <= 0. {
+                    drawing = !drawing;
+                    left = unit * if drawing { 2.5 } else { 1.5 };
+                }
+            }
+        }
+    }
     fn draw(
         &self,
         canvas: &mut Canvas<Window>,
@@ -157,6 +210,7 @@ impl Mesh {
 enum Key {
     Rounded(Rect, u32, Rgba, Option<Rgba>),
     Cover(Rect, u32),
+    Dashed(Rect, u32, Rgba),
 }
 /// Per-renderer bounded LRU for panels and cover meshes. Evicted meshes
 /// donate their Vec allocations to the next moving-pill mesh.
@@ -188,6 +242,7 @@ impl Geometry {
                 Key::Cover(rect, r) => {
                     mesh.fan(&outline(rect, f32::from_bits(r)), Color::WHITE, rect, true)
                 }
+                Key::Dashed(rect, r, c) => mesh.dashed(rect, f32::from_bits(r), c),
             }
             self.meshes.push_back((key, mesh));
         }
@@ -202,6 +257,16 @@ impl Geometry {
         border: Option<Rgba>,
     ) -> Result<(), String> {
         self.mesh(Key::Rounded(rect, radius.to_bits(), fill, border))
+            .draw(canvas, None)
+    }
+    pub fn dashed(
+        &mut self,
+        canvas: &mut Canvas<Window>,
+        rect: Rect,
+        radius: f32,
+        c: Rgba,
+    ) -> Result<(), String> {
+        self.mesh(Key::Dashed(rect, radius.to_bits(), c))
             .draw(canvas, None)
     }
     pub fn cover(

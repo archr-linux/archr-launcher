@@ -35,11 +35,36 @@ impl SystemCfg {
             .map(String::from)
     }
 
-    /// Game then system scope only, for keys whose fallback is es_systems.cfg.
+    /// Game then system scope only, for keys whose fallback is the systems catalog.
     pub fn get_local(&self, system: &str, rom: Option<&str>, key: &str) -> Option<String> {
         rom.and_then(|name| self.entry(&rom_key(system, name, key)))
             .or_else(|| self.entry(&format!("{system}.{key}")))
             .map(String::from)
+    }
+
+    /// Shell `get_setting` precedence, ignoring empty values. Fully qualified
+    /// keys also work without a system argument (e.g. `audio.volume`).
+    pub fn get_setting(
+        &self,
+        key: &str,
+        system: Option<&str>,
+        rom: Option<&str>,
+    ) -> Option<String> {
+        let mut keys = Vec::new();
+        if let Some(system) = system {
+            if let Some(rom) = rom {
+                keys.push(rom_key(system, rom, key));
+            }
+            keys.push(format!("{system}.{key}"));
+        }
+        keys.extend([
+            format!("system.{key}"),
+            key.to_owned(),
+            format!("global.{key}"),
+        ]);
+        keys.iter()
+            .find_map(|key| self.entry(key).filter(|v| !v.is_empty()))
+            .map(str::to_owned)
     }
 
     /// Re-read under the shared shell lock and atomically replace one entry.

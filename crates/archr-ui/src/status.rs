@@ -18,30 +18,56 @@ pub struct Battery {
     pub percent: u8,
     pub charging: bool,
 }
+/// Off-thread acquisition shared by the status pill and information cards.
+pub fn read_battery(root: &Path) -> Option<Battery> {
+    battery_at(&find_battery(root)?)
+}
+/// The first power supply named `battery` or of type `Battery`, by name order.
+fn find_battery(root: &Path) -> Option<PathBuf> {
+    let base = root.join("sys/class/power_supply");
+    let mut sources: Vec<_> = fs::read_dir(base).ok()?.filter_map(Result::ok).collect();
+    sources.sort_by_key(|e| e.file_name());
+    sources.into_iter().map(|e| e.path()).find(|p| {
+        p.file_name().is_some_and(|v| v == "battery")
+            || archr_io::read_utf8(&p.join("type"), 4096, archr_io::Symlinks::Follow)
+                .is_ok_and(|s| s.trim() == "Battery")
+    })
+}
+fn battery_at(path: &Path) -> Option<Battery> {
+    let percent = archr_io::read_utf8(&path.join("capacity"), 4096, archr_io::Symlinks::Follow)
+        .ok()?
+        .trim()
+        .parse::<u8>()
+        .ok()?;
+    let charging = archr_io::read_utf8(&path.join("status"), 4096, archr_io::Symlinks::Follow)
+        .is_ok_and(|s| s.trim() == "Charging");
+    (percent <= 100).then_some(Battery { percent, charging })
+}
+/// Polled every 2 s: the directory is found once and searched for again only
+/// after a failed read, so a steady tick costs exactly two small reads.
 struct BatterySource {
-    path: PathBuf,
+    root: PathBuf,
+    dir: Option<PathBuf>,
     next_read: Instant,
 }
 impl BatterySource {
+    fn new(root: PathBuf, now: Instant) -> Self {
+        Self {
+            root,
+            dir: None,
+            next_read: now,
+        }
+    }
     fn poll(&mut self, now: Instant) -> Option<Option<Battery>> {
         if now < self.next_read {
             return None;
         }
         self.next_read = now + BATTERY_REFRESH;
-        Some((|| {
-            let percent = fs::read_to_string(self.path.join("capacity"))
-                .ok()?
-                .trim()
-                .parse::<u8>()
-                .ok()?;
-            if percent > 100 {
-                return None;
-            }
-            let charging = fs::read_to_string(self.path.join("status"))
-                .ok()
-                .is_some_and(|s| s.trim() == "Charging");
-            Some(Battery { percent, charging })
-        })())
+        if let Some(battery) = self.dir.as_deref().and_then(battery_at) {
+            return Some(Some(battery));
+        }
+        self.dir = find_battery(&self.root);
+        Some(self.dir.as_deref().and_then(battery_at))
     }
 }
 #[derive(Clone, Copy, Default, PartialEq)]
@@ -65,10 +91,7 @@ impl Worker {
         thread::Builder::new()
             .name("launcher-status".into())
             .spawn(move || {
-                let mut source = BatterySource {
-                    path: path.join("sys/class/power_supply/battery"),
-                    next_read: Instant::now(),
-                };
+                let mut source = BatterySource::new(path.clone(), Instant::now());
                 let mut snapshot = Snapshot::default();
                 let mut next_wifi = Instant::now();
                 loop {
@@ -159,6 +182,10 @@ impl Status {
             .as_secs();
         self.update(unix, snapshot)
     }
+    /// Recompute even within the same minute after a timezone change.
+    pub fn invalidate_clock(&mut self) {
+        self.minute = u64::MAX;
+    }
     fn update(&mut self, unix: u64, snapshot: Option<Snapshot>) -> bool {
         let mut changed = false;
         if let Some(Snapshot { battery, wifi }) = snapshot {
@@ -203,6 +230,18 @@ fn local_clock(unix: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn timezone_change_invalidates_a_clock_cached_within_the_minute() {
+        let mut status = Status::new(None, Instant::now());
+        let unix = 1_700_000_040;
+        status.minute = unix / 60;
+        status.clock = "stale timezone".into();
+        assert!(!status.update(unix, None));
+        status.invalidate_clock();
+        assert!(status.update(unix, None));
+        assert_ne!(status.clock, "stale timezone");
+    }
+
     #[test]
     fn redraw_only_when_displayed_clock_or_snapshot_changes() {
         let mut status = Status::new(None, Instant::now());
@@ -320,14 +359,12 @@ mod tests {
     #[test]
     fn battery_source_is_optional_and_throttled_to_two_seconds() {
         let root = tempfile::tempdir().unwrap();
-        let path = root.path().to_owned();
+        let path = root.path().join("sys/class/power_supply/battery");
+        fs::create_dir_all(&path).unwrap();
         fs::write(path.join("capacity"), "87").unwrap();
         fs::write(path.join("status"), "Charging").unwrap();
         let now = Instant::now();
-        let mut source = BatterySource {
-            path: path.clone(),
-            next_read: now,
-        };
+        let mut source = BatterySource::new(root.path().into(), now);
         assert_eq!(
             source.poll(now),
             Some(Some(Battery {
@@ -345,5 +382,34 @@ mod tests {
         assert_eq!(source.poll(now + BATTERY_REFRESH * 2), Some(None));
         fs::remove_file(path.join("capacity")).unwrap();
         assert_eq!(source.poll(now + BATTERY_REFRESH * 3), Some(None));
+    }
+
+    #[test]
+    fn battery_directory_is_cached_and_searched_again_only_after_a_failed_read() {
+        let root = tempfile::tempdir().unwrap();
+        let supplies = root.path().join("sys/class/power_supply");
+        let supply = |name: &str, percent: &str| {
+            let dir = supplies.join(name);
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(dir.join("type"), "Battery\n").unwrap();
+            fs::write(dir.join("capacity"), percent).unwrap();
+        };
+        supply("rk817-battery", "40");
+        let now = Instant::now();
+        let mut source = BatterySource::new(root.path().into(), now);
+        let percent = |source: &mut BatterySource, tick: u32| {
+            source
+                .poll(now + BATTERY_REFRESH * tick)
+                .unwrap()
+                .map(|b| b.percent)
+        };
+        assert_eq!(percent(&mut source, 0), Some(40));
+        // An earlier-sorting supply appears: the cached directory keeps winning.
+        supply("axp-battery", "90");
+        assert_eq!(percent(&mut source, 1), Some(40));
+        // Only a failed read triggers a new search.
+        fs::remove_dir_all(supplies.join("rk817-battery")).unwrap();
+        assert_eq!(percent(&mut source, 2), Some(90));
+        assert_eq!(source.dir, Some(supplies.join("axp-battery")));
     }
 }

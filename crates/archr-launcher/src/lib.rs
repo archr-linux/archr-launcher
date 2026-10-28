@@ -8,3 +8,5 @@ pub mod wifi;
 mod worker;
 
 mod persistence;
+
+pub mod settings;

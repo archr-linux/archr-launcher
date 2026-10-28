@@ -279,6 +279,10 @@ impl<'font> PreparedText<'font> {
             }
         }
     }
+    /// Reads icon SVG sources now; rasterizing them later touches no files.
+    pub(crate) fn preload_icons(&mut self, glyphs: &[Glyph]) {
+        self.icon_loader.preload(glyphs);
+    }
     pub(crate) fn label(&mut self, source: &str, style: Style, width: u32) -> Result<(), String> {
         let source = bounded_source(source);
         if self
@@ -656,6 +660,48 @@ mod tests {
             assert!(!tags.iter().any(|t| *t == b"fpgm" || *t == b"prep"));
         }
     }
+
+    #[test]
+    fn collection_startup_prepares_row_icons_but_not_deferred_panel_icons() {
+        struct Collection(&'static str);
+        impl crate::state::DataSource for Collection {
+            fn systems(&self) -> &[archr_index::cache::SystemEntry] {
+                &[]
+            }
+            fn games(&self, _: &str) -> &[archr_index::Game] {
+                &[]
+            }
+            fn collection_len(&self, name: &str) -> usize {
+                usize::from(name == self.0)
+            }
+            fn origin(&self, _: &str, _: usize) -> Option<(String, usize)> {
+                None
+            }
+            fn cores(&self, _: &str) -> Vec<(String, String)> {
+                vec![]
+            }
+            fn current_core(&self, _: &str, _: usize) -> Option<(String, String)> {
+                None
+            }
+        }
+        let _sdl = crate::SDL_TEST_LOCK.lock().unwrap();
+        let ttf = sdl2::ttf::init().unwrap();
+        for (collection, glyph) in [("@favorites", Glyph::Star), ("@recent", Glyph::Clock)] {
+            let prepared = crate::render::prepare_first_frame(
+                &ttf,
+                &crate::Theme::builtin(),
+                (None, None, Path::new(icons::DEFAULT_ICONS_DIR)),
+                &crate::i18n::I18n::default(),
+                &Collection(collection),
+                (640, 480),
+                StartupTrace::default(),
+            )
+            .unwrap();
+            assert!(prepared.icons.iter().any(|(key, _)| *key == (glyph, 16)));
+            assert!(!prepared.icons.iter().any(|((_, size), _)| *size == 96));
+        }
+    }
+
     #[test]
     fn ellipsis_is_font_measured_and_unicode_safe() {
         let _sdl = crate::SDL_TEST_LOCK.lock().unwrap();

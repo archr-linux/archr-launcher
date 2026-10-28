@@ -338,12 +338,31 @@ fn quick_menu_from_systems_works_even_without_systems() {
         assert_eq!(app.screen, Screen::QuickMenu { game: None });
         assert_eq!(
             app.quick_menu_items(&data),
-            [QuickItem::Suspend, QuickItem::Reboot, QuickItem::Shutdown]
+            [
+                QuickItem::Settings,
+                QuickItem::Move,
+                QuickItem::Suspend,
+                QuickItem::Reboot,
+                QuickItem::Shutdown
+            ]
         );
         app.handle(Button::Down, &data);
         app.handle(Button::B, &data);
         assert_eq!(app.screen, Screen::Systems);
         assert_eq!(app.cursor, cursor);
+    }
+}
+
+#[test]
+fn settings_remains_accessible_alongside_order_actions() {
+    let mut data = FakeData::library();
+    for order in [vec![], vec!["snes".to_owned(), "nes".to_owned()]] {
+        data.order = order;
+        let mut app = App::new(5);
+        app.handle(Button::Y, &data);
+        assert_eq!(app.quick_menu_items(&data)[0], QuickItem::Settings);
+        assert_eq!(app.handle(Button::A, &data), Outcome::Settings);
+        assert_eq!(app.screen, Screen::Systems);
     }
 }
 
@@ -391,7 +410,11 @@ fn quick_menu_tools_and_ports_hide_core_but_keep_all_session_actions() {
         .insert("ports".into(), vec![pair("portmaster", "portmaster")]);
     for system in [None, Some("snes"), Some("tools"), Some("ports")] {
         let mut app = system.map_or_else(|| App::new(5), |s| in_games(s, 0));
-        let core_rows = usize::from(system == Some("snes"));
+        let core_rows = if system.is_none() {
+            2
+        } else {
+            usize::from(system == Some("snes"))
+        };
         app.handle(Button::Y, &data);
         assert_eq!(
             app.quick_menu_items(&data).len(),
@@ -613,4 +636,81 @@ fn quick_menu_preserves_the_collection_backdrop_and_cursor() {
     );
     app.handle(Button::B, &data);
     assert_eq!(app.backdrop(), (&app.screen, 1));
+}
+
+fn ordered(data: &FakeData) -> Vec<String> {
+    App::system_rows(data)
+}
+
+#[test]
+fn saved_order_wins_then_new_systems_follow_and_removed_ids_are_ignored() {
+    let mut data = FakeData::library();
+    data.collections();
+    data.order = ["snes", "gone", "@recent", "snes"].map(String::from).into();
+    assert_eq!(ordered(&data), ["snes", "@recent", "@favorites", "nes"]);
+    data.order.clear();
+    assert_eq!(ordered(&data), ["@favorites", "@recent", "nes", "snes"]);
+}
+
+fn start_move(data: &FakeData, cursor: usize) -> App {
+    let mut app = App::new(5);
+    app.cursor = cursor;
+    app.handle(Button::Y, data);
+    app.handle(Button::Down, data);
+    assert_eq!(app.quick_menu_items(data)[app.cursor], QuickItem::Move);
+    assert_eq!(app.handle(Button::A, data), Outcome::None);
+    assert_eq!(app.screen, Screen::Systems);
+    app
+}
+
+#[test]
+fn move_swaps_rows_with_the_cursor_and_confirm_publishes_the_order() {
+    let mut data = FakeData::library();
+    data.collections();
+    let mut app = start_move(&data, 1);
+    assert_eq!(app.moving(), Some(("@recent", 2, 4)));
+    app.handle(Button::Down, &data);
+    app.handle(Button::Down, &data);
+    app.handle(Button::Down, &data);
+    assert_eq!(app.cursor, 3, "clamped at the last row");
+    app.handle(Button::Up, &data);
+    app.handle(Button::L, &data);
+    app.handle(Button::Start, &data);
+    assert_eq!(app.screen, Screen::Systems, "other buttons are ignored");
+    assert_eq!(app.rows(&data), ["@favorites", "nes", "@recent", "snes"]);
+    assert_eq!(ordered(&data), ["@favorites", "@recent", "nes", "snes"]);
+    let expected = ["@favorites", "nes", "@recent", "snes"].map(String::from);
+    assert_eq!(
+        app.handle(Button::A, &data),
+        Outcome::SetOrder(expected.into())
+    );
+    assert_eq!((app.moving(), app.cursor), (None, 2));
+}
+
+#[test]
+fn cancel_restores_the_previous_order_and_cursor() {
+    let data = FakeData::library();
+    let mut app = start_move(&data, 0);
+    app.handle(Button::Down, &data);
+    assert_eq!(app.handle(Button::B, &data), Outcome::None);
+    assert_eq!((app.moving(), app.cursor), (None, 0));
+    assert_eq!(app.rows(&data), ["nes", "snes"]);
+}
+
+#[test]
+fn restore_item_exists_only_with_a_custom_order_and_keeps_the_cursor_on_its_row() {
+    let mut data = FakeData::library();
+    let mut app = App::new(5);
+    app.handle(Button::Y, &data);
+    assert!(!app
+        .quick_menu_items(&data)
+        .contains(&QuickItem::RestoreOrder));
+    data.order = ["snes", "nes"].map(String::from).into();
+    app.handle(Button::B, &data);
+    app.handle(Button::Y, &data);
+    assert_eq!(app.quick_menu_items(&data)[2], QuickItem::RestoreOrder);
+    app.handle(Button::Down, &data);
+    app.handle(Button::Down, &data);
+    assert_eq!(app.handle(Button::A, &data), Outcome::SetOrder(Vec::new()));
+    assert_eq!((app.screen.clone(), app.cursor), (Screen::Systems, 1));
 }

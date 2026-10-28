@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use archr_index::{load_systems, IndexError};
 
 fn fixture() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/es_systems.cfg")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/systems.cfg")
 }
 
 #[test]
@@ -15,6 +15,9 @@ fn parses_three_systems() {
     assert_eq!(systems[0].name, "3do");
     assert_eq!(systems[0].fullname, "3DO");
     assert_eq!(systems[0].path, Path::new("/storage/roms/3do"));
+    assert!(systems[0]
+        .command
+        .starts_with("/usr/bin/runemu.sh %ROM% -P%SYSTEM%"));
     assert_eq!(systems[1].name, "amiga");
     assert_eq!(systems[1].fullname, "Amiga");
     assert_eq!(systems[1].path, Path::new("/storage/roms/amiga"));
@@ -159,7 +162,7 @@ fn empty_system_list_is_valid() {
 
 fn parse_xml(xml: &str) -> Result<Vec<archr_index::SystemDef>, IndexError> {
     let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("es_systems.cfg");
+    let path = directory.path().join("systems.cfg");
     std::fs::write(&path, xml).unwrap();
     load_systems(&path)
 }

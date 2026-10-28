@@ -12,13 +12,13 @@ use std::{
 
 fn fixture() -> (tempfile::TempDir, Paths) {
     let dir = tempfile::tempdir().unwrap();
-    let config = dir.path().join("storage/.config/emulationstation");
+    let config = dir.path().join("storage/.config/archr");
     fs::create_dir_all(&config).unwrap();
     let paths = Paths::new(Some(dir.path().to_owned()));
     let roms = paths.at("/storage/roms/nes");
     fs::create_dir_all(&roms).unwrap();
     fs::write(roms.join("A.nes"), []).unwrap();
-    fs::write(config.join("es_systems.cfg"), "<systemList><system><name>nes</name><fullname>Nintendo</fullname><path>/storage/roms/nes</path><extension>.nes</extension><emulators><emulator name=\"retroarch\"><cores><core default=\"true\">fceumm</core><core>nestopia</core></cores></emulator></emulators></system></systemList>").unwrap();
+    fs::write(config.join("systems.cfg"), "<systemList><system><name>nes</name><fullname>Nintendo</fullname><path>/storage/roms/nes</path><extension>.nes</extension><emulators><emulator name=\"retroarch\"><cores><core default=\"true\">fceumm</core><core>nestopia</core></cores></emulator></emulators></system></systemList>").unwrap();
     let paths = Paths::new(Some(dir.path().to_owned()));
     let mut definitions = load_systems(&paths.systems).unwrap();
     definitions[0].path = roms.clone();
@@ -328,4 +328,130 @@ fn invalid_store_is_visible_and_never_replaced_on_exit() {
     );
     library.finish().unwrap();
     assert_eq!(fs::read_to_string(path).unwrap(), "broken [");
+}
+
+#[test]
+fn system_order_is_saved_off_thread_reloaded_and_default_order_clears_it() {
+    let (_dir, paths) = fixture();
+    let mut library = ready(&paths, None);
+    let custom = ["nes", "@favorites"].map(String::from).to_vec();
+    assert!(!library
+        .handle(Outcome::SetOrder(custom.clone()), "")
+        .unwrap());
+    assert_eq!(App::system_rows(&library), ["nes", "@favorites"]);
+    library.finish().unwrap();
+    assert_eq!(Store::load(&paths.store).order(), custom);
+    let mut reopened = ready(&paths, None);
+    assert_eq!(App::system_rows(&reopened), ["nes", "@favorites"]);
+    // Saving the default arrangement is the same as having no custom order.
+    let default = ["@favorites", "nes"].map(String::from).to_vec();
+    reopened.handle(Outcome::SetOrder(default), "").unwrap();
+    assert!(reopened.system_order().is_empty());
+    reopened.finish().unwrap();
+    assert!(Store::load(&paths.store).order().is_empty());
+}
+
+#[test]
+fn saved_order_is_known_before_the_worker_starts() {
+    let (_dir, paths) = fixture();
+    let mut store = Store::load(&paths.store);
+    store.set_order(["nes", "@favorites"].map(String::from).into(), |_| true);
+    store.save(&paths.store).unwrap();
+    let library = Library::initial(paths);
+    assert!(!library.ready);
+    assert_eq!(library.system_order(), ["nes", "@favorites"]);
+}
+
+#[test]
+fn restore_from_the_menu_clears_the_persisted_order() {
+    use archr_launcher::state::{Button, QuickItem};
+    let (_dir, paths) = fixture();
+    let mut library = ready(&paths, None);
+    library
+        .handle(
+            Outcome::SetOrder(["nes", "@favorites"].map(String::from).into()),
+            "",
+        )
+        .unwrap();
+    let mut app = App::new(5);
+    app.handle(Button::Y, &library);
+    assert_eq!(app.quick_menu_items(&library)[2], QuickItem::RestoreOrder);
+    app.handle(Button::Down, &library);
+    app.handle(Button::Down, &library);
+    let outcome = app.handle(Button::A, &library);
+    library.handle(outcome, "").unwrap();
+    library.finish().unwrap();
+    assert_eq!(App::system_rows(&library), ["@favorites", "nes"]);
+    assert!(Store::load(&paths.store).order().is_empty());
+}
+
+#[test]
+fn confirming_an_order_before_boot_keeps_favorites_and_survives_boot() {
+    let (_dir, paths) = fixture();
+    let mut library = Library::initial(paths.clone());
+    library.start();
+    assert!(!library.ready);
+    let custom = ["nes", "@favorites"].map(String::from).to_vec();
+    library
+        .handle(Outcome::SetOrder(custom.clone()), "")
+        .unwrap();
+    wait(&mut library, |l| l.ready);
+    assert_eq!(
+        library.system_order(),
+        custom,
+        "Boot must not undo the move"
+    );
+    assert_eq!(library.favorite_count("nes"), 1);
+    library.finish().unwrap();
+    let saved = Store::load(&paths.store);
+    assert_eq!(saved.order(), custom);
+    assert_eq!(saved.favorites().len(), 1);
+}
+
+#[test]
+fn invalid_store_banner_is_shown_from_the_initial_library() {
+    let (_dir, paths) = fixture();
+    fs::write(paths.store.join("store.toml"), "favorites = [").unwrap();
+    let library = Library::initial(paths);
+    assert!(library.banner.is_some());
+}
+
+#[test]
+fn systems_without_emulators_launch_their_catalog_command() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = Paths::new(Some(dir.path().to_owned()));
+    let tools = paths.at("/storage/.config/modules");
+    fs::create_dir_all(&tools).unwrap();
+    fs::write(tools.join("Mount NFS.sh"), []).unwrap();
+    let music = paths.at("/storage/roms/music");
+    fs::create_dir_all(&music).unwrap();
+    fs::write(music.join("Song.rom"), []).unwrap();
+    let catalog = paths.at("/storage/.config/archr/systems.cfg");
+    fs::create_dir_all(catalog.parent().unwrap()).unwrap();
+    fs::write(&catalog, "<systemList><system><name>tools</name><fullname>Tools</fullname><path>/storage/.config/modules</path><extension>.sh</extension><command>/usr/bin/foot %ROM%</command></system><system><name>music</name><fullname>Music</fullname><path>/storage/roms/music</path><extension>.rom</extension></system></systemList>").unwrap();
+    let paths = Paths::new(Some(dir.path().to_owned()));
+    let mut library = ready(&paths, Some("tools"));
+    let launch = |system: &str| Outcome::Launch {
+        system: system.into(),
+        game: 0,
+    };
+    assert!(library.handle(launch("tools"), "pad").unwrap());
+    let rom = tools.join("Mount NFS.sh");
+    assert_eq!(
+        fs::read_to_string(paths.run.join("next")).unwrap(),
+        format!(
+            "game ARCHR_ROM='{}'; ARCHR_BASENAME='Mount NFS'; ARCHR_SYSTEM='tools'; \
+             export ARCHR_ROM ARCHR_BASENAME ARCHR_SYSTEM; /usr/bin/foot \"$ARCHR_ROM\"\n",
+            rom.display()
+        )
+    );
+    fs::remove_file(paths.run.join("next")).unwrap();
+    // Neither emulators nor a command: nothing is published.
+    library.ensure("music");
+    wait(&mut library, |l| !l.loading("music"));
+    assert_eq!(
+        library.handle(launch("music"), "").unwrap_err(),
+        "error.no_core"
+    );
+    assert!(!paths.run.join("next").exists());
 }

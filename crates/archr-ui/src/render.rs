@@ -11,6 +11,7 @@ use crate::{
     status::{Battery, Status},
     text::{color, Align, Face, Style, TextCache},
     theme::{Rect01, Rgba, Theme},
+    HintButton,
 };
 mod hub;
 
@@ -89,6 +90,93 @@ fn selection<T>(selected: bool, normal: T, highlighted: T) -> T {
     }
 }
 
+/// List offset of row `i` when `cursor` is the selected row: rows below it
+/// make room for the taller pill, and rows after the collections for the divider.
+fn slot(
+    i: usize,
+    cursor: usize,
+    collections: usize,
+    (pitch, divider, extra): (f32, f32, f32),
+) -> f32 {
+    i as f32 * pitch
+        + if collections > 0 && i >= collections {
+            divider
+        } else {
+            0.
+        }
+        + if i > cursor { extra } else { 0. }
+}
+
+/// Side of the Lucide chevrons that flank a lifted row.
+const CHEVRON: f32 = 18.;
+
+/// "Name (detail)" without its trailing parenthetical, when it has one.
+fn without_detail(name: &str) -> &str {
+    name.strip_suffix(')')
+        .and_then(|s| s.rsplit_once(" ("))
+        .map_or(name, |(short, _)| short)
+}
+
+/// How much of the move status survives: everything, a compact position, or
+/// the name alone.
+#[derive(Clone, Copy)]
+enum MoveStatus {
+    Full,
+    Short,
+    Name,
+}
+
+fn status_text(
+    catalog: &I18n,
+    name: &str,
+    (n, total): (usize, usize),
+    status: MoveStatus,
+) -> String {
+    let key = match status {
+        MoveStatus::Full => "move.status",
+        MoveStatus::Short => "move.status_short",
+        MoveStatus::Name => return name.to_owned(),
+    };
+    catalog.format(
+        key,
+        &[
+            ("name", name),
+            ("n", &n.to_string()),
+            ("total", &total.to_string()),
+        ],
+    )
+}
+
+/// Status text is never ellipsized: full, compact, then the name without its
+/// parenthetical, shrinking to 10px, and finally without the position.
+fn fit_status(
+    name: &str,
+    width: u32,
+    mut form: impl FnMut(&str, MoveStatus) -> String,
+    mut measure: impl FnMut(&str, f32) -> Result<u32, String>,
+) -> Result<(String, f32), String> {
+    let short = without_detail(name);
+    let tries = [
+        (name, MoveStatus::Full, 13.),
+        (name, MoveStatus::Short, 13.),
+    ]
+    .into_iter()
+    .chain([
+        (short, MoveStatus::Full, 13.),
+        (short, MoveStatus::Short, 13.),
+    ])
+    .chain([12., 11., 10.].map(|size| (short, MoveStatus::Short, size)))
+    .chain([13., 12., 11., 10.].map(|size| (short, MoveStatus::Name, size)));
+    let mut last = (String::new(), 10.);
+    for (name, status, size) in tries {
+        last = (form(name, status), size);
+        if measure(&last.0, size)? <= width {
+            break;
+        }
+    }
+    Ok(last)
+}
+
 /// Keep system rows single-line; parenthetical detail remains in the artwork panel.
 fn fit_system_name(
     name: &str,
@@ -99,10 +187,7 @@ fn fit_system_name(
     if measure(name, size)? <= width {
         return Ok((name, size));
     }
-    let name = name
-        .strip_suffix(')')
-        .and_then(|s| s.rsplit_once(" ("))
-        .map_or(name, |(short, _)| short);
+    let name = without_detail(name);
     while size > minimum && measure(name, size)? > width {
         size = (size - 1.).max(minimum);
     }
@@ -113,6 +198,11 @@ struct ListMotion {
     key: String,
     scroll: Tween,
     pill: Tween,
+    /// Cursor of the previous frame while a row is lifted, and the neighbour
+    /// it displaced, which glides into its new place.
+    held: Option<(usize, usize)>,
+    swap_row: usize,
+    swap: Tween,
 }
 impl ListMotion {
     fn new() -> Self {
@@ -120,6 +210,9 @@ impl ListMotion {
             key: String::new(),
             scroll: Tween::new(0., Duration::from_millis(90)),
             pill: Tween::new(0., Duration::from_millis(90)),
+            held: None,
+            swap_row: 0,
+            swap: Tween::new(0., Duration::from_millis(90)),
         }
     }
 }
@@ -180,6 +273,9 @@ fn battery_glyph(battery: Battery) -> Glyph {
         }
     }
 }
+
+#[path = "settings/render.rs"]
+mod settings_render;
 
 pub struct Ui<'font, 'texture> {
     startup: StartupTrace,
@@ -350,6 +446,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
     pub fn snap_animations(&mut self) {
         self.list.scroll.snap();
         self.list.pill.snap();
+        self.list.swap.snap();
         self.menu_pill.snap();
         self.cover_fade.snap();
     }
@@ -452,34 +549,67 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         theme: &Theme,
         cover: Option<&Texture<'_>>,
     ) -> Result<(), String> {
+        self.draw_with_settings(app, data, theme, cover, None)
+    }
+    pub fn draw_with_settings(
+        &mut self,
+        app: &App,
+        data: &dyn DataSource,
+        theme: &Theme,
+        cover: Option<&Texture<'_>>,
+        settings: Option<&crate::settings::Settings>,
+    ) -> Result<(), String> {
         self.frame = Frame::from_size(self.canvas.output_size()?);
         let Frame {
             width, height, now, ..
         } = self.frame;
         self.canvas.set_draw_color(color(theme.background));
         self.canvas.clear();
-        let (backdrop, cursor) = app.backdrop();
-        self.header(backdrop, cursor, data, theme)?;
-        if matches!(app.screen, Screen::StartHub { .. }) {
-            self.hub(app, data, theme)?;
+        if let Some(settings) = settings {
+            self.settings_page(settings, theme)?;
+            self.animating = false; // Static applying label; completion marks the frame dirty.
         } else {
-            self.list(backdrop, cursor, data, theme)?;
-            // Keep the first present to the prepared list; the panel follows
-            // on the redraw requested when tick starts the artwork worker.
-            if self.has_presented && matches!(backdrop, Screen::Systems) {
-                self.system_panel(&App::system_rows(data), cursor, data, theme)?;
+            let (backdrop, cursor) = app.backdrop();
+            self.header(backdrop, cursor, data, theme)?;
+            if matches!(app.screen, Screen::StartHub { .. }) {
+                self.hub(app, data, theme)?;
+            } else {
+                let rows = if matches!(backdrop, Screen::Systems) {
+                    app.rows(data)
+                } else {
+                    Vec::new()
+                };
+                let lifted = app.moving().is_some();
+                self.list(backdrop, (&rows, lifted), cursor, data, theme)?;
+                // Secondary visuals follow the redraw requested by the artwork worker.
+                if self.has_presented && matches!(backdrop, Screen::Systems) {
+                    self.system_panel(&rows, cursor, data, theme)?;
+                    if lifted {
+                        let panel = system_art::panel_rect(self.frame, theme);
+                        self.canvas.set_draw_color(color(Rgba {
+                            a: 140,
+                            ..theme.background
+                        }));
+                        self.canvas.fill_rect(panel)?;
+                    }
+                }
+                if let Screen::Games { system } = backdrop {
+                    self.cover(system, cursor, data, theme, cover)?;
+                }
+                if self.has_presented {
+                    self.footer(app, data, theme)?;
+                }
             }
-            if let Screen::Games { system } = backdrop {
-                self.cover(system, cursor, data, theme, cover)?;
+            if matches!(app.screen, Screen::QuickMenu { .. }) {
+                self.menu(app, data, theme)?;
+            } else {
+                self.menu_open = false;
             }
-            if self.has_presented {
-                self.footer(app, data, theme)?;
-            }
-        }
-        if matches!(app.screen, Screen::QuickMenu { .. }) {
-            self.menu(app, data, theme)?;
-        } else {
-            self.menu_open = false;
+            self.animating = self.list.scroll.active(now)
+                || self.list.pill.active(now)
+                || self.list.swap.active(now)
+                || self.menu_pill.active(now)
+                || self.cover_fade.active(now);
         }
         if let Some(banner) = self.banner.clone() {
             self.notice(&banner, theme)?;
@@ -487,10 +617,6 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         if let Some(message) = self.transition.clone() {
             self.notice(&message, theme)?;
         }
-        self.animating = self.list.scroll.active(now)
-            || self.list.pill.active(now)
-            || self.menu_pill.active(now)
-            || self.cover_fade.active(now);
         // Explicit debug readback; normal rendering does no disk I/O.
         if let Some(path) = self.screenshot.take() {
             let rgba = self
@@ -513,13 +639,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         }
         Ok(())
     }
-    fn header(
-        &mut self,
-        screen: &Screen,
-        cursor: usize,
-        data: &dyn DataSource,
-        theme: &Theme,
-    ) -> Result<(), String> {
+    fn status_header(&mut self, theme: &Theme) -> Result<i32, String> {
         let Frame { width, height, .. } = self.frame;
         let h = (theme.header_height * height as f32).round() as u32;
         let pad = self.px(24.);
@@ -563,6 +683,18 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             }
             right = layout.pill.x() - self.px(20.);
         }
+        Ok(right)
+    }
+    fn header(
+        &mut self,
+        screen: &Screen,
+        cursor: usize,
+        data: &dyn DataSource,
+        theme: &Theme,
+    ) -> Result<(), String> {
+        let right = self.status_header(theme)?;
+        let h = (theme.header_height * self.frame.height as f32).round() as u32;
+        let pad = self.px(24.);
         if let Screen::Games { system } = screen {
             let title = system_title(system, data, &self.catalog);
             let pos = format!(
@@ -606,6 +738,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
     fn list(
         &mut self,
         screen: &Screen,
+        (systems, lifted): (&[String], bool),
         cursor: usize,
         data: &dyn DataSource,
         theme: &Theme,
@@ -613,7 +746,6 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         let Frame {
             width, height, now, ..
         } = self.frame;
-        let systems = App::system_rows(data);
         let (key, len, collections, is_games) = match screen {
             Screen::Games { system } => (system.clone(), data.games(system).len(), 0, true),
             _ => (
@@ -647,8 +779,8 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         } else {
             0.
         };
-        let y_of =
-            |i: usize| i as f32 * (row + gap) + if i >= collections { separator } else { 0. };
+        let metrics = (row + gap, self.px(15.) as f32, extra);
+        let y_of = |i: usize| slot(i, cursor, collections, metrics);
         let target = y_of(cursor);
         let available = (bottom - top).max(1) as f32;
         let total = len as f32 * (row + gap) + separator + extra;
@@ -670,6 +802,22 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             self.list.scroll.retarget(scroll, now);
             self.list.pill.retarget(target, now);
         }
+        if let Some((prev, was)) = self
+            .list
+            .held
+            .filter(|&(p, _)| lifted && p.abs_diff(cursor) == 1)
+        {
+            // The displaced row now sits at the lifted row's old index; it
+            // starts from where the previous layout actually drew it.
+            let before = slot(cursor, prev, was, metrics);
+            self.list.swap_row = prev;
+            self.list
+                .swap
+                .retarget(before - slot(prev, cursor, collections, metrics), now);
+            self.list.swap.snap();
+            self.list.swap.retarget(0., now);
+        }
+        self.list.held = lifted.then_some((cursor, collections));
         let offset = self.list.scroll.value(now);
         self.canvas.set_clip_rect(Rect::new(
             margin,
@@ -677,19 +825,27 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             list_width,
             (bottom - top).max(1) as u32,
         ));
+        // A lifted row sits slightly right of the list, in an outline.
+        let lift = if lifted { self.px(6.) } else { 0 };
         if len > 0 {
             let pill = Rect::new(
-                margin,
+                margin + lift,
                 top + (self.list.pill.value(now) - offset).round() as i32,
-                list_width,
+                list_width - lift as u32,
                 selected.max(1.) as u32,
             );
-            self.rounded(
-                pill,
-                theme.radius_item * height as f32,
-                theme.highlight_bg,
-                None,
-            )?;
+            let radius = theme.radius_item * height as f32;
+            if lifted {
+                let fill = Rgba {
+                    a: 40,
+                    ..theme.highlight_bg
+                };
+                self.rounded(pill, radius, fill, None)?;
+                self.geometry
+                    .dashed(&mut self.canvas, pill, radius, theme.highlight_bg)?;
+            } else {
+                self.rounded(pill, radius, theme.highlight_bg, None)?;
+            }
         }
         if collections > 0 {
             let y = top
@@ -707,7 +863,12 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         let first = ((offset - separator - extra).max(0.) / (row + gap)).floor() as usize;
         let last = ((offset + available) / (row + gap)).ceil() as usize + 1;
         for i in first..len.min(last) {
-            let y = top + (y_of(i) + if i > cursor { extra } else { 0. } - offset).round() as i32;
+            let glide = if i == self.list.swap_row {
+                self.list.swap.value(now)
+            } else {
+                0.
+            };
+            let y = top + (y_of(i) + glide - offset).round() as i32;
             let rh = if i == cursor { selected } else { row }.max(1.) as u32;
             if y + rh as i32 <= top || y >= bottom {
                 continue;
@@ -734,38 +895,53 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 game.name.clone()
             } else {
                 let name = systems.get(i).expect("visible system row");
-                let count = if name.starts_with('@') {
-                    data.collection_len(name)
-                } else {
-                    data.systems()
-                        .iter()
-                        .find(|s| s.name == *name)
-                        .map_or(0, |s| s.game_count as usize)
-                };
-                let count = count.to_string();
-                let face = selection(selected, Face::Mono, Face::MonoMedium);
-                let color = selection(selected, theme.dim_text, theme.accent_text_secondary);
-                right = self.packed_label(
-                    &count,
-                    (face, 13., color),
-                    (right, y, rh),
-                    u32::MAX,
-                    Align::Right,
-                )? - self.px(14.);
-                if name.starts_with('@') {
-                    let icon = self
-                        .frame
-                        .square(x, y + (rh as i32 - self.px(16.)) / 2, 16.);
-                    if name == "@favorites" {
-                        self.icon(
-                            Glyph::Star,
-                            icon,
-                            selection(selected, theme.highlight_bg, theme.highlight_text),
-                        )?;
-                    } else {
-                        self.icon(Glyph::Clock, icon, c)?;
-                    }
+                if lifted && selected {
+                    x += lift;
+                    let mid = y + rh as i32 / 2;
+                    let rect = self.frame.square(
+                        right - self.px(CHEVRON - 4.),
+                        mid - self.px(CHEVRON / 2.),
+                        CHEVRON,
+                    );
+                    self.icon(Glyph::ChevronsUpDown, rect, theme.highlight_bg)?;
+                    right -= self.px(CHEVRON + 4.);
+                    let icon = self.frame.square(x, mid - self.px(8.), 16.);
+                    self.icon(Glyph::ArrowUpDown, icon, theme.highlight_text)?;
                     x += self.px(26.);
+                } else {
+                    let count = if name.starts_with('@') {
+                        data.collection_len(name)
+                    } else {
+                        data.systems()
+                            .iter()
+                            .find(|s| s.name == *name)
+                            .map_or(0, |s| s.game_count as usize)
+                    };
+                    let count = count.to_string();
+                    let face = selection(selected, Face::Mono, Face::MonoMedium);
+                    let color = selection(selected, theme.dim_text, theme.accent_text_secondary);
+                    right = self.packed_label(
+                        &count,
+                        (face, 13., color),
+                        (right, y, rh),
+                        u32::MAX,
+                        Align::Right,
+                    )? - self.px(14.);
+                    if name.starts_with('@') {
+                        let icon = self
+                            .frame
+                            .square(x, y + (rh as i32 - self.px(16.)) / 2, 16.);
+                        if name == "@favorites" {
+                            self.icon(
+                                Glyph::Star,
+                                icon,
+                                selection(selected, theme.highlight_bg, theme.highlight_text),
+                            )?;
+                        } else {
+                            self.icon(Glyph::Clock, icon, c)?;
+                        }
+                        x += self.px(26.);
+                    }
                 }
                 system_title(name, data, &self.catalog)
             };
@@ -898,7 +1074,13 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         let h = (theme.footer_height * height as f32).round().max(1.) as u32;
         let y = height as i32 - h as i32;
         self.divider(0, y, width, theme.border)?;
+        let moving = app.moving();
         let hint_keys: &[(char, &str)] = match app.screen {
+            Screen::Systems if moving.is_some() => &[
+                ('↕', "hint.move"),
+                ('A', "hint.confirm"),
+                ('B', "hint.cancel"),
+            ],
             Screen::Systems => &[('A', "hint.open"), ('Y', "hint.menu")],
             Screen::Games { .. } => &[
                 ('A', "hint.play"),
@@ -910,17 +1092,38 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         };
         let left = self.hints(hint_keys, theme, width, y, h)?;
         if matches!(app.screen, Screen::Systems) {
+            let width = (left - self.px(40.)).max(1) as u32;
+            let (text, size, ink) = match moving {
+                Some((name, n, total)) => {
+                    let title = system_title(name, data, &self.catalog);
+                    let (catalog, frame, fonts) = (&self.catalog, self.frame, &mut self.text);
+                    let (text, size) = fit_status(
+                        &title,
+                        width,
+                        |name, status| status_text(catalog, name, (n, total), status),
+                        |text, size| {
+                            fonts
+                                .as_mut()
+                                .ok_or_else(|| catalog.text("error.font_init"))?
+                                .measure(text, Face::Regular, frame.font_size(size))
+                                .map_err(|e| localized_error(catalog, e))
+                        },
+                    )?;
+                    (text, size, theme.text)
+                }
+                None => (library_summary(data, &self.catalog), 13., theme.muted),
+            };
             self.label(
-                &library_summary(data, &self.catalog),
-                (Face::Regular, 13., theme.muted),
+                &text,
+                (Face::Regular, size, ink),
                 Rect::new(self.px(24.), y, (left - self.px(40.)).max(1) as u32, h),
             )?;
         }
         Ok(())
     }
-    fn hints(
+    fn hints<B: Copy + Into<HintButton>>(
         &mut self,
-        hints: &[(char, &str)],
+        hints: &[(B, &str)],
         theme: &Theme,
         width: u32,
         y: i32,
@@ -928,6 +1131,11 @@ impl<'font, 'texture> Ui<'font, 'texture> {
     ) -> Result<i32, String> {
         let mut right = width as i32 - self.px(24.);
         for &(button, key) in hints.iter().rev() {
+            let buttons = match button.into() {
+                HintButton::Key(key) => [Some(key), None],
+                HintButton::Pair(left, right) => [Some(left), Some(right)],
+            };
+            let paired = buttons[1].is_some();
             let label = self.catalog.text(key);
             right = self.packed_label(
                 &label,
@@ -936,22 +1144,42 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 u32::MAX,
                 Align::Left,
             )? - self.px(6.)
-                - self.px(20.);
-            let badge = self
-                .frame
-                .square(right, y + (h as i32 - self.px(20.)) / 2, 20.);
-            let size = self.px(11.).clamp(8, 128) as u16;
-            self.text
-                .as_mut()
-                .ok_or_else(|| self.catalog.text("error.font_init"))?
-                .draw_badge(
-                    &mut self.canvas,
-                    button,
-                    size,
-                    theme.badge,
-                    theme.text,
-                    badge,
+                - self.px(if paired { 50. } else { 20. });
+            if paired {
+                self.label_aligned(
+                    "/",
+                    (Face::Regular, 13., theme.muted),
+                    Rect::new(right + self.px(20.), y, self.px(10.) as u32, h),
+                    Align::Center,
                 )?;
+            }
+            for (n, button) in buttons.into_iter().flatten().enumerate() {
+                let badge = self.frame.square(
+                    right + self.px(n as f32 * 30.),
+                    y + (h as i32 - self.px(20.)) / 2,
+                    20.,
+                );
+                let size = self.px(11.).clamp(8, 128) as u16;
+                self.text
+                    .as_mut()
+                    .ok_or_else(|| self.catalog.text("error.font_init"))?
+                    .draw_badge(
+                        &mut self.canvas,
+                        if button == '↕' { ' ' } else { button },
+                        size,
+                        theme.badge,
+                        theme.text,
+                        badge,
+                    )?;
+                if button == '↕' {
+                    let icon = self.frame.square(
+                        badge.x() + (badge.width() as i32 - self.px(14.)) / 2,
+                        badge.y() + (badge.height() as i32 - self.px(14.)) / 2,
+                        14.,
+                    );
+                    self.icon(Glyph::ArrowUpDown, icon, theme.text)?;
+                }
+            }
             right -= self.px(16.);
         }
         Ok(right + self.px(16.))
@@ -994,7 +1222,12 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         self.scrim(theme, 1.2)?;
         let items = app.quick_menu_items(data);
         let has_core = matches!(items.first(), Some(QuickItem::Core));
-        let panel_h = if has_core { 300. } else { 256. };
+        let (base_h, base_items) = if has_core || items.first() == Some(&QuickItem::Settings) {
+            (300., 4)
+        } else {
+            (256., 3)
+        };
+        let panel_h = base_h + 42. * items.len().saturating_sub(base_items) as f32;
         // Optical centering: the approved modal sits 20px above center.
         let panel = self.modal(theme, (340., 32., panel_h, -self.px(20.)))?;
         let (title, subtitle) = if let Screen::QuickMenu {
@@ -1028,7 +1261,10 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         )?;
         let top = panel.y() + self.px(64.);
         let row = self.px(42.);
-        let divider_index = if has_core { 2 } else { 1 };
+        let divider_index = items
+            .iter()
+            .position(|item| *item == QuickItem::Reboot)
+            .unwrap_or(1);
         let core_extra = if has_core { self.px(4.) } else { 0 };
         let separator = self.px(10.);
         let offset = |index: usize| {
@@ -1067,7 +1303,10 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             let selected = index == app.cursor;
             let c = selection(selected, theme.text, theme.highlight_text);
             let label = match item {
+                QuickItem::Settings => "settings.title",
                 QuickItem::Core => "menu.core",
+                QuickItem::Move => "menu.move",
+                QuickItem::RestoreOrder => "menu.restore_order",
                 QuickItem::Suspend => "menu.suspend",
                 QuickItem::Reboot => "menu.reboot",
                 QuickItem::Shutdown => "menu.shutdown",
@@ -1306,17 +1545,9 @@ pub fn prepare_first_frame<'font>(
             Some(list_width.saturating_sub(frame.px(28.) as u32).max(1)),
         )?;
     }
-    if let Some(name) = systems.first().filter(|name| name.starts_with('@')) {
-        first_icons.push((
-            if name == "@favorites" {
-                Glyph::Star
-            } else {
-                Glyph::Clock
-            },
-            frame.px(96.) as u32,
-        ));
-    }
     prepared.prepare_icons(theme_dir, system_icons_dir, first_icons);
+    // Entering move mode must not read files on the render thread.
+    prepared.preload_icons(&[Glyph::ArrowUpDown, Glyph::ChevronsUpDown]);
     Ok(prepared)
 }
 
@@ -1404,6 +1635,69 @@ fn font_paths(theme: &Theme, root: Option<&Path>) -> [Vec<PathBuf>; 4] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn move_status_fits_beside_its_hints_in_every_locale_without_ellipsis() {
+        let _sdl = crate::SDL_TEST_LOCK.lock().unwrap();
+        let ttf = sdl2::ttf::init().unwrap();
+        let fonts = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../themes/default/fonts");
+        let font = |size: f32| {
+            ttf.load_font(fonts.join("Inter-Regular.ttf"), size as u16)
+                .unwrap()
+        };
+        let measure = |text: &str, size: f32| Ok(font(size).size_of(text).unwrap().0);
+        for code in ["en", "pt_BR", "es", "ru"] {
+            let i = I18n::load(
+                &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../locales"),
+                Some(code),
+                None,
+            );
+            // Footer: 24px margins, three badges with 6px gap, 16px between hints, 40px clearance.
+            let hints: u32 = ["hint.move", "hint.confirm", "hint.cancel"]
+                .iter()
+                .map(|key| measure(&i.text(key), 13.).unwrap() + 26)
+                .sum::<u32>()
+                + 32;
+            // The label ends 16px left of the hints; 24px margins on both sides.
+            let width = 640 - 24 - hints - 40 - 24 + 24;
+            for name in [
+                "Nintendo 64",
+                "Super Nintendo Entertainment System (Super Famicom)",
+                "MO/TO family (TO7, TO7/70, TO8, TO8D, TO9, TO9+, MO5 and MO6)",
+                "Игровая приставка Sega Mega Drive (Genesis)",
+            ] {
+                let (text, size) = fit_status(
+                    name,
+                    width,
+                    |name, status| status_text(&i, name, (12, 34), status),
+                    measure,
+                )
+                .unwrap();
+                assert!(
+                    measure(&text, size).unwrap() <= width,
+                    "{code}: {text} at {size}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn displaced_row_starts_from_its_previous_position_across_the_separator() {
+        let metrics = (40., 15., 6.);
+        // Rows: 2 collections, then systems; the first system (index 2) is lifted
+        // above Recentes (index 1), leaving a single leading collection.
+        let drawn_before = slot(1, 2, 2, metrics);
+        let target_after = slot(2, 1, 1, metrics);
+        assert_eq!(drawn_before, 40.);
+        let start = drawn_before - target_after;
+        assert_eq!(
+            target_after + start,
+            drawn_before,
+            "no jump on the first frame"
+        );
+        // Within one section the offset is the row pitch plus the pill growth.
+        assert_eq!(slot(4, 3, 2, metrics) - slot(3, 4, 2, metrics), 40. + 6.);
+    }
 
     #[test]
     fn system_names_fit_selected_and_unselected_rows_without_ellipsis() {

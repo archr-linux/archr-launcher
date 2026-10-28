@@ -21,21 +21,25 @@ para validar navegação, imagens e o contrato do supervisor, sem iniciar emulad
 Teclado: Enter abre, Backspace volta, X favorita, Y abre o menu, PgUp/PgDn
 ou esquerda/direita mudam de página/núcleo, cima/baixo selecionam. Escape fecha
 somente em modo janela. Direções mantidas repetem após 300 ms e depois a cada
-80 ms. Uma entrada de `es_input.cfg` com GUID ou nome correspondente tem
-prioridade, inclusive para pads reconhecidos como SDL GameController: nesses
-pads só os eventos raw são usados, sem duplicar os eventos GameController.
-Sem entrada ES, usa SDL GameController ou o fallback de botões/eixo/hat.
+80 ms. Os mapeamentos vêm só do banco SDL GameController
+(`SDL_GAMECONTROLLERCONFIG_FILE`, exportado pela sessão); o `es_input.cfg` não
+é lido. Pads reconhecidos usam apenas os eventos GameController; os demais, o
+fallback de botões/eixo/hat do joystick.
 
 `ARCHR_LAUNCHER_ROOT` prefixa os caminhos absolutos, inclusive os caminhos de
-ROMs de `es_systems.cfg`, ROMs/mídias absolutos do gamelist (antes dos testes
+ROMs do catálogo de sistemas, ROMs/mídias absolutos do gamelist (antes dos testes
 de existência), `/usr/bin/runemu.sh`, `/run/archr-launcher` e
 `/tmp/.system.cfg.lock`. Assim uma execução de teste não grava a trava nem o
 handoff do host. As fontes padrão tentam primeiro o prefixo, depois as fontes
 do host. Isso facilita testes, mas não é uma sandbox de segurança.
 
-A configuração de sistemas vem de
-`/storage/.config/emulationstation/es_systems.cfg`, ou de
-`/usr/config/emulationstation/es_systems.cfg` se a primeira não existir.
+O catálogo de sistemas (XML no formato do `es_systems.cfg`, gerado pelo pacote
+`virtual/emulators`) é o primeiro arquivo existente entre
+`/storage/.config/archr/systems.cfg` (substituição do usuário),
+`/usr/share/archr/systems.cfg` (do pacote) e, só durante a transição, os
+caminhos antigos `/storage/.config/emulationstation/es_systems.cfg` e
+`/usr/config/emulationstation/es_systems.cfg`; usar um destes gera um aviso
+no log.
 O tema vem de `launcher.theme` em
 `/storage/.config/system/configs/system.cfg` (padrão `default`).
 
@@ -100,6 +104,17 @@ no desenho. Sem display, os mesmos fluxos podem rodar com
 - Escritas de núcleo são serializadas em worker; emulador e núcleo são publicados
   juntos, sob uma única trava/rename do `system.cfg`. Um lançamento aguarda essas
   escritas sem bloquear o event loop.
+- Sistemas com emuladores usam o contrato do `runemu.sh`. Sistemas sem
+  emuladores (`tools`, `moonlight`, `imageviewer`) executam o `<command>` do
+  catálogo pelo mesmo `next`. Nomes de arquivo nunca entram no modelo: os
+  valores são exportados em `ARCHR_ROM`, `ARCHR_BASENAME` e `ARCHR_SYSTEM`, e
+  cada marcador vira uma referência à variável. Só três formas são aceitas:
+  palavra inteira sem aspas (`foot %ROM%`), palavra inteira entre aspas duplas
+  (`"%ROM%"`) e `--command="%ROM%"` (o weston-terminal a repassa a outro
+  `sh -c`, que expande a variável herdada). Barra invertida, crase, `$(`,
+  `((`, marcador logo após `-c`, `eval` ou `let`, marcador desconhecido ou
+  qualquer outro contexto: recusado com
+  `error.no_core`, e o modelo vai para o log.
 - Falhas do jogo são lidas de `last-exit`, exibidas por alguns segundos e
   apontam para `/var/log/exec.log`, usado por `runemu.sh`.
 
@@ -124,7 +139,7 @@ pela cor do tema; os do primeiro quadro de sistemas são preparados no worker.
 Imagens de console da tela de sistemas: `/storage/.config/archr-launcher/systems/<nome>.{png,jpg,webp}`
 tem precedência sobre `<tema>/systems/<nome>.{png,jpg,webp}`; sem imagem, o
 painel mostra um cartão tipográfico gerado. `<nome>` é o `<name>` do
-`es_systems.cfg`; sistemas parentes (ex. `megadrive` e `genesis`) usam a mesma
+catálogo de sistemas; sistemas parentes (ex. `megadrive` e `genesis`) usam a mesma
 foto por uma tabela de apelidos em `render/system_art.rs`.
 
 Todos os tokens de `theme.toml` são opcionais, com fallback individual.
@@ -186,6 +201,44 @@ favorito, troca de núcleo, consumo de `last-exit` e publicação de `next`.
 Os testes puros cobrem miniaturas por caminho/mtime, limites de cache, bindings,
 coleções e resolução de núcleos. A meta de 0,3 s precisa ser medida no RK3326;
 uma medição no PC não substitui a sonda no aparelho.
+
+## Configurações
+
+Entrada temporária: `Y` na lista de sistemas → `Configurações` → `A`.
+`B` volta pela pilha de páginas; na raiz retorna ao launcher. `Y` na raiz
+abre Informações do sistema. O menu Start também abre as configurações.
+Som e tela, Sistema e Região e idioma aplicam alterações imediatamente;
+as outras categorias mostram “Em breve”. Atualização mostra a versão instalada,
+sem iniciar o atualizador. O driver de GPU oferece confirmação de reinício.
+
+As páginas são descritas em `archr-ui::settings`; o host usa
+`archr-launcher::settings::Runtime`. Um worker serial executa scripts com argv,
+limite de 20 s e código de saída real. Volume usa `pactl` diretamente e brilho
+usa o backlight; após sucesso, `archr-config` publica a chave atomicamente sob a
+trava compartilhada. Saída de áudio, governador, fuso, idioma e inatividade
+também têm o launcher como único dono da chave. `gpudriver`, `suspendmode` e
+`turbomode` são donos exclusivos das suas chaves: o launcher chama o script e
+confere a gravação, sem escrever antes ou depois. Esses três scripts ainda
+precisam de modo runtime-only e propagação de falhas no sistema; suas gravações
+legadas não ganham atomicidade por serem chamadas daqui. A mesma propagação deve
+ser conferida em `set-audio`, `archr-config tz` e nas funções de governador.
+Erros exibem somente uma mensagem curta e localizada; detalhes técnicos
+completos vão ao log. Leituras usam `archr-io`, rejeitando arquivos não regulares e limitando os
+dados. Informações
+são sondadas fora do SDL quatro segundos após a conclusão anterior; a saída
+aguarda apenas mutações, nunca sondagens descartáveis. O driver de GPU ativo
+é obtido pelo binding; a preferência divergente é marcada para após reiniciar.
+
+As opções de suspensão por inatividade gravam `idle.timeout` e
+`idle.timeout.game`, em minutos: 0, 1, 3, 5, 10, 15 ou 30; ambas começam em
+0 (“Nunca”). O launcher apenas grava essas duas chaves: o detector de
+inatividade é responsabilidade do sistema, inclusive durante jogos.
+O idioma recarrega o catálogo do launcher após a gravação; os locales das
+ferramentas e emuladores continuam dependendo da preparação feita pelo serviço.
+
+Os testes usam `ARCHR_LAUNCHER_ROOT` e executáveis falsos em `ROOT/usr/bin`,
+com esse diretório no `PATH`; nenhum script ausente pode cair no host.
+O driver `SNAPSHOT` também aguarda as operações pendentes de configurações.
 
 ## Idiomas
 
@@ -267,12 +320,25 @@ simultaneamente e não use `systemctl enable` para contornar o seletor.
 
 A sessão carrega `/etc/profile` uma vez em Bash, pois os profiles da distro
 contêm funções Bash, e usa `exec` para substituí-lo pelo supervisor POSIX sh.
-Preserva os exports dos quirks/usuário e configura Wayland, SDL e o locale já
-gerado pelo ES, sem chamar `es_settings`: esse script também gera locales,
-reinicia `tz-data`, importa o ambiente do systemd e escolhe o alvo do hotkey.
+Antes do launcher, faz o que o `es_settings` fazia para o ES: executa
+`/usr/bin/archr-apply-locale` (fuso e idioma) e importa no systemd as variáveis
+listadas em `/etc/profile.d/999-export`. Os dois são opcionais e uma falha não
+impede a UI. A sessão nunca espera a geração do locale: se o idioma configurado
+ainda não existe em `/usr/lib/locale`, o script roda destacado na unidade
+transitória `archr-apply-locale` (`systemd-run`, nice 19, E/S ociosa, uma
+instância), e o launcher abre na hora com as próprias traduções. Gerar o locale
+ao trocar o idioma cabe à ação de configurações. `LOCPATH` é removido: o glibc
+acha os locales por `/usr/lib/locale`. Preserva os exports dos quirks/usuário e
+configura Wayland e SDL. O banco de controles é o `SDL_GAMECONTROLLERCONFIG_FILE`
+herdado só se o arquivo existir; senão o `gamecontrollerdb.txt` do usuário e,
+sem ele, o de `/usr/config/SDL-GameControllerDB`.
 A espera por sway reproduz a do `start_es.sh`: socket Wayland + IPC com saída
 ativa, polling de 100 ms, teto de 10 s. Sem compositor pronto após o teto,
 tenta iniciar a UI e deixa o backoff lidar com uma falha.
+
+A janela usa o `app_id` Wayland fixo `archr-launcher` (o launcher define
+`SDL_VIDEO_WAYLAND_WMCLASS` para si antes de iniciar o vídeo); as regras do sway
+e do OSD devem usar esse nome.
 
 O hotkey de saída (`input_sense`) lê `/tmp/.process-kill-data` e executa
 `killall` com seu conteúdo. No menu, a sessão grava `archr-launcher`, nunca o

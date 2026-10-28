@@ -21,14 +21,8 @@ impl Paths {
             }
         });
         let at = |path: &str| prefix(root.as_deref(), Path::new(path));
-        let user = at("/storage/.config/emulationstation/es_systems.cfg");
-        let systems = if user.is_file() {
-            user
-        } else {
-            at("/usr/config/emulationstation/es_systems.cfg")
-        };
         Self {
-            systems,
+            systems: systems_catalog(&at),
             config: at("/storage/.config/system/configs/system.cfg"),
             lock: at("/tmp/.system.cfg.lock"),
             cache: at("/storage/.cache/archr-launcher"),
@@ -43,6 +37,28 @@ impl Paths {
     pub fn remap(&self, path: &Path) -> PathBuf {
         prefix(self.root.as_deref(), path)
     }
+}
+/// ArchR catalogs (user override, then packaged) come first. The ES paths are
+/// a transition fallback until the distribution installs the ArchR catalog.
+pub const CATALOGS: [&str; 4] = [
+    "/storage/.config/archr/systems.cfg",
+    "/usr/share/archr/systems.cfg",
+    "/storage/.config/emulationstation/es_systems.cfg",
+    "/usr/config/emulationstation/es_systems.cfg",
+];
+fn systems_catalog(at: &impl Fn(&str) -> PathBuf) -> PathBuf {
+    let Some((index, path)) = CATALOGS
+        .iter()
+        .map(|path| at(path))
+        .enumerate()
+        .find(|(_, path)| path.is_file())
+    else {
+        return at(CATALOGS[1]);
+    };
+    if index >= 2 {
+        log::warn!("Using legacy systems catalog {}", path.display());
+    }
+    path
 }
 fn prefix(root: Option<&Path>, path: &Path) -> PathBuf {
     match root {

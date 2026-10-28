@@ -10,9 +10,14 @@ pub struct FakeData {
     pub cores: HashMap<String, Vec<(String, String)>>,
     pub counts: HashMap<String, usize>,
     pub current: HashMap<(String, usize), (String, String)>,
+    pub order: Vec<String>,
 }
 
 impl DataSource for FakeData {
+    fn system_order(&self) -> &[String] {
+        &self.order
+    }
+
     fn systems(&self) -> &[SystemEntry] {
         &self.systems
     }

@@ -1,9 +1,9 @@
 //! Lazy library adapter for the navigation model.
 use crate::{
-    handoff::{launch_command_with, write_next},
+    handoff::{catalog_command, launch_command_with, write_next},
     paths::Paths,
     persistence::StoreWriter,
-    state::{DataSource, Outcome},
+    state::{App, DataSource, Outcome},
     store::{game_key, Store},
     worker::{self, Update, Work, Worker},
 };
@@ -42,6 +42,11 @@ impl Library {
     pub fn initial_traced(paths: Paths, trace: StartupTrace) -> Self {
         let cached = cache::load_overview(&paths.cache);
         startup_phase!(trace, "overview cache read");
+        // Tiny file, read in the startup worker alongside video setup: the first
+        // frame already shows the user's order, and the Store is complete before
+        // any input can change it.
+        let store = Store::load(&paths.store);
+        startup_phase!(trace, "store read");
         let counts_known = cached.is_some();
         let (definitions, banner) = if counts_known {
             (Vec::new(), None)
@@ -56,6 +61,12 @@ impl Library {
                 }
             }
         };
+        let banner = banner.or_else(|| {
+            store
+                .load_error
+                .is_some()
+                .then(|| Message::new("error.store_load"))
+        });
         let overview = cached.unwrap_or_else(|| Overview {
             systems: definitions
                 .iter()
@@ -83,7 +94,7 @@ impl Library {
             members: HashMap::new(),
             config: None,
             overrides: HashMap::new(),
-            store: Store::default(),
+            store,
             store_writer: None,
             worker: None,
         }
@@ -160,12 +171,10 @@ impl Library {
                 Update::Boot {
                     systems,
                     config,
-                    store,
                     banner,
                 } => {
                     self.definitions = systems;
                     self.config = config;
-                    self.store = *store;
                     if self.store.migrate(&self.definitions) {
                         self.queue_store();
                     }
@@ -220,7 +229,7 @@ impl Library {
     }
     pub fn handle(&mut self, outcome: Outcome, controllers: &str) -> Result<bool, String> {
         match outcome {
-            Outcome::None => {}
+            Outcome::None | Outcome::Settings => {}
             Outcome::ToggleFavorite { system, game } => {
                 let key = self.game_key(&system, game).ok_or("error.game_missing")?;
                 self.store.toggle_favorite(&key);
@@ -263,17 +272,7 @@ impl Library {
                 self.write_failed = false;
             }
             Outcome::Launch { system, game } => {
-                let selected = self.games(&system).get(game).ok_or("error.game_missing")?;
-                let (emulator, core) = self.current_core(&system, game).ok_or("error.no_core")?;
-                let command = launch_command_with(
-                    &self.paths.at("/usr/bin/runemu.sh"),
-                    &selected.path,
-                    &system,
-                    &core,
-                    &emulator,
-                    controllers,
-                )
-                .map_err(|error| error.to_string())?;
+                let command = self.launch_command(&system, game, controllers)?;
                 let key = self.game_key(&system, game).ok_or("error.game_missing")?;
                 self.store.push_recent(&key);
                 self.refresh_collection("@recent");
@@ -281,9 +280,50 @@ impl Library {
                 write_next(&self.paths.run, &command).map_err(|error| error.to_string())?;
                 return Ok(true);
             }
+            Outcome::SetOrder(order) => {
+                // The default arrangement is stored as no custom order.
+                if order.is_empty() || order == App::default_rows(self) {
+                    self.store.clear_order();
+                } else {
+                    let overview = &self.overview;
+                    let exist = |id: &str| {
+                        id.starts_with('@') || overview.systems.iter().any(|s| s.name == id)
+                    };
+                    self.store.set_order(order, exist);
+                }
+                self.queue_store();
+            }
             Outcome::Action(_) | Outcome::ToggleWifi => return Err("error.operation".to_owned()),
         }
         Ok(false)
+    }
+    /// Emulated systems use the runemu contract; systems without emulators
+    /// (tools, moonlight) run their catalog `<command>`.
+    fn launch_command(
+        &self,
+        system: &str,
+        game: usize,
+        controllers: &str,
+    ) -> Result<String, String> {
+        let rom = &self
+            .games(system)
+            .get(game)
+            .ok_or("error.game_missing")?
+            .path;
+        if let Some((emulator, core)) = self.current_core(system, game) {
+            let runemu = self.paths.at("/usr/bin/runemu.sh");
+            return launch_command_with(&runemu, rom, system, &core, &emulator, controllers)
+                .map_err(|error| error.to_string());
+        }
+        let template = self
+            .definition(system)
+            .map(|definition| definition.command.as_str())
+            .filter(|command| !command.is_empty())
+            .ok_or("error.no_core")?;
+        catalog_command(template, rom, system).map_err(|error| {
+            log::warn!("Cannot launch {system}: {error}");
+            "error.no_core".to_owned()
+        })
     }
     fn queue_store(&self) {
         if let Some(writer) = &self.store_writer {
@@ -366,6 +406,9 @@ impl DataSource for Library {
     fn manufacturer(&self, system: &str) -> Option<(&str, &str)> {
         let def = self.definition(system)?;
         Some((&def.manufacturer, &def.release))
+    }
+    fn system_order(&self) -> &[String] {
+        self.store.order()
     }
     fn favorite_count(&self, system: &str) -> usize {
         self.store
