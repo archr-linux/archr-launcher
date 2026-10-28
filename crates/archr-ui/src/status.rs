@@ -21,15 +21,15 @@ pub fn read_battery(root: &Path) -> Option<Battery> {
     sources.sort_by_key(|e| e.file_name());
     let path = sources.into_iter().map(|e| e.path()).find(|p| {
         p.file_name().is_some_and(|v| v == "battery")
-            || archr_io::read_utf8(&p.join("type"), 64, archr_io::Symlinks::Follow)
+            || archr_io::read_utf8(&p.join("type"), 4096, archr_io::Symlinks::Follow)
                 .is_ok_and(|s| s.trim() == "Battery")
     })?;
-    let percent = archr_io::read_utf8(&path.join("capacity"), 64, archr_io::Symlinks::Follow)
+    let percent = archr_io::read_utf8(&path.join("capacity"), 4096, archr_io::Symlinks::Follow)
         .ok()?
         .trim()
         .parse::<u8>()
         .ok()?;
-    let charging = archr_io::read_utf8(&path.join("status"), 64, archr_io::Symlinks::Follow)
+    let charging = archr_io::read_utf8(&path.join("status"), 4096, archr_io::Symlinks::Follow)
         .is_ok_and(|s| s.trim() == "Charging");
     (percent <= 100).then_some(Battery { percent, charging })
 }

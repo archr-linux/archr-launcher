@@ -141,8 +141,13 @@ fn load_uses_live_volume_and_first_backlight_percent() {
     );
     let backlight = dir.path().join("sys/class/backlight/panel");
     fs::create_dir_all(&backlight).unwrap();
-    fs::write(backlight.join("brightness"), "64").unwrap();
-    fs::write(backlight.join("max_brightness"), "255").unwrap();
+    // Sysfs reports a page-sized st_size even for short numeric attributes.
+    fs::write(backlight.join("brightness"), format!("{:<4096}", "64\n")).unwrap();
+    fs::write(
+        backlight.join("max_brightness"),
+        format!("{:<4096}", "255\n"),
+    )
+    .unwrap();
     let state = backend.load().unwrap();
     assert_eq!(state.value(Id::Volume), "50");
     assert_eq!(state.value(Id::Brightness), "25");
@@ -221,7 +226,7 @@ fn brightness_publishes_once_after_success_and_keeps_config_on_sysfs_failure() {
     let (dir, backend) = fixture();
     let panel = dir.path().join("sys/class/backlight/panel");
     fs::create_dir_all(&panel).unwrap();
-    fs::write(panel.join("max_brightness"), "255").unwrap();
+    fs::write(panel.join("max_brightness"), format!("{:<4096}", "255\n")).unwrap();
     fs::write(panel.join("brightness"), "128").unwrap();
     script(&dir, "brightness", "exit 29"); // Must never invoke the owning legacy helper.
     assert_eq!(backend.apply(Id::Brightness, "75").unwrap(), "75");

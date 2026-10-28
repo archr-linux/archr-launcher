@@ -41,7 +41,7 @@ impl Backend {
             .ok_or_else(|| "No backlight available".into())
     }
     fn number(path: &std::path::Path) -> Result<u64, String> {
-        archr_io::read_utf8(path, 128, archr_io::Symlinks::Follow)
+        archr_io::read_utf8(path, 4096, archr_io::Symlinks::Follow)
             .map_err(|e| e.to_string())?
             .trim()
             .parse()

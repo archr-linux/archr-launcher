@@ -78,3 +78,23 @@ fn slow_sysfs_worker_never_blocks_construction_polling_or_drop() {
     drop(status); // do not join a worker blocked inside sysfs
     assert!(began.elapsed() < Duration::from_millis(100));
 }
+
+#[test]
+fn page_sized_sysfs_metadata_keeps_battery_acquisition_working() {
+    let root = tempfile::tempdir().unwrap();
+    let battery = root.path().join("sys/class/power_supply/rk817-battery");
+    fs::create_dir_all(&battery).unwrap();
+    // Pad short attributes to the length reported by sysfs, not their text length.
+    for (name, value) in [
+        ("type", "Battery\n"),
+        ("capacity", "78\n"),
+        ("status", "Charging\n"),
+    ] {
+        let path = battery.join(name);
+        fs::write(&path, format!("{value:<4096}")).unwrap();
+        assert_eq!(fs::metadata(path).unwrap().len(), 4096);
+    }
+    let value = archr_ui::status::read_battery(root.path()).unwrap();
+    assert_eq!(value.percent, 78);
+    assert!(value.charging);
+}
