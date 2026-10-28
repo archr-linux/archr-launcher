@@ -313,7 +313,7 @@ impl Ui<'_, '_> {
             let glyph = if name == "@favorites" {
                 Glyph::Star
             } else if name == crate::moonlight::SYSTEM {
-                Glyph::Moon
+                Glyph::MonitorPlay
             } else {
                 Glyph::Clock
             };

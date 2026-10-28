@@ -965,7 +965,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                         } else {
                             self.icon(
                                 if name == crate::moonlight::SYSTEM {
-                                    Glyph::Moon
+                                    Glyph::MonitorPlay
                                 } else {
                                     Glyph::Clock
                                 },
@@ -1559,7 +1559,7 @@ pub fn prepare_first_frame<'font>(
                 if name == "@favorites" {
                     Glyph::Star
                 } else if name == crate::moonlight::SYSTEM {
-                    Glyph::Moon
+                    Glyph::MonitorPlay
                 } else {
                     Glyph::Clock
                 },
@@ -1628,7 +1628,7 @@ pub fn prepare_first_frame<'font>(
         Glyph::SignalHigh,
         Glyph::Lock,
         Glyph::Check,
-        Glyph::Moon,
+        Glyph::MonitorPlay,
     ]);
     Ok(prepared)
 }
