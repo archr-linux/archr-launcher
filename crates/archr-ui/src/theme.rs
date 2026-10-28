@@ -51,6 +51,9 @@ pub struct Theme {
     pub muted: Rgba,
     pub accent_text_secondary: Rgba,
     pub scrim: Rgba,
+    /// Positive and cautionary status ink (e.g. matching / different ROM).
+    pub success: Rgba,
+    pub warning: Rgba,
     /// Radii, heights, font size and margin are screen-height fractions.
     pub radius_item: f32,
     pub radius_card: f32,
@@ -126,6 +129,8 @@ impl Theme {
             muted: token!(muted, color),
             accent_text_secondary: token!(accent_text_secondary, color),
             scrim: token!(scrim, color),
+            success: token!(success, color),
+            warning: token!(warning, color),
             radius_item: token!(radius_item, fraction),
             radius_card: token!(radius_card, fraction),
             header_height: token!(header_height, fraction),
