@@ -89,6 +89,21 @@ fn selection<T>(selected: bool, normal: T, highlighted: T) -> T {
     }
 }
 
+/// The longest form that fits, at 13px, then the short form shrinking to 10px.
+/// Status text is never ellipsized; the smallest short form is the last resort.
+fn fit_status(
+    forms: &[String; 2],
+    width: u32,
+    mut measure: impl FnMut(&str, f32) -> Result<u32, String>,
+) -> Result<(&str, f32), String> {
+    for (form, size) in [(0, 13.), (1, 13.), (1, 12.), (1, 11.)] {
+        if measure(&forms[form], size)? <= width {
+            return Ok((&forms[form], size));
+        }
+    }
+    Ok((&forms[1], 10.))
+}
+
 /// Keep system rows single-line; parenthetical detail remains in the artwork panel.
 fn fit_system_name(
     name: &str,
@@ -1006,23 +1021,27 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         };
         let left = self.hints(hint_keys, theme, width, y, h)?;
         if matches!(app.screen, Screen::Systems) {
-            let (text, ink) = match moving {
-                Some((name, n, total)) => (
-                    self.catalog.format(
-                        "move.status",
-                        &[
-                            ("name", &system_title(name, data, &self.catalog)),
-                            ("n", &n.to_string()),
-                            ("total", &total.to_string()),
-                        ],
-                    ),
-                    theme.text,
-                ),
-                None => (library_summary(data, &self.catalog), theme.muted),
+            let width = (left - self.px(40.)).max(1) as u32;
+            let (text, size, ink) = match moving {
+                Some((name, n, total)) => {
+                    let args = [
+                        ("name", system_title(name, data, &self.catalog)),
+                        ("n", n.to_string()),
+                        ("total", total.to_string()),
+                    ];
+                    let args = args.each_ref().map(|(k, v)| (*k, v.as_str()));
+                    let forms = ["move.status", "move.status_short"]
+                        .map(|key| self.catalog.format(key, &args));
+                    let (text, size) = fit_status(&forms, width, |text, size| {
+                        self.measure(text, Face::Regular, size)
+                    })?;
+                    (text.to_owned(), size, theme.text)
+                }
+                None => (library_summary(data, &self.catalog), 13., theme.muted),
             };
             self.label(
                 &text,
-                (Face::Regular, 13., ink),
+                (Face::Regular, size, ink),
                 Rect::new(self.px(24.), y, (left - self.px(40.)).max(1) as u32, h),
             )?;
         }
@@ -1498,6 +1517,46 @@ fn font_paths(theme: &Theme, root: Option<&Path>) -> [Vec<PathBuf>; 4] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn move_status_fits_beside_its_hints_in_every_locale_without_ellipsis() {
+        let _sdl = crate::SDL_TEST_LOCK.lock().unwrap();
+        let ttf = sdl2::ttf::init().unwrap();
+        let fonts = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../themes/default/fonts");
+        let font = |size: f32| {
+            ttf.load_font(fonts.join("Inter-Regular.ttf"), size as u16)
+                .unwrap()
+        };
+        let measure = |text: &str, size: f32| Ok(font(size).size_of(text).unwrap().0);
+        for code in ["en", "pt_BR", "es", "ru"] {
+            let i = I18n::load(
+                &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../locales"),
+                Some(code),
+                None,
+            );
+            // Footer: 24px margins, three badges with 6px gap, 16px between hints, 40px clearance.
+            let hints: u32 = ["hint.move", "hint.confirm", "hint.cancel"]
+                .iter()
+                .map(|key| measure(&i.text(key), 13.).unwrap() + 26)
+                .sum::<u32>()
+                + 32;
+            let width = 640 - 24 - hints - 40 - 24;
+            for name in [
+                "Nintendo 64",
+                "Super Nintendo Entertainment System",
+                "Игровая приставка Sega Mega Drive",
+            ] {
+                let args = [("name", name), ("n", "12"), ("total", "34")];
+                let forms = ["move.status", "move.status_short"].map(|key| i.format(key, &args));
+                let (text, size) = fit_status(&forms, width, measure).unwrap();
+                let fits = measure(text, size).unwrap() <= width;
+                assert!(fits || size == 10., "{code}: {name}: {text} at {size}");
+                if name == "Nintendo 64" {
+                    assert!(fits, "{code}: short names fit at some size");
+                }
+            }
+        }
+    }
 
     #[test]
     fn system_names_fit_selected_and_unselected_rows_without_ellipsis() {

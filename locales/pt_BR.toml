@@ -14,6 +14,7 @@
 "hint.confirm" = "Confirmar"
 "hint.cancel" = "Cancelar"
 "move.status" = "Movendo {name} · posição {n} de {total}"
+"move.status_short" = "{name} · {n}/{total}"
 "menu.title" = "Menu rápido"
 "menu.core" = "Núcleo"
 "menu.suspend" = "Suspender"
