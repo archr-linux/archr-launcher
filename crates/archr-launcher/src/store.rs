@@ -1,12 +1,12 @@
 use std::{
     collections::{HashMap, HashSet},
-    io,
+    io::{self, Write},
     path::Path,
 };
 
 use serde::{Deserialize, Serialize};
 
-use crate::file_io::{atomic_write, read_bounded};
+use archr_io::{atomic_publish, read_utf8, Symlinks::Follow};
 
 const MAX_STORE_BYTES: u64 = 256 * 1024;
 const MAX_RECENT: usize = 30;
@@ -15,6 +15,8 @@ const MAX_RECENT: usize = 30;
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Store {
+    #[serde(skip)]
+    pub(crate) load_error: Option<String>,
     favorites: Vec<String>,
     recent: Vec<String>,
     imported_systems: Vec<String>,
@@ -22,10 +24,10 @@ pub struct Store {
 }
 
 impl Store {
-    /// Unreadable or invalid data is nonfatal: start empty and report a warning.
+    /// Invalid data is nonfatal to browsing, but disables saving this snapshot.
     pub fn load(dir: &Path) -> Self {
         let path = dir.join("store.toml");
-        let result = read_bounded(&path, MAX_STORE_BYTES).and_then(|source| {
+        let result = read_utf8(&path, MAX_STORE_BYTES, Follow).and_then(|source| {
             toml::from_str::<Self>(&source)
                 .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
         });
@@ -38,20 +40,32 @@ impl Store {
                 store.recent.truncate(MAX_RECENT);
                 store
             }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Self::default(),
             Err(error) => {
                 log::warn!(
-                    "Cannot load store {}: {error}; using empty store",
+                    "Cannot load store {}: {error}; saving disabled",
                     path.display()
                 );
-                Self::default()
+                Self {
+                    load_error: Some(error.to_string()),
+                    ..Self::default()
+                }
             }
         }
     }
 
     pub fn save(&self, dir: &Path) -> io::Result<()> {
+        if let Some(error) = &self.load_error {
+            return Err(archr_io::invalid_data(error));
+        }
         let source = toml::to_string(self)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-        atomic_write(dir, "store.toml", source.as_bytes())
+        if source.len() as u64 > MAX_STORE_BYTES {
+            return Err(archr_io::invalid_data("store exceeds 256 KiB"));
+        }
+        atomic_publish(&dir.join("store.toml"), true, |file| {
+            file.write_all(source.as_bytes())
+        })
     }
 
     pub fn toggle_favorite(&mut self, key: &str) {

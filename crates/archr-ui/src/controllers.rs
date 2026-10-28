@@ -1,11 +1,11 @@
 //! Open devices in SDL joystick index order, retaining handles for event delivery.
+use archr_io::{read_utf8, Symlinks::Follow};
 use sdl2::{
     controller::GameController, joystick::Joystick, GameControllerSubsystem, JoystickSubsystem,
 };
 
 use crate::{joystick_mapping::RawMappings, startup::StartupTrace, startup_phase, state::Button};
 use std::{
-    io::Read,
     path::PathBuf,
     sync::mpsc::{self, Receiver},
 };
@@ -47,21 +47,8 @@ impl Controllers {
         self.loading = Some(ready);
         std::thread::spawn(move || {
             let read = || -> Result<RawMappings, String> {
-                let file = std::fs::File::open(path).map_err(|error| error.to_string())?;
-                if !file
-                    .metadata()
-                    .map_err(|error| error.to_string())?
-                    .is_file()
-                {
-                    return Err("es_input.cfg is not a regular file".into());
-                }
-                let mut text = String::new();
-                file.take(1024 * 1024 + 1)
-                    .read_to_string(&mut text)
-                    .map_err(|error| error.to_string())?;
-                if text.len() > 1024 * 1024 {
-                    return Err("es_input.cfg exceeds 1 MiB".into());
-                }
+                let text =
+                    read_utf8(&path, 1024 * 1024, Follow).map_err(|error| error.to_string())?;
                 RawMappings::parse(&text)
             };
             let mappings = read().unwrap_or_else(|error| {

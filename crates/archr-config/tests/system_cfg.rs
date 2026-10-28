@@ -211,3 +211,36 @@ fn set_preserves_file_permissions() {
         0o640
     );
 }
+
+#[test]
+fn oversized_configuration_is_rejected_and_preserved_on_save() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("system.cfg");
+    let lock = dir.path().join("lock");
+    fs::write(&path, "global.core=old\n").unwrap();
+    fs::OpenOptions::new()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_len(1024 * 1024 + 1)
+        .unwrap();
+    assert!(SystemCfg::load(&path).is_err());
+    assert!(SystemCfg::set_and_save(&path, &lock, "global.core", "new").is_err());
+    assert_eq!(fs::metadata(&path).unwrap().len(), 1024 * 1024 + 1);
+    assert!(!lock.exists());
+}
+
+#[test]
+fn configuration_write_cannot_publish_an_unreadable_oversized_file() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("system.cfg");
+    fs::write(&path, "global.core=old\n").unwrap();
+    assert!(SystemCfg::set_and_save(
+        &path,
+        &dir.path().join("lock"),
+        "global.core",
+        &"x".repeat(1024 * 1024)
+    )
+    .is_err());
+    assert_eq!(fs::read_to_string(path).unwrap(), "global.core=old\n");
+}

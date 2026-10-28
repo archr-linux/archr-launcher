@@ -1,6 +1,5 @@
+use archr_io::{read_bytes, Symlinks::Follow};
 use std::collections::HashMap;
-use std::fs::File;
-use std::io::BufReader;
 use std::path::{Component, Path, PathBuf};
 
 use quick_xml::events::Event;
@@ -67,8 +66,8 @@ pub(crate) fn load_gamelist(
     system_dir: &Path,
     mapper: &dyn Fn(&Path) -> PathBuf,
 ) -> Result<HashMap<PathBuf, Metadata>, IndexError> {
-    let mut reader =
-        Reader::from_reader(BufReader::new(File::open(system_dir.join("gamelist.xml"))?));
+    let source = read_bytes(&system_dir.join("gamelist.xml"), 32 * 1024 * 1024, Follow)?;
+    let mut reader = Reader::from_reader(source.as_slice());
     reader.config_mut().expand_empty_elements = true;
     reader.config_mut().check_comments = true;
     let mut buffer = Vec::new();

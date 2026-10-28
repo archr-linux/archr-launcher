@@ -74,10 +74,14 @@ pub fn start(paths: Paths, initial: Vec<SystemDef>) -> Worker {
             }
             _ => {}
         }
+        let store = Store::load(&paths.store);
+        if store.load_error.is_some() {
+            banner = Some(Message::new("error.store_load"));
+        }
         let boot = Update::Boot {
             systems: systems.clone(),
             config: SystemCfg::load(&paths.config).ok(),
-            store: Store::load(&paths.store),
+            store,
             banner,
         };
         if done.send(boot).is_err() {

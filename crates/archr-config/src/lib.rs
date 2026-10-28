@@ -1,14 +1,17 @@
 //! Ordered `system.cfg` access using the shell helpers' PID-file lock protocol.
 
+use archr_io::{
+    atomic_publish, open_regular, parent_dir, read_bounded, read_bytes, read_utf8, Symlinks::Follow,
+};
 use std::fs;
-use std::io::{self, Read, Write};
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
 const LOCK_TIMEOUT: Duration = Duration::from_secs(10);
 const LOCK_RETRY_INTERVAL: Duration = Duration::from_millis(100);
-const PID_PUBLICATION_GRACE: Duration = Duration::from_secs(2);
+const INVALID_LOCK_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// A snapshot of the configuration, including comments and original line endings.
 pub struct SystemCfg {
@@ -18,7 +21,7 @@ pub struct SystemCfg {
 impl SystemCfg {
     /// Read a snapshot without changing the configuration.
     pub fn load(path: &Path) -> io::Result<SystemCfg> {
-        let contents = fs::read_to_string(path)?;
+        let contents = read_utf8(path, 1024 * 1024, Follow)?;
         Ok(Self {
             lines: contents.split_inclusive('\n').map(String::from).collect(),
         })
@@ -42,9 +45,9 @@ impl SystemCfg {
     /// Re-read under the shared shell lock and atomically replace one entry.
     ///
     /// A live lock holder is retried for up to ten seconds. Dead PID locks are
-    /// reclaimed; invalid contents receive a two-second grace period for shell
-    /// PID publication. The lock is released on success and I/O errors, provided
-    /// it still contains our PID.
+    /// reclaimed; unchanged invalid contents must be observed for two seconds
+    /// before serialized recovery, regardless of their on-disk age. The lock is
+    /// released on success and I/O errors, provided it still contains our PID.
     pub fn set_and_save(path: &Path, lock: &Path, entry_key: &str, value: &str) -> io::Result<()> {
         Self::set_many_and_save(path, lock, &[(entry_key, value)])
     }
@@ -94,16 +97,16 @@ impl SystemCfg {
                 cfg.lines.push(format!("{entry_key}={value}\n"));
             }
         }
-        let mut temporary = tempfile::NamedTempFile::new_in(containing_directory(path))?;
-        for line in &cfg.lines {
-            temporary.write_all(line.as_bytes())?;
+        if cfg.lines.iter().map(String::len).sum::<usize>() > 1024 * 1024 {
+            return Err(archr_io::invalid_data("configuration exceeds 1 MiB"));
         }
-        temporary
-            .as_file()
-            .set_permissions(fs::metadata(path)?.permissions())?;
-        temporary.as_file().sync_all()?;
-        temporary.persist(path).map_err(|error| error.error)?;
-        Ok(())
+        atomic_publish(path, true, |file| {
+            file.set_permissions(fs::metadata(path)?.permissions())?;
+            for line in &cfg.lines {
+                file.write_all(line.as_bytes())?;
+            }
+            Ok(())
+        })
     }
 }
 
@@ -129,29 +132,30 @@ fn entry_value<'a>(line: &'a str, key: &str) -> Option<&'a str> {
         .strip_prefix('=')
 }
 
-fn containing_directory(path: &Path) -> &Path {
-    path.parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."))
-}
-
 fn lock_pid(contents: &[u8]) -> Option<u32> {
-    std::str::from_utf8(contents).ok()?.trim().parse().ok()
+    let pid = std::str::from_utf8(contents).ok()?.trim().parse().ok()?;
+    (pid != 0).then_some(pid)
 }
 
+#[derive(Clone, PartialEq, Eq)]
 struct LockSnapshot {
     contents: Vec<u8>,
-    modified: SystemTime,
+    identity: (u64, u64, SystemTime),
 }
 
 impl LockSnapshot {
     fn read(path: &Path) -> io::Result<Self> {
-        let mut file = fs::File::open(path)?;
-        let mut contents = Vec::new();
-        file.read_to_end(&mut contents)?;
+        use std::os::unix::fs::MetadataExt;
+        let file = open_regular(path, Follow)?;
+        let meta = file.metadata()?;
+        let contents = match read_bounded(&file, 64) {
+            Ok(contents) => contents,
+            Err(error) if error.kind() == io::ErrorKind::InvalidData => Vec::new(),
+            Err(error) => return Err(error),
+        };
         Ok(Self {
             contents,
-            modified: file.metadata()?.modified()?,
+            identity: (meta.ino(), meta.len(), meta.modified()?),
         })
     }
 
@@ -159,11 +163,7 @@ impl LockSnapshot {
         if let Some(pid) = lock_pid(&self.contents) {
             return Ok(!Path::new("/proc").join(pid.to_string()).try_exists()?);
         }
-        // Shell writers create the file before writing their PID.
-        Ok(self
-            .modified
-            .elapsed()
-            .is_ok_and(|age| age > PID_PUBLICATION_GRACE))
+        Ok(false)
     }
 }
 
@@ -177,16 +177,17 @@ impl PidLock {
         if Instant::now() >= deadline {
             return Err(io::Error::new(
                 io::ErrorKind::TimedOut,
-                format!(
-                    "timed out waiting for configuration lock {}",
-                    path.display()
-                ),
+                format!("configuration lock timeout: {}", path.display()),
             ));
         }
         Ok(())
     }
 
-    fn reclaim_if_stale(path: &Path, deadline: Instant) -> io::Result<()> {
+    fn reclaim_if_stale(
+        path: &Path,
+        deadline: Instant,
+        expired: Option<&LockSnapshot>,
+    ) -> io::Result<()> {
         let mut helper_path = path.as_os_str().to_os_string();
         helper_path.push(".reclaim");
         let helper = fs::OpenOptions::new()
@@ -215,7 +216,9 @@ impl PidLock {
         };
         // Discard any earlier stale judgment: another reclaimer may have
         // removed the old lock and a live owner may already have replaced it.
-        if snapshot.is_stale()? {
+        if snapshot.is_stale()?
+            || (expired == Some(&snapshot) && lock_pid(&snapshot.contents).is_none())
+        {
             match fs::remove_file(path) {
                 Ok(()) => {}
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {}
@@ -228,7 +231,8 @@ impl PidLock {
     fn acquire(path: &Path, timeout: Duration) -> io::Result<Self> {
         let deadline = Instant::now() + timeout;
         let pid = std::process::id();
-        let mut published = tempfile::NamedTempFile::new_in(containing_directory(path))?;
+        let mut invalid: Option<(LockSnapshot, Instant)> = None;
+        let mut published = tempfile::NamedTempFile::new_in(parent_dir(path))?;
         writeln!(published, "{pid}")?;
         loop {
             Self::check_deadline(path, deadline)?;
@@ -246,8 +250,15 @@ impl PidLock {
                         Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
                         Err(error) => return Err(error),
                     };
-                    if snapshot.is_stale()? {
-                        Self::reclaim_if_stale(path, deadline)?;
+                    let observed =
+                        invalid.get_or_insert_with(|| (snapshot.clone(), Instant::now()));
+                    if observed.0 != snapshot {
+                        *observed = (snapshot.clone(), Instant::now());
+                    }
+                    let expired = lock_pid(&snapshot.contents).is_none()
+                        && observed.1.elapsed() >= INVALID_LOCK_TIMEOUT;
+                    if snapshot.is_stale()? || expired {
+                        Self::reclaim_if_stale(path, deadline, expired.then_some(&snapshot))?;
                         continue;
                     }
                 }
@@ -262,7 +273,9 @@ impl PidLock {
 
 impl Drop for PidLock {
     fn drop(&mut self) {
-        if fs::read(&self.path).is_ok_and(|contents| lock_pid(&contents) == Some(self.pid)) {
+        if read_bytes(&self.path, 64, Follow)
+            .is_ok_and(|contents| lock_pid(&contents) == Some(self.pid))
+        {
             let _ = fs::remove_file(&self.path);
         }
     }
@@ -274,52 +287,41 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn fresh_unpublished_or_invalid_pid_is_not_reclaimed() {
+    fn invalid_pid_waits_even_with_old_mtime() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("system.cfg");
         let lock = dir.path().join(".system.cfg.lock");
         fs::write(&path, "snes.core=old\n").unwrap();
-
-        for contents in [b"".as_slice(), b"not-a-pid\n", b"\xff"] {
-            fs::write(&lock, contents).unwrap();
-            let timeout = Duration::from_millis(30);
-            let started = Instant::now();
-
-            let result =
-                SystemCfg::set_and_save_with_timeout(&path, &lock, "snes.core", "new", timeout);
-
-            assert_eq!(result.unwrap_err().kind(), io::ErrorKind::TimedOut);
-            assert!(started.elapsed() >= timeout);
-            assert_eq!(fs::read(&lock).unwrap(), contents);
-            assert_eq!(fs::read_to_string(&path).unwrap(), "snes.core=old\n");
-            assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 2);
+        for age in [0, 60] {
+            for contents in [b"".as_slice(), b"invalid\n", b"\xff", b"0\n", &[b'x'; 65]] {
+                fs::write(&lock, contents).unwrap();
+                fs::File::open(&lock)
+                    .unwrap()
+                    .set_modified(SystemTime::now() - Duration::from_secs(age))
+                    .unwrap();
+                let timeout = Duration::from_millis(30);
+                let started = Instant::now();
+                let result =
+                    SystemCfg::set_and_save_with_timeout(&path, &lock, "snes.core", "new", timeout);
+                assert_eq!(result.unwrap_err().kind(), io::ErrorKind::TimedOut);
+                assert!(started.elapsed() >= timeout);
+                assert_eq!(fs::read(&lock).unwrap(), contents);
+                assert_eq!(fs::read_to_string(&path).unwrap(), "snes.core=old\n");
+                assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 2);
+            }
         }
     }
 
     #[test]
-    fn old_empty_lock_is_reclaimed_without_waiting_for_public_timeout() {
+    fn unchanged_invalid_lock_recovers_after_observation_timeout() {
         let dir = tempdir().unwrap();
-        let path = dir.path().join("system.cfg");
         let lock = dir.path().join(".system.cfg.lock");
-        fs::write(&path, "snes.core=old\n").unwrap();
-        fs::File::create(&lock)
-            .unwrap()
-            .set_modified(std::time::SystemTime::now() - Duration::from_secs(5))
-            .unwrap();
-
-        SystemCfg::set_and_save_with_timeout(
-            &path,
-            &lock,
-            "snes.core",
-            "new",
-            Duration::from_millis(100),
-        )
-        .unwrap();
-
-        assert_eq!(fs::read_to_string(&path).unwrap(), "snes.core=new\n");
+        fs::write(&lock, "invalid\n").unwrap();
+        let started = Instant::now();
+        let guard = PidLock::acquire(&lock, Duration::from_secs(3)).unwrap();
+        assert!(started.elapsed() >= Duration::from_secs(2));
+        drop(guard);
         assert!(!lock.exists());
-        assert!(dir.path().join(".system.cfg.lock.reclaim").exists());
-        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 2);
     }
 
     #[test]
@@ -360,7 +362,7 @@ mod tests {
             let first = scope.spawn(move || {
                 assert!(LockSnapshot::read(lock).unwrap().is_stale().unwrap());
                 both_judged_stale.wait();
-                PidLock::reclaim_if_stale(lock, Instant::now() + Duration::from_millis(100))
+                PidLock::reclaim_if_stale(lock, Instant::now() + Duration::from_millis(100), None)
                     .unwrap();
                 let guard = PidLock::acquire(lock, Duration::from_millis(100)).unwrap();
                 assert_eq!(holders.fetch_add(1, Ordering::SeqCst), 0);
@@ -374,7 +376,7 @@ mod tests {
                 both_judged_stale.wait();
                 acquired_rx.recv().unwrap();
 
-                PidLock::reclaim_if_stale(lock, Instant::now() + Duration::from_millis(100))
+                PidLock::reclaim_if_stale(lock, Instant::now() + Duration::from_millis(100), None)
                     .unwrap();
                 let result = PidLock::acquire(lock, Duration::from_millis(30));
                 if result.is_ok() {
@@ -450,32 +452,43 @@ mod tests {
     }
 
     #[test]
-    fn reclaim_helper_is_kept_and_unlocked_when_main_lock_is_gone() {
-        let dir = tempdir().unwrap();
-        let lock = dir.path().join(".system.cfg.lock");
-
-        PidLock::reclaim_if_stale(&lock, Instant::now() + Duration::from_millis(100)).unwrap();
-
-        assert!(!lock.exists());
-        let helper = fs::File::open(dir.path().join(".system.cfg.lock.reclaim")).unwrap();
-        helper.try_lock().unwrap();
-        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+    fn reclaim_helper_unlocks_on_missing_or_nonregular_main_lock() {
+        for nonregular in [false, true] {
+            let dir = tempdir().unwrap();
+            let lock = dir.path().join(".system.cfg.lock");
+            if nonregular {
+                fs::create_dir(&lock).unwrap();
+            }
+            let result =
+                PidLock::reclaim_if_stale(&lock, Instant::now() + Duration::from_millis(100), None);
+            assert_eq!(result.is_err(), nonregular);
+            assert_eq!(lock.is_dir(), nonregular);
+            let helper = fs::File::open(dir.path().join(".system.cfg.lock.reclaim")).unwrap();
+            helper.try_lock().unwrap();
+            assert_eq!(
+                fs::read_dir(dir.path()).unwrap().count(),
+                1 + usize::from(nonregular)
+            );
+        }
     }
 
     #[test]
-    fn reclaim_helper_unlocks_on_read_error_without_removing_main_lock() {
+    fn expired_invalid_snapshot_cannot_remove_a_replacement_lock() {
         let dir = tempdir().unwrap();
-        let lock = dir.path().join(".system.cfg.lock");
-        fs::create_dir(&lock).unwrap();
-
-        assert!(
-            PidLock::reclaim_if_stale(&lock, Instant::now() + Duration::from_millis(100)).is_err()
-        );
-
-        assert!(lock.is_dir());
-        let helper = fs::File::open(dir.path().join(".system.cfg.lock.reclaim")).unwrap();
-        helper.try_lock().unwrap();
-        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 2);
+        let lock = dir.path().join("lock");
+        fs::write(&lock, "invalid").unwrap();
+        let expired = LockSnapshot::read(&lock).unwrap();
+        let old = fs::File::open(&lock).unwrap(); // pin the old inode
+        fs::remove_file(&lock).unwrap();
+        fs::write(&lock, "invalid").unwrap();
+        PidLock::reclaim_if_stale(
+            &lock,
+            Instant::now() + Duration::from_millis(100),
+            Some(&expired),
+        )
+        .unwrap();
+        assert_eq!(fs::read(&lock).unwrap(), b"invalid");
+        drop(old);
     }
 
     #[test]

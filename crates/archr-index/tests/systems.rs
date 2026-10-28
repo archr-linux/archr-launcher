@@ -1,3 +1,4 @@
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use archr_index::{load_systems, IndexError};
@@ -161,4 +162,17 @@ fn parse_xml(xml: &str) -> Result<Vec<archr_index::SystemDef>, IndexError> {
     let path = directory.path().join("es_systems.cfg");
     std::fs::write(&path, xml).unwrap();
     load_systems(&path)
+}
+
+#[test]
+fn systems_xml_rejects_bytes_beyond_limit_instead_of_truncating() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("systems.xml");
+    let mut source = "<systemList/>".to_owned();
+    source.extend(std::iter::repeat_n(' ', 1024 * 1024 - source.len()));
+    fs::write(&path, &source).unwrap();
+    assert!(load_systems(&path).is_ok());
+    source.push(' ');
+    fs::write(&path, source).unwrap();
+    assert!(load_systems(&path).is_err());
 }

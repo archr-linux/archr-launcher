@@ -1,7 +1,9 @@
 //! Decode and resize off-thread; SDL textures never leave the render thread.
+use archr_io::{atomic_publish, read_utf8, Symlinks::Follow};
 use std::{
     collections::{HashSet, VecDeque},
-    fs, io,
+    fs,
+    io::{self, Write},
     path::{Path, PathBuf},
     sync::mpsc::{self, Receiver, SyncSender},
     time::UNIX_EPOCH,
@@ -44,7 +46,7 @@ pub fn load_thumbnail(
     let path = thumbnail_path(cache, source)?;
     let size_path = path.with_extension("size");
     let size = format!("{width}x{height}");
-    let cached = (fs::read_to_string(&size_path).ok().as_deref() == Some(&size))
+    let cached = (read_utf8(&size_path, 32, Follow).ok().as_deref() == Some(&size))
         .then(|| {
             let mut reader = image::ImageReader::open(&path).ok()?;
             let mut limits = image::Limits::default();
@@ -70,13 +72,12 @@ pub fn load_thumbnail(
                 .thumbnail(width.max(1), height.max(1));
             // Cache failure is nonfatal; the thumbnail is still usable.
             let save = || -> io::Result<()> {
-                fs::create_dir_all(cache)?;
-                let temp = tempfile::NamedTempFile::new_in(cache)?;
-                image
-                    .save_with_format(temp.path(), image::ImageFormat::Png)
-                    .map_err(io::Error::other)?;
-                temp.persist(&path).map_err(|error| error.error)?;
-                fs::write(size_path, size)
+                atomic_publish(&path, false, |file| {
+                    image
+                        .write_to(file, image::ImageFormat::Png)
+                        .map_err(io::Error::other)
+                })?;
+                atomic_publish(&size_path, false, |file| file.write_all(size.as_bytes()))
             };
             if let Err(error) = save() {
                 log::warn!("Cannot cache cover: {error}");

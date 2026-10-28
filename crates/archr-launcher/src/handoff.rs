@@ -1,6 +1,9 @@
-use std::{io, path::Path};
+use std::{
+    io::{self, Write},
+    path::Path,
+};
 
-use crate::file_io::{atomic_write, read_bounded};
+use archr_io::{atomic_publish, read_utf8, Symlinks::Follow};
 
 #[derive(Debug)]
 pub enum NextCmd {
@@ -81,11 +84,13 @@ pub fn write_next(run_dir: &Path, cmd: &NextCmd) -> io::Result<()> {
         }
         NextCmd::Suspend => "action suspend\n".into(),
     };
-    atomic_write(run_dir, "next", line.as_bytes())
+    atomic_publish(&run_dir.join("next"), false, |file| {
+        file.write_all(line.as_bytes())
+    })
 }
 
 pub fn read_last_exit(run_dir: &Path) -> Option<i32> {
-    read_bounded(&run_dir.join("last-exit"), 128)
+    read_utf8(&run_dir.join("last-exit"), 128, Follow)
         .ok()?
         .trim()
         .parse()

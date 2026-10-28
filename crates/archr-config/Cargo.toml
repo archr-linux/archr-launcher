@@ -5,4 +5,5 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+archr-io = { path = "../archr-io" }
 tempfile = "3"

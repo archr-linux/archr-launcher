@@ -5,11 +5,14 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+archr-io = { path = "../archr-io" }
 archr-config = { path = "../archr-config" }
 archr-ui = { path = "../archr-ui" }
 sdl2 = { version = "0.38", features = ["ttf", "image"] }
 archr-index = { path = "../archr-index" }
 log = "0.4"
 serde = { version = "1", features = ["derive"] }
-tempfile = "3"
 toml = "0.8"
+
+[dev-dependencies]
+tempfile = "3"

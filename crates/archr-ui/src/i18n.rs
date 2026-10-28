@@ -1,10 +1,9 @@
 //! Small, bounded TOML catalogs. No locale framework or process-global language.
+use archr_io::{read_utf8, Symlinks::Reject};
 use std::{
     cell::RefCell,
     collections::{BTreeMap, HashSet},
-    fs::OpenOptions,
-    io::{self, Read},
-    os::unix::fs::OpenOptionsExt,
+    io,
     path::Path,
 };
 
@@ -74,7 +73,7 @@ impl I18n {
                 continue;
             }
             let path = dir.join(format!("{candidate}.toml"));
-            match read_catalog(&path).and_then(|source| {
+            match read_utf8(&path, MAX_BYTES, Reject).and_then(|source| {
                 parse(&source).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
             }) {
                 Ok(catalog) => {
@@ -264,31 +263,6 @@ fn interpolate(template: &str, args: &[(&str, &str)]) -> String {
     result.push_str(rest);
     result
 }
-fn read_catalog(path: &Path) -> io::Result<String> {
-    // O_NONBLOCK prevents a FIFO from hanging startup; O_NOFOLLOW rejects a
-    // catalog symlink, then fstat validates the actual opened file (no race).
-    let file = OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(path)?;
-    let metadata = file.metadata()?;
-    if !metadata.is_file() || metadata.len() > MAX_BYTES {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "catalog must be a regular file of at most 64 KiB",
-        ));
-    }
-    let mut source = String::new();
-    file.take(MAX_BYTES + 1).read_to_string(&mut source)?;
-    if source.len() as u64 > MAX_BYTES {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "catalog exceeds 64 KiB",
-        ));
-    }
-    Ok(source)
-}
-
 /// Unrendered worker feedback: keep presentation language out of workers.
 #[derive(Debug)]
 pub struct Message {

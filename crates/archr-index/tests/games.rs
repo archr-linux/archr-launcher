@@ -397,3 +397,21 @@ fn gamelist_supplies_optional_year_and_players_for_cover_caption() {
     assert_eq!(games[0].year, None);
     assert_eq!(games[0].players, None);
 }
+
+#[test]
+fn oversized_gamelist_discards_all_metadata() {
+    let dir = tempfile::tempdir().unwrap();
+    touch(dir.path(), "Game.sfc");
+    let path = dir.path().join("gamelist.xml");
+    let mut source = "<gameList><game><path>Game.sfc</path><name>Imported</name><favorite>true</favorite></game></gameList>".to_owned();
+    // Valid XML whitespace ensures size, not syntax, rejects the document.
+    source.extend(std::iter::repeat_n(
+        ' ',
+        32 * 1024 * 1024 + 1 - source.len(),
+    ));
+    fs::write(&path, source).unwrap();
+    let games = scan_system(&system(dir.path()));
+    assert_eq!(games.len(), 1);
+    assert_eq!(games[0].name, "Game");
+    assert!(!games[0].favorite);
+}

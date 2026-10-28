@@ -216,3 +216,17 @@ fn power_actions_cannot_publish_next() {
         assert!(!paths.run.join("next").exists());
     }
 }
+
+#[test]
+fn invalid_store_is_visible_and_never_replaced_on_exit() {
+    let (_dir, paths) = fixture();
+    let path = paths.store.join("store.toml");
+    fs::write(&path, "broken [").unwrap();
+    let library = ready(&paths, None);
+    assert_eq!(
+        library.banner.as_ref().map(|banner| banner.key),
+        Some("error.store_load")
+    );
+    assert!(library.finish().is_err());
+    assert_eq!(fs::read_to_string(path).unwrap(), "broken [");
+}

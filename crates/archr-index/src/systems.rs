@@ -1,5 +1,5 @@
-use std::fs::File;
-use std::io::{BufRead, BufReader};
+use archr_io::{read_bytes, Symlinks::Follow};
+use std::io::BufRead;
 use std::path::{Path, PathBuf};
 
 use quick_xml::events::{BytesStart, Event};
@@ -49,7 +49,8 @@ impl SystemDef {
 /// Read EmulationStation's system list without building an XML DOM.
 /// Unknown elements are skipped, preserving the order of systems and cores.
 pub fn load_systems(es_systems: &Path) -> Result<Vec<SystemDef>, IndexError> {
-    let mut reader = Reader::from_reader(BufReader::new(File::open(es_systems)?));
+    let source = read_bytes(es_systems, 1024 * 1024, Follow)?;
+    let mut reader = Reader::from_reader(source.as_slice());
     reader.config_mut().expand_empty_elements = true;
     let mut buffer = Vec::new();
     let mut systems = Vec::new();

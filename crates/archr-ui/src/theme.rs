@@ -1,7 +1,6 @@
+use archr_io::{read_utf8, Symlinks::Follow};
 use serde::{de::DeserializeOwned, Deserialize};
 use std::{
-    fs,
-    io::{self, Read},
     path::{Component, Path, PathBuf},
     sync::OnceLock,
 };
@@ -155,7 +154,7 @@ impl Theme {
     pub fn load(dir: &Path) -> Self {
         let mut theme = Self::builtin();
         let path = dir.join("theme.toml");
-        let source = match read_theme(&path) {
+        let source = match read_utf8(&path, MAX_THEME_BYTES, Follow) {
             Ok(source) => source,
             Err(error) => {
                 log::warn!(
@@ -285,27 +284,6 @@ impl Theme {
 
         theme
     }
-}
-
-fn read_theme(path: &Path) -> io::Result<String> {
-    let file = fs::File::open(path)?;
-    let metadata = file.metadata()?;
-    if !metadata.is_file() || metadata.len() > MAX_THEME_BYTES {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "theme must be a regular file of at most 64 KiB",
-        ));
-    }
-    // The file can grow after metadata was read; bound the actual read too.
-    let mut source = String::new();
-    file.take(MAX_THEME_BYTES + 1).read_to_string(&mut source)?;
-    if source.len() as u64 > MAX_THEME_BYTES {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "theme exceeds 64 KiB",
-        ));
-    }
-    Ok(source)
 }
 
 /// User themes take precedence as a whole; fields inherit from the builtin,

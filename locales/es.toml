@@ -28,6 +28,7 @@
 "library.summary" = "{systems} · {games}"
 "error.systems" = "No se pudieron cargar los sistemas.\nRevisa es_systems.cfg."
 "error.core_save" = "No se pudo guardar el núcleo.\nRevisa el espacio y los permisos."
+"error.store_load" = "No se pudieron cargar los datos.\nArchivo conservado; guardado desactivado."
 "error.store_save" = "No se pudieron guardar los datos.\nRevisa el espacio y los permisos."
 "error.game_missing" = "No se encontró el juego"
 "error.rom_name" = "Nombre de ROM no válido"

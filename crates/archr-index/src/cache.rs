@@ -6,10 +6,11 @@
 //! decoding are size-limited and reject truncated payloads and trailing bytes.
 
 use std::fs;
-use std::io::{self, Read, Write};
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
+use archr_io::{atomic_publish, read_bytes, Symlinks::Follow};
 use bincode::Options;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
@@ -168,19 +169,7 @@ fn codec(limit: u64) -> impl Options {
 }
 
 fn read_cache<T: DeserializeOwned>(path: &Path, max_bytes: u64) -> Option<T> {
-    let file = fs::File::open(path).ok()?;
-    let length = file.metadata().ok()?.len();
-    if length > max_bytes {
-        return None;
-    }
-    let mut bytes = Vec::with_capacity(usize::try_from(length).ok()?);
-    // Metadata is only a snapshot: bound the read even if the file grows.
-    file.take(max_bytes.checked_add(1)?)
-        .read_to_end(&mut bytes)
-        .ok()?;
-    if u64::try_from(bytes.len()).ok()? > max_bytes {
-        return None;
-    }
+    let bytes = read_bytes(path, max_bytes, Follow).ok()?;
     if bytes.get(..4)? != MAGIC || bytes.get(4..8)? != CACHE_VERSION.to_le_bytes() {
         return None;
     }
@@ -195,22 +184,15 @@ fn read_cache<T: DeserializeOwned>(path: &Path, max_bytes: u64) -> Option<T> {
 }
 
 fn write_cache<T: Serialize>(path: &Path, value: &T, max_bytes: u64) -> io::Result<()> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "cache path has no parent"))?;
-    fs::create_dir_all(parent)?;
-    let mut temp = tempfile::NamedTempFile::new_in(parent)?;
-    {
-        let mut writer = io::BufWriter::new(temp.as_file_mut());
+    atomic_publish(path, false, |file| {
+        let mut writer = io::BufWriter::new(file);
         writer.write_all(MAGIC)?;
         writer.write_all(&CACHE_VERSION.to_le_bytes())?;
         codec(max_bytes - HEADER_BYTES)
             .serialize_into(&mut writer, value)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-        writer.flush()?;
-    }
-    temp.persist(path).map_err(|error| error.error)?;
-    Ok(())
+        writer.flush()
+    })
 }
 
 /// Encode every unsafe UTF-8 byte, including `%`, so sanitization cannot cause

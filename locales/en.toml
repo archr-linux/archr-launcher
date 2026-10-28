@@ -28,6 +28,7 @@
 "library.summary" = "{systems} · {games}"
 "error.systems" = "Cannot load systems.\nCheck es_systems.cfg."
 "error.core_save" = "Cannot save core.\nCheck free space and permissions."
+"error.store_load" = "Cannot load favorites or history.\nPrevious file preserved; saving disabled."
 "error.store_save" = "Cannot save favorites or history.\nCheck free space and permissions."
 "error.game_missing" = "Game not found"
 "error.rom_name" = "Invalid ROM filename"
