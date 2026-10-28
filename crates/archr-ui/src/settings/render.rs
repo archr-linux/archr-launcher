@@ -85,27 +85,32 @@ impl View<'_, '_, '_> {
     ) -> Result<(), String> {
         let rect = self.rect(bounds);
         let (mut size, ink, align) = style;
-        loop {
+        let (lines, size) = loop {
             let lines = self.lines(text, size, rect.width())?;
-            let step = size + 3.;
-            let limit = (bounds.3 / step).floor().max(1.) as usize;
+            let limit = (bounds.3 / (size + 3.)).floor().max(1.) as usize;
             if lines.len() <= limit {
-                let top = bounds.1 + (bounds.3 - lines.len() as f32 * step) / 2.;
-                for (n, line) in lines.iter().enumerate() {
-                    self.ui.label_aligned(
-                        line,
-                        (Face::Regular, size, ink),
-                        self.rect((bounds.0, top + n as f32 * step, bounds.2, step)),
-                        align,
-                    )?;
-                }
-                return Ok(());
+                break (lines, size);
             }
             if size <= 12. {
-                return Err(format!("Settings text exceeds {limit} lines: {text}"));
+                log::warn!("Settings text unavailable in this layout: {text}");
+                break (
+                    self.lines(&self.tr("settings.unavailable"), style.0, rect.width())?,
+                    style.0,
+                );
             }
             size = (size - 1.).max(12.);
+        };
+        let step = size + 3.;
+        let top = bounds.1 + (bounds.3 - lines.len() as f32 * step) / 2.;
+        for (n, line) in lines.iter().enumerate() {
+            self.ui.label_aligned(
+                line,
+                (Face::Regular, size, ink),
+                self.rect((bounds.0, top + n as f32 * step, bounds.2, step)),
+                align,
+            )?;
         }
+        Ok(())
     }
     fn label(&mut self, bounds: Bounds, text: &str, size: f32) -> Result<(), String> {
         self.text(bounds, text, (size, self.theme.text, Align::Left))
@@ -142,19 +147,27 @@ impl View<'_, '_, '_> {
                     let y = 68. + n as f32 * step;
                     let selected = n == state.cursor;
                     let ink = self.ink(selected);
+                    let label = self.tr(row.label);
+                    let label_width = if row.subtitle.is_none() && row.kind == Kind::Value {
+                        self.ui.measure(&label, Face::Regular, 15.)?.clamp(120, 278) as f32
+                    } else {
+                        278.
+                    };
+                    let control_x = 38. + label_width + 16.;
+                    let control = (control_x, y, 600. - control_x, step - 6.);
                     self.panel((24., y, 592., step - 6.), selected)?;
                     self.text(
                         (
                             38.,
                             y,
-                            278.,
+                            label_width,
                             if row.subtitle.is_some() {
                                 28.
                             } else {
                                 step - 6.
                             },
                         ),
-                        &self.tr(row.label),
+                        &label,
                         (15., ink, Align::Left),
                     )?;
                     if let Some(key) = row.subtitle {
@@ -174,18 +187,12 @@ impl View<'_, '_, '_> {
                     }
                     if state.pending == Some(row.id) {
                         self.text(
-                            (332., y, 268., step - 6.),
+                            control,
                             &self.tr("settings.applying"),
                             (14., ink, Align::Right),
                         )?;
                     } else {
-                        self.control(
-                            row.id,
-                            row.kind,
-                            state,
-                            selected,
-                            (332., y, 268., step - 6.),
-                        )?;
+                        self.control(row.id, row.kind, state, selected, control)?;
                     }
                 }
             }
@@ -367,6 +374,15 @@ impl View<'_, '_, '_> {
             for line in card.lines.iter().filter(|s| !s.is_empty()) {
                 lines.extend(self.lines(&self.tr(line), 12., self.ui.px(260.) as u32)?);
             }
+            // Reserve readable space for every card, including the footer.
+            let limit = if content.len() < 2 { 4 } else { 2 };
+            if lines.len() > limit {
+                log::warn!(
+                    "Settings information unavailable in this layout: {}",
+                    card.lines.join("\n")
+                );
+                lines.clear();
+            }
             if lines.is_empty() {
                 lines.push(self.tr("settings.unavailable"));
             }
@@ -375,7 +391,7 @@ impl View<'_, '_, '_> {
         let mut y = 144.;
         for pair in content.chunks(2) {
             let count = pair.iter().map(|(_, lines)| lines.len()).max().unwrap_or(1);
-            let h = 40.
+            let h = 36.
                 + count as f32 * 17.
                 + if pair.iter().any(|(c, _)| c.percent.is_some()) {
                     12.

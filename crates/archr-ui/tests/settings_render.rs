@@ -7,8 +7,23 @@ use archr_ui::{
     Theme,
 };
 use common::FakeData;
+struct Warnings(std::sync::Mutex<Vec<String>>);
+static WARNINGS: Warnings = Warnings(std::sync::Mutex::new(Vec::new()));
+impl log::Log for Warnings {
+    fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
+        metadata.level() <= log::Level::Warn
+    }
+    fn log(&self, record: &log::Record<'_>) {
+        if self.enabled(record.metadata()) {
+            self.0.lock().unwrap().push(record.args().to_string());
+        }
+    }
+    fn flush(&self) {}
+}
 #[test]
 fn all_locales_and_pages_render_and_selected_on_toggle_has_contrast() {
+    log::set_logger(&WARNINGS).unwrap();
+    log::set_max_level(log::LevelFilter::Warn);
     std::env::set_var("SDL_VIDEODRIVER", "offscreen");
     let ttf;
     let creator;
@@ -96,10 +111,67 @@ fn all_locales_and_pages_render_and_selected_on_toggle_has_contrast() {
                     .canvas
                     .read_pixels(None, sdl2::pixels::PixelFormatEnum::RGBA32)
                     .unwrap();
-                assert_eq!(
-                    before, after,
+                assert!(
+                    before == after,
                     "technical details must never enter the banner"
                 );
+            }
+            if page == Page::Sound {
+                state.error = None;
+                let name = "W".repeat(264);
+                assert_eq!(name.chars().count(), 264);
+                state.values.insert(Id::Audio, name);
+                ui.draw_with_settings(
+                    &App::new(9),
+                    &FakeData::default(),
+                    &theme,
+                    None,
+                    Some(&state),
+                )
+                .unwrap();
+                let unavailable = ui
+                    .canvas
+                    .read_pixels(None, sdl2::pixels::PixelFormatEnum::RGBA32)
+                    .unwrap();
+                state.values.insert(Id::Audio, String::new());
+                ui.draw_with_settings(
+                    &App::new(9),
+                    &FakeData::default(),
+                    &theme,
+                    None,
+                    Some(&state),
+                )
+                .unwrap();
+                assert!(unavailable == ui.canvas.read_pixels(None,sdl2::pixels::PixelFormatEnum::RGBA32).unwrap(),"unrenderable external data must show localized unavailable, never terminate or truncate");
+                state.values.insert(Id::Audio, "W".repeat(90));
+                ui.draw_with_settings(
+                    &App::new(9),
+                    &FakeData::default(),
+                    &theme,
+                    None,
+                    Some(&state),
+                )
+                .unwrap();
+                assert_ne!(
+                    unavailable,
+                    ui.canvas
+                        .read_pixels(None, sdl2::pixels::PixelFormatEnum::RGBA32)
+                        .unwrap(),
+                    "reallocated row width must allow complete multi-line values"
+                );
+            }
+            if page == Page::Info {
+                state.info.device = "W".repeat(264);
+                state.info.cards[0].lines = vec!["W\n".repeat(264)];
+                state.info.cards[4].lines = vec!["W".repeat(264)];
+                ui.draw_with_settings(
+                    &App::new(9),
+                    &FakeData::default(),
+                    &theme,
+                    None,
+                    Some(&state),
+                )
+                .unwrap();
             }
             if page == Page::System {
                 let pixels = ui
@@ -120,4 +192,13 @@ fn all_locales_and_pages_render_and_selected_on_toggle_has_contrast() {
             }
         }
     }
+    assert!(
+        WARNINGS
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|line| line.contains(&"W".repeat(264))),
+        "full original data must be logged"
+    );
 }
