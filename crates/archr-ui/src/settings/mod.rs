@@ -387,6 +387,8 @@ pub struct Settings {
     pub pending: Option<Id>,
     pub loading: bool,
     pub error: Option<(Option<Id>, String)>,
+    /// Bumped by every `fail`, so a repeated identical message restarts its timer.
+    pub error_seq: u64,
     pub reboot_prompt: bool,
     pub info: Information,
     pub networks: Vec<Network>,
@@ -421,6 +423,7 @@ impl Default for Settings {
             pending: None,
             loading: true,
             error: None,
+            error_seq: 0,
             reboot_prompt: false,
             info: Information::default(),
             networks: Vec::new(),
@@ -658,6 +661,10 @@ impl Settings {
             .get(&id)
             .map_or(id.default_value(), String::as_str)
     }
+    pub fn fail(&mut self, id: Option<Id>, error: String) {
+        self.error = Some((id, error));
+        self.error_seq += 1;
+    }
     pub fn complete(&mut self, id: Id, result: Result<String, String>) {
         self.pending = None;
         match result {
@@ -666,7 +673,7 @@ impl Settings {
                 self.error = None;
                 self.reboot_prompt = id == Id::Gpu;
             }
-            Err(error) => self.error = Some((Some(id), error)),
+            Err(error) => self.fail(Some(id), error),
         }
     }
     /// A slider reply: returns the newest value still to apply, if any.
@@ -688,7 +695,7 @@ impl Settings {
             Err(error) => {
                 let (confirmed, _) = self.slides.remove(&id).expect("slide");
                 self.values.insert(id, confirmed);
-                self.error = Some((Some(id), error));
+                self.fail(Some(id), error);
             }
         }
         None

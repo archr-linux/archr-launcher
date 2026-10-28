@@ -47,7 +47,7 @@ impl Runtime {
         self.state.scanning = self.worker.as_ref().is_some_and(Worker::scanning);
         if let Err(error) = result {
             log::warn!("Settings worker failed: {error}");
-            self.state.error = Some((self.state.pending, error));
+            self.state.fail(self.state.pending, error);
             self.state.pending = None;
             self.state.loading = false;
         }

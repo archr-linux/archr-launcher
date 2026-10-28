@@ -190,7 +190,7 @@ impl Backend {
         if !errors.is_empty() {
             let error = errors.join("; ");
             log::warn!("Settings discovery failed: {error}");
-            state.error = Some((None, error));
+            state.fail(None, error);
         }
         Ok(state)
     }
@@ -474,7 +474,7 @@ impl Worker {
                 }
                 Reply::Loaded(Err(error)) => {
                     log::warn!("Loading settings failed: {error}");
-                    state.error = Some((None, error));
+                    state.fail(None, error);
                     state.loading = false;
                 }
                 Reply::Set(id, result) => {
@@ -533,7 +533,7 @@ impl Worker {
                     }
                     // A scan cut short by switching Wi-Fi off is not an error.
                     Err(error) if state.value(Id::WifiSwitch) == "1" => {
-                        state.error = Some((None, error));
+                        state.fail(None, error);
                     }
                     Err(_) => {}
                 },
@@ -544,7 +544,7 @@ impl Worker {
                             state.error = None;
                             let _ = self.send(Work::Scan);
                         }
-                        Err(error) => state.error = Some((None, error)),
+                        Err(error) => state.fail(None, error),
                     }
                 }
                 Reply::Login(result) => {
@@ -556,7 +556,7 @@ impl Worker {
                             state.scrape.threads = threads;
                             state.error = None;
                         }
-                        Err(error) => state.error = Some((None, error)),
+                        Err(error) => state.fail(None, error),
                     }
                 }
                 Reply::Scrape(result) => {
@@ -568,7 +568,7 @@ impl Worker {
                             state.scrape.running = true;
                             *job = Some(started);
                         }
-                        Err(error) => state.error = Some((None, error)),
+                        Err(error) => state.fail(None, error),
                     }
                 }
             }

@@ -97,6 +97,7 @@ const BANNER_FADE: Duration = Duration::from_millis(150);
 /// a different message shows at once and restarts the timer.
 pub(super) struct Banner {
     shown: Option<(Option<Id>, String)>,
+    seq: u64,
     since: Instant,
     pub(super) fade: Tween,
 }
@@ -104,6 +105,7 @@ impl Default for Banner {
     fn default() -> Self {
         Self {
             shown: None,
+            seq: 0,
             since: Instant::now(),
             fade: Tween::new(0., BANNER_FADE),
         }
@@ -111,10 +113,11 @@ impl Default for Banner {
 }
 impl Banner {
     /// Opacity (0..=1) to draw `error` with this frame.
-    fn alpha(&mut self, error: Option<&(Option<Id>, String)>, now: Instant) -> f32 {
+    fn alpha(&mut self, error: Option<&(Option<Id>, String)>, seq: u64, now: Instant) -> f32 {
         match error {
-            Some(error) if self.shown.as_ref() != Some(error) => {
+            Some(error) if self.shown.as_ref() != Some(error) || self.seq != seq => {
                 self.shown = Some(error.clone());
+                self.seq = seq;
                 self.since = now;
                 self.fade.retarget(1., now);
                 self.fade.snap();
@@ -413,7 +416,10 @@ impl View<'_, '_, '_> {
             !matches!(state.page(), Page::Info | Page::InfoDetail(_))
                 && (id.is_none() || rows.iter().any(|r| Some(r.id) == *id))
         });
-        let alpha = self.ui.settings_banner.alpha(error, self.ui.frame.now);
+        let alpha = self
+            .ui
+            .settings_banner
+            .alpha(error, state.error_seq, self.ui.frame.now);
         if let Some((id, error)) = self.ui.settings_banner.shown.clone().filter(|_| alpha > 0.) {
             let fade = |c: Rgba| Rgba {
                 a: (f32::from(c.a) * alpha) as u8,
@@ -804,31 +810,41 @@ mod banner_tests {
     fn message_fades_after_four_seconds_and_a_new_one_restarts_the_timer() {
         let (mut banner, t0) = (Banner::default(), Instant::now());
         let first = error("settings.failed");
-        assert_eq!(banner.alpha(first.as_ref(), t0), 1.);
+        assert_eq!(banner.alpha(first.as_ref(), 0, t0), 1.);
         let late = t0 + Duration::from_millis(3900);
-        assert_eq!(banner.alpha(first.as_ref(), late), 1.);
+        assert_eq!(banner.alpha(first.as_ref(), 0, late), 1.);
         // A different message replaces it at full opacity and restarts the clock.
         let second = error("settings.wifi_timeout");
-        assert_eq!(banner.alpha(second.as_ref(), late), 1.);
+        assert_eq!(banner.alpha(second.as_ref(), 1, late), 1.);
         let later = late + Duration::from_millis(3900);
-        assert_eq!(banner.alpha(second.as_ref(), later), 1.);
+        assert_eq!(banner.alpha(second.as_ref(), 1, later), 1.);
         // Past the timer the message fades, then stays gone while the state keeps it.
         let gone = later + Duration::from_millis(300);
-        banner.alpha(second.as_ref(), gone);
+        banner.alpha(second.as_ref(), 1, gone);
         let end = gone + BANNER_FADE + Duration::from_millis(10);
-        assert_eq!(banner.alpha(second.as_ref(), end), 0.);
+        assert_eq!(banner.alpha(second.as_ref(), 1, end), 0.);
         assert!(!banner.busy(end));
-        assert_eq!(banner.alpha(second.as_ref(), end), 0.);
+        assert_eq!(banner.alpha(second.as_ref(), 1, end), 0.);
+    }
+    #[test]
+    fn an_identical_message_arriving_again_restarts_the_timer() {
+        let (mut banner, t0) = (Banner::default(), Instant::now());
+        let message = error("settings.failed");
+        banner.alpha(message.as_ref(), 1, t0);
+        let late = t0 + Duration::from_millis(3900);
+        assert_eq!(banner.alpha(message.as_ref(), 2, late), 1.);
+        let later = late + Duration::from_millis(3900);
+        assert_eq!(banner.alpha(message.as_ref(), 2, later), 1.);
     }
     #[test]
     fn input_dropping_the_message_fades_it_out_early() {
         let (mut banner, t0) = (Banner::default(), Instant::now());
-        banner.alpha(error("settings.failed").as_ref(), t0);
+        banner.alpha(error("settings.failed").as_ref(), 0, t0);
         let now = t0 + Duration::from_millis(500);
-        banner.alpha(None, now);
+        banner.alpha(None, 0, now);
         assert!(banner.busy(now));
         let end = now + BANNER_FADE + Duration::from_millis(10);
-        assert_eq!(banner.alpha(None, end), 0.);
+        assert_eq!(banner.alpha(None, 0, end), 0.);
         assert!(banner.shown.is_none());
     }
 }
