@@ -1,5 +1,8 @@
 //! Declarative settings pages and pure navigation. Effects belong to the host.
-use crate::{icons::Glyph, keyboard::Keyboard, state::Button, HintButton};
+use crate::{
+    appearance, appearance::Appearance, icons::Glyph, keyboard::Keyboard, state::Button,
+    HintButton, Theme,
+};
 use std::collections::BTreeMap;
 use std::time::Instant;
 pub(crate) mod information;
@@ -21,6 +24,7 @@ pub enum Page {
     Games,
     Netplay,
     Scraper,
+    Appearance,
     Keyboard,
     Soon(&'static str),
 }
@@ -37,6 +41,7 @@ impl Page {
             Self::Games => "settings.games",
             Self::Netplay => "settings.netplay",
             Self::Scraper => "settings.scraper",
+            Self::Appearance => "settings.appearance",
             Self::Keyboard => "settings.keyboard",
             Self::Soon(key) => key,
         }
@@ -59,6 +64,7 @@ impl Page {
             Self::Games => pages::GAMES,
             Self::Netplay => pages::NETPLAY,
             Self::Scraper => pages::SCRAPER,
+            Self::Appearance => pages::APPEARANCE,
             _ => &[],
         }
     }
@@ -107,6 +113,13 @@ pub enum Id {
     ScraperMedia,
     ScraperMissing,
     ScraperStart,
+    Theme,
+    Accent,
+    Background,
+    Font,
+    TextSize,
+    Animations,
+    Restore,
 }
 impl Id {
     fn metadata(self) -> (&'static str, &'static str) {
@@ -146,7 +159,14 @@ impl Id {
             Self::ScraperSystems => ("launcher.scraper.systems", ""),
             Self::ScraperMedia => ("launcher.scraper.media", "box"),
             Self::ScraperMissing => ("launcher.scraper.only_missing", "1"),
+            Self::Theme => ("launcher.theme", "default"),
+            Self::Accent => ("launcher.accent", ""),
+            Self::Background => ("launcher.background", ""),
+            Self::Font => ("launcher.font", ""),
+            Self::TextSize => ("launcher.text_size", "normal"),
+            Self::Animations => ("launcher.animations", "1"),
             Self::Update
+            | Self::Restore
             | Self::Hidden
             | Self::NetplayLink
             | Self::IndexNow
@@ -185,6 +205,11 @@ impl Id {
             Self::Relay => &["none", "nyc", "madrid", "montreal", "saopaulo", "custom"],
             Self::ScraperSource => &["screenscraper"],
             Self::ScraperMedia => &["box", "box,screenshot", "box,screenshot,wheel"],
+            Self::Accent => &appearance::ACCENTS,
+            Self::Background => &appearance::BACKGROUNDS,
+            Self::Font => &appearance::FONTS,
+            Self::TextSize => &appearance::TEXT_SIZES,
+            Self::Animations => &["1", "0"],
             _ => &[],
         }
     }
@@ -308,7 +333,7 @@ pub(crate) const CATEGORIES: &[(Page, &str, Glyph)] = &[
     (Page::Games, "settings.games_detail", Glyph::Play),
     (Page::Region, "settings.region_detail", Glyph::Globe),
     (
-        Page::Soon("settings.appearance"),
+        Page::Appearance,
         "settings.appearance_detail",
         Glyph::Palette,
     ),
@@ -336,6 +361,10 @@ pub enum Effect {
     Login(String, String),
     Scrape,
     CancelScrape,
+    /// Preview another theme: load it off the draw thread.
+    Theme(String),
+    /// Leaving Appearance with changes: persist the choices and apply them.
+    Appearance,
 }
 /// Passwords never reach a log through `{:?}`.
 impl std::fmt::Debug for Effect {
@@ -351,6 +380,8 @@ impl std::fmt::Debug for Effect {
             Self::Login(user, _) => write!(f, "Login({user:?}, <hidden>)"),
             Self::Scrape => write!(f, "Scrape"),
             Self::CancelScrape => write!(f, "CancelScrape"),
+            Self::Theme(name) => write!(f, "Theme({name:?})"),
+            Self::Appearance => write!(f, "Appearance"),
         }
     }
 }
@@ -408,6 +439,12 @@ pub struct Settings {
     pub scrape: Scrape,
     /// Sliders in flight: last confirmed value and the newest unsent one.
     pub slides: BTreeMap<Id, (String, Option<String>)>,
+    /// Appearance page: the choices when it opened, the theme being previewed
+    /// and the choices the host just saved (taken by the host to apply them).
+    pub appearance_saved: Appearance,
+    pub base_theme: Theme,
+    pub base_dir: Option<std::path::PathBuf>,
+    pub applied: Option<Appearance>,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -439,6 +476,10 @@ impl Default for Settings {
             usb_busy: false,
             scrape: Scrape::default(),
             slides: BTreeMap::new(),
+            appearance_saved: Appearance::default(),
+            base_theme: Theme::builtin(),
+            base_dir: None,
+            applied: None,
         }
     }
 }
@@ -462,6 +503,20 @@ impl Settings {
             (Id::Suspend, "mem") => "settings.suspend_mem",
             (Id::Suspend, "freeze") => "settings.suspend_freeze",
             (Id::Suspend, "standby") => "settings.suspend_standby",
+            (Id::Theme, "default") => "appearance.theme_default",
+            (Id::Background, "") => return self.display_value(Id::Theme, catalog),
+            (Id::Background, "black") => "appearance.bg_black",
+            (Id::Background, "slate") => "appearance.bg_slate",
+            (Id::Font, "") if self.value(Id::Theme) == "default" => "appearance.font_inter",
+            (Id::Font, "") => "appearance.font_theme",
+            (Id::Font, "mono") => return "JetBrains Mono".into(),
+            (Id::Font, "system") => "appearance.font_system",
+            (Id::TextSize, "small") => "appearance.text_small",
+            (Id::TextSize, "normal") => "appearance.text_normal",
+            (Id::TextSize, "large") => "appearance.text_large",
+            (Id::Animations, "1") => "appearance.anim_on",
+            (Id::Animations, "0") => "appearance.anim_off",
+            (Id::Restore | Id::Accent, _) => return String::new(),
             (Id::IndexNow, _) => "settings.soon",
             (Id::ScraperAccount, _) => "settings.sign_in",
             (Id::ScraperStart, _) if self.scrape.running => "settings.cancel_scraping",
@@ -647,6 +702,9 @@ impl Settings {
         self.stack.last_mut().expect("root page").1 = self.cursor;
         self.stack.push((page, 0));
         self.cursor = 0;
+        if page == Page::Appearance {
+            self.appearance_saved = self.appearance();
+        }
     }
     fn back(&mut self) -> Effect {
         if self.stack.len() == 1 {
@@ -727,6 +785,7 @@ impl Settings {
             rows.len()
         };
         match button {
+            Button::B if page == Page::Appearance => return self.leave_appearance(),
             Button::B => return self.back(),
             Button::Up => self.cursor = self.cursor.saturating_sub(1),
             Button::Down => self.cursor = (self.cursor + 1).min(len.saturating_sub(1)),
@@ -793,6 +852,15 @@ impl Settings {
                     }
                     _ => return Effect::None,
                 };
+                if page == Page::Appearance {
+                    // A draft: shown in the preview now, saved on leaving.
+                    self.values.insert(row.id, next.clone());
+                    return if row.id == Id::Theme {
+                        Effect::Theme(next)
+                    } else {
+                        Effect::None
+                    };
+                }
                 if next != old && matches!(row.kind, Kind::Slider { .. }) {
                     // Optimistic: show it now, apply in the background and
                     // coalesce presses made while a value is being applied.
@@ -901,6 +969,71 @@ mod tests {
         assert_eq!(state.settle(Id::Volume, Err("pactl".into())), None);
         assert_eq!(state.value(Id::Volume), "75");
         assert_eq!(state.error, Some((Some(Id::Volume), "pactl".into())));
+    }
+}
+#[cfg(test)]
+mod appearance_tests {
+    use super::*;
+    fn page() -> Settings {
+        let mut state = Settings {
+            loading: false,
+            ..Settings::default()
+        };
+        state
+            .options
+            .insert(Id::Theme, vec!["default".into(), "night".into()]);
+        state.open(Page::Appearance);
+        state
+    }
+    #[test]
+    fn choices_are_a_draft_until_the_page_is_left() {
+        let mut state = page();
+        state.cursor = 1;
+        assert_eq!(state.handle(Button::R), Effect::None);
+        assert_eq!(state.value(Id::Accent), "teal");
+        assert_eq!(state.pending, None);
+        assert_eq!(state.handle(Button::B), Effect::Appearance);
+        assert_eq!(state.appearance().accent, "teal");
+        assert_eq!(state.pending, Some(Id::Theme));
+    }
+    #[test]
+    fn leaving_unchanged_or_restored_saves_nothing() {
+        let mut state = page();
+        state.cursor = 4;
+        state.handle(Button::R);
+        state.handle(Button::L);
+        assert_eq!(state.handle(Button::B), Effect::None);
+        assert_eq!(state.pending, None);
+    }
+    #[test]
+    fn theme_changes_ask_the_host_to_load_the_preview() {
+        let mut state = page();
+        assert_eq!(state.handle(Button::R), Effect::Theme("night".into()));
+        state.cursor = 6;
+        assert_eq!(state.handle(Button::A), Effect::Theme("default".into()));
+        assert_eq!(state.value(Id::Theme), "default");
+    }
+    #[test]
+    fn restore_returns_every_choice_to_its_default() {
+        let mut state = page();
+        for (id, value) in [
+            (Id::Accent, "pink"),
+            (Id::TextSize, "large"),
+            (Id::Animations, "0"),
+        ] {
+            state.values.insert(id, value.into());
+        }
+        state.cursor = 6;
+        assert_eq!(state.handle(Button::A), Effect::None);
+        assert_eq!(
+            state.appearance(),
+            Appearance {
+                text_size: "normal".into(),
+                theme: "default".into(),
+                animations: true,
+                ..Appearance::default()
+            }
+        );
     }
 }
 #[cfg(test)]

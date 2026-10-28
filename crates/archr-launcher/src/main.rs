@@ -3,6 +3,7 @@ mod script;
 mod transition;
 use archr_config::SystemCfg;
 use archr_launcher::{
+    appearance,
     library::Library,
     netplay,
     paths::Paths,
@@ -17,7 +18,7 @@ use archr_ui::{
     netplay::{Effect, Lobby},
     render::{prepare_first_frame, Ui},
     startup::StartupTrace,
-    startup_phase, theme_dir, Theme,
+    startup_phase,
 };
 use sdl2::{
     event::{Event, WindowEvent},
@@ -84,7 +85,8 @@ fn run(
     let ttf = sdl2::ttf::init().map_err(|error| error.to_string())?;
     startup_phase!(trace, "TTF_Init");
     let creator;
-    let (mut ui, (theme, theme_path, catalog, mut library, prepared, netplay_on)) =
+    #[allow(clippy::type_complexity)]
+    let (mut ui, (mut theme, (base, look), theme_path, catalog, mut library, prepared, netplay_on)) =
         std::thread::scope(|scope| {
             let (sized, size) = std::sync::mpsc::sync_channel(1);
             let paths = &paths;
@@ -101,19 +103,9 @@ fn run(
                     std::env::var("LANG").ok().as_deref(),
                 );
                 startup_phase!(trace, "locale selection");
-                let name = config
-                    .as_ref()
-                    .and_then(|cfg| cfg.get("launcher", None, "theme"))
-                    .unwrap_or_else(|| "default".to_owned());
-                let theme_path = theme_dir(
-                    &paths.at("/storage/.config/archr-launcher/themes"),
-                    &paths.at("/usr/share/archr-launcher/themes"),
-                    &name,
-                );
-                let mut theme = theme_path
-                    .as_deref()
-                    .map_or_else(Theme::builtin, Theme::load);
-                theme.font = theme.font.as_deref().map(|font| paths.remap(font));
+                let look = appearance::saved(config.as_ref());
+                let (base, theme_path) = appearance::load_theme(paths, &look.theme);
+                let theme = look.apply(&base);
                 startup_phase!(trace, "theme load");
                 // No per-system scans, controller enumeration or cover work yet.
                 let library = Library::initial_traced(paths.clone(), trace);
@@ -141,7 +133,15 @@ fn run(
                     .as_ref()
                     .and_then(|cfg| cfg.get_setting("netplay", None, None))
                     .is_some_and(|value| value == "1");
-                Ok((theme, theme_path, catalog, library, prepared, netplay_on))
+                Ok((
+                    theme,
+                    (base, look),
+                    theme_path,
+                    catalog,
+                    library,
+                    prepared,
+                    netplay_on,
+                ))
             });
             let sdl = sdl2::init()?;
             let video = sdl.video()?;
@@ -165,6 +165,8 @@ fn run(
     creator = ui.canvas.texture_creator();
     ui.catalog = catalog;
     ui.theme_dir = theme_path;
+    ui.text_scale = look.text_scale();
+    ui.animations = look.animations;
     ui.configure_prepared(&creator, prepared, paths.root.as_deref())?;
     let mut app = App::new(ui.page_size(&theme));
     app.netplay = netplay_on;
@@ -178,6 +180,8 @@ fn run(
     library.start();
     let (width, height) = ui.canvas.output_size()?;
     let mut settings = archr_launcher::settings::Runtime::new(paths.clone());
+    settings.state.base_theme = base;
+    settings.state.base_dir = ui.theme_dir.clone();
     let mut rooms = netplay::Runtime::new(paths.clone());
     let mut was_browsing = true;
     let mut moonlight = archr_launcher::moonlight::Runtime::new(paths.clone(), (width, height));
@@ -224,6 +228,22 @@ fn run(
             ui.set_settings_clock_format(settings.state.value(archr_ui::settings::Id::ClockFormat));
         }
         dirty |= settings_dirty;
+        if let Some(look) = settings.state.applied.take() {
+            let base = &settings.state.base_theme;
+            let next = look.apply(base);
+            // Fonts and system art load with the theme; colors apply at once.
+            let reload = next.font != theme.font
+                || next.font_semibold != theme.font_semibold
+                || settings.state.base_dir != ui.theme_dir;
+            theme = next;
+            ui.theme_dir = settings.state.base_dir.clone();
+            ui.text_scale = look.text_scale();
+            ui.animations = look.animations;
+            if reload {
+                ui.configure(&ttf, &creator, &theme, paths.root.as_deref())?;
+            }
+            dirty = true;
+        }
         if let Some(systems) = settings.take_scraped() {
             library.reload(&systems);
             covers.clear();

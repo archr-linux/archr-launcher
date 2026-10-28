@@ -319,6 +319,8 @@ pub(super) enum Work {
     Variants(String),
     Login(String, String),
     Scrape,
+    Theme(String),
+    Appearance(Vec<(Id, String)>),
 }
 enum Reply {
     Loaded(Result<Box<Settings>, String>),
@@ -333,6 +335,8 @@ enum Reply {
     Variants(Vec<(String, String)>),
     Login(Result<(String, usize), String>),
     Scrape(Result<(archr_scraper::Job, Vec<String>), String>),
+    Theme(Box<(archr_ui::Theme, Option<std::path::PathBuf>)>),
+    Appearance(Result<(), String>),
 }
 /// A radio scan takes ~20 s on the R36S: it runs on its own lane so it never
 /// delays the Wi-Fi switch or any other action.
@@ -390,6 +394,13 @@ impl Worker {
                             Reply::Login(backend.login(&user, &password))
                         }
                         Work::Scrape => Reply::Scrape(backend.scrape()),
+                        Work::Theme(name) => Reply::Theme(Box::new(crate::appearance::load_theme(
+                            &backend.paths,
+                            &name,
+                        ))),
+                        Work::Appearance(choices) => {
+                            Reply::Appearance(backend.save_appearance(&choices))
+                        }
                     };
                     if results.send(reply).is_err() {
                         break;
@@ -516,6 +527,14 @@ impl Worker {
                     }
                 }
                 Reply::Info(info) => state.info = info,
+                Reply::Theme(loaded) => (state.base_theme, state.base_dir) = *loaded,
+                Reply::Appearance(result) => {
+                    state.pending = None;
+                    match result {
+                        Ok(()) => state.applied = Some(state.appearance()),
+                        Err(error) => state.fail(None, error),
+                    }
+                }
                 Reply::Variants(names) => {
                     pages::keyboard_choices(state, Id::KeyboardVariant, names);
                 }
