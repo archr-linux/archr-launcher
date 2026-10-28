@@ -431,10 +431,7 @@ fn lobby_input(
     button: archr_launcher::state::Button,
 ) -> Outcome {
     match lobby.as_mut().map(|lobby| lobby.handle(button)) {
-        Some(Effect::Close) => {
-            *lobby = None;
-            rooms.close();
-        }
+        Some(Effect::Close) => *lobby = None,
         Some(Effect::Refresh) => rooms.refresh(),
         Some(Effect::Join(join)) => return Outcome::Netplay(join),
         _ => {}

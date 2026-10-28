@@ -55,6 +55,8 @@ pub struct Join {
     pub core: String,
     pub ip: String,
     pub port: u16,
+    /// Relay session id; empty for direct rooms.
+    pub session: String,
     pub spectate: bool,
 }
 
@@ -109,6 +111,8 @@ impl Lobby {
         self.rooms = rooms;
         self.failed = failed;
         self.loading = false;
+        // The room under the cursor may be another one now.
+        self.menu = None;
     }
     pub fn handle(&mut self, button: Button) -> Effect {
         if let Some(item) = self.menu {

@@ -59,53 +59,63 @@ pub fn launch_command_with(
     ))
 }
 
+/// An address the lobby may legitimately hand out; also keeps arguments that
+/// runemu.sh splits by substring (`--`, `-P`, ...) out of the join line.
+pub fn is_ip(text: &str) -> bool {
+    text.parse::<std::net::IpAddr>().is_ok()
+}
+
 /// Lobby join: the runemu contract plus the ES netplay arguments
-/// `--connect IP --port PORT --nick NICK`, and `--spectate` to watch instead of play.
-/// Contract expected of runemu.sh/setsettings.sh: the host and port of the
-/// session come from `--connect`/`--port` (never from the saved
-/// `global.netplay.host`/`port`); the mode is client, or spectator with
-/// `--spectate`; the nickname after `--nick` is informational. The room's address and the nickname
-/// come from the network or the user, so they are exported and only referenced.
-/// runemu.sh parses its arguments by substring: an address with `--` is refused
-/// and the nickname cannot contain one.
+/// `--connect IP --port PORT --nick NICK`, `--spectate` to watch instead of play and,
+/// for relay (MITM) rooms, `--mitm-session ID`.
+///
+/// Contract expected of runemu.sh/setsettings.sh: host and port of the session come
+/// from `--connect`/`--port` (never from the saved `global.netplay.host`/`port`);
+/// the mode is client, or spectator with `--spectate`; with `--mitm-session` the
+/// address is the relay and the id selects the room on it; the value after `--nick`
+/// is informational. runemu.sh parses its arguments by substring, so everything
+/// from the network is restricted: the address must be an IP literal, the session
+/// alphanumeric, and the nickname `[A-Za-z0-9 _.]` (at most 32 characters, no `-`).
+/// Values are exported and only referenced, never spliced into the shell line.
 pub fn netplay_command(
     bin: &Path,
     rom: &Path,
     game: (&str, &str, &str, &str),
-    peer: (&str, u16, &str),
+    peer: (&str, u16, &str, &str),
     spectate: bool,
 ) -> io::Result<String> {
     let (system, core, emulator, controllers) = game;
-    let (ip, port, nick) = peer;
-    let valid = !ip.is_empty()
-        && !ip.contains("--")
-        && ip
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b".:-_".contains(&b));
-    if !valid || port == 0 {
+    let (ip, port, nick, session) = peer;
+    let session_ok = session.len() <= 64 && session.bytes().all(|b| b.is_ascii_alphanumeric());
+    if !is_ip(ip) || port == 0 || !session_ok {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "invalid netplay address",
         ));
     }
-    let mut nick: String = nick.chars().filter(|c| !c.is_control()).collect();
-    while nick.contains("--") {
-        nick = nick.replace("--", "-");
-    }
+    let nick: String = nick
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || " _.".contains(*c))
+        .take(32)
+        .collect();
     let base = launch_command_with(bin, rom, system, core, emulator, controllers)?;
     let mut command = String::new();
     for (name, value) in [
         ("ARCHR_NP_IP", ip),
         ("ARCHR_NP_PORT", &port.to_string()),
         ("ARCHR_NP_NICK", &nick),
+        ("ARCHR_NP_SESSION", session),
     ] {
         command.push_str(&assignment(name, value));
     }
-    command.push_str("export ARCHR_NP_IP ARCHR_NP_PORT ARCHR_NP_NICK; ");
+    command.push_str("export ARCHR_NP_IP ARCHR_NP_PORT ARCHR_NP_NICK ARCHR_NP_SESSION; ");
     command.push_str(&base);
     command.push_str(
         " --connect \"$ARCHR_NP_IP\" --port \"$ARCHR_NP_PORT\" --nick \"$ARCHR_NP_NICK\"",
     );
+    if !session.is_empty() {
+        command.push_str(" --mitm-session \"$ARCHR_NP_SESSION\"");
+    }
     if spectate {
         command.push_str(" --spectate");
     }

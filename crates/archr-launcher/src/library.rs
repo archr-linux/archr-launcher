@@ -288,7 +288,7 @@ impl Library {
                     .unwrap_or_else(|| "ArchR Player".to_owned());
                 let runemu = self.paths.at("/usr/bin/runemu.sh");
                 let game = (&*join.system, &*join.core, &*join.emulator, controllers);
-                let peer = (&*join.ip, join.port, &*nickname);
+                let peer = (&*join.ip, join.port, &*nickname, &*join.session);
                 let command = netplay_command(&runemu, &join.rom, game, peer, join.spectate)
                     .map_err(|error| error.to_string())?;
                 self.flush_store()?;

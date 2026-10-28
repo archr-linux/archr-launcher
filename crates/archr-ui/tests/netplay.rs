@@ -27,6 +27,7 @@ fn room(group: Group, game: &str, rom: Rom, join: bool) -> Room {
             core: "snes9x".into(),
             ip: "203.0.113.9".into(),
             port: 55435,
+            session: String::new(),
             spectate: false,
         }),
     }
@@ -125,6 +126,13 @@ fn every_locale_renders_the_lobby_and_menu_without_warnings() {
             ui.screenshot = Some(dir.join(format!("menu-{language}.png")));
         }
         ui.draw(&app, &data, &theme, None).unwrap();
+        // Defensive: a menu left open over no rooms must not panic the renderer.
+        ui.lobby = Some(Lobby {
+            menu: Some(0),
+            loading: false,
+            ..Lobby::default()
+        });
+        ui.draw(&app, &data, &theme, None).unwrap();
         ui.lobby = Some(Lobby {
             failed: true,
             loading: false,
@@ -145,4 +153,14 @@ fn theme_carries_status_colours() {
         (theme.warning.r, theme.warning.g, theme.warning.b),
         (0xD2, 0x99, 0x22)
     );
+}
+
+#[test]
+fn a_refresh_closes_the_menu_and_an_empty_lobby_with_a_menu_renders() {
+    let mut lobby = Lobby::default();
+    lobby.set(sample(), false);
+    lobby.handle(Button::A);
+    assert!(lobby.menu.is_some());
+    lobby.set(sample().into_iter().rev().collect(), false);
+    assert!(lobby.menu.is_none());
 }

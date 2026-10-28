@@ -261,7 +261,9 @@ impl Ui<'_, '_> {
     fn join_menu(&mut self, lobby: &Lobby, selected: usize, theme: &Theme) -> Result<(), String> {
         self.scrim(theme, 1.2)?;
         let panel = self.modal(theme, (340., 32., 176., -self.px(20.)))?;
-        let room = &lobby.rooms[lobby.cursor];
+        let Some(room) = lobby.rooms.get(lobby.cursor) else {
+            return Ok(());
+        };
         self.label(
             &room.game,
             (Face::Semibold, 16., theme.text),
