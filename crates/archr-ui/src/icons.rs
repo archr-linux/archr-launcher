@@ -5,6 +5,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+mod dots;
+
 pub const DEFAULT_ICONS_DIR: &str = "/usr/share/archr-launcher/themes/default/icons";
 
 macro_rules! glyphs {
@@ -115,7 +117,7 @@ impl IconLoader {
 }
 
 fn rasterize(svg: &str, size: u32) -> Result<Surface<'static>, String> {
-    let svg = svg.replace("currentColor", "#ffffff");
+    let svg = dots::normalize(&svg.replace("currentColor", "#ffffff"))?;
     let rw = RWops::from_bytes(svg.as_bytes())?;
     let dimension = i32::try_from(size).map_err(|e| e.to_string())?;
     // SDL_image borrows the RWops; Surface takes ownership of the result.
@@ -130,6 +132,97 @@ fn rasterize(svg: &str, size: u32) -> Result<Surface<'static>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn dot_forms_match_filled_circles_without_moving_other_geometry() {
+        let pixels = |body: &str| {
+            let svg = format!(
+                r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">{body}</svg>"#
+            );
+            rasterize(&svg, 24)
+                .unwrap()
+                .without_lock()
+                .unwrap()
+                .to_vec()
+        };
+        let dot = r#"<circle cx="12" cy="20" r="1" fill="currentColor" stroke="none"/>"#;
+        for path in [
+            "M12 20h.01",
+            "m12 20v.01",
+            "M12,20H12.01",
+            "M12 20V20.01",
+            "M12 20l0 .01",
+            "m12 20 .01 0",
+        ] {
+            assert_eq!(
+                pixels(&format!(r#"<path d="{path}"/>"#)),
+                pixels(dot),
+                "{path}"
+            );
+        }
+        assert_eq!(
+            pixels(r#"<line x1="12" y1="20" x2="12.01" y2="20"/>"#),
+            pixels(dot)
+        );
+        assert_eq!(
+            pixels(r#"<g stroke-width="4"><path d="M12 20h.01"/></g>"#),
+            pixels(r#"<circle cx="12" cy="20" r="2" fill="currentColor" stroke="none"/>"#)
+        );
+        assert_eq!(
+            pixels(r#"<path d="M12 20h.01m-8-16h8"/>"#),
+            pixels(&format!(r#"{dot}<path d="M4.01 4h8"/>"#)),
+            "relative geometry after a dot must keep its origin"
+        );
+        assert_eq!(
+            pixels(r#"<path d="M12 20h.01m4-4v.01"/>"#),
+            pixels(&format!(
+                r#"{dot}<circle cx="16.01" cy="16" r="1" fill="currentColor" stroke="none"/>"#
+            ))
+        );
+        assert_eq!(
+            pixels(r#"<path d="M2 2h8M12 20h.01"/>"#),
+            pixels(&format!(r#"<path d="M2 2h8"/>{dot}"#))
+        );
+    }
+
+    #[test]
+    fn bundled_dot_audit_changes_only_the_five_affected_icons() {
+        for &glyph in Glyph::ALL {
+            let svg = glyph.embedded();
+            let normalized = dots::normalize(svg).unwrap();
+            let added = match glyph {
+                Glyph::Wifi | Glyph::WifiOff => 1,
+                Glyph::Controls | Glyph::Games | Glyph::Storage => 2,
+                _ => 0,
+            };
+            assert_eq!(
+                normalized.matches("<circle").count(),
+                svg.matches("<circle").count() + added,
+                "{glyph:?}"
+            );
+            if added == 0 {
+                assert_eq!(normalized, svg, "unrelated geometry in {glyph:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn wifi_dot_survives_small_raster_sizes() {
+        for size in [16, 24] {
+            let surface = rasterize(Glyph::Wifi.embedded(), size)
+                .unwrap()
+                .convert_format(sdl2::pixels::PixelFormatEnum::RGBA32)
+                .unwrap();
+            let (x, y) = (size / 2, size * 20 / 24);
+            surface.with_lock(|pixels| {
+                assert!(
+                    (y - 1..=y).any(|y| (x - 1..=x)
+                        .any(|x| pixels[(y * surface.pitch() + x * 4 + 3) as usize] > 32)),
+                    "Wi-Fi dot disappeared at {size}px"
+                );
+            });
+        }
+    }
+
     #[test]
     fn embedded_svgs_render_at_target_sizes() {
         for &glyph in Glyph::ALL {
