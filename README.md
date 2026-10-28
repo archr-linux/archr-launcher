@@ -278,9 +278,13 @@ simultaneamente e não use `systemctl enable` para contornar o seletor.
 A sessão carrega `/etc/profile` uma vez em Bash, pois os profiles da distro
 contêm funções Bash, e usa `exec` para substituí-lo pelo supervisor POSIX sh.
 Antes do launcher, faz o que o `es_settings` fazia para o ES: executa
-`/usr/bin/archr-apply-locale` (fuso e idioma; pode gerar o locale na primeira
-vez) e importa no systemd as variáveis listadas em `/etc/profile.d/999-export`.
-Os dois são opcionais e uma falha não impede a UI. `LOCPATH` é removido: o glibc
+`/usr/bin/archr-apply-locale` (fuso e idioma) e importa no systemd as variáveis
+listadas em `/etc/profile.d/999-export`. Os dois são opcionais e uma falha não
+impede a UI. A sessão nunca espera a geração do locale: se o idioma configurado
+ainda não existe em `/usr/lib/locale`, o script roda destacado na unidade
+transitória `archr-apply-locale` (`systemd-run`, nice 19, E/S ociosa, uma
+instância), e o launcher abre na hora com as próprias traduções. Gerar o locale
+ao trocar o idioma cabe à ação de configurações. `LOCPATH` é removido: o glibc
 acha os locales por `/usr/lib/locale`. Preserva os exports dos quirks/usuário e
 configura Wayland e SDL; o banco de controles é o `gamecontrollerdb.txt` do
 usuário ou, sem ele, o de `/usr/config/SDL-GameControllerDB`.

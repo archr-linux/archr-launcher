@@ -6,22 +6,37 @@
 # Source it in Bash once, then replace that process with this POSIX supervisor.
 # Before the UI, do what es_settings did for EmulationStation: apply timezone
 # and language (archr-apply-locale) and hand the quirk exports to systemd so
-# units started later see them. Both are optional; neither blocks the UI.
+# units started later see them. Both are optional and neither may block the
+# UI: when the configured locale is not generated yet, archr-apply-locale
+# (which would run localedef for minutes) is detached at idle priority. The
+# launcher translates itself; the libc locale only matters to later children.
 if [ "${1-}" != --profile-loaded ]; then
     profile=/etc/profile
     session_shell=/bin/sh
     apply_locale=/usr/bin/archr-apply-locale
     quirk_exports=/etc/profile.d/999-export
+    locale_dir=/usr/lib/locale
     if [ "${ARCHR_SESSION_TEST:-0}" = 1 ]; then
         profile=${ARCHR_SESSION_PROFILE:?}
         session_shell=${ARCHR_SESSION_SHELL:?}
         apply_locale=${ARCHR_SESSION_APPLY_LOCALE:?}
         quirk_exports=${ARCHR_SESSION_EXPORTS:?}
+        locale_dir=${ARCHR_SESSION_LOCALE_DIR:?}
     fi
     exec /usr/bin/bash -c '
         . "$1"
-        if [ -x "$4" ]; then
+        locale=$(get_setting system.language)
+        if [ ! -x "$4" ]; then
+            :
+        elif [ -z "$locale" ] || [ -e "$6/$locale.UTF-8/LC_NAME" ]; then
             "$4" >/dev/null || echo "archr-launcher-session: $4 failed" >&2
+        elif command -v systemd-run >/dev/null 2>&1; then
+            # Own unit: survives session restarts; its fixed name keeps a
+            # single instance (a second start fails while one is active).
+            systemd-run --no-block --collect --quiet --unit=archr-apply-locale \
+                --nice=19 -p IOSchedulingClass=idle "$4" >/dev/null 2>&1 || :
+        else
+            nice -n 19 "$4" >/dev/null 2>&1 </dev/null &
         fi
         if [ -r "$5" ]; then
             names=$(sed "s/#.*//" "$5" | grep -o "[A-Z_][A-Z0-9_]*")
@@ -31,12 +46,12 @@ if [ "${1-}" != --profile-loaded ]; then
         # glibc finds generated locales through /usr/lib/locale; a LOCPATH
         # inherited from the manager may still point at the ES folder.
         unset I18NPATH LOCPATH
-        locale=$(get_setting system.language)
         if [ -n "$locale" ]; then
             export LANG="$locale.UTF-8" LANGUAGE="$locale.UTF-8"
         fi
         exec "$2" "$3" --profile-loaded
-    ' archr-session "$profile" "$session_shell" "$0" "$apply_locale" "$quirk_exports"
+    ' archr-session "$profile" "$session_shell" "$0" "$apply_locale" "$quirk_exports" \
+        "$locale_dir"
 fi
 
 run_dir=/run/archr-launcher
