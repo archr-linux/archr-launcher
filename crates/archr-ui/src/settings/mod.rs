@@ -3,7 +3,9 @@ use crate::{icons::Glyph, keyboard::Keyboard, state::Button, HintButton};
 use std::collections::BTreeMap;
 use std::time::Instant;
 pub mod bluetooth;
+pub(crate) mod games;
 pub(crate) mod information;
+pub use games::{GameCore, GameSystem, Games};
 pub mod network;
 mod pages;
 use bluetooth::{Action, Device};
@@ -95,6 +97,13 @@ pub enum Id {
     Player,
     Channel,
     UsbMode,
+    Emulator,
+    Core,
+    Ratio,
+    Filter,
+    Autosave,
+    StateSlot,
+    GameSystem,
     NetplayLink,
     NetplayEnabled,
     Nickname,
@@ -142,6 +151,14 @@ impl Id {
             Self::Player => ("wifi.adhoc.id", "1"),
             Self::Channel => ("wifi.adhoc.channel", "6"),
             Self::UsbMode => ("", "disabled"), // usbgadget owns its state file
+            // Per-system suffixes: the Games page writes `<system>.<suffix>`,
+            // the keys runemu.sh passes on and setsettings.sh reads.
+            Self::Emulator => ("emulator", ""),
+            Self::Core => ("core", ""),
+            Self::Ratio => ("ratio", "core"),
+            Self::Filter => ("smooth", "0"),
+            Self::Autosave => ("autosave", "0"),
+            Self::StateSlot => ("incrementalsavestates", "0"),
             Self::NetplayEnabled => ("global.netplay", "0"),
             Self::Nickname => ("global.netplay.nickname", ""),
             Self::NetplayHost => ("global.netplay.host", ""),
@@ -156,6 +173,7 @@ impl Id {
             Self::ScraperMissing => ("launcher.scraper.only_missing", "1"),
             Self::Update
             | Self::Hidden
+            | Self::GameSystem
             | Self::NetplayLink
             | Self::IndexNow
             | Self::ScraperLink
@@ -186,7 +204,12 @@ impl Id {
             | Self::NetplayEnabled
             | Self::OnlyRelay
             | Self::MissingGames
-            | Self::ScraperMissing => &["0", "1"],
+            | Self::ScraperMissing
+            | Self::Filter
+            | Self::Autosave
+            | Self::StateSlot => &["0", "1"],
+            // setsettings.sh CORE_RATIOS names; "core" lets the core decide.
+            Self::Ratio => &["core", "4/3", "3/2", "16/9", "8/7", "squarepixel", "full"],
             Self::ClockFormat => &["24", "12"],
             Self::Player => &["1", "2", "3", "4"],
             Self::Channel => &["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"],
@@ -420,6 +443,7 @@ pub struct Settings {
     /// The single USB port hosts a device, so gadget mode is refused.
     pub usb_busy: bool,
     pub scrape: Scrape,
+    pub games: Games,
     /// Sliders in flight: last confirmed value and the newest unsent one.
     pub slides: BTreeMap<Id, (String, Option<String>)>,
 }
@@ -455,6 +479,7 @@ impl Default for Settings {
             access_ip: String::new(),
             usb_busy: false,
             scrape: Scrape::default(),
+            games: Games::default(),
             slides: BTreeMap::new(),
         }
     }
@@ -484,6 +509,15 @@ impl Settings {
             (Id::ScraperStart, _) if self.scrape.running => "settings.cancel_scraping",
             (Id::ScraperStart, _) => return String::new(),
             (Id::NetplayLink | Id::ScraperLink, _) => return "›".into(),
+            (Id::GameSystem, _) => return format!("{} ›", self.games.fullname()),
+            (Id::Ratio, "core") => "settings.ratio_auto",
+            (Id::Ratio, "squarepixel") => "settings.ratio_square",
+            (Id::Ratio, "full") => "settings.ratio_full",
+            (Id::Ratio, v) => return v.replace('/', ":"),
+            (Id::Filter, "0") => "settings.filter_none",
+            (Id::Filter, _) => "settings.filter_smooth",
+            (Id::StateSlot, "1") => "settings.slot_auto",
+            (Id::StateSlot, _) => "settings.slot_fixed",
             (Id::KeyboardVariant, "") => "menu.default",
             (Id::ScraperSystems, "") => "settings.all",
             (Id::ClockFormat, "24") => "settings.clock_24",
@@ -542,6 +576,7 @@ impl Settings {
                     false
                 }
                 Id::CustomServer => self.value(Id::Relay) == "custom",
+                id if Games::ROWS.contains(&id) => self.games.shows(id, self),
                 _ => true,
             })
             .collect()
@@ -549,7 +584,11 @@ impl Settings {
     /// Rows with at most one choice show their value and accept no input
     /// (one audio sink: the jack switches speaker and headphones itself).
     pub fn fixed(&self, id: Id) -> bool {
-        id == Id::Audio && self.options.get(&id).is_none_or(|sinks| sinks.len() <= 1)
+        matches!(id, Id::Audio | Id::Emulator | Id::Core)
+            && self
+                .options
+                .get(&id)
+                .is_none_or(|choices| choices.len() <= 1)
     }
     /// Disabled rows are drawn muted and accept no input.
     pub fn disabled(&self, id: Id) -> bool {
@@ -713,7 +752,11 @@ impl Settings {
         self.pending = None;
         match result {
             Ok(value) => {
+                if Games::ROWS.contains(&id) {
+                    self.games.record(id, &value);
+                }
                 self.values.insert(id, value);
+                self.sync_games();
                 self.error = None;
                 self.reboot_prompt = id == Id::Gpu;
             }

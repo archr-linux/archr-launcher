@@ -142,7 +142,7 @@ fn read_emulator<R: BufRead>(
     Ok(emulator)
 }
 
-fn attribute<R: BufRead>(
+pub(crate) fn attribute<R: BufRead>(
     reader: &Reader<R>,
     element: &BytesStart<'_>,
     name: &[u8],

@@ -1,12 +1,14 @@
 //! System definitions and game indexing for the launcher.
 
 pub mod cache;
+pub mod features;
 mod gamelist;
 pub mod games;
 pub mod systems;
 
 pub use games::{clean_name, scan_system, scan_system_with_mapper, Game};
 
+pub use features::{load_features, Features};
 pub use systems::{load_systems, Core, Emulator, SystemDef};
 
 /// Errors while reading launcher index inputs.

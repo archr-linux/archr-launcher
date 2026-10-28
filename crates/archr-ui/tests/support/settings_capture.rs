@@ -119,6 +119,29 @@ fn pages() -> Vec<(&'static str, Settings)> {
     let mut unavailable = ready();
     unavailable.open(Page::Games);
     unavailable.open(Page::Scraper);
+    let mut games = ready();
+    let pair = |emulator: &str, core: &str, options: &[Id]| crate::settings::GameCore {
+        emulator: emulator.into(),
+        core: core.into(),
+        default: false,
+        options: options.to_vec(),
+    };
+    let options = [Id::Ratio, Id::Filter, Id::Autosave, Id::StateSlot];
+    games.games.replace(vec![crate::settings::GameSystem {
+        name: "snes".into(),
+        fullname: "Super Nintendo".into(),
+        cores: vec![
+            pair("retroarch", "snes9x", &options),
+            pair("retroarch", "bsnes", &options),
+            pair("snes9x-sa", "snes9x-sa", &[]),
+        ],
+        saved: [(Id::Autosave, "1".to_owned()), (Id::StateSlot, "1".into())].into(),
+    }]);
+    games.sync_games();
+    games.open(Page::Games);
+    let mut standalone = games.clone();
+    standalone.complete(Id::Emulator, Ok("snes9x-sa".into()));
+    standalone.cursor = 3;
     let mut sound = ready();
     sound.open(Page::Sound);
     let sink = "Built-in Audio Internal Speaker".to_owned();
@@ -139,6 +162,8 @@ fn pages() -> Vec<(&'static str, Settings)> {
         ("bluetooth-off", bt_off),
         ("services", services),
         ("region", region),
+        ("games", games),
+        ("games-standalone", standalone),
         ("netplay", netplay),
         ("scraper", scraper),
         ("scraper-running", running),

@@ -4,7 +4,7 @@ use crate::{
     paths::Paths,
     state::{Button, Outcome, SessionAction},
 };
-use archr_ui::settings::{Effect, Page, Settings};
+use archr_ui::settings::{Effect, Games, Page, Settings};
 use std::time::{Duration, Instant};
 /// Active radio scans are not free: refresh an open Wi-Fi page once a minute.
 const SCAN_INTERVAL: Duration = Duration::from_secs(60);
@@ -23,6 +23,8 @@ pub struct Runtime {
     job: Option<(archr_scraper::Job, Vec<String>)>,
     /// Systems whose art changed, for the library to reload.
     scraped: Option<Vec<String>>,
+    /// A Games page write finished: launch choices may differ now.
+    games_saved: bool,
     closing: bool,
 }
 impl Runtime {
@@ -38,6 +40,7 @@ impl Runtime {
             scan_age: 0,
             job: None,
             scraped: None,
+            games_saved: false,
             closing: false,
         }
     }
@@ -67,6 +70,14 @@ impl Runtime {
             self.send(Work::Load);
         }
     }
+    /// The Games page starts on the system the launcher was showing.
+    pub fn focus(&mut self, system: &str) {
+        self.state.focus_system(system);
+    }
+    /// The library re-reads system.cfg after a Games page write.
+    pub fn take_games_saved(&mut self) -> bool {
+        std::mem::take(&mut self.games_saved)
+    }
     pub fn busy(&self) -> bool {
         self.worker.as_ref().is_some_and(Worker::busy)
     }
@@ -82,6 +93,10 @@ impl Runtime {
         let before = self.state.page();
         match self.state.handle(button) {
             Effect::Close => self.active = false,
+            Effect::Set(id, value) if Games::ROWS.contains(&id) => {
+                let system = self.state.games.name().to_owned();
+                self.send(Work::Game(system, id, value));
+            }
             Effect::Set(id, value) => self.send(Work::Set(id, value)),
             // Radio scans: on entry, on X, and every minute while open.
             Effect::Scan => {
@@ -144,10 +159,12 @@ impl Runtime {
         self.scraped.take()
     }
     pub fn poll(&mut self) -> (bool, Option<String>) {
+        let writing = self.state.pending.filter(|id| Games::ROWS.contains(id));
         let (mut dirty, language) = match self.worker.as_mut() {
             Some(worker) => worker.poll(&mut self.state, &mut self.job),
             None => (false, None),
         };
+        self.games_saved |= writing.is_some() && self.state.pending.is_none();
         dirty |= self.poll_scrape();
         let now = Instant::now();
         let wifi = self.active
@@ -340,6 +357,52 @@ mod tests {
             assert!(Instant::now() < deadline, "no fresh scan");
             thread_yield();
         }
+    }
+    #[test]
+    fn games_page_writes_the_focused_system_and_flags_the_library() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::new(Some(dir.path().into()));
+        let catalog = paths.at("/usr/share/archr/systems.cfg");
+        fs::create_dir_all(catalog.parent().unwrap()).unwrap();
+        fs::write(
+            &catalog,
+            "<systemList>\
+             <system><name>nes</name><fullname>NES</fullname><path>/r/nes</path><emulators>\
+             <emulator name=\"retroarch\"><cores><core>fceumm</core></cores></emulator>\
+             </emulators></system>\
+             <system><name>snes</name><fullname>Super Nintendo</fullname><path>/r/snes</path>\
+             <emulators><emulator name=\"retroarch\"><cores><core>snes9x</core>\
+             <core>bsnes</core></cores></emulator></emulators></system></systemList>",
+        )
+        .unwrap();
+        fs::create_dir_all(paths.config.parent().unwrap()).unwrap();
+        fs::create_dir_all(paths.lock.parent().unwrap()).unwrap();
+        fs::write(&paths.config, "").unwrap();
+        let mut runtime = Runtime::new(Paths::new(Some(dir.path().into())));
+        runtime.focus("snes");
+        runtime.open();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while runtime.state.loading || runtime.busy() {
+            runtime.poll();
+            assert!(Instant::now() < deadline);
+            thread_yield();
+        }
+        runtime.state.open(Page::Games);
+        assert_eq!(runtime.state.games.name(), "snes");
+        runtime.state.cursor = 1;
+        runtime.handle(Button::R);
+        while runtime.state.pending.is_some() {
+            runtime.poll();
+            assert!(Instant::now() < deadline);
+            thread_yield();
+        }
+        assert_eq!(runtime.state.value(Id::Core), "bsnes");
+        assert_eq!(
+            fs::read_to_string(&paths.config).unwrap(),
+            "snes.core=bsnes\n"
+        );
+        assert!(runtime.take_games_saved());
+        assert!(!runtime.take_games_saved());
     }
     fn thread_yield() {
         std::thread::sleep(Duration::from_millis(5));

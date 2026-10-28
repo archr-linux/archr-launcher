@@ -46,6 +46,8 @@ pub const CATALOGS: [&str; 4] = [
     "/storage/.config/emulationstation/es_systems.cfg",
     "/usr/config/emulationstation/es_systems.cfg",
 ];
+/// Which launch options each emulator and core accepts (archr package).
+pub const FEATURES: &str = "/usr/share/archr/es_features.cfg";
 fn systems_catalog(at: &impl Fn(&str) -> PathBuf) -> PathBuf {
     let Some((index, path)) = CATALOGS
         .iter()

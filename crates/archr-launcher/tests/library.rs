@@ -486,3 +486,18 @@ fn a_command_that_wraps_an_emulator_is_not_tools() {
     let library = ready(&paths, None);
     assert!(!library.is_tools("ports") && !library.is_tools("other"));
 }
+#[test]
+fn a_system_core_saved_by_the_settings_applies_to_the_next_launch() {
+    let (_dir, paths) = fixture();
+    fs::write(&paths.config, "nes.core=fceumm\n").unwrap();
+    let mut library = ready(&paths, Some("nes"));
+    assert_eq!(
+        library.current_core("nes", 0),
+        Some(("retroarch".into(), "fceumm".into()))
+    );
+    fs::write(&paths.config, "nes.core=nestopia\n").unwrap();
+    library.reload_config();
+    wait(&mut library, |l| {
+        l.current_core("nes", 0) == Some(("retroarch".into(), "nestopia".into()))
+    });
+}
