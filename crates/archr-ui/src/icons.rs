@@ -26,6 +26,7 @@ macro_rules! glyphs {
     };
 }
 glyphs! {
+    Cpu => "cpu", Gpu => "monitor", Memory => "memory-stick",
     Recent => "history", Games => "gamepad-2", Tools => "wrench",
     Gear => "settings", Download => "download", Wifi => "wifi",
     WifiOff => "wifi-off", Moon => "moon", Restart => "rotate-cw",

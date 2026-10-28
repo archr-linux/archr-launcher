@@ -1,6 +1,8 @@
 //! Declarative settings pages and pure navigation. Effects belong to the host.
 use crate::{icons::Glyph, state::Button, HintButton};
 use std::collections::BTreeMap;
+pub(crate) mod information;
+pub use information::{InfoCard, InfoDetail, InfoMeter, Information};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Page {
@@ -9,6 +11,7 @@ pub enum Page {
     System,
     Region,
     Info,
+    InfoDetail(usize),
     Soon(&'static str),
 }
 impl Page {
@@ -18,7 +21,7 @@ impl Page {
             Self::Sound => "settings.sound",
             Self::System => "settings.system",
             Self::Region => "settings.region",
-            Self::Info => "settings.info",
+            Self::Info | Self::InfoDetail(_) => "settings.info",
             Self::Soon(key) => key,
         }
     }
@@ -204,20 +207,6 @@ pub enum Effect {
     Set(Id, String),
     Reboot,
 }
-#[derive(Clone, Default)]
-pub struct InfoCard {
-    pub title: &'static str,
-    pub lines: Vec<String>,
-    pub percent: Option<u8>,
-}
-#[derive(Clone, Default)]
-pub struct Information {
-    pub version: String,
-    pub device: String,
-    pub kernel: String,
-    pub uptime: String,
-    pub cards: Vec<InfoCard>,
-}
 #[derive(Clone)]
 pub struct Settings {
     stack: Vec<(Page, usize)>,
@@ -278,6 +267,11 @@ impl Settings {
                 (Key('B'), "hint.back"),
                 (Key('Y'), "settings.info_short"),
             ],
+            Page::Info => &[(Key('A'), "settings.details"), (Key('B'), "hint.back")],
+            Page::InfoDetail(_) => &[
+                (Pair('L', 'R'), "settings.previous_next"),
+                (Key('B'), "hint.back"),
+            ],
             page => match page.rows().get(self.cursor).map(|r| r.kind) {
                 Some(Kind::Action) => &[(Key('A'), "hint.choose"), (Key('B'), "hint.back")],
                 Some(Kind::Toggle) => &[
@@ -324,6 +318,9 @@ impl Settings {
                 }
                 _ => Effect::None,
             };
+        }
+        if let Some(effect) = self.information_input(button) {
+            return effect;
         }
         let page = self.page();
         let len = if page == Page::Root {

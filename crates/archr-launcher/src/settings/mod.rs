@@ -6,6 +6,7 @@ use archr_config::SystemCfg;
 use archr_ui::settings::{Id, Information, Page, Settings};
 pub use runtime::Runtime;
 use std::{
+    collections::BTreeMap,
     fs,
     io::{Read, Seek, SeekFrom},
     os::unix::process::CommandExt,
@@ -17,13 +18,15 @@ use std::{
 
 pub struct Backend {
     paths: Paths,
-    identity: std::sync::OnceLock<Information>,
+    identity: std::sync::OnceLock<info::Identity>,
+    cpu_ticks: std::sync::Mutex<BTreeMap<u32, (u64, u64)>>,
 }
 impl Backend {
     pub fn new(paths: Paths) -> Self {
         Self {
             paths,
             identity: std::sync::OnceLock::new(),
+            cpu_ticks: std::sync::Mutex::new(BTreeMap::new()),
         }
     }
     fn read(&self, path: &str) -> String {

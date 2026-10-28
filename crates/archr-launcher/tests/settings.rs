@@ -198,22 +198,41 @@ fn information_distinguishes_active_driver_and_detects_hardware_and_metrics() {
     fs::create_dir_all(driver.parent().unwrap()).unwrap();
     symlink("/drivers/panfrost", &driver).unwrap();
     let info = backend.load().unwrap().info;
-    assert_eq!(info.uptime, "2:03");
+    assert!(info.cards[0]
+        .detail
+        .rows
+        .iter()
+        .any(|(key, value)| *key == "settings.uptime_label"
+            && value == "settings.duration_hours|count=2"));
     assert_eq!(info.cards.len(), 6);
-    assert!(info.cards[0].lines.contains(&"Example x86 CPU".into()));
-    assert!(info.cards[0].lines.contains(&"performance".into()));
-    assert!(info.cards[0].lines.iter().any(|l| l.contains("43 °C")));
+    assert_eq!(info.cards[0].detail.heading, "Example x86 CPU");
+    assert!(info.cards[0]
+        .detail
+        .rows
+        .iter()
+        .any(|(_, v)| v == "performance"));
+    assert!(info.cards[0].lines.iter().any(|l| l.contains("43.0 °C")));
     assert!(info.cards[1]
-        .lines
-        .contains(&"settings.active|panfrost".into()));
+        .detail
+        .rows
+        .iter()
+        .any(|(_, v)| v == "panfrost"));
     assert!(info.cards[1]
-        .lines
-        .contains(&"settings.after_reboot|libmali".into()));
-    assert!(info.cards[1].lines.contains(&"640 × 480".into()));
+        .detail
+        .rows
+        .iter()
+        .any(|(_, v)| v == "libmali"));
+    assert!(info.cards[1]
+        .detail
+        .rows
+        .iter()
+        .any(|(_, v)| v == "640 × 480"));
     fs::remove_file(driver).unwrap();
     assert!(backend.load().unwrap().info.cards[1]
-        .lines
-        .contains(&"settings.active|?".into()));
+        .detail
+        .rows
+        .iter()
+        .any(|(k, v)| *k == "settings.active_driver" && v.is_empty()));
     assert!(!info
         .cards
         .iter()
@@ -238,4 +257,46 @@ fn brightness_publishes_once_after_success_and_keeps_config_on_sysfs_failure() {
         .unwrap_err()
         .contains("brightness"));
     assert_eq!(backend.load().unwrap().value(Id::Brightness), "75");
+}
+
+#[test]
+fn information_collects_detail_rows_and_core_deltas_without_commands() {
+    let (dir, backend) = fixture();
+    for (path, value) in [
+        ("proc/cpuinfo", "processor : 0\nHardware : Rockchip RK3326\n"),
+        ("proc/stat", "cpu 10 0 10 80 0 0 0 0\ncpu0 10 0 10 80 0 0 0 0\n"),
+        ("proc/meminfo", "MemTotal: 1000000 kB\nMemAvailable: 750000 kB\nCached: 50000 kB\nSwapTotal: 100000 kB\nSwapFree: 90000 kB\n"),
+        ("proc/uptime", "3540.0 0.0"),
+        ("proc/net/route", "Iface Destination Gateway Flags\nwlan0 00000000 0103A8C0 0003\n"),
+        ("etc/resolv.conf", "nameserver 1.1.1.1\n"),
+        ("proc/sys/kernel/hostname", "archr-test"),
+        ("sys/devices/system/cpu/cpufreq/policy0/scaling_cur_freq", "1008000"),
+        ("sys/devices/system/cpu/cpufreq/policy0/scaling_min_freq", "408000"),
+        ("sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq", "1512000"),
+    ] {
+        let p = dir.path().join(path);
+        fs::create_dir_all(p.parent().unwrap()).unwrap();
+        fs::write(p, value).unwrap();
+    }
+    let first = backend.load().unwrap().info;
+    assert_eq!(first.cards[0].detail.rows[0].1, "@1008 MHz");
+    fs::write(
+        dir.path().join("proc/stat"),
+        "cpu 20 0 20 100 0 0 0 0\ncpu0 20 0 20 100 0 0 0 0\n",
+    )
+    .unwrap();
+    let second = backend.load().unwrap().info;
+    assert_eq!(second.cards[0].detail.meters[0].percent, Some(50));
+    assert_eq!(second.cards[2].percent, Some(25));
+    assert!(second.cards[4]
+        .detail
+        .rows
+        .iter()
+        .any(|(_, v)| v == "1.1.1.1"));
+    assert!(second.cards[4]
+        .detail
+        .rows
+        .iter()
+        .any(|(_, v)| v == "192.168.3.1"));
+    assert!(second.cards[0].lines[0].contains("Rockchip RK3326"));
 }
