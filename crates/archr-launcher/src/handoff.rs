@@ -5,12 +5,6 @@ use std::{
 
 use archr_io::{atomic_publish, read_utf8, Symlinks::Follow};
 
-#[derive(Debug)]
-pub enum NextCmd {
-    Game(String),
-    Suspend,
-}
-
 /// Build the existing ES runemu contract; every argument is a POSIX shell word.
 /// Returns `InvalidInput` if the ROM path is not valid UTF-8.
 pub fn launch_command(
@@ -71,21 +65,15 @@ pub fn launch_command_with(
 ///
 /// The supervisor must read the line with `IFS= read -r line` to preserve shell
 /// escapes. For a game, strip the `game ` prefix and run `sh -c "$command"`.
-pub fn write_next(run_dir: &Path, cmd: &NextCmd) -> io::Result<()> {
-    let line = match cmd {
-        NextCmd::Game(command) => {
-            if command.contains(['\n', '\0']) {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "game command contains newline or NUL",
-                ));
-            }
-            format!("game {command}\n")
-        }
-        NextCmd::Suspend => "action suspend\n".into(),
-    };
+pub fn write_next(run_dir: &Path, command: &str) -> io::Result<()> {
+    if command.contains(['\n', '\0']) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "game command contains newline or NUL",
+        ));
+    }
     atomic_publish(&run_dir.join("next"), false, |file| {
-        file.write_all(line.as_bytes())
+        writeln!(file, "game {command}")
     })
 }
 

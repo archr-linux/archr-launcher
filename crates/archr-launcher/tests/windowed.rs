@@ -61,12 +61,12 @@ fn windowed_script_navigates_and_publishes_game() {
 }
 
 #[test]
-fn missing_systems_still_allow_suspend_and_fallback_is_logged() {
+fn missing_systems_still_allow_quick_menu_and_fallback_is_logged() {
     let root = tempfile::tempdir().unwrap();
     let result = Command::new(env!("CARGO_BIN_EXE_archr-launcher"))
         .env("ARCHR_LAUNCHER_ROOT", root.path())
         .env("SDL_VIDEODRIVER", "offscreen")
-        .args(["--windowed", "--script", "Y,A"])
+        .args(["--windowed", "--script", "Y,B,QUIT"])
         .output()
         .unwrap();
     assert!(
@@ -74,10 +74,7 @@ fn missing_systems_still_allow_suspend_and_fallback_is_logged() {
         "{}",
         String::from_utf8_lossy(&result.stderr)
     );
-    assert_eq!(
-        fs::read_to_string(root.path().join("run/archr-launcher/next")).unwrap(),
-        "action suspend\n"
-    );
+    assert!(!root.path().join("run/archr-launcher/next").exists());
     assert!(
         String::from_utf8_lossy(&result.stderr).contains("using builtin"),
         "theme fallback should reach the log"

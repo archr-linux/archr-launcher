@@ -246,10 +246,12 @@ serviços, governador e demais estados. Seu `quit()` ainda grava
 `archr-launcher`. Nenhum desses scripts da distro foi modificado.
 
 Antes de cada execução do launcher, a sessão descarta qualquer `next` antigo.
-Só aceita um novo pedido se o launcher sair com código 0; uma falha descarta o
-pedido e aplica backoff de 1 s. Cada `next` aceito é lido sem reinterpretar
-escapes e removido antes da execução; `last-exit` recebe o código decimal via
-arquivo temporário + rename.
+Só aceita `game ...` após saída com código 0; falhas descartam o pedido e aplicam
+backoff de 1 s. Cada `next` é lido sem reinterpretar escapes e removido antes da
+execução; `last-exit` recebe o código decimal via arquivo temporário + rename.
+
+Suspender mantém o launcher aberto: após o flush, relê `get_setting system.suspendmode`
+e inicia `archr-fake-suspend power` (off/ausente) ou `systemctl suspend` sem esperar.
 
 Jogos rodam em um grupo separado com `setsid` (habilitado no BusyBox do ArchR).
 Em TERM, INT ou HUP, o supervisor percorre os PPIDs em `/proc/*/stat` e sinaliza
@@ -261,12 +263,8 @@ A unidade usa `KillMode=mixed` para que o primeiro SIGTERM atinja somente o
 supervisor, não mate prematuramente o wrapper; `TimeoutStopSec=6` mantém o
 SIGKILL de todo o cgroup como fallback final.
 
-O log fica
-em `/var/log/archr-launcher-session.log`, truncado ao atingir 256 KiB. Somente
-eventos do supervisor entram nesse arquivo; stdout/stderr dos filhos seguem
-para o journal da unidade, evitando crescimento sem limite durante um jogo.
-O log específico do jogo continua em
-`/var/log/exec.log`. `archr-settings` é opcional e, se ausente, volta ao menu.
+O log do supervisor, `/var/log/archr-launcher-session.log`, é truncado aos 256 KiB.
+stdout/stderr dos filhos vão ao journal; o log do jogo continua em `/var/log/exec.log`.
 
 Validação hermética no PC, sem serviços/dispositivos reais:
 

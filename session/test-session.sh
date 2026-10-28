@@ -24,24 +24,15 @@ mkdir -p "$root/bin"
 export PATH="$root/bin:$PATH"
 export ARCHR_SESSION_TEST=1
 export ARCHR_SESSION_LAUNCHER=archr-launcher
-export ARCHR_SESSION_FAKE_SUSPEND="$root/bin/archr-fake-suspend"
 export ARCHR_SESSION_SWAY_ATTEMPTS=0
 export ARCHR_SESSION_SLEEP="$root/bin/sleep"
 export ARCHR_SESSION_STOP_SLEEP=/bin/sleep
 export ARCHR_SESSION_PROFILE="$root/profile"
 export ARCHR_SESSION_SHELL=${SESSION_TEST_SHELL:-sh}
 export ARCHR_TEST_EMULATOR="$root/bin/fake) emulator"
-# Copy the current authoritative helper, not a second implementation.
-cp "$(dirname "$session")/../../distribution/projects/ArchR/packages/archr/profile.d/001-functions" "$root/001-functions"
-export ARCHR_SESSION_FUNCTIONS="$root/functions"
-cat >"$ARCHR_SESSION_FUNCTIONS" <<EOF
-saved_path=\$PATH saved_runtime=\${XDG_RUNTIME_DIR-}
-. "$root/001-functions"
-export PATH=\$saved_path XDG_RUNTIME_DIR=\$saved_runtime
-J_CONF=\$ARCHR_SESSION_CONFIG
-EOF
 cat >"$ARCHR_SESSION_PROFILE" <<'EOF'
-. "$ARCHR_SESSION_FUNCTIONS"
+# Deliberately Bash-only to exercise the profile bridge.
+function get_setting() { printf '%s\n' pt_BR; }
 export MALI_WAYLAND_AFBC=0 SDL_VIDEODRIVER=wayland
 EOF
 
@@ -70,10 +61,6 @@ case "$line" in
     trap '' TERM
     : >"$CASE_DIR/launcher-ready"
     exec /bin/sleep 30
-    ;;
-  CONFIG_*)
-    printf '%b\n' "${line#CONFIG_}" >"$ARCHR_SESSION_CONFIG"
-    printf '%s\n' 'action suspend' >"$ARCHR_SESSION_RUN_DIR/next"
     ;;
   CRASH) exit 9 ;;
   WRITE_CRASH) printf '%s\n' 'action reboot' >"$ARCHR_SESSION_RUN_DIR/next"; exit 9 ;;
@@ -124,10 +111,6 @@ cat >"$root/bin/systemctl" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >>"$CASE_DIR/actions"
 EOF
-cat >"$root/bin/archr-fake-suspend" <<'EOF'
-#!/bin/sh
-printf '%s\n' "fake-suspend $*" >>"$CASE_DIR/actions"
-EOF
 cat >"$root/bin/stop-sleep" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >>"$CASE_DIR/stop-sleeps"
@@ -151,8 +134,6 @@ setup_case() {
   export ARCHR_SESSION_RUN_DIR="$CASE_DIR/run"
   export ARCHR_SESSION_LOG="$CASE_DIR/session.log"
   export ARCHR_SESSION_KILL_FILE="$CASE_DIR/kill-data"
-  export ARCHR_SESSION_CONFIG="$CASE_DIR/system.cfg"
-  printf 'system.language=pt_BR\n' >"$ARCHR_SESSION_CONFIG"
   printf '%s\n' "$2" >"$CASE_DIR/plan"
 }
 
@@ -309,28 +290,13 @@ run_stop_case() {
 run_stop_case service-stop 'game runemu.sh LONG'
 run_stop_case service-stop-shell 'game runemu.sh LONG; :'
 
-run_case removed-actions 'action shutdown
+run_case removed-actions 'action suspend
+action shutdown
 action reboot
 action settings
 END'
 [ ! -f "$CASE_DIR/actions" ]
 printf '%s\n' 'PASS removed actions cannot execute in supervisor'
-# Change the file before each request: unset, off, mem, both duplicate orders,
-# surrounding spaces, global fallback, then unset again in this same session.
-run_case suspend-changes 'action suspend
-CONFIG_system.suspendmode=off
-CONFIG_system.suspendmode=mem
-CONFIG_system.suspendmode=off\nsystem.suspendmode=mem
-CONFIG_system.suspendmode=mem\nsystem.suspendmode=off
-CONFIG_system.suspendmode=\040off\040
-CONFIG_global.system.suspendmode=mem
-CONFIG_
-END'
-printf '%s\n' 'fake-suspend power' 'fake-suspend power' suspend 'fake-suspend power' suspend 'fake-suspend power' suspend 'fake-suspend power' >"$CASE_DIR/expected"
-cmp "$CASE_DIR/expected" "$CASE_DIR/actions"
-[ "$(cat "$CASE_DIR/count")" = 9 ]
-printf '%s\n' 'PASS authoritative suspend policy and live changes'
-
 export ARCHR_SESSION_STOP_SLEEP="$root/bin/stop-sleep"
 stop_case launcher-stop HOLD launcher-ready
 [ "$(cat "$CASE_DIR/stop-sleeps")" = 0.2 ]

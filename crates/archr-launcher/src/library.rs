@@ -1,9 +1,9 @@
 //! Lazy library adapter for the navigation model.
 use crate::{
-    handoff::{launch_command_with, write_next, NextCmd},
+    handoff::{launch_command_with, write_next},
     paths::Paths,
     persistence::StoreWriter,
-    state::{DataSource, Outcome, SessionAction},
+    state::{DataSource, Outcome},
     store::Store,
     worker::{self, Update, Work, Worker},
 };
@@ -276,14 +276,7 @@ impl Library {
                 let key = self.game_key(&system, game).ok_or("error.game_missing")?;
                 self.store.push_recent(&key);
                 self.flush_store()?;
-                write_next(&self.paths.run, &NextCmd::Game(command))
-                    .map_err(|error| error.to_string())?;
-                return Ok(true);
-            }
-            Outcome::Action(SessionAction::Suspend) => {
-                self.flush_store()?;
-                write_next(&self.paths.run, &NextCmd::Suspend)
-                    .map_err(|error| error.to_string())?;
+                write_next(&self.paths.run, &command).map_err(|error| error.to_string())?;
                 return Ok(true);
             }
             Outcome::Action(_) => return Err("error.operation".to_owned()),

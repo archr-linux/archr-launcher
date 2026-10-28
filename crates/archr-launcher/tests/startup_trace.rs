@@ -7,7 +7,7 @@ fn startup(trace: Option<&str>) -> String {
         .env("ARCHR_LAUNCHER_ROOT", root.path())
         .env("SDL_VIDEODRIVER", "offscreen")
         .env_remove("ARCHR_LAUNCHER_TRACE")
-        .args(["--windowed", "--script", "Y,A"]);
+        .args(["--windowed", "--script", "Y,B,QUIT"]);
     if let Some(value) = trace {
         command.env("ARCHR_LAUNCHER_TRACE", value);
     }

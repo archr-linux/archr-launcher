@@ -4,6 +4,12 @@ use archr_launcher::{
     state::{App, DataSource, Outcome, SessionAction},
 };
 use archr_ui::{i18n::I18n, render::Ui, Theme};
+#[cfg(not(test))]
+use std::ffi::OsString;
+use std::{
+    os::unix::process::CommandExt,
+    process::{Command, Stdio},
+};
 
 /// Blocking durability work is allowed only at a terminal transition: present
 /// immediate feedback first, then flush Store and publish the durable handoff.
@@ -29,25 +35,69 @@ pub fn apply(
         ))
     );
     let result = match outcome {
-        Some(Outcome::Action(action)) if power => library.finish().and_then(|()| {
+        Some(Outcome::Action(action)) => library.finish().and_then(|()| {
             #[cfg(not(test))]
-            let systemctl = "/usr/bin/systemctl";
+            let systemctl = OsString::from("/usr/bin/systemctl");
             // Unit tests must never invoke the host's power manager.
             #[cfg(test)]
             let systemctl = std::env::var_os("ARCHR_TEST_SYSTEMCTL").unwrap_or_default();
-            let command = if action == SessionAction::Shutdown {
-                "poweroff"
-            } else {
-                "reboot"
+            let (program, argument) = match action {
+                SessionAction::Suspend => {
+                    #[cfg(not(test))]
+                    let functions = OsString::from("/etc/profile.d/001-functions");
+                    #[cfg(test)]
+                    let functions = std::env::var_os("ARCHR_TEST_FUNCTIONS").unwrap_or_default();
+                    let mode = Command::new("/usr/bin/bash")
+                        .args([
+                            "-c",
+                            ". \"$1\"; get_setting system.suspendmode",
+                            "archr-suspend",
+                        ])
+                        .arg(functions)
+                        .output()
+                        .map_err(|e| e.to_string())?;
+                    if !mode.status.success() {
+                        return Err(format!("get_setting: {}", mode.status));
+                    }
+                    if matches!(
+                        String::from_utf8_lossy(&mode.stdout).trim_end_matches('\n'),
+                        "" | "off"
+                    ) {
+                        #[cfg(not(test))]
+                        let fake_suspend = OsString::from("/usr/bin/archr-fake-suspend");
+                        #[cfg(test)]
+                        let fake_suspend =
+                            std::env::var_os("ARCHR_TEST_FAKE_SUSPEND").unwrap_or_default();
+                        (fake_suspend, "power")
+                    } else {
+                        (systemctl, "suspend")
+                    }
+                }
+                SessionAction::Shutdown => (systemctl, "poweroff"),
+                SessionAction::Reboot => (systemctl, "reboot"),
             };
-            let status = std::process::Command::new(systemctl)
-                .arg(command)
-                .status()
-                .map_err(|e| e.to_string())?;
-            if status.success() {
+            let mut command = Command::new(program);
+            command.arg(argument);
+            if action == SessionAction::Suspend {
+                let mut child = command
+                    .process_group(0)
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()
+                    .map_err(|e| e.to_string())?;
+                // Reap without blocking the UI, even while fake-suspend sleeps.
+                std::thread::spawn(move || {
+                    let _ = child.wait();
+                });
                 Ok(false)
             } else {
-                Err(format!("systemctl {command}: {status}"))
+                let status = command.status().map_err(|e| e.to_string())?;
+                if status.success() {
+                    Ok(false)
+                } else {
+                    Err(format!("systemctl {argument}: {status}"))
+                }
             }
         }),
         Some(outcome) => library.handle(outcome, controllers),
@@ -109,6 +159,7 @@ mod tests {
     };
     use std::{
         fs,
+        path::Path,
         time::{Duration, Instant},
     };
 
@@ -135,9 +186,6 @@ mod tests {
         std::env::set_var("SDL_VIDEODRIVER", "offscreen");
         let root = tempfile::tempdir().unwrap();
         let paths = Paths::new(Some(root.path().to_owned()));
-        fs::create_dir_all(paths.run.parent().unwrap()).unwrap();
-        // An unwritable handoff location, even when tests run as root.
-        fs::write(&paths.run, "not a directory").unwrap();
         let mut library = Library::initial(paths.clone());
         library.start();
         let deadline = Instant::now() + Duration::from_secs(5);
@@ -153,37 +201,15 @@ mod tests {
         creator = ui.canvas.texture_creator();
         let theme = Theme::builtin();
         ui.configure(&ttf, &creator, &theme, None).unwrap();
-        let frame = root.path().join("transition.png");
-        ui.screenshot = Some(frame.clone());
-        let exit = invoke(&mut ui, &mut library, Some(SessionAction::Suspend));
-        assert!(!exit, "failed handoff must return to the event loop");
-        assert!(ui.banner.as_ref().is_some_and(|banner| !banner.is_empty()));
-        assert!(
-            ui.transition.is_none(),
-            "failure must dismiss the busy overlay"
-        );
-        assert!(!paths.run.join("next").exists());
-        use sdl2::image::LoadSurface;
-        let image = sdl2::surface::Surface::from_file(frame)
-            .unwrap()
-            .convert_format(sdl2::pixels::PixelFormatEnum::RGBA32)
-            .unwrap();
-        let color = theme.surface_elevated;
-        let offset = 220 * image.pitch() as usize + 140 * 4;
-        image.with_lock(|bytes| {
-            assert_eq!(
-                &bytes[offset..offset + 4],
-                &[color.r, color.g, color.b, color.a]
-            )
-        });
-        assert!(
-            paths.store.join("store.toml").exists(),
-            "handoff follows the store flush"
-        );
+        library.finish().unwrap();
         // Flush failures must also cancel action and window-close transitions.
         fs::remove_file(paths.store.join("store.toml")).unwrap();
         fs::create_dir(paths.store.join("store.toml")).unwrap();
-        for outcome in [Some(SessionAction::Shutdown), None] {
+        for outcome in [
+            Some(SessionAction::Shutdown),
+            Some(SessionAction::Suspend),
+            None,
+        ] {
             ui.banner = None;
             assert!(!invoke(&mut ui, &mut library, outcome));
             assert!(ui.banner.is_some());
@@ -191,13 +217,7 @@ mod tests {
         }
         // Repair the destinations and verify the same launcher can retry.
         fs::remove_dir(paths.store.join("store.toml")).unwrap();
-        fs::remove_file(&paths.run).unwrap();
-        assert!(invoke(&mut ui, &mut library, Some(SessionAction::Suspend)));
-        assert_eq!(
-            fs::read_to_string(paths.run.join("next")).unwrap(),
-            "action suspend\n"
-        );
-        fs::remove_file(paths.run.join("next")).unwrap();
+        library.finish().unwrap();
         // The command must observe both the presented notice and flushed Store.
         use std::os::unix::fs::PermissionsExt;
         let systemctl = root.path().join("systemctl");
@@ -206,7 +226,21 @@ mod tests {
             r#"#!/bin/sh
 dir=${0%/*}
 [ -f "$dir/power.png" ] && [ -f "$dir/storage/.config/archr-launcher/store.toml" ] || exit 1
-printf '%s\n' "$1" >>"$dir/commands"
+case "$1" in
+    power|suspend)
+        [ "$(awk '{print $5}' /proc/$$/stat)" = "$$" ] || exit 1
+        for fd in 0 1 2; do
+            [ "$(readlink /proc/$$/fd/$fd)" = /dev/null ] || exit 1
+        done
+        printf '%s %s\n' "$1" "$$" >"$dir/child"
+        i=0
+        while [ ! -f "$dir/release" ] && [ "$i" -lt 500 ]; do
+            /bin/sleep 0.01
+            i=$((i + 1))
+        done
+        ;;
+    *) printf '%s\n' "$1" >>"$dir/commands" ;;
+esac
 "#,
         )
         .unwrap();
@@ -227,10 +261,7 @@ printf '%s\n' "$1" >>"$dir/commands"
             fs::read_to_string(root.path().join("commands")).unwrap(),
             "poweroff\nreboot\n"
         );
-        for program in [
-            std::path::Path::new("/bin/false"),
-            &root.path().join("missing"),
-        ] {
+        for program in [Path::new("/bin/false"), &root.path().join("missing")] {
             std::env::set_var("ARCHR_TEST_SYSTEMCTL", program);
             ui.banner = None;
             assert!(!invoke(&mut ui, &mut library, Some(SessionAction::Reboot)));
@@ -238,16 +269,74 @@ printf '%s\n' "$1" >>"$dir/commands"
             assert!(ui.banner.is_some());
             assert!(!paths.run.join("next").exists());
         }
-        // Drive real SDL input while a core write is blocked. The latest power
-        // request must supersede the older deferred suspend, then remain idle.
-        let sender = ui.sdl.event().unwrap().event_sender();
-        drop(ui);
-        std::env::set_var("ARCHR_LAUNCHER_ROOT", root.path());
+        // The real settings helper selects a detached, nonblocking command on
+        // each request. The child observes the flush and presentation first.
+        let functions = root.path().join("functions");
+        let mut source =
+            fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join(
+                "../../../distribution/projects/ArchR/packages/archr/profile.d/001-functions",
+            ))
+            .unwrap();
+        source.extend_from_slice(format!("\nJ_CONF=\"{}\"\n", paths.config.display()).as_bytes());
+        fs::write(&functions, source).unwrap();
+        let fake_suspend = root.path().join("fake-suspend");
+        fs::copy(&systemctl, &fake_suspend).unwrap();
+        std::env::set_var("ARCHR_TEST_FUNCTIONS", &functions);
+        std::env::set_var("ARCHR_TEST_FAKE_SUSPEND", &fake_suspend);
         std::env::set_var("ARCHR_TEST_SYSTEMCTL", &systemctl);
+        fs::create_dir_all(paths.config.parent().unwrap()).unwrap();
+        for (config, expected) in [
+            ("", "power"),
+            ("system.suspendmode=off\nsystem.suspendmode=mem", "power"),
+            ("system.suspendmode=mem\nsystem.suspendmode=off", "suspend"),
+            ("system.suspendmode= off ", "power"),
+            ("global.system.suspendmode=mem", "suspend"),
+        ] {
+            fs::write(&paths.config, config).unwrap();
+            fs::remove_file(paths.store.join("store.toml")).unwrap();
+            fs::remove_file(root.path().join("power.png")).unwrap();
+            ui.screenshot = Some(root.path().join("power.png"));
+            assert!(!invoke(&mut ui, &mut library, Some(SessionAction::Suspend)));
+            assert!(
+                ui.transition.is_none(),
+                "suspend must not idle the event loop"
+            );
+            assert!(!paths.run.join("next").exists());
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let record = loop {
+                if let Ok(record) = fs::read_to_string(root.path().join("child")) {
+                    if record.ends_with('\n') {
+                        break record;
+                    }
+                }
+                assert!(Instant::now() < deadline, "suspend command did not start");
+                std::thread::sleep(Duration::from_millis(5));
+            };
+            let (argument, pid) = record.trim().split_once(' ').unwrap();
+            assert_eq!(argument, expected);
+            let proc = Path::new("/proc").join(pid);
+            assert!(proc.exists(), "suspend waited for its child");
+            ui.draw(&App::new(10), &library, &theme, None).unwrap();
+            fs::write(root.path().join("release"), []).unwrap();
+            while proc.exists() {
+                assert!(Instant::now() < deadline, "detached child was not reaped");
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            fs::remove_file(root.path().join("child")).unwrap();
+            fs::remove_file(root.path().join("release")).unwrap();
+        }
+        std::env::remove_var("ARCHR_TEST_FUNCTIONS");
+        std::env::remove_var("ARCHR_TEST_FAKE_SUSPEND");
+        // Drive real SDL input while a core write is blocked. The latest power
+        // request must supersede the older deferred game, then remain idle.
         fs::create_dir_all(paths.systems.parent().unwrap()).unwrap();
         fs::create_dir_all(paths.at("/storage/roms/nes")).unwrap();
         fs::write(paths.at("/storage/roms/nes/A.nes"), []).unwrap();
         fs::write(&paths.systems, "<systemList><system><name>nes</name><path>/storage/roms/nes</path><extension>.nes</extension><emulators><emulator name=\"retroarch\"><cores><core>a</core><core>b</core></cores></emulator></emulators></system></systemList>").unwrap();
+        let sender = ui.sdl.event().unwrap().event_sender();
+        drop(ui);
+        std::env::set_var("ARCHR_LAUNCHER_ROOT", root.path());
+        std::env::set_var("ARCHR_TEST_SYSTEMCTL", &systemctl);
         for (target, command) in [(3, "poweroff\n"), (2, "reboot\n")] {
             fs::create_dir_all(paths.lock.parent().unwrap()).unwrap();
             fs::write(&paths.lock, std::process::id().to_string()).unwrap();
@@ -294,21 +383,24 @@ printf '%s\n' "$1" >>"$dir/commands"
                             2 if matches!(app.screen, Screen::QuickMenu { .. }) => {
                                 Some(Keycode::Right)
                             }
-                            3 if library.pending_writes == 1 => Some(Keycode::Down),
-                            4 if app.cursor == 1 => Some(Keycode::Return),
-                            5 if deferred.is_some() => Some(Keycode::Down),
-                            6 if target == 3 && app.cursor == 2 => Some(Keycode::Down),
-                            6 | 7 if app.cursor == target => {
+                            3 if library.pending_writes == 1 => Some(Keycode::Backspace),
+                            4 if matches!(app.screen, Screen::Games { .. }) => {
+                                Some(Keycode::Return)
+                            }
+                            5 if deferred.is_some() => Some(Keycode::Y),
+                            6 if app.cursor == 0 => Some(Keycode::Down),
+                            7 if app.cursor == 1 => Some(Keycode::Down),
+                            8 if target == 3 && app.cursor == 2 => Some(Keycode::Down),
+                            8 | 9 if app.cursor == target => {
                                 assert_eq!(library.pending_writes, 1);
                                 fs::remove_file(&paths.lock).unwrap();
-                                phase = 8;
+                                phase = 10;
                                 None
                             }
-                            8 if library.pending_writes == 0 => {
+                            10 if library.pending_writes == 0 => {
                                 assert!(!library.write_failed);
-                                assert_eq!(
-                                    deferred,
-                                    Some(&Outcome::Action(SessionAction::Suspend))
+                                assert!(
+                                    matches!(deferred, Some(Outcome::Launch { system, game: 0 }) if system == "nes")
                                 );
                                 Some(Keycode::Return)
                             }
@@ -334,7 +426,7 @@ printf '%s\n' "$1" >>"$dir/commands"
                 );
                 result.unwrap();
             });
-            assert_eq!(phase, 9, "power input followed a real pending core write");
+            assert_eq!(phase, 11, "power input followed a real pending core write");
             assert_eq!(
                 fs::read_to_string(root.path().join("commands")).unwrap(),
                 command

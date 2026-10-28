@@ -124,8 +124,7 @@ fn core_lock_is_waited_in_worker_not_in_ui_call() {
 }
 
 #[test]
-fn action_flushes_latest_favorites_before_publishing_next() {
-    use archr_launcher::state::SessionAction;
+fn launch_requires_final_store_flush_before_publishing_next() {
     let (_dir, paths) = fixture();
     let mut library = ready(&paths, Some("nes"));
     library
@@ -137,23 +136,17 @@ fn action_flushes_latest_favorites_before_publishing_next() {
             "",
         )
         .unwrap();
-    assert!(library
-        .handle(Outcome::Action(SessionAction::Suspend), "")
-        .unwrap());
-    assert!(paths.run.join("next").exists());
+    let launch = Outcome::Launch {
+        system: "nes".into(),
+        game: 0,
+    };
+    assert!(library.handle(launch.clone(), "").unwrap());
     assert!(Store::load(&paths.store).favorites().is_empty());
-}
-#[test]
-fn failed_final_store_flush_does_not_publish_next() {
-    use archr_launcher::state::SessionAction;
-    let (_dir, paths) = fixture();
-    let mut library = ready(&paths, None);
-    // No game import/save has been queued. Force every store rename to fail.
+    fs::remove_file(paths.run.join("next")).unwrap();
+    // A failed final flush must not publish a new instruction.
     fs::remove_file(paths.store.join("store.toml")).unwrap();
     fs::create_dir(paths.store.join("store.toml")).unwrap();
-    assert!(library
-        .handle(Outcome::Action(SessionAction::Suspend), "")
-        .is_err());
+    assert!(library.handle(launch, "").is_err());
     assert!(!paths.run.join("next").exists());
 }
 
@@ -207,11 +200,11 @@ fn legacy_absolute_favorites_and_recents_migrate_once() {
 }
 
 #[test]
-fn power_actions_cannot_publish_next() {
-    use archr_launcher::state::SessionAction;
+fn session_actions_cannot_publish_next() {
+    use archr_launcher::state::SessionAction::{Reboot, Shutdown, Suspend};
     let (_root, paths) = fixture();
     let mut library = ready(&paths, None);
-    for action in [SessionAction::Shutdown, SessionAction::Reboot] {
+    for action in [Shutdown, Reboot, Suspend] {
         assert!(library.handle(Outcome::Action(action), "").is_err());
         assert!(!paths.run.join("next").exists());
     }
