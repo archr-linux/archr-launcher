@@ -363,6 +363,17 @@ impl DataSource for Library {
             Some((system.to_owned(), game))
         }
     }
+    fn manufacturer(&self, system: &str) -> Option<(&str, &str)> {
+        let def = self.definition(system)?;
+        Some((&def.manufacturer, &def.release))
+    }
+    fn favorite_count(&self, system: &str) -> usize {
+        self.store
+            .favorites()
+            .iter()
+            .filter(|key| key.split_once('/').is_some_and(|(name, _)| name == system))
+            .count()
+    }
     fn cores(&self, system: &str) -> Vec<(String, String)> {
         self.definition(system)
             .into_iter()

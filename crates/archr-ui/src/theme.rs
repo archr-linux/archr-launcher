@@ -150,18 +150,23 @@ impl Theme {
 /// User themes take precedence as a whole; fields inherit from the builtin,
 /// not from the identically named system theme.
 pub fn resolve_theme(user_dir: &Path, system_dir: &Path, name: &str) -> Theme {
+    theme_dir(user_dir, system_dir, name).map_or_else(Theme::builtin, |dir| Theme::load(&dir))
+}
+
+/// Directory of the theme `resolve_theme` would load, if any.
+pub fn theme_dir(user_dir: &Path, system_dir: &Path, name: &str) -> Option<PathBuf> {
     if name.is_empty() || name.starts_with('.') || name.contains('/') || name.contains("..") {
         log::warn!("Invalid theme name {name:?}; using builtin");
-        return Theme::builtin();
+        return None;
     }
-    for root in [user_dir, system_dir] {
-        let dir = root.join(name);
-        if dir.join("theme.toml").is_file() {
-            return Theme::load(&dir);
-        }
+    let found = [user_dir, system_dir]
+        .into_iter()
+        .map(|root| root.join(name))
+        .find(|dir| dir.join("theme.toml").is_file());
+    if found.is_none() {
+        log::warn!("Theme {name:?} not found; using builtin");
     }
-    log::warn!("Theme {name:?} not found; using builtin");
-    Theme::builtin()
+    found
 }
 
 fn field<T: DeserializeOwned>(table: &toml::Table, name: &str) -> Option<T> {

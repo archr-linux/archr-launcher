@@ -9,6 +9,7 @@ fn system(name: &str, path: &str) -> SystemDef {
         path: path.into(),
         extensions: vec![],
         emulators: vec![],
+        ..Default::default()
     }
 }
 

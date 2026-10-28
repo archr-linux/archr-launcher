@@ -7,10 +7,12 @@ use quick_xml::Reader;
 
 use crate::IndexError;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SystemDef {
     pub name: String,
     pub fullname: String,
+    pub manufacturer: String,
+    pub release: String,
     pub path: PathBuf,
     pub extensions: Vec<String>,
     pub emulators: Vec<Emulator>,
@@ -79,17 +81,13 @@ pub fn load_systems(es_systems: &Path) -> Result<Vec<SystemDef>, IndexError> {
 }
 
 fn read_system<R: BufRead>(reader: &mut Reader<R>) -> Result<SystemDef, IndexError> {
-    let mut system = SystemDef {
-        name: String::new(),
-        fullname: String::new(),
-        path: PathBuf::new(),
-        extensions: Vec::new(),
-        emulators: Vec::new(),
-    };
+    let mut system = SystemDef::default();
     read_children(reader, b"system", |reader, child| {
         match child.name().as_ref() {
             b"name" => system.name = read_text(reader)?,
             b"fullname" => system.fullname = read_text(reader)?,
+            b"manufacturer" => system.manufacturer = read_text(reader)?,
+            b"release" => system.release = read_text(reader)?,
             b"path" => system.path = PathBuf::from(read_text(reader)?),
             b"extension" => {
                 system.extensions = read_text(reader)?

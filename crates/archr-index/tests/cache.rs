@@ -15,6 +15,7 @@ fn system(path: &Path) -> SystemDef {
         path: path.to_owned(),
         extensions: vec![".sfc".into()],
         emulators: Vec::new(),
+        ..Default::default()
     }
 }
 

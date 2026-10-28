@@ -16,6 +16,7 @@ fn root_is_applied_before_absolute_gamelist_rom_and_media_checks() {
         path: roms,
         extensions: vec![".nes".into()],
         emulators: vec![],
+        ..Default::default()
     };
     let mapper = |path: &Path| {
         if path.is_absolute() && !path.starts_with(root.path()) {

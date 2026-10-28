@@ -318,6 +318,7 @@ mod tests {
             path: system_dir.clone(),
             extensions: vec![".sfc".into()],
             emulators: Vec::new(),
+            ..Default::default()
         };
 
         let games = scan_system(&sys);
@@ -360,6 +361,7 @@ mod tests {
             path: system_dir,
             extensions: vec![".sfc".into()],
             emulators: Vec::new(),
+            ..Default::default()
         };
 
         let games = scan_system(&sys);

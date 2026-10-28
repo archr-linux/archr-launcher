@@ -217,6 +217,7 @@ fn select<'a>(entry: &'a Entry, lang: &str, n: Option<f64>) -> Option<&'a str> {
 }
 /// Small CLDR cardinal rules; add a language branch here for future catalogs.
 /// Counts in the launcher are integers; f64 also supports fractional `other`.
+/// Portuguese UI counts deliberately use singular only for one, unlike CLDR.
 pub fn plural_category(language: &str, n: f64) -> &'static str {
     if !n.is_finite() {
         return "other";
@@ -224,7 +225,6 @@ pub fn plural_category(language: &str, n: f64) -> &'static str {
     let n = n.abs();
     let lang = language.split('_').next().unwrap_or(language);
     match lang {
-        "pt" if n.floor() <= 1. => "one",
         "ru" if n.fract() != 0. => "other",
         "ru" => {
             let last = n % 10.;

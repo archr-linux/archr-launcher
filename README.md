@@ -47,7 +47,9 @@ Uma única thread prepara fontes em memória e surfaces de texto/badges enquanto
 SDL cria janela/EGL/renderer na thread principal. `worker join` marca a entrega;
 `CPU surfaces upload` registra o envio ao renderer. SDL_ttf é inicializado antes
 da thread e seus handles nunca são usados concorrentemente. Não há cache de
-badges/sombras em disco; a sombra e os badges fora da primeira tela são lazy.
+badges/sombras em disco; texto e sombra do painel de sistemas também são
+preparados no worker. Assets fora da primeira tela continuam lazy. A resolução
+das imagens dos sistemas só começa após o primeiro present, no worker de capas.
 
 ## Navegação automatizada
 
@@ -107,6 +109,12 @@ OFL. Os TTF estáticos são dos releases oficiais Inter 4.1 e JetBrains Mono
 2.304; não entram no binário. Sem os arquivos, permanece o fallback para
 Liberation/DejaVu. Para experimentar o tema no PC com `ARCHR_LAUNCHER_ROOT`,
 copie essa pasta para `ROOT/usr/share/archr-launcher/themes/default/`.
+
+Imagens de console da tela de sistemas: `/storage/.config/archr-launcher/systems/<nome>.{png,jpg,webp}`
+tem precedência sobre `<tema>/systems/<nome>.{png,jpg,webp}`; sem imagem, o
+painel mostra um cartão tipográfico gerado. `<nome>` é o `<name>` do
+`es_systems.cfg`; sistemas parentes (ex. `megadrive` e `genesis`) usam a mesma
+foto por uma tabela de apelidos em `render/system_art.rs`.
 
 Todos os tokens de `theme.toml` são opcionais, com fallback individual.
 `accent`, `accent_text` e `dim` também aceitam os nomes antigos `highlight_bg`,

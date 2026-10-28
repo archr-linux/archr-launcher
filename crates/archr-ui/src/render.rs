@@ -24,6 +24,9 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+mod system_art;
+use system_art::SystemArt;
+
 #[derive(Clone, Copy)]
 struct Frame {
     width: u32,
@@ -83,6 +86,26 @@ fn selection<T>(selected: bool, normal: T, highlighted: T) -> T {
     } else {
         normal
     }
+}
+
+/// Keep system rows single-line; parenthetical detail remains in the artwork panel.
+fn fit_system_name(
+    name: &str,
+    width: u32,
+    (mut size, minimum): (f32, f32),
+    mut measure: impl FnMut(&str, f32) -> Result<u32, String>,
+) -> Result<(&str, f32), String> {
+    if measure(name, size)? <= width {
+        return Ok((name, size));
+    }
+    let name = name
+        .strip_suffix(')')
+        .and_then(|s| s.rsplit_once(" ("))
+        .map_or(name, |(short, _)| short);
+    while size > minimum && measure(name, size)? > width {
+        size = (size - 1.).max(minimum);
+    }
+    Ok((name, size))
 }
 
 struct ListMotion {
@@ -151,6 +174,8 @@ pub struct Ui<'font, 'texture> {
     text: Option<TextCache<'font, 'texture>>,
     shadow: Option<Shadow<'texture>>,
     creator: Option<&'texture TextureCreator<WindowContext>>,
+    art: Option<SystemArt<'texture>>,
+    root: Option<PathBuf>,
     geometry: Geometry,
     status: Option<Status>,
     list: ListMotion,
@@ -166,6 +191,8 @@ pub struct Ui<'font, 'texture> {
     pub banner: Option<String>,
     pub screenshot: Option<PathBuf>,
     pub transition: Option<String>,
+    /// Active theme directory; its `systems/` folder holds console images.
+    pub theme_dir: Option<PathBuf>,
 }
 impl<'font, 'texture> Ui<'font, 'texture> {
     pub fn new(width: u32, height: u32, windowed: bool) -> Result<Self, String> {
@@ -228,6 +255,8 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             text: None,
             shadow: None,
             creator: None,
+            art: None,
+            root: None,
             geometry: {
                 let mut geometry = Geometry::new();
                 geometry.startup = trace;
@@ -248,6 +277,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             banner: None,
             screenshot: None,
             transition: None,
+            theme_dir: None,
         })
     }
     pub fn configure(
@@ -271,6 +301,8 @@ impl<'font, 'texture> Ui<'font, 'texture> {
     ) -> Result<(), String> {
         self.frame = Frame::from_size(self.canvas.output_size()?);
         self.creator = Some(creator);
+        self.root = root.map(Path::to_path_buf);
+        self.art = None;
         self.shadow = prepared
             .shadow
             .take()
@@ -301,7 +333,12 @@ impl<'font, 'texture> Ui<'font, 'texture> {
     }
     /// Timer work, separate from rendering; sysfs refresh is rate limited.
     pub fn tick(&mut self) -> bool {
-        self.status.as_mut().is_some_and(|s| s.poll(Instant::now()))
+        // Artwork loading starts after the first frame, never before it.
+        let created = self.art.is_none() && self.creator.is_some();
+        self.ensure_art();
+        let art = self.art.as_mut().is_some_and(SystemArt::tick);
+        let status = self.status.as_mut().is_some_and(|s| s.poll(Instant::now()));
+        created || art || status
     }
     fn px(&self, value: f32) -> i32 {
         self.frame.px(value)
@@ -392,6 +429,9 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         let (backdrop, cursor) = app.backdrop();
         self.header(backdrop, cursor, data, theme)?;
         self.list(backdrop, cursor, data, theme)?;
+        if matches!(backdrop, Screen::Systems) {
+            self.system_panel(&App::system_rows(data), cursor, data, theme)?;
+        }
         if let Screen::Games { system } = backdrop {
             self.cover(system, cursor, data, theme, cover)?;
         }
@@ -602,7 +642,8 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         let list_width = if is_games {
             (theme.list_width * width as f32).round() as u32
         } else {
-            width.saturating_sub(margin.max(0) as u32 * 2)
+            let panel = system_art::panel_rect(self.frame, theme);
+            (panel.x() - self.px(system_art::PANEL_GAP) - margin).max(1) as u32
         }
         .max(1);
         let [row, selected] = if is_games {
@@ -742,11 +783,16 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 }
                 system_title(name, data, &self.catalog)
             };
-            self.label(
-                &name,
-                (face, size, c),
-                Rect::new(x, y, (right - x).max(1) as u32, rh),
-            )?;
+            let width = (right - x).max(1) as u32;
+            let (name, size) = if is_games {
+                (name.as_str(), size)
+            } else {
+                let minimum = f32::from(self.frame.font_size(0.)) / self.frame.scale;
+                fit_system_name(&name, width, (size, minimum), |name, size| {
+                    self.measure(name, face, size)
+                })?
+            };
+            self.label(name, (face, size, c), Rect::new(x, y, width, rh))?;
         }
         if len == 0 {
             self.label(
@@ -1170,7 +1216,11 @@ pub fn prepare_first_frame<'font>(
         size: frame.font_size(size),
         color,
     };
-    let mut label = |text: &str, (face, size, color), width: Option<u32>| -> Result<u32, String> {
+    let label = |prepared: &mut PreparedText,
+                 text: &str,
+                 (face, size, color),
+                 width: Option<u32>|
+     -> Result<u32, String> {
         let style = style(face, size, color);
         let width = match width {
             Some(w) => w,
@@ -1180,12 +1230,18 @@ pub fn prepare_first_frame<'font>(
         Ok(width)
     };
     label(
+        &mut prepared,
         &Status::new(root, Instant::now()).clock,
         (Face::Mono, 13., theme.muted),
         None,
     )?;
     for glyph in catalog.text("systems.title").chars() {
-        label(&glyph.to_string(), (Face::Semibold, 12., theme.text), None)?;
+        label(
+            &mut prepared,
+            &glyph.to_string(),
+            (Face::Semibold, 12., theme.text),
+            None,
+        )?;
     }
     let systems = App::system_rows(data);
     let collections = systems.iter().take_while(|s| s.starts_with('@')).count();
@@ -1193,7 +1249,8 @@ pub fn prepare_first_frame<'font>(
     let bottom =
         height as i32 - (theme.footer_height * height as f32).round() as i32 - frame.px(6.);
     let margin = (theme.margin * height as f32).round() as i32;
-    let list_width = width.saturating_sub(margin.max(0) as u32 * 2).max(1);
+    let panel = system_art::panel_rect(frame, theme);
+    let list_width = (panel.x() - frame.px(system_art::PANEL_GAP) - margin).max(1) as u32;
     let row = (theme.row_height * height as f32).round();
     let selected = (theme.selected_height * height as f32).round();
     for (i, name) in systems.iter().enumerate() {
@@ -1218,6 +1275,7 @@ pub fn prepare_first_frame<'font>(
                 .map_or(0, |s| s.game_count as usize)
         };
         let count_width = label(
+            &mut prepared,
             &count.to_string(),
             (
                 selection(i == 0, Face::Mono, Face::MonoMedium),
@@ -1234,14 +1292,18 @@ pub fn prepare_first_frame<'font>(
                 0
             };
         let right = margin + list_width as i32 - frame.px(14.) - count_width as i32 - frame.px(14.);
-        label(
-            &system_title(name, data, catalog),
-            row_style(theme, i, collections, 0, false),
-            Some((right - x).max(1) as u32),
-        )?;
+        let title = system_title(name, data, catalog);
+        let (face, size, color) = row_style(theme, i, collections, 0, false);
+        let width = (right - x).max(1) as u32;
+        let minimum = f32::from(frame.font_size(0.)) / frame.scale;
+        let (title, size) = fit_system_name(&title, width, (size, minimum), |text, size| {
+            prepared.measure(text, face, frame.font_size(size))
+        })?;
+        label(&mut prepared, title, (face, size, color), Some(width))?;
     }
     if systems.is_empty() {
         label(
+            &mut prepared,
             &catalog.text("empty.systems"),
             (Face::Regular, 16., theme.muted),
             Some(list_width.saturating_sub(frame.px(28.) as u32).max(1)),
@@ -1249,13 +1311,19 @@ pub fn prepare_first_frame<'font>(
     }
     let mut right = width as i32 - frame.px(24.);
     for key in ["hint.menu", "hint.open"] {
-        right -= label(&catalog.text(key), (Face::Regular, 13., theme.muted), None)? as i32
+        right -= label(
+            &mut prepared,
+            &catalog.text(key),
+            (Face::Regular, 13., theme.muted),
+            None,
+        )? as i32
             + frame.px(6.)
             + frame.px(20.)
             + frame.px(16.);
     }
     // hints() excludes the final inter-hint gap from its returned left edge.
     label(
+        &mut prepared,
         &library_summary(data, catalog),
         (Face::Regular, 13., theme.muted),
         Some((right + frame.px(16.) - frame.px(40.)).max(1) as u32),
@@ -1268,6 +1336,10 @@ pub fn prepare_first_frame<'font>(
             background: theme.badge,
             foreground: theme.text,
         })?;
+    }
+    if let Some(name) = systems.first() {
+        prepared.shadow = Some(Shadow::surface()?);
+        system_art::prepare_panel(&mut prepared, frame, name, data, catalog, theme)?;
     }
     Ok(prepared)
 }
@@ -1356,6 +1428,48 @@ fn font_paths(theme: &Theme, root: Option<&Path>) -> [Vec<PathBuf>; 4] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn system_names_fit_selected_and_unselected_rows_without_ellipsis() {
+        let ttf = sdl2::ttf::init().unwrap();
+        let fonts = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../themes/default/fonts");
+        let full = "MO/TO family (TO7, TO7/70, TO8, TO8D, TO9, TO9+, MO5 and MO6)";
+        for selected in [false, true] {
+            let face = selection(selected, "Inter-Regular", "Inter-SemiBold");
+            let initial = selection(selected, 17., 18.);
+            let path = fonts.join(format!("{face}.ttf"));
+            let measure = |text: &str, size: f32| {
+                let font = ttf.load_font(&path, size as u16).unwrap();
+                Ok(font.size_of(text).unwrap().0)
+            };
+            for (text, width, want) in [
+                (full, 1000, full),
+                (full, 280, "MO/TO family"),
+                (full, 70, "MO/TO family"),
+                (
+                    "Super Nintendo Entertainment System",
+                    200,
+                    "Super Nintendo Entertainment System",
+                ),
+                ("Name (region) revision", 140, "Name (region) revision"),
+            ] {
+                let (name, size) = fit_system_name(text, width, (initial, 8.), measure).unwrap();
+                assert_eq!(name, want, "selected={selected}, width={width}");
+                assert!(measure(name, size).unwrap() <= width);
+                assert!((8. ..=initial).contains(&size));
+                if width == 70 {
+                    assert!(size < initial);
+                }
+                if width == 1000 || width == 280 {
+                    assert_eq!(size, initial);
+                }
+            }
+            let minimum_width = measure("MO/TO family", 8.).unwrap();
+            let (name, size) =
+                fit_system_name(full, minimum_width, (initial, 8.), measure).unwrap();
+            assert_eq!((name, size), ("MO/TO family", 8.));
+        }
+    }
 
     #[test]
     fn panel_rows_preserve_single_rounding_of_combined_insets() {

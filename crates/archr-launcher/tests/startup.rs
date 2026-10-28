@@ -7,11 +7,19 @@ fn first_present_only_prepares_visible_rasters_and_fonts() {
         "An extraordinarily long system title ".repeat(3)
     )).collect::<String>();
     for definitions in ["", populated.as_str()] {
-        check_startup(definitions);
+        check_startup(definitions, false);
     }
 }
 
-fn check_startup(definitions: &str) {
+#[test]
+fn first_present_prepares_themed_system_panel_and_fitted_name() {
+    check_startup(
+        "<system><name>moto</name><fullname>MO/TO family (TO7, TO7/70, TO8, TO8D, TO9, TO9+, MO5 and MO6)</fullname><manufacturer>Thomson</manufacturer><release>1982</release><path>/roms/moto</path><extension>.rom</extension></system>",
+        true,
+    );
+}
+
+fn check_startup(definitions: &str, themed: bool) {
     let root = tempfile::tempdir().unwrap();
     let config = root.path().join("storage/.config/emulationstation");
     std::fs::create_dir_all(&config).unwrap();
@@ -20,7 +28,19 @@ fn check_startup(definitions: &str) {
         format!("<systemList>{definitions}</systemList>"),
     )
     .unwrap();
-    for _ in 0..2 {
+    if themed {
+        let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../themes/default");
+        let theme = root.path().join("usr/share/archr-launcher/themes/default");
+        std::fs::create_dir_all(theme.join("fonts")).unwrap();
+        std::fs::copy(source.join("theme.toml"), theme.join("theme.toml")).unwrap();
+        for entry in std::fs::read_dir(source.join("fonts")).unwrap() {
+            let entry = entry.unwrap();
+            if entry.path().extension().is_some_and(|ext| ext == "ttf") {
+                std::fs::copy(entry.path(), theme.join("fonts").join(entry.file_name())).unwrap();
+            }
+        }
+    }
+    for run in 0..2 {
         let output = Command::new(env!("CARGO_BIN_EXE_archr-launcher"))
             .env("ARCHR_LAUNCHER_ROOT", root.path())
             .env("ARCHR_LAUNCHER_TRACE", "1")
@@ -33,7 +53,6 @@ fn check_startup(definitions: &str) {
         let before = trace.split("startup first present:").next().unwrap();
         for absent in [
             "SDL_image init",
-            "shadow texture",
             "badge B",
             "badge X",
             "PNG hit",
@@ -51,6 +70,16 @@ fn check_startup(definitions: &str) {
             .expect("worker join");
         assert!(!after_join.contains("text rasterization"), "{after_join}");
         assert!(!after_join.contains("font file open"), "{after_join}");
+        if definitions.is_empty() {
+            assert!(!before.contains("shadow texture"), "{before}");
+        } else if run == 0 {
+            let shadow = before.find("shadow texture").expect("visible panel shadow");
+            let upload = before.find("CPU surfaces upload").expect("prepared upload");
+            assert!(
+                shadow < upload,
+                "shadow must come from the worker: {before}"
+            );
+        }
         assert_eq!(trace.matches("startup first frame draw:").count(), 1);
         assert_eq!(trace.matches("startup first present:").count(), 1);
         let cache = root.path().join("storage/.cache/archr-launcher");

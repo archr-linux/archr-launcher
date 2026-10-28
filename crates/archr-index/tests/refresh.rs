@@ -13,6 +13,7 @@ fn system(path: std::path::PathBuf) -> SystemDef {
         path,
         extensions: vec![".nes".into()],
         emulators: vec![],
+        ..Default::default()
     }
 }
 #[test]
