@@ -107,8 +107,9 @@ no desenho. Sem display, os mesmos fluxos podem rodar com
 - Sistemas com emuladores usam o contrato do `runemu.sh`. Sistemas sem
   emuladores (`tools`, `moonlight`, `imageviewer`) executam o `<command>` do
   catálogo pelo mesmo `next`; `%ROM%`, `%BASENAME%` e `%SYSTEM%` viram uma
-  palavra de shell cada. Outros marcadores, ou um marcador entre aspas, são
-  recusados com `error.no_core` em vez de adivinhados.
+  palavra de shell cada, ou são escapados dentro de aspas duplas (weston:
+  `--command="%ROM%"`). Outros marcadores, ou um marcador entre aspas simples,
+  são recusados com `error.no_core` em vez de adivinhados.
 - Falhas do jogo são lidas de `last-exit`, exibidas por alguns segundos e
   apontam para `/var/log/exec.log`, usado por `runemu.sh`.
 

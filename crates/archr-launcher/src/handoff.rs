@@ -60,8 +60,9 @@ pub fn launch_command_with(
 }
 
 /// Expand a catalog `<command>` for a system without emulators, as ES did.
-/// `%ROM%`, `%BASENAME%` and `%SYSTEM%` become single quoted shell words; any
-/// other placeholder, or one inside quotes, is rejected rather than guessed.
+/// `%ROM%`, `%BASENAME%` and `%SYSTEM%` become single quoted shell words, or are
+/// escaped inside double quotes (weston: `--command="%ROM%"`). Any other
+/// placeholder, or one inside single quotes, is rejected rather than guessed.
 pub fn catalog_command(template: &str, rom: &Path, system: &str) -> io::Result<String> {
     let invalid = |message: String| io::Error::new(io::ErrorKind::InvalidInput, message);
     let rom_text = rom
@@ -85,10 +86,19 @@ pub fn catalog_command(template: &str, rom: &Path, system: &str) -> io::Result<S
                 "SYSTEM" => system,
                 _ => return Err(invalid(format!("unsupported placeholder %{name}%"))),
             };
-            if single || double {
-                return Err(invalid(format!("quoted placeholder %{name}%")));
+            if single {
+                return Err(invalid(format!("single-quoted placeholder %{name}%")));
             }
-            command.push_str(&quote(value));
+            if double {
+                for c in value.chars() {
+                    if matches!(c, '"' | '\\' | '$' | '`') {
+                        command.push('\\');
+                    }
+                    command.push(c);
+                }
+            } else {
+                command.push_str(&quote(value));
+            }
             rest = &rest[name.len() + 2..];
             continue;
         }
@@ -201,8 +211,11 @@ mod tests {
         let bin = dir.path().join("args");
         fs::write(&bin, "#!/bin/sh\nprintf '%s\\n' \"$@\"\n").unwrap();
         fs::set_permissions(&bin, fs::Permissions::from_mode(0o700)).unwrap();
-        let rom = Path::new("/storage/.config/modules/Tom's $(x) \"Mount\" NFS.sh");
-        let template = format!("{} %ROM% --base=%BASENAME% -P%SYSTEM% 100%", bin.display());
+        let rom = Path::new("/storage/.config/modules/Tom's $(x) `y` \\ \"Mount\" NFS.sh");
+        let template = format!(
+            "{} %ROM% --base=%BASENAME% \"--rom=%ROM%\" -P%SYSTEM% 100%",
+            bin.display()
+        );
         let command = catalog_command(&template, rom, "tools").unwrap();
         let result = Command::new("sh").arg("-c").arg(command).output().unwrap();
         assert!(result.status.success());
@@ -213,7 +226,8 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![
                 rom.to_str().unwrap(),
-                "--base=Tom's $(x) \"Mount\" NFS",
+                "--base=Tom's $(x) `y` \\ \"Mount\" NFS",
+                &format!("--rom={}", rom.to_str().unwrap()),
                 "-Ptools",
                 "100%"
             ]
@@ -227,11 +241,7 @@ mod tests {
     #[test]
     fn catalog_command_rejects_what_it_cannot_expand_safely() {
         let rom = Path::new("/roms/ok.sh");
-        for template in [
-            "/usr/bin/runemu.sh %ROM% --core=%CORE%",
-            "foot \"%ROM%\"",
-            "foot '%ROM%'",
-        ] {
+        for template in ["/usr/bin/runemu.sh %ROM% --core=%CORE%", "foot '%ROM%'"] {
             assert_eq!(
                 catalog_command(template, rom, "tools").unwrap_err().kind(),
                 io::ErrorKind::InvalidInput,
