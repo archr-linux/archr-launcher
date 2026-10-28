@@ -14,6 +14,9 @@ use crate::{
     HintButton,
 };
 mod hub;
+mod keyboard;
+mod moonlight;
+mod netplay;
 
 use sdl2::{
     rect::Rect,
@@ -290,6 +293,7 @@ pub struct Ui<'font, 'texture> {
     status: Option<Status>,
     list: ListMotion,
     menu_pill: Tween,
+    settings_scroll: settings_render::Scroll,
     menu_open: bool,
     cover_key: Option<PathBuf>,
     cover_visible: bool,
@@ -301,7 +305,10 @@ pub struct Ui<'font, 'texture> {
     pub loading: bool,
     pub banner: Option<String>,
     pub screenshot: Option<PathBuf>,
+    /// Open Netplay lobby; it replaces the browsing screens while present.
+    pub lobby: Option<crate::netplay::Lobby>,
     pub transition: Option<String>,
+    pub moonlight: Option<crate::moonlight::State>,
     /// Active theme directory; its `systems/` folder holds console images.
     pub theme_dir: Option<PathBuf>,
     /// Root-mapped installed icon directory (separate from the selected theme).
@@ -374,7 +381,9 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             status: None,
             list: ListMotion::new(),
             menu_pill: Tween::new(0., Duration::from_millis(90)),
+            settings_scroll: settings_render::Scroll::default(),
             menu_open: false,
+            lobby: None,
             cover_key: None,
             cover_visible: false,
             cover_fade: Tween::new(0., Duration::from_millis(120)),
@@ -386,6 +395,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             banner: None,
             screenshot: None,
             transition: None,
+            moonlight: None,
             theme_dir: None,
             system_icons_dir: None,
         })
@@ -448,6 +458,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         self.list.pill.snap();
         self.list.swap.snap();
         self.menu_pill.snap();
+        self.settings_scroll.tween.snap();
         self.cover_fade.snap();
     }
     pub fn animating(&self) -> bool {
@@ -565,9 +576,19 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         } = self.frame;
         self.canvas.set_draw_color(color(theme.background));
         self.canvas.clear();
-        if let Some(settings) = settings {
+        if let Some(lobby) = self.lobby.take() {
+            let drawn = self.lobby_page(&lobby, theme);
+            self.lobby = Some(lobby);
+            drawn?;
+            self.animating = false;
+        } else if let Some(moonlight) = self.moonlight.take() {
+            let result = self.moonlight_page(&moonlight, theme);
+            self.moonlight = Some(moonlight);
+            result?;
+            self.animating = false;
+        } else if let Some(settings) = settings {
             self.settings_page(settings, theme)?;
-            self.animating = false; // Static applying label; completion marks the frame dirty.
+            self.animating = self.settings_scroll.tween.active(now);
         } else {
             let (backdrop, cursor) = app.backdrop();
             self.header(backdrop, cursor, data, theme)?;
@@ -917,7 +938,11 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                             .find(|s| s.name == *name)
                             .map_or(0, |s| s.game_count as usize)
                     };
-                    let count = count.to_string();
+                    let count = if name == crate::moonlight::SYSTEM {
+                        String::new()
+                    } else {
+                        count.to_string()
+                    };
                     let face = selection(selected, Face::Mono, Face::MonoMedium);
                     let color = selection(selected, theme.dim_text, theme.accent_text_secondary);
                     right = self.packed_label(
@@ -938,7 +963,15 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                                 selection(selected, theme.highlight_bg, theme.highlight_text),
                             )?;
                         } else {
-                            self.icon(Glyph::Clock, icon, c)?;
+                            self.icon(
+                                if name == crate::moonlight::SYSTEM {
+                                    Glyph::Moon
+                                } else {
+                                    Glyph::Clock
+                                },
+                                icon,
+                                c,
+                            )?;
                         }
                         x += self.px(26.);
                     }
@@ -1327,6 +1360,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             let c = selection(selected, theme.text, theme.highlight_text);
             let label = match item {
                 QuickItem::Settings => "settings.title",
+                QuickItem::Netplay => "netplay.menu",
                 QuickItem::Core => "menu.core",
                 QuickItem::Move => "menu.move",
                 QuickItem::RestoreOrder => "menu.restore_order",
@@ -1431,10 +1465,15 @@ fn row_style(
     )
 }
 fn library_summary(data: &dyn DataSource, catalog: &I18n) -> String {
-    let systems = data.systems().iter().filter(|s| s.game_count > 0).count();
+    let systems = data
+        .systems()
+        .iter()
+        .filter(|s| !s.name.starts_with('@') && s.game_count > 0)
+        .count();
     let games = data
         .systems()
         .iter()
+        .filter(|s| !s.name.starts_with('@'))
         .map(|s| u64::from(s.game_count))
         .sum::<u64>();
     let count = |key, n: u64| catalog.plural(key, n as f64, &[("count", &n.to_string())]);
@@ -1519,6 +1558,8 @@ pub fn prepare_first_frame<'font>(
             first_icons.push((
                 if name == "@favorites" {
                     Glyph::Star
+                } else if name == crate::moonlight::SYSTEM {
+                    Glyph::Moon
                 } else {
                     Glyph::Clock
                 },
@@ -1535,7 +1576,11 @@ pub fn prepare_first_frame<'font>(
         };
         let count_width = label(
             &mut prepared,
-            &count.to_string(),
+            &if name == crate::moonlight::SYSTEM {
+                String::new()
+            } else {
+                count.to_string()
+            },
             (
                 selection(i == 0, Face::Mono, Face::MonoMedium),
                 13.,
@@ -1569,16 +1614,21 @@ pub fn prepare_first_frame<'font>(
         )?;
     }
     prepared.prepare_icons(theme_dir, system_icons_dir, first_icons);
-    // Deferred settings and move overlays must not read icons on the render thread.
+    // Deferred settings, move and Moonlight overlays must not read icons on the render thread.
     prepared.preload_icons(&[
         Glyph::ArrowUpDown,
         Glyph::ChevronsUpDown,
         Glyph::Shift,
         Glyph::Backspace,
-        Glyph::WifiHigh,
-        Glyph::WifiLow,
+        Glyph::Eye,
+        Glyph::EyeOff,
+        Glyph::Signal,
+        Glyph::SignalLow,
+        Glyph::SignalMedium,
+        Glyph::SignalHigh,
         Glyph::Lock,
         Glyph::Check,
+        Glyph::Moon,
     ]);
     Ok(prepared)
 }

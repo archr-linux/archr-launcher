@@ -7,24 +7,21 @@ use archr_config::SystemCfg;
 use archr_ui::settings::{Id, Information, Page, Settings};
 pub use runtime::Runtime;
 use std::{
-    fs,
-    io::{Read, Seek, SeekFrom},
-    os::unix::process::CommandExt,
-    process::{Command, Stdio},
-    sync::mpsc,
-    thread,
-    time::{Duration, Instant},
+    collections::BTreeMap, fs, process::Command, sync::atomic::AtomicBool, sync::mpsc, thread,
+    time::Duration,
 };
 
 pub struct Backend {
     paths: Paths,
-    identity: std::sync::OnceLock<Information>,
+    identity: std::sync::OnceLock<info::Identity>,
+    cpu_ticks: std::sync::Mutex<BTreeMap<u32, (u64, u64)>>,
 }
 impl Backend {
     pub fn new(paths: Paths) -> Self {
         Self {
             paths,
             identity: std::sync::OnceLock::new(),
+            cpu_ticks: std::sync::Mutex::new(BTreeMap::new()),
         }
     }
     fn read(&self, path: &str) -> String {
@@ -66,49 +63,26 @@ impl Backend {
         args: &[&str],
         timeout: Duration,
     ) -> Result<String, String> {
-        let mut stdout = tempfile::tempfile().map_err(|e| e.to_string())?;
-        let mut stderr = tempfile::tempfile().map_err(|e| e.to_string())?;
         let mut command = Command::new(self.paths.at(&format!("/usr/bin/{name}")));
-        command
-            .args(args)
-            .process_group(0)
-            .stdin(Stdio::null())
-            .stdout(stdout.try_clone().map_err(|e| e.to_string())?)
-            .stderr(stderr.try_clone().map_err(|e| e.to_string())?);
+        command.args(args);
         if let Some(root) = &self.paths.root {
             command
                 .env("ARCHR_LAUNCHER_ROOT", root)
                 .env("PATH", self.paths.at("/usr/bin"));
         }
-        let mut child = command.spawn().map_err(|e| format!("{name}: {e}"))?;
-        let deadline = Instant::now() + timeout;
-        let status = loop {
-            match child.try_wait().map_err(|e| e.to_string())? {
-                Some(status) => break status,
-                None if Instant::now() < deadline => thread::sleep(Duration::from_millis(10)),
-                None => {
-                    // SAFETY: the child owns its new process group; never signal
-                    // the launcher's group or an arbitrary configured PID.
-                    unsafe {
-                        libc::kill(-(child.id() as i32), libc::SIGKILL);
-                    }
-                    let _ = child.wait();
-                    return Err(format!("{name}: timeout"));
-                }
-            }
-        };
-        let capture = |file: &mut fs::File| -> Result<String, String> {
-            file.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
-            let mut text = String::new();
-            file.take(64 * 1024)
-                .read_to_string(&mut text)
-                .map_err(|e| e.to_string())?;
-            Ok(text.trim().to_owned())
-        };
-        if status.success() {
-            capture(&mut stdout)
+        let output =
+            crate::process::capture(&mut command, timeout, &AtomicBool::new(false), 64 * 1024)
+                .map_err(|e| format!("{name}: {e}"))?;
+        if output.status.success() {
+            String::from_utf8(output.stdout)
+                .map(|s| s.trim().to_owned())
+                .map_err(|e| e.to_string())
         } else {
-            Err(format!("{name}: {status}; {}", capture(&mut stderr)?))
+            Err(format!(
+                "{name}: {}; {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim()
+            ))
         }
     }
     pub fn load(&self) -> Result<Settings, String> {
@@ -335,10 +309,10 @@ enum Reply {
     Loaded(Result<Box<Settings>, String>),
     Set(Id, Result<String, String>),
     Info(Information),
-    Scan(Result<Vec<archr_ui::settings::network::Network>, String>),
+    Scan(Result<(Vec<archr_ui::settings::network::Network>, String), String>),
     Connect(Result<(), String>),
     Forget(Result<(), String>),
-    Variants(Vec<String>),
+    Variants(Vec<(String, String)>),
 }
 pub struct Worker {
     tx: mpsc::Sender<Work>,
@@ -364,7 +338,7 @@ impl Worker {
                         }
                         Work::Forget(ssid) => Reply::Forget(backend.forget(&ssid)),
                         Work::Variants(layout) => {
-                            Reply::Variants(backend.keyboard_variants(&layout))
+                            Reply::Variants(backend.keyboard_names(&["list-variants", &layout]))
                         }
                     };
                     if results.send(reply).is_err() {
@@ -384,7 +358,7 @@ impl Worker {
         Ok(())
     }
     /// Language is returned only after durable success, never speculatively.
-    pub fn poll(&mut self, state: &mut Settings) -> (bool, Option<String>) {
+    pub(super) fn poll(&mut self, state: &mut Settings) -> (bool, Option<String>) {
         let mut changed = false;
         let mut language = None;
         while let Ok(reply) = self.rx.try_recv() {
@@ -394,6 +368,7 @@ impl Worker {
                 Reply::Loaded(Ok(mut loaded)) => {
                     std::mem::swap(&mut state.values, &mut loaded.values);
                     state.options = loaded.options;
+                    state.labels = loaded.labels;
                     state.access_ip = loaded.access_ip;
                     state.info = loaded.info;
                     state.error = loaded.error;
@@ -411,50 +386,57 @@ impl Worker {
                     if id == Id::Language {
                         language = result.as_ref().ok().cloned();
                     }
-                    let wifi_enabled = id == Id::WifiSwitch && result.as_deref() == Ok("1");
-                    let wifi_disabled = id == Id::WifiSwitch && result.as_deref() == Ok("0");
+                    let wifi = (id == Id::WifiSwitch)
+                        .then(|| result.as_deref().ok() == Some("1"))
+                        .filter(|_| result.is_ok());
                     let new_layout = (id == Id::KeyboardLayout)
                         .then(|| result.as_ref().ok().cloned())
                         .flatten();
                     state.complete(id, result);
                     if let Some(layout) = new_layout {
                         state.values.insert(Id::KeyboardVariant, String::new());
-                        let _ = self.tx.send(Work::Variants(layout));
-                        self.pending += 1;
+                        let _ = self.send(Work::Variants(layout));
                     }
-                    if wifi_disabled {
-                        state.networks.clear();
-                    }
-                    if wifi_enabled {
-                        let _ = self.tx.send(Work::Scan);
-                        self.pending += 1;
+                    match wifi {
+                        Some(true) => {
+                            let _ = self.send(Work::Scan);
+                        }
+                        Some(false) => {
+                            state.networks.clear();
+                            state.scanned = None;
+                            state.cursor = state.cursor.min(state.wifi_rows() - 1);
+                        }
+                        None => {}
                     }
                 }
                 Reply::Info(info) => state.info = info,
-                Reply::Variants(mut options) => {
-                    options.push(String::new());
-                    options.sort();
-                    options.dedup();
-                    state.options.insert(Id::KeyboardVariant, options);
+                Reply::Variants(names) => {
+                    pages::keyboard_choices(state, Id::KeyboardVariant, names);
                 }
                 Reply::Scan(result) => match result {
-                    Ok(networks) => {
-                        state.networks = networks;
-                        if state.page() == Page::Wifi {
-                            state.cursor = state.cursor.min(state.networks.len() + 3);
+                    Ok((networks, address)) => {
+                        // A late scan never repopulates a list the user switched off.
+                        if state.value(Id::WifiSwitch) == "1" {
+                            state.networks = networks;
+                            state.scanned = Some(std::time::Instant::now());
                         }
-                        state.error = None;
+                        state.access_ip = address;
+                        if state.page() == Page::Wifi {
+                            state.cursor = state.cursor.min(state.wifi_rows() - 1);
+                        }
                     }
                     Err(error) => state.error = Some((None, error)),
                 },
-                Reply::Connect(result) | Reply::Forget(result) => match result {
-                    Ok(()) => {
-                        state.error = None;
-                        let _ = self.tx.send(Work::Scan);
-                        self.pending += 1;
+                Reply::Connect(result) | Reply::Forget(result) => {
+                    state.connecting = None;
+                    match result {
+                        Ok(()) => {
+                            state.error = None;
+                            let _ = self.send(Work::Scan);
+                        }
+                        Err(error) => state.error = Some((None, error)),
                     }
-                    Err(error) => state.error = Some((None, error)),
-                },
+                }
             }
         }
         (changed, language)

@@ -26,7 +26,7 @@ pub fn read_battery(root: &Path) -> Option<Battery> {
     battery_at(&find_battery(root)?)
 }
 /// The first power supply named `battery` or of type `Battery`, by name order.
-fn find_battery(root: &Path) -> Option<PathBuf> {
+pub fn find_battery(root: &Path) -> Option<PathBuf> {
     let base = root.join("sys/class/power_supply");
     let mut sources: Vec<_> = fs::read_dir(base).ok()?.filter_map(Result::ok).collect();
     sources.sort_by_key(|e| e.file_name());
@@ -248,11 +248,13 @@ impl Status {
 }
 /// Radio state is the wlan rfkill soft block, which `wifictl` flips at once; link
 /// flags would lag behind it and depend on the interface name.
-fn wifi_on(root: &Path) -> bool {
+pub fn wifi_on(root: &Path) -> bool {
     let Ok(entries) = fs::read_dir(root.join("sys/class/rfkill")) else {
         return false;
     };
-    let read = |dir: &Path, name: &str| fs::read_to_string(dir.join(name)).unwrap_or_default();
+    let read = |dir: &Path, name: &str| {
+        archr_io::read_utf8(&dir.join(name), 4096, archr_io::Symlinks::Follow).unwrap_or_default()
+    };
     entries
         .flatten()
         .any(|e| read(&e.path(), "type").trim() == "wlan" && read(&e.path(), "soft").trim() == "0")

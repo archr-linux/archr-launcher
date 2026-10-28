@@ -46,7 +46,13 @@ pub enum SessionAction {
 pub enum Outcome {
     None,
     Settings,
+    /// Opens the Netplay lobby.
+    OpenNetplay,
+    /// Starts a lobby room as a netplay client.
+    Netplay(Box<crate::netplay::Join>),
     ToggleWifi,
+    Moonlight,
+    MoonlightStream(crate::moonlight::Stream),
     Launch {
         system: String,
         game: usize,
@@ -69,6 +75,7 @@ pub enum Outcome {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum QuickItem {
     Settings,
+    Netplay,
     Core,
     Move,
     RestoreOrder,
@@ -107,6 +114,8 @@ pub struct App {
     pub screen: Screen,
     pub cursor: usize,
     pub page_size: usize,
+    /// `global.netplay` is on: the quick menu offers the lobby.
+    pub netplay: bool,
     history: Vec<(Screen, usize)>,
     moving: Option<order::Moving>,
     selected_core: Option<(String, String)>,
@@ -118,6 +127,7 @@ impl App {
             screen: Screen::Systems,
             cursor: 0,
             page_size,
+            netplay: false,
             history: Vec::new(),
             moving: None,
             selected_core: None,
@@ -141,11 +151,21 @@ impl App {
             Screen::QuickMenu {
                 game: Some((system, _)),
             } => &GAME[usize::from(data.cores(system).len() <= 1)..],
-            Screen::QuickMenu { game: None } if data.system_order().is_empty() => {
-                &[Settings, Move, Suspend, Reboot, Shutdown]
-            }
             Screen::QuickMenu { game: None } => {
-                &[Settings, Move, RestoreOrder, Suspend, Reboot, Shutdown]
+                match (self.netplay, data.system_order().is_empty()) {
+                    (false, true) => &[Settings, Move, Suspend, Reboot, Shutdown],
+                    (false, false) => &[Settings, Move, RestoreOrder, Suspend, Reboot, Shutdown],
+                    (true, true) => &[Settings, Netplay, Move, Suspend, Reboot, Shutdown],
+                    (true, false) => &[
+                        Settings,
+                        Netplay,
+                        Move,
+                        RestoreOrder,
+                        Suspend,
+                        Reboot,
+                        Shutdown,
+                    ],
+                }
             }
             _ => &[],
         }
@@ -202,6 +222,9 @@ impl App {
             Screen::Systems => match b {
                 Button::A => {
                     if let Some(system) = Self::system_rows(data).get(self.cursor) {
+                        if system == crate::moonlight::SYSTEM {
+                            return Outcome::Moonlight;
+                        }
                         self.enter(Screen::Games {
                             system: system.clone(),
                         });
@@ -241,6 +264,10 @@ impl App {
                     (Button::A, Some(QuickItem::Settings)) => {
                         self.back();
                         return Outcome::Settings;
+                    }
+                    (Button::A, Some(QuickItem::Netplay)) => {
+                        self.back();
+                        return Outcome::OpenNetplay;
                     }
                     (Button::A, Some(QuickItem::Move)) => {
                         self.back();

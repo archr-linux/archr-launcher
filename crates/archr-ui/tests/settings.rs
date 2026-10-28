@@ -99,5 +99,46 @@ fn localized_values_and_footer_affordances_match_actions() {
         [Key('A'), Key('B')]
     );
     s.open(Page::Info);
-    assert_eq!(s.hints(), &[(Key('B'), "hint.back")]);
+    assert_eq!(
+        s.hints(),
+        &[(Key('A'), "settings.details"), (Key('B'), "hint.back")]
+    );
+}
+
+#[test]
+fn information_grid_moves_in_two_columns_and_details_restore_focus() {
+    let mut state = Settings::default();
+    state.open(Page::Info);
+    state.handle(Button::R);
+    state.handle(Button::Up);
+    assert_eq!(state.cursor, 1, "up preserves the column at the top edge");
+    state.handle(Button::L);
+    state.handle(Button::Down);
+    assert_eq!(state.cursor, 2);
+    state.handle(Button::Down);
+    state.handle(Button::Down);
+    assert_eq!(
+        state.cursor, 4,
+        "down preserves the column at the bottom edge"
+    );
+    state.handle(Button::Up);
+    state.handle(Button::L);
+    assert_eq!(
+        state.cursor, 2,
+        "left edge cannot jump into the previous row"
+    );
+    state.handle(Button::R);
+    state.handle(Button::R);
+    assert_eq!(state.cursor, 3, "right edge cannot jump into the next row");
+    state.handle(Button::A);
+    assert_eq!(state.page(), Page::InfoDetail(3));
+    state.handle(Button::R);
+    assert_eq!(state.page(), Page::InfoDetail(4));
+    state.handle(Button::L);
+    assert_eq!(state.page(), Page::InfoDetail(3));
+    state.handle(Button::B);
+    assert_eq!(state.page(), Page::Info);
+    assert_eq!(state.cursor, 3);
+    state.handle(Button::B);
+    assert_eq!(state.page(), Page::Root);
 }

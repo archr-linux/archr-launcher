@@ -127,6 +127,9 @@ pub fn apply(
 fn message(outcome: Option<&Outcome>, data: &dyn DataSource, catalog: &I18n) -> Option<String> {
     Some(match outcome {
         None => catalog.text("notice.closing"),
+        Some(Outcome::MoonlightStream(stream)) => {
+            catalog.format("notice.opening", &[("game", &stream.app)])
+        }
         Some(Outcome::Launch { system, game }) => catalog.format(
             "notice.opening",
             &[(
@@ -138,6 +141,7 @@ fn message(outcome: Option<&Outcome>, data: &dyn DataSource, catalog: &I18n) -> 
                     .unwrap_or_else(|| catalog.text("notice.game")),
             )],
         ),
+        Some(Outcome::Netplay(join)) => catalog.format("notice.opening", &[("game", &join.game)]),
         Some(Outcome::Action(action)) => catalog.text(match action {
             SessionAction::Shutdown => "notice.shutdown",
             SessionAction::Reboot => "notice.reboot",

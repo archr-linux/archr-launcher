@@ -1,6 +1,6 @@
 //! Lazy library adapter for the navigation model.
 use crate::{
-    handoff::{catalog_command, launch_command_with, write_next},
+    handoff::{catalog_command, launch_command_with, netplay_command, write_next},
     paths::Paths,
     persistence::StoreWriter,
     state::{App, DataSource, Outcome},
@@ -22,6 +22,7 @@ pub struct Library {
     pub banner: Option<Message>,
     pub pending_writes: usize,
     pub write_failed: bool,
+    moonlight_available: bool,
     overview: Overview,
     definitions: Vec<SystemDef>,
     games: HashMap<String, Vec<Game>>,
@@ -67,7 +68,7 @@ impl Library {
                 .is_some()
                 .then(|| Message::new("error.store_load"))
         });
-        let overview = cached.unwrap_or_else(|| Overview {
+        let mut overview = cached.unwrap_or_else(|| Overview {
             systems: definitions
                 .iter()
                 .map(|system| SystemEntry {
@@ -79,7 +80,10 @@ impl Library {
                 })
                 .collect(),
         });
+        let moonlight_available = paths.at("/usr/bin/moonlight").is_file();
+        crate::moonlight::collection(&mut overview, moonlight_available);
         Self {
+            moonlight_available,
             paths,
             ready: false,
             counts_known,
@@ -185,6 +189,7 @@ impl Library {
                 }
                 Update::Overview(overview) => {
                     self.overview = overview;
+                    crate::moonlight::collection(&mut self.overview, self.moonlight_available);
                     self.counts_known = true;
                 }
                 Update::Games(system, mut games) => {
@@ -229,7 +234,7 @@ impl Library {
     }
     pub fn handle(&mut self, outcome: Outcome, controllers: &str) -> Result<bool, String> {
         match outcome {
-            Outcome::None | Outcome::Settings => {}
+            Outcome::None | Outcome::Settings | Outcome::OpenNetplay | Outcome::Moonlight => {}
             Outcome::ToggleFavorite { system, game } => {
                 let key = self.game_key(&system, game).ok_or("error.game_missing")?;
                 self.store.toggle_favorite(&key);
@@ -271,11 +276,32 @@ impl Library {
                 self.pending_writes += 1;
                 self.write_failed = false;
             }
+            Outcome::MoonlightStream(stream) => {
+                let command = crate::moonlight::stream_command(&self.paths, &stream)?;
+                self.flush_store()?;
+                write_next(&self.paths.run, &command).map_err(|error| error.to_string())?;
+                return Ok(true);
+            }
             Outcome::Launch { system, game } => {
                 let command = self.launch_command(&system, game, controllers)?;
                 let key = self.game_key(&system, game).ok_or("error.game_missing")?;
                 self.store.push_recent(&key);
                 self.refresh_collection("@recent");
+                self.flush_store()?;
+                write_next(&self.paths.run, &command).map_err(|error| error.to_string())?;
+                return Ok(true);
+            }
+            Outcome::Netplay(join) => {
+                let nickname = self
+                    .config
+                    .as_ref()
+                    .and_then(|config| config.get_setting("global.netplay.nickname", None, None))
+                    .unwrap_or_else(|| "ArchR Player".to_owned());
+                let runemu = self.paths.at("/usr/bin/runemu.sh");
+                let game = (&*join.system, &*join.core, &*join.emulator, controllers);
+                let peer = (&*join.ip, join.port, &*nickname, &*join.session);
+                let command = netplay_command(&runemu, &join.rom, game, peer, join.spectate)
+                    .map_err(|error| error.to_string())?;
                 self.flush_store()?;
                 write_next(&self.paths.run, &command).map_err(|error| error.to_string())?;
                 return Ok(true);

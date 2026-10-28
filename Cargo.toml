@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/archr-io", "crates/archr-config", "crates/archr-index", "crates/archr-ui", "crates/archr-launcher"]
+members = ["crates/archr-io", "crates/archr-config", "crates/archr-index", "crates/archr-ui", "crates/archr-launcher", "crates/archr-scraper"]
 resolver = "2"
 
 [workspace.package]

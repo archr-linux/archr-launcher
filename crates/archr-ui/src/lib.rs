@@ -14,6 +14,7 @@ pub mod input;
 pub mod state;
 
 pub mod controllers;
+pub mod netplay;
 
 pub mod render;
 
@@ -26,6 +27,8 @@ pub mod startup;
 pub mod status;
 mod text;
 
+pub mod keyboard;
+pub mod moonlight;
 pub mod settings;
 
 /// A footer action may be bound to one button or a grouped pair.

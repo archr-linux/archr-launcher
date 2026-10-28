@@ -12,6 +12,9 @@ pub struct Runtime {
     paths: Paths,
     worker: Option<Worker>,
     next_info: Instant,
+    next_scan: Instant,
+    /// Seconds shown in the Wi-Fi footer, redrawn as they change.
+    scan_age: u64,
     closing: bool,
 }
 impl Runtime {
@@ -22,6 +25,8 @@ impl Runtime {
             paths,
             worker: None,
             next_info: Instant::now(),
+            next_scan: Instant::now(),
+            scan_age: 0,
             closing: false,
         }
     }
@@ -50,7 +55,7 @@ impl Runtime {
         self.worker.as_ref().is_some_and(Worker::busy)
     }
     pub fn mutations_pending(&self) -> bool {
-        self.state.pending.is_some()
+        self.state.pending.is_some() || self.state.connecting.is_some()
     }
     pub fn close(&mut self) {
         self.closing = true;
@@ -63,32 +68,47 @@ impl Runtime {
             Effect::Scan => self.send(Work::Scan),
             Effect::Connect(ssid, password) => self.send(Work::Connect(ssid, password)),
             Effect::Forget(ssid) => self.send(Work::Forget(ssid)),
+            Effect::Login(..) | Effect::Scrape | Effect::CancelScrape => {}
             Effect::Reboot => return Outcome::Action(SessionAction::Reboot),
             Effect::None => {}
         }
-        if before != Page::Wifi
-            && self.state.page() == Page::Wifi
-            && self.state.value(archr_ui::settings::Id::WifiSwitch) == "1"
-        {
-            self.send(Work::Scan);
+        if before != Page::Wifi && self.state.page() == Page::Wifi {
+            self.next_scan = Instant::now();
         }
         Outcome::None
     }
     pub fn poll(&mut self) -> (bool, Option<String>) {
-        let (dirty, language) = self
-            .worker
-            .as_mut()
-            .map(|w| w.poll(&mut self.state))
-            .unwrap_or_default();
+        let (mut dirty, language) = match self.worker.as_mut() {
+            Some(worker) => worker.poll(&mut self.state),
+            None => (false, None),
+        };
         let now = Instant::now();
+        let wifi = self.active
+            && self.state.page() == Page::Wifi
+            && self.state.value(archr_ui::settings::Id::WifiSwitch) == "1";
+        if wifi && dirty && self.state.scanned.is_some() {
+            self.next_scan = now + Duration::from_secs(10);
+        }
+        if wifi && !self.closing && !self.busy() && now >= self.next_scan {
+            self.next_scan = now + Duration::from_secs(10);
+            self.send(Work::Scan);
+        }
+        let age = self
+            .state
+            .scanned
+            .map_or(0, |at| now.saturating_duration_since(at).as_secs());
+        if wifi && age != self.scan_age {
+            self.scan_age = age;
+            dirty = true;
+        }
         // Completion, not dispatch, starts the interval, even for a slow probe.
         if dirty {
-            self.next_info = now + Duration::from_secs(4);
+            self.next_info = now + Duration::from_secs(2);
         }
         if !self.closing
             && !self.busy()
             && self.active
-            && self.state.page() == Page::Info
+            && matches!(self.state.page(), Page::Info | Page::InfoDetail(_))
             && now >= self.next_info
         {
             self.send(Work::Info);
@@ -102,12 +122,16 @@ mod tests {
     use super::*;
     use std::{fs, os::unix::fs::PermissionsExt};
     #[test]
-    fn slow_refresh_is_disposable_and_next_interval_starts_after_completion() {
+    fn refresh_is_disposable_uses_two_second_interval_and_never_runs_ip() {
         let dir = tempfile::tempdir().unwrap();
         let bin = dir.path().join("usr/bin");
         fs::create_dir_all(&bin).unwrap();
         let ip = bin.join("ip");
-        fs::write(&ip, "#!/bin/sh\n/bin/sleep 4.2\n").unwrap();
+        fs::write(
+            &ip,
+            "#!/bin/sh\n/usr/bin/touch \"$ARCHR_LAUNCHER_ROOT/ip-was-run\"\n/bin/sleep 4.2\n",
+        )
+        .unwrap();
         fs::set_permissions(&ip, fs::Permissions::from_mode(0o755)).unwrap();
         let mut runtime = Runtime::new(Paths::new(Some(dir.path().into())));
         runtime.active = true;
@@ -122,7 +146,8 @@ mod tests {
             assert!(Instant::now() < deadline);
             thread_yield();
         }
-        assert!(runtime.next_info > Instant::now() + Duration::from_secs(3));
+        assert!(runtime.next_info > Instant::now() + Duration::from_secs(1));
+        assert!(!dir.path().join("ip-was-run").exists());
         runtime.close();
         runtime.next_info = Instant::now() - Duration::from_secs(1);
         runtime.poll();

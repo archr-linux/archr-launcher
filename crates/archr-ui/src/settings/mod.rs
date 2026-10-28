@@ -1,9 +1,12 @@
 //! Declarative settings pages and pure navigation. Effects belong to the host.
-use crate::{icons::Glyph, state::Button, HintButton};
+use crate::{icons::Glyph, keyboard::Keyboard, state::Button, HintButton};
+use std::collections::BTreeMap;
+use std::time::Instant;
+pub(crate) mod information;
 pub mod network;
 mod pages;
-use network::{Keyboard, Network};
-use std::collections::BTreeMap;
+pub use information::{InfoCard, InfoDetail, InfoMeter, Information};
+use network::Network;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Page {
@@ -12,6 +15,7 @@ pub enum Page {
     System,
     Region,
     Info,
+    InfoDetail(usize),
     Wifi,
     Services,
     Games,
@@ -27,14 +31,22 @@ impl Page {
             Self::Sound => "settings.sound",
             Self::System => "settings.system",
             Self::Region => "settings.region",
-            Self::Info => "settings.info",
-            Self::Wifi => "settings.network",
+            Self::Info | Self::InfoDetail(_) => "settings.info",
+            Self::Wifi => "settings.wifi",
             Self::Services => "settings.services",
             Self::Games => "settings.games",
             Self::Netplay => "settings.netplay",
             Self::Scraper => "settings.scraper",
             Self::Keyboard => "settings.keyboard",
             Self::Soon(key) => key,
+        }
+    }
+    /// Breadcrumb parents between "Settings" and the page itself.
+    pub fn parent(self) -> Option<&'static str> {
+        match self {
+            Self::Wifi | Self::Services => Some("settings.network"),
+            Self::Netplay | Self::Scraper => Some("settings.games"),
+            _ => None,
         }
     }
     pub fn rows(self) -> &'static [Row] {
@@ -70,30 +82,27 @@ pub enum Id {
     KeyboardVariant,
     WifiSwitch,
     Hidden,
-    Bluetooth,
-    ServicesLink,
     Ssh,
     Samba,
     Http,
-    NetplayLink,
     Adhoc,
     Player,
     Channel,
     UsbMode,
+    NetplayLink,
     NetplayEnabled,
     Nickname,
     NetplayHost,
     NetplayPort,
     Relay,
     CustomServer,
-    AutoLobby,
     OnlyRelay,
     MissingGames,
-    CheckIndexes,
     IndexNow,
     ScraperLink,
     ScraperSource,
     ScraperAccount,
+    ScraperPassword,
     ScraperSystems,
     ScraperMedia,
     ScraperMissing,
@@ -111,10 +120,10 @@ impl Id {
             Self::Suspend => ("system.suspendmode", "off"),
             Self::Governor => ("system.cpugovernor", "ondemand"),
             Self::Turbo => ("enable.turbo-mode", "0"),
-            Self::Update => ("", ""),
             Self::Language => ("system.language", "en_US"),
             Self::Timezone => ("system.timezone", "America/Sao_Paulo"),
             Self::ClockFormat => ("launcher.clock.format", "24"),
+            // archr-keyboard owns both keyboard keys.
             Self::KeyboardLayout => ("system.kblayout", "us"),
             Self::KeyboardVariant => ("system.kbvariant", ""),
             Self::WifiSwitch => ("wifi.enabled", "0"),
@@ -131,22 +140,20 @@ impl Id {
             Self::NetplayPort => ("global.netplay.port", "55435"),
             Self::Relay => ("global.netplay.relay", "none"),
             Self::CustomServer => ("global.netplay.customserver", ""),
-            Self::AutoLobby => ("netplay.auto_lobby", "0"),
             Self::OnlyRelay => ("netplay.relay_only", "0"),
-            Self::MissingGames => ("netplay.show_missing", "0"),
-            Self::CheckIndexes => ("netplay.index_at_start", "0"),
-            Self::ScraperSource
-            | Self::ScraperAccount
-            | Self::ScraperSystems
-            | Self::ScraperMedia
-            | Self::ScraperMissing
-            | Self::ScraperStart
-            | Self::ScraperLink
-            | Self::IndexNow
+            Self::MissingGames => ("netplay.show_missing", "1"),
+            Self::ScraperSource => ("", "screenscraper"),
+            Self::ScraperSystems => ("launcher.scraper.systems", ""),
+            Self::ScraperMedia => ("launcher.scraper.media", "box"),
+            Self::ScraperMissing => ("launcher.scraper.only_missing", "1"),
+            Self::Update
             | Self::Hidden
-            | Self::Bluetooth
-            | Self::ServicesLink
-            | Self::NetplayLink => ("", ""),
+            | Self::NetplayLink
+            | Self::IndexNow
+            | Self::ScraperLink
+            | Self::ScraperAccount
+            | Self::ScraperPassword
+            | Self::ScraperStart => ("", ""),
         }
     }
     pub fn key(self) -> &'static str {
@@ -168,15 +175,16 @@ impl Id {
             | Self::Http
             | Self::Adhoc
             | Self::NetplayEnabled
-            | Self::AutoLobby
             | Self::OnlyRelay
             | Self::MissingGames
-            | Self::CheckIndexes => &["0", "1"],
+            | Self::ScraperMissing => &["0", "1"],
             Self::ClockFormat => &["24", "12"],
             Self::Player => &["1", "2", "3", "4"],
             Self::Channel => &["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"],
             Self::UsbMode => &["disabled", "network", "file_transfer"],
             Self::Relay => &["none", "nyc", "madrid", "montreal", "saopaulo", "custom"],
+            Self::ScraperSource => &["screenscraper"],
+            Self::ScraperMedia => &["box", "box,screenshot", "box,screenshot,wheel"],
             _ => &[],
         }
     }
@@ -214,6 +222,19 @@ pub struct Row {
     pub label: &'static str,
     pub subtitle: Option<&'static str>,
     pub kind: Kind,
+    /// Non-selectable heading drawn above this row.
+    pub section: Option<&'static str>,
+}
+impl Row {
+    const fn under(self, section: &'static str) -> Self {
+        Self {
+            section: Some(section),
+            ..self
+        }
+    }
+    const fn kind(self, kind: Kind) -> Self {
+        Self { kind, ..self }
+    }
 }
 const fn row(id: Id, label: &'static str, kind: Kind) -> Row {
     Row {
@@ -221,6 +242,7 @@ const fn row(id: Id, label: &'static str, kind: Kind) -> Row {
         label,
         subtitle: None,
         kind,
+        section: None,
     }
 }
 const fn slider(id: Id, label: &'static str, min: u8) -> Row {
@@ -266,7 +288,8 @@ const REGION: &[Row] = &[
         Id::KeyboardLayout,
         "settings.keyboard_layout",
         "settings.keyboard_detail",
-    ),
+    )
+    .under("settings.keyboard_section"),
     row(
         Id::KeyboardVariant,
         "settings.keyboard_variant",
@@ -310,20 +333,27 @@ pub enum Effect {
     Scan,
     Connect(String, String),
     Forget(String),
+    Login(String, String),
+    Scrape,
+    CancelScrape,
 }
-#[derive(Clone, Default)]
-pub struct InfoCard {
-    pub title: &'static str,
-    pub lines: Vec<String>,
-    pub percent: Option<u8>,
-}
-#[derive(Clone, Default)]
-pub struct Information {
-    pub version: String,
-    pub device: String,
-    pub kernel: String,
-    pub uptime: String,
-    pub cards: Vec<InfoCard>,
+/// ScreenScraper state mirrored from the host's engine job.
+#[derive(Clone, Debug, Default)]
+pub struct Scrape {
+    /// This build carries the developer credential.
+    pub available: bool,
+    pub user: String,
+    /// Allowed threads after a verified login, 0 when unknown.
+    pub threads: usize,
+    pub verifying: bool,
+    pub running: bool,
+    pub system: String,
+    pub done: usize,
+    pub total: usize,
+    pub scraped: usize,
+    pub missing: usize,
+    /// Locale key describing how the last run ended.
+    pub outcome: Option<&'static str>,
 }
 #[derive(Clone)]
 pub struct Settings {
@@ -331,17 +361,24 @@ pub struct Settings {
     pub cursor: usize,
     pub values: BTreeMap<Id, String>,
     pub options: BTreeMap<Id, Vec<String>>,
+    /// Display names for option codes (keyboard layouts, systems).
+    pub labels: BTreeMap<(Id, String), String>,
     pub pending: Option<Id>,
     pub loading: bool,
     pub error: Option<(Option<Id>, String)>,
     pub reboot_prompt: bool,
     pub info: Information,
     pub networks: Vec<Network>,
+    pub scanned: Option<Instant>,
+    /// SSID being joined; input waits for the host's reply.
+    pub connecting: Option<String>,
+    pub confirm_forget: Option<String>,
     pub keyboard: Option<Keyboard>,
     pub keyboard_target: Option<Id>,
     pub wifi_ssid: String,
     pub wifi_hidden: bool,
     pub access_ip: String,
+    pub scrape: Scrape,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -353,23 +390,31 @@ impl Default for Settings {
                 .into_iter()
                 .map(|id| (id, id.choices().iter().map(|v| (*v).into()).collect()))
                 .collect(),
+            labels: BTreeMap::new(),
             pending: None,
             loading: true,
             error: None,
             reboot_prompt: false,
             info: Information::default(),
             networks: Vec::new(),
+            scanned: None,
+            connecting: None,
+            confirm_forget: None,
             keyboard: None,
             keyboard_target: None,
             wifi_ssid: String::new(),
             wifi_hidden: false,
             access_ip: String::new(),
+            scrape: Scrape::default(),
         }
     }
 }
 impl Settings {
     pub fn display_value(&self, id: Id, catalog: &crate::i18n::I18n) -> String {
         let value = self.value(id);
+        if let Some(label) = self.labels.get(&(id, value.to_owned())) {
+            return label.clone();
+        }
         let key = match (id, value) {
             (Id::Language, "en_US") => "settings.lang_en",
             (Id::Language, "pt_BR") => "settings.lang_pt",
@@ -384,106 +429,176 @@ impl Settings {
             (Id::Suspend, "mem") => "settings.suspend_mem",
             (Id::Suspend, "freeze") => "settings.suspend_freeze",
             (Id::Suspend, "standby") => "settings.suspend_standby",
-            (
-                Id::Bluetooth
-                | Id::IndexNow
-                | Id::ScraperAccount
-                | Id::ScraperMedia
-                | Id::ScraperStart,
-                _,
-            ) => "settings.soon",
-            (Id::Hidden | Id::ServicesLink | Id::NetplayLink | Id::ScraperLink, _) => {
-                return "›".into()
-            }
+            (Id::IndexNow, _) => "settings.soon",
+            (Id::ScraperAccount, _) => "settings.sign_in",
+            (Id::ScraperStart, _) if self.scrape.running => "settings.cancel_scraping",
+            (Id::ScraperStart, _) => return String::new(),
+            (Id::NetplayLink | Id::ScraperLink, _) => return "›".into(),
             (Id::KeyboardVariant, "") => "menu.default",
+            (Id::ScraperSystems, "") => "settings.all",
             (Id::ClockFormat, "24") => "settings.clock_24",
             (Id::ClockFormat, "12") => "settings.clock_12",
             (Id::UsbMode, "disabled") => "settings.off",
             (Id::UsbMode, "network") => "settings.usb_network",
             (Id::UsbMode, "file_transfer") => "settings.usb_files",
             (Id::Relay, "none") => "settings.off",
+            (Id::NetplayEnabled | Id::Adhoc, "0") => "settings.off",
+            (Id::NetplayEnabled | Id::Adhoc, "1") => "settings.on",
+            (Id::Relay, "nyc") => "settings.relay_nyc",
+            (Id::Relay, "madrid") => "settings.relay_madrid",
+            (Id::Relay, "montreal") => "settings.relay_montreal",
+            (Id::Relay, "saopaulo") => "settings.relay_saopaulo",
+            (Id::Relay, "custom") => "settings.relay_custom",
+            (Id::ScraperSource, _) => return "ScreenScraper".into(),
+            (Id::ScraperMedia, "box") => "settings.media_box",
+            (Id::ScraperMedia, "box,screenshot") => "settings.media_screen",
+            (Id::ScraperMedia, _) => "settings.media_all",
             (Id::Nickname | Id::NetplayHost | Id::CustomServer, "") => "settings.define",
             (_, "") => "settings.unavailable",
             _ => return value.into(),
         };
         catalog.text(key)
     }
+    /// Subtitle text, or a `key|name=value` catalog reference.
+    pub fn subtitle(&self, row: &Row) -> Option<String> {
+        let ip = &self.access_ip;
+        Some(match row.id {
+            Id::Ssh if !ip.is_empty() => format!("settings.ssh_at|ip={ip}"),
+            Id::Http if !ip.is_empty() => format!("settings.http_at|ip={ip}"),
+            Id::ScraperAccount if self.scrape.verifying => "settings.verifying".into(),
+            Id::ScraperAccount if self.scrape.user.is_empty() => "settings.not_signed_in".into(),
+            Id::ScraperAccount if self.scrape.threads > 0 => format!(
+                "settings.account_threads|user={}|count={}",
+                self.scrape.user, self.scrape.threads
+            ),
+            Id::ScraperAccount => self.scrape.user.clone(),
+            _ => row.subtitle?.into(),
+        })
+    }
     pub fn visible_rows(&self) -> Vec<&'static Row> {
         self.page()
             .rows()
             .iter()
-            .filter(|row| {
-                self.page() != Page::Netplay
-                    || (!matches!(
-                        row.id,
-                        Id::NetplayHost
-                            | Id::NetplayPort
-                            | Id::Relay
-                            | Id::CustomServer
-                            | Id::AutoLobby
-                            | Id::OnlyRelay
-                            | Id::MissingGames
-                    ) || self.value(Id::Adhoc) != "1")
-                        && (row.id != Id::CustomServer || self.value(Id::Relay) == "custom")
+            .filter(|row| match row.id {
+                Id::NetplayHost
+                | Id::NetplayPort
+                | Id::Relay
+                | Id::CustomServer
+                | Id::OnlyRelay
+                | Id::MissingGames
+                    if self.value(Id::Adhoc) == "1" =>
+                {
+                    false
+                }
+                Id::CustomServer => self.value(Id::Relay) == "custom",
+                _ => true,
             })
             .collect()
     }
+    /// Disabled rows are drawn muted and accept no input.
+    pub fn disabled(&self, id: Id) -> bool {
+        match id {
+            Id::IndexNow => true,
+            Id::ScraperSource
+            | Id::ScraperAccount
+            | Id::ScraperSystems
+            | Id::ScraperMedia
+            | Id::ScraperMissing
+            | Id::ScraperStart => {
+                !self.scrape.available
+                    || self.scrape.verifying
+                    || (self.scrape.running && id != Id::ScraperStart)
+            }
+            _ => false,
+        }
+    }
     pub fn hints(&self) -> &'static [(HintButton, &'static str)] {
         use HintButton::{Key, Pair};
+        const BACK: &[(HintButton, &str)] = &[(Key('B'), "hint.back")];
+        if self.connecting.is_some() {
+            return &[];
+        }
+        if self.confirm_forget.is_some() {
+            return &[(Key('A'), "settings.forget"), (Key('B'), "hint.cancel")];
+        }
         match self.page() {
-            Page::Wifi => &[
-                (Key('A'), "hint.choose"),
-                (Key('X'), "settings.refresh"),
-                (Key('Y'), "settings.forget"),
-                (Key('B'), "hint.back"),
-            ],
-            Page::Keyboard if self.keyboard_target == Some(Id::WifiSwitch) => &[
-                (Key('A'), "hint.choose"),
-                (Key('X'), "settings.delete"),
-                (Key('Y'), "settings.shift"),
-                (HintButton::Start, "settings.connect"),
-                (Key('B'), "hint.back"),
-            ],
-            Page::Keyboard => &[
-                (Key('A'), "hint.choose"),
-                (Key('X'), "settings.delete"),
-                (Key('Y'), "settings.shift"),
-                (HintButton::Start, "hint.confirm"),
-                (Key('B'), "hint.back"),
-            ],
             Page::Root => &[
                 (Key('A'), "hint.open"),
                 (Key('B'), "hint.back"),
                 (Key('Y'), "settings.info_short"),
             ],
-            Page::Scraper => &[(Key('B'), "hint.back")],
-            Page::Netplay
+            Page::Info => &[(Key('A'), "settings.details"), (Key('B'), "hint.back")],
+            Page::InfoDetail(_) => &[
+                (Pair('L', 'R'), "settings.previous_next"),
+                (Key('B'), "hint.back"),
+            ],
+            Page::Keyboard
                 if self
-                    .visible_rows()
-                    .get(self.cursor)
-                    .is_some_and(|row| row.id == Id::IndexNow) =>
+                    .keyboard
+                    .as_ref()
+                    .is_some_and(|k| k.mode == crate::keyboard::Mode::Secret) =>
             {
-                &[(Key('B'), "hint.back")]
-            }
-            _ => match self.visible_rows().get(self.cursor).map(|r| r.kind) {
-                Some(Kind::Action) => &[(Key('A'), "hint.choose"), (Key('B'), "hint.back")],
-                Some(Kind::Toggle) => &[
-                    (Pair('L', 'R'), "settings.change"),
-                    (Key('A'), "hint.choose"),
+                &[
+                    (Key('A'), "settings.type"),
+                    (Key('Y'), "settings.delete"),
+                    (Key('X'), "settings.show"),
+                    (HintButton::Start, "settings.connect"),
                     (Key('B'), "hint.back"),
-                ],
-                Some(_) => &[(Pair('L', 'R'), "settings.change"), (Key('B'), "hint.back")],
-                None => &[(Key('B'), "hint.back")],
+                ]
+            }
+            Page::Keyboard => &[
+                (Key('A'), "settings.type"),
+                (Key('Y'), "settings.delete"),
+                (HintButton::Start, "hint.confirm"),
+                (Key('B'), "hint.back"),
+            ],
+            Page::Wifi if self.wifi_network().is_some() => &[
+                (Key('A'), "settings.connect"),
+                (Key('X'), "settings.forget"),
+                (Key('B'), "hint.back"),
+            ],
+            Page::Wifi if self.cursor > 0 => &[(Key('A'), "hint.open"), (Key('B'), "hint.back")],
+            Page::Wifi => &[(Pair('L', 'R'), "settings.change"), (Key('B'), "hint.back")],
+            _ => match self.visible_rows().get(self.cursor) {
+                Some(row) if self.disabled(row.id) => BACK,
+                Some(row) => match row.kind {
+                    Kind::Action => &[(Key('A'), "hint.choose"), (Key('B'), "hint.back")],
+                    Kind::Toggle => &[
+                        (Pair('L', 'R'), "settings.change"),
+                        (Key('A'), "hint.choose"),
+                        (Key('B'), "hint.back"),
+                    ],
+                    _ if Self::text_input(row.id) => {
+                        &[(Key('A'), "settings.edit"), (Key('B'), "hint.back")]
+                    }
+                    _ => &[(Pair('L', 'R'), "settings.change"), (Key('B'), "hint.back")],
+                },
+                None => BACK,
             },
         }
     }
     pub fn page(&self) -> Page {
         self.stack.last().expect("root page").0
     }
+    /// The page below the current one, for breadcrumbs.
+    pub fn parent_page(&self) -> Page {
+        self.stack
+            .len()
+            .checked_sub(2)
+            .map_or(Page::Root, |n| self.stack[n].0)
+    }
     pub fn open(&mut self, page: Page) {
         self.stack.last_mut().expect("root page").1 = self.cursor;
         self.stack.push((page, 0));
         self.cursor = 0;
+    }
+    fn back(&mut self) -> Effect {
+        if self.stack.len() == 1 {
+            return Effect::Close;
+        }
+        self.stack.pop();
+        self.cursor = self.stack.last().expect("root page").1;
+        Effect::None
     }
     pub fn value(&self, id: Id) -> &str {
         self.values
@@ -512,25 +627,13 @@ impl Settings {
                 _ => Effect::None,
             };
         }
+        if let Some(effect) = self.information_input(button) {
+            return effect;
+        }
+        if let Some(effect) = self.page_input(button) {
+            return effect;
+        }
         let page = self.page();
-        if page == Page::Keyboard {
-            return self.handle_keyboard(button);
-        }
-        if page == Page::Wifi {
-            return self.handle_wifi(button);
-        }
-        if page == Page::Scraper {
-            match button {
-                Button::B => {
-                    self.stack.pop();
-                    self.cursor = self.stack.last().expect("parent page").1;
-                }
-                Button::Up => self.cursor = self.cursor.saturating_sub(1),
-                Button::Down => self.cursor = (self.cursor + 1).min(page.rows().len() - 1),
-                _ => {}
-            }
-            return Effect::None;
-        }
         let rows = self.visible_rows();
         let len = if page == Page::Root {
             CATEGORIES.len()
@@ -538,13 +641,7 @@ impl Settings {
             rows.len()
         };
         match button {
-            Button::B => {
-                if self.stack.len() == 1 {
-                    return Effect::Close;
-                }
-                self.stack.pop();
-                self.cursor = self.stack.last().expect("root page").1;
-            }
+            Button::B => return self.back(),
             Button::Up => self.cursor = self.cursor.saturating_sub(1),
             Button::Down => self.cursor = (self.cursor + 1).min(len.saturating_sub(1)),
             Button::Y if page == Page::Root => self.open(Page::Info),
@@ -555,8 +652,11 @@ impl Settings {
                 let Some(row) = rows.get(self.cursor) else {
                     return Effect::None;
                 };
+                if self.disabled(row.id) {
+                    return Effect::None;
+                }
                 if button == Button::A {
-                    if let Some(effect) = self.handle_special(row.id) {
+                    if let Some(effect) = self.activate(row.id) {
                         return effect;
                     }
                 }
@@ -584,10 +684,13 @@ impl Settings {
                         .to_string()
                     }
                     Kind::Value if button != Button::A => {
-                        let Some(options) = self.options.get(&row.id).filter(|v| !v.is_empty())
-                        else {
-                            return Effect::None;
+                        let options = match self.options.get(&row.id).filter(|v| !v.is_empty()) {
+                            Some(options) => options.clone(),
+                            None => row.id.choices().iter().map(|v| (*v).into()).collect(),
                         };
+                        if options.is_empty() {
+                            return Effect::None;
+                        }
                         let index = options.iter().position(|v| v == old).unwrap_or(0);
                         options[(index
                             + if button == Button::L {
@@ -624,19 +727,13 @@ mod tests {
         assert_eq!(CATEGORIES[2].2, Glyph::Controls);
         assert_eq!(CATEGORIES[3].2, Glyph::Play);
     }
-}
-
-#[cfg(test)]
-mod page_tests {
-    use super::*;
     #[test]
-    fn lobby_keys_match_the_independent_netplay_consumer() {
-        assert_eq!(Id::AutoLobby.key(), "netplay.auto_lobby");
+    fn netplay_keys_match_the_lobby_and_launch_consumers() {
+        assert_eq!(Id::Nickname.key(), "global.netplay.nickname");
         assert_eq!(Id::OnlyRelay.key(), "netplay.relay_only");
         assert_eq!(Id::MissingGames.key(), "netplay.show_missing");
-        assert_eq!(Id::CheckIndexes.key(), "netplay.index_at_start");
+        assert_eq!(Id::MissingGames.default_value(), "1");
     }
-
     #[test]
     fn empty_netplay_text_fields_prompt_to_define_instead_of_unavailable() {
         let state = Settings::default();
@@ -648,113 +745,37 @@ mod page_tests {
             );
         }
     }
-
     #[test]
-    fn netplay_text_fields_open_localized_keyboard_and_host_starts_numeric() {
+    fn netplay_hides_server_rows_for_local_play() {
         let mut state = Settings::default();
         state.open(Page::Netplay);
-        state.loading = false;
-        state.cursor = 1;
-        assert_eq!(state.handle(Button::A), Effect::None);
-        assert_eq!(state.keyboard.as_ref().unwrap().title, "settings.nickname");
-        assert!(!state.keyboard.as_ref().unwrap().numeric);
-        state.handle(Button::B);
-        state.cursor = 2;
-        assert_eq!(state.handle(Button::A), Effect::None);
-        assert_eq!(state.keyboard.as_ref().unwrap().title, "settings.host");
-        assert!(state.keyboard.as_ref().unwrap().numeric);
-    }
-
-    #[test]
-    fn keyboard_footer_has_a_start_connect_badge() {
-        let mut state = Settings::default();
-        state.open_keyboard(Id::WifiSwitch, "AP".into(), true, String::new());
-        assert!(state
-            .hints()
-            .contains(&(HintButton::Start, "settings.connect")));
-        state.open_keyboard(
-            Id::NetplayHost,
-            "settings.host".into(),
-            false,
-            String::new(),
-        );
-        assert!(state.hints().contains(&(HintButton::Start, "hint.confirm")));
-    }
-
-    #[test]
-    fn compact_rows_keep_non_selectable_sections_and_real_heights() {
-        let mut state = Settings::default();
-        state.open(Page::Services);
-        let rows = state.compact_rows();
-        assert_eq!(rows[0].section, Some("settings.access"));
-        assert_eq!(rows[0].height, 38.0);
-        assert!(rows[4].top > rows[3].top + rows[3].height);
-        state.open(Page::Netplay);
-        let rows = state.compact_rows();
-        assert_eq!(rows[2].section, Some("settings.connection"));
-        assert_eq!(rows[2].height, 34.0);
-    }
-
-    #[test]
-    fn service_netplay_link_is_an_action_and_wifi_hint_has_no_duplicate_button() {
-        assert_eq!(pages::SERVICES[3].kind, Kind::Action);
-        let mut state = Settings::default();
-        state.open(Page::Wifi);
-        assert_eq!(state.hints()[1].1, "settings.refresh");
-    }
-
-    #[test]
-    fn disabled_scraping_and_index_actions_have_only_back_hint() {
-        let mut state = Settings::default();
-        state.open(Page::Scraper);
-        assert_eq!(state.hints().len(), 1);
-        state.open(Page::Netplay);
-        state.cursor = state.visible_rows().len() - 1;
-        assert_eq!(state.visible_rows()[state.cursor].id, Id::IndexNow);
-        assert_eq!(state.hints().len(), 1);
-        state.cursor = 5;
-        assert_eq!(state.visible_rows()[state.cursor].id, Id::AutoLobby);
-        assert_eq!(state.hints().len(), 3);
-    }
-
-    #[test]
-    fn legacy_wep_network_does_not_offer_a_wpa_password_prompt() {
-        let mut state = Settings::default();
-        state.open(Page::Wifi);
-        state.loading = false;
-        state.networks.push(network::Network {
-            ssid: "Old AP".into(),
-            security: "wep".into(),
-            signal: "33".into(),
-            connected: false,
-            known: false,
-        });
-        state.cursor = 1;
-        assert_eq!(state.handle(Button::A), Effect::None);
-        assert_eq!(state.page(), Page::Wifi);
-    }
-
-    #[test]
-    fn network_routes_to_services_and_netplay() {
-        let mut state = Settings::default();
-        state.open(Page::Wifi);
-        state.loading = false;
-        state.cursor = 3;
-        state.handle(Button::A);
-        assert_eq!(state.page(), Page::Services);
-        state.cursor = 3;
-        state.handle(Button::A);
-        assert_eq!(state.page(), Page::Netplay);
-        state.handle(Button::B);
-        assert_eq!(state.page(), Page::Services);
-    }
-    #[test]
-    fn netplay_hides_host_and_port_for_local_play() {
-        let mut state = Settings::default();
         state.values.insert(Id::Adhoc, "1".into());
         assert!(!state
             .visible_rows()
             .iter()
             .any(|r| matches!(r.id, Id::NetplayHost | Id::NetplayPort)));
+    }
+    #[test]
+    fn disabled_rows_offer_only_back() {
+        let mut state = Settings::default();
+        state.open(Page::Scraper);
+        assert_eq!(state.hints().len(), 1);
+        state.scrape.available = true;
+        assert_eq!(state.hints().len(), 2);
+        state.open(Page::Netplay);
+        state.cursor = state.visible_rows().len() - 1;
+        assert_eq!(state.visible_rows()[state.cursor].id, Id::IndexNow);
+        assert_eq!(state.hints().len(), 1);
+    }
+    #[test]
+    fn value_rows_fall_back_to_their_static_choices() {
+        let mut state = Settings::default();
+        state.open(Page::Region);
+        state.loading = false;
+        state.cursor = 2;
+        assert_eq!(
+            state.handle(Button::R),
+            Effect::Set(Id::ClockFormat, "12".into())
+        );
     }
 }

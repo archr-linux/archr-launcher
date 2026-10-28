@@ -386,3 +386,15 @@ Os testes também validam o bridge de profile Bash para sh e o alvo do hotkey;
 com Python 3 disponível, criam sockets locais para testar sway pronto. Testes
 com RetroArch, standalone, ports e medição da primeira tela continuam sendo
 validações no aparelho, não substituídas pelos testes do host.
+
+## Moonlight
+
+A coleção aparece quando `/usr/bin/moonlight` está instalado. Adicione o IPv4 do
+PC; `A` abre/pareia/inicia, `X` atualiza e `Y` abre opções (salvas ao sair com
+`B`/`Y`). Digite o PIN aleatório exibido no Sunshine; `B` cancela. Desparear também
+esquece o PC; se estiver offline, um aviso informa que o pareamento remoto pode
+permanecer. Para encerrar o stream: Start + Select + L1 + R1 ou Ctrl+Alt+Shift+Q.
+
+Até 16 PCs e as opções ficam em `/storage/.config/archr-launcher/moonlight.cfg`.
+O CLI usa `/storage/.config/moonlight/moonlight.conf` e chaves em
+`/storage/.cache/moonlight`. A resolução inicial acompanha o painel.

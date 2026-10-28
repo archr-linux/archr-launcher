@@ -1,38 +1,48 @@
-//! Settings effects owned by the network and games pages.
+//! Settings effects owned by the network, regional and games pages.
 use super::*;
-use archr_ui::settings::network::{parse_scanlist, Network};
+use archr_ui::settings::network::{parse_scanlist, wpa_valid, Network};
+use std::os::unix::process::CommandExt;
+
+/// wifictl's worst case: scan, connect, hidden-network retry and DHCP wait.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(150);
+
+/// Known wifictl failures become locale keys; the raw text goes to the log.
+fn wifi_error(error: String) -> String {
+    log::warn!("Wi-Fi: {error}");
+    if error.contains("no WiFi interface") {
+        "settings.wifi_no_adapter".into()
+    } else if error.contains("timed out") {
+        "settings.wifi_timeout".into()
+    } else if error.contains("passphrase") {
+        "settings.wpa_length".into()
+    } else {
+        "settings.wifi_connect_failed".into()
+    }
+}
 
 impl Backend {
-    pub(super) fn scan(&self) -> Result<Vec<Network>, String> {
-        self.command("wifictl", &["scanlist", "--detail"])
+    /// Networks and the current address, refreshed together.
+    pub(super) fn scan(&self) -> Result<(Vec<Network>, String), String> {
+        let networks = self
+            .command("wifictl", &["scanlist", "--detail"])
             .map(|output| parse_scanlist(&output))
+            .map_err(wifi_error)?;
+        Ok((networks, self.address()))
+    }
+    pub(super) fn address(&self) -> String {
+        info::ipv4_interface("wlan0").map_or_else(String::new, |(_, ip)| ip)
     }
     pub(super) fn connect(&self, ssid: &str, password: &str) -> Result<(), String> {
-        if ssid.is_empty() || ssid.len() > 128 || ssid.contains(['\n', '\r', '\0']) {
-            return Err("Invalid network name".into());
+        if ssid.is_empty() || ssid.len() > 32 || ssid.contains(['\n', '\r', '\0']) {
+            return Err("settings.wifi_connect_failed".into());
         }
-        if !password.is_empty()
-            && !((8..=63).contains(&password.len())
-                || (password.len() == 64 && password.bytes().all(|b| b.is_ascii_hexdigit())))
-        {
-            return Err("Invalid WPA password".into());
+        if !password.is_empty() && !wpa_valid(password) {
+            return Err("settings.wpa_length".into());
         }
-        // Current wifictl treats an empty third argument as "use wifi.key".
-        // Refuse open-network attempts while a saved PSK exists; wifictl must
-        // distinguish an explicit empty argument from an omitted one.
-        if password.is_empty()
-            && self
-                .cfg()?
-                .get_setting("wifi.key", None, None)
-                .is_some_and(|key| !key.is_empty())
-        {
-            return Err("Cannot connect to open network while a Wi-Fi password is saved".into());
-        }
-        self.command_with_timeout(
-            "wifictl",
-            &["connect", ssid, password],
-            Duration::from_secs(95),
-        )?;
+        // An explicit empty third argument is an open network; wifictl then
+        // clears the saved key itself.
+        self.command_with_timeout("wifictl", &["connect", ssid, password], CONNECT_TIMEOUT)
+            .map_err(wifi_error)?;
         SystemCfg::set_many_and_save(
             &self.paths.config,
             &self.paths.lock,
@@ -42,19 +52,43 @@ impl Backend {
     }
     pub(super) fn forget(&self, ssid: &str) -> Result<(), String> {
         if ssid.is_empty() || ssid.contains(['\n', '\r', '\0']) {
-            return Err("Invalid network name".into());
+            return Err("settings.wifi_connect_failed".into());
         }
         // wifictl owns profile deletion and clears wifi.ssid/key when applicable.
-        self.command("wifictl", &["forget", ssid]).map(|_| ())
+        self.command("wifictl", &["forget", ssid])
+            .map(|_| ())
+            .map_err(wifi_error)
+    }
+    /// Like boot's background reconnect: the reply and the scan never wait for it.
+    fn reconnect_detached(&self) {
+        let mut command = Command::new(self.paths.at("/usr/bin/wifictl"));
+        command
+            .arg("connect")
+            .process_group(0)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        if let Some(root) = &self.paths.root {
+            command.env("ARCHR_LAUNCHER_ROOT", root);
+        }
+        match command.spawn() {
+            Ok(mut child) => {
+                thread::spawn(move || child.wait());
+            }
+            Err(error) => log::warn!("Wi-Fi reconnect not started: {error}"),
+        }
+    }
+    /// `archr-keyboard list-*` prints "code Name" lines.
+    pub(super) fn keyboard_names(&self, args: &[&str]) -> Vec<(String, String)> {
+        self.command("archr-keyboard", args)
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|line| line.trim().split_once(' '))
+            .map(|(code, name)| (code.into(), name.trim().into()))
+            .collect()
     }
     pub(super) fn load_pages(&self, cfg: &SystemCfg, state: &mut Settings) {
-        for page in [
-            Page::Wifi,
-            Page::Services,
-            Page::Netplay,
-            Page::Games,
-            Page::Scraper,
-        ] {
+        for page in [Page::Wifi, Page::Services, Page::Netplay, Page::Scraper] {
             for row in page.rows() {
                 if !row.id.key().is_empty() {
                     if let Some(value) = cfg.get_setting(row.id.key(), None, None) {
@@ -66,51 +100,15 @@ impl Backend {
         if let Ok(mode) = self.command("usbgadget", &[]) {
             state.values.insert(Id::UsbMode, mode);
         }
-        if let Ok(ip) = self.command("hostname", &["-I"]) {
-            state.access_ip = ip.split_whitespace().next().unwrap_or_default().to_owned();
-        }
-        let mut layouts = self
-            .command("archr-keyboard", &["list-layouts"])
-            .unwrap_or_default()
-            .lines()
-            .filter_map(|line| line.split_whitespace().next())
-            .map(str::to_owned)
-            .collect::<Vec<_>>();
-        layouts.push(state.value(Id::KeyboardLayout).into());
-        layouts.sort();
-        layouts.dedup();
-        state.options.insert(Id::KeyboardLayout, layouts);
-        self.load_variants(state);
-        state.options.insert(
-            Id::ClockFormat,
-            Id::ClockFormat
-                .choices()
-                .iter()
-                .map(|v| (*v).into())
-                .collect(),
+        state.access_ip = self.address();
+        keyboard_choices(
+            state,
+            Id::KeyboardLayout,
+            self.keyboard_names(&["list-layouts"]),
         );
-        for id in [Id::Player, Id::Channel, Id::UsbMode, Id::Relay] {
-            state
-                .options
-                .insert(id, id.choices().iter().map(|v| (*v).into()).collect());
-        }
-    }
-    pub(super) fn load_variants(&self, state: &mut Settings) {
         let layout = state.value(Id::KeyboardLayout).to_owned();
-        let mut variants = self.keyboard_variants(&layout);
-        variants.push(String::new());
-        variants.push(state.value(Id::KeyboardVariant).into());
-        variants.sort();
-        variants.dedup();
-        state.options.insert(Id::KeyboardVariant, variants);
-    }
-    pub(super) fn keyboard_variants(&self, layout: &str) -> Vec<String> {
-        self.command("archr-keyboard", &["list-variants", layout])
-            .unwrap_or_default()
-            .lines()
-            .filter_map(|line| line.split_whitespace().next())
-            .map(str::to_owned)
-            .collect()
+        let variants = self.keyboard_names(&["list-variants", &layout]);
+        keyboard_choices(state, Id::KeyboardVariant, variants);
     }
     pub(super) fn apply_page(&self, id: Id, value: &str) -> Option<Result<String, String>> {
         if !matches!(
@@ -132,75 +130,45 @@ impl Backend {
                 | Id::NetplayPort
                 | Id::Relay
                 | Id::CustomServer
-                | Id::AutoLobby
                 | Id::OnlyRelay
                 | Id::MissingGames
-                | Id::CheckIndexes
         ) {
             return None;
         }
         let result = (|| -> Result<String, String> {
+            let choices = id.choices();
             match id {
-                Id::WifiSwitch
-                | Id::Ssh
-                | Id::Samba
-                | Id::Http
-                | Id::Adhoc
-                | Id::NetplayEnabled
-                | Id::AutoLobby
-                | Id::OnlyRelay
-                | Id::MissingGames
-                | Id::CheckIndexes
-                    if !matches!(value, "0" | "1") =>
-                {
-                    Err("Invalid switch value".into())
+                _ if !choices.is_empty() && !choices.contains(&value) => {
+                    Err("Invalid option".into())
                 }
                 Id::Ssh | Id::Samba | Id::Http => self.service(id, value),
                 Id::WifiSwitch => {
                     self.command(
                         "wifictl",
                         &[if value == "1" { "enable" } else { "disable" }],
-                    )?;
+                    )
+                    .map_err(wifi_error)?;
                     self.save(id, value)?;
                     if value == "1" && self.cfg()?.get_setting("wifi.ssid", None, None).is_some() {
-                        if let Err(error) = self.command_with_timeout(
-                            "wifictl",
-                            &["connect"],
-                            Duration::from_secs(95),
-                        ) {
-                            log::warn!("Wi-Fi enabled, saved network reconnect failed: {error}");
-                        }
+                        self.reconnect_detached();
                     }
                     Ok(value.into())
                 }
                 Id::Adhoc | Id::Player | Id::Channel => {
-                    if !id.choices().contains(&value) {
-                        Err("Invalid local play option".into())
-                    } else {
-                        // wifictl reads this key directly; reconnect after publishing.
-                        self.save(id, value)?;
-                        if self
-                            .cfg()?
-                            .get_setting("wifi.enabled", None, None)
-                            .as_deref()
-                            == Some("1")
-                        {
-                            self.command_with_timeout(
-                                "wifictl",
-                                &["reconnect"],
-                                Duration::from_secs(95),
-                            )?;
-                        }
-                        Ok(value.into())
+                    // wifictl reads this key directly; reconnect after publishing.
+                    self.save(id, value)?;
+                    if self
+                        .cfg()?
+                        .get_setting("wifi.enabled", None, None)
+                        .as_deref()
+                        == Some("1")
+                    {
+                        self.command_with_timeout("wifictl", &["reconnect"], CONNECT_TIMEOUT)
+                            .map_err(wifi_error)?;
                     }
+                    Ok(value.into())
                 }
-                Id::UsbMode => {
-                    if !id.choices().contains(&value) {
-                        Err("Invalid USB mode".into())
-                    } else {
-                        self.command("usbgadget", &[value]).map(|_| value.into())
-                    }
-                }
+                Id::UsbMode => self.command("usbgadget", &[value]).map(|_| value.into()),
                 Id::KeyboardLayout | Id::KeyboardVariant => {
                     let cfg = self.cfg()?;
                     let layout = if id == Id::KeyboardLayout {
@@ -211,21 +179,19 @@ impl Backend {
                     };
                     let variant = if id == Id::KeyboardVariant { value } else { "" };
                     if !valid_xkb(&layout) || !valid_xkb(variant) {
-                        Err("Invalid keyboard layout".into())
-                    } else {
-                        self.command("swaymsg", &["input", "*", "xkb_layout", &layout])?;
-                        self.command("swaymsg", &["input", "*", "xkb_variant", variant])?;
-                        SystemCfg::set_many_and_save(
-                            &self.paths.config,
-                            &self.paths.lock,
-                            &[
-                                (Id::KeyboardLayout.key(), layout.as_str()),
-                                (Id::KeyboardVariant.key(), variant),
-                            ],
-                        )
-                        .map_err(|e| e.to_string())?;
-                        Ok(value.into())
+                        return Err("Invalid keyboard layout".into());
                     }
+                    // One sway transaction; clear the variant first so the old
+                    // one never compiles with the new layout. Sway strips the
+                    // quotes of "" and receives an empty variant.
+                    let mut sway = format!("input * xkb_variant \"\"; input * xkb_layout {layout}");
+                    if !variant.is_empty() {
+                        sway += &format!("; input * xkb_variant {variant}");
+                    }
+                    self.command("swaymsg", &[&sway])?;
+                    // archr-keyboard owns system.kblayout and system.kbvariant.
+                    self.command("archr-keyboard", &["set", &layout, variant])?;
+                    Ok(value.into())
                 }
                 Id::NetplayPort => {
                     if value.parse::<u16>().is_ok_and(|port| port > 0) {
@@ -234,30 +200,35 @@ impl Backend {
                         Err("Invalid port".into())
                     }
                 }
-                Id::Nickname | Id::NetplayHost | Id::CustomServer => {
-                    if value.len() > 128 || value.contains(['\n', '\r', '\0']) {
-                        Err("Invalid text".into())
-                    } else {
-                        self.save(id, value).map(|_| value.into())
-                    }
-                }
-                Id::Relay | Id::ClockFormat => {
-                    if id.choices().contains(&value) {
+                Id::Nickname => {
+                    // RetroArch's nickname rule, as the launch handoff applies it.
+                    if value.len() <= 32
+                        && value
+                            .chars()
+                            .all(|c| c.is_ascii_alphanumeric() || " _.".contains(c))
+                    {
                         self.save(id, value).map(|_| value.into())
                     } else {
-                        Err("Invalid option".into())
+                        Err("settings.invalid_nickname".into())
                     }
                 }
-                Id::NetplayEnabled
-                | Id::AutoLobby
-                | Id::OnlyRelay
-                | Id::MissingGames
-                | Id::CheckIndexes => self.save(id, value).map(|_| value.into()),
-                _ => Err("Unsupported setting".into()),
+                Id::NetplayHost | Id::CustomServer => {
+                    if value.len() <= 253
+                        && value
+                            .bytes()
+                            .all(|b| b.is_ascii_alphanumeric() || b".-:".contains(&b))
+                    {
+                        self.save(id, value).map(|_| value.into())
+                    } else {
+                        Err("settings.invalid_address".into())
+                    }
+                }
+                _ => self.save(id, value).map(|_| value.into()),
             }
         })();
         Some(result)
     }
+    /// Marker names and unit lists mirror the distribution's `daemons/*` scripts.
     fn service(&self, id: Id, value: &str) -> Result<String, String> {
         let (marker, units): (&str, &[&str]) = match id {
             Id::Ssh => ("sshd.conf", &["sshd.service"]),
@@ -273,28 +244,41 @@ impl Backend {
             fs::create_dir_all(marker.parent().expect("marker parent"))
                 .map_err(|e| e.to_string())?;
             fs::write(&marker, "").map_err(|e| e.to_string())?;
-        }
-        for unit in if value == "1" {
-            units.to_vec()
-        } else {
-            units.iter().rev().copied().collect::<Vec<_>>()
-        } {
-            if let Err(error) = self.command(
-                "systemctl",
-                &[if value == "1" { "start" } else { "stop" }, unit],
-            ) {
-                if value == "1" {
+            for (n, unit) in units.iter().enumerate() {
+                if let Err(error) = self.command("systemctl", &["start", unit]) {
+                    // Never leave half a service running.
+                    for started in units[..n].iter().rev() {
+                        let _ = self.command("systemctl", &["stop", started]);
+                    }
                     let _ = fs::remove_file(&marker);
+                    return Err(error);
                 }
-                return Err(error);
             }
-        }
-        if value == "0" && marker.exists() {
-            fs::remove_file(&marker).map_err(|e| e.to_string())?;
+        } else {
+            for unit in units.iter().rev() {
+                self.command("systemctl", &["stop", unit])?;
+            }
+            if marker.exists() {
+                fs::remove_file(&marker).map_err(|e| e.to_string())?;
+            }
         }
         self.save(id, value)?;
         Ok(value.into())
     }
+}
+/// Names label the codes; the current value and "default variant" stay choosable.
+pub(super) fn keyboard_choices(state: &mut Settings, id: Id, names: Vec<(String, String)>) {
+    let mut codes = vec![state.value(id).to_owned()];
+    if id == Id::KeyboardVariant {
+        codes.push(String::new());
+    }
+    for (code, name) in names {
+        state.labels.insert((id, code.clone()), name);
+        codes.push(code);
+    }
+    codes.sort();
+    codes.dedup();
+    state.options.insert(id, codes);
 }
 fn valid_xkb(value: &str) -> bool {
     value.len() <= 32
@@ -307,30 +291,38 @@ fn valid_xkb(value: &str) -> bool {
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
-    #[test]
-    fn ssh_toggle_prepares_marker_starts_unit_then_persists() {
+    fn fixture(config: &str) -> (tempfile::TempDir, Paths) {
         let root = tempfile::tempdir().unwrap();
         let paths = Paths::new(Some(root.path().to_owned()));
         fs::create_dir_all(paths.at("/usr/bin")).unwrap();
         fs::create_dir_all(paths.config.parent().unwrap()).unwrap();
         fs::create_dir_all(paths.lock.parent().unwrap()).unwrap();
-        fs::write(&paths.config, "ssh.enabled=0\n").unwrap();
-        let script = paths.at("/usr/bin/systemctl");
+        fs::write(&paths.config, config).unwrap();
+        (root, paths)
+    }
+    /// A fixture command that appends its arguments, one call per line.
+    fn recorder(root: &tempfile::TempDir, paths: &Paths, name: &str, body: &str) {
+        let script = paths.at(&format!("/usr/bin/{name}"));
         fs::write(
             &script,
             format!(
-                "#!/bin/sh\necho \"$1 $2\" >> {}\n",
+                "#!/bin/sh\necho \"{name} $*\" >> {}\n{body}\n",
                 root.path().join("calls").display()
             ),
         )
         .unwrap();
         fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    fn calls(root: &tempfile::TempDir) -> String {
+        fs::read_to_string(root.path().join("calls")).unwrap_or_default()
+    }
+    #[test]
+    fn ssh_toggle_prepares_marker_starts_unit_then_persists() {
+        let (root, paths) = fixture("ssh.enabled=0\n");
+        recorder(&root, &paths, "systemctl", "");
         let backend = Backend::new(paths.clone());
         assert_eq!(backend.apply_page(Id::Ssh, "1"), Some(Ok("1".into())));
-        assert_eq!(
-            fs::read_to_string(root.path().join("calls")).unwrap(),
-            "start sshd.service\n"
-        );
+        assert_eq!(calls(&root), "systemctl start sshd.service\n");
         assert!(paths.at("/var/lib/archr/services/sshd.conf").exists());
         assert_eq!(
             SystemCfg::load(&paths.config)
@@ -341,38 +333,25 @@ mod tests {
         );
     }
     #[test]
-    fn open_network_never_inherits_previous_password() {
-        let root = tempfile::tempdir().unwrap();
-        let paths = Paths::new(Some(root.path().to_owned()));
-        fs::create_dir_all(paths.at("/usr/bin")).unwrap();
-        fs::create_dir_all(paths.config.parent().unwrap()).unwrap();
-        fs::write(&paths.config, "wifi.ssid=Old\nwifi.key=oldpassword\n").unwrap();
-        let command = paths.at("/usr/bin/wifictl");
-        fs::write(
-            &command,
-            format!(
-                "#!/bin/sh\ntouch {}\n",
-                root.path().join("called").display()
-            ),
-        )
-        .unwrap();
-        fs::set_permissions(&command, fs::Permissions::from_mode(0o755)).unwrap();
+    fn failed_samba_start_stops_units_already_started() {
+        let (root, paths) = fixture("samba.enabled=0\n");
+        recorder(
+            &root,
+            &paths,
+            "systemctl",
+            "[ \"$2\" = smbd.service ] && exit 1\nexit 0",
+        );
         let backend = Backend::new(paths.clone());
-        assert!(backend
-            .connect("Guest", "")
-            .unwrap_err()
-            .contains("open network"));
-        assert!(!root.path().join("called").exists());
+        assert!(backend.apply_page(Id::Samba, "1").unwrap().is_err());
+        assert_eq!(
+            calls(&root),
+            "systemctl start nmbd.service\nsystemctl start smbd.service\nsystemctl stop nmbd.service\n"
+        );
+        assert!(!paths.at("/var/lib/archr/services/smb.conf").exists());
     }
-
     #[test]
     fn open_network_passes_explicit_empty_password_argument() {
-        let root = tempfile::tempdir().unwrap();
-        let paths = Paths::new(Some(root.path().to_owned()));
-        fs::create_dir_all(paths.at("/usr/bin")).unwrap();
-        fs::create_dir_all(paths.config.parent().unwrap()).unwrap();
-        fs::create_dir_all(paths.lock.parent().unwrap()).unwrap();
-        fs::write(&paths.config, "wifi.ssid=\nwifi.key=\n").unwrap();
+        let (root, paths) = fixture("wifi.ssid=\nwifi.key=\n");
         let command = paths.at("/usr/bin/wifictl");
         fs::write(
             &command,
@@ -390,17 +369,72 @@ mod tests {
             "3\nconnect\nGuest\n\n"
         );
     }
-
     #[test]
-    fn invalid_port_is_not_published() {
-        let root = tempfile::tempdir().unwrap();
-        let paths = Paths::new(Some(root.path().to_owned()));
-        fs::create_dir_all(paths.config.parent().unwrap()).unwrap();
-        fs::create_dir_all(paths.lock.parent().unwrap()).unwrap();
-        fs::write(&paths.config, "global.netplay.port=55435\n").unwrap();
+    fn wifictl_failures_become_locale_keys() {
+        for (raw, key) in [
+            (
+                "wifictl: exit status: 1; wifictl: no WiFi interface",
+                "settings.wifi_no_adapter",
+            ),
+            ("wifictl: command timed out", "settings.wifi_timeout"),
+            (
+                "wifictl: exit status: 2; wifictl: passphrase has 5 bytes",
+                "settings.wpa_length",
+            ),
+            ("wifictl: exit status: 1; ", "settings.wifi_connect_failed"),
+        ] {
+            assert_eq!(wifi_error(raw.into()), key);
+        }
+        let (_root, paths) = fixture("");
+        assert_eq!(
+            Backend::new(paths).connect(&"x".repeat(33), ""),
+            Err("settings.wifi_connect_failed".into())
+        );
+    }
+    #[test]
+    fn enabling_wifi_returns_before_the_background_reconnect_finishes() {
+        let (root, paths) = fixture("wifi.ssid=Casa\n");
+        recorder(
+            &root,
+            &paths,
+            "wifictl",
+            "[ \"$1\" = connect ] && sleep 3\nexit 0",
+        );
+        let backend = Backend::new(paths);
+        let started = std::time::Instant::now();
+        assert_eq!(
+            backend.apply_page(Id::WifiSwitch, "1"),
+            Some(Ok("1".into()))
+        );
+        assert!(started.elapsed() < Duration::from_secs(2));
+        thread::sleep(Duration::from_millis(300));
+        assert_eq!(calls(&root), "wifictl enable\nwifictl connect\n");
+    }
+    #[test]
+    fn keyboard_layout_clears_variant_in_one_sway_command_then_persists_through_script() {
+        let (root, paths) = fixture("system.kblayout=br\nsystem.kbvariant=abnt2\n");
+        recorder(&root, &paths, "swaymsg", "");
+        recorder(&root, &paths, "archr-keyboard", "");
+        let backend = Backend::new(paths);
+        assert_eq!(
+            backend.apply_page(Id::KeyboardLayout, "us"),
+            Some(Ok("us".into()))
+        );
+        assert_eq!(
+            calls(&root),
+            "swaymsg input * xkb_variant \"\"; input * xkb_layout us\narchr-keyboard set us \n"
+        );
+    }
+    #[test]
+    fn invalid_port_and_nickname_are_not_published() {
+        let (_root, paths) = fixture("global.netplay.port=55435\n");
         let backend = Backend::new(paths.clone());
         assert!(backend
             .apply_page(Id::NetplayPort, "65536")
+            .unwrap()
+            .is_err());
+        assert!(backend
+            .apply_page(Id::Nickname, "bad-name")
             .unwrap()
             .is_err());
         assert_eq!(

@@ -26,10 +26,10 @@ macro_rules! glyphs {
     };
 }
 glyphs! {
+    Cpu => "cpu", Gpu => "monitor", Memory => "memory-stick",
     Recent => "history", Games => "gamepad-2", Tools => "wrench",
     Gear => "settings", Download => "download", Wifi => "wifi",
-    WifiOff => "wifi-off", WifiHigh => "wifi-high", WifiLow => "wifi-low",
-    Lock => "lock", Check => "check", Moon => "moon", Restart => "rotate-cw",
+    WifiOff => "wifi-off", Lock => "lock", Check => "check", Moon => "moon", Restart => "rotate-cw",
     Power => "power", Clock => "clock", Star => "star",
     Battery => "battery", BatteryLow => "battery-low",
     BatteryMedium => "battery-medium", BatteryFull => "battery-full",
@@ -38,7 +38,9 @@ glyphs! {
     Globe => "globe", Palette => "palette", Trophy => "trophy", Storage => "hard-drive",
     ChevronLeft => "chevron-left", ChevronRight => "chevron-right",
     ArrowUpDown => "arrow-up-down", ChevronsUpDown => "chevrons-up-down",
-    Shift => "arrow-big-up", Backspace => "delete",
+    Shift => "arrow-big-up", Backspace => "delete", Eye => "eye", EyeOff => "eye-off",
+    Signal => "signal", SignalLow => "signal-low", SignalMedium => "signal-medium",
+    SignalHigh => "signal-high",
 }
 
 #[link(name = "SDL2_image")]
@@ -205,7 +207,12 @@ mod tests {
             let svg = glyph.embedded();
             let normalized = normalize_dots(svg);
             let added = match glyph {
-                Glyph::Wifi | Glyph::WifiOff | Glyph::WifiHigh | Glyph::WifiLow => 1,
+                Glyph::Wifi
+                | Glyph::WifiOff
+                | Glyph::Signal
+                | Glyph::SignalLow
+                | Glyph::SignalMedium
+                | Glyph::SignalHigh => 1,
                 Glyph::Controls | Glyph::Games | Glyph::Storage => 2,
                 _ => 0,
             };
