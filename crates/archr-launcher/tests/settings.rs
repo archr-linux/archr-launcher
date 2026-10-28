@@ -203,7 +203,7 @@ fn information_distinguishes_active_driver_and_detects_hardware_and_metrics() {
         .rows
         .iter()
         .any(|(key, value)| *key == "settings.uptime_label"
-            && value == "settings.duration_hours|count=2"));
+            && value == "settings.duration_hours|hours=2|minutes=3"));
     assert_eq!(info.cards.len(), 6);
     assert_eq!(info.cards[0].detail.heading, "Example x86 CPU");
     assert!(info.cards[0]

@@ -241,13 +241,13 @@ fn default_interface(routes: &str) -> &str {
         .unwrap_or("")
 }
 fn uptime(seconds: u64, summary: bool) -> String {
-    let (key, count) = match (seconds >= 3600, summary) {
-        (true, false) => ("settings.duration_hours", seconds / 3600),
-        (false, false) => ("settings.duration_minutes", seconds / 60),
-        (true, true) => ("settings.uptime_summary_hours", seconds / 3600),
-        (false, true) => ("settings.uptime_summary_minutes", seconds / 60),
-    };
-    format!("{key}|count={count}")
+    let (hours, minutes) = (seconds / 3600, seconds % 3600 / 60);
+    match (hours > 0, summary) {
+        (true, false) => format!("settings.duration_hours|hours={hours}|minutes={minutes}"),
+        (true, true) => format!("settings.uptime_summary_hours|hours={hours}|minutes={minutes}"),
+        (false, false) => format!("settings.duration_minutes|count={minutes}"),
+        (false, true) => format!("settings.uptime_summary_minutes|count={minutes}"),
+    }
 }
 fn mhz(value: Option<u64>, divisor: u64) -> String {
     value
@@ -907,12 +907,22 @@ mod tests {
         );
         assert_eq!(default_interface("eth0 00000000 0103A8C0 0003"), "eth0");
         assert_eq!(default_interface("eth0 00000000 0103A8C0 0001"), "");
-        assert_eq!(uptime(7380, false), "settings.duration_hours|count=2");
+        assert_eq!(
+            uptime(7380, false),
+            "settings.duration_hours|hours=2|minutes=3"
+        );
+        assert_eq!(
+            uptime(10799, false),
+            "settings.duration_hours|hours=2|minutes=59"
+        );
         assert_eq!(
             uptime(3540, true),
             "settings.uptime_summary_minutes|count=59"
         );
-        assert_eq!(uptime(7380, true), "settings.uptime_summary_hours|count=2");
+        assert_eq!(
+            uptime(7380, true),
+            "settings.uptime_summary_hours|hours=2|minutes=3"
+        );
     }
     #[test]
     fn ipv4_lookup_never_returns_loopback() {

@@ -165,5 +165,18 @@ mod tests {
                 format!("RK · {count} {noun}")
             );
         }
+        for (tag, want) in [
+            ("settings.duration_hours|hours=2|minutes=59", "2 ч 59 мин"),
+            (
+                "settings.uptime_summary_hours|hours=2|minutes=59",
+                "работает 2 ч 59 мин",
+            ),
+            (
+                "settings.uptime_summary_minutes|count=59",
+                "работает 59 мин",
+            ),
+        ] {
+            assert_eq!(value(&catalog, tag), want);
+        }
     }
 }
