@@ -81,15 +81,7 @@ pub fn load_systems(es_systems: &Path) -> Result<Vec<SystemDef>, IndexError> {
 }
 
 fn read_system<R: BufRead>(reader: &mut Reader<R>) -> Result<SystemDef, IndexError> {
-    let mut system = SystemDef {
-        name: String::new(),
-        fullname: String::new(),
-        manufacturer: String::new(),
-        release: String::new(),
-        path: PathBuf::new(),
-        extensions: Vec::new(),
-        emulators: Vec::new(),
-    };
+    let mut system = SystemDef::default();
     read_children(reader, b"system", |reader, child| {
         match child.name().as_ref() {
             b"name" => system.name = read_text(reader)?,

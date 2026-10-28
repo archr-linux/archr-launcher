@@ -305,29 +305,22 @@ impl Ui<'_, '_> {
             return self.geometry.icon(&mut self.canvas, glyph, icon, ink);
         }
         let text = short_name(name);
-        let glyphs: Vec<String> = text.chars().map(String::from).collect();
-        let avail = rect.width() as f32 - self.px(24.) as f32;
-        let advance = |ui: &mut Self, size: f32| -> Result<Vec<f32>, String> {
-            glyphs
-                .iter()
-                .map(|g| Ok(ui.measure(g, face, size)? as f32 - 0.06 * size))
-                .collect()
-        };
-        let natural: f32 = advance(self, size)?.iter().sum();
-        let size = (size * (avail / natural).min(1.)).floor().max(24.);
-        let advances = advance(self, size)?;
-        let mut x = rect.right() as f32 - self.px(12.) as f32 - advances.iter().sum::<f32>();
-        let line = (size * 1.25) as u32;
-        for (glyph, step) in glyphs.iter().zip(advances) {
-            let w = (step + 0.06 * size).ceil().max(1.) as u32;
-            self.label(
-                glyph,
-                (face, size, ink),
-                Rect::new(x as i32, rect.y() + self.px(22.), w, line),
-            )?;
-            x += step;
-        }
-        Ok(())
+        let width = rect.width().saturating_sub(self.px(24.) as u32);
+        let natural = self.measure(&text, face, size)?.max(1);
+        let size = (size * (width as f32 / natural as f32).min(1.))
+            .floor()
+            .max(12.);
+        self.label_aligned(
+            &text,
+            (face, size, ink),
+            Rect::new(
+                rect.x() + self.px(12.),
+                rect.y() + self.px(22.),
+                width,
+                self.px(size * 1.25) as u32,
+            ),
+            Align::Right,
+        )
     }
 
     fn panel_text(
@@ -387,44 +380,22 @@ impl Ui<'_, '_> {
         }
         let maker = data
             .manufacturer(name)
-            .map(|(maker, year)| [maker, year])
-            .map(|parts| {
-                parts
+            .map(|(maker, year)| {
+                [maker, year]
                     .into_iter()
-                    .filter(|p| !p.is_empty())
+                    .filter(|part| !part.is_empty())
                     .collect::<Vec<_>>()
+                    .join(" · ")
+                    .to_uppercase()
             })
-            .filter(|parts| !parts.is_empty())
-            .map(|parts| parts.join(" · ").to_uppercase());
+            .filter(|maker| !maker.is_empty());
         if let Some(maker) = maker {
             bottom -= self.px(18.);
-            self.spaced(&maker, (x, bottom, width), theme.muted)?;
-        }
-        Ok(())
-    }
-
-    /// 12 px muted caps with 0.12 em tracking; plain (ellipsized) when too wide.
-    fn spaced(
-        &mut self,
-        text: &str,
-        (x, y, width): (i32, i32, u32),
-        ink: Rgba,
-    ) -> Result<(), String> {
-        let style = (Face::Regular, 12., ink);
-        let gap = self.px(12.) as f32 * 0.12;
-        let glyphs: Vec<String> = text.chars().map(String::from).collect();
-        let mut advances = Vec::new();
-        for glyph in &glyphs {
-            advances.push(self.measure(glyph, style.0, style.1)? as f32 + gap);
-        }
-        let h = self.px(16.) as u32;
-        if advances.iter().sum::<f32>() > width as f32 {
-            return self.label_aligned(text, style, Rect::new(x, y, width, h), Align::Left);
-        }
-        let mut at = x as f32;
-        for (glyph, step) in glyphs.iter().zip(advances) {
-            self.label(glyph, style, Rect::new(at as i32, y, step.ceil() as u32, h))?;
-            at += step;
+            self.label(
+                &maker,
+                (Face::Regular, 12., theme.muted),
+                Rect::new(x, bottom, width, self.px(16.) as u32),
+            )?;
         }
         Ok(())
     }
