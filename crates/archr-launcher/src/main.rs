@@ -179,6 +179,7 @@ fn run(
     let (width, height) = ui.canvas.output_size()?;
     let mut settings = archr_launcher::settings::Runtime::new(paths.clone());
     let mut rooms = netplay::Runtime::new(paths.clone());
+    let mut was_browsing = true;
     let mut covers = CoverCache::new(
         &creator,
         paths.cache.join("thumbs"),
@@ -225,6 +226,16 @@ fn run(
         }
         if let Some(lobby) = &mut ui.lobby {
             dirty |= rooms.poll(lobby);
+        }
+        // No change notification exists: re-read `global.netplay` on returning
+        // to the systems screen (e.g. from the settings pages).
+        let browsing = app.screen == Screen::Systems && !settings.active && ui.lobby.is_none();
+        if browsing && !was_browsing {
+            rooms.recheck();
+        }
+        was_browsing = browsing;
+        if let Some(on) = rooms.enabled() {
+            app.netplay = on;
         }
         dirty |= ui.tick() || ui.animating();
         let selected_system = if app.screen == Screen::Systems {

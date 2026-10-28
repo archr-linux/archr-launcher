@@ -17,6 +17,7 @@ fn room(group: Group, game: &str, rom: Rom, join: bool) -> Room {
         core: "snes9x".into(),
         relay: String::new(),
         latency_ms: Some(38),
+        locked: game.starts_with('S'),
         rom,
         join: join.then(|| Join {
             game: game.into(),
@@ -131,4 +132,17 @@ fn every_locale_renders_the_lobby_and_menu_without_warnings() {
         });
         ui.draw(&app, &data, &theme, None).unwrap();
     }
+}
+
+#[test]
+fn theme_carries_status_colours() {
+    let theme = Theme::builtin();
+    assert_eq!(
+        (theme.success.r, theme.success.g, theme.success.b),
+        (0x3F, 0xB9, 0x50)
+    );
+    assert_eq!(
+        (theme.warning.r, theme.warning.g, theme.warning.b),
+        (0xD2, 0x99, 0x22)
+    );
 }

@@ -63,6 +63,7 @@ pub struct Entry {
     pub port: u16,
     pub relay: Option<(String, u16)>,
     pub lan: bool,
+    pub locked: bool,
     pub latency_ms: Option<u32>,
 }
 
@@ -90,6 +91,7 @@ pub fn parse_lobby(json: &str) -> Result<Vec<Entry>, String> {
                 ip: text("ip"),
                 port: port("port"),
                 // host_method 3 is the MITM relay: clients dial the relay session.
+                locked: f["has_password"] == true || f["has_spectate_password"] == true,
                 relay: (f["host_method"] == 3).then(|| (text("mitm_ip"), port("mitm_port"))),
                 ..Entry::default()
             }
@@ -124,6 +126,7 @@ pub fn parse_lan(packet: &[u8], from: &str) -> Option<Entry> {
         ip: from.to_owned(),
         port: u16::try_from(word(8)).ok()?,
         lan: true,
+        locked: word(12) != 0,
         ..Entry::default()
     })
 }
@@ -259,8 +262,40 @@ pub fn resolve(
             .map(|(ip, _)| ip.clone())
             .unwrap_or_default(),
         latency_ms: entry.latency_ms,
+        locked: entry.locked,
         rom,
         join,
+    }
+}
+
+/// The two ES room filters. Unset `show_missing` keeps unavailable rooms visible.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Filters {
+    pub relay_only: bool,
+    pub show_missing: bool,
+}
+impl Filters {
+    /// Accepts the settings page's names and ES's own (`NetPlayShow...`).
+    pub fn from_config(config: &SystemCfg) -> Self {
+        let flag = |keys: [&str; 2], default| {
+            keys.iter()
+                .find_map(|key| config.get_setting(key, None, None))
+                .map_or(default, |v| matches!(v.as_str(), "1" | "true"))
+        };
+        Self {
+            relay_only: flag(
+                ["netplay.relay_only", "NetPlayShowOnlyRelayServerGames"],
+                false,
+            ),
+            show_missing: flag(["netplay.show_missing", "NetPlayShowMissingGames"], true),
+        }
+    }
+    /// ES applied the relay filter to internet rooms only.
+    pub fn keeps_entry(self, entry: &Entry) -> bool {
+        entry.lan || !self.relay_only || entry.relay.is_some()
+    }
+    pub fn keeps_room(self, room: &Room) -> bool {
+        self.show_missing || room.group != Group::Unavailable
     }
 }
 
@@ -362,8 +397,16 @@ pub fn refresh(paths: &Paths) -> (Vec<Room>, bool) {
     if let Err(error) = &online {
         log::warn!("Netplay lobby unavailable: {error}");
     }
+    let filters = config.as_ref().map_or(
+        Filters {
+            relay_only: false,
+            show_missing: true,
+        },
+        Filters::from_config,
+    );
     let mut entries = lan.join().unwrap_or_default();
     entries.extend(online.unwrap_or_default());
+    entries.retain(|entry| filters.keeps_entry(entry));
     let locals: Vec<_> = definitions(paths)
         .unwrap_or_default()
         .iter()
@@ -387,6 +430,7 @@ pub fn refresh(paths: &Paths) -> (Vec<Room>, bool) {
     let rooms = entries
         .iter()
         .map(|e| resolve(e, &locals, &mut hash))
+        .filter(|room| filters.keeps_room(room))
         .collect();
     (arrange(rooms), failed)
 }
@@ -395,12 +439,14 @@ pub fn refresh(paths: &Paths) -> (Vec<Room>, bool) {
 pub struct Runtime {
     paths: Paths,
     pending: Option<Receiver<(Vec<Room>, bool)>>,
+    enabled: Option<Receiver<bool>>,
 }
 impl Runtime {
     pub fn new(paths: Paths) -> Self {
         Self {
             paths,
             pending: None,
+            enabled: None,
         }
     }
     pub fn refresh(&mut self) {
@@ -419,6 +465,24 @@ impl Runtime {
         self.pending = None;
         lobby.set(rooms, failed);
         true
+    }
+    /// Re-read `global.netplay` off the UI thread; the answer comes from `enabled`.
+    pub fn recheck(&mut self) {
+        let (send, receive) = channel();
+        let config = self.paths.config.clone();
+        std::thread::spawn(move || {
+            let on = SystemCfg::load(&config)
+                .ok()
+                .and_then(|cfg| cfg.get_setting("netplay", None, None))
+                .is_some_and(|value| value == "1");
+            let _ = send.send(on);
+        });
+        self.enabled = Some(receive);
+    }
+    pub fn enabled(&mut self) -> Option<bool> {
+        let answer = self.enabled.as_ref()?.try_recv().ok()?;
+        self.enabled = None;
+        Some(answer)
     }
     pub fn close(&mut self) {
         self.pending = None;

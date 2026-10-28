@@ -2,18 +2,6 @@
 use super::{selection, Align, Face, Glyph, Rect, Rgba, Theme, Ui};
 use crate::netplay::{Group, Lobby, Rom, Room};
 
-const GREEN: Rgba = Rgba {
-    r: 0x3F,
-    g: 0xB9,
-    b: 0x50,
-    a: 255,
-};
-const AMBER: Rgba = Rgba {
-    r: 0xD2,
-    g: 0x99,
-    b: 0x22,
-    a: 255,
-};
 const ROW: f32 = 46.;
 const HEADER: f32 = 22.;
 const LIST: (f32, f32, f32, f32) = (16., 48., 378., 378.);
@@ -151,6 +139,7 @@ impl Ui<'_, '_> {
             )?;
         }
         let ink = selection(selected, theme.text, theme.highlight_text);
+        let sub_ink = selection(selected, theme.muted, theme.accent_text_secondary);
         let status = self.catalog.text(room.rom.label());
         let status_ink = if selected {
             theme.highlight_text
@@ -164,7 +153,18 @@ impl Ui<'_, '_> {
             u32::MAX,
             Align::Left,
         )?;
-        let text_w = (status_x - rect.x() - self.px(24.)).max(1) as u32;
+        let mut text_end = status_x;
+        if room.locked {
+            let icon = Rect::new(
+                status_x - self.px(22.),
+                rect.y() + self.px(16.),
+                self.px(14.) as u32,
+                self.px(14.) as u32,
+            );
+            self.icon(Glyph::Lock, icon, sub_ink)?;
+            text_end = icon.x();
+        }
+        let text_w = (text_end - rect.x() - self.px(24.)).max(1) as u32;
         let face = selection(selected, Face::Regular, Face::Semibold);
         self.label(
             &room.game,
@@ -177,7 +177,6 @@ impl Ui<'_, '_> {
             ),
         )?;
         let sub = format!("{} · {}", room.host, room.place);
-        let sub_ink = selection(selected, theme.muted, theme.accent_text_secondary);
         self.label(
             &sub,
             (Face::Regular, 12., sub_ink),
@@ -314,8 +313,8 @@ impl Ui<'_, '_> {
 
 fn rom_ink(rom: Rom, theme: &Theme) -> Rgba {
     match rom {
-        Rom::Same => GREEN,
-        Rom::Different | Rom::Unknown => AMBER,
+        Rom::Same => theme.success,
+        Rom::Different | Rom::Unknown => theme.warning,
         Rom::NoRom | Rom::NoCore => theme.dim_text,
     }
 }

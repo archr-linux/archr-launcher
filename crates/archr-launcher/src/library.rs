@@ -289,7 +289,7 @@ impl Library {
                 let runemu = self.paths.at("/usr/bin/runemu.sh");
                 let game = (&*join.system, &*join.core, &*join.emulator, controllers);
                 let peer = (&*join.ip, join.port, &*nickname);
-                let command = netplay_command(&runemu, &join.rom, game, peer)
+                let command = netplay_command(&runemu, &join.rom, game, peer, join.spectate)
                     .map_err(|error| error.to_string())?;
                 self.flush_store()?;
                 write_next(&self.paths.run, &command).map_err(|error| error.to_string())?;

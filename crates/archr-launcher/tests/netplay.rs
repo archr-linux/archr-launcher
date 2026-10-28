@@ -1,6 +1,6 @@
 use archr_launcher::{
     handoff::netplay_command,
-    netplay::{arrange, parse_lan, parse_lobby, resolve, Entry, Local},
+    netplay::{arrange, parse_lan, parse_lobby, resolve, Entry, Filters, Local},
 };
 use archr_ui::netplay::{Group, Rom};
 use std::{
@@ -11,7 +11,7 @@ use std::{
 };
 
 const LOBBY: &str = r#"[
- {"model":"x","fields":{"username":"marcos","game_name":"Super Mario World (USA)","game_crc":"B19ED489","core_name":"Snes9x","country":"br","ip":"203.0.113.9","port":55435,"host_method":2,"has_password":false}},
+ {"model":"x","fields":{"username":"marcos","game_name":"Super Mario World (USA)","game_crc":"B19ED489","core_name":"Snes9x","country":"br","ip":"203.0.113.9","port":55435,"host_method":2,"has_password":true}},
  {"fields":{"username":"lu","game_name":"Sonic the Hedgehog 2","game_crc":"00000000","core_name":"Genesis Plus GX","country":"es","ip":"1.2.3.4","port":55435,"host_method":3,"mitm_ip":"198.51.100.7","mitm_port":55436,"mitm_session":"abc"}},
  {"fields":{"username":"rafa","game_name":"Tekken 3","game_crc":"11111111","core_name":"Beetle PSX","country":"ca","ip":"5.6.7.8","port":1}},
  {"nofields":true}
@@ -208,6 +208,7 @@ fn join_line_passes_untrusted_values_only_through_the_environment() {
         Path::new("/roms/it's $x.sfc"),
         ("snes", "snes9x", "retroarch", "pad 1"),
         ("203.0.113.9", 55435, nick),
+        false,
     )
     .unwrap();
     let (assignments, command) = line.split_once("; '/").unwrap();
@@ -251,6 +252,7 @@ fn join_line_refuses_addresses_that_could_forge_runemu_arguments() {
             Path::new("/r"),
             ("s", "c", "e", ""),
             (ip, 1, "n"),
+            false,
         );
         assert!(error.is_err(), "{ip}");
     }
@@ -258,7 +260,8 @@ fn join_line_refuses_addresses_that_could_forge_runemu_arguments() {
         Path::new("/usr/bin/runemu.sh"),
         Path::new("/r"),
         ("s", "c", "e", ""),
-        ("h.example", 0, "n")
+        ("h.example", 0, "n"),
+        false
     )
     .is_err());
 }
@@ -299,4 +302,78 @@ fn refresh_downloads_the_lobby_and_matches_the_installed_library() {
     fs::remove_file(root.join("usr/bin/curl")).unwrap();
     let (rooms, failed) = archr_launcher::netplay::refresh(&paths);
     assert!(failed && rooms.is_empty());
+}
+
+#[test]
+fn locked_rooms_spectate_flag_and_filters() {
+    let entries = parse_lobby(LOBBY).unwrap();
+    assert_eq!(
+        entries.iter().map(|e| e.locked).collect::<Vec<_>>(),
+        [true, false, false]
+    );
+    let line = |spectate| {
+        netplay_command(
+            Path::new("/usr/bin/runemu.sh"),
+            Path::new("/r"),
+            ("s", "c", "e", ""),
+            ("h.example", 1, "n"),
+            spectate,
+        )
+        .unwrap()
+    };
+    assert!(line(true).ends_with(" --nick \"$ARCHR_NP_NICK\" --spectate"));
+    assert!(!line(false).contains("--spectate"));
+    let relay_only = Filters {
+        relay_only: true,
+        show_missing: false,
+    };
+    assert_eq!(
+        entries.iter().filter(|e| relay_only.keeps_entry(e)).count(),
+        1
+    );
+    let lan = Entry {
+        lan: true,
+        ..Entry::default()
+    };
+    assert!(relay_only.keeps_entry(&lan));
+    let locals = [local("snes", &[("retroarch", "snes9x")], &[])];
+    let missing = resolve(&entries[0], &locals, &mut |_: &Path| None);
+    assert!(missing.locked && missing.group == Group::Unavailable);
+    assert!(!relay_only.keeps_room(&missing));
+    assert!(Filters {
+        relay_only: false,
+        show_missing: true
+    }
+    .keeps_room(&missing));
+}
+
+#[test]
+fn filters_read_both_setting_names_and_default_to_showing_missing() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("system.cfg");
+    let load = |text: &str| {
+        fs::write(&path, text).unwrap();
+        Filters::from_config(&archr_config::SystemCfg::load(&path).unwrap())
+    };
+    assert_eq!(
+        load(""),
+        Filters {
+            relay_only: false,
+            show_missing: true
+        }
+    );
+    assert_eq!(
+        load("global.netplay.relay_only=1\nglobal.netplay.show_missing=0\n"),
+        Filters {
+            relay_only: true,
+            show_missing: false
+        }
+    );
+    assert_eq!(
+        load("global.NetPlayShowOnlyRelayServerGames=true\nglobal.NetPlayShowMissingGames=false\n"),
+        Filters {
+            relay_only: true,
+            show_missing: false
+        }
+    );
 }

@@ -68,6 +68,8 @@ pub struct Room {
     /// Relay (MITM) name; empty when the room is reached directly.
     pub relay: String,
     pub latency_ms: Option<u32>,
+    /// Password-protected (play or spectate).
+    pub locked: bool,
     pub rom: Rom,
     /// Present only when the game and core are installed and the address is valid.
     pub join: Option<Join>,
