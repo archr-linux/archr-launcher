@@ -557,13 +557,28 @@ impl Settings {
                 (HintButton::Start, "hint.confirm"),
                 (Key('B'), "hint.back"),
             ],
-            Page::Wifi if self.wifi_network().is_some() => &[
-                (Key('A'), "settings.connect"),
-                (Key('X'), "settings.forget"),
-                (Key('B'), "hint.back"),
-            ],
-            Page::Wifi if self.cursor > 0 => &[(Key('A'), "hint.open"), (Key('B'), "hint.back")],
-            Page::Wifi => &[(Pair('L', 'R'), "settings.change"), (Key('B'), "hint.back")],
+            Page::Wifi => match self.wifi_network() {
+                Some(network) if network.known || network.connected => &[
+                    (Key('A'), "settings.connect"),
+                    (Key('X'), "settings.forget"),
+                    (Key('B'), "hint.back"),
+                ],
+                Some(_) => &[
+                    (Key('A'), "settings.connect"),
+                    (Key('X'), "settings.refresh"),
+                    (Key('B'), "hint.back"),
+                ],
+                None if self.cursor > 0 => &[
+                    (Key('A'), "hint.open"),
+                    (Key('X'), "settings.refresh"),
+                    (Key('B'), "hint.back"),
+                ],
+                None => &[
+                    (Pair('L', 'R'), "settings.change"),
+                    (Key('X'), "settings.refresh"),
+                    (Key('B'), "hint.back"),
+                ],
+            },
             _ => match self.visible_rows().get(self.cursor) {
                 Some(row) if self.disabled(row.id) => BACK,
                 Some(row) => match row.kind {

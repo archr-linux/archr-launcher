@@ -6,6 +6,8 @@ use crate::{
 };
 use archr_ui::settings::{Effect, Page, Settings};
 use std::time::{Duration, Instant};
+/// Active radio scans are not free: refresh an open Wi-Fi page once a minute.
+const SCAN_INTERVAL: Duration = Duration::from_secs(60);
 pub struct Runtime {
     pub state: Settings,
     pub active: bool,
@@ -70,7 +72,8 @@ impl Runtime {
         match self.state.handle(button) {
             Effect::Close => self.active = false,
             Effect::Set(id, value) => self.send(Work::Set(id, value)),
-            Effect::Scan => self.send(Work::Scan),
+            // Radio scans: on entry, on X, and every minute while open.
+            Effect::Scan => self.next_scan = Instant::now(),
             Effect::Connect(ssid, password) => self.send(Work::Connect(ssid, password)),
             Effect::Forget(ssid) => self.send(Work::Forget(ssid)),
             Effect::Login(user, password) => self.send(Work::Login(user, password)),
@@ -132,11 +135,8 @@ impl Runtime {
         let wifi = self.active
             && self.state.page() == Page::Wifi
             && self.state.value(archr_ui::settings::Id::WifiSwitch) == "1";
-        if wifi && dirty && self.state.scanned.is_some() {
-            self.next_scan = now + Duration::from_secs(10);
-        }
         if wifi && !self.closing && !self.busy() && now >= self.next_scan {
-            self.next_scan = now + Duration::from_secs(10);
+            self.next_scan = now + SCAN_INTERVAL;
             self.send(Work::Scan);
         }
         let age = self

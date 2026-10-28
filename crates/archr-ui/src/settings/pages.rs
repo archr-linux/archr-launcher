@@ -345,4 +345,83 @@ mod tests {
         state.cursor = 5;
         assert_eq!(state.handle(Button::A), Effect::None);
     }
+    #[test]
+    fn unverified_login_never_replaces_the_shown_account() {
+        let mut state = Settings {
+            loading: false,
+            ..Default::default()
+        };
+        state.scrape.available = true;
+        state.scrape.user = "saved".into();
+        state.open(Page::Scraper);
+        state.cursor = 1;
+        state.handle(Button::A);
+        state.handle(Button::A);
+        state.handle(Button::Start);
+        assert_eq!(state.scrape.user, "saved");
+        state.handle(Button::B);
+        assert_eq!(state.page(), Page::Scraper);
+        assert_eq!(state.scrape.user, "saved");
+    }
+    #[test]
+    fn a_second_start_press_before_the_reply_starts_nothing() {
+        let mut state = Settings {
+            loading: false,
+            ..Default::default()
+        };
+        state.scrape.available = true;
+        state.open(Page::Scraper);
+        state.cursor = 5;
+        assert_eq!(state.handle(Button::A), Effect::Scrape);
+        assert_eq!(state.handle(Button::A), Effect::None);
+        assert!(state.scrape.starting);
+    }
+    #[test]
+    fn netplay_text_fields_can_be_cleared_but_the_port_cannot() {
+        let mut state = Settings {
+            loading: false,
+            ..Default::default()
+        };
+        state.values.insert(Id::NetplayHost, "1".into());
+        state.open(Page::Netplay);
+        state.cursor = 2;
+        state.handle(Button::A);
+        state.handle(Button::Y);
+        assert_eq!(
+            state.handle(Button::Start),
+            Effect::Set(Id::NetplayHost, String::new())
+        );
+        state.pending = None;
+        state.cursor = 3;
+        state.handle(Button::A);
+        for _ in 0..5 {
+            state.handle(Button::Y);
+        }
+        assert_eq!(state.handle(Button::Start), Effect::None);
+    }
+    #[test]
+    fn x_refreshes_except_on_a_saved_network() {
+        let mut state = wifi();
+        state.values.insert(Id::WifiSwitch, "1".into());
+        state.networks.push(network("Guest", "open", false));
+        state.networks.push(network("Home", "psk", true));
+        assert_eq!(state.handle(Button::X), Effect::Scan);
+        state.cursor = 1;
+        assert_eq!(state.handle(Button::X), Effect::Scan);
+        state.cursor = 2;
+        assert_eq!(state.handle(Button::X), Effect::None);
+        assert_eq!(state.confirm_forget.as_deref(), Some("Home"));
+    }
+    #[test]
+    fn effect_debug_never_shows_passwords() {
+        const SENTINEL: &str = "sentinel-p4ssw0rd";
+        for effect in [
+            Effect::Connect("Casa".into(), SENTINEL.into()),
+            Effect::Login("user".into(), SENTINEL.into()),
+        ] {
+            let text = format!("{effect:?}");
+            assert!(!text.contains(SENTINEL), "{text}");
+            assert!(text.contains("<hidden>"));
+        }
+    }
 }
