@@ -64,6 +64,7 @@ struct Fonts<'font> {
     paths: [Vec<PathBuf>; 4],
     fonts: Vec<FontFace<'font>>,
     resolved: HashMap<Face, usize>,
+    measurements: VecDeque<(String, Face, u16, u32)>,
 }
 impl<'font> Fonts<'font> {
     fn new(ttf: &'font Sdl2TtfContext, paths: [Vec<PathBuf>; 4]) -> Self {
@@ -73,7 +74,33 @@ impl<'font> Fonts<'font> {
             paths,
             fonts: Vec::new(),
             resolved: HashMap::new(),
+            measurements: VecDeque::new(),
         }
+    }
+    fn measure(&mut self, text: &str, face: Face, size: u16) -> Result<u32, String> {
+        let source = bounded_source(text);
+        if let Some((_, _, _, width)) = self
+            .measurements
+            .iter()
+            .find(|(s, f, z, _)| s == source && *f == face && *z == size)
+        {
+            return Ok(*width);
+        }
+        let width = self
+            .font(face, size)?
+            .size_of(&sanitize(source))
+            .map_err(|e| e.to_string())?
+            .0;
+        startup_phase!(
+            self.startup,
+            "text measurement [face={face:?}; size={size}px]"
+        );
+        if self.measurements.len() == 256 {
+            self.measurements.pop_front();
+        }
+        self.measurements
+            .push_back((source.to_owned(), face, size, width));
+        Ok(width)
     }
     fn font(&mut self, face: Face, size: u16) -> Result<&Font<'font, 'static>, String> {
         let key = face;
@@ -159,7 +186,6 @@ impl<'font> Fonts<'font> {
 pub struct PreparedText<'font> {
     fonts: Fonts<'font>,
     entries: Vec<(String, u32, Style, Surface<'static>)>,
-    badges: Vec<(BadgeKey, Surface<'static>)>,
     pub(crate) shadow: Option<Surface<'static>>,
     first_rasterization: StartupTrace,
 }
@@ -179,7 +205,6 @@ impl<'font> PreparedText<'font> {
         Self {
             fonts,
             entries: Vec::new(),
-            badges: Vec::new(),
             shadow: None,
             first_rasterization: trace,
         }
@@ -214,23 +239,7 @@ impl<'font> PreparedText<'font> {
         Ok(())
     }
     pub(crate) fn measure(&mut self, text: &str, face: Face, size: u16) -> Result<u32, String> {
-        self.fonts
-            .font(face, size)?
-            .size_of(&sanitize(text))
-            .map(|s| s.0)
-            .map_err(|e| e.to_string())
-    }
-    pub(crate) fn badge(&mut self, key: BadgeKey) -> Result<(), String> {
-        let surface = badges::render(
-            self.fonts
-                .font(Face::Semibold, key.size * SUPERSAMPLE as u16)?,
-            key,
-        )?;
-        self.first_rasterization
-            .phase_once("first text rasterization");
-        self.badges.push((key, surface));
-        startup_phase!(self.fonts.startup, "badge {} [rasterized]", key.letter);
-        Ok(())
+        self.fonts.measure(text, face, size)
     }
 }
 
@@ -269,14 +278,6 @@ impl<'font, 'texture> TextCache<'font, 'texture> {
                 width,
                 texture,
             });
-        }
-        for (key, surface) in prepared.badges {
-            let mut texture = creator
-                .create_texture_from_surface(surface)
-                .map_err(|e| e.to_string())?;
-            texture.set_blend_mode(BlendMode::Blend);
-            texture.set_scale_mode(ScaleMode::Linear);
-            cache.badges.push_back((key, texture));
         }
         startup_phase!(cache.startup, "CPU surfaces upload");
         Ok(cache)
@@ -365,10 +366,7 @@ impl<'font, 'texture> TextCache<'font, 'texture> {
         canvas.copy(texture, None, panel)
     }
     pub fn measure(&mut self, text: &str, face: Face, size: u16) -> Result<u32, String> {
-        self.font(face, size)?
-            .size_of(&sanitize(text))
-            .map(|s| s.0)
-            .map_err(|e| e.to_string())
+        self.fonts.measure(text, face, size)
     }
     pub fn draw(
         &mut self,
@@ -559,6 +557,36 @@ mod tests {
             assert_eq!(texture.alpha_mod(), 128);
         }
         assert_eq!(cache.icons.len(), 3);
+    }
+
+    #[test]
+    fn prepared_measurements_survive_handover_without_font_layout() {
+        let _sdl = crate::SDL_TEST_LOCK.lock().unwrap();
+        std::env::set_var("SDL_VIDEODRIVER", "dummy");
+        let sdl = sdl2::init().unwrap();
+        let video = sdl.video().unwrap();
+        let window = video.window("metrics", 160, 80).build().unwrap();
+        let canvas = window.into_canvas().software().build().unwrap();
+        let creator = canvas.texture_creator();
+        let ttf = sdl2::ttf::init().unwrap();
+        let paths = std::array::from_fn(|_| vec![bundled_font("Inter-Regular")]);
+        let mut prepared = PreparedText::new(&ttf, paths, StartupTrace::default());
+        let source = "MO/TO family";
+        let width = load_font(&ttf, "Inter-Regular", 17)
+            .size_of(source)
+            .unwrap()
+            .0;
+        assert_eq!(prepared.measure(source, Face::Regular, 17).unwrap(), width);
+        let mut cache = TextCache::from_prepared(&creator, prepared).unwrap();
+        // A hit must not revisit FreeType, even after a different size was used.
+        cache.font(Face::Regular, 13).unwrap();
+        cache.fonts.fonts.clear();
+        cache.fonts.resolved.clear();
+        cache.fonts.paths = std::array::from_fn(|_| vec![]);
+        assert_eq!(cache.measure(source, Face::Regular, 17).unwrap(), width);
+        assert!(cache.measure(source, Face::Regular, 18).is_err());
+        assert!(cache.measure(source, Face::Semibold, 17).is_err());
+        assert!(cache.measure("different", Face::Regular, 17).is_err());
     }
 
     #[test]
@@ -757,7 +785,6 @@ mod tests {
                 .spawn(|| {
                     let mut prepared = PreparedText::new(&ttf, paths, StartupTrace::default());
                     prepared.label(source, style, panel.width()).unwrap();
-                    prepared.badge(badge).unwrap();
                     prepared
                 })
                 .join()
@@ -777,7 +804,9 @@ mod tests {
                     .unwrap()
             );
         }
-        // CPU-prepared surfaces are usable without any font/layout fallback.
+        // Deferred badges still render from the handed-over in-memory face.
+        transferred.badge(badge).unwrap();
+        // CPU-prepared text and cached badges need no font/layout fallback.
         transferred.fonts.fonts.clear();
         transferred.fonts.resolved.clear();
         transferred.fonts.paths = std::array::from_fn(|_| vec![]);

@@ -12,7 +12,7 @@ fn first_present_only_prepares_visible_rasters_and_fonts() {
 }
 
 #[test]
-fn first_present_prepares_themed_system_panel_and_fitted_name() {
+fn first_present_prepares_fitted_names_without_the_deferred_panel() {
     check_startup(
         "<system><name>moto</name><fullname>MO/TO family (TO7, TO7/70, TO8, TO8D, TO9, TO9+, MO5 and MO6)</fullname><manufacturer>Thomson</manufacturer><release>1982</release><path>/roms/moto</path><extension>.rom</extension></system>",
         true,
@@ -40,7 +40,7 @@ fn check_startup(definitions: &str, themed: bool) {
             }
         }
     }
-    for run in 0..2 {
+    for _ in 0..2 {
         let output = Command::new(env!("CARGO_BIN_EXE_archr-launcher"))
             .env("ARCHR_LAUNCHER_ROOT", root.path())
             .env("ARCHR_LAUNCHER_TRACE", "1")
@@ -53,7 +53,10 @@ fn check_startup(definitions: &str, themed: bool) {
         let before = trace.split("startup first present:").next().unwrap();
         for absent in [
             "SDL_image init",
+            "shadow texture",
             "icon rasterization",
+            "badge A",
+            "badge Y",
             "badge B",
             "badge X",
             "PNG hit",
@@ -70,17 +73,8 @@ fn check_startup(definitions: &str, themed: bool) {
             .nth(1)
             .expect("worker join");
         assert!(!after_join.contains("text rasterization"), "{after_join}");
+        assert!(!after_join.contains("text measurement"), "{after_join}");
         assert!(!after_join.contains("font file open"), "{after_join}");
-        if definitions.is_empty() {
-            assert!(!before.contains("shadow texture"), "{before}");
-        } else if run == 0 {
-            let shadow = before.find("shadow texture").expect("visible panel shadow");
-            let upload = before.find("CPU surfaces upload").expect("prepared upload");
-            assert!(
-                shadow < upload,
-                "shadow must come from the worker: {before}"
-            );
-        }
         assert_eq!(trace.matches("startup first frame draw:").count(), 1);
         assert_eq!(trace.matches("startup first present:").count(), 1);
         let cache = root.path().join("storage/.cache/archr-launcher");

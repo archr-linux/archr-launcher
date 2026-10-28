@@ -63,7 +63,33 @@ fn grafite_layout_motion_glyphs_and_untrusted_text_render_offscreen() {
         &[30, 136, 255],
         "pill begins below the 44px header"
     );
-    assert_eq!(pixel(8, 432), &[28, 35, 44], "footer divider");
+    assert_eq!(
+        pixel(8, 432),
+        &[11, 15, 20],
+        "footer waits for first present"
+    );
+    assert_eq!(
+        pixel(380, 240),
+        &[11, 15, 20],
+        "panel must wait for first present"
+    );
+    ui.draw(&app, &data, &theme, None).unwrap();
+    let settled = ui
+        .canvas
+        .read_pixels(None, sdl2::pixels::PixelFormatEnum::RGBA32)
+        .unwrap();
+    let divider = (432 * 640 + 8) * 4;
+    assert_eq!(
+        &settled[divider..divider + 3],
+        &[28, 35, 44],
+        "footer appears on the next frame"
+    );
+    let panel = (240 * 640 + 380) * 4;
+    assert_eq!(
+        &settled[panel..panel + 3],
+        &[17, 22, 28],
+        "panel appears on the next frame"
+    );
     ui.snap_animations();
     app.cursor = 1;
     ui.draw(&app, &data, &theme, None).unwrap();
