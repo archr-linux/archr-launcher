@@ -461,6 +461,59 @@ fn huge_progressive_jpeg() -> Vec<u8> {
     bytes
 }
 
+/// A 1x1 PNG carrying an iCCP chunk that inflates to 128 MiB: about 130 KB on
+/// the wire, and a decoder that expands metadata while reading the header
+/// would allocate it all.
+fn iccp_bomb() -> Vec<u8> {
+    use std::io::Write;
+    let mut zlib = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::best());
+    let zeros = vec![0u8; 1 << 20];
+    for _ in 0..128 {
+        zlib.write_all(&zeros).unwrap();
+    }
+    let mut data = b"icc\0\0".to_vec();
+    data.extend(zlib.finish().unwrap());
+    let mut chunk = (data.len() as u32).to_be_bytes().to_vec();
+    let mut body = b"iCCP".to_vec();
+    body.extend(&data);
+    chunk.extend(&body);
+    chunk.extend(crc32fast::hash(&body).to_be_bytes());
+    let mut bytes = png(1, 1);
+    bytes.splice(33..33, chunk); // right after the 25-byte IHDR chunk
+    bytes
+}
+
+/// Peak resident memory of this process, in KiB.
+fn peak_kib() -> u64 {
+    let status = fs::read_to_string("/proc/self/status").unwrap();
+    let line = status.lines().find(|l| l.starts_with("VmHWM:")).unwrap();
+    line.split_whitespace().nth(1).unwrap().parse().unwrap()
+}
+
+#[test]
+fn metadata_bomb_png_does_not_inflate_into_memory() {
+    let bomb = iccp_bomb();
+    assert!(bomb.len() < 400 << 10);
+    let dir = tempfile::tempdir().unwrap();
+    let sys = system(dir.path(), &["A.sfc"]);
+    let http = mock(move |url| {
+        if url.contains("/box-") {
+            Some((200, bomb.clone()))
+        } else {
+            happy(url)
+        }
+    });
+    let before = peak_kib();
+    let (_, report) = finish(&engine(http, dir.path()).start(vec![sys], Options::new("en")));
+    assert_eq!(report.stop, Stop::Completed);
+    // Unbounded, the 128 MiB chunk is inflated while reading the header.
+    assert!(
+        peak_kib() - before < 64 << 10,
+        "peak grew by {} KiB",
+        peak_kib() - before
+    );
+}
+
 #[test]
 fn only_complete_decodable_images_are_saved() {
     let whole_png = png(64, 48);

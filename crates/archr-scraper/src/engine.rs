@@ -675,23 +675,32 @@ fn needed(options: &Options, system: &SystemDef, game: &Game) -> Vec<Media> {
 /// allocation limit. Decodes are serialized so worker threads never stack up
 /// big buffers on a small device. The service answers errors as text with 200.
 fn image_ext(bytes: &[u8]) -> Option<&'static str> {
-    use image::{ImageFormat, ImageReader};
+    use image::{ImageFormat, ImageReader, Limits};
     static ONE_DECODE: Mutex<()> = Mutex::new(());
-    let reader = || ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format();
+    // Every reader gets the small limits: even reading the header can inflate
+    // metadata chunks (PNG iCCP) up to the default 512 MiB budget.
+    let reader = || {
+        let mut reader = ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format();
+        if let Ok(reader) = reader.as_mut() {
+            let mut limits = Limits::default();
+            limits.max_image_width = Some(MAX_SIDE);
+            limits.max_image_height = Some(MAX_SIDE);
+            limits.max_alloc = Some(32 << 20);
+            reader.limits(limits);
+        }
+        reader
+    };
     let decode = || {
+        let _one = ONE_DECODE.lock().unwrap_or_else(|e| e.into_inner());
         let ext = match reader().ok()?.format()? {
             ImageFormat::Png => "png",
             ImageFormat::Jpeg => "jpg",
             _ => return None,
         };
         let (width, height) = reader().ok()?.into_dimensions().ok()?;
-        if width > MAX_SIDE
-            || height > MAX_SIDE
-            || u64::from(width) * u64::from(height) > MAX_PIXELS
-        {
+        if u64::from(width) * u64::from(height) > MAX_PIXELS {
             return None;
         }
-        let _one = ONE_DECODE.lock().unwrap_or_else(|e| e.into_inner());
         reader().ok()?.decode().ok().map(|_| ext)
     };
     // A decoder bug must not take the worker (and the final event) down.
