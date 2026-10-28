@@ -32,6 +32,9 @@ export ARCHR_SESSION_SHELL=${SESSION_TEST_SHELL:-sh}
 export ARCHR_TEST_EMULATOR="$root/bin/fake) emulator"
 export ARCHR_SESSION_APPLY_LOCALE="$root/bin/apply-locale"
 export ARCHR_SESSION_EXPORTS="$root/exports"
+export ARCHR_SESSION_USER_CONTROLLER_DB="$root/user-db"
+export ARCHR_SESSION_PACKAGED_CONTROLLER_DB="$root/packaged-db"
+: >"$ARCHR_SESSION_PACKAGED_CONTROLLER_DB"
 # The profile selects pt_BR; it is already generated unless a case says not.
 export ARCHR_SESSION_LOCALE_DIR="$root/locale"
 mkdir -p "$ARCHR_SESSION_LOCALE_DIR/pt_BR.UTF-8"
@@ -47,6 +50,8 @@ cat >"$ARCHR_SESSION_PROFILE" <<'EOF'
 # Deliberately Bash-only to exercise the profile bridge.
 function get_setting() { printf '%s\n' pt_BR; }
 export MALI_WAYLAND_AFBC=0 SDL_VIDEODRIVER=wayland
+# A user database the profile names but nobody created.
+export SDL_GAMECONTROLLERCONFIG_FILE=/nonexistent/gamecontrollerdb.txt
 EOF
 
 cat >"$root/bin/archr-launcher" <<'EOF'
@@ -54,6 +59,7 @@ cat >"$root/bin/archr-launcher" <<'EOF'
 set -eu
 [ "$LANG" = pt_BR.UTF-8 ]
 [ -z "${LOCPATH+set}" ]
+printf '%s\n' "$SDL_GAMECONTROLLERCONFIG_FILE" >"$CASE_DIR/controller-db"
 [ -f "$CASE_DIR/locale-applied" ] || [ ! -e "$ARCHR_SESSION_APPLY_LOCALE" ] ||
   [ -f "$CASE_DIR/detached" ]
 [ "$MALI_WAYLAND_AFBC" = 0 ]
@@ -200,7 +206,15 @@ END'
 [ ! -f "$CASE_DIR/sleeps" ]
 [ -f "$CASE_DIR/locale-applied" ]
 [ "$(cat "$CASE_DIR/imports")" = 'import-environment MALI_WAYLAND_AFBC SDL_VIDEODRIVER' ]
+[ "$(cat "$CASE_DIR/controller-db")" = "$ARCHR_SESSION_PACKAGED_CONTROLLER_DB" ]
 printf '%s\n' 'PASS game round-trip and kill-target reset'
+
+: >"$ARCHR_SESSION_USER_CONTROLLER_DB"
+run_case user-controller-db 'CLEAN
+END'
+[ "$(cat "$CASE_DIR/controller-db")" = "$ARCHR_SESSION_USER_CONTROLLER_DB" ]
+rm -f "$ARCHR_SESSION_USER_CONTROLLER_DB"
+printf '%s\n' 'PASS missing inherited controller database falls back'
 
 # Literal ROM includes double/single quotes, spaces, backslash and an unexpanded $.
 run_case quoting 'game runemu.sh '\''/roms/It'\''\'\'''\''s "Mega" $cash\ cart.zip'\'' '\''-Psnes'\'' '\''--core=auto'\'' '\''--emulator=retroarch'\'' '\''--controllers=pad one'\''

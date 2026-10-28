@@ -290,8 +290,9 @@ transitória `archr-apply-locale` (`systemd-run`, nice 19, E/S ociosa, uma
 instância), e o launcher abre na hora com as próprias traduções. Gerar o locale
 ao trocar o idioma cabe à ação de configurações. `LOCPATH` é removido: o glibc
 acha os locales por `/usr/lib/locale`. Preserva os exports dos quirks/usuário e
-configura Wayland e SDL; o banco de controles é o `gamecontrollerdb.txt` do
-usuário ou, sem ele, o de `/usr/config/SDL-GameControllerDB`.
+configura Wayland e SDL. O banco de controles é o `SDL_GAMECONTROLLERCONFIG_FILE`
+herdado só se o arquivo existir; senão o `gamecontrollerdb.txt` do usuário e,
+sem ele, o de `/usr/config/SDL-GameControllerDB`.
 A espera por sway reproduz a do `start_es.sh`: socket Wayland + IPC com saída
 ativa, polling de 100 ms, teto de 10 s. Sem compositor pronto após o teto,
 tenta iniciar a UI e deixa o backoff lidar com uma falha.
