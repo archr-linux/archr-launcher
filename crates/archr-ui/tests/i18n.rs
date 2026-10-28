@@ -399,6 +399,7 @@ const CONFIG_KEYS: &[&str] = &[
     "missing.png",
     "nmbd.service",
     "plain.sh",
+    "runemu.sh",
     "power.png",
     "scraper.toml",
     "sfc.png",
