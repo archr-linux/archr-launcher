@@ -324,7 +324,10 @@ enum Reply {
     Loaded(Result<Box<Settings>, String>),
     Set(Id, Result<String, String>),
     Info(Information),
-    Scan(Result<(Vec<archr_ui::settings::network::Network>, String), String>),
+    Scan(
+        u64,
+        Result<(Vec<archr_ui::settings::network::Network>, String), String>,
+    ),
     Connect(Result<(), String>),
     Forget(Result<(), String>),
     Variants(Vec<(String, String)>),
@@ -336,10 +339,14 @@ enum Reply {
 const SCAN_TIMEOUT: Duration = Duration::from_secs(45);
 pub struct Worker {
     tx: mpsc::Sender<Work>,
-    scans: mpsc::Sender<()>,
+    scans: mpsc::Sender<u64>,
     rx: mpsc::Receiver<Reply>,
     pending: usize,
     scanning: bool,
+    /// A scan was requested while one ran: dispatch again when it ends.
+    rescan: bool,
+    /// Bumped on every Wi-Fi switch change; older scans' replies are stale.
+    generation: u64,
 }
 impl Worker {
     pub fn start(paths: Paths) -> Result<Self, String> {
@@ -352,8 +359,11 @@ impl Worker {
             .name("launcher-scan".into())
             .spawn(move || {
                 let backend = Backend::new(scan_paths);
-                while scan_requests.recv().is_ok() {
-                    if scan_results.send(Reply::Scan(backend.scan())).is_err() {
+                while let Ok(generation) = scan_requests.recv() {
+                    if scan_results
+                        .send(Reply::Scan(generation, backend.scan()))
+                        .is_err()
+                    {
                         break;
                     }
                 }
@@ -393,6 +403,8 @@ impl Worker {
             rx,
             pending: 0,
             scanning: false,
+            rescan: false,
+            generation: 0,
         })
     }
     pub fn busy(&self) -> bool {
@@ -401,13 +413,23 @@ impl Worker {
     pub fn scanning(&self) -> bool {
         self.scanning
     }
+    fn scan(&mut self) -> Result<(), String> {
+        if self.scanning {
+            self.rescan = true;
+            return Ok(());
+        }
+        self.scans
+            .send(self.generation)
+            .map_err(|e| e.to_string())?;
+        self.scanning = true;
+        Ok(())
+    }
     pub(super) fn send(&mut self, work: Work) -> Result<(), String> {
         if matches!(work, Work::Scan) {
-            if !self.scanning {
-                self.scans.send(()).map_err(|e| e.to_string())?;
-                self.scanning = true;
-            }
-            return Ok(());
+            return self.scan();
+        }
+        if matches!(work, Work::Set(Id::WifiSwitch, _)) {
+            self.generation += 1;
         }
         self.tx.send(work).map_err(|e| e.to_string())?;
         self.pending += 1;
@@ -423,8 +445,15 @@ impl Worker {
         let mut language = None;
         while let Ok(reply) = self.rx.try_recv() {
             changed = true;
-            if matches!(reply, Reply::Scan(_)) {
+            if let Reply::Scan(generation, _) = &reply {
                 self.scanning = false;
+                let stale = *generation != self.generation;
+                if std::mem::take(&mut self.rescan) {
+                    let _ = self.scan();
+                }
+                if stale {
+                    continue;
+                }
             } else {
                 self.pending = self.pending.saturating_sub(1);
             }
@@ -449,6 +478,9 @@ impl Worker {
                     state.loading = false;
                 }
                 Reply::Set(id, result) => {
+                    if id == Id::WifiSwitch {
+                        self.generation += 1;
+                    }
                     if let Err(error) = &result {
                         log::warn!("Setting {id:?} failed: {error}");
                     }
@@ -487,7 +519,7 @@ impl Worker {
                 Reply::Variants(names) => {
                     pages::keyboard_choices(state, Id::KeyboardVariant, names);
                 }
-                Reply::Scan(result) => match result {
+                Reply::Scan(_, result) => match result {
                     Ok((networks, address)) => {
                         // A late scan never repopulates a list the user switched off.
                         if state.value(Id::WifiSwitch) == "1" {
