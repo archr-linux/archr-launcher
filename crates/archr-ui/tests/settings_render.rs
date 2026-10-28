@@ -79,6 +79,27 @@ fn all_locales_and_pages_render_and_selected_on_toggle_has_contrast() {
                     Some(&state),
                 )
                 .unwrap();
+                let before = ui
+                    .canvas
+                    .read_pixels(None, sdl2::pixels::PixelFormatEnum::RGBA32)
+                    .unwrap();
+                state.error = Some((None, "different private technical details".into()));
+                ui.draw_with_settings(
+                    &App::new(9),
+                    &FakeData::default(),
+                    &theme,
+                    None,
+                    Some(&state),
+                )
+                .unwrap();
+                let after = ui
+                    .canvas
+                    .read_pixels(None, sdl2::pixels::PixelFormatEnum::RGBA32)
+                    .unwrap();
+                assert_eq!(
+                    before, after,
+                    "technical details must never enter the banner"
+                );
             }
             if page == Page::System {
                 let pixels = ui

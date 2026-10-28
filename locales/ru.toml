@@ -87,7 +87,7 @@
 "settings.timezone" = "Часовой пояс"
 "settings.soon" = "Скоро"
 "settings.applying" = "Применяется…"
-"settings.failed" = "Не удалось применить"
+"settings.failed" = "Не удалось применить. Повторите попытку."
 "settings.change" = "Изменить"
 "settings.later" = "Позже"
 "settings.reboot_question" = "Драйвер GPU сохранён. Перезагрузить для применения?"

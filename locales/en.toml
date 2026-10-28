@@ -87,7 +87,7 @@
 "settings.timezone" = "Timezone"
 "settings.soon" = "Coming soon"
 "settings.applying" = "Applying…"
-"settings.failed" = "Could not apply"
+"settings.failed" = "Could not apply. Please try again."
 "settings.change" = "Change"
 "settings.later" = "Later"
 "settings.reboot_question" = "GPU driver saved. Reboot now to apply?"

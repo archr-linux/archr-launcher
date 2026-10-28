@@ -33,6 +33,7 @@ impl Runtime {
             self.worker.as_mut().expect("worker started").send(work)
         })();
         if let Err(error) = result {
+            log::warn!("Settings worker failed: {error}");
             self.state.error = Some((self.state.pending, error));
             self.state.pending = None;
             self.state.loading = false;

@@ -215,8 +215,8 @@ confere a gravação, sem escrever antes ou depois. Esses três scripts ainda
 precisam de modo runtime-only e propagação de falhas no sistema; suas gravações
 legadas não ganham atomicidade por serem chamadas daqui. A mesma propagação deve
 ser conferida em `set-audio`, `archr-config tz` e nas funções de governador.
-Erros mostram o status com quebra de linha limitada; detalhes completos vão ao
-log. Leituras usam `archr-io`, rejeitando arquivos não regulares e limitando os
+Erros exibem somente uma mensagem curta e localizada; detalhes técnicos
+completos vão ao log. Leituras usam `archr-io`, rejeitando arquivos não regulares e limitando os
 dados. Informações
 são sondadas fora do SDL quatro segundos após a conclusão anterior; a saída
 aguarda apenas mutações, nunca sondagens descartáveis. O driver de GPU ativo

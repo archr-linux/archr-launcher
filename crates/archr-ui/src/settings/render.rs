@@ -50,21 +50,11 @@ impl View<'_, '_, '_> {
     }
     /// Wrap at measured character boundaries, preserve explicit newlines, never
     /// send an oversized line to the ellipsizing game-text API. Minimum: 12 px.
-    fn lines(
-        &mut self,
-        text: &str,
-        size: f32,
-        width: u32,
-        limit: usize,
-    ) -> Result<Vec<String>, String> {
+    fn lines(&mut self, text: &str, size: f32, width: u32) -> Result<Vec<String>, String> {
         let mut lines = vec![String::new()];
         for ch in text.chars() {
-            let full = lines.len() == limit;
             let line = lines.last_mut().expect("one line");
             if ch == '\n' {
-                if full {
-                    break;
-                }
                 lines.push(String::new());
                 continue;
             }
@@ -74,9 +64,6 @@ impl View<'_, '_, '_> {
                     .measure(&format!("{line}{ch}"), Face::Regular, size)?
                     > width
             {
-                if full {
-                    break;
-                }
                 if let Some(at) = line.rfind(' ') {
                     let rest = line.split_off(at + 1);
                     line.truncate(at);
@@ -99,7 +86,7 @@ impl View<'_, '_, '_> {
         let rect = self.rect(bounds);
         let (mut size, ink, align) = style;
         loop {
-            let lines = self.lines(text, size, rect.width(), usize::MAX)?;
+            let lines = self.lines(text, size, rect.width())?;
             let step = size + 3.;
             let limit = (bounds.3 / step).floor().max(1.) as usize;
             if lines.len() <= limit {
@@ -203,7 +190,7 @@ impl View<'_, '_, '_> {
                 }
             }
         }
-        if let Some((_, detail)) = state.error.as_ref().filter(|(id, _)| {
+        if state.error.as_ref().is_some_and(|(id, _)| {
             state.page() != Page::Info
                 && (id.is_none()
                     || state.page() == Page::Root
@@ -216,21 +203,11 @@ impl View<'_, '_, '_> {
             };
             self.panel(bounds, false)?;
             let (x, y, w, h) = bounds;
-            let message = format!("{}: {detail}", self.tr("settings.failed"));
-            // Diagnostics have an explicit line budget; full details go to the log.
-            for (n, line) in self
-                .lines(
-                    &message,
-                    12.,
-                    self.ui.px(w - 20.) as u32,
-                    (h / 15.).floor() as usize,
-                )?
-                .iter()
-                .take((h / 15.).floor() as usize)
-                .enumerate()
-            {
-                self.label((x + 10., y + n as f32 * 15., w - 20., 15.), line, 12.)?;
-            }
+            self.label(
+                (x + 12., y + 8., w - 24., h - 16.),
+                &self.tr("settings.failed"),
+                12.,
+            )?;
         }
         self.ui
             .divider(0, self.ui.px(440.), self.ui.frame.width, self.theme.border)?;
@@ -388,12 +365,7 @@ impl View<'_, '_, '_> {
         for card in &info.cards {
             let mut lines = Vec::new();
             for line in card.lines.iter().filter(|s| !s.is_empty()) {
-                lines.extend(self.lines(
-                    &self.tr(line),
-                    12.,
-                    self.ui.px(260.) as u32,
-                    usize::MAX,
-                )?);
+                lines.extend(self.lines(&self.tr(line), 12., self.ui.px(260.) as u32)?);
             }
             if lines.is_empty() {
                 lines.push(self.tr("settings.unavailable"));

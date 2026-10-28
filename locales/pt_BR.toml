@@ -87,7 +87,7 @@
 "settings.timezone" = "Fuso horário"
 "settings.soon" = "Em breve"
 "settings.applying" = "Aplicando…"
-"settings.failed" = "Não foi possível aplicar"
+"settings.failed" = "Não foi possível aplicar. Tente novamente."
 "settings.change" = "Alterar"
 "settings.later" = "Depois"
 "settings.reboot_question" = "Driver de GPU salvo. Reiniciar agora para aplicar?"

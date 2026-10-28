@@ -87,7 +87,7 @@
 "settings.timezone" = "Zona horaria"
 "settings.soon" = "Próximamente"
 "settings.applying" = "Aplicando…"
-"settings.failed" = "No se pudo aplicar"
+"settings.failed" = "No se pudo aplicar. Inténtalo de nuevo."
 "settings.change" = "Cambiar"
 "settings.later" = "Después"
 "settings.reboot_question" = "Controlador GPU guardado. ¿Reiniciar para aplicar?"
