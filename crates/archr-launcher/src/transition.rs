@@ -22,11 +22,40 @@ pub fn apply(
     if ui.transition.is_some() {
         ui.draw(app, library, theme, cover)?; // draw includes present, before any flush
     }
+    let power = matches!(
+        outcome,
+        Some(Outcome::Action(
+            SessionAction::Shutdown | SessionAction::Reboot
+        ))
+    );
     let result = match outcome {
+        Some(Outcome::Action(action)) if power => library.finish().and_then(|()| {
+            #[cfg(not(test))]
+            let systemctl = "/usr/bin/systemctl";
+            // Unit tests must never invoke the host's power manager.
+            #[cfg(test)]
+            let systemctl = std::env::var_os("ARCHR_TEST_SYSTEMCTL").unwrap_or_default();
+            let command = if action == SessionAction::Shutdown {
+                "poweroff"
+            } else {
+                "reboot"
+            };
+            let status = std::process::Command::new(systemctl)
+                .arg(command)
+                .status()
+                .map_err(|e| e.to_string())?;
+            if status.success() {
+                Ok(false)
+            } else {
+                Err(format!("systemctl {command}: {status}"))
+            }
+        }),
         Some(outcome) => library.handle(outcome, controllers),
         None => library.finish().map(|()| true),
     };
-    ui.transition = None;
+    if !power || result.is_err() {
+        ui.transition = None;
+    }
     match result {
         Ok(exit) => Ok(exit),
         Err(error) => {
@@ -59,7 +88,6 @@ fn message(outcome: Option<&Outcome>, data: &dyn DataSource, catalog: &I18n) -> 
             SessionAction::Shutdown => "notice.shutdown",
             SessionAction::Reboot => "notice.reboot",
             SessionAction::Suspend => "notice.suspend",
-            SessionAction::OpenSettings => "notice.settings",
         }),
         _ => return None,
     })
@@ -81,7 +109,7 @@ mod tests {
     };
 
     #[test]
-    fn failed_handoff_presents_feedback_then_sets_banner_without_exiting() {
+    fn terminal_transitions_cover_failures_and_persistent_power_notices() {
         std::env::set_var("SDL_VIDEODRIVER", "offscreen");
         let root = tempfile::tempdir().unwrap();
         let paths = Paths::new(Some(root.path().to_owned()));
@@ -110,7 +138,7 @@ mod tests {
             &App::new(10),
             &mut library,
             &theme,
-            Some(Outcome::Action(SessionAction::OpenSettings)),
+            Some(Outcome::Action(SessionAction::Suspend)),
             "",
             None,
         )
@@ -165,42 +193,37 @@ mod tests {
             &App::new(10),
             &mut library,
             &theme,
-            Some(Outcome::Action(SessionAction::OpenSettings)),
+            Some(Outcome::Action(SessionAction::Suspend)),
             "",
             None
         )
         .unwrap());
         assert_eq!(
             fs::read_to_string(paths.run.join("next")).unwrap(),
-            "action settings\n"
+            "action suspend\n"
         );
-    }
-    #[test]
-    #[ignore = "step 2: power commands belong to the launcher and must stay on the notice"]
-    fn power_actions_stay_on_the_notice_without_handoff() {
-        std::env::set_var("SDL_VIDEODRIVER", "offscreen");
-        let root = tempfile::tempdir().unwrap();
-        let paths = Paths::new(Some(root.path().to_owned()));
-        let mut library = Library::initial(paths.clone());
-        library.start();
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while !library.ready {
-            library.poll();
-            assert!(Instant::now() < deadline);
-            std::thread::sleep(Duration::from_millis(5));
-        }
-        let ttf;
-        let creator;
-        let mut ui = Ui::new(640, 480, true).unwrap();
-        ttf = sdl2::ttf::init().unwrap();
-        creator = ui.canvas.texture_creator();
-        let theme = Theme::builtin();
+        fs::remove_file(paths.run.join("next")).unwrap();
+        // The command must observe both the presented notice and flushed Store.
+        use std::os::unix::fs::PermissionsExt;
+        let systemctl = root.path().join("systemctl");
+        fs::write(
+            &systemctl,
+            r#"#!/bin/sh
+dir=${0%/*}
+[ -f "$dir/power.png" ] && [ -f "$dir/storage/.config/archr-launcher/store.toml" ] || exit 1
+printf '%s\n' "$1" >>"$dir/commands"
+"#,
+        )
+        .unwrap();
+        fs::set_permissions(&systemctl, fs::Permissions::from_mode(0o700)).unwrap();
+        std::env::set_var("ARCHR_TEST_SYSTEMCTL", &systemctl);
         ui.catalog = I18n::load(root.path(), Some("pt_BR"), None);
-        ui.configure(&ttf, &creator, &theme, None).unwrap();
         for (action, notice) in [
             (SessionAction::Shutdown, "Desligando…"),
             (SessionAction::Reboot, "Reiniciando…"),
         ] {
+            fs::remove_file(paths.store.join("store.toml")).unwrap();
+            ui.screenshot = Some(root.path().join("power.png"));
             assert!(!apply(
                 &mut ui,
                 &App::new(10),
@@ -213,10 +236,92 @@ mod tests {
             .unwrap());
             assert_eq!(ui.transition.as_deref(), Some(notice));
             assert!(!paths.run.join("next").exists());
-            assert!(paths.store.join("store.toml").exists());
         }
+        assert_eq!(
+            fs::read_to_string(root.path().join("commands")).unwrap(),
+            "poweroff\nreboot\n"
+        );
+        for program in [
+            std::path::Path::new("/bin/false"),
+            &root.path().join("missing"),
+        ] {
+            std::env::set_var("ARCHR_TEST_SYSTEMCTL", program);
+            ui.banner = None;
+            assert!(!apply(
+                &mut ui,
+                &App::new(10),
+                &mut library,
+                &theme,
+                Some(Outcome::Action(SessionAction::Reboot)),
+                "",
+                None
+            )
+            .unwrap());
+            assert!(ui.transition.is_none());
+            assert!(ui.banner.is_some());
+            assert!(!paths.run.join("next").exists());
+        }
+        // Exercise the real event loop: later scripted actions and QUIT must be
+        // ignored after systemctl succeeds; only external SDL Quit ends the notice.
+        let sender = ui.sdl.event().unwrap().event_sender();
+        drop(ui);
+        std::env::set_var("ARCHR_LAUNCHER_ROOT", root.path());
+        std::env::set_var("ARCHR_LAUNCHER_SCREENSHOT", root.path().join("power.png"));
+        std::env::set_var("ARCHR_TEST_SYSTEMCTL", &systemctl);
+        for (sequence, command) in [
+            ("Y,DOWN,DOWN,A,SNAPSHOT,DOWN,A,QUIT", "poweroff\n"),
+            ("Y,DOWN,A,SNAPSHOT,DOWN,A,QUIT", "reboot\n"),
+        ] {
+            fs::remove_file(root.path().join("commands")).unwrap();
+            fs::remove_file(root.path().join("power.png")).unwrap();
+            let finished = std::sync::atomic::AtomicBool::new(false);
+            std::thread::scope(|scope| {
+                let observer = scope.spawn(|| {
+                    let deadline = Instant::now() + Duration::from_secs(5);
+                    while !root.path().join("commands").exists()
+                        && !finished.load(std::sync::atomic::Ordering::Relaxed)
+                        && Instant::now() < deadline
+                    {
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    let requested = root.path().join("commands").exists();
+                    if requested {
+                        std::thread::sleep(Duration::from_millis(600));
+                    }
+                    if finished.load(std::sync::atomic::Ordering::Relaxed) {
+                        return false;
+                    }
+                    // Also unblock a broken run when the power request never arrived.
+                    sender
+                        .push_event(sdl2::event::Event::Quit { timestamp: 0 })
+                        .unwrap();
+                    requested
+                });
+                let began = Instant::now();
+                let result = crate::run(
+                    began,
+                    archr_ui::startup::StartupTrace::new(began),
+                    ["--windowed", "--script", sequence]
+                        .into_iter()
+                        .map(str::to_owned),
+                );
+                finished.store(true, std::sync::atomic::Ordering::Relaxed);
+                assert!(
+                    observer.join().unwrap(),
+                    "launcher left the notice before external Quit"
+                );
+                result.unwrap();
+            });
+            assert_eq!(
+                fs::read_to_string(root.path().join("commands")).unwrap(),
+                command
+            );
+            assert!(!paths.run.join("next").exists());
+        }
+        std::env::remove_var("ARCHR_LAUNCHER_ROOT");
+        std::env::remove_var("ARCHR_LAUNCHER_SCREENSHOT");
+        std::env::remove_var("ARCHR_TEST_SYSTEMCTL");
     }
-
     #[test]
     fn terminal_labels_match_requested_actions_and_display_game_name() {
         use archr_index::Game;
@@ -253,7 +358,6 @@ mod tests {
             (SessionAction::Shutdown, "Powering off…"),
             (SessionAction::Reboot, "Restarting…"),
             (SessionAction::Suspend, "Going to sleep…"),
-            (SessionAction::OpenSettings, "Opening settings…"),
         ] {
             assert_eq!(
                 message(Some(&Outcome::Action(action)), &data, &I18n::default()).as_deref(),

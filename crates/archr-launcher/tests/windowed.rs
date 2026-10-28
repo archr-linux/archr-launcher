@@ -61,7 +61,7 @@ fn windowed_script_navigates_and_publishes_game() {
 }
 
 #[test]
-fn missing_systems_still_allow_settings_and_fallback_is_logged() {
+fn missing_systems_still_allow_suspend_and_fallback_is_logged() {
     let root = tempfile::tempdir().unwrap();
     let result = Command::new(env!("CARGO_BIN_EXE_archr-launcher"))
         .env("ARCHR_LAUNCHER_ROOT", root.path())
@@ -76,7 +76,7 @@ fn missing_systems_still_allow_settings_and_fallback_is_logged() {
     );
     assert_eq!(
         fs::read_to_string(root.path().join("run/archr-launcher/next")).unwrap(),
-        "action settings\n"
+        "action suspend\n"
     );
     assert!(
         String::from_utf8_lossy(&result.stderr).contains("using builtin"),

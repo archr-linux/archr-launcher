@@ -44,13 +44,7 @@ fn shipped_fonts_cover_cyrillic_and_phase_one_labels_fit() {
                 + 16 * (keys.len() as u32 - 1);
             assert!(width <= 592, "{code}: footer {width}px");
         }
-        for key in [
-            "menu.title",
-            "menu.settings",
-            "menu.suspend",
-            "menu.reboot",
-            "menu.shutdown",
-        ] {
+        for key in ["menu.title", "menu.suspend", "menu.reboot", "menu.shutdown"] {
             let width = semibold.size_of(&i.text(key)).unwrap().0;
             assert!(width <= 292, "{code}: {key}: {width}px");
         }
@@ -58,7 +52,6 @@ fn shipped_fonts_cover_cyrillic_and_phase_one_labels_fit() {
             "notice.suspend",
             "notice.shutdown",
             "notice.reboot",
-            "notice.settings",
             "error.operation",
         ] {
             for line in i.text(key).lines() {

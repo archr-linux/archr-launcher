@@ -34,7 +34,6 @@ pub enum SessionAction {
     Shutdown,
     Reboot,
     Suspend,
-    OpenSettings,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -60,7 +59,6 @@ pub enum Outcome {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum QuickItem {
     Core { emulator: String, core: String },
-    Settings,
     Suspend,
     Reboot,
     Shutdown,
@@ -136,12 +134,7 @@ impl App {
             let (emulator, core) = self.selected_core.clone().unwrap_or_default();
             items.push(QuickItem::Core { emulator, core });
         }
-        items.extend([
-            QuickItem::Settings,
-            QuickItem::Suspend,
-            QuickItem::Reboot,
-            QuickItem::Shutdown,
-        ]);
+        items.extend([QuickItem::Suspend, QuickItem::Reboot, QuickItem::Shutdown]);
         items
     }
 
@@ -215,9 +208,6 @@ impl App {
                 let items = self.quick_menu_items(data);
                 match (b, items.get(self.cursor)) {
                     (Button::B, _) => self.back(),
-                    (Button::A, Some(QuickItem::Settings)) => {
-                        return Outcome::Action(SessionAction::OpenSettings);
-                    }
                     (Button::A, Some(QuickItem::Suspend)) => {
                         return Outcome::Action(SessionAction::Suspend);
                     }

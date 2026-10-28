@@ -1,14 +1,11 @@
 use std::{io, path::Path};
 
-use crate::{
-    file_io::{atomic_write, read_bounded},
-    state::SessionAction,
-};
+use crate::file_io::{atomic_write, read_bounded};
 
 #[derive(Debug)]
 pub enum NextCmd {
     Game(String),
-    Action(SessionAction),
+    Suspend,
 }
 
 /// Build the existing ES runemu contract; every argument is a POSIX shell word.
@@ -82,15 +79,7 @@ pub fn write_next(run_dir: &Path, cmd: &NextCmd) -> io::Result<()> {
             }
             format!("game {command}\n")
         }
-        NextCmd::Action(action) => {
-            let name = match action {
-                SessionAction::Shutdown => "shutdown",
-                SessionAction::Reboot => "reboot",
-                SessionAction::Suspend => "suspend",
-                SessionAction::OpenSettings => "settings",
-            };
-            format!("action {name}\n")
-        }
+        NextCmd::Suspend => "action suspend\n".into(),
     };
     atomic_write(run_dir, "next", line.as_bytes())
 }

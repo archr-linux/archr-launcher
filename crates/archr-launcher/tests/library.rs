@@ -135,7 +135,7 @@ fn action_flushes_latest_favorites_before_publishing_next() {
         )
         .unwrap();
     assert!(library
-        .handle(Outcome::Action(SessionAction::OpenSettings), "")
+        .handle(Outcome::Action(SessionAction::Suspend), "")
         .unwrap());
     assert!(paths.run.join("next").exists());
     assert!(Store::load(&paths.store).favorites().is_empty());
@@ -151,7 +151,7 @@ fn failed_final_store_flush_does_not_publish_next() {
     fs::remove_file(paths.store.join("store.toml")).unwrap();
     fs::create_dir(paths.store.join("store.toml")).unwrap();
     assert!(library
-        .handle(Outcome::Action(SessionAction::OpenSettings), "")
+        .handle(Outcome::Action(SessionAction::Suspend), "")
         .is_err());
     assert!(!paths.run.join("next").exists());
 }
@@ -214,5 +214,18 @@ fn legacy_absolute_favorites_and_recents_migrate_once() {
         let store = Store::load(&paths.store);
         assert_eq!(store.favorites(), ["nes/A.nes"]);
         assert_eq!(store.recent(), ["nes/A.nes"]);
+    }
+}
+
+#[test]
+fn power_actions_cannot_publish_next() {
+    use archr_launcher::state::SessionAction;
+    let (_root, paths) = fixture();
+    let mut library = Library::initial(paths.clone());
+    library.start();
+    wait(&mut library, |l| l.ready);
+    for action in [SessionAction::Shutdown, SessionAction::Reboot] {
+        assert!(library.handle(Outcome::Action(action), "").is_err());
+        assert!(!paths.run.join("next").exists());
     }
 }

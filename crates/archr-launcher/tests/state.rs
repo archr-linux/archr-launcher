@@ -347,12 +347,7 @@ fn quick_menu_from_systems_works_even_without_systems() {
         );
         assert_eq!(
             app.quick_menu_items(&data),
-            [
-                QuickItem::Settings,
-                QuickItem::Suspend,
-                QuickItem::Reboot,
-                QuickItem::Shutdown
-            ]
+            [QuickItem::Suspend, QuickItem::Reboot, QuickItem::Shutdown]
         );
         app.handle(Button::Down, &data);
         app.handle(Button::B, &data);
@@ -382,7 +377,6 @@ fn quick_menu_collection_uses_real_game_and_restores_collection_cursor() {
                 emulator: "retroarch".into(),
                 core: "snes9x".into()
             },
-            QuickItem::Settings,
             QuickItem::Suspend,
             QuickItem::Reboot,
             QuickItem::Shutdown
@@ -411,7 +405,6 @@ fn quick_menu_actions_emit_session_outcomes() {
         };
         app.handle(Button::Y, &data);
         for (index, action) in [
-            SessionAction::OpenSettings,
             SessionAction::Suspend,
             SessionAction::Reboot,
             SessionAction::Shutdown,
@@ -436,7 +429,7 @@ fn quick_menu_up_down_clamp() {
     for _ in 0..10 {
         app.handle(Button::Down, &data);
     }
-    assert_eq!(app.cursor, 4);
+    assert_eq!(app.cursor, 3);
 }
 
 #[test]

@@ -4,10 +4,7 @@ use std::{
     path::Path,
 };
 
-use archr_launcher::{
-    handoff::{launch_command, read_last_exit, write_next, NextCmd},
-    state::SessionAction,
-};
+use archr_launcher::handoff::{launch_command, read_last_exit, write_next, NextCmd};
 use tempfile::tempdir;
 
 #[test]
@@ -45,15 +42,11 @@ fn next_file_format_game_and_action() {
         fs::read_to_string(dir.join("next")).unwrap(),
         "game /usr/bin/runemu.sh 'game.zip'\n"
     );
-    for (action, line) in [
-        (SessionAction::Shutdown, "action shutdown\n"),
-        (SessionAction::Reboot, "action reboot\n"),
-        (SessionAction::Suspend, "action suspend\n"),
-        (SessionAction::OpenSettings, "action settings\n"),
-    ] {
-        write_next(&dir, &NextCmd::Action(action)).unwrap();
-        assert_eq!(fs::read_to_string(dir.join("next")).unwrap(), line);
-    }
+    write_next(&dir, &NextCmd::Suspend).unwrap();
+    assert_eq!(
+        fs::read_to_string(dir.join("next")).unwrap(),
+        "action suspend\n"
+    );
     assert_eq!(fs::read_dir(&dir).unwrap().count(), 1);
 }
 
@@ -76,7 +69,7 @@ fn next_rejects_newline_or_nul_in_every_game_argument() {
             assert!(!dir.exists());
         }
     }
-    write_next(&dir, &NextCmd::Action(SessionAction::Reboot)).unwrap();
+    write_next(&dir, &NextCmd::Suspend).unwrap();
     for bad in ["game\naction shutdown", "game\0ignored"] {
         assert_eq!(
             write_next(&dir, &NextCmd::Game(bad.into()))
@@ -86,7 +79,7 @@ fn next_rejects_newline_or_nul_in_every_game_argument() {
         );
         assert_eq!(
             fs::read_to_string(dir.join("next")).unwrap(),
-            "action reboot\n"
+            "action suspend\n"
         );
     }
 }
@@ -94,19 +87,19 @@ fn next_rejects_newline_or_nul_in_every_game_argument() {
 #[test]
 fn next_replaces_instead_of_truncating_and_cleans_up_on_failure() {
     let dir = tempdir().unwrap();
-    write_next(dir.path(), &NextCmd::Action(SessionAction::Reboot)).unwrap();
+    write_next(dir.path(), &NextCmd::Game("old".into())).unwrap();
     let mut old = fs::File::open(dir.path().join("next")).unwrap();
-    write_next(dir.path(), &NextCmd::Action(SessionAction::Suspend)).unwrap();
+    write_next(dir.path(), &NextCmd::Suspend).unwrap();
     let mut text = String::new();
     old.read_to_string(&mut text).unwrap();
-    assert_eq!(text, "action reboot\n");
+    assert_eq!(text, "game old\n");
     assert_eq!(
         fs::read_to_string(dir.path().join("next")).unwrap(),
         "action suspend\n"
     );
     fs::remove_file(dir.path().join("next")).unwrap();
     fs::create_dir(dir.path().join("next")).unwrap();
-    assert!(write_next(dir.path(), &NextCmd::Action(SessionAction::Shutdown)).is_err());
+    assert!(write_next(dir.path(), &NextCmd::Suspend).is_err());
     assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
 }
 

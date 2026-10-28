@@ -25,7 +25,6 @@ export PATH="$root/bin:$PATH"
 export ARCHR_SESSION_TEST=1
 export ARCHR_SESSION_LAUNCHER=archr-launcher
 export ARCHR_SESSION_FAKE_SUSPEND="$root/bin/archr-fake-suspend"
-export ARCHR_SESSION_SETTINGS="$root/bin/archr-settings"
 export ARCHR_SESSION_SWAY_ATTEMPTS=0
 export ARCHR_SESSION_SLEEP="$root/bin/sleep"
 export ARCHR_SESSION_STOP_SLEEP=/bin/sleep
@@ -119,10 +118,6 @@ cat >"$root/bin/systemctl" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >>"$CASE_DIR/actions"
 EOF
-cat >"$root/bin/archr-settings" <<'EOF'
-#!/bin/sh
-printf '%s\n' settings >>"$CASE_DIR/actions"
-EOF
 cat >"$root/bin/archr-fake-suspend" <<'EOF'
 #!/bin/sh
 printf '%s\n' "fake-suspend $*" >>"$CASE_DIR/actions"
@@ -178,11 +173,6 @@ END'
 [ ! -f "$CASE_DIR/sleeps" ]
 printf '%s\n' 'PASS game round-trip and kill-target reset'
 
-run_case reboot 'action reboot
-END'
-[ "$(cat "$CASE_DIR/actions")" = reboot ]
-printf '%s\n' 'PASS reboot action'
-
 # Literal ROM includes double/single quotes, spaces, backslash and an unexpanded $.
 run_case quoting 'game runemu.sh '\''/roms/It'\''\'\'''\''s "Mega" $cash\ cart.zip'\'' '\''-Psnes'\'' '\''--core=auto'\'' '\''--emulator=retroarch'\'' '\''--controllers=pad one'\''
 END'
@@ -219,45 +209,33 @@ END'
 printf '%s\n' 'PASS failed launcher cannot publish an action'
 
 run_case clean 'CLEAN
-action shutdown
-action suspend
-action settings
 END'
-printf '%s\n' poweroff suspend settings >"$CASE_DIR/expected"
-cmp "$CASE_DIR/expected" "$CASE_DIR/actions"
+[ ! -f "$CASE_DIR/actions" ]
 [ ! -f "$CASE_DIR/sleeps" ]
-printf '%s\n' 'PASS clean exit and remaining actions'
-
-ARCHR_SESSION_SETTINGS="$root/missing-settings"
-export ARCHR_SESSION_SETTINGS
-run_case missing-settings 'action settings
-game runemu.sh demo
-END'
-[ "$(cat "$ARCHR_SESSION_RUN_DIR/last-exit")" = 37 ]
-grep -q 'settings.*unavailable' "$ARCHR_SESSION_LOG"
-printf '%s\n' 'PASS unavailable settings returns to launcher'
+printf '%s
+' 'PASS clean exit returns to launcher'
 
 # A missing compositor consumes exactly the bounded 100 polls, then continues.
 ARCHR_SESSION_SWAY_ATTEMPTS=100
 export ARCHR_SESSION_SWAY_ATTEMPTS
 XDG_RUNTIME_DIR="$root/no-compositor"
 export XDG_RUNTIME_DIR
-run_case sway-timeout 'action reboot
+run_case sway-timeout 'CLEAN
 END'
 [ "$(wc -l <"$CASE_DIR/sleeps" | tr -d ' ')" = 100 ]
 [ "$(sort -u "$CASE_DIR/sleeps")" = 0.1 ]
-[ "$(cat "$CASE_DIR/actions")" = reboot ]
+[ ! -f "$CASE_DIR/actions" ]
 printf '%s\n' 'PASS bounded sway wait'
 
 ARCHR_SESSION_SWAY_ATTEMPTS=0
 export ARCHR_SESSION_SWAY_ATTEMPTS
 run_case log-cap 'LOUD
 game runemu.sh LOGCHECK
-action reboot
+CLEAN
 END'
 [ "$(wc -c <"$ARCHR_SESSION_LOG")" -lt 262144 ]
 [ "$(cat "$ARCHR_SESSION_RUN_DIR/last-exit")" = 37 ]
-[ "$(cat "$CASE_DIR/actions")" = reboot ]
+[ ! -f "$CASE_DIR/actions" ]
 printf '%s\n' 'PASS session log remains bounded during child output'
 
 # Socket file types are real; only swaymsg's external protocol is faked.
@@ -275,7 +253,7 @@ for name in ("wayland-1", "sway-ipc.0.sock"):
   WAYLAND_DISPLAY=wayland-1
   ARCHR_SESSION_SWAY_ATTEMPTS=100
   export WAYLAND_DISPLAY ARCHR_SESSION_SWAY_ATTEMPTS
-  run_case sway-ready 'action reboot
+  run_case sway-ready 'CLEAN
 END'
   [ ! -f "$CASE_DIR/sleeps" ]
   [ "$(cat "$CASE_DIR/sway-calls")" = "-s $XDG_RUNTIME_DIR/sway-ipc.0.sock -t get_outputs" ]
@@ -321,51 +299,47 @@ run_stop_case() {
 run_stop_case service-stop 'game runemu.sh LONG'
 run_stop_case service-stop-shell 'game runemu.sh LONG; :'
 
-# Pending step 2; opt in with SESSION_PLATFORM_CONTRACTS=1.
-if [ "${SESSION_PLATFORM_CONTRACTS:-0}" = 1 ]; then
-  run_case removed-actions 'action shutdown
+run_case removed-actions 'action shutdown
 action reboot
 action settings
 END'
-  [ ! -f "$CASE_DIR/actions" ]
-  printf '%s\n' 'PASS removed actions cannot execute in supervisor'
-  for mode in absent off mem; do
-    ARCHR_TEST_SUSPEND_MODE=$mode
-    [ "$mode" != absent ] || ARCHR_TEST_SUSPEND_MODE=
-    export ARCHR_TEST_SUSPEND_MODE
-    run_case "suspend-$mode" 'action suspend
+[ ! -f "$CASE_DIR/actions" ]
+printf '%s\n' 'PASS removed actions cannot execute in supervisor'
+for mode in absent off mem; do
+  ARCHR_TEST_SUSPEND_MODE=$mode
+  [ "$mode" != absent ] || ARCHR_TEST_SUSPEND_MODE=
+  export ARCHR_TEST_SUSPEND_MODE
+  run_case "suspend-$mode" 'action suspend
 END'
-    expected='fake-suspend power'
-    [ "$mode" != mem ] || expected=suspend
-    [ "$(cat "$CASE_DIR/actions")" = "$expected" ]
-    [ "$(cat "$CASE_DIR/count")" = 2 ]
-  done
-  printf '%s\n' 'PASS suspend policy and launcher return'
+  expected='fake-suspend power'
+  [ "$mode" != mem ] || expected=suspend
+  [ "$(cat "$CASE_DIR/actions")" = "$expected" ]
+  [ "$(cat "$CASE_DIR/count")" = 2 ]
+done
+printf '%s\n' 'PASS suspend policy and launcher return'
 
-  export CASE_DIR="$root/launcher-stop"
-  mkdir -p "$CASE_DIR"
-  export ARCHR_SESSION_RUN_DIR="$CASE_DIR/run"
-  export ARCHR_SESSION_LOG="$CASE_DIR/session.log"
-  export ARCHR_SESSION_KILL_FILE="$CASE_DIR/kill-data"
-  export ARCHR_SESSION_STOP_SLEEP="$root/bin/stop-sleep"
-  export ARCHR_SESSION_SWAY_ATTEMPTS=0
-  printf '%s\n' HOLD >"$CASE_DIR/plan"
-  timeout 8 "${SESSION_TEST_SHELL:-sh}" "$session" >"$CASE_DIR/output" 2>&1 &
-  test_runner=$!
-  i=0
-  while [ ! -f "$CASE_DIR/launcher-ready" ] && [ "$i" -lt 200 ]; do
-    /bin/sleep 0.01
-    i=$((i + 1))
-  done
-  [ -f "$CASE_DIR/launcher-ready" ]
-  kill -TERM "$(cat "$CASE_DIR/supervisor-pid")"
-  wait "$test_runner"
-  test_runner=
-  [ "$(cat "$CASE_DIR/stop-sleeps")" = 0.2 ]
-  ! grep -q '4 s' "$ARCHR_SESSION_LOG"
-  [ ! -e "$ARCHR_SESSION_RUN_DIR/next" ]
-  [ "$(cat "$CASE_DIR/count")" = 1 ]
-  printf '%s\n' 'PASS launcher-only stop has no game cleanup window'
-fi
-
+export CASE_DIR="$root/launcher-stop"
+mkdir -p "$CASE_DIR"
+export ARCHR_SESSION_RUN_DIR="$CASE_DIR/run"
+export ARCHR_SESSION_LOG="$CASE_DIR/session.log"
+export ARCHR_SESSION_KILL_FILE="$CASE_DIR/kill-data"
+export ARCHR_SESSION_STOP_SLEEP="$root/bin/stop-sleep"
+export ARCHR_SESSION_SWAY_ATTEMPTS=0
+printf '%s\n' HOLD >"$CASE_DIR/plan"
+timeout 8 "${SESSION_TEST_SHELL:-sh}" "$session" >"$CASE_DIR/output" 2>&1 &
+test_runner=$!
+i=0
+while [ ! -f "$CASE_DIR/launcher-ready" ] && [ "$i" -lt 200 ]; do
+  /bin/sleep 0.01
+  i=$((i + 1))
+done
+[ -f "$CASE_DIR/launcher-ready" ]
+kill -TERM "$(cat "$CASE_DIR/supervisor-pid")"
+wait "$test_runner"
+test_runner=
+[ "$(cat "$CASE_DIR/stop-sleeps")" = 0.2 ]
+! grep -q '4 s' "$ARCHR_SESSION_LOG"
+[ ! -e "$ARCHR_SESSION_RUN_DIR/next" ]
+[ "$(cat "$CASE_DIR/count")" = 1 ]
+printf '%s\n' 'PASS launcher-only stop has no game cleanup window'
 echo 'All session tests passed.'

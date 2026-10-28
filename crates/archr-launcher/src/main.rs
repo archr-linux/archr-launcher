@@ -29,15 +29,18 @@ use std::{
 fn main() {
     let began = Instant::now();
     init_logging();
-    if let Err(error) = run(began, StartupTrace::new(began)) {
+    if let Err(error) = run(began, StartupTrace::new(began), std::env::args().skip(1)) {
         eprintln!("archr-launcher: {error}");
         std::process::exit(1);
     }
 }
-fn run(began: Instant, trace: StartupTrace) -> Result<(), String> {
+fn run(
+    began: Instant,
+    trace: StartupTrace,
+    mut args: impl Iterator<Item = String>,
+) -> Result<(), String> {
     let mut windowed = false;
     let mut script_source = None;
-    let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--windowed" => windowed = true,
@@ -116,6 +119,19 @@ fn run(began: Instant, trace: StartupTrace) -> Result<(), String> {
     let mut deferred = None;
     let mut banner_until = Instant::now() + Duration::from_secs(8);
     loop {
+        // A successful power request owns the screen until the OS stops us.
+        // Store is already flushed; no more input, scans, scripts or handoffs.
+        if ui.transition.is_some() {
+            match events.wait_event_timeout(1000) {
+                Some(Event::Quit { .. }) => return Ok(()),
+                Some(Event::Window {
+                    win_event: WindowEvent::Exposed | WindowEvent::SizeChanged(..),
+                    ..
+                }) => ui.draw(&app, &library, &theme, None)?,
+                _ => {}
+            }
+            continue;
+        }
         controllers.poll_mappings();
         dirty |= ui.tick() || ui.animating();
         let selected_system = if app.screen == Screen::Systems {
@@ -188,7 +204,7 @@ fn run(began: Instant, trace: StartupTrace) -> Result<(), String> {
             repeat.wait_ms(Instant::now())
         }) {
             match event {
-                Event::Quit { .. } if windowed => close_requested = true,
+                Event::Quit { .. } => close_requested = true,
                 Event::KeyDown {
                     keycode: Some(Keycode::Escape),
                     ..

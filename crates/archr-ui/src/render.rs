@@ -1073,7 +1073,6 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             };
             let label = match item {
                 QuickItem::Core { .. } => "menu.core",
-                QuickItem::Settings => "menu.settings",
                 QuickItem::Suspend => "menu.suspend",
                 QuickItem::Reboot => "menu.reboot",
                 QuickItem::Shutdown => "menu.shutdown",

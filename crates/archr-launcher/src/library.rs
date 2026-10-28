@@ -3,7 +3,7 @@ use crate::{
     handoff::{launch_command_with, write_next, NextCmd},
     paths::Paths,
     persistence::StoreWriter,
-    state::{DataSource, Outcome},
+    state::{DataSource, Outcome, SessionAction},
     store::Store,
     worker::{self, Update, Work, Worker},
 };
@@ -280,12 +280,13 @@ impl Library {
                     .map_err(|error| error.to_string())?;
                 return Ok(true);
             }
-            Outcome::Action(action) => {
+            Outcome::Action(SessionAction::Suspend) => {
                 self.flush_store()?;
-                write_next(&self.paths.run, &NextCmd::Action(action))
+                write_next(&self.paths.run, &NextCmd::Suspend)
                     .map_err(|error| error.to_string())?;
                 return Ok(true);
             }
+            Outcome::Action(_) => return Err("error.operation".to_owned()),
         }
         Ok(false)
     }
@@ -294,7 +295,7 @@ impl Library {
             writer.queue(self.store.clone());
         }
     }
-    /// Windowed close also waits for queued favorite/import snapshots.
+    /// Closing also waits for queued favorite/import snapshots.
     pub fn finish(&self) -> Result<(), String> {
         if self.ready {
             self.flush_store()
