@@ -348,8 +348,24 @@ fn sources(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
     }
 }
 
-/// Literals that look like catalog keys but name files or config entries.
+/// Config entries and file names that look like catalog keys.
 const CONFIG_KEYS: &[&str] = &[
+    "audio.device",
+    "audio.volume",
+    "display.brightness",
+    "global.netplay",
+    "global.netplay.customserver",
+    "global.netplay.host",
+    "global.netplay.nickname",
+    "global.netplay.port",
+    "global.netplay.relay",
+    "gpu.driver",
+    "idle.timeout",
+    "idle.timeout.game",
+    "launcher.clock.format",
+    "launcher.scraper.media",
+    "launcher.scraper.only_missing",
+    "launcher.scraper.systems",
     "moonlight.cfg",
     "moonlight.height",
     "moonlight.hosts",
@@ -358,15 +374,149 @@ const CONFIG_KEYS: &[&str] = &[
     "netplay.port",
     "netplay.relay_only",
     "netplay.show_missing",
+    "samba.enabled",
+    "simplehttp.enabled",
+    "ssh.enabled",
+    "system.cpugovernor",
+    "system.kblayout",
+    "system.kbvariant",
+    "system.language",
+    "system.suspendmode",
+    "system.timezone",
+    "wifi.adhoc.channel",
+    "wifi.adhoc.enabled",
+    "wifi.adhoc.id",
+    "wifi.enabled",
+    "wifi.key",
+    "wifi.ssid",
+    "a.rom",
+    "b.rom",
+    "body.ttf",
+    "game.nes",
+    "game.zip",
+    "h.01",
+    "legacy.size",
+    "missing.png",
+    "nmbd.service",
+    "plain.sh",
+    "power.png",
+    "scraper.toml",
+    "sfc.png",
+    "simplehttp.conf",
+    "smb.conf",
+    "smbd.service",
+    "snes.png",
+    "sshd.conf",
+    "sshd.service",
+    "store.toml",
+    "theme.toml",
+    "twonlinesn.sh",
+    "v.01",
+    "wifi.svg",
+    "wrench.svg",
 ];
+
+/// Every string literal of a Rust source: comments skipped, char literals
+/// (including '"'), escapes and raw strings handled.
+fn literals(source: &str) -> Vec<String> {
+    let c: Vec<char> = source.chars().collect();
+    let (mut i, mut out) = (0, Vec::new());
+    while i < c.len() {
+        match c[i] {
+            '/' if c.get(i + 1) == Some(&'/') => {
+                while i < c.len() && c[i] != '\n' {
+                    i += 1;
+                }
+            }
+            '/' if c.get(i + 1) == Some(&'*') => {
+                let mut depth = 0;
+                while i < c.len() {
+                    if c[i] == '/' && c.get(i + 1) == Some(&'*') {
+                        depth += 1;
+                        i += 2;
+                    } else if c[i] == '*' && c.get(i + 1) == Some(&'/') {
+                        depth -= 1;
+                        i += 2;
+                        if depth == 0 {
+                            break;
+                        }
+                    } else {
+                        i += 1;
+                    }
+                }
+            }
+            '\'' => {
+                // A char literal ('x', '\n', '"') closes within a few chars;
+                // anything else is a lifetime.
+                let close = if c.get(i + 1) == Some(&'\\') {
+                    c[i + 2..]
+                        .iter()
+                        .position(|&ch| ch == '\'')
+                        .map(|n| i + 2 + n)
+                } else {
+                    (c.get(i + 2) == Some(&'\'')).then_some(i + 2)
+                };
+                i = close.map_or(i + 1, |end| end + 1);
+            }
+            'r' if matches!(c.get(i + 1), Some('"' | '#'))
+                && (i == 0 || !(c[i - 1].is_alphanumeric() || c[i - 1] == '_')) =>
+            {
+                let hashes = c[i + 1..].iter().take_while(|&&ch| ch == '#').count();
+                if c.get(i + 1 + hashes) != Some(&'"') {
+                    i += 1;
+                    continue;
+                }
+                let start = i + 2 + hashes;
+                let end = (start..c.len())
+                    .find(|&j| c[j] == '"' && c[j + 1..].iter().take(hashes).all(|&ch| ch == '#'))
+                    .unwrap_or(c.len());
+                out.push(c[start..end].iter().collect());
+                i = end + 1 + hashes;
+            }
+            '"' => {
+                let mut text = String::new();
+                i += 1;
+                while i < c.len() && c[i] != '"' {
+                    if c[i] == '\\' {
+                        i += 1;
+                    }
+                    text.push(c[i.min(c.len() - 1)]);
+                    i += 1;
+                }
+                out.push(text);
+                i += 1;
+            }
+            _ => i += 1,
+        }
+    }
+    out
+}
+/// `[a-z_]+(\.[a-z0-9_]+)+`
+fn key_shaped(text: &str) -> bool {
+    let mut parts = text.split('.');
+    let first = parts.next().unwrap_or("");
+    let rest: Vec<_> = parts.collect();
+    !first.is_empty()
+        && first.chars().all(|c| c.is_ascii_lowercase() || c == '_')
+        && !rest.is_empty()
+        && rest.iter().all(|p| {
+            !p.is_empty()
+                && p.chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+        })
+}
+
+#[test]
+fn the_literal_tokenizer_skips_comments_and_char_literals() {
+    let source = "let a = '\"'; // \"in.comment\"\nlet b = \"x.y\\\"z\"; let c: &'static str = r#\"raw.key\"#; /* \"no.pe\" */ let d = '\\'';";
+    assert_eq!(literals(source), ["x.y\"z", "raw.key"]);
+    assert!(key_shaped("settings.usb_busy") && key_shaped("a.b2.c"));
+    assert!(!key_shaped("Cargo.toml") && !key_shaped("a.") && !key_shaped("a b.c"));
+}
 
 #[test]
 fn every_key_used_in_code_exists_in_the_catalog() {
     let known = keys(&locales().join("en.toml"));
-    let groups: std::collections::BTreeSet<_> = known
-        .iter()
-        .filter_map(|k| k.split_once('.').map(|g| g.0))
-        .collect();
     let mut files = Vec::new();
     for krate in ["archr-ui", "archr-launcher"] {
         sources(
@@ -379,22 +529,10 @@ fn every_key_used_in_code_exists_in_the_catalog() {
     }
     let mut missing = Vec::new();
     for file in files {
-        for literal in fs::read_to_string(&file)
-            .unwrap()
-            .split('"')
-            .skip(1)
-            .step_by(2)
-        {
+        for literal in literals(&fs::read_to_string(&file).unwrap()) {
             let key = literal.split('|').next().unwrap();
-            let shaped = !key.ends_with('.')
-                && !CONFIG_KEYS.contains(&key)
-                && key.contains('.')
-                && key
-                    .chars()
-                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '.')
-                && key.split_once('.').is_some_and(|(g, _)| groups.contains(g));
-            if shaped && !known.contains(key) {
-                missing.push(format!("{key} ({})", file.display()));
+            if key_shaped(key) && !CONFIG_KEYS.contains(&key) && !known.contains(key) {
+                missing.push(key.to_owned());
             }
         }
     }
@@ -402,6 +540,13 @@ fn every_key_used_in_code_exists_in_the_catalog() {
     missing.dedup();
     assert!(
         missing.is_empty(),
-        "keys without a catalog entry: {missing:#?}"
+        "literals that are not catalog keys: {missing:#?}"
     );
+}
+
+#[test]
+fn any_catalog_key_is_recognised_but_plain_text_is_not() {
+    let catalog = I18n::load(&locales(), Some("pt_BR"), None);
+    assert!(catalog.has("hint.confirm") && catalog.has("settings.failed"));
+    assert!(!catalog.has("Wi-Fi.guest") && !catalog.has("192.168.1.2"));
 }

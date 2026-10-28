@@ -77,7 +77,7 @@ impl Settings {
 pub(crate) fn value(catalog: &crate::i18n::I18n, text: &str) -> String {
     let mut fields = text.split('|');
     let key = fields.next().unwrap_or_default();
-    if key.starts_with("settings.") {
+    if key.starts_with("settings.") || catalog.has(key) {
         let fields: Vec<_> = fields.filter_map(|f| f.split_once('=')).collect();
         if fields.is_empty() {
             return catalog.text(key);
@@ -178,5 +178,12 @@ mod tests {
         ] {
             assert_eq!(value(&catalog, tag), want);
         }
+    }
+    #[test]
+    fn keys_outside_settings_are_translated_too() {
+        let catalog =
+            crate::i18n::I18n::load(std::path::Path::new("/nonexistent"), Some("pt_BR"), None);
+        assert_eq!(value(&catalog, "hint.confirm"), "Confirmar");
+        assert_eq!(value(&catalog, "alsa.card"), "alsa.card");
     }
 }
