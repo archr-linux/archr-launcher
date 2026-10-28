@@ -5,7 +5,7 @@ use std::{
 
 use archr_io::{atomic_publish, read_utf8, Symlinks::Follow};
 
-/// Build the existing ES runemu contract; every argument is a POSIX shell word.
+/// Build the runemu.sh launch contract; every argument is a POSIX shell word.
 /// Returns `InvalidInput` if the ROM path is not valid UTF-8.
 pub fn launch_command(
     rom: &Path,

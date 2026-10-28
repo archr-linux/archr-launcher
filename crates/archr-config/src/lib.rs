@@ -35,7 +35,7 @@ impl SystemCfg {
             .map(String::from)
     }
 
-    /// Game then system scope only, for keys whose fallback is es_systems.cfg.
+    /// Game then system scope only, for keys whose fallback is the systems catalog.
     pub fn get_local(&self, system: &str, rom: Option<&str>, key: &str) -> Option<String> {
         rom.and_then(|name| self.entry(&rom_key(system, name, key)))
             .or_else(|| self.entry(&format!("{system}.{key}")))
