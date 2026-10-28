@@ -27,7 +27,6 @@ pub struct InfoDetail {
 }
 #[derive(Clone, Default)]
 pub struct InfoCard {
-    pub title: &'static str,
     /// Summary: prominent main line, then secondary line.
     pub lines: Vec<String>,
     pub percent: Option<u8>,
@@ -35,7 +34,6 @@ pub struct InfoCard {
 }
 #[derive(Clone, Default)]
 pub struct Information {
-    pub uptime: String,
     pub version: String,
     pub device: String,
     pub kernel: String,

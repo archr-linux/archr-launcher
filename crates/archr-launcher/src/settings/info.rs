@@ -39,7 +39,6 @@ fn meter(label: impl Into<String>, value: String, percent: Option<u8>) -> InfoMe
     }
 }
 fn card(
-    title: &'static str,
     main: String,
     secondary: String,
     percent: Option<u8>,
@@ -47,7 +46,6 @@ fn card(
     meters: Vec<InfoMeter>,
 ) -> InfoCard {
     InfoCard {
-        title,
         lines: vec![main.clone(), secondary.clone()],
         percent,
         detail: InfoDetail {
@@ -358,7 +356,6 @@ impl Backend {
             .and_then(|v| v.parse::<f64>().ok())
             .unwrap_or(0.) as u64;
         Information {
-            uptime:format!("{}:{:02}",seconds/3600,seconds/60%60),
             version: identity.version.clone(),
             device: identity.device.clone(),
             kernel: identity.kernel.clone(),
@@ -448,7 +445,6 @@ impl Backend {
             temp.and_then(|v| percent(v, critical.unwrap_or(100_000))),
         ));
         InfoCard {
-            title:"settings.processor",
             lines: vec![
                 format!(
                     "settings.cpu_summary|model={}|count={}",
@@ -593,7 +589,7 @@ impl Backend {
             ("settings.resolution", resolution.clone()),
             ("settings.refresh_rate", refresh),
         ];
-        card("settings.graphics",
+        card(
             main,
             driver_version,
             None,
@@ -620,7 +616,7 @@ impl Backend {
         let available = kb("MemAvailable:");
         let used = total.saturating_sub(available);
         if total == 0 {
-            return card("settings.memory",String::new(), String::new(), None, vec![], vec![]);
+            return card(String::new(), String::new(), None, vec![], vec![]);
         }
         let ratio = percent(used, total);
         let mut rows = vec![
@@ -648,7 +644,7 @@ impl Backend {
             rows.push(("settings.zram", value.clone()));
             meters.push(meter("settings.zram", value, percent(used, total)));
         }
-        card("settings.memory",
+        card(
             usage(used, total),
             format!("settings.in_use|value={}", ratio.unwrap_or(0)),
             ratio,
@@ -695,7 +691,6 @@ impl Backend {
             }
         }
         InfoCard {
-            title:"settings.storage",
             lines: vec![main, secondary],
             percent: ratio,
             detail: InfoDetail {
@@ -748,7 +743,7 @@ impl Backend {
             String::new()
         };
         let signal_text = signal.map(|v| format!("@{v} dBm")).unwrap_or_default();
-        card("settings.network",
+        card(
             if wireless && connected && wifi_on(&self.paths.at("/")) {
                 "settings.wifi_connected"
             } else if connected {
@@ -820,7 +815,7 @@ impl Backend {
                 }
             })
             .unwrap_or("settings.unavailable");
-        card("settings.battery",
+        card(
             level
                 .map(|v| format!("settings.battery_summary|value={v}|status={status}"))
                 .unwrap_or_default(),

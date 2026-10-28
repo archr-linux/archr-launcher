@@ -1,6 +1,8 @@
 //! Shared, bounded settings layout. The common text cache only sees fitted lines.
 use super::*;
-use crate::settings::{Id, InfoCard, Kind, Page, Settings, CATEGORIES};
+use crate::settings::{Id, Kind, Page, Settings, CATEGORIES};
+#[path = "render/information.rs"]
+mod information;
 type Bounds = (f32, f32, f32, f32);
 struct View<'a, 'ttf, 'tex> {
     ui: &'a mut Ui<'ttf, 'tex>,
@@ -33,24 +35,25 @@ impl View<'_, '_, '_> {
             (!selected).then_some(self.theme.border),
         )
     }
+
     fn ink(&self, selected: bool) -> Rgba {
         selection(selected, self.theme.text, self.theme.highlight_text)
     }
     fn tr(&self, text: &str) -> String {
-        if let Some((key, value)) = text
-            .split_once('|')
-            .filter(|(k, _)| k.starts_with("settings."))
-        {
-            self.ui.catalog.format(key, &[("value", value)])
-        } else if text.starts_with("settings.") {
-            self.ui.catalog.text(text)
-        } else {
-            text.into()
-        }
+        crate::settings::information::value(&self.ui.catalog, text)
     }
     /// Wrap at measured character boundaries, preserve explicit newlines, never
     /// send an oversized line to the ellipsizing game-text API. Minimum: 12 px.
     fn lines(&mut self, text: &str, size: f32, width: u32) -> Result<Vec<String>, String> {
+        self.lines_face(text, size, width, Face::Regular)
+    }
+    fn lines_face(
+        &mut self,
+        text: &str,
+        size: f32,
+        width: u32,
+        face: Face,
+    ) -> Result<Vec<String>, String> {
         let mut lines = vec![String::new()];
         for ch in text.chars() {
             let line = lines.last_mut().expect("one line");
@@ -58,12 +61,7 @@ impl View<'_, '_, '_> {
                 lines.push(String::new());
                 continue;
             }
-            if !line.is_empty()
-                && self
-                    .ui
-                    .measure(&format!("{line}{ch}"), Face::Regular, size)?
-                    > width
-            {
+            if !line.is_empty() && self.ui.measure(&format!("{line}{ch}"), face, size)? > width {
                 if let Some(at) = line.rfind(' ') {
                     let rest = line.split_off(at + 1);
                     line.truncate(at);
@@ -83,10 +81,19 @@ impl View<'_, '_, '_> {
         text: &str,
         style: (f32, Rgba, Align),
     ) -> Result<(), String> {
+        self.text_face(bounds, text, style, Face::Regular)
+    }
+    fn text_face(
+        &mut self,
+        bounds: Bounds,
+        text: &str,
+        style: (f32, Rgba, Align),
+        face: Face,
+    ) -> Result<(), String> {
         let rect = self.rect(bounds);
         let (mut size, ink, align) = style;
         let (lines, size) = loop {
-            let lines = self.lines(text, size, rect.width())?;
+            let lines = self.lines_face(text, size, rect.width(), face)?;
             let limit = (bounds.3 / (size + 3.)).floor().max(1.) as usize;
             if lines.len() <= limit {
                 break (lines, size);
@@ -105,7 +112,7 @@ impl View<'_, '_, '_> {
         for (n, line) in lines.iter().enumerate() {
             self.ui.label_aligned(
                 line,
-                (Face::Regular, size, ink),
+                (face, size, ink),
                 self.rect((bounds.0, top + n as f32 * step, bounds.2, step)),
                 align,
             )?;
@@ -120,7 +127,15 @@ impl View<'_, '_, '_> {
     }
     fn draw(&mut self, state: &Settings) -> Result<(), String> {
         let right = self.ui.status_header(self.theme)? as f32 / self.ui.frame.scale;
-        let title = if state.page() == Page::Root {
+        let title = if let Page::InfoDetail(index) = state.page() {
+            format!(
+                "{} › {}",
+                self.tr("settings.info"),
+                self.tr(crate::settings::information::ITEMS[index.min(5)].0)
+            )
+        } else if state.page() == Page::Info {
+            self.tr("settings.info")
+        } else if state.page() == Page::Root {
             self.tr("settings.title")
         } else {
             format!(
@@ -129,10 +144,51 @@ impl View<'_, '_, '_> {
                 self.tr(state.page().title())
             )
         };
-        self.label((24., 0., right - 24., 48.), &title, 15.)?;
+        if let Page::InfoDetail(index) = state.page() {
+            let base = self.tr("settings.info");
+            let item = self.tr(crate::settings::information::ITEMS[index.min(5)].0);
+            let mut size = 15.;
+            while size > 12. && self.ui.measure(&title, Face::Semibold, size)? as f32 > right - 24.
+            {
+                size -= 1.;
+            }
+            let base_width = self.ui.measure(&base, Face::Semibold, size)? as f32;
+            let arrow_width = self.ui.measure(" › ", Face::Semibold, size)? as f32;
+            self.text_face(
+                (24., 0., base_width, 44.),
+                &base,
+                (size, self.theme.text, Align::Left),
+                Face::Semibold,
+            )?;
+            self.text_face(
+                (24. + base_width, 0., arrow_width, 44.),
+                " › ",
+                (size, self.theme.muted, Align::Left),
+                Face::Semibold,
+            )?;
+            self.text_face(
+                (
+                    24. + base_width + arrow_width,
+                    0.,
+                    right - 24. - base_width - arrow_width,
+                    44.,
+                ),
+                &item,
+                (size, self.theme.text, Align::Left),
+                Face::Semibold,
+            )?;
+        } else {
+            self.text_face(
+                (24., 0., right - 24., 44.),
+                &title,
+                (15., self.theme.text, Align::Left),
+                Face::Semibold,
+            )?;
+        }
         match state.page() {
             Page::Root => self.root(state)?,
             Page::Info => self.info(state)?,
+            Page::InfoDetail(index) => self.info_detail(state, index)?,
             Page::Soon(_) => {
                 self.panel((24., 90., 592., 100.), false)?;
                 self.text(
@@ -205,7 +261,7 @@ impl View<'_, '_, '_> {
             }
         }
         if state.error.as_ref().is_some_and(|(id, _)| {
-            state.page() != Page::Info
+            !matches!(state.page(), Page::Info | Page::InfoDetail(_))
                 && (id.is_none()
                     || state.page() == Page::Root
                     || state.page().rows().iter().any(|r| Some(r.id) == *id))
@@ -223,15 +279,32 @@ impl View<'_, '_, '_> {
                 12.,
             )?;
         }
-        self.ui
-            .divider(0, self.ui.px(440.), self.ui.frame.width, self.theme.border)?;
+        let footer = if matches!(state.page(), Page::Info | Page::InfoDetail(_)) {
+            432.
+        } else {
+            440.
+        };
+        self.ui.divider(
+            0,
+            self.ui.px(footer),
+            self.ui.frame.width,
+            self.theme.border,
+        )?;
         self.ui.hints(
             state.hints(),
             self.theme,
             self.ui.frame.width,
-            self.ui.px(440.),
-            self.ui.px(40.) as u32,
+            self.ui.px(footer),
+            self.ui.px(480. - footer) as u32,
         )?;
+        if matches!(state.page(), Page::Info | Page::InfoDetail(_)) {
+            let key = if state.page() == Page::Info {
+                "settings.updated_now"
+            } else {
+                "settings.refresh_interval"
+            };
+            self.note((24., footer, 170., 48.), &self.tr(key), 12.)?;
+        }
         if state.loading {
             self.note((24., 440., 160., 40.), &self.tr("loading"), 12.)?;
         }
@@ -347,88 +420,5 @@ impl View<'_, '_, '_> {
             &self.tr("settings.instant"),
             (12., self.theme.dim_text, Align::Left),
         )
-    }
-    fn card_height(pair: &[(&InfoCard, Vec<String>)]) -> f32 {
-        let count = pair.iter().map(|(_, lines)| lines.len()).max().unwrap_or(1);
-        36. + count as f32 * 17.
-            + if pair.iter().any(|(card, _)| card.percent.is_some()) {
-                12.
-            } else {
-                0.
-            }
-    }
-    fn info(&mut self, state: &Settings) -> Result<(), String> {
-        let info = &state.info;
-        self.label((24., 50., 94., 38.), "ArchR", 24.)?;
-        self.text(
-            (128., 50., 488., 38.),
-            &info.version,
-            (18., self.theme.highlight_bg, Align::Left),
-        )?;
-        self.note(
-            (24., 88., 592., 30.),
-            &self.ui.catalog.format(
-                "settings.device_line",
-                &[("device", &info.device), ("kernel", &info.kernel)],
-            ),
-            13.,
-        )?;
-        self.note(
-            (24., 118., 592., 20.),
-            &self
-                .ui
-                .catalog
-                .format("settings.uptime", &[("value", &info.uptime)]),
-            12.,
-        )?;
-        let mut content = Vec::new();
-        for card in &info.cards {
-            let mut lines = Vec::new();
-            for line in card.lines.iter().filter(|s| !s.is_empty()) {
-                lines.extend(self.lines(&self.tr(line), 12., self.ui.px(260.) as u32)?);
-            }
-            if lines.is_empty() {
-                lines.push(self.tr("settings.unavailable"));
-            }
-            content.push((card, lines));
-        }
-        // Try the complete content first; only unavailable cards replace an
-        // external value when the combined layout cannot clear the footer.
-        while content
-            .chunks(2)
-            .map(|pair| Self::card_height(pair) + 8.)
-            .sum::<f32>()
-            > 440. - 144.
-        {
-            let Some((card, lines)) = content
-                .iter_mut()
-                .filter(|(_, lines)| lines.len() > 1)
-                .max_by_key(|(_, lines)| lines.len())
-            else {
-                break;
-            };
-            log::warn!(
-                "Settings information unavailable in this layout: {}",
-                card.lines.join("\n")
-            );
-            *lines = vec![self.tr("settings.unavailable")];
-        }
-        let mut y = 144.;
-        for pair in content.chunks(2) {
-            let h = Self::card_height(pair);
-            for (n, (card, lines)) in pair.iter().enumerate() {
-                let x = 24. + n as f32 * 304.;
-                self.panel((x, y, 288., h), false)?;
-                self.label((x + 14., y + 6., 260., 22.), &self.tr(card.title), 14.)?;
-                for (i, line) in lines.iter().enumerate() {
-                    self.note((x + 14., y + 31. + i as f32 * 17., 260., 17.), line, 12.)?;
-                }
-                if let Some(v) = card.percent {
-                    self.bar((x + 14., y + h - 12., 260., 5.), v, self.theme.highlight_bg)?;
-                }
-            }
-            y += h + 8.;
-        }
-        Ok(())
     }
 }
