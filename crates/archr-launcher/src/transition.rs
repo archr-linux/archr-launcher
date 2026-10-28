@@ -333,6 +333,54 @@ esac
         fs::create_dir_all(paths.at("/storage/roms/nes")).unwrap();
         fs::write(paths.at("/storage/roms/nes/A.nes"), []).unwrap();
         fs::write(&paths.systems, "<systemList><system><name>nes</name><path>/storage/roms/nes</path><extension>.nes</extension><emulators><emulator name=\"retroarch\"><cores><core>a</core><core>b</core></cores></emulator></emulators></system></systemList>").unwrap();
+        // A failed load makes Store read-only, not the terminal actions.
+        let invalid = b"not TOML [";
+        fs::write(paths.store.join("store.toml"), invalid).unwrap();
+        let mut readonly = Library::initial(paths.clone());
+        readonly.start();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !readonly.ready || readonly.loading("nes") {
+            readonly.poll();
+            readonly.ensure("nes");
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let warning = ui.catalog.text("error.store_load");
+        assert_eq!(readonly.banner.take().unwrap().render(&ui.catalog), warning);
+        ui.banner = Some(warning.clone());
+        fs::remove_file(root.path().join("commands")).unwrap();
+        assert!(!invoke(
+            &mut ui,
+            &mut readonly,
+            Some(SessionAction::Shutdown)
+        ));
+        assert_eq!(ui.transition.as_deref(), Some("Desligando…"));
+        assert_eq!(
+            fs::read_to_string(root.path().join("commands")).unwrap(),
+            "poweroff\n"
+        );
+        assert_eq!(fs::read(paths.store.join("store.toml")).unwrap(), invalid);
+        assert!(apply(
+            &mut ui,
+            &App::new(10),
+            &mut readonly,
+            &theme,
+            Some(Outcome::Launch {
+                system: "nes".into(),
+                game: 0,
+            }),
+            "",
+            None,
+        )
+        .unwrap());
+        let next = fs::read_to_string(paths.run.join("next")).unwrap();
+        assert!(next.starts_with("game "));
+        assert!(next.contains("A.nes' '-Pnes' '--core=a' '--emulator=retroarch'"));
+        assert_eq!(ui.banner.as_deref(), Some(warning.as_str()));
+        assert!(invoke(&mut ui, &mut readonly, None));
+        assert_eq!(fs::read(paths.store.join("store.toml")).unwrap(), invalid);
+        fs::remove_file(paths.run.join("next")).unwrap();
+        drop(readonly);
         let sender = ui.sdl.event().unwrap().event_sender();
         drop(ui);
         std::env::set_var("ARCHR_LAUNCHER_ROOT", root.path());

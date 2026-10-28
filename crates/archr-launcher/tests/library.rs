@@ -220,6 +220,6 @@ fn invalid_store_is_visible_and_never_replaced_on_exit() {
         library.banner.as_ref().map(|banner| banner.key),
         Some("error.store_load")
     );
-    assert!(library.finish().is_err());
+    library.finish().unwrap();
     assert_eq!(fs::read_to_string(path).unwrap(), "broken [");
 }

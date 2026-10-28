@@ -162,23 +162,6 @@ fn store_fifo_is_rejected_without_opening() {
 }
 
 #[test]
-fn oversized_save_reports_error_and_preserves_previous_store() {
-    let dir = tempdir().unwrap();
-    let mut store = Store::default();
-    store.toggle_favorite("nes/old.zip");
-    store.save(dir.path()).unwrap();
-    let path = dir.path().join("store.toml");
-    let previous = fs::read(&path).unwrap();
-    store.toggle_favorite(&"x".repeat(256 * 1024));
-    assert_eq!(
-        store.save(dir.path()).unwrap_err().kind(),
-        std::io::ErrorKind::InvalidData
-    );
-    assert_eq!(fs::read(&path).unwrap(), previous);
-    assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
-}
-
-#[test]
 fn invalid_loaded_store_cannot_be_overwritten() {
     let dir = tempdir().unwrap();
     let path = dir.path().join("store.toml");
@@ -209,6 +192,10 @@ fn save_accepts_exactly_256_kib_and_rejects_further_growth() {
     assert_eq!(previous.len(), 256 * 1024);
     assert_eq!(Store::load(dir.path()).favorites(), store.favorites());
     store.toggle_favorite("one more");
-    assert!(store.save(dir.path()).is_err());
+    assert_eq!(
+        store.save(dir.path()).unwrap_err().kind(),
+        std::io::ErrorKind::InvalidData
+    );
     assert_eq!(fs::read(path).unwrap(), previous);
+    assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
 }

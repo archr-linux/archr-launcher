@@ -80,7 +80,7 @@ fn nonregular_descriptors_never_block() {
 }
 
 #[test]
-fn symlink_policy_is_explicit() {
+fn symlink_reads_follow_policy_and_publish_replaces_link_not_target() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("target");
     let link = dir.path().join("link");
@@ -88,10 +88,14 @@ fn symlink_policy_is_explicit() {
     symlink(&path, &link).unwrap();
     assert_eq!(read_utf8(&link, 5, Follow).unwrap(), "media");
     assert!(read_utf8(&link, 5, Reject).is_err());
+    atomic_publish(&link, true, |file| file.write_all(b"new")).unwrap();
+    assert!(!fs::symlink_metadata(&link).unwrap().is_symlink());
+    assert_eq!(fs::read(path).unwrap(), b"media");
+    assert_eq!(fs::read(link).unwrap(), b"new");
 }
 
 #[test]
-fn publish_replaces_without_truncation_and_syncs_durable_or_ephemeral_data() {
+fn publish_replaces_without_truncation_for_durable_or_ephemeral_data() {
     let dir = tempfile::tempdir().unwrap();
     for durable in [false, true] {
         let path = dir.path().join("nested/data");
@@ -131,19 +135,6 @@ fn failed_write_or_rename_preserves_destination_and_cleans_temporary() {
     assert!(atomic_publish(&path, true, |file| file.write_all(b"new")).is_err());
     assert!(path.is_dir());
     assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
-}
-
-#[test]
-fn publish_replaces_symlink_not_its_target() {
-    let dir = tempfile::tempdir().unwrap();
-    let target = dir.path().join("target");
-    let link = dir.path().join("link");
-    fs::write(&target, "old").unwrap();
-    symlink(&target, &link).unwrap();
-    atomic_publish(&link, true, |file| file.write_all(b"new")).unwrap();
-    assert!(!fs::symlink_metadata(&link).unwrap().is_symlink());
-    assert_eq!(fs::read(target).unwrap(), b"old");
-    assert_eq!(fs::read(link).unwrap(), b"new");
 }
 
 #[test]

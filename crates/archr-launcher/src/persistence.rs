@@ -28,7 +28,13 @@ pub(crate) struct StoreWriter {
 }
 impl StoreWriter {
     pub fn new(dir: PathBuf) -> Self {
-        Self::spawn(move |store| store.save(&dir).map_err(|error| error.to_string()))
+        Self::spawn(move |store| {
+            // A preserved invalid Store is read-only, not a failed transition.
+            if store.load_error.is_some() {
+                return Ok(());
+            }
+            store.save(&dir).map_err(|error| error.to_string())
+        })
     }
     fn spawn(mut write: impl FnMut(&Store) -> Saved + Send + 'static) -> Self {
         let shared = Arc::new(Shared::default());
