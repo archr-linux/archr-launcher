@@ -5,6 +5,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+pub(crate) const DEFAULT_ICONS_DIR: &str = "/usr/share/archr-launcher/themes/default/icons";
+
 macro_rules! glyphs {
     ($($variant:ident => $file:literal),+ $(,)?) => {
         #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]

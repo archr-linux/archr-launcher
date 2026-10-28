@@ -115,7 +115,11 @@ fn run(
                 let mut prepared = prepare_first_frame(
                     ttf,
                     &theme,
-                    paths.root.as_deref(),
+                    (
+                        paths.root.as_deref(),
+                        theme_path.as_deref(),
+                        &paths.at("/usr/share/archr-launcher/themes/default/icons"),
+                    ),
                     &catalog,
                     &library,
                     size,

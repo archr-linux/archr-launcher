@@ -20,7 +20,7 @@ use sdl2::{
 };
 use std::{
     collections::{HashMap, VecDeque},
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
@@ -186,6 +186,8 @@ impl<'font> Fonts<'font> {
 pub struct PreparedText<'font> {
     fonts: Fonts<'font>,
     entries: Vec<(String, u32, Style, Surface<'static>)>,
+    icons: Vec<((Glyph, u32), Surface<'static>)>,
+    icon_loader: icons::IconLoader,
     pub(crate) shadow: Option<Surface<'static>>,
     first_rasterization: StartupTrace,
 }
@@ -205,8 +207,30 @@ impl<'font> PreparedText<'font> {
         Self {
             fonts,
             entries: Vec::new(),
+            icons: Vec::new(),
+            icon_loader: icons::IconLoader::new(None, Path::new(icons::DEFAULT_ICONS_DIR)),
             shadow: None,
             first_rasterization: trace,
+        }
+    }
+    pub(crate) fn prepare_icons(
+        &mut self,
+        theme_dir: Option<&Path>,
+        system_icons_dir: &Path,
+        icons: impl IntoIterator<Item = (Glyph, u32)>,
+    ) {
+        self.icon_loader = icons::IconLoader::new(theme_dir, system_icons_dir);
+        for (glyph, size) in icons {
+            if self.icons.iter().any(|(key, _)| *key == (glyph, size)) {
+                continue;
+            }
+            if let Some(surface) = self.icon_loader.render(glyph, size) {
+                self.icons.push(((glyph, size), surface));
+                startup_phase!(
+                    self.fonts.startup,
+                    "icon rasterization [glyph={glyph:?}; size={size}px]"
+                );
+            }
         }
     }
     pub(crate) fn label(&mut self, source: &str, style: Style, width: u32) -> Result<(), String> {
@@ -266,10 +290,7 @@ impl<'font, 'texture> TextCache<'font, 'texture> {
             entries: VecDeque::new(),
             badges: VecDeque::with_capacity(16),
             icons: HashMap::new(),
-            icon_loader: icons::IconLoader::new(
-                None,
-                std::path::Path::new("/usr/share/archr-launcher/themes/default/icons"),
-            ),
+            icon_loader: prepared.icon_loader,
         };
         for (source, width, style, surface) in prepared.entries {
             let texture = creator
@@ -281,6 +302,14 @@ impl<'font, 'texture> TextCache<'font, 'texture> {
                 width,
                 texture,
             });
+        }
+        for (key, surface) in prepared.icons {
+            let mut texture = creator
+                .create_texture_from_surface(surface)
+                .map_err(|e| e.to_string())?;
+            texture.set_blend_mode(BlendMode::Blend);
+            texture.set_scale_mode(ScaleMode::Linear);
+            cache.icons.insert(key, texture);
         }
         startup_phase!(cache.startup, "CPU surfaces upload");
         Ok(cache)

@@ -301,11 +301,15 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         theme: &Theme,
         root: Option<&Path>,
     ) -> Result<(), String> {
-        self.configure_prepared(
-            creator,
-            PreparedText::new(ttf, font_paths(theme, root), self.startup),
-            root,
-        )
+        let mut prepared = PreparedText::new(ttf, font_paths(theme, root), self.startup);
+        prepared.prepare_icons(
+            self.theme_dir.as_deref(),
+            self.system_icons_dir
+                .as_deref()
+                .unwrap_or_else(|| Path::new(crate::icons::DEFAULT_ICONS_DIR)),
+            [],
+        );
+        self.configure_prepared(creator, prepared, root)
     }
     pub fn configure_prepared(
         &mut self,
@@ -325,13 +329,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         if self.shadow.is_some() {
             startup_phase!(self.startup, "shadow texture");
         }
-        let mut text = TextCache::from_prepared(creator, prepared)?;
-        text.icon_loader = crate::icons::IconLoader::new(
-            self.theme_dir.as_deref(),
-            self.system_icons_dir
-                .as_deref()
-                .unwrap_or_else(|| Path::new("/usr/share/archr-launcher/themes/default/icons")),
-        );
+        let text = TextCache::from_prepared(creator, prepared)?;
         self.text = Some(text);
         self.status = Some(Status::new(root, Instant::now()));
         startup_phase!(self.startup, "status initialization");
@@ -1191,7 +1189,7 @@ fn library_summary(data: &dyn DataSource, catalog: &I18n) -> String {
 pub fn prepare_first_frame<'font>(
     ttf: &'font Sdl2TtfContext,
     theme: &Theme,
-    root: Option<&Path>,
+    (root, theme_dir, system_icons_dir): (Option<&Path>, Option<&Path>, &Path),
     catalog: &I18n,
     data: &dyn DataSource,
     (width, height): (u32, u32),
@@ -1241,6 +1239,7 @@ pub fn prepare_first_frame<'font>(
     let list_width = (panel.x() - frame.px(system_art::PANEL_GAP) - margin).max(1) as u32;
     let row = (theme.row_height * height as f32).round();
     let selected = (theme.selected_height * height as f32).round();
+    let mut first_icons = Vec::new();
     for (i, name) in systems.iter().enumerate() {
         let y = top
             + (i as f32 * (row + frame.px(2.) as f32)
@@ -1253,6 +1252,16 @@ pub fn prepare_first_frame<'font>(
             .round() as i32;
         if y >= bottom {
             break;
+        }
+        if name.starts_with('@') {
+            first_icons.push((
+                if name == "@favorites" {
+                    Glyph::Star
+                } else {
+                    Glyph::Clock
+                },
+                frame.px(16.) as u32,
+            ));
         }
         let count = if name.starts_with('@') {
             data.collection_len(name)
@@ -1297,6 +1306,17 @@ pub fn prepare_first_frame<'font>(
             Some(list_width.saturating_sub(frame.px(28.) as u32).max(1)),
         )?;
     }
+    if let Some(name) = systems.first().filter(|name| name.starts_with('@')) {
+        first_icons.push((
+            if name == "@favorites" {
+                Glyph::Star
+            } else {
+                Glyph::Clock
+            },
+            frame.px(96.) as u32,
+        ));
+    }
+    prepared.prepare_icons(theme_dir, system_icons_dir, first_icons);
     Ok(prepared)
 }
 
