@@ -382,7 +382,7 @@
 "settings.ratio" = "Соотношение сторон"
 "settings.filter" = "Фильтр изображения"
 "settings.autosave" = "Автосохранение"
-"settings.autosave_detail" = "Сохраняет при выходе, восстанавливает при запуске"
+"settings.autosave_detail" = "Сохранение при выходе, загрузка при входе"
 "settings.state_slot" = "Слот состояния"
 "settings.other" = "Другое"
 "settings.other_system" = "Выбрать другую систему"
