@@ -42,7 +42,7 @@ pub struct Worker {
 
 pub fn definitions(paths: &Paths) -> Result<Vec<SystemDef>, String> {
     let mut systems = load_systems(&paths.systems)
-        .map_err(|error| format!("Cannot read es_systems.cfg: {error}"))?;
+        .map_err(|error| format!("Cannot read {}: {error}", paths.systems.display()))?;
     for system in &mut systems {
         system.path = paths.remap(&system.path);
     }

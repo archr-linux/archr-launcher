@@ -21,10 +21,10 @@ fn first_present_prepares_fitted_names_without_the_deferred_panel() {
 
 fn check_startup(definitions: &str, themed: bool) {
     let root = tempfile::tempdir().unwrap();
-    let config = root.path().join("storage/.config/emulationstation");
+    let config = root.path().join("storage/.config/archr");
     std::fs::create_dir_all(&config).unwrap();
     std::fs::write(
-        config.join("es_systems.cfg"),
+        config.join("systems.cfg"),
         format!("<systemList>{definitions}</systemList>"),
     )
     .unwrap();

@@ -26,7 +26,7 @@
 "empty.games" = "No games found"
 "empty.systems" = "No systems found"
 "library.summary" = "{systems} · {games}"
-"error.systems" = "Cannot load systems.\nCheck es_systems.cfg."
+"error.systems" = "Cannot load systems.\nCheck systems.cfg."
 "error.core_save" = "Cannot save core.\nCheck free space and permissions."
 "error.store_load" = "Cannot load favorites or history.\nPrevious file preserved; saving disabled."
 "error.store_save" = "Cannot save favorites or history.\nCheck free space and permissions."

@@ -27,15 +27,19 @@ pads só os eventos raw são usados, sem duplicar os eventos GameController.
 Sem entrada ES, usa SDL GameController ou o fallback de botões/eixo/hat.
 
 `ARCHR_LAUNCHER_ROOT` prefixa os caminhos absolutos, inclusive os caminhos de
-ROMs de `es_systems.cfg`, ROMs/mídias absolutos do gamelist (antes dos testes
+ROMs do catálogo de sistemas, ROMs/mídias absolutos do gamelist (antes dos testes
 de existência), `/usr/bin/runemu.sh`, `/run/archr-launcher` e
 `/tmp/.system.cfg.lock`. Assim uma execução de teste não grava a trava nem o
 handoff do host. As fontes padrão tentam primeiro o prefixo, depois as fontes
 do host. Isso facilita testes, mas não é uma sandbox de segurança.
 
-A configuração de sistemas vem de
-`/storage/.config/emulationstation/es_systems.cfg`, ou de
-`/usr/config/emulationstation/es_systems.cfg` se a primeira não existir.
+O catálogo de sistemas (XML no formato do `es_systems.cfg`, gerado pelo pacote
+`virtual/emulators`) é o primeiro arquivo existente entre
+`/storage/.config/archr/systems.cfg` (substituição do usuário),
+`/usr/share/archr/systems.cfg` (do pacote) e, só durante a transição, os
+caminhos antigos `/storage/.config/emulationstation/es_systems.cfg` e
+`/usr/config/emulationstation/es_systems.cfg`; usar um destes gera um aviso
+no log.
 O tema vem de `launcher.theme` em
 `/storage/.config/system/configs/system.cfg` (padrão `default`).
 
@@ -124,7 +128,7 @@ pela cor do tema; os do primeiro quadro de sistemas são preparados no worker.
 Imagens de console da tela de sistemas: `/storage/.config/archr-launcher/systems/<nome>.{png,jpg,webp}`
 tem precedência sobre `<tema>/systems/<nome>.{png,jpg,webp}`; sem imagem, o
 painel mostra um cartão tipográfico gerado. `<nome>` é o `<name>` do
-`es_systems.cfg`; sistemas parentes (ex. `megadrive` e `genesis`) usam a mesma
+catálogo de sistemas; sistemas parentes (ex. `megadrive` e `genesis`) usam a mesma
 foto por uma tabela de apelidos em `render/system_art.rs`.
 
 Todos os tokens de `theme.toml` são opcionais, com fallback individual.

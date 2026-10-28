@@ -12,13 +12,13 @@ use std::{
 
 fn fixture() -> (tempfile::TempDir, Paths) {
     let dir = tempfile::tempdir().unwrap();
-    let config = dir.path().join("storage/.config/emulationstation");
+    let config = dir.path().join("storage/.config/archr");
     fs::create_dir_all(&config).unwrap();
     let paths = Paths::new(Some(dir.path().to_owned()));
     let roms = paths.at("/storage/roms/nes");
     fs::create_dir_all(&roms).unwrap();
     fs::write(roms.join("A.nes"), []).unwrap();
-    fs::write(config.join("es_systems.cfg"), "<systemList><system><name>nes</name><fullname>Nintendo</fullname><path>/storage/roms/nes</path><extension>.nes</extension><emulators><emulator name=\"retroarch\"><cores><core default=\"true\">fceumm</core><core>nestopia</core></cores></emulator></emulators></system></systemList>").unwrap();
+    fs::write(config.join("systems.cfg"), "<systemList><system><name>nes</name><fullname>Nintendo</fullname><path>/storage/roms/nes</path><extension>.nes</extension><emulators><emulator name=\"retroarch\"><cores><core default=\"true\">fceumm</core><core>nestopia</core></cores></emulator></emulators></system></systemList>").unwrap();
     let paths = Paths::new(Some(dir.path().to_owned()));
     let mut definitions = load_systems(&paths.systems).unwrap();
     definitions[0].path = roms.clone();

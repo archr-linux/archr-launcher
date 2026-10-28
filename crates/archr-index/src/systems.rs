@@ -48,10 +48,10 @@ impl SystemDef {
     }
 }
 
-/// Read EmulationStation's system list without building an XML DOM.
+/// Read a systems catalog (es_systems.cfg XML format) without building a DOM.
 /// Unknown elements are skipped, preserving the order of systems and cores.
-pub fn load_systems(es_systems: &Path) -> Result<Vec<SystemDef>, IndexError> {
-    let source = read_bytes(es_systems, 1024 * 1024, Follow)?;
+pub fn load_systems(catalog: &Path) -> Result<Vec<SystemDef>, IndexError> {
+    let source = read_bytes(catalog, 1024 * 1024, Follow)?;
     let mut reader = Reader::from_reader(source.as_slice());
     reader.config_mut().expand_empty_elements = true;
     let mut buffer = Vec::new();
