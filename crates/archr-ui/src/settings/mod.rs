@@ -346,6 +346,10 @@ pub struct Scrape {
     /// Allowed threads after a verified login, 0 when unknown.
     pub threads: usize,
     pub verifying: bool,
+    /// User name typed for a login that is not verified yet.
+    pub draft: String,
+    /// A start was requested and the host has not answered.
+    pub starting: bool,
     pub running: bool,
     pub system: String,
     pub done: usize,
@@ -507,6 +511,7 @@ impl Settings {
             | Id::ScraperStart => {
                 !self.scrape.available
                     || self.scrape.verifying
+                    || self.scrape.starting
                     || (self.scrape.running && id != Id::ScraperStart)
             }
             _ => false,

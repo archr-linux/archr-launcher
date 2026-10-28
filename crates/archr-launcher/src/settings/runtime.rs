@@ -15,7 +15,9 @@ pub struct Runtime {
     next_scan: Instant,
     /// Seconds shown in the Wi-Fi footer, redrawn as they change.
     scan_age: u64,
-    job: Option<archr_scraper::Job>,
+    job: Option<(archr_scraper::Job, Vec<String>)>,
+    /// Systems whose art changed, for the library to reload.
+    scraped: Option<Vec<String>>,
     closing: bool,
 }
 impl Runtime {
@@ -29,6 +31,7 @@ impl Runtime {
             next_scan: Instant::now(),
             scan_age: 0,
             job: None,
+            scraped: None,
             closing: false,
         }
     }
@@ -71,9 +74,10 @@ impl Runtime {
             Effect::Connect(ssid, password) => self.send(Work::Connect(ssid, password)),
             Effect::Forget(ssid) => self.send(Work::Forget(ssid)),
             Effect::Login(user, password) => self.send(Work::Login(user, password)),
+            Effect::Scrape if self.job.is_some() => self.state.scrape.starting = false,
             Effect::Scrape => self.send(Work::Scrape),
             Effect::CancelScrape => {
-                if let Some(job) = &self.job {
+                if let Some((job, _)) = &self.job {
                     job.cancel();
                 }
             }
@@ -87,7 +91,7 @@ impl Runtime {
     }
     /// Engine events arrive on the engine's own thread; this never blocks.
     fn poll_scrape(&mut self) -> bool {
-        let Some(job) = &self.job else {
+        let Some((job, _)) = &self.job else {
             return false;
         };
         let mut changed = false;
@@ -106,13 +110,18 @@ impl Runtime {
             if let Some(stop) = stop {
                 scrape.running = false;
                 scrape.outcome = Some(super::pages::scrape_outcome(stop));
-                self.job = None;
+                // Cancelled and failed runs may still have saved some art.
+                self.scraped = self.job.take().map(|(_, systems)| systems);
                 break;
             }
         }
         changed
     }
 
+    /// Systems to reload once a scraping run has ended.
+    pub fn take_scraped(&mut self) -> Option<Vec<String>> {
+        self.scraped.take()
+    }
     pub fn poll(&mut self) -> (bool, Option<String>) {
         let (mut dirty, language) = match self.worker.as_mut() {
             Some(worker) => worker.poll(&mut self.state, &mut self.job),

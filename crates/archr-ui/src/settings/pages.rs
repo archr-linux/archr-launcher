@@ -133,14 +133,14 @@ impl Settings {
                 Effect::Connect(self.wifi_ssid.clone(), value)
             }
             Id::ScraperAccount => {
-                self.scrape.user = value;
+                // A draft until the service accepts it and the login is saved.
+                self.scrape.draft = value;
                 self.open_keyboard(Id::ScraperPassword, Mode::Secret, String::new());
                 Effect::None
             }
             Id::ScraperPassword => {
                 self.scrape.verifying = true;
-                self.scrape.threads = 0;
-                Effect::Login(self.scrape.user.clone(), value)
+                Effect::Login(std::mem::take(&mut self.scrape.draft), value)
             }
             id => {
                 self.pending = Some(id);
@@ -202,8 +202,11 @@ impl Settings {
                 self.open_keyboard(Id::ScraperAccount, Mode::Text, user);
             }
             Id::ScraperStart if self.scrape.running => return Some(Effect::CancelScrape),
+            // Pending from the first press: a second A never starts a second job.
+            Id::ScraperStart if self.scrape.starting => {}
             Id::ScraperStart => {
                 self.scrape.outcome = None;
+                self.scrape.starting = true;
                 return Some(Effect::Scrape);
             }
             id if Self::text_input(id) => {

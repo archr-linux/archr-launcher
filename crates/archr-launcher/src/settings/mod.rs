@@ -315,8 +315,8 @@ enum Reply {
     Connect(Result<(), String>),
     Forget(Result<(), String>),
     Variants(Vec<(String, String)>),
-    Login(Result<usize, String>),
-    Scrape(Result<archr_scraper::Job, String>),
+    Login(Result<(String, usize), String>),
+    Scrape(Result<(archr_scraper::Job, Vec<String>), String>),
 }
 pub struct Worker {
     tx: mpsc::Sender<Work>,
@@ -369,7 +369,7 @@ impl Worker {
     pub(super) fn poll(
         &mut self,
         state: &mut Settings,
-        job: &mut Option<archr_scraper::Job>,
+        job: &mut Option<(archr_scraper::Job, Vec<String>)>,
     ) -> (bool, Option<String>) {
         let mut changed = false;
         let mut language = None;
@@ -456,23 +456,27 @@ impl Worker {
                 Reply::Login(result) => {
                     state.scrape.verifying = false;
                     match result {
-                        Ok(threads) => {
+                        // Only a verified, saved login becomes the shown account.
+                        Ok((user, threads)) => {
+                            state.scrape.user = user;
                             state.scrape.threads = threads;
                             state.error = None;
                         }
-                        Err(error) => {
-                            state.scrape.user.clear();
-                            state.error = Some((None, error));
-                        }
+                        Err(error) => state.error = Some((None, error)),
                     }
                 }
-                Reply::Scrape(result) => match result {
-                    Ok(started) => {
-                        state.scrape.running = true;
-                        *job = Some(started);
+                Reply::Scrape(result) => {
+                    state.scrape.starting = false;
+                    match result {
+                        // Never replace (and so cancel) a job already running.
+                        Ok(started) if job.is_some() => drop(started),
+                        Ok(started) => {
+                            state.scrape.running = true;
+                            *job = Some(started);
+                        }
+                        Err(error) => state.error = Some((None, error)),
                     }
-                    Err(error) => state.error = Some((None, error)),
-                },
+                }
             }
         }
         (changed, language)

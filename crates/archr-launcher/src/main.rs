@@ -224,6 +224,11 @@ fn run(
             ui.set_settings_clock_format(settings.state.value(archr_ui::settings::Id::ClockFormat));
         }
         dirty |= settings_dirty;
+        if let Some(systems) = settings.take_scraped() {
+            library.reload(&systems);
+            covers.clear();
+            dirty = true;
+        }
         dirty |= moonlight.poll();
         if let Some(language) = language {
             ui.catalog = I18n::load(

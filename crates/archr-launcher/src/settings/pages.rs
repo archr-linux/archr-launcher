@@ -138,7 +138,7 @@ impl Backend {
         state.options.insert(Id::ScraperSystems, systems);
     }
     /// Blocking login check; the login is stored only once the service accepts it.
-    pub(super) fn login(&self, user: &str, password: &str) -> Result<usize, String> {
+    pub(super) fn login(&self, user: &str, password: &str) -> Result<(String, usize), String> {
         let creds = Credentials {
             user: user.trim().into(),
             password: password.into(),
@@ -150,10 +150,11 @@ impl Backend {
             .map_err(|stop| scrape_outcome(stop).to_owned())?;
         fs::create_dir_all(&self.paths.store).map_err(|e| e.to_string())?;
         creds.save(&self.paths.store).map_err(|e| e.to_string())?;
-        Ok(info.threads)
+        Ok((creds.user, info.threads))
     }
-    /// Starts the engine's own background job from the saved options.
-    pub(super) fn scrape(&self) -> Result<Job, String> {
+    /// Starts the engine's own background job from the saved options; also
+    /// names the systems whose art may change.
+    pub(super) fn scrape(&self) -> Result<(Job, Vec<String>), String> {
         let cfg = self.cfg()?;
         let get = |id: Id| {
             cfg.get_setting(id.key(), None, None)
@@ -180,7 +181,14 @@ impl Backend {
             })
             .collect();
         fs::create_dir_all(&self.paths.cache).map_err(|e| e.to_string())?;
-        Ok(engine.start(crate::worker::definitions(&self.paths)?, options))
+        let systems = crate::worker::definitions(&self.paths)?;
+        let touched = systems
+            .iter()
+            .filter(|s| options.systems.is_empty() || options.systems.contains(&s.name))
+            .filter(|s| archr_scraper::system_id(&s.name).is_some())
+            .map(|s| s.name.clone())
+            .collect();
+        Ok((engine.start(systems, options), touched))
     }
     pub(super) fn apply_page(&self, id: Id, value: &str) -> Option<Result<String, String>> {
         if !matches!(
