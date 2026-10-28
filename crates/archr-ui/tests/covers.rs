@@ -14,8 +14,8 @@ fn thumbnail_cached_by_path_and_mtime() {
         .save(&source)
         .unwrap();
     fs::copy(&source, &other).unwrap();
-    let first = thumbnail_path(&cache, &source).unwrap();
-    assert_ne!(first, thumbnail_path(&cache, &other).unwrap());
+    let first = thumbnail_path(&cache, &source, 40, 40).unwrap();
+    assert_ne!(first, thumbnail_path(&cache, &other, 40, 40).unwrap());
     let thumb = load_thumbnail(&cache, &source, 40, 40).unwrap();
     assert_eq!((thumb.width, thumb.height), (40, 32));
     assert!(first.is_file());
@@ -33,10 +33,27 @@ fn thumbnail_cached_by_path_and_mtime() {
         .unwrap()
         .set_modified(changed)
         .unwrap();
-    let second = thumbnail_path(&cache, &source).unwrap();
+    let second = thumbnail_path(&cache, &source, 40, 40).unwrap();
     assert_ne!(first, second);
     load_thumbnail(&cache, &source, 40, 40).unwrap();
     assert!(second.is_file());
+    assert_ne!(second, thumbnail_path(&cache, &source, 20, 20).unwrap());
+    let second_mtime = fs::metadata(&second).unwrap().modified().unwrap();
     let resized = load_thumbnail(&cache, &source, 20, 20).unwrap();
     assert_eq!((resized.width, resized.height), (20, 16));
+    assert_eq!(
+        fs::metadata(&second).unwrap().modified().unwrap(),
+        second_mtime,
+        "a second size must not replace an existing thumbnail"
+    );
+    assert!(
+        fs::read_dir(&cache).unwrap().all(|entry| {
+            entry
+                .unwrap()
+                .path()
+                .extension()
+                .is_some_and(|ext| ext == "png")
+        }),
+        "thumbnail dimensions belong in the key, not a sidecar"
+    );
 }

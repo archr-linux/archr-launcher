@@ -1,5 +1,6 @@
 //! Open devices in SDL joystick index order, retaining handles for event delivery.
 use archr_io::{read_utf8, Symlinks::Follow};
+use sdl2::event::Event;
 use sdl2::{
     controller::GameController, joystick::Joystick, GameControllerSubsystem, JoystickSubsystem,
 };
@@ -12,6 +13,8 @@ use std::{
 
 struct Device {
     index: u32,
+    guid: String,
+    name: String,
     joystick: Joystick,
     controller: Option<GameController>,
 }
@@ -68,27 +71,28 @@ impl Controllers {
             self.loading = None;
         }
     }
-    pub fn map_device_event(&self, event: &sdl2::event::Event) -> Option<Button> {
-        let which = match *event {
-            sdl2::event::Event::JoyButtonDown { which, .. }
-            | sdl2::event::Event::JoyButtonUp { which, .. }
-            | sdl2::event::Event::JoyHatMotion { which, .. }
-            | sdl2::event::Event::JoyAxisMotion { which, .. }
-            | sdl2::event::Event::ControllerButtonDown { which, .. }
-            | sdl2::event::Event::ControllerButtonUp { which, .. }
-            | sdl2::event::Event::ControllerAxisMotion { which, .. } => which,
-            _ => return None,
+    /// None ignores a duplicate/unknown stream; Some(None) releases an input.
+    pub(crate) fn read(&self, event: &Event) -> Option<Option<Button>> {
+        let Some((which, raw)) = crate::input::device_event(event) else {
+            return Some(crate::input::map_event(event));
         };
+        if self.loading.is_some() {
+            return None;
+        }
         let device = self
             .devices
             .iter()
-            .find(|device| device.joystick.instance_id() == which)?;
-        self.mappings.map_device(
-            &device.joystick.guid().to_string(),
-            &device.joystick.name(),
-            device.controller.is_some(),
-            event,
-        )
+            .find(|d| d.joystick.instance_id() == which)?;
+        let raw_stream = device.controller.is_none()
+            || self.mappings.contains_device(&device.guid, &device.name);
+        (raw == raw_stream).then(|| {
+            self.mappings.map_device(
+                &device.guid,
+                &device.name,
+                device.controller.is_some(),
+                event,
+            )
+        })
     }
 
     pub fn refresh(&mut self) {
@@ -106,6 +110,8 @@ impl Controllers {
                         .flatten();
                     self.devices.push(Device {
                         index,
+                        guid: joystick.guid().to_string(),
+                        name: joystick.name(),
                         joystick,
                         controller,
                     });
@@ -114,36 +120,11 @@ impl Controllers {
             }
         }
     }
-    pub fn accepts_raw(&self, instance: u32) -> bool {
-        if self.loading.is_some() {
-            return false;
-        }
-        self.devices.iter().any(|device| {
-            device.joystick.instance_id() == instance
-                && (device.controller.is_none()
-                    || self.mappings.contains_device(
-                        &device.joystick.guid().to_string(),
-                        &device.joystick.name(),
-                    ))
-        })
-    }
-    pub fn accepts_controller(&self, instance: u32) -> bool {
-        if self.loading.is_some() {
-            return false;
-        }
-        self.devices.iter().any(|device| {
-            device.joystick.instance_id() == instance
-                && device.controller.is_some()
-                && !self
-                    .mappings
-                    .contains_device(&device.joystick.guid().to_string(), &device.joystick.name())
-        })
-    }
     pub fn configuration(&self) -> String {
         controller_arguments(
             self.devices
                 .iter()
-                .map(|device| (device.index, device.joystick.guid().to_string())),
+                .map(|device| (device.index, device.guid.clone())),
         )
     }
 }

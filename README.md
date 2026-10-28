@@ -73,8 +73,8 @@ no desenho. Sem display, os mesmos fluxos podem rodar com
 - Favoritos/histórico do ES são importados uma vez por sistema, quando sua lista
   é carregada. As coleções preservam o sistema e índice reais de cada jogo.
 - Miniaturas são decodificadas/redimensionadas em worker e salvas em
-  `/storage/.cache/archr-launcher/thumbs/<hash-caminho>-<mtime>.png`. Um pequeno
-  arquivo `.size` invalida a miniatura quando o tamanho do retângulo muda.
+  `/storage/.cache/archr-launcher/thumbs/<hash-caminho>-<mtime>-<largura>x<altura>.png`.
+  As dimensões fazem parte da chave; tamanhos diferentes coexistem sem `.size`.
   Somente a seleção e até dois vizinhos de cada lado são pedidos; até 16
   texturas de capa e 128 texturas de texto ficam em memória.
 - Favoritos/importações são gravados por um writer serializado que coalesce
@@ -115,7 +115,7 @@ A bateria usa `ROOT/sys/class/power_supply/battery/{capacity,status}`, quando
 há prefixo; sem capacidade válida, o indicador fica oculto. Um worker começa
 depois da primeira apresentação e faz a leitura no máximo a cada 30 s; até
 chegar a primeira amostra, a bateria fica oculta. O desenho só consulta um
-snapshot atômico, sem esperar pelo sysfs. O relógio usa a hora local e atualiza
+snapshot tipado, sem bloquear nem esperar pelo sysfs. O relógio usa a hora local e atualiza
 por minuto. Seleção/rolagem animam por 90 ms e capas por 120 ms. Nova entrada
 conclui os alvos anteriores imediatamente. Somente durante essas animações há
 apresentações contínuas com vsync; parado, o desenho continua por eventos.

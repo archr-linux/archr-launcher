@@ -221,37 +221,20 @@ pub fn button_event(
     controllers: &Controllers,
     repeat: &mut Repeat,
 ) -> Option<Button> {
+    repeat.event(event, controllers.read(event)?, Instant::now())
+}
+
+/// SDL instance identity and stream kind, shared by routing and translation.
+pub(crate) fn device_event(event: &Event) -> Option<(u32, bool)> {
     match *event {
-        Event::ControllerButtonDown { which, .. }
-        | Event::ControllerButtonUp { which, .. }
-        | Event::ControllerAxisMotion { which, .. }
-            if !controllers.accepts_controller(which) =>
-        {
-            return None
-        }
         Event::JoyButtonDown { which, .. }
         | Event::JoyButtonUp { which, .. }
         | Event::JoyHatMotion { which, .. }
-        | Event::JoyAxisMotion { which, .. }
-            if !controllers.accepts_raw(which) =>
-        {
-            return None
-        }
-        _ => {}
-    }
-    repeat.event(event, mapped_button(event, controllers), Instant::now())
-}
-
-fn mapped_button(event: &Event, controllers: &Controllers) -> Option<Button> {
-    match event {
-        Event::JoyButtonDown { .. }
-        | Event::JoyButtonUp { .. }
-        | Event::JoyHatMotion { .. }
-        | Event::JoyAxisMotion { .. }
-        | Event::ControllerButtonDown { .. }
-        | Event::ControllerButtonUp { .. }
-        | Event::ControllerAxisMotion { .. } => controllers.map_device_event(event),
-        _ => map_event(event),
+        | Event::JoyAxisMotion { which, .. } => Some((which, true)),
+        Event::ControllerButtonDown { which, .. }
+        | Event::ControllerButtonUp { which, .. }
+        | Event::ControllerAxisMotion { which, .. } => Some((which, false)),
+        _ => None,
     }
 }
 

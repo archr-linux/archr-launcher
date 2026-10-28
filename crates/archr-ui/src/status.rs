@@ -1,22 +1,14 @@
 //! Cached status: only the status worker touches sysfs. It starts after
-//! present; the render thread consumes its atomic snapshot without waiting.
+//! present; the render thread consumes a typed snapshot without waiting.
 use std::{
     fs,
     path::{Path, PathBuf},
-    sync::{
-        atomic::{AtomicU16, Ordering},
-        mpsc, Arc,
-    },
+    sync::{mpsc, Arc, Mutex},
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 const REFRESH: Duration = Duration::from_secs(30);
-const WIFI: u16 = 1 << 10;
-const READY: u16 = 1 << 9;
-const PRESENT: u16 = 1 << 8;
-const CHARGING: u16 = 1 << 7;
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Battery {
     pub percent: u8,
@@ -48,13 +40,18 @@ impl BatterySource {
         })())
     }
 }
+#[derive(Clone, Copy, Default)]
+struct Snapshot {
+    battery: Option<Battery>,
+    wifi: bool,
+}
 struct Worker {
-    value: Arc<AtomicU16>,
+    value: Arc<Mutex<Snapshot>>,
     stop: mpsc::Sender<()>,
 }
 impl Worker {
     fn start(path: PathBuf) -> std::io::Result<Self> {
-        let value = Arc::new(AtomicU16::new(0)); // no reading has arrived yet
+        let value = Arc::new(Mutex::new(Snapshot::default()));
         let published = value.clone();
         let (stop, stopped) = mpsc::channel();
         thread::Builder::new()
@@ -66,14 +63,11 @@ impl Worker {
                 };
                 loop {
                     if let Some(battery) = source.poll(Instant::now()) {
-                        let bits = READY
-                            | if wifi_on(&path) { WIFI } else { 0 }
-                            | battery.map_or(0, |b| {
-                                PRESENT
-                                    | u16::from(b.percent)
-                                    | if b.charging { CHARGING } else { 0 }
-                            });
-                        published.store(bits, Ordering::Release);
+                        let snapshot = Snapshot {
+                            battery,
+                            wifi: wifi_on(&path),
+                        };
+                        *published.lock().expect("status snapshot") = snapshot;
                     }
                     if stopped.recv_timeout(REFRESH) != Err(mpsc::RecvTimeoutError::Timeout) {
                         break;
@@ -126,24 +120,19 @@ impl Status {
         }
     }
     pub fn poll(&mut self, _now: Instant) -> bool {
-        let bits = self
+        let snapshot = self
             .worker
             .as_ref()
-            .map_or(0, |w| w.value.load(Ordering::Acquire));
+            .and_then(|w| w.value.try_lock().ok().map(|s| *s));
         let unix = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        self.update(unix, bits)
+        self.update(unix, snapshot)
     }
-    fn update(&mut self, unix: u64, bits: u16) -> bool {
+    fn update(&mut self, unix: u64, snapshot: Option<Snapshot>) -> bool {
         let mut changed = false;
-        if bits & READY != 0 {
-            let battery = (bits & PRESENT != 0).then_some(Battery {
-                percent: (bits & 0x7f) as u8,
-                charging: bits & CHARGING != 0,
-            });
-            let wifi = bits & WIFI != 0;
+        if let Some(Snapshot { battery, wifi }) = snapshot {
             changed = self.battery != battery || self.wifi != wifi;
             self.battery = battery;
             self.wifi = wifi;
@@ -189,23 +178,32 @@ mod tests {
     fn redraw_only_when_displayed_clock_or_snapshot_changes() {
         let mut status = Status::new(None, Instant::now());
         let unix = 1_700_000_040;
-        status.update(unix, READY);
-        assert!(!status.update(unix + 59, READY));
-        assert!(status.update(unix + 60, READY));
-        assert!(!status.update(unix + 60, READY));
-        for (bits, changed) in [
-            (READY | PRESENT | 87, true),
-            (READY | PRESENT | 87, false),
-            (READY | PRESENT | 86, true),
-            (READY | PRESENT | CHARGING | 86, true),
-            (READY | PRESENT | CHARGING | WIFI | 86, true),
-            (READY | PRESENT | CHARGING | WIFI | 86, false),
-            (READY | PRESENT | WIFI | 86, true),
-            (READY | PRESENT | 86, true),
-            (READY, true),
-            (READY, false),
+        let empty = Some(Snapshot::default());
+        status.update(unix, empty);
+        assert!(!status.update(unix + 59, empty));
+        assert!(status.update(unix + 60, empty));
+        assert!(!status.update(unix + 60, empty));
+        for (percent, charging, wifi, changed) in [
+            (Some(87), false, false, true),
+            (Some(87), false, false, false),
+            (Some(86), false, false, true),
+            (Some(86), true, false, true),
+            (Some(86), true, true, true),
+            (Some(86), true, true, false),
+            (Some(86), false, true, true),
+            (Some(86), false, false, true),
+            (None, false, false, true),
+            (None, false, false, false),
         ] {
-            assert_eq!(status.update(unix + 60, bits), changed, "bits={bits}");
+            let snapshot = Snapshot {
+                battery: percent.map(|percent| Battery { percent, charging }),
+                wifi,
+            };
+            assert_eq!(status.update(unix + 60, Some(snapshot)), changed);
+            assert!(
+                !status.update(unix + 60, None),
+                "an unavailable snapshot retains displayed status"
+            );
         }
     }
 

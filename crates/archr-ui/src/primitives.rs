@@ -36,13 +36,31 @@ fn corner_arcs() -> &'static [[Point; SEGMENTS + 1]; 4] {
         })
     })
 }
-fn outline(rect: Rect, radius: f32) -> [Point; POINTS] {
-    let (x, y, w, h) = (
+fn bounds(rect: Rect) -> (f32, f32, f32, f32) {
+    (
         rect.x() as f32,
         rect.y() as f32,
         rect.width() as f32,
         rect.height() as f32,
-    );
+    )
+}
+fn center(rect: Rect) -> Point {
+    (
+        rect.x() as f32 + rect.width() as f32 / 2.,
+        rect.y() as f32 + rect.height() as f32 / 2.,
+    )
+}
+/// Pixel bounds shared by nine-slice geometry and row layout.
+pub(crate) fn between(left: i32, top: i32, right: i32, bottom: i32) -> Rect {
+    Rect::new(
+        left,
+        top,
+        (right - left).max(1) as u32,
+        (bottom - top).max(1) as u32,
+    )
+}
+fn outline(rect: Rect, radius: f32) -> [Point; POINTS] {
+    let (x, y, w, h) = bounds(rect);
     let r = radius.min(w / 2.).min(h / 2.).max(0.);
     let centers = [
         (x + w - r, y + r),
@@ -74,10 +92,7 @@ impl Mesh {
     }
     fn fan(&mut self, points: &[Point], c: Color, rect: Rect, textured: bool) {
         let base = self.vertices.len() as u16;
-        let center = (
-            rect.x() as f32 + rect.width() as f32 / 2.,
-            rect.y() as f32 + rect.height() as f32 / 2.,
-        );
+        let center = center(rect);
         self.vertices.push(vertex(center, c, (0.5, 0.5)));
         self.vertices.extend(points.iter().map(|&p| {
             vertex(
@@ -117,6 +132,11 @@ impl Mesh {
         );
         self.indices
             .extend([base, base + 1, base + 2, base, base + 2, base + 3]);
+    }
+    fn stroke(&mut self, points: &[Point], width: f32, c: Rgba) {
+        for (&from, &to) in points.iter().zip(points.iter().cycle().skip(1)) {
+            self.line(from, to, width, c);
+        }
     }
     fn rounded(&mut self, rect: Rect, radius: f32, fill: Rgba, border: Option<Rgba>) {
         let points = outline(rect, radius);
@@ -165,18 +185,13 @@ impl Mesh {
                 (r * a.cos(), r * a.sin())
             })
         });
-        let center = (
-            rect.x() as f32 + rect.width() as f32 / 2.,
-            rect.y() as f32 + rect.height() as f32 / 2.,
-        );
+        let center = center(rect);
         let r = rect.width().min(rect.height()) as f32 / 2.;
         let points = unit.map(|p| (center.0 + r * p.0, center.1 + r * p.1));
         if filled {
             self.fan(&points, color(c), rect, false);
         } else {
-            for i in 0..10 {
-                self.line(points[i], points[(i + 1) % 10], 1.4, c);
-            }
+            self.stroke(&points, 1.4, c);
         }
     }
     fn clock(&mut self, rect: Rect, c: Rgba) {
@@ -187,25 +202,15 @@ impl Mesh {
                 (a.cos(), a.sin())
             })
         });
-        let (cx, cy) = (
-            rect.x() as f32 + rect.width() as f32 / 2.,
-            rect.y() as f32 + rect.height() as f32 / 2.,
-        );
+        let (cx, cy) = center(rect);
         let r = rect.width() as f32 / 2. - 1.;
         let points = unit.map(|p| (cx + r * p.0, cy + r * p.1));
-        for i in 0..24 {
-            self.line(points[i], points[(i + 1) % 24], 1.3, c);
-        }
+        self.stroke(&points, 1.3, c);
         self.line((cx, cy - r * 0.55), (cx, cy), 1.3, c);
         self.line((cx, cy), (cx + r * 0.4, cy + r * 0.25), 1.3, c);
     }
     fn lightning(&mut self, rect: Rect, c: Rgba) {
-        let (x, y, w, h) = (
-            rect.x() as f32,
-            rect.y() as f32,
-            rect.width() as f32,
-            rect.height() as f32,
-        );
+        let (x, y, w, h) = bounds(rect);
         self.vertices.extend(
             [
                 (x + w * 0.85, y),
@@ -227,13 +232,17 @@ impl Mesh {
         canvas.render_geometry(&self.vertices, texture, self.indices.as_slice())
     }
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Icon {
+    Star(bool),
+    Clock,
+    Lightning,
+}
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Key {
     Rounded(Rect, u32, Rgba, Option<Rgba>),
     Cover(Rect, u32),
-    Star(Rect, Rgba, bool),
-    Clock(Rect, Rgba),
-    Lightning(Rect, Rgba),
+    Icon(Rect, Rgba, Icon),
 }
 /// Per-renderer bounded LRU: static badges, battery pieces and icons are hits;
 /// evicted meshes donate their Vec allocations to the next moving-pill mesh.
@@ -267,17 +276,13 @@ impl Geometry {
                 Key::Cover(rect, r) => {
                     mesh.fan(&outline(rect, f32::from_bits(r)), Color::WHITE, rect, true)
                 }
-                Key::Star(rect, c, filled) => {
-                    mesh.star(rect, c, filled);
-                    startup_phase!(self.startup, "icon star");
-                }
-                Key::Clock(rect, c) => {
-                    mesh.clock(rect, c);
-                    startup_phase!(self.startup, "icon clock");
-                }
-                Key::Lightning(rect, c) => {
-                    mesh.lightning(rect, c);
-                    startup_phase!(self.startup, "icon lightning");
+                Key::Icon(rect, c, icon) => {
+                    match icon {
+                        Icon::Star(filled) => mesh.star(rect, c, filled),
+                        Icon::Clock => mesh.clock(rect, c),
+                        Icon::Lightning => mesh.lightning(rect, c),
+                    }
+                    startup_phase!(self.startup, "icon {icon:?}");
                 }
             }
             self.meshes.push_back((key, mesh));
@@ -309,30 +314,14 @@ impl Geometry {
         }
         mesh.draw(canvas, Some(texture))
     }
-    pub fn star(
+    pub fn icon(
         &mut self,
         canvas: &mut Canvas<Window>,
-        rect: Rect,
-        c: Rgba,
-        filled: bool,
-    ) -> Result<(), String> {
-        self.mesh(Key::Star(rect, c, filled)).draw(canvas, None)
-    }
-    pub fn clock_icon(
-        &mut self,
-        canvas: &mut Canvas<Window>,
+        icon: Icon,
         rect: Rect,
         c: Rgba,
     ) -> Result<(), String> {
-        self.mesh(Key::Clock(rect, c)).draw(canvas, None)
-    }
-    pub fn lightning(
-        &mut self,
-        canvas: &mut Canvas<Window>,
-        rect: Rect,
-        c: Rgba,
-    ) -> Result<(), String> {
-        self.mesh(Key::Lightning(rect, c)).draw(canvas, None)
+        self.mesh(Key::Icon(rect, c, icon)).draw(canvas, None)
     }
 }
 pub(crate) struct Shadow<'a>(Texture<'a>);
@@ -380,18 +369,8 @@ impl<'a> Shadow<'a> {
                 if xs[x + 1] > xs[x] && ys[y + 1] > ys[y] {
                     canvas.copy(
                         &self.0,
-                        Rect::new(
-                            src[x],
-                            src[y],
-                            (src[x + 1] - src[x]) as u32,
-                            (src[y + 1] - src[y]) as u32,
-                        ),
-                        Rect::new(
-                            xs[x],
-                            ys[y],
-                            (xs[x + 1] - xs[x]) as u32,
-                            (ys[y + 1] - ys[y]) as u32,
-                        ),
+                        between(src[x], src[y], src[x + 1], src[y + 1]),
+                        between(xs[x], ys[y], xs[x + 1], ys[y + 1]),
                     )?;
                 }
             }
@@ -428,9 +407,9 @@ mod tests {
         assert_eq!(geometry.meshes.len(), CACHE_SIZE);
         assert!(std::ptr::eq(corner_arcs(), corner_arcs()));
         for icon in [
-            Key::Star(Rect::new(0, 0, 16, 16), color, true),
-            Key::Clock(Rect::new(0, 0, 16, 16), color),
-            Key::Lightning(Rect::new(0, 0, 8, 14), color),
+            Key::Icon(Rect::new(0, 0, 16, 16), color, Icon::Star(true)),
+            Key::Icon(Rect::new(0, 0, 16, 16), color, Icon::Clock),
+            Key::Icon(Rect::new(0, 0, 8, 14), color, Icon::Lightning),
         ] {
             let first = geometry.mesh(icon).vertices.as_ptr();
             assert_eq!(geometry.mesh(icon).vertices.as_ptr(), first);

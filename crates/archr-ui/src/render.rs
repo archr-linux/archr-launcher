@@ -2,7 +2,7 @@
 use crate::{
     i18n::I18n,
     motion::Tween,
-    primitives::{Geometry, Shadow},
+    primitives::{Geometry, Icon, Shadow},
     startup::StartupTrace,
     startup_phase,
     state::{App, DataSource, QuickItem, Screen},
@@ -21,6 +21,59 @@ use std::{
     path::{Path, PathBuf},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
+
+#[derive(Clone, Copy)]
+struct Frame {
+    width: u32,
+    height: u32,
+    scale: f32,
+    now: Instant,
+    unix: u64,
+}
+impl Frame {
+    fn new(width: u32, height: u32) -> Self {
+        Self {
+            width,
+            height,
+            scale: height as f32 / 480.,
+            now: Instant::now(),
+            unix: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+        }
+    }
+    fn from_size((width, height): (u32, u32)) -> Self {
+        Self::new(width, height)
+    }
+    fn px(self, value: f32) -> i32 {
+        (value * self.scale).round().max(1.) as i32
+    }
+    fn row(self, panel: Rect, inset: f32, y: f32, height: f32) -> Rect {
+        Rect::new(
+            panel.x() + self.px(inset),
+            panel.y() + self.px(y),
+            panel
+                .width()
+                .saturating_sub(self.px(inset * 2.) as u32)
+                .max(1),
+            self.px(height) as u32,
+        )
+    }
+    fn square(self, x: i32, y: i32, side: f32) -> Rect {
+        Rect::new(x, y, self.px(side) as u32, self.px(side) as u32)
+    }
+    fn font_size(self, value: f32) -> u16 {
+        self.px(value).clamp(8, 128) as u16
+    }
+}
+fn localized_error(catalog: &I18n, error: String) -> String {
+    if error.starts_with("error.") {
+        catalog.text(&error)
+    } else {
+        error
+    }
+}
 
 struct ListMotion {
     key: String,
@@ -97,7 +150,7 @@ pub struct Ui<'font, 'texture> {
     cover_visible: bool,
     cover_fade: Tween,
     animating: bool,
-    scale: f32,
+    frame: Frame,
     pub catalog: I18n,
     pub loading: bool,
     pub banner: Option<String>,
@@ -157,7 +210,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             cover_visible: false,
             cover_fade: Tween::new(0., Duration::from_millis(120)),
             animating: false,
-            scale: height as f32 / 480.,
+            frame: Frame::new(width, height),
             catalog: I18n::default(),
             loading: false,
             banner: None,
@@ -172,7 +225,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         theme: &Theme,
         root: Option<&Path>,
     ) -> Result<(), String> {
-        self.scale = self.canvas.output_size()?.1 as f32 / 480.;
+        self.frame = Frame::from_size(self.canvas.output_size()?);
         let defaults = |mono: bool| {
             let names = if mono {
                 [
@@ -228,13 +281,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             Face::Semibold,
             self.px(12.) as u16,
         )
-        .map_err(|error| {
-            if error.starts_with("error.") {
-                self.catalog.text(&error)
-            } else {
-                error
-            }
-        })?;
+        .map_err(|e| localized_error(&self.catalog, e))?;
         text.prepare_badges(
             self.px(20.) as u32,
             self.px(11.).clamp(8, 128) as u16,
@@ -268,53 +315,38 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         self.status.as_mut().is_some_and(|s| s.poll(Instant::now()))
     }
     fn px(&self, value: f32) -> i32 {
-        (value * self.scale).round().max(1.) as i32
+        self.frame.px(value)
     }
-    fn label(
+    fn label(&mut self, text: &str, style: (Face, f32, Rgba), panel: Rect) -> Result<(), String> {
+        self.label_aligned(text, style, panel, Align::Left)
+    }
+    fn label_aligned(
         &mut self,
         text: &str,
-        face: Face,
-        size: f32,
-        c: Rgba,
+        (face, size, color): (Face, f32, Rgba),
         panel: Rect,
         align: Align,
     ) -> Result<(), String> {
-        let size = self.px(size).clamp(8, 128) as u16;
-        self.text
+        let style = Style {
+            face,
+            size: self.frame.font_size(size),
+            color,
+        };
+        let text_cache = self
+            .text
             .as_mut()
-            .ok_or_else(|| self.catalog.text("error.font_init"))?
-            .draw(
-                &mut self.canvas,
-                text,
-                Style {
-                    face,
-                    size,
-                    color: c,
-                },
-                panel,
-                align,
-            )
-            .map_err(|error| {
-                if error.starts_with("error.") {
-                    self.catalog.text(&error)
-                } else {
-                    error
-                }
-            })
+            .ok_or_else(|| self.catalog.text("error.font_init"))?;
+        text_cache
+            .draw(&mut self.canvas, text, style, panel, align)
+            .map_err(|e| localized_error(&self.catalog, e))
     }
     fn measure(&mut self, text: &str, face: Face, size: f32) -> Result<u32, String> {
-        let size = self.px(size).clamp(8, 128) as u16;
+        let size = self.frame.font_size(size);
         self.text
             .as_mut()
             .ok_or_else(|| self.catalog.text("error.font_init"))?
             .measure(text, face, size)
-            .map_err(|error| {
-                if error.starts_with("error.") {
-                    self.catalog.text(&error)
-                } else {
-                    error
-                }
-            })
+            .map_err(|e| localized_error(&self.catalog, e))
     }
     fn rounded(
         &mut self,
@@ -326,11 +358,11 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         self.geometry
             .rounded(&mut self.canvas, rect, radius, fill, border)
     }
-    fn shadow(&mut self, rect: Rect) -> Result<(), String> {
+    fn panel(&mut self, rect: Rect, radius: f32, fill: Rgba, border: Rgba) -> Result<(), String> {
         if let Some(shadow) = &self.shadow {
-            shadow.draw(&mut self.canvas, rect, self.scale)?;
+            shadow.draw(&mut self.canvas, rect, self.frame.scale)?;
         }
-        Ok(())
+        self.rounded(rect, radius, fill, Some(border))
     }
     fn divider(&mut self, x: i32, y: i32, w: u32, c: Rgba) -> Result<(), String> {
         self.canvas.set_draw_color(color(c));
@@ -343,28 +375,29 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         theme: &Theme,
         cover: Option<&Texture<'_>>,
     ) -> Result<(), String> {
-        let (width, height) = self.canvas.output_size()?;
-        self.scale = height as f32 / 480.;
-        let now = Instant::now();
+        self.frame = Frame::from_size(self.canvas.output_size()?);
+        let Frame {
+            width, height, now, ..
+        } = self.frame;
         self.canvas.set_draw_color(color(theme.background));
         self.canvas.clear();
         let (backdrop, cursor) = app.backdrop();
-        self.header(backdrop, cursor, data, theme, width, height)?;
-        self.list(app, backdrop, cursor, data, theme, width, height, now)?;
+        self.header(backdrop, cursor, data, theme)?;
+        self.list(backdrop, cursor, data, theme)?;
         if let Screen::Games { system } = backdrop {
-            self.cover(system, cursor, data, theme, cover, width, height, now)?;
+            self.cover(system, cursor, data, theme, cover)?;
         }
-        self.footer(app, data, theme, width, height)?;
+        self.footer(app, data, theme)?;
         if matches!(app.screen, Screen::QuickMenu { .. }) {
-            self.menu(app, data, theme, width, height, now)?;
+            self.menu(app, data, theme)?;
         } else {
             self.menu_open = false;
         }
         if let Some(banner) = self.banner.clone() {
-            self.notice(&banner, theme, width, height)?;
+            self.notice(&banner, theme)?;
         }
         if let Some(message) = self.transition.clone() {
-            self.notice(&message, theme, width, height)?;
+            self.notice(&message, theme)?;
         }
         self.animating = self.list.scroll.active(now)
             || self.list.pill.active(now)
@@ -398,9 +431,8 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         cursor: usize,
         data: &dyn DataSource,
         theme: &Theme,
-        width: u32,
-        height: u32,
     ) -> Result<(), String> {
+        let Frame { width, height, .. } = self.frame;
         let h = (theme.header_height * height as f32).round() as u32;
         let pad = self.px(24.);
         let status = self
@@ -415,7 +447,8 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 .as_deref()
                 .map(|s| self.measure(s, Face::Mono, 13.))
                 .transpose()?;
-            let layout = status_layout(right, h, self.scale, clock_width, percent_width, wifi);
+            let layout =
+                status_layout(right, h, self.frame.scale, clock_width, percent_width, wifi);
             self.rounded(
                 layout.pill,
                 layout.pill.height() as f32 / 2.,
@@ -444,18 +477,11 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                     self.px(2.) as u32,
                 ))?;
             }
-            self.label(
-                &clock,
-                Face::Mono,
-                13.,
-                theme.muted,
-                layout.clock,
-                Align::Left,
-            )?;
+            self.label(&clock, (Face::Mono, 13., theme.muted), layout.clock)?;
             if let (Some(b), Some(icon), Some(panel), Some(text)) =
                 (battery, layout.battery, layout.percent, percent)
             {
-                self.label(&text, Face::Mono, 13., theme.muted, panel, Align::Left)?;
+                self.label(&text, (Face::Mono, 13., theme.muted), panel)?;
                 let battery = Rect::new(icon.x(), icon.y(), self.px(19.) as u32, icon.height());
                 self.rounded(
                     battery,
@@ -472,7 +498,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                             fill_width,
                             self.px(8.) as u32,
                         ),
-                        self.scale,
+                        self.frame.scale,
                         theme.muted,
                         None,
                     )?;
@@ -483,7 +509,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                     self.px(2.) as u32,
                     self.px(4.) as u32,
                 );
-                self.rounded(nub, self.scale, theme.muted, None)?;
+                self.rounded(nub, self.frame.scale, theme.muted, None)?;
                 if b.charging {
                     let bolt = Rect::new(
                         battery.x() + self.px(5.),
@@ -491,8 +517,12 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                         self.px(9.) as u32,
                         self.px(10.) as u32,
                     );
-                    self.geometry
-                        .lightning(&mut self.canvas, bolt, theme.highlight_bg)?;
+                    self.geometry.icon(
+                        &mut self.canvas,
+                        Icon::Lightning,
+                        bolt,
+                        theme.highlight_bg,
+                    )?;
                 }
             }
             right = layout.pill.x() - self.px(20.);
@@ -514,19 +544,13 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 .min((right - pad - self.px(10.) - pw as i32).max(1) as u32);
             self.label(
                 &title,
-                Face::Semibold,
-                15.,
-                theme.text,
+                (Face::Semibold, 15., theme.text),
                 Rect::new(pad, 0, title_w, h),
-                Align::Left,
             )?;
             self.label(
                 &pos,
-                Face::Mono,
-                13.,
-                theme.muted,
+                (Face::Mono, 13., theme.muted),
                 Rect::new(pad + title_w as i32 + self.px(10.), 0, pw, h),
-                Align::Left,
             )?;
         } else {
             let mut x = pad;
@@ -535,30 +559,25 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 let w = self.measure(glyph, Face::Semibold, 12.)?;
                 self.label(
                     glyph,
-                    Face::Semibold,
-                    12.,
-                    theme.text,
+                    (Face::Semibold, 12., theme.text),
                     Rect::new(x, 0, w, h),
-                    Align::Left,
                 )?;
                 x += w as i32 + self.px(1.);
             }
         }
         Ok(())
     }
-    #[allow(clippy::too_many_arguments)]
     fn list(
         &mut self,
-        app: &App,
         screen: &Screen,
         cursor: usize,
         data: &dyn DataSource,
         theme: &Theme,
-        width: u32,
-        height: u32,
-        now: Instant,
     ) -> Result<(), String> {
-        let systems = app.system_rows(data);
+        let Frame {
+            width, height, now, ..
+        } = self.frame;
+        let systems = App::system_rows(data);
         let (key, len, collections, is_games) = match screen {
             Screen::Games { system } => (system.clone(), data.games(system).len(), 0, true),
             _ => (
@@ -687,21 +706,20 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             let name = if let Screen::Games { system } = screen {
                 let game = &data.games(system)[i];
                 if game.favorite {
-                    let star = Rect::new(
+                    let star = self.frame.square(
                         right - self.px(14.),
                         y + (rh as i32 - self.px(14.)) / 2,
-                        self.px(14.) as u32,
-                        self.px(14.) as u32,
+                        14.,
                     );
-                    self.geometry.star(
+                    self.geometry.icon(
                         &mut self.canvas,
+                        Icon::Star(true),
                         star,
                         if selected {
                             theme.highlight_text
                         } else {
                             theme.highlight_bg
                         },
-                        true,
                     )?;
                     right -= self.px(24.);
                 }
@@ -717,52 +735,44 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                         .map_or(0, |s| s.game_count as usize)
                 };
                 let count = count.to_string();
-                let cw = self.measure(
+                let count_face = if selected {
+                    Face::MonoMedium
+                } else {
+                    Face::Mono
+                };
+                let cw = self.measure(&count, count_face, 13.)?;
+                self.label_aligned(
                     &count,
-                    if selected {
-                        Face::MonoMedium
-                    } else {
-                        Face::Mono
-                    },
-                    13.,
-                )?;
-                self.label(
-                    &count,
-                    if selected {
-                        Face::MonoMedium
-                    } else {
-                        Face::Mono
-                    },
-                    13.,
-                    if selected {
-                        theme.accent_text_secondary
-                    } else {
-                        theme.dim_text
-                    },
+                    (
+                        count_face,
+                        13.,
+                        if selected {
+                            theme.accent_text_secondary
+                        } else {
+                            theme.dim_text
+                        },
+                    ),
                     Rect::new(right - cw as i32, y, cw, rh),
                     Align::Right,
                 )?;
                 right -= cw as i32 + self.px(14.);
                 if name.starts_with('@') {
-                    let icon = Rect::new(
-                        x,
-                        y + (rh as i32 - self.px(16.)) / 2,
-                        self.px(16.) as u32,
-                        self.px(16.) as u32,
-                    );
+                    let icon = self
+                        .frame
+                        .square(x, y + (rh as i32 - self.px(16.)) / 2, 16.);
                     if name == "@favorites" {
-                        self.geometry.star(
+                        self.geometry.icon(
                             &mut self.canvas,
+                            Icon::Star(false),
                             icon,
                             if selected {
                                 theme.highlight_text
                             } else {
                                 theme.highlight_bg
                             },
-                            false,
                         )?;
                     } else {
-                        self.geometry.clock_icon(&mut self.canvas, icon, c)?;
+                        self.geometry.icon(&mut self.canvas, Icon::Clock, icon, c)?;
                     }
                     x += self.px(26.);
                 }
@@ -770,11 +780,8 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             };
             self.label(
                 &name,
-                face,
-                size,
-                c,
+                (face, size, c),
                 Rect::new(x, y, (right - x).max(1) as u32, rh),
-                Align::Left,
             )?;
         }
         if len == 0 {
@@ -786,22 +793,18 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 } else {
                     "empty.systems"
                 }),
-                Face::Regular,
-                16.,
-                theme.muted,
+                (Face::Regular, 16., theme.muted),
                 Rect::new(
                     margin + self.px(14.),
                     top,
                     list_width.saturating_sub(self.px(28.) as u32).max(1),
                     self.px(38.) as u32,
                 ),
-                Align::Left,
             )?;
         }
         self.canvas.set_clip_rect(None);
         Ok(())
     }
-    #[allow(clippy::too_many_arguments)]
     fn cover(
         &mut self,
         system: &str,
@@ -809,17 +812,16 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         data: &dyn DataSource,
         theme: &Theme,
         cover: Option<&Texture<'_>>,
-        width: u32,
-        height: u32,
-        now: Instant,
     ) -> Result<(), String> {
+        let Frame {
+            width, height, now, ..
+        } = self.frame;
         let rect = pixels(theme.cover, width, height);
-        self.shadow(rect)?;
-        self.rounded(
+        self.panel(
             rect,
             theme.radius_card * height as f32 * 0.75,
             theme.surface,
-            Some(theme.border),
+            theme.border,
         )?;
         let game = data.games(system).get(cursor);
         let key = game.map(|g| g.path.clone());
@@ -853,11 +855,9 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             )?;
         } else {
             self.cover_visible = false;
-            self.label(
+            self.label_aligned(
                 &system_title(system, data, &self.catalog),
-                Face::Regular,
-                13.,
-                theme.dim_text,
+                (Face::Regular, 13., theme.dim_text),
                 Rect::new(
                     rect.x() + self.px(12.),
                     rect.y(),
@@ -877,15 +877,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             }
             let played = game
                 .last_played
-                .map(|timestamp| {
-                    self.catalog.relative_time(
-                        timestamp,
-                        SystemTime::now()
-                            .duration_since(UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_secs(),
-                    )
-                })
+                .map(|timestamp| self.catalog.relative_time(timestamp, self.frame.unix))
                 .unwrap_or_default();
             let pw = self.measure(&played, Face::Regular, 12.)?;
             let h = self.px(20.) as u32;
@@ -893,31 +885,20 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             let gap = if pw > 0 { self.px(8.) as u32 } else { 0 };
             self.label(
                 &parts.join(" · "),
-                Face::Regular,
-                12.,
-                theme.muted,
+                (Face::Regular, 12., theme.muted),
                 Rect::new(rect.x(), y, rect.width().saturating_sub(pw + gap).max(1), h),
-                Align::Left,
             )?;
-            self.label(
+            self.label_aligned(
                 &played,
-                Face::Regular,
-                12.,
-                theme.muted,
+                (Face::Regular, 12., theme.muted),
                 Rect::new(rect.right() - pw as i32, y, pw.max(1), h),
                 Align::Right,
             )?;
         }
         Ok(())
     }
-    fn footer(
-        &mut self,
-        app: &App,
-        data: &dyn DataSource,
-        theme: &Theme,
-        width: u32,
-        height: u32,
-    ) -> Result<(), String> {
+    fn footer(&mut self, app: &App, data: &dyn DataSource, theme: &Theme) -> Result<(), String> {
+        let Frame { width, height, .. } = self.frame;
         let h = (theme.footer_height * height as f32).round().max(1.) as u32;
         let y = height as i32 - h as i32;
         self.divider(0, y, width, theme.border)?;
@@ -961,11 +942,8 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                         ),
                     ],
                 ),
-                Face::Regular,
-                13.,
-                theme.muted,
+                (Face::Regular, 13., theme.muted),
                 Rect::new(self.px(24.), y, (left - self.px(40.)).max(1) as u32, h),
-                Align::Left,
             )?;
         }
         Ok(())
@@ -985,19 +963,13 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             let w = self.measure(label, Face::Regular, 13.)?;
             self.label(
                 label,
-                Face::Regular,
-                13.,
-                theme.muted,
+                (Face::Regular, 13., theme.muted),
                 Rect::new(right - w as i32, y, w, h),
-                Align::Left,
             )?;
             right -= w as i32 + self.px(6.) + self.px(20.);
-            let badge = Rect::new(
-                right,
-                y + (h as i32 - self.px(20.)) / 2,
-                self.px(20.) as u32,
-                self.px(20.) as u32,
-            );
+            let badge = self
+                .frame
+                .square(right, y + (h as i32 - self.px(20.)) / 2, 20.);
             let size = self.px(11.).clamp(8, 128) as u16;
             self.text
                 .as_mut()
@@ -1014,13 +986,8 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         }
         Ok(right + self.px(16.))
     }
-    fn scrim(
-        &mut self,
-        theme: &Theme,
-        width: u32,
-        height: u32,
-        strength: f32,
-    ) -> Result<(), String> {
+    fn scrim(&mut self, theme: &Theme, strength: f32) -> Result<(), String> {
+        let Frame { width, height, .. } = self.frame;
         let scrim = Rgba {
             a: (f32::from(theme.scrim.a) * strength).round().min(255.) as u8,
             ..theme.scrim
@@ -1028,19 +995,14 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         self.canvas.set_draw_color(color(scrim));
         self.canvas.fill_rect(Rect::new(0, 0, width, height))
     }
-    fn menu(
-        &mut self,
-        app: &App,
-        data: &dyn DataSource,
-        theme: &Theme,
-        width: u32,
-        height: u32,
-        now: Instant,
-    ) -> Result<(), String> {
+    fn menu(&mut self, app: &App, data: &dyn DataSource, theme: &Theme) -> Result<(), String> {
+        let Frame {
+            width, height, now, ..
+        } = self.frame;
         // The mockup combines a dimmed backdrop and its base scrim.
-        self.scrim(theme, width, height, 1.2)?;
+        self.scrim(theme, 1.2)?;
         let items = app.quick_menu_items(data);
-        let has_core = matches!(items.first(), Some(QuickItem::Core { .. }));
+        let has_core = matches!(items.first(), Some(QuickItem::Core));
         let panel_h = self.px(if has_core { 300. } else { 256. }) as u32;
         let panel_w = (self.px(340.) as u32)
             .min(width.saturating_sub(self.px(32.) as u32))
@@ -1052,16 +1014,14 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             panel_w,
             panel_h,
         );
-        self.shadow(panel)?;
-        self.rounded(
+        self.panel(
             panel,
             theme.radius_card * height as f32,
             theme.surface_elevated,
-            Some(theme.border),
+            theme.border,
         )?;
         let (title, subtitle) = if let Screen::QuickMenu {
-            system: Some(system),
-            game: Some(game),
+            game: Some((system, game)),
         } = &app.screen
         {
             (
@@ -1081,19 +1041,13 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         let content_w = panel.width().saturating_sub(self.px(48.) as u32).max(1);
         self.label(
             &title,
-            Face::Semibold,
-            16.,
-            theme.text,
-            Rect::new(x, panel.y() + self.px(16.), content_w, self.px(24.) as u32),
-            Align::Left,
+            (Face::Semibold, 16., theme.text),
+            self.frame.row(panel, 24., 16., 24.),
         )?;
         self.label(
             &subtitle,
-            Face::Regular,
-            12.,
-            theme.muted,
-            Rect::new(x, panel.y() + self.px(40.), content_w, self.px(16.) as u32),
-            Align::Left,
+            (Face::Regular, 12., theme.muted),
+            self.frame.row(panel, 24., 40., 16.),
         )?;
         let top = panel.y() + self.px(64.);
         let row = self.px(42.);
@@ -1140,7 +1094,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 theme.text
             };
             let label = match item {
-                QuickItem::Core { .. } => "menu.core",
+                QuickItem::Core => "menu.core",
                 QuickItem::Suspend => "menu.suspend",
                 QuickItem::Reboot => "menu.reboot",
                 QuickItem::Shutdown => "menu.shutdown",
@@ -1153,7 +1107,8 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 Face::Regular
             };
             let mut label_width = content_w;
-            if let QuickItem::Core { core, .. } = item {
+            if let QuickItem::Core = item {
+                let (_, core) = app.selected_core();
                 let default_core = self.catalog.text("menu.default");
                 let core = if core.is_empty() { &default_core } else { core };
                 let space = self.px(8.);
@@ -1168,32 +1123,24 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 };
                 self.label(
                     "R",
-                    Face::Mono,
-                    12.,
-                    cc,
+                    (Face::Mono, 12., cc),
                     Rect::new(end - rw as i32, y, rw, item_height),
-                    Align::Left,
                 )?;
-                self.label(
+                self.label_aligned(
                     core,
-                    Face::Regular,
-                    15.,
-                    c,
+                    (Face::Regular, 15., c),
                     Rect::new(end - rw as i32 - space - cw as i32, y, cw, item_height),
                     Align::Right,
                 )?;
                 self.label(
                     "L",
-                    Face::Mono,
-                    12.,
-                    cc,
+                    (Face::Mono, 12., cc),
                     Rect::new(
                         end - rw as i32 - space * 2 - cw as i32 - lw as i32,
                         y,
                         lw,
                         item_height,
                     ),
-                    Align::Left,
                 )?;
                 label_width = content_w
                     .saturating_sub(cw + lw + rw + (space * 3) as u32)
@@ -1201,11 +1148,8 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             }
             self.label(
                 label,
-                face,
-                15.,
-                c,
+                (face, 15., c),
                 Rect::new(x, y, label_width, item_height),
-                Align::Left,
             )?;
         }
         let footer = (theme.footer_height * height as f32).round().max(1.) as u32;
@@ -1218,14 +1162,9 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         )?;
         Ok(())
     }
-    fn notice(
-        &mut self,
-        message: &str,
-        theme: &Theme,
-        width: u32,
-        height: u32,
-    ) -> Result<(), String> {
-        self.scrim(theme, width, height, 1.0)?;
+    fn notice(&mut self, message: &str, theme: &Theme) -> Result<(), String> {
+        let Frame { width, height, .. } = self.frame;
+        self.scrim(theme, 1.0)?;
         let lines: Vec<_> = message.split('\n').take(3).collect();
         let w = (self.px(380.) as u32)
             .min(width.saturating_sub(self.px(48.) as u32))
@@ -1237,25 +1176,17 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             w,
             h,
         );
-        self.shadow(panel)?;
-        self.rounded(
+        self.panel(
             panel,
             theme.radius_card * height as f32,
             theme.surface_elevated,
-            Some(theme.border),
+            theme.border,
         )?;
         for (i, line) in lines.iter().enumerate() {
-            self.label(
+            self.label_aligned(
                 line,
-                Face::Semibold,
-                16.,
-                theme.text,
-                Rect::new(
-                    panel.x() + self.px(24.),
-                    panel.y() + self.px(32. + i as f32 * 24.),
-                    w.saturating_sub(self.px(48.) as u32).max(1),
-                    self.px(24.) as u32,
-                ),
+                (Face::Semibold, 16., theme.text),
+                self.frame.row(panel, 24., 32. + i as f32 * 24., 24.),
                 Align::Center,
             )?;
         }
@@ -1286,6 +1217,26 @@ fn system_title(name: &str, data: &dyn DataSource, catalog: &I18n) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn panel_rows_preserve_single_rounding_of_combined_insets() {
+        for height in [240, 350, 480, 720, 960, 1080] {
+            let frame = Frame::new(640, height);
+            for width in [1, 37, 340, 680] {
+                let panel = Rect::new(10, 20, width, 256);
+                assert_eq!(
+                    frame.row(panel, 24., 16., 24.),
+                    Rect::new(
+                        panel.x() + frame.px(24.),
+                        panel.y() + frame.px(16.),
+                        width.saturating_sub(frame.px(48.) as u32).max(1),
+                        frame.px(24.) as u32,
+                    ),
+                    "height={height}, width={width}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn status_pill_orders_centers_and_hides_optional_items() {

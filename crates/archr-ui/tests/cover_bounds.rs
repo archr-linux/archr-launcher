@@ -6,21 +6,20 @@ fn oversized_cached_thumbnail_is_rebuilt_with_bounds() {
     let source = dir.path().join("cover.png");
     let cache = dir.path().join("thumbs");
     image::RgbaImage::new(100, 80).save(&source).unwrap();
-    let file = thumbnail_path(&cache, &source).unwrap();
+    let file = thumbnail_path(&cache, &source, 40, 40).unwrap();
     std::fs::create_dir_all(&cache).unwrap();
     image::RgbaImage::new(400, 400).save(&file).unwrap();
-    std::fs::write(file.with_extension("size"), "40x40").unwrap();
     let thumbnail = load_thumbnail(&cache, &source, 40, 40).unwrap();
     assert_eq!((thumbnail.width, thumbnail.height), (40, 32));
 }
 
 #[test]
-fn fifo_size_marker_is_rejected_and_atomically_replaced() {
+fn obsolete_fifo_size_marker_is_never_opened() {
     let dir = tempfile::tempdir().unwrap();
     let source = dir.path().join("cover.png");
     let cache = dir.path().join("thumbs");
     image::RgbaImage::new(100, 80).save(&source).unwrap();
-    let marker = thumbnail_path(&cache, &source)
+    let marker = thumbnail_path(&cache, &source, 40, 40)
         .unwrap()
         .with_extension("size");
     std::fs::create_dir_all(&cache).unwrap();
@@ -36,6 +35,6 @@ fn fifo_size_marker_is_rejected_and_atomically_replaced() {
         .unwrap()
         .unwrap();
     assert_eq!((thumbnail.width, thumbnail.height), (40, 32));
-    assert!(std::fs::metadata(&marker).unwrap().is_file());
-    assert_eq!(std::fs::read(marker).unwrap(), b"40x40");
+    use std::os::unix::fs::FileTypeExt;
+    assert!(std::fs::metadata(&marker).unwrap().file_type().is_fifo());
 }

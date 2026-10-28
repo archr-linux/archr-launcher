@@ -24,8 +24,7 @@ pub enum Screen {
     },
     /// Game context is always resolved to its real system and index.
     QuickMenu {
-        system: Option<String>,
-        game: Option<usize>,
+        game: Option<(String, usize)>,
     },
 }
 
@@ -56,9 +55,9 @@ pub enum Outcome {
     Action(SessionAction),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum QuickItem {
-    Core { emulator: String, core: String },
+    Core,
     Suspend,
     Reboot,
     Shutdown,
@@ -109,7 +108,7 @@ impl App {
     }
 
     /// Shared row ordering for navigation and rendering.
-    pub fn system_rows(&self, data: &dyn DataSource) -> Vec<String> {
+    pub fn system_rows(data: &dyn DataSource) -> Vec<String> {
         ["@favorites", "@recent"]
             .into_iter()
             .filter(|name| data.collection_len(name) > 0)
@@ -123,25 +122,34 @@ impl App {
             .collect()
     }
 
-    pub fn quick_menu_items(&self, data: &dyn DataSource) -> Vec<QuickItem> {
-        let Screen::QuickMenu { system, game } = &self.screen else {
-            return Vec::new();
-        };
-        let mut items = Vec::new();
-        if game.is_some() && system.as_ref().is_some_and(|s| data.cores(s).len() > 1) {
-            // Unknown current values still allow choosing a supported pair.
-            let (emulator, core) = self.selected_core.clone().unwrap_or_default();
-            items.push(QuickItem::Core { emulator, core });
+    pub fn quick_menu_items(&self, data: &dyn DataSource) -> &'static [QuickItem] {
+        const ITEMS: &[QuickItem] = &[
+            QuickItem::Core,
+            QuickItem::Suspend,
+            QuickItem::Reboot,
+            QuickItem::Shutdown,
+        ];
+        match &self.screen {
+            Screen::QuickMenu { game } => {
+                let core = game
+                    .as_ref()
+                    .is_some_and(|(system, _)| data.cores(system).len() > 1);
+                &ITEMS[usize::from(!core)..]
+            }
+            _ => &[],
         }
-        items.extend([QuickItem::Suspend, QuickItem::Reboot, QuickItem::Shutdown]);
-        items
+    }
+    pub fn selected_core(&self) -> (&str, &str) {
+        self.selected_core
+            .as_ref()
+            .map_or(("", ""), |(emulator, core)| (emulator, core))
     }
 
     /// Returns effects for the caller to apply. Core selection is tracked locally
     /// while the quick menu is open, independently of persistence timing.
     pub fn handle(&mut self, b: Button, data: &dyn DataSource) -> Outcome {
         let len = match &self.screen {
-            Screen::Systems => self.system_rows(data).len(),
+            Screen::Systems => Self::system_rows(data).len(),
             Screen::Games { system } => data.games(system).len(),
             Screen::QuickMenu { .. } => self.quick_menu_items(data).len(),
         };
@@ -167,16 +175,13 @@ impl App {
         match self.screen.clone() {
             Screen::Systems => match b {
                 Button::A => {
-                    if let Some(system) = self.system_rows(data).get(self.cursor) {
+                    if let Some(system) = Self::system_rows(data).get(self.cursor) {
                         self.enter(Screen::Games {
                             system: system.clone(),
                         });
                     }
                 }
-                Button::Y => self.enter(Screen::QuickMenu {
-                    system: None,
-                    game: None,
-                }),
+                Button::Y => self.enter(Screen::QuickMenu { game: None }),
                 _ => {}
             },
             Screen::Games { system } => match b {
@@ -194,8 +199,7 @@ impl App {
                         Button::Y => {
                             self.selected_core = data.current_core(&system, game);
                             self.enter(Screen::QuickMenu {
-                                system: Some(system),
-                                game: Some(game),
+                                game: Some((system, game)),
                             });
                         }
                         _ => unreachable!(),
@@ -203,7 +207,7 @@ impl App {
                 }
                 _ => {}
             },
-            Screen::QuickMenu { system, game } => {
+            Screen::QuickMenu { game } => {
                 let items = self.quick_menu_items(data);
                 match (b, items.get(self.cursor)) {
                     (Button::B, _) => self.back(),
@@ -216,8 +220,8 @@ impl App {
                     (Button::A, Some(QuickItem::Shutdown)) => {
                         return Outcome::Action(SessionAction::Shutdown);
                     }
-                    (Button::L | Button::R, Some(QuickItem::Core { .. })) => {
-                        if let (Some(system), Some(game)) = (system, game) {
+                    (Button::L | Button::R, Some(QuickItem::Core)) => {
+                        if let Some((system, game)) = game {
                             return self.cycle_core(b, system, game, data);
                         }
                     }

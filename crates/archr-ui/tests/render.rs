@@ -89,8 +89,7 @@ fn grafite_layout_motion_glyphs_and_untrusted_text_render_offscreen() {
     ui.draw(&app, &data, &theme, None).unwrap();
     ui.banner = None;
     app.screen = Screen::QuickMenu {
-        system: Some("nes".into()),
-        game: Some(0),
+        game: Some(("nes".into(), 0)),
     };
     ui.draw(&app, &data, &theme, None).unwrap();
     let rgba = ui

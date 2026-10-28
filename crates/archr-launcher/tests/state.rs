@@ -224,9 +224,8 @@ fn page_bounds_cover_overflow_and_zero() {
 fn collections_listed_before_systems() {
     let mut data = FakeData::library();
     data.collections();
-    let app = App::new(5);
     assert_eq!(
-        app.system_rows(&data),
+        App::system_rows(&data),
         ["@favorites", "@recent", "nes", "snes"]
     );
 }
@@ -234,14 +233,13 @@ fn collections_listed_before_systems() {
 #[test]
 fn empty_collections_and_zero_game_systems_are_hidden() {
     let mut data = FakeData::library();
-    let app = App::new(5);
-    assert_eq!(app.system_rows(&data), ["nes", "snes"]);
+    assert_eq!(App::system_rows(&data), ["nes", "snes"]);
     data.collections();
     data.games.remove("@favorites");
-    assert_eq!(app.system_rows(&data), ["@recent", "nes", "snes"]);
+    assert_eq!(App::system_rows(&data), ["@recent", "nes", "snes"]);
     data.games.remove("@recent");
     data.games.insert("@favorites".into(), games(1));
-    assert_eq!(app.system_rows(&data), ["@favorites", "nes", "snes"]);
+    assert_eq!(App::system_rows(&data), ["@favorites", "nes", "snes"]);
 }
 
 #[test]
@@ -315,8 +313,7 @@ fn y_opens_quick_menu_and_b_closes() {
     assert_eq!(
         app.screen,
         Screen::QuickMenu {
-            system: Some("snes".into()),
-            game: Some(7)
+            game: Some(("snes".into(), 7))
         }
     );
     assert_eq!(app.cursor, 0);
@@ -338,13 +335,7 @@ fn quick_menu_from_systems_works_even_without_systems() {
         app.handle(Button::Down, &data);
         let cursor = app.cursor;
         app.handle(Button::Y, &data);
-        assert_eq!(
-            app.screen,
-            Screen::QuickMenu {
-                system: None,
-                game: None
-            }
-        );
+        assert_eq!(app.screen, Screen::QuickMenu { game: None });
         assert_eq!(
             app.quick_menu_items(&data),
             [QuickItem::Suspend, QuickItem::Reboot, QuickItem::Shutdown]
@@ -366,17 +357,13 @@ fn quick_menu_collection_uses_real_game_and_restores_collection_cursor() {
     assert_eq!(
         app.screen,
         Screen::QuickMenu {
-            system: Some("snes".into()),
-            game: Some(7)
+            game: Some(("snes".into(), 7))
         }
     );
     assert_eq!(
         app.quick_menu_items(&data),
         [
-            QuickItem::Core {
-                emulator: "retroarch".into(),
-                core: "snes9x".into()
-            },
+            QuickItem::Core,
             QuickItem::Suspend,
             QuickItem::Reboot,
             QuickItem::Shutdown
@@ -462,13 +449,7 @@ fn core_cycles_with_shoulders_and_emits_real_identity() {
         );
         data.current
             .insert(("snes".into(), 7), pair(emulator, core));
-        assert_eq!(
-            app.quick_menu_items(&data)[0],
-            QuickItem::Core {
-                emulator: emulator.into(),
-                core: core.into()
-            }
-        );
+        assert_eq!(app.selected_core(), (emulator, core));
         assert_eq!(app.cursor, 0);
     }
     assert_eq!(app.handle(Button::A, &data), Outcome::None);
@@ -480,13 +461,7 @@ fn core_cycle_handles_missing_current_and_empty_choices() {
     data.current.clear();
     let mut app = in_games("snes", 7);
     app.handle(Button::Y, &data);
-    assert_eq!(
-        app.quick_menu_items(&data)[0],
-        QuickItem::Core {
-            emulator: String::new(),
-            core: String::new()
-        }
-    );
+    assert_eq!(app.selected_core(), ("", ""));
     for (button, emulator, core) in [
         (Button::R, "retroarch", "snes9x"),
         (Button::L, "standalone", "native"),
@@ -575,7 +550,7 @@ fn assert_core_sequence_without_data_changes(button: Button, expected: &[(&str, 
     let mut displayed = Vec::new();
     for _ in expected {
         outcomes.push(app.handle(button, &data));
-        displayed.push(app.quick_menu_items(&data)[0].clone());
+        displayed.push(pair(app.selected_core().0, app.selected_core().1));
     }
     for (outcome, &(emulator, core)) in outcomes.into_iter().zip(expected) {
         assert_eq!(
@@ -589,13 +564,7 @@ fn assert_core_sequence_without_data_changes(button: Button, expected: &[(&str, 
         );
     }
     for (item, &(emulator, core)) in displayed.into_iter().zip(expected) {
-        assert_eq!(
-            item,
-            QuickItem::Core {
-                emulator: emulator.into(),
-                core: core.into(),
-            }
-        );
+        assert_eq!(item, pair(emulator, core));
     }
 }
 

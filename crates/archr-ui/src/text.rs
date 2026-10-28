@@ -53,7 +53,7 @@ pub(crate) struct TextCache<'font, 'texture> {
     ttf: &'font Sdl2TtfContext,
     creator: &'texture TextureCreator<WindowContext>,
     paths: [Vec<PathBuf>; 4],
-    fonts: HashMap<(Face, u16), Font<'font, 'static>>,
+    fonts: HashMap<Face, (Font<'font, 'static>, u16)>,
     entries: VecDeque<Entry<'texture>>,
     badges: VecDeque<(BadgeKey, Texture<'texture>)>,
 }
@@ -79,7 +79,7 @@ impl<'font, 'texture> TextCache<'font, 'texture> {
         self.first_rasterization = trace;
     }
     fn font(&mut self, face: Face, size: u16) -> Result<&Font<'font, 'static>, String> {
-        if !self.fonts.contains_key(&(face, size)) {
+        if !self.fonts.contains_key(&face) {
             let paths = &self.paths[face as usize];
             let mut font = paths
                 .iter()
@@ -113,9 +113,18 @@ impl<'font, 'texture> TextCache<'font, 'texture> {
                     font.set_style(FontStyle::BOLD);
                 }
             }
-            self.fonts.insert((face, size), font);
+            self.fonts.insert(face, (font, size));
         }
-        Ok(self.fonts.get(&(face, size)).expect("loaded face"))
+        let (font, current_size) = self.fonts.get_mut(&face).expect("loaded face");
+        if *current_size != size {
+            // SAFETY: TextCache exclusively owns this live font and all access
+            // stays on the SDL thread. SDL_ttf retains ownership of the handle.
+            if unsafe { sdl2::sys::ttf::TTF_SetFontSize(font.raw(), i32::from(size)) } != 0 {
+                return Err(sdl2::get_error());
+            }
+            *current_size = size;
+        }
+        Ok(font)
     }
     fn badge(&mut self, key: BadgeKey) -> Result<&Texture<'texture>, String> {
         if let Some(index) = self.badges.iter().position(|(k, _)| *k == key) {
@@ -375,6 +384,24 @@ mod tests {
             let q = texture.query();
             assert_eq!((q.width, q.height), (80, 80));
             assert_eq!(texture.scale_mode(), ScaleMode::Linear);
+        }
+        let handle = cache.font(Face::Semibold, 44).unwrap().raw();
+        for size in [12, 17, 44, 13, 44] {
+            let font = cache.font(Face::Semibold, size).unwrap();
+            assert_eq!(font.raw(), handle, "resizing must reuse the physical face");
+            let reference = ttf
+                .load_font(
+                    concat!(
+                        env!("CARGO_MANIFEST_DIR"),
+                        "/../../themes/default/fonts/Inter-SemiBold.ttf"
+                    ),
+                    size,
+                )
+                .unwrap();
+            assert_eq!(
+                font.size_of("Ação Русский").unwrap(),
+                reference.size_of("Ação Русский").unwrap()
+            );
         }
         cache.fonts.clear();
         cache.paths = std::array::from_fn(|_| vec![]);

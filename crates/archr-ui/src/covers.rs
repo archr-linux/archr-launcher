@@ -1,9 +1,8 @@
 //! Decode and resize off-thread; SDL textures never leave the render thread.
-use archr_io::{atomic_publish, read_utf8, Symlinks::Follow};
+use archr_io::atomic_publish;
 use std::{
     collections::{HashSet, VecDeque},
-    fs,
-    io::{self, Write},
+    fs, io,
     path::{Path, PathBuf},
     sync::mpsc::{self, Receiver, SyncSender},
     time::UNIX_EPOCH,
@@ -21,9 +20,9 @@ pub struct Thumbnail {
     pub rgba: Vec<u8>,
 }
 
-/// Stable FNV-1a over the complete path, plus nanosecond source mtime.
+/// Stable FNV-1a over the complete path, plus source mtime and target bounds.
 /// Metadata and all cache I/O belong on the loader thread.
-pub fn thumbnail_path(cache: &Path, source: &Path) -> io::Result<PathBuf> {
+pub fn thumbnail_path(cache: &Path, source: &Path, width: u32, height: u32) -> io::Result<PathBuf> {
     let mut hash = 0xcbf29ce484222325u64;
     for byte in source.as_os_str().as_encoded_bytes() {
         hash ^= u64::from(*byte);
@@ -34,7 +33,11 @@ pub fn thumbnail_path(cache: &Path, source: &Path) -> io::Result<PathBuf> {
         .duration_since(UNIX_EPOCH)
         .map_err(io::Error::other)?
         .as_nanos();
-    Ok(cache.join(format!("{hash:016x}-{mtime}.png")))
+    Ok(cache.join(format!(
+        "{hash:016x}-{mtime}-{}x{}.png",
+        width.max(1),
+        height.max(1)
+    )))
 }
 
 pub fn load_thumbnail(
@@ -43,43 +46,18 @@ pub fn load_thumbnail(
     width: u32,
     height: u32,
 ) -> io::Result<Thumbnail> {
-    let path = thumbnail_path(cache, source)?;
-    let size_path = path.with_extension("size");
-    let size = format!("{width}x{height}");
-    let cached = (read_utf8(&size_path, 32, Follow).ok().as_deref() == Some(&size))
-        .then(|| {
-            let mut reader = image::ImageReader::open(&path).ok()?;
-            let mut limits = image::Limits::default();
-            limits.max_image_width = Some(width.max(1));
-            limits.max_image_height = Some(height.max(1));
-            limits.max_alloc = Some(64 * 1024 * 1024);
-            reader.limits(limits);
-            reader.decode().ok()
-        })
-        .flatten();
+    let path = thumbnail_path(cache, source, width, height)?;
+    let cached = decode(&path, width.max(1), height.max(1)).ok();
     let image = match cached {
         Some(image) => image,
         None => {
-            let mut reader = image::ImageReader::open(source)?.with_guessed_format()?;
-            let mut limits = image::Limits::default();
-            limits.max_image_width = Some(16384);
-            limits.max_image_height = Some(16384);
-            limits.max_alloc = Some(64 * 1024 * 1024);
-            reader.limits(limits);
-            let image = reader
-                .decode()
-                .map_err(io::Error::other)?
-                .thumbnail(width.max(1), height.max(1));
+            let image = decode(source, 16384, 16384)?.thumbnail(width.max(1), height.max(1));
             // Cache failure is nonfatal; the thumbnail is still usable.
-            let save = || -> io::Result<()> {
-                atomic_publish(&path, false, |file| {
-                    image
-                        .write_to(file, image::ImageFormat::Png)
-                        .map_err(io::Error::other)
-                })?;
-                atomic_publish(&size_path, false, |file| file.write_all(size.as_bytes()))
-            };
-            if let Err(error) = save() {
+            if let Err(error) = atomic_publish(&path, false, |file| {
+                image
+                    .write_to(file, image::ImageFormat::Png)
+                    .map_err(io::Error::other)
+            }) {
                 log::warn!("Cannot cache cover: {error}");
             }
             image
@@ -91,6 +69,16 @@ pub fn load_thumbnail(
         height: image.height(),
         rgba: image.into_raw(),
     })
+}
+
+fn decode(path: &Path, width: u32, height: u32) -> io::Result<image::DynamicImage> {
+    let mut reader = image::ImageReader::open(path)?.with_guessed_format()?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(width);
+    limits.max_image_height = Some(height);
+    limits.max_alloc = Some(64 * 1024 * 1024);
+    reader.limits(limits);
+    reader.decode().map_err(io::Error::other)
 }
 
 type Loaded = (PathBuf, io::Result<Thumbnail>);

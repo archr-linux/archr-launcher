@@ -70,7 +70,7 @@ fn warm_overview_precedes_worker_and_collection_origins_are_real() {
         "overview must not load Store-referenced systems"
     );
     assert!(!paths.cache.join("systems").exists());
-    assert_eq!(App::new(10).system_rows(&library), ["@favorites", "nes"]);
+    assert_eq!(App::system_rows(&library), ["@favorites", "nes"]);
     library.ensure("@favorites");
     wait(&mut library, |library| {
         library.games("@favorites").len() == 1
@@ -80,7 +80,7 @@ fn warm_overview_precedes_worker_and_collection_origins_are_real() {
         library.current_core("nes", 0),
         Some(("retroarch".into(), "nestopia".into()))
     );
-    assert_eq!(App::new(10).system_rows(&library), ["@favorites", "nes"]);
+    assert_eq!(App::system_rows(&library), ["@favorites", "nes"]);
     assert!(library
         .handle(
             Outcome::Launch {

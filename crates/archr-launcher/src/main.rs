@@ -108,7 +108,7 @@ fn run(
     eprintln!(
         "archr-launcher: first frame {} ms ({} system rows)",
         began.elapsed().as_millis(),
-        app.system_rows(&library).len()
+        App::system_rows(&library).len()
     );
     library.start();
     let (width, height) = ui.canvas.output_size()?;
@@ -142,14 +142,13 @@ fn run(
         controllers.poll_mappings();
         dirty |= ui.tick() || ui.animating();
         let selected_system = if app.screen == Screen::Systems {
-            app.system_rows(&library).get(app.cursor).cloned()
+            App::system_rows(&library).get(app.cursor).cloned()
         } else {
             None
         };
         if library.poll() {
             if let Some(name) = selected_system {
-                if let Some(index) = app
-                    .system_rows(&library)
+                if let Some(index) = App::system_rows(&library)
                     .iter()
                     .position(|system| *system == name)
                 {
