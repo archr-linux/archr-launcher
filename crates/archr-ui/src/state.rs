@@ -44,6 +44,7 @@ pub enum SessionAction {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Outcome {
     None,
+    Settings,
     ToggleWifi,
     Launch {
         system: String,
@@ -64,6 +65,7 @@ pub enum Outcome {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum QuickItem {
+    Settings,
     Core,
     Suspend,
     Reboot,
@@ -144,6 +146,12 @@ impl App {
             QuickItem::Shutdown,
         ];
         match &self.screen {
+            Screen::QuickMenu { game: None } => &[
+                QuickItem::Settings,
+                QuickItem::Suspend,
+                QuickItem::Reboot,
+                QuickItem::Shutdown,
+            ],
             Screen::QuickMenu { game } => {
                 let core = game
                     .as_ref()
@@ -238,6 +246,10 @@ impl App {
                 let items = self.quick_menu_items(data);
                 match (b, items.get(self.cursor)) {
                     (Button::B, _) => self.back(),
+                    (Button::A, Some(QuickItem::Settings)) => {
+                        self.back();
+                        return Outcome::Settings;
+                    }
                     (Button::A, Some(QuickItem::Suspend)) => {
                         return Outcome::Action(SessionAction::Suspend);
                     }

@@ -11,6 +11,7 @@ use crate::{
     status::{Battery, Status},
     text::{color, Align, Face, Style, TextCache},
     theme::{Rect01, Rgba, Theme},
+    HintButton,
 };
 mod hub;
 
@@ -180,6 +181,9 @@ fn battery_glyph(battery: Battery) -> Glyph {
         }
     }
 }
+
+#[path = "settings/render.rs"]
+mod settings_render;
 
 pub struct Ui<'font, 'texture> {
     startup: StartupTrace,
@@ -452,34 +456,52 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         theme: &Theme,
         cover: Option<&Texture<'_>>,
     ) -> Result<(), String> {
+        self.draw_with_settings(app, data, theme, cover, None)
+    }
+    pub fn draw_with_settings(
+        &mut self,
+        app: &App,
+        data: &dyn DataSource,
+        theme: &Theme,
+        cover: Option<&Texture<'_>>,
+        settings: Option<&crate::settings::Settings>,
+    ) -> Result<(), String> {
         self.frame = Frame::from_size(self.canvas.output_size()?);
         let Frame {
             width, height, now, ..
         } = self.frame;
         self.canvas.set_draw_color(color(theme.background));
         self.canvas.clear();
-        let (backdrop, cursor) = app.backdrop();
-        self.header(backdrop, cursor, data, theme)?;
-        if matches!(app.screen, Screen::StartHub { .. }) {
-            self.hub(app, data, theme)?;
+        if let Some(settings) = settings {
+            self.settings_page(settings, theme)?;
+            self.animating = false; // Static applying label; completion marks the frame dirty.
         } else {
-            self.list(backdrop, cursor, data, theme)?;
-            // Keep the first present to the prepared list; the panel follows
-            // on the redraw requested when tick starts the artwork worker.
-            if self.has_presented && matches!(backdrop, Screen::Systems) {
-                self.system_panel(&App::system_rows(data), cursor, data, theme)?;
+            let (backdrop, cursor) = app.backdrop();
+            self.header(backdrop, cursor, data, theme)?;
+            if matches!(app.screen, Screen::StartHub { .. }) {
+                self.hub(app, data, theme)?;
+            } else {
+                self.list(backdrop, cursor, data, theme)?;
+                // Secondary visuals follow the redraw requested by the artwork worker.
+                if self.has_presented && matches!(backdrop, Screen::Systems) {
+                    self.system_panel(&App::system_rows(data), cursor, data, theme)?;
+                }
+                if let Screen::Games { system } = backdrop {
+                    self.cover(system, cursor, data, theme, cover)?;
+                }
+                if self.has_presented {
+                    self.footer(app, data, theme)?;
+                }
             }
-            if let Screen::Games { system } = backdrop {
-                self.cover(system, cursor, data, theme, cover)?;
+            if matches!(app.screen, Screen::QuickMenu { .. }) {
+                self.menu(app, data, theme)?;
+            } else {
+                self.menu_open = false;
             }
-            if self.has_presented {
-                self.footer(app, data, theme)?;
-            }
-        }
-        if matches!(app.screen, Screen::QuickMenu { .. }) {
-            self.menu(app, data, theme)?;
-        } else {
-            self.menu_open = false;
+            self.animating = self.list.scroll.active(now)
+                || self.list.pill.active(now)
+                || self.menu_pill.active(now)
+                || self.cover_fade.active(now);
         }
         if let Some(banner) = self.banner.clone() {
             self.notice(&banner, theme)?;
@@ -487,10 +509,6 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         if let Some(message) = self.transition.clone() {
             self.notice(&message, theme)?;
         }
-        self.animating = self.list.scroll.active(now)
-            || self.list.pill.active(now)
-            || self.menu_pill.active(now)
-            || self.cover_fade.active(now);
         // Explicit debug readback; normal rendering does no disk I/O.
         if let Some(path) = self.screenshot.take() {
             let rgba = self
@@ -513,13 +531,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         }
         Ok(())
     }
-    fn header(
-        &mut self,
-        screen: &Screen,
-        cursor: usize,
-        data: &dyn DataSource,
-        theme: &Theme,
-    ) -> Result<(), String> {
+    fn status_header(&mut self, theme: &Theme) -> Result<i32, String> {
         let Frame { width, height, .. } = self.frame;
         let h = (theme.header_height * height as f32).round() as u32;
         let pad = self.px(24.);
@@ -563,6 +575,18 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             }
             right = layout.pill.x() - self.px(20.);
         }
+        Ok(right)
+    }
+    fn header(
+        &mut self,
+        screen: &Screen,
+        cursor: usize,
+        data: &dyn DataSource,
+        theme: &Theme,
+    ) -> Result<(), String> {
+        let right = self.status_header(theme)?;
+        let h = (theme.header_height * self.frame.height as f32).round() as u32;
+        let pad = self.px(24.);
         if let Screen::Games { system } = screen {
             let title = system_title(system, data, &self.catalog);
             let pos = format!(
@@ -918,9 +942,9 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         }
         Ok(())
     }
-    fn hints(
+    fn hints<B: Copy + Into<HintButton>>(
         &mut self,
-        hints: &[(char, &str)],
+        hints: &[(B, &str)],
         theme: &Theme,
         width: u32,
         y: i32,
@@ -928,6 +952,11 @@ impl<'font, 'texture> Ui<'font, 'texture> {
     ) -> Result<i32, String> {
         let mut right = width as i32 - self.px(24.);
         for &(button, key) in hints.iter().rev() {
+            let buttons = match button.into() {
+                HintButton::Key(key) => [Some(key), None],
+                HintButton::Pair(left, right) => [Some(left), Some(right)],
+            };
+            let paired = buttons[1].is_some();
             let label = self.catalog.text(key);
             right = self.packed_label(
                 &label,
@@ -936,22 +965,34 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 u32::MAX,
                 Align::Left,
             )? - self.px(6.)
-                - self.px(20.);
-            let badge = self
-                .frame
-                .square(right, y + (h as i32 - self.px(20.)) / 2, 20.);
-            let size = self.px(11.).clamp(8, 128) as u16;
-            self.text
-                .as_mut()
-                .ok_or_else(|| self.catalog.text("error.font_init"))?
-                .draw_badge(
-                    &mut self.canvas,
-                    button,
-                    size,
-                    theme.badge,
-                    theme.text,
-                    badge,
+                - self.px(if paired { 50. } else { 20. });
+            if paired {
+                self.label_aligned(
+                    "/",
+                    (Face::Regular, 13., theme.muted),
+                    Rect::new(right + self.px(20.), y, self.px(10.) as u32, h),
+                    Align::Center,
                 )?;
+            }
+            for (n, button) in buttons.into_iter().flatten().enumerate() {
+                let badge = self.frame.square(
+                    right + self.px(n as f32 * 30.),
+                    y + (h as i32 - self.px(20.)) / 2,
+                    20.,
+                );
+                let size = self.px(11.).clamp(8, 128) as u16;
+                self.text
+                    .as_mut()
+                    .ok_or_else(|| self.catalog.text("error.font_init"))?
+                    .draw_badge(
+                        &mut self.canvas,
+                        button,
+                        size,
+                        theme.badge,
+                        theme.text,
+                        badge,
+                    )?;
+            }
             right -= self.px(16.);
         }
         Ok(right + self.px(16.))
@@ -994,7 +1035,11 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         self.scrim(theme, 1.2)?;
         let items = app.quick_menu_items(data);
         let has_core = matches!(items.first(), Some(QuickItem::Core));
-        let panel_h = if has_core { 300. } else { 256. };
+        let panel_h = if has_core || items.first() == Some(&QuickItem::Settings) {
+            300.
+        } else {
+            256.
+        };
         // Optical centering: the approved modal sits 20px above center.
         let panel = self.modal(theme, (340., 32., panel_h, -self.px(20.)))?;
         let (title, subtitle) = if let Screen::QuickMenu {
@@ -1067,6 +1112,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             let selected = index == app.cursor;
             let c = selection(selected, theme.text, theme.highlight_text);
             let label = match item {
+                QuickItem::Settings => "settings.title",
                 QuickItem::Core => "menu.core",
                 QuickItem::Suspend => "menu.suspend",
                 QuickItem::Reboot => "menu.reboot",
@@ -1305,16 +1351,6 @@ pub fn prepare_first_frame<'font>(
             (Face::Regular, 16., theme.muted),
             Some(list_width.saturating_sub(frame.px(28.) as u32).max(1)),
         )?;
-    }
-    if let Some(name) = systems.first().filter(|name| name.starts_with('@')) {
-        first_icons.push((
-            if name == "@favorites" {
-                Glyph::Star
-            } else {
-                Glyph::Clock
-            },
-            frame.px(96.) as u32,
-        ));
     }
     prepared.prepare_icons(theme_dir, system_icons_dir, first_icons);
     Ok(prepared)

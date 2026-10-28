@@ -14,6 +14,25 @@ pub struct Battery {
     pub percent: u8,
     pub charging: bool,
 }
+/// Off-thread acquisition shared by the status pill and information cards.
+pub fn read_battery(root: &Path) -> Option<Battery> {
+    let base = root.join("sys/class/power_supply");
+    let mut sources: Vec<_> = fs::read_dir(base).ok()?.filter_map(Result::ok).collect();
+    sources.sort_by_key(|e| e.file_name());
+    let path = sources.into_iter().map(|e| e.path()).find(|p| {
+        p.file_name().is_some_and(|v| v == "battery")
+            || archr_io::read_utf8(&p.join("type"), 4096, archr_io::Symlinks::Follow)
+                .is_ok_and(|s| s.trim() == "Battery")
+    })?;
+    let percent = archr_io::read_utf8(&path.join("capacity"), 4096, archr_io::Symlinks::Follow)
+        .ok()?
+        .trim()
+        .parse::<u8>()
+        .ok()?;
+    let charging = archr_io::read_utf8(&path.join("status"), 4096, archr_io::Symlinks::Follow)
+        .is_ok_and(|s| s.trim() == "Charging");
+    (percent <= 100).then_some(Battery { percent, charging })
+}
 struct BatterySource {
     path: PathBuf,
     next_read: Instant,
@@ -24,20 +43,7 @@ impl BatterySource {
             return None;
         }
         self.next_read = now + REFRESH;
-        Some((|| {
-            let percent = fs::read_to_string(self.path.join("capacity"))
-                .ok()?
-                .trim()
-                .parse::<u8>()
-                .ok()?;
-            if percent > 100 {
-                return None;
-            }
-            let charging = fs::read_to_string(self.path.join("status"))
-                .ok()
-                .is_some_and(|s| s.trim() == "Charging");
-            Some(Battery { percent, charging })
-        })())
+        Some(read_battery(&self.path))
     }
 }
 #[derive(Clone, Copy, Default)]
@@ -62,7 +68,7 @@ impl Worker {
             .name("launcher-status".into())
             .spawn(move || {
                 let mut source = BatterySource {
-                    path: path.join("sys/class/power_supply/battery"),
+                    path: path.clone(),
                     next_read: Instant::now(),
                 };
                 loop {
@@ -144,6 +150,10 @@ impl Status {
             .as_secs();
         self.update(unix, snapshot)
     }
+    /// Recompute even within the same minute after a timezone change.
+    pub fn invalidate_clock(&mut self) {
+        self.minute = u64::MAX;
+    }
     fn update(&mut self, unix: u64, snapshot: Option<Snapshot>) -> bool {
         let mut changed = false;
         if let Some(Snapshot { battery, wifi }) = snapshot {
@@ -188,6 +198,18 @@ fn local_clock(unix: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn timezone_change_invalidates_a_clock_cached_within_the_minute() {
+        let mut status = Status::new(None, Instant::now());
+        let unix = 1_700_000_040;
+        status.minute = unix / 60;
+        status.clock = "stale timezone".into();
+        assert!(!status.update(unix, None));
+        status.invalidate_clock();
+        assert!(status.update(unix, None));
+        assert_ne!(status.clock, "stale timezone");
+    }
+
     #[test]
     fn redraw_only_when_displayed_clock_or_snapshot_changes() {
         let mut status = Status::new(None, Instant::now());
@@ -269,12 +291,13 @@ mod tests {
     #[test]
     fn worker_source_is_optional_and_throttled_for_thirty_seconds() {
         let root = tempfile::tempdir().unwrap();
-        let path = root.path().to_owned();
+        let path = root.path().join("sys/class/power_supply/battery");
+        fs::create_dir_all(&path).unwrap();
         fs::write(path.join("capacity"), "87").unwrap();
         fs::write(path.join("status"), "Charging").unwrap();
         let now = Instant::now();
         let mut source = BatterySource {
-            path: path.clone(),
+            path: root.path().into(),
             next_read: now,
         };
         assert_eq!(

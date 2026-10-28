@@ -220,7 +220,7 @@ impl Library {
     }
     pub fn handle(&mut self, outcome: Outcome, controllers: &str) -> Result<bool, String> {
         match outcome {
-            Outcome::None => {}
+            Outcome::None | Outcome::Settings => {}
             Outcome::ToggleFavorite { system, game } => {
                 let key = self.game_key(&system, game).ok_or("error.game_missing")?;
                 self.store.toggle_favorite(&key);

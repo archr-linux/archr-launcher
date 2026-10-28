@@ -1,0 +1,241 @@
+use archr_launcher::{paths::Paths, settings::Backend};
+use archr_ui::settings::Id;
+use std::{fs, os::unix::fs::PermissionsExt};
+use tempfile::{tempdir, TempDir};
+fn fixture() -> (TempDir, Backend) {
+    let dir = tempdir().unwrap();
+    let paths = Paths::new(Some(dir.path().to_owned()));
+    fs::create_dir_all(paths.config.parent().unwrap()).unwrap();
+    fs::create_dir_all(paths.lock.parent().unwrap()).unwrap();
+    fs::create_dir_all(paths.at("/usr/bin")).unwrap();
+    fs::create_dir_all(paths.at("/sys/power")).unwrap();
+    fs::write(paths.at("/sys/power/state"), "freeze mem disk").unwrap();
+    fs::write(&paths.config, "system.suspendmode=off\naudio.volume=60\n").unwrap();
+    let backend = Backend::new(paths);
+    (dir, backend)
+}
+fn script(dir: &TempDir, name: &str, body: &str) {
+    let path = dir.path().join("usr/bin").join(name);
+    fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+    fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+}
+#[test]
+fn scripts_are_single_owners_and_runtime_only_operations_publish_after_success() {
+    let (dir, backend) = fixture();
+    script(&dir, "suspendmode", "case \"$(/bin/cat \"$ARCHR_LAUNCHER_ROOT/storage/.config/system/configs/system.cfg\")\" in *system.suspendmode=off*) printf 'system.suspendmode=mem\n' > \"$ARCHR_LAUNCHER_ROOT/storage/.config/system/configs/system.cfg\";; *) exit 23;; esac");
+    assert_eq!(backend.apply(Id::Suspend, "mem").unwrap(), "mem");
+    script(&dir, "pactl", "case \"$(/bin/cat \"$ARCHR_LAUNCHER_ROOT/storage/.config/system/configs/system.cfg\")\" in *audio.volume=65*) exit 24;; *) exit 0;; esac");
+    backend.apply(Id::Volume, "65").unwrap();
+}
+#[test]
+fn failure_reports_status_and_stderr_without_publishing_value() {
+    let (dir, backend) = fixture();
+    script(&dir, "volume", "false; exit 0"); // Legacy helper masks the runtime error.
+    script(&dir, "pactl", "echo 'sink unavailable' >&2; exit 7");
+    let error = backend.apply(Id::Volume, "65").unwrap_err();
+    assert!(
+        error.contains('7') && error.contains("sink unavailable"),
+        "{error}"
+    );
+    assert!(
+        fs::read_to_string(dir.path().join("storage/.config/system/configs/system.cfg"))
+            .unwrap()
+            .contains("audio.volume=60")
+    );
+}
+#[test]
+fn invalid_values_never_reach_scripts_or_config() {
+    let (_dir, backend) = fixture();
+    for (id, value) in [
+        (Id::Volume, "101"),
+        (Id::Brightness, "0"),
+        (Id::Gpu, "bad"),
+        (Id::Governor, "bad; reboot"),
+        (Id::Language, "xx"),
+        (Id::Timezone, "../../etc/passwd"),
+    ] {
+        assert!(backend.apply(id, value).is_err());
+    }
+}
+#[test]
+fn load_parses_comma_timezones_and_includes_current_suspend_mode() {
+    let (dir, backend) = fixture();
+    script(
+        &dir,
+        "timeinfo",
+        "printf 'Europe/London,\\nAmerica/Sao_Paulo,\\n'",
+    );
+    script(&dir, "set-audio", "printf 'Speakers\\nHeadphones\\n'");
+    let state = backend.load().unwrap();
+    assert!(state.options[&Id::Timezone].contains(&"Europe/London".into()));
+    assert!(state.options[&Id::Timezone].contains(&"UTC".into()));
+    assert!(state.options[&Id::Suspend].contains(&"off".into()));
+}
+
+#[test]
+fn inactivity_keys_store_minutes_and_default_to_never() {
+    let (_dir, backend) = fixture();
+    let state = backend.load().unwrap();
+    for (id, key) in [
+        (Id::Idle, "idle.timeout"),
+        (Id::IdleGame, "idle.timeout.game"),
+    ] {
+        assert_eq!(id.key(), key);
+        assert_eq!(state.value(id), "0");
+        assert_eq!(state.options[&id], ["0", "1", "3", "5", "10", "15", "30"]);
+        for value in ["0", "1", "3", "5", "10", "15", "30"] {
+            assert_eq!(backend.apply(id, value).unwrap(), value);
+            assert_eq!(backend.load().unwrap().value(id), value);
+        }
+        assert!(backend.apply(id, "60").is_err());
+    }
+}
+
+#[test]
+fn worker_does_not_block_input_and_commits_only_after_success() {
+    use archr_launcher::{
+        settings::Runtime,
+        state::{Button, Outcome},
+    };
+    use archr_ui::settings::Page;
+    use std::time::{Duration, Instant};
+    let (dir, _) = fixture();
+    script(&dir, "set-audio", "printf 'Speakers\\n'");
+    script(&dir, "timeinfo", "printf 'UTC,\\n'");
+    script(
+        &dir,
+        "pactl",
+        "if [ \"$1\" = -- ]; then /bin/sleep 0.2; fi; exit 0",
+    );
+    let mut runtime = Runtime::new(Paths::new(Some(dir.path().to_owned())));
+    runtime.open();
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while runtime.state.loading {
+        runtime.poll();
+        assert!(Instant::now() < deadline);
+        std::thread::yield_now();
+    }
+    runtime.state.open(Page::Sound);
+    let began = Instant::now();
+    assert_eq!(runtime.handle(Button::R), Outcome::None);
+    assert!(began.elapsed() < Duration::from_millis(50));
+    assert_eq!(runtime.state.pending, Some(Id::Volume));
+    assert_eq!(runtime.state.value(Id::Volume), "60");
+    runtime.handle(Button::B);
+    assert_eq!(runtime.state.page(), Page::Root);
+    while runtime.busy() {
+        runtime.poll();
+        assert!(Instant::now() < deadline);
+        std::thread::yield_now();
+    }
+    assert_eq!(runtime.state.value(Id::Volume), "65");
+}
+
+#[test]
+fn load_uses_live_volume_and_first_backlight_percent() {
+    let (dir, backend) = fixture();
+    script(
+        &dir,
+        "pactl",
+        "printf 'Volume: front-left: 32768 / 50%% / -18.06 dB\\n'",
+    );
+    let backlight = dir.path().join("sys/class/backlight/panel");
+    fs::create_dir_all(&backlight).unwrap();
+    // Sysfs reports a page-sized st_size even for short numeric attributes.
+    fs::write(backlight.join("brightness"), format!("{:<4096}", "64\n")).unwrap();
+    fs::write(
+        backlight.join("max_brightness"),
+        format!("{:<4096}", "255\n"),
+    )
+    .unwrap();
+    let state = backend.load().unwrap();
+    assert_eq!(state.value(Id::Volume), "50");
+    assert_eq!(state.value(Id::Brightness), "25");
+}
+
+#[test]
+fn load_normalizes_stored_sliders_and_rejects_nonregular_probes() {
+    let (dir, backend) = fixture();
+    let cfg = dir.path().join("storage/.config/system/configs/system.cfg");
+    fs::write(&cfg, "audio.volume=32767\ndisplay.brightness=-500\n").unwrap();
+    fs::create_dir_all(dir.path().join("proc")).unwrap();
+    let fifo = std::ffi::CString::new(dir.path().join("proc/cpuinfo").to_str().unwrap()).unwrap();
+    // SAFETY: a valid NUL-terminated fixture path, no retained pointer.
+    assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+    let began = std::time::Instant::now();
+    let state = backend.load().unwrap();
+    assert!(began.elapsed() < std::time::Duration::from_secs(1));
+    assert_eq!(state.value(Id::Volume), "100");
+    assert_eq!(state.value(Id::Brightness), "5");
+}
+
+#[test]
+fn information_distinguishes_active_driver_and_detects_hardware_and_metrics() {
+    use std::os::unix::fs::symlink;
+    let (dir, backend) = fixture();
+    let root = dir.path();
+    for (path, value) in [
+        (
+            "proc/cpuinfo",
+            "processor : 0\nmodel name : Example x86 CPU\n",
+        ),
+        ("proc/uptime", "7380.0 9000.0"),
+        ("sys/class/thermal/thermal_zone0/temp", "43000"),
+        ("sys/class/graphics/fb0/virtual_size", "640,480"),
+        (
+            "sys/devices/system/cpu/cpufreq/policy0/scaling_governor",
+            "performance",
+        ),
+    ] {
+        let p = root.join(path);
+        fs::create_dir_all(p.parent().unwrap()).unwrap();
+        fs::write(p, value).unwrap();
+    }
+    let display = root.join("sys/class/drm/card0/device/driver");
+    fs::create_dir_all(display.parent().unwrap()).unwrap();
+    symlink("/drivers/rockchip-drm", display).unwrap();
+    let driver = root.join("sys/class/drm/renderD128/device/driver");
+    fs::create_dir_all(driver.parent().unwrap()).unwrap();
+    symlink("/drivers/panfrost", &driver).unwrap();
+    let info = backend.load().unwrap().info;
+    assert_eq!(info.uptime, "2:03");
+    assert_eq!(info.cards.len(), 6);
+    assert!(info.cards[0].lines.contains(&"Example x86 CPU".into()));
+    assert!(info.cards[0].lines.contains(&"performance".into()));
+    assert!(info.cards[0].lines.iter().any(|l| l.contains("43 °C")));
+    assert!(info.cards[1]
+        .lines
+        .contains(&"settings.active|panfrost".into()));
+    assert!(info.cards[1]
+        .lines
+        .contains(&"settings.after_reboot|libmali".into()));
+    assert!(info.cards[1].lines.contains(&"640 × 480".into()));
+    fs::remove_file(driver).unwrap();
+    assert!(backend.load().unwrap().info.cards[1]
+        .lines
+        .contains(&"settings.active|?".into()));
+    assert!(!info
+        .cards
+        .iter()
+        .flat_map(|c| &c.lines)
+        .any(|l| l.contains("Cortex-A35") || l.contains("Mali-G31")));
+}
+
+#[test]
+fn brightness_publishes_once_after_success_and_keeps_config_on_sysfs_failure() {
+    let (dir, backend) = fixture();
+    let panel = dir.path().join("sys/class/backlight/panel");
+    fs::create_dir_all(&panel).unwrap();
+    fs::write(panel.join("max_brightness"), format!("{:<4096}", "255\n")).unwrap();
+    fs::write(panel.join("brightness"), "128").unwrap();
+    script(&dir, "brightness", "exit 29"); // Must never invoke the owning legacy helper.
+    assert_eq!(backend.apply(Id::Brightness, "75").unwrap(), "75");
+    assert_eq!(fs::read_to_string(panel.join("brightness")).unwrap(), "191");
+    fs::remove_file(panel.join("brightness")).unwrap();
+    fs::create_dir(panel.join("brightness")).unwrap();
+    assert!(backend
+        .apply(Id::Brightness, "80")
+        .unwrap_err()
+        .contains("brightness"));
+    assert_eq!(backend.load().unwrap().value(Id::Brightness), "75");
+}

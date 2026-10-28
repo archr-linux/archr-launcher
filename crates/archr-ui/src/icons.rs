@@ -5,7 +5,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-pub(crate) const DEFAULT_ICONS_DIR: &str = "/usr/share/archr-launcher/themes/default/icons";
+pub const DEFAULT_ICONS_DIR: &str = "/usr/share/archr-launcher/themes/default/icons";
 
 macro_rules! glyphs {
     ($($variant:ident => $file:literal),+ $(,)?) => {
@@ -33,6 +33,9 @@ glyphs! {
     Battery => "battery", BatteryLow => "battery-low",
     BatteryMedium => "battery-medium", BatteryFull => "battery-full",
     BatteryCharging => "battery-charging",
+    Controls => "gamepad", Play => "play", Sound => "volume-2",
+    Globe => "globe", Palette => "palette", Trophy => "trophy", Storage => "hard-drive",
+    ChevronLeft => "chevron-left", ChevronRight => "chevron-right",
 }
 
 #[link(name = "SDL2_image")]

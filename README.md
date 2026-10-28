@@ -187,6 +187,44 @@ Os testes puros cobrem miniaturas por caminho/mtime, limites de cache, bindings,
 coleções e resolução de núcleos. A meta de 0,3 s precisa ser medida no RK3326;
 uma medição no PC não substitui a sonda no aparelho.
 
+## Configurações
+
+Entrada temporária: `Y` na lista de sistemas → `Configurações` → `A`.
+`B` volta pela pilha de páginas; na raiz retorna ao launcher. `Y` na raiz
+abre Informações do sistema. O menu Start também abre as configurações.
+Som e tela, Sistema e Região e idioma aplicam alterações imediatamente;
+as outras categorias mostram “Em breve”. Atualização mostra a versão instalada,
+sem iniciar o atualizador. O driver de GPU oferece confirmação de reinício.
+
+As páginas são descritas em `archr-ui::settings`; o host usa
+`archr-launcher::settings::Runtime`. Um worker serial executa scripts com argv,
+limite de 20 s e código de saída real. Volume usa `pactl` diretamente e brilho
+usa o backlight; após sucesso, `archr-config` publica a chave atomicamente sob a
+trava compartilhada. Saída de áudio, governador, fuso, idioma e inatividade
+também têm o launcher como único dono da chave. `gpudriver`, `suspendmode` e
+`turbomode` são donos exclusivos das suas chaves: o launcher chama o script e
+confere a gravação, sem escrever antes ou depois. Esses três scripts ainda
+precisam de modo runtime-only e propagação de falhas no sistema; suas gravações
+legadas não ganham atomicidade por serem chamadas daqui. A mesma propagação deve
+ser conferida em `set-audio`, `archr-config tz` e nas funções de governador.
+Erros exibem somente uma mensagem curta e localizada; detalhes técnicos
+completos vão ao log. Leituras usam `archr-io`, rejeitando arquivos não regulares e limitando os
+dados. Informações
+são sondadas fora do SDL quatro segundos após a conclusão anterior; a saída
+aguarda apenas mutações, nunca sondagens descartáveis. O driver de GPU ativo
+é obtido pelo binding; a preferência divergente é marcada para após reiniciar.
+
+As opções de suspensão por inatividade gravam `idle.timeout` e
+`idle.timeout.game`, em minutos: 0, 1, 3, 5, 10, 15 ou 30; ambas começam em
+0 (“Nunca”). O launcher apenas grava essas duas chaves: o detector de
+inatividade é responsabilidade do sistema, inclusive durante jogos.
+O idioma recarrega o catálogo do launcher após a gravação; os locales das
+ferramentas e emuladores continuam dependendo da preparação feita pelo serviço.
+
+Os testes usam `ARCHR_LAUNCHER_ROOT` e executáveis falsos em `ROOT/usr/bin`,
+com esse diretório no `PATH`; nenhum script ausente pode cair no host.
+O driver `SNAPSHOT` também aguarda as operações pendentes de configurações.
+
 ## Idiomas
 
 Instale `locales/*.toml` em `/usr/share/archr-launcher/locales/` (também sob

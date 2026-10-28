@@ -118,7 +118,7 @@ fn run(
                     (
                         paths.root.as_deref(),
                         theme_path.as_deref(),
-                        &paths.at("/usr/share/archr-launcher/themes/default/icons"),
+                        &paths.at(archr_ui::DEFAULT_ICONS_DIR),
                     ),
                     &catalog,
                     &library,
@@ -153,7 +153,6 @@ fn run(
     creator = ui.canvas.texture_creator();
     ui.catalog = catalog;
     ui.theme_dir = theme_path;
-    ui.system_icons_dir = Some(paths.at("/usr/share/archr-launcher/themes/default/icons"));
     ui.configure_prepared(&creator, prepared, paths.root.as_deref())?;
     let mut app = App::new(ui.page_size(&theme));
     ui.banner = library.banner.take().map(|m| m.render(&ui.catalog));
@@ -165,6 +164,7 @@ fn run(
     );
     library.start();
     let (width, height) = ui.canvas.output_size()?;
+    let mut settings = archr_launcher::settings::Runtime::new(paths.clone());
     let mut covers = CoverCache::new(
         &creator,
         paths.cache.join("thumbs"),
@@ -177,6 +177,7 @@ fn run(
     let mut repeat = Repeat::default();
     let mut dirty = false;
     let mut deferred = None;
+    let mut closing = false;
     let mut banner_until = Instant::now() + Duration::from_secs(8);
     loop {
         // A successful power request owns the screen until the OS stops us.
@@ -191,6 +192,23 @@ fn run(
                 _ => {}
             }
             continue;
+        }
+        let previous_setting = settings.state.pending;
+        let (settings_dirty, language) = settings.poll();
+        if settings_dirty
+            && previous_setting == Some(archr_ui::settings::Id::Timezone)
+            && settings.state.pending.is_none()
+            && settings.state.error.is_none()
+        {
+            ui.invalidate_settings_clock();
+        }
+        dirty |= settings_dirty;
+        if let Some(language) = language {
+            ui.catalog = I18n::load(
+                &paths.at("/usr/share/archr-launcher/locales"),
+                Some(&language),
+                None,
+            );
         }
         controllers.poll_mappings();
         dirty |= ui.tick() || ui.animating();
@@ -233,7 +251,13 @@ fn run(
         dirty |= covers.poll();
         if dirty {
             let cover = selected.as_ref().and_then(|path| covers.get(path));
-            ui.draw(&app, &library, &theme, cover)?;
+            ui.draw_with_settings(
+                &app,
+                &library,
+                &theme,
+                cover,
+                settings.active.then_some(&settings.state),
+            )?;
             dirty = false;
         }
         #[cfg(test)]
@@ -241,9 +265,9 @@ fn run(
         let mut button = None;
         let mut close_requested = false;
         if let Some(driver) = &mut script {
-            if let Some(step) =
-                driver.poll(library.ready && !ui.loading && library.pending_writes == 0)?
-            {
+            if let Some(step) = driver.poll(
+                library.ready && !ui.loading && library.pending_writes == 0 && !settings.busy(),
+            )? {
                 match step {
                     script::Step::Button(b) => button = Some(b),
                     script::Step::Quit => close_requested = true,
@@ -290,12 +314,32 @@ fn run(
             }
         }
         let mut outcome = None;
+        closing |= close_requested;
+        if closing {
+            settings.close();
+        }
+        close_requested = closing && !settings.mutations_pending();
+        if closing {
+            button = None;
+            repeat.clear();
+        }
         if close_requested {
             deferred = None;
             repeat.clear();
         } else if let Some(button) = button.or_else(|| repeat.poll(Instant::now())) {
             ui.snap_animations();
-            let requested = app.handle(button, &library);
+
+            let requested = if settings.active {
+                settings.handle(button)
+            } else {
+                app.handle(button, &library)
+            };
+            let requested = if requested == Outcome::Settings {
+                settings.open();
+                Outcome::None
+            } else {
+                requested
+            };
             if requested == Outcome::ToggleWifi {
                 if let Err(error) =
                     wifi::toggle(&paths, !ui.wifi_enabled(), ui.wifi_refresh_signal())
@@ -307,7 +351,7 @@ fn run(
                 outcome = Some(Outcome::None);
             } else {
                 let terminal = matches!(requested, Outcome::Launch { .. } | Outcome::Action(_));
-                if terminal && library.pending_writes > 0 {
+                if terminal && (library.pending_writes > 0 || settings.mutations_pending()) {
                     deferred = Some(requested);
                 } else {
                     if terminal {
@@ -318,7 +362,11 @@ fn run(
             }
             dirty = true;
         }
-        if !close_requested && outcome.is_none() && library.pending_writes == 0 {
+        if !close_requested
+            && outcome.is_none()
+            && library.pending_writes == 0
+            && !settings.mutations_pending()
+        {
             outcome = deferred.take().filter(|_| !library.write_failed);
         }
         if close_requested || outcome.is_some() {

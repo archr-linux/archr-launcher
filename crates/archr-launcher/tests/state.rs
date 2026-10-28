@@ -338,7 +338,12 @@ fn quick_menu_from_systems_works_even_without_systems() {
         assert_eq!(app.screen, Screen::QuickMenu { game: None });
         assert_eq!(
             app.quick_menu_items(&data),
-            [QuickItem::Suspend, QuickItem::Reboot, QuickItem::Shutdown]
+            [
+                QuickItem::Settings,
+                QuickItem::Suspend,
+                QuickItem::Reboot,
+                QuickItem::Shutdown
+            ]
         );
         app.handle(Button::Down, &data);
         app.handle(Button::B, &data);
@@ -391,7 +396,7 @@ fn quick_menu_tools_and_ports_hide_core_but_keep_all_session_actions() {
         .insert("ports".into(), vec![pair("portmaster", "portmaster")]);
     for system in [None, Some("snes"), Some("tools"), Some("ports")] {
         let mut app = system.map_or_else(|| App::new(5), |s| in_games(s, 0));
-        let core_rows = usize::from(system == Some("snes"));
+        let core_rows = usize::from(system == Some("snes") || system.is_none());
         app.handle(Button::Y, &data);
         assert_eq!(
             app.quick_menu_items(&data).len(),

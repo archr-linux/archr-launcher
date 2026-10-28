@@ -42,6 +42,31 @@ impl SystemCfg {
             .map(String::from)
     }
 
+    /// Shell `get_setting` precedence, ignoring empty values. Fully qualified
+    /// keys also work without a system argument (e.g. `audio.volume`).
+    pub fn get_setting(
+        &self,
+        key: &str,
+        system: Option<&str>,
+        rom: Option<&str>,
+    ) -> Option<String> {
+        let mut keys = Vec::new();
+        if let Some(system) = system {
+            if let Some(rom) = rom {
+                keys.push(rom_key(system, rom, key));
+            }
+            keys.push(format!("{system}.{key}"));
+        }
+        keys.extend([
+            format!("system.{key}"),
+            key.to_owned(),
+            format!("global.{key}"),
+        ]);
+        keys.iter()
+            .find_map(|key| self.entry(key).filter(|v| !v.is_empty()))
+            .map(str::to_owned)
+    }
+
     /// Re-read under the shared shell lock and atomically replace one entry.
     ///
     /// A live lock holder is retried for up to ten seconds. Dead PID locks are
