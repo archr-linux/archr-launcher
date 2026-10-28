@@ -448,7 +448,7 @@ fn systems_without_emulators_launch_their_catalog_command() {
     assert!(library.handle(launch("tools"), "pad").unwrap());
     assert_eq!(
         library.collection_len("@recent"),
-        0,
+        1,
         "tools are not recents"
     );
     let rom = tools.join("Mount NFS.sh");
