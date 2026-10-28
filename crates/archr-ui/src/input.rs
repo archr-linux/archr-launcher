@@ -66,15 +66,7 @@ pub fn map_event(e: &Event) -> Option<Button> {
             axis: sdl2::controller::Axis::LeftX,
             value,
             ..
-        } => {
-            if value < 0 {
-                Some(Button::L)
-            } else if value > 0 {
-                Some(Button::R)
-            } else {
-                None
-            }
-        }
+        } => axis_button(value, Button::L, Button::R),
         Event::JoyAxisMotion {
             axis_idx: 1, value, ..
         }
@@ -82,16 +74,18 @@ pub fn map_event(e: &Event) -> Option<Button> {
             axis: sdl2::controller::Axis::LeftY,
             value,
             ..
-        } => {
-            if value < 0 {
-                Some(Button::Up)
-            } else if value > 0 {
-                Some(Button::Down)
-            } else {
-                None
-            }
-        }
+        } => axis_button(value, Button::Up, Button::Down),
         _ => None,
+    }
+}
+
+fn axis_button(value: i16, negative: Button, positive: Button) -> Option<Button> {
+    if value < 0 {
+        Some(negative)
+    } else if value > 0 {
+        Some(positive)
+    } else {
+        None
     }
 }
 
@@ -184,6 +178,13 @@ impl Repeat {
             let (_, old) = self.sources.remove(index);
             if !self.sources.iter().any(|(_, b)| *b == old) {
                 self.release(old);
+                if self.held.is_none() {
+                    if let Some((_, remaining)) = self.sources.iter().rev().find(|(_, b)| {
+                        matches!(b, Button::Up | Button::Down | Button::L | Button::R)
+                    }) {
+                        self.press(*remaining, now);
+                    }
+                }
             }
         }
         let button = button?;
@@ -287,6 +288,65 @@ mod tests {
             which: 1,
             axis,
             value,
+        }
+    }
+
+    #[test]
+    fn remaining_direction_repeats_after_either_source_is_released() {
+        use sdl2::controller::Axis::{LeftX, LeftY};
+        for (axis_id, pad, buttons) in [
+            (LeftY, Pad::DPadDown, [Button::Up, Button::Down]),
+            (LeftX, Pad::DPadDown, [Button::L, Button::Down]),
+            (LeftY, Pad::DPadRight, [Button::Up, Button::R]),
+        ] {
+            for stick_first in [false, true] {
+                for release_active in [false, true] {
+                    let now = Instant::now();
+                    let mut repeat = Repeat::default();
+                    let pressed = [
+                        axis(axis_id, -32768),
+                        Event::ControllerButtonDown {
+                            timestamp: 0,
+                            which: 1,
+                            button: pad,
+                        },
+                    ];
+                    let released = [
+                        axis(axis_id, 0),
+                        Event::ControllerButtonUp {
+                            timestamp: 0,
+                            which: 1,
+                            button: pad,
+                        },
+                    ];
+                    let first = usize::from(!stick_first);
+                    let second = 1 - first;
+                    for (index, elapsed) in [(first, 0), (second, 100)] {
+                        let event = &pressed[index];
+                        let button = map_event(event);
+                        assert_eq!(
+                            repeat.event(event, button, now + Duration::from_millis(elapsed)),
+                            Some(buttons[index])
+                        );
+                    }
+                    let released_index = if release_active { second } else { first };
+                    let remaining = 1 - released_index;
+                    let release_time = now + Duration::from_millis(200);
+                    let event = &released[released_index];
+                    assert_eq!(repeat.event(event, map_event(event), release_time), None);
+                    // Resumed input gets 300 ms; untouched active input keeps its deadline.
+                    let deadline =
+                        now + Duration::from_millis(if release_active { 500 } else { 400 });
+                    let expected = Some(buttons[remaining]);
+                    assert_eq!(repeat.poll(deadline - Duration::from_millis(1)), None);
+                    assert_eq!(repeat.poll(deadline), expected);
+                    assert_eq!(repeat.poll(deadline + Duration::from_millis(79)), None);
+                    assert_eq!(repeat.poll(deadline + Duration::from_millis(80)), expected);
+                    let event = &released[remaining];
+                    assert_eq!(repeat.event(event, map_event(event), deadline), None);
+                    assert_eq!(repeat.poll(deadline + Duration::from_secs(1)), None);
+                }
+            }
         }
     }
 
