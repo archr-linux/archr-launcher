@@ -20,17 +20,18 @@ fn script(dir: &TempDir, name: &str, body: &str) {
     fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
 }
 #[test]
-fn suspend_sees_old_value_and_other_scripts_see_committed_value() {
+fn scripts_are_single_owners_and_runtime_only_operations_publish_after_success() {
     let (dir, backend) = fixture();
-    script(&dir, "suspendmode", "case \"$(/bin/cat \"$ARCHR_LAUNCHER_ROOT/storage/.config/system/configs/system.cfg\")\" in *system.suspendmode=off*) exit 0;; *) exit 23;; esac");
+    script(&dir, "suspendmode", "case \"$(/bin/cat \"$ARCHR_LAUNCHER_ROOT/storage/.config/system/configs/system.cfg\")\" in *system.suspendmode=off*) printf 'system.suspendmode=mem\n' > \"$ARCHR_LAUNCHER_ROOT/storage/.config/system/configs/system.cfg\";; *) exit 23;; esac");
     assert_eq!(backend.apply(Id::Suspend, "mem").unwrap(), "mem");
-    script(&dir, "volume", "case \"$(/bin/cat \"$ARCHR_LAUNCHER_ROOT/storage/.config/system/configs/system.cfg\")\" in *audio.volume=65*) exit 0;; *) exit 24;; esac");
+    script(&dir, "pactl", "case \"$(/bin/cat \"$ARCHR_LAUNCHER_ROOT/storage/.config/system/configs/system.cfg\")\" in *audio.volume=65*) exit 24;; *) exit 0;; esac");
     backend.apply(Id::Volume, "65").unwrap();
 }
 #[test]
 fn failure_reports_status_and_stderr_and_restores_value() {
     let (dir, backend) = fixture();
-    script(&dir, "volume", "echo 'sink unavailable' >&2; exit 7");
+    script(&dir, "volume", "false; exit 0"); // Legacy helper masks the runtime error.
+    script(&dir, "pactl", "echo 'sink unavailable' >&2; exit 7");
     let error = backend.apply(Id::Volume, "65").unwrap_err();
     assert!(
         error.contains('7') && error.contains("sink unavailable"),
@@ -101,7 +102,11 @@ fn worker_does_not_block_input_and_commits_only_after_success() {
     let (dir, _) = fixture();
     script(&dir, "set-audio", "printf 'Speakers\\n'");
     script(&dir, "timeinfo", "printf 'UTC,\\n'");
-    script(&dir, "volume", "/bin/sleep 0.2; exit 0");
+    script(
+        &dir,
+        "pactl",
+        "if [ \"$1\" = -- ]; then /bin/sleep 0.2; fi; exit 0",
+    );
     let mut runtime = Runtime::new(Paths::new(Some(dir.path().to_owned())));
     runtime.open();
     let deadline = Instant::now() + Duration::from_secs(3);
@@ -141,4 +146,20 @@ fn load_uses_live_volume_and_first_backlight_percent() {
     let state = backend.load().unwrap();
     assert_eq!(state.value(Id::Volume), "50");
     assert_eq!(state.value(Id::Brightness), "25");
+}
+
+#[test]
+fn load_normalizes_stored_sliders_and_rejects_nonregular_probes() {
+    let (dir, backend) = fixture();
+    let cfg = dir.path().join("storage/.config/system/configs/system.cfg");
+    fs::write(&cfg, "audio.volume=32767\ndisplay.brightness=-500\n").unwrap();
+    fs::create_dir_all(dir.path().join("proc")).unwrap();
+    let fifo = std::ffi::CString::new(dir.path().join("proc/cpuinfo").to_str().unwrap()).unwrap();
+    // SAFETY: a valid NUL-terminated fixture path, no retained pointer.
+    assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+    let began = std::time::Instant::now();
+    let state = backend.load().unwrap();
+    assert!(began.elapsed() < std::time::Duration::from_secs(1));
+    assert_eq!(state.value(Id::Volume), "100");
+    assert_eq!(state.value(Id::Brightness), "5");
 }

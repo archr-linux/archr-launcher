@@ -23,7 +23,7 @@ impl Backend {
         Self { paths }
     }
     fn read(&self, path: &str) -> String {
-        fs::read_to_string(self.paths.at(path))
+        archr_io::read_utf8(&self.paths.at(path), 64 * 1024, archr_io::Symlinks::Follow)
             .unwrap_or_default()
             .trim()
             .to_owned()
@@ -89,7 +89,7 @@ impl Backend {
         for page in [Page::Sound, Page::System, Page::Region] {
             for row in page.rows() {
                 if let Some(value) = cfg.get_setting(row.id.key(), None, None) {
-                    state.values.insert(row.id, value);
+                    state.values.insert(row.id, row.id.normalize(&value));
                 }
             }
         }
@@ -111,7 +111,7 @@ impl Backend {
         backlights.sort_by_key(|d| d.file_name());
         if let Some(panel) = backlights.first() {
             let number = |name| {
-                fs::read_to_string(panel.path().join(name))
+                archr_io::read_utf8(&panel.path().join(name), 128, archr_io::Symlinks::Follow)
                     .ok()?
                     .trim()
                     .parse::<u64>()
@@ -131,10 +131,10 @@ impl Backend {
         }
         let mut errors = Vec::new();
         for (id, program, args) in [
-            (Id::Audio, "set-audio", vec!["list"]),
-            (Id::Timezone, "timeinfo", vec!["timezones"]),
+            (Id::Audio, "set-audio", &["list"][..]),
+            (Id::Timezone, "timeinfo", &["timezones"][..]),
         ] {
-            match self.command(program, &args) {
+            match self.command(program, args) {
                 Ok(output) => {
                     let mut options: Vec<String> = output
                         .split(['\n', ','])
@@ -174,10 +174,11 @@ impl Backend {
         state.options.insert(Id::Suspend, modes);
         let available =
             self.read("/sys/devices/system/cpu/cpufreq/policy0/scaling_available_governors");
-        let governors: Vec<String> = ["ondemand", "performance", "schedutil", "powersave"]
-            .into_iter()
-            .filter(|v| available.split_whitespace().any(|g| g == *v))
-            .map(str::to_owned)
+        let governors = Id::Governor
+            .choices()
+            .iter()
+            .filter(|v| available.split_whitespace().any(|g| g == **v))
+            .map(|v| (*v).into())
             .collect();
         state.options.insert(Id::Governor, governors);
         self.refresh_info(&mut state);
@@ -193,14 +194,9 @@ impl Backend {
             Id::Volume | Id::Brightness => value
                 .parse::<u8>()
                 .is_ok_and(|n| n <= 100 && (id != Id::Brightness || n >= 5)),
-            Id::Turbo => matches!(value, "0" | "1"),
-            Id::Gpu => matches!(value, "panfrost" | "libmali"),
-            Id::Governor => matches!(
-                value,
-                "ondemand" | "performance" | "schedutil" | "powersave"
-            ),
-            Id::Language => matches!(value, "en_US" | "pt_BR" | "es_ES" | "ru_RU"),
-            Id::Idle | Id::IdleGame => matches!(value, "0" | "1" | "3" | "5" | "10" | "15" | "30"),
+            Id::Turbo | Id::Gpu | Id::Governor | Id::Language | Id::Idle | Id::IdleGame => {
+                id.choices().contains(&value)
+            }
             Id::Suspend => {
                 matches!(value, "default" | "off")
                     || self
@@ -225,56 +221,84 @@ impl Backend {
         if !valid {
             return Err("Invalid setting value".into());
         }
-        // suspendmode compares the stored value itself; pre-saving makes it a no-op.
-        if id == Id::Suspend {
-            self.command("suspendmode", &[value])?;
-            if value != "default" {
-                self.save(id, value)?;
-            }
-            return Ok(if value == "default" {
-                self.cfg()?
-                    .get_setting(id.key(), None, None)
-                    .unwrap_or_else(|| "off".into())
-            } else {
-                value.into()
-            });
-        }
-        let old = self
-            .cfg()?
-            .get_setting(id.key(), None, None)
-            .unwrap_or_else(|| id.default_value().into());
-        self.save(id, value)?;
-        let result = match id {
-            Id::Volume => self.command("volume", &[value]),
-            Id::Brightness => self.command("brightness", &["set", value]),
-            Id::Audio => self.command("set-audio", &["set", value]),
-            Id::Gpu => self.command("gpudriver", &[value]),
-            Id::Turbo => self.command(
-                "turbomode",
-                &[if value == "1" { "enable" } else { "disable" }],
-            ),
-            Id::Timezone => self.command("archr-config", &["tz", value]),
-            Id::Governor => self.command(
-                "bash",
-                &[
-                    "-lc",
-                    ". \"$1\"; \"$2\"",
-                    "archr-settings",
-                    self.paths
-                        .at("/etc/profile.d/099-freqfunctions")
-                        .to_str()
-                        .ok_or("Invalid path")?,
-                    value,
-                ],
-            ),
-            _ => Ok(String::new()),
+        // Legacy scripts own these keys. Never pre-save, restore or write twice.
+        let script = match id {
+            Id::Suspend => Some(("suspendmode", value)),
+            Id::Gpu => Some(("gpudriver", value)),
+            Id::Turbo => Some(("turbomode", if value == "1" { "enable" } else { "disable" })),
+            _ => None,
         };
-        if let Err(error) = result {
-            return Err(match self.save(id, &old) {
-                Ok(()) => error,
-                Err(restore) => format!("{error}; config restore: {restore}"),
-            });
+        if let Some((name, argument)) = script {
+            self.command(name, &[argument])?;
+            let stored = self.cfg()?.get_setting(id.key(), None, None);
+            if id == Id::Suspend && value == "default" {
+                return Ok(stored.unwrap_or_else(|| "off".into()));
+            }
+            if stored.as_deref() != Some(value) {
+                return Err(format!(
+                    "{name}: successful exit without persisting {}={value}",
+                    id.key()
+                ));
+            }
+            return Ok(value.into());
         }
+        // Runtime-only operations must succeed before the single atomic publish.
+        match id {
+            Id::Volume => {
+                self.command(
+                    "pactl",
+                    &[
+                        "--",
+                        "set-sink-volume",
+                        "@DEFAULT_SINK@",
+                        &format!("{value}%"),
+                    ],
+                )?;
+            }
+            Id::Brightness => {
+                let mut panels: Vec<_> = fs::read_dir(self.paths.at("/sys/class/backlight"))
+                    .map_err(|e| e.to_string())?
+                    .filter_map(Result::ok)
+                    .collect();
+                panels.sort_by_key(|p| p.file_name());
+                let panel = panels.first().ok_or("No backlight available")?;
+                let max = archr_io::read_utf8(
+                    &panel.path().join("max_brightness"),
+                    128,
+                    archr_io::Symlinks::Follow,
+                )
+                .map_err(|e| e.to_string())?
+                .trim()
+                .parse::<u64>()
+                .map_err(|e| e.to_string())?;
+                let raw = max.saturating_mul(value.parse().expect("validated percent")) / 100;
+                fs::write(panel.path().join("brightness"), raw.max(1).to_string())
+                    .map_err(|e| format!("brightness: {e}"))?;
+            }
+            Id::Audio => {
+                self.command("set-audio", &["set", value])?;
+            }
+            Id::Timezone => {
+                self.command("archr-config", &["tz", value])?;
+            }
+            Id::Governor => {
+                self.command(
+                    "bash",
+                    &[
+                        "-lc",
+                        ". \"$1\"; \"$2\"",
+                        "archr-settings",
+                        self.paths
+                            .at("/etc/profile.d/099-freqfunctions")
+                            .to_str()
+                            .ok_or("Invalid path")?,
+                        value,
+                    ],
+                )?;
+            }
+            _ => {}
+        }
+        self.save(id, value)?;
         if id == Id::Timezone && self.paths.root.is_none() {
             unsafe extern "C" {
                 fn tzset();
