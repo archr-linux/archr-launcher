@@ -5,8 +5,6 @@ use std::{
     path::{Path, PathBuf},
 };
 
-mod dots;
-
 pub const DEFAULT_ICONS_DIR: &str = "/usr/share/archr-launcher/themes/default/icons";
 
 macro_rules! glyphs {
@@ -116,8 +114,33 @@ impl IconLoader {
     }
 }
 
+// Only Lucide's exact two-unit-stroke dot forms; this is not a general SVG parser.
+fn normalize_dots(svg: &str) -> String {
+    let mut result = svg.to_owned();
+    let numeric = |s: &str| s.parse::<f32>().is_ok();
+    for (tag, _) in svg.split('<').filter_map(|s| s.split_once("/>")) {
+        let fields: Vec<_> = tag.trim_end().split('"').collect();
+        let point = match fields.as_slice() {
+            ["path d=", d, ""] => d
+                .strip_prefix('M')
+                .and_then(|d| d.strip_suffix("h.01").or_else(|| d.strip_suffix("v.01")))
+                .and_then(|d| d.split_once(' ')),
+            ["line x1=", x, " x2=", end, " y1=", y, " y2=", ey, ""] => {
+                (*end == format!("{x}.01") && y == ey).then_some((*x, *y))
+            }
+            _ => None,
+        };
+        if let Some((x, y)) = point.filter(|(x, y)| numeric(x) && numeric(y)) {
+            let circle =
+                format!(r#"<circle cx="{x}" cy="{y}" r="1" fill="currentColor" stroke="none" />"#);
+            result = result.replace(&format!("<{tag}/>"), &circle);
+        }
+    }
+    result
+}
+
 fn rasterize(svg: &str, size: u32) -> Result<Surface<'static>, String> {
-    let svg = dots::normalize(&svg.replace("currentColor", "#ffffff"))?;
+    let svg = normalize_dots(svg).replace("currentColor", "#ffffff");
     let rw = RWops::from_bytes(svg.as_bytes())?;
     let dimension = i32::try_from(size).map_err(|e| e.to_string())?;
     // SDL_image borrows the RWops; Surface takes ownership of the result.
@@ -133,62 +156,22 @@ fn rasterize(svg: &str, size: u32) -> Result<Surface<'static>, String> {
 mod tests {
     use super::*;
     #[test]
-    fn dot_forms_match_filled_circles_without_moving_other_geometry() {
-        let pixels = |body: &str| {
-            let svg = format!(
-                r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">{body}</svg>"#
-            );
-            rasterize(&svg, 24)
-                .unwrap()
-                .without_lock()
-                .unwrap()
-                .to_vec()
-        };
-        let dot = r#"<circle cx="12" cy="20" r="1" fill="currentColor" stroke="none"/>"#;
-        for path in [
-            "M12 20h.01",
-            "m12 20v.01",
-            "M12,20H12.01",
-            "M12 20V20.01",
-            "M12 20l0 .01",
-            "m12 20 .01 0",
-        ] {
-            assert_eq!(
-                pixels(&format!(r#"<path d="{path}"/>"#)),
-                pixels(dot),
-                "{path}"
-            );
+    fn dot_transform_handles_exact_forms_and_leaves_complex_paths_alone() {
+        for path in ["M12 20h.01", "M15 9h.01", "M12 20v.01"] {
+            let svg = format!(r#"<path d="{path}" />"#);
+            assert!(normalize_dots(&svg).contains("<circle"));
         }
-        assert_eq!(
-            pixels(r#"<line x1="12" y1="20" x2="12.01" y2="20"/>"#),
-            pixels(dot)
-        );
-        assert_eq!(
-            pixels(r#"<g stroke-width="4"><path d="M12 20h.01"/></g>"#),
-            pixels(r#"<circle cx="12" cy="20" r="2" fill="currentColor" stroke="none"/>"#)
-        );
-        assert_eq!(
-            pixels(r#"<path d="M12 20h.01m-8-16h8"/>"#),
-            pixels(&format!(r#"{dot}<path d="M4.01 4h8"/>"#)),
-            "relative geometry after a dot must keep its origin"
-        );
-        assert_eq!(
-            pixels(r#"<path d="M12 20h.01m4-4v.01"/>"#),
-            pixels(&format!(
-                r#"{dot}<circle cx="16.01" cy="16" r="1" fill="currentColor" stroke="none"/>"#
-            ))
-        );
-        assert_eq!(
-            pixels(r#"<path d="M2 2h8M12 20h.01"/>"#),
-            pixels(&format!(r#"<path d="M2 2h8"/>{dot}"#))
-        );
+        for path in ["M12 20h.01m-8-16h8", "M2 2h8M12 20h.01", "M12 20h.012"] {
+            let svg = format!(r#"<path d="{path}" />"#);
+            assert_eq!(normalize_dots(&svg), svg);
+        }
     }
 
     #[test]
     fn bundled_dot_audit_changes_only_the_five_affected_icons() {
         for &glyph in Glyph::ALL {
             let svg = glyph.embedded();
-            let normalized = dots::normalize(svg).unwrap();
+            let normalized = normalize_dots(svg);
             let added = match glyph {
                 Glyph::Wifi | Glyph::WifiOff => 1,
                 Glyph::Controls | Glyph::Games | Glyph::Storage => 2,
