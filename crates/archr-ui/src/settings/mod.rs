@@ -324,7 +324,7 @@ pub(crate) const CATEGORIES: &[(Page, &str, Glyph)] = &[
         Glyph::Storage,
     ),
 ];
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum Effect {
     None,
     Close,
@@ -336,6 +336,23 @@ pub enum Effect {
     Login(String, String),
     Scrape,
     CancelScrape,
+}
+/// Passwords never reach a log through `{:?}`.
+impl std::fmt::Debug for Effect {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::None => write!(f, "None"),
+            Self::Close => write!(f, "Close"),
+            Self::Set(id, value) => write!(f, "Set({id:?}, {value:?})"),
+            Self::Reboot => write!(f, "Reboot"),
+            Self::Scan => write!(f, "Scan"),
+            Self::Connect(ssid, _) => write!(f, "Connect({ssid:?}, <hidden>)"),
+            Self::Forget(ssid) => write!(f, "Forget({ssid:?})"),
+            Self::Login(user, _) => write!(f, "Login({user:?}, <hidden>)"),
+            Self::Scrape => write!(f, "Scrape"),
+            Self::CancelScrape => write!(f, "CancelScrape"),
+        }
+    }
 }
 /// ScreenScraper state mirrored from the host's engine job.
 #[derive(Clone, Debug, Default)]

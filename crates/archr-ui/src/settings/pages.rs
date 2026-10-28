@@ -158,12 +158,14 @@ impl Settings {
         match button {
             Button::Up => self.cursor = self.cursor.saturating_sub(1),
             Button::Down => self.cursor = (self.cursor + 1).min(last),
-            Button::X => {
-                let network = self.wifi_network()?;
-                if network.known || network.connected {
+            // X forgets a saved network and refreshes the list anywhere else.
+            Button::X => match self.wifi_network() {
+                Some(network) if network.known || network.connected => {
                     self.confirm_forget = Some(network.ssid.clone());
                 }
-            }
+                _ if self.value(Id::WifiSwitch) == "1" => return Some(Effect::Scan),
+                _ => {}
+            },
             Button::A if self.cursor == services => self.open(Page::Services),
             Button::A if self.cursor == hidden => {
                 self.wifi_hidden = true;
