@@ -3,6 +3,79 @@ use super::*;
 use crate::settings::{Id, Kind, Page, Settings, CATEGORIES};
 #[path = "render/information.rs"]
 mod information;
+const VIEW_TOP: f32 = 50.;
+const VIEW_BOTTOM: f32 = 434.;
+const ROW_GAP: f32 = 3.;
+const SECTION_HEIGHT: f32 = 21.;
+#[derive(Clone, Copy)]
+struct Placement {
+    top: f32,
+    height: f32,
+    section: Option<&'static str>,
+}
+impl Placement {
+    fn selected_top(self) -> f32 {
+        self.top
+            - if self.section.is_some() {
+                SECTION_HEIGHT
+            } else {
+                0.
+            }
+    }
+    fn bottom(self) -> f32 {
+        self.top + self.height
+    }
+}
+fn placements(rows: &[crate::settings::Row]) -> Vec<Placement> {
+    let mut top = VIEW_TOP;
+    rows.iter()
+        .map(|row| {
+            let height = if row.subtitle.is_some() { 46. } else { 40. };
+            let place = Placement {
+                top,
+                height,
+                section: None,
+            };
+            top += height + ROW_GAP;
+            place
+        })
+        .collect()
+}
+pub(super) struct Scroll {
+    page: Option<Page>,
+    pub(super) tween: Tween,
+}
+impl Default for Scroll {
+    fn default() -> Self {
+        Self {
+            page: None,
+            tween: Tween::new(0., Duration::from_millis(90)),
+        }
+    }
+}
+impl Scroll {
+    fn offset(
+        &mut self,
+        page: Page,
+        selected_top: f32,
+        selected_bottom: f32,
+        content_bottom: f32,
+        now: Instant,
+    ) -> f32 {
+        let changed = self.page != Some(page);
+        let previous = if changed { 0. } else { self.tween.target };
+        let target = previous
+            .min(selected_top - VIEW_TOP)
+            .max(selected_bottom - VIEW_BOTTOM)
+            .clamp(0., (content_bottom - VIEW_BOTTOM).max(0.));
+        self.tween.retarget(target, now);
+        if changed {
+            self.tween.snap();
+            self.page = Some(page);
+        }
+        self.tween.value(now)
+    }
+}
 type Bounds = (f32, f32, f32, f32);
 struct View<'a, 'ttf, 'tex> {
     ui: &'a mut Ui<'ttf, 'tex>,
@@ -15,6 +88,11 @@ impl Ui<'_, '_> {
         }
     }
     pub(super) fn settings_page(&mut self, state: &Settings, theme: &Theme) -> Result<(), String> {
+        if state.page().rows().is_empty() {
+            self.settings_scroll.page = None;
+            self.settings_scroll.tween.retarget(0., self.frame.now);
+            self.settings_scroll.tween.snap();
+        }
         View { ui: self, theme }.draw(state)
     }
 }
@@ -35,7 +113,19 @@ impl View<'_, '_, '_> {
             (!selected).then_some(self.theme.border),
         )
     }
-
+    fn row_panel(&mut self, bounds: Bounds, selected: bool) -> Result<(), String> {
+        if !selected {
+            return Ok(());
+        }
+        // Clip the mesh's antialias fringe to the placement's exact height.
+        let previous = self.ui.canvas.clip_rect();
+        self.ui
+            .canvas
+            .set_clip_rect(previous.intersect_rect(self.rect(bounds)));
+        let result = self.panel(bounds, true);
+        self.ui.canvas.set_clip_rect(previous);
+        result
+    }
     fn ink(&self, selected: bool) -> Rgba {
         selection(selected, self.theme.text, self.theme.highlight_text)
     }
@@ -197,68 +287,7 @@ impl View<'_, '_, '_> {
                     (20., self.theme.text, Align::Center),
                 )?;
             }
-            page => {
-                let step = if page == Page::Region { 80. } else { 64. };
-                for (n, row) in page.rows().iter().enumerate() {
-                    let y = 68. + n as f32 * step;
-                    let selected = n == state.cursor;
-                    let ink = self.ink(selected);
-                    let label = self.tr(row.label);
-                    let expand = row.subtitle.is_none()
-                        && row.kind == Kind::Value
-                        && self.ui.measure(
-                            &state.display_value(row.id, &self.ui.catalog),
-                            Face::Regular,
-                            14.,
-                        )? > 228;
-                    let label_width = if expand {
-                        self.ui.measure(&label, Face::Regular, 15.)?.clamp(120, 278) as f32
-                    } else {
-                        278.
-                    };
-                    let control_x = 38. + label_width + 16.;
-                    let control = (control_x, y, 600. - control_x, step - 6.);
-                    self.panel((24., y, 592., step - 6.), selected)?;
-                    self.text(
-                        (
-                            38.,
-                            y,
-                            label_width,
-                            if row.subtitle.is_some() {
-                                28.
-                            } else {
-                                step - 6.
-                            },
-                        ),
-                        &label,
-                        (15., ink, Align::Left),
-                    )?;
-                    if let Some(key) = row.subtitle {
-                        self.text(
-                            (38., y + 28., 278., 30.),
-                            &self.tr(key),
-                            (
-                                12.,
-                                selection(
-                                    selected,
-                                    self.theme.muted,
-                                    self.theme.accent_text_secondary,
-                                ),
-                                Align::Left,
-                            ),
-                        )?;
-                    }
-                    if state.pending == Some(row.id) {
-                        self.text(
-                            control,
-                            &self.tr("settings.applying"),
-                            (14., ink, Align::Right),
-                        )?;
-                    } else {
-                        self.control(row.id, row.kind, state, selected, control)?;
-                    }
-                }
-            }
+            page => self.rows(state, page.rows())?,
         }
         if state.error.as_ref().is_some_and(|(id, _)| {
             !matches!(state.page(), Page::Info | Page::InfoDetail(_))
@@ -325,6 +354,109 @@ impl View<'_, '_, '_> {
             )?;
         }
         Ok(())
+    }
+    fn rows(&mut self, state: &Settings, rows: &[crate::settings::Row]) -> Result<(), String> {
+        self.rows_at(state, rows, &placements(rows))
+    }
+    /// Sections and variable-height rows share one geometry with scrolling.
+    /// The pages branch can pass its existing placements through this adapter.
+    fn rows_at(
+        &mut self,
+        state: &Settings,
+        rows: &[crate::settings::Row],
+        positions: &[Placement],
+    ) -> Result<(), String> {
+        let selected = positions.get(state.cursor).copied().unwrap_or(Placement {
+            top: VIEW_TOP,
+            height: 0.,
+            section: None,
+        });
+        let bottom = positions.last().map_or(VIEW_TOP, |p| p.bottom());
+        let offset = self.ui.settings_scroll.offset(
+            state.page(),
+            selected.selected_top(),
+            selected.bottom(),
+            bottom,
+            self.ui.frame.now,
+        );
+        self.ui
+            .canvas
+            .set_clip_rect(self.rect((16., VIEW_TOP, 608., VIEW_BOTTOM - VIEW_TOP)));
+        let result = (|| {
+            for (n, (row, position)) in rows.iter().zip(positions).enumerate() {
+                let y = position.top - offset;
+                if position.bottom() - offset < VIEW_TOP
+                    || position.selected_top() - offset >= VIEW_BOTTOM
+                {
+                    continue;
+                }
+                if let Some(section) = position.section {
+                    self.note(
+                        (24., y - SECTION_HEIGHT, 592., SECTION_HEIGHT),
+                        &self.tr(section),
+                        12.,
+                    )?;
+                }
+                let selected = n == state.cursor;
+                let ink = self.ink(selected);
+                let face = selection(selected, Face::Regular, Face::Semibold);
+                let label = self.tr(row.label);
+                let expand = row.subtitle.is_none()
+                    && row.kind == Kind::Value
+                    && self.ui.measure(
+                        &state.display_value(row.id, &self.ui.catalog),
+                        face,
+                        14.,
+                    )? > 228;
+                let label_width = if expand {
+                    self.ui.measure(&label, face, 15.)?.clamp(120, 278) as f32
+                } else {
+                    278.
+                };
+                let control_x = 30. + label_width + 16.;
+                let control = (control_x, y, 610. - control_x, position.height);
+                self.row_panel((16., y, 608., position.height), selected)?;
+                self.text_face(
+                    (
+                        30.,
+                        y,
+                        label_width,
+                        if row.subtitle.is_some() {
+                            25.
+                        } else {
+                            position.height
+                        },
+                    ),
+                    &label,
+                    (15., ink, Align::Left),
+                    face,
+                )?;
+                if let Some(key) = row.subtitle {
+                    self.text(
+                        (30., y + 25., 278., 21.),
+                        &self.tr(key),
+                        (
+                            12.,
+                            selection(selected, self.theme.muted, self.theme.accent_text_secondary),
+                            Align::Left,
+                        ),
+                    )?;
+                }
+                if state.pending == Some(row.id) {
+                    self.text_face(
+                        control,
+                        &self.tr("settings.applying"),
+                        (14., ink, Align::Right),
+                        face,
+                    )?;
+                } else {
+                    self.control(row.id, row.kind, state, selected, control)?;
+                }
+            }
+            Ok(())
+        })();
+        self.ui.canvas.set_clip_rect(None);
+        result
     }
     fn capsule(&mut self, bounds: Bounds, ink: Rgba) -> Result<(), String> {
         let rect = self.rect(bounds);
@@ -394,7 +526,12 @@ impl View<'_, '_, '_> {
                         ink,
                     )?;
                 }
-                self.text((x + 20., y, w - 40., h), &v, (14., ink, Align::Right))?;
+                self.text_face(
+                    (x + 20., y, w - 40., h),
+                    &v,
+                    (14., ink, Align::Right),
+                    selection(selected, Face::Regular, Face::Semibold),
+                )?;
             }
         }
         Ok(())
@@ -402,13 +539,13 @@ impl View<'_, '_, '_> {
     fn root(&mut self, state: &Settings) -> Result<(), String> {
         for (n, (page, _, glyph)) in CATEGORIES.iter().enumerate() {
             let key = page.title();
-            let y = 66. + n as f32 * 40.;
+            let y = 50. + n as f32 * 39.;
             let selected = n == state.cursor;
             let ink = self.ink(selected);
-            self.panel((24., y, 346., 38.), selected)?;
+            self.row_panel((16., y, 358., 36.), selected)?;
             self.ui
-                .icon(*glyph, self.rect((38., y + 10., 18., 18.)), ink)?;
-            self.text((68., y, 282., 38.), &self.tr(key), (15., ink, Align::Left))?;
+                .icon(*glyph, self.rect((28., y + 9., 18., 18.)), ink)?;
+            self.text((58., y, 300., 36.), &self.tr(key), (15., ink, Align::Left))?;
         }
         let (page, detail, _) = CATEGORIES[state.cursor.min(CATEGORIES.len() - 1)];
         let key = page.title();
@@ -422,3 +559,7 @@ impl View<'_, '_, '_> {
         )
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/support/settings_scroll.rs"]
+mod scroll_tests;

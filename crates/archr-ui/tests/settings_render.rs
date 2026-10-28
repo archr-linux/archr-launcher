@@ -83,6 +83,21 @@ fn all_locales_and_pages_render_and_selected_on_toggle_has_contrast() {
                 Some(&state),
             )
             .unwrap();
+            if page == Page::Root {
+                let pixels = ui
+                    .canvas
+                    .read_pixels(None, sdl2::pixels::PixelFormatEnum::RGBA32)
+                    .unwrap();
+                let rgb = |x: usize, y: usize| &pixels[(y * 640 + x) * 4..(y * 640 + x) * 4 + 3];
+                assert_eq!(
+                    rgb(24, 110),
+                    &[11, 15, 20],
+                    "unselected rows have no background or border"
+                );
+                for y in 86..89 {
+                    assert_eq!(rgb(100, y), &[11, 15, 20], "three-pixel inter-row gap");
+                }
+            }
             if matches!(page, Page::Root | Page::Sound) {
                 state.error = Some((None, "diagnostic без потери отклика ".repeat(2048)));
                 ui.draw_with_settings(
@@ -131,7 +146,7 @@ fn all_locales_and_pages_render_and_selected_on_toggle_has_contrast() {
                 let unavailable = ui
                     .canvas
                     .read_pixels(
-                        Some(sdl2::rect::Rect::new(352, 196, 228, 58)),
+                        Some(sdl2::rect::Rect::new(352, 136, 228, 40)),
                         sdl2::pixels::PixelFormatEnum::RGBA32,
                     )
                     .unwrap();
@@ -144,8 +159,8 @@ fn all_locales_and_pages_render_and_selected_on_toggle_has_contrast() {
                     Some(&state),
                 )
                 .unwrap();
-                assert!(unavailable == ui.canvas.read_pixels(Some(sdl2::rect::Rect::new(352,196,228,58)),sdl2::pixels::PixelFormatEnum::RGBA32).unwrap(),"unrenderable external data must show localized unavailable, never terminate or truncate");
-                state.values.insert(Id::Audio, "W".repeat(90));
+                assert!(unavailable == ui.canvas.read_pixels(Some(sdl2::rect::Rect::new(352,136,228,40)),sdl2::pixels::PixelFormatEnum::RGBA32).unwrap(),"unrenderable external data must show localized unavailable, never terminate or truncate");
+                state.values.insert(Id::Audio, "W".repeat(60));
                 ui.draw_with_settings(
                     &App::new(9),
                     &FakeData::default(),
@@ -159,7 +174,7 @@ fn all_locales_and_pages_render_and_selected_on_toggle_has_contrast() {
                         != ui
                             .canvas
                             .read_pixels(
-                                Some(sdl2::rect::Rect::new(352, 196, 228, 58)),
+                                Some(sdl2::rect::Rect::new(352, 136, 228, 40)),
                                 sdl2::pixels::PixelFormatEnum::RGBA32
                             )
                             .unwrap(),
@@ -220,12 +235,12 @@ fn all_locales_and_pages_render_and_selected_on_toggle_has_contrast() {
                     .unwrap();
                 let pixel = |x: usize, y: usize| &pixels[(y * 640 + x) * 4..(y * 640 + x) * 4 + 3];
                 assert_eq!(
-                    pixel(570, 289),
+                    pixel(580, 199),
                     &[255, 255, 255],
                     "white selected switch track"
                 );
                 assert_eq!(
-                    pixel(590, 289),
+                    pixel(600, 199),
                     &[30, 136, 255],
                     "accent selected switch knob"
                 );

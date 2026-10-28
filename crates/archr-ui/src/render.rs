@@ -290,6 +290,7 @@ pub struct Ui<'font, 'texture> {
     status: Option<Status>,
     list: ListMotion,
     menu_pill: Tween,
+    settings_scroll: settings_render::Scroll,
     menu_open: bool,
     cover_key: Option<PathBuf>,
     cover_visible: bool,
@@ -374,6 +375,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             status: None,
             list: ListMotion::new(),
             menu_pill: Tween::new(0., Duration::from_millis(90)),
+            settings_scroll: settings_render::Scroll::default(),
             menu_open: false,
             cover_key: None,
             cover_visible: false,
@@ -448,6 +450,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         self.list.pill.snap();
         self.list.swap.snap();
         self.menu_pill.snap();
+        self.settings_scroll.tween.snap();
         self.cover_fade.snap();
     }
     pub fn animating(&self) -> bool {
@@ -567,7 +570,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         self.canvas.clear();
         if let Some(settings) = settings {
             self.settings_page(settings, theme)?;
-            self.animating = false; // Static applying label; completion marks the frame dirty.
+            self.animating = self.settings_scroll.tween.active(now);
         } else {
             let (backdrop, cursor) = app.backdrop();
             self.header(backdrop, cursor, data, theme)?;
