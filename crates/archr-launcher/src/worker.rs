@@ -25,6 +25,8 @@ pub enum Work {
     },
     /// Rescan a loaded system whose files changed (new scraped art).
     Reload(String),
+    /// Re-read system.cfg after the settings changed launch choices.
+    Config,
 }
 pub enum Update {
     Boot {
@@ -35,6 +37,7 @@ pub enum Update {
     Overview(Overview),
     Games(String, Vec<Game>),
     CoreSaved(String, String, Result<Option<SystemCfg>, String>),
+    Config(Option<SystemCfg>),
 }
 pub struct Worker {
     pub send: Sender<Work>,
@@ -104,6 +107,7 @@ pub fn start(paths: Paths, initial: Vec<SystemDef>) -> Worker {
         let mut loaded = HashSet::new();
         while let Some(job) = next_work(&jobs, &mut pending) {
             let update = match job {
+                Work::Config => Update::Config(SystemCfg::load(&paths.config).ok()),
                 Work::Reload(name) => {
                     loaded.remove(&name);
                     pending.push_front(Work::Games {

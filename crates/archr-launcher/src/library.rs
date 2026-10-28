@@ -156,6 +156,12 @@ impl Library {
             }
         }
     }
+    /// Launch choices saved elsewhere (the Games settings page) apply next launch.
+    pub fn reload_config(&self) {
+        if let Err(error) = self.send(Work::Config) {
+            log::warn!("Cannot reload system.cfg: {error}");
+        }
+    }
     fn send(&self, work: Work) -> Result<(), String> {
         let worker = self.worker.as_ref().ok_or("error.index")?;
         worker.send.send(work).map_err(|error| error.to_string())
@@ -220,6 +226,12 @@ impl Library {
                     self.games.insert(system, games);
                     for name in ["@favorites", "@recent"] {
                         self.refresh_collection(name);
+                    }
+                }
+                // A failed read keeps the last good snapshot.
+                Update::Config(config) => {
+                    if config.is_some() {
+                        self.config = config;
                     }
                 }
                 Update::CoreSaved(system, rom, result) => {

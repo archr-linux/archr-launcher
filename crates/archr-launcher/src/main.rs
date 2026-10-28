@@ -224,6 +224,9 @@ fn run(
             ui.set_settings_clock_format(settings.state.value(archr_ui::settings::Id::ClockFormat));
         }
         dirty |= settings_dirty;
+        if settings.take_games_saved() {
+            library.reload_config();
+        }
         if let Some(systems) = settings.take_scraped() {
             library.reload(&systems);
             covers.clear();
@@ -383,6 +386,15 @@ fn run(
                 app.handle(button, &library)
             };
             let requested = if requested == Outcome::Settings {
+                // The Games page opens on the system being browsed.
+                let system = match &app.screen {
+                    Screen::Games { system } => Some(system.clone()),
+                    Screen::Systems => app.rows(&library).get(app.cursor).cloned(),
+                    _ => None,
+                };
+                if let Some(system) = system {
+                    settings.focus(&system);
+                }
                 settings.open();
                 Outcome::None
             } else if requested == Outcome::Moonlight {
