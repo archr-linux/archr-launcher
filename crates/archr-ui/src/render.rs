@@ -87,6 +87,26 @@ fn selection<T>(selected: bool, normal: T, highlighted: T) -> T {
     }
 }
 
+/// Keep system rows single-line; parenthetical detail remains in the artwork panel.
+fn fit_system_name(
+    name: &str,
+    width: u32,
+    (mut size, minimum): (f32, f32),
+    mut measure: impl FnMut(&str, f32) -> Result<u32, String>,
+) -> Result<(&str, f32), String> {
+    if measure(name, size)? <= width {
+        return Ok((name, size));
+    }
+    let name = name
+        .strip_suffix(')')
+        .and_then(|s| s.rsplit_once(" ("))
+        .map_or(name, |(short, _)| short);
+    while size > minimum && measure(name, size)? > width {
+        size = (size - 1.).max(minimum);
+    }
+    Ok((name, size))
+}
+
 struct ListMotion {
     key: String,
     scroll: Tween,
@@ -860,11 +880,16 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 }
                 system_title(name, data, &self.catalog)
             };
-            self.label(
-                &name,
-                (face, size, c),
-                Rect::new(x, y, (right - x).max(1) as u32, rh),
-            )?;
+            let width = (right - x).max(1) as u32;
+            let (name, size) = if is_games {
+                (name.as_str(), size)
+            } else {
+                let minimum = f32::from(self.frame.font_size(0.)) / self.frame.scale;
+                fit_system_name(&name, width, (size, minimum), |name, size| {
+                    self.measure(name, face, size)
+                })?
+            };
+            self.label(name, (face, size, c), Rect::new(x, y, width, rh))?;
         }
         if len == 0 {
             self.label(
@@ -1251,6 +1276,48 @@ fn system_title(name: &str, data: &dyn DataSource, catalog: &I18n) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn system_names_fit_selected_and_unselected_rows_without_ellipsis() {
+        let ttf = sdl2::ttf::init().unwrap();
+        let fonts = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../themes/default/fonts");
+        let full = "MO/TO family (TO7, TO7/70, TO8, TO8D, TO9, TO9+, MO5 and MO6)";
+        for selected in [false, true] {
+            let face = selection(selected, "Inter-Regular", "Inter-SemiBold");
+            let initial = selection(selected, 17., 18.);
+            let path = fonts.join(format!("{face}.ttf"));
+            let measure = |text: &str, size: f32| {
+                let font = ttf.load_font(&path, size as u16).unwrap();
+                Ok(font.size_of(text).unwrap().0)
+            };
+            for (text, width, want) in [
+                (full, 1000, full),
+                (full, 280, "MO/TO family"),
+                (full, 70, "MO/TO family"),
+                (
+                    "Super Nintendo Entertainment System",
+                    200,
+                    "Super Nintendo Entertainment System",
+                ),
+                ("Name (region) revision", 140, "Name (region) revision"),
+            ] {
+                let (name, size) = fit_system_name(text, width, (initial, 8.), measure).unwrap();
+                assert_eq!(name, want, "selected={selected}, width={width}");
+                assert!(measure(name, size).unwrap() <= width);
+                assert!((8. ..=initial).contains(&size));
+                if width == 70 {
+                    assert!(size < initial);
+                }
+                if width == 1000 || width == 280 {
+                    assert_eq!(size, initial);
+                }
+            }
+            let minimum_width = measure("MO/TO family", 8.).unwrap();
+            let (name, size) =
+                fit_system_name(full, minimum_width, (initial, 8.), measure).unwrap();
+            assert_eq!((name, size), ("MO/TO family", 8.));
+        }
+    }
 
     #[test]
     fn panel_rows_preserve_single_rounding_of_combined_insets() {
