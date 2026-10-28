@@ -469,6 +469,8 @@ impl View<'_, '_, '_> {
             } else {
                 "settings.refresh_interval"
             }))
+        } else if state.page() == Page::Wifi && state.scanning {
+            Some(self.tr("settings.refreshing"))
         } else if state.page() == Page::Wifi {
             state.scanned.map(|at| {
                 let seconds = self.ui.frame.now.saturating_duration_since(at).as_secs();

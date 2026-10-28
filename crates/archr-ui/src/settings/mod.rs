@@ -391,6 +391,8 @@ pub struct Settings {
     pub info: Information,
     pub networks: Vec<Network>,
     pub scanned: Option<Instant>,
+    /// A radio scan is running; the list shown meanwhile is the previous one.
+    pub scanning: bool,
     /// SSID being joined; input waits for the host's reply.
     pub connecting: Option<String>,
     pub confirm_forget: Option<String>,
@@ -423,6 +425,7 @@ impl Default for Settings {
             info: Information::default(),
             networks: Vec::new(),
             scanned: None,
+            scanning: false,
             connecting: None,
             confirm_forget: None,
             keyboard: None,

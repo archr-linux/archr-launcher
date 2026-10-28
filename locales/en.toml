@@ -265,6 +265,7 @@
 # Live system information
 "settings.details" = "Details"
 "settings.previous_next" = "Previous · next"
+"settings.refreshing" = "Updating…"
 "settings.updated_now" = "Updated just now"
 "settings.refresh_interval" = "Refreshes every 2 s"
 "settings.cpu_summary" = { one = "{model} · {count} core", other = "{model} · {count} cores" }

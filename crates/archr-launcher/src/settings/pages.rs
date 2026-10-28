@@ -48,7 +48,7 @@ impl Backend {
     /// Networks and the current address, refreshed together.
     pub(super) fn scan(&self) -> Result<(Vec<Network>, String), String> {
         let networks = self
-            .command("wifictl", &["scanlist", "--detail"])
+            .command_with_timeout("wifictl", &["scanlist", "--detail"], super::SCAN_TIMEOUT)
             .map(|output| parse_scanlist(&output))
             .map_err(wifi_error)?;
         Ok((networks, self.address()))

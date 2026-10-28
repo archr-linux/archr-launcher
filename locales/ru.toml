@@ -265,6 +265,7 @@
 # Live system information
 "settings.details" = "Подробнее"
 "settings.previous_next" = "Пред. · след."
+"settings.refreshing" = "Обновление…"
 "settings.updated_now" = "Обновлено сейчас"
 "settings.refresh_interval" = "Обновление каждые 2 с"
 "settings.cpu_summary" = { one = "{model} · {count} ядро", few = "{model} · {count} ядра", many = "{model} · {count} ядер", other = "{model} · {count} ядра" }

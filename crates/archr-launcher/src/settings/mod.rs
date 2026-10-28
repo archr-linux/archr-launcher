@@ -331,15 +331,34 @@ enum Reply {
     Login(Result<(String, usize), String>),
     Scrape(Result<(archr_scraper::Job, Vec<String>), String>),
 }
+/// A radio scan takes ~20 s on the R36S: it runs on its own lane so it never
+/// delays the Wi-Fi switch or any other action.
+const SCAN_TIMEOUT: Duration = Duration::from_secs(45);
 pub struct Worker {
     tx: mpsc::Sender<Work>,
+    scans: mpsc::Sender<()>,
     rx: mpsc::Receiver<Reply>,
     pending: usize,
+    scanning: bool,
 }
 impl Worker {
     pub fn start(paths: Paths) -> Result<Self, String> {
         let (tx, requests) = mpsc::channel();
         let (results, rx) = mpsc::channel();
+        let (scans, scan_requests) = mpsc::channel();
+        let scan_results = results.clone();
+        let scan_paths = paths.clone();
+        thread::Builder::new()
+            .name("launcher-scan".into())
+            .spawn(move || {
+                let backend = Backend::new(scan_paths);
+                while scan_requests.recv().is_ok() {
+                    if scan_results.send(Reply::Scan(backend.scan())).is_err() {
+                        break;
+                    }
+                }
+            })
+            .map_err(|e| e.to_string())?;
         thread::Builder::new()
             .name("launcher-settings".into())
             .spawn(move || {
@@ -349,7 +368,7 @@ impl Worker {
                         Work::Load => Reply::Loaded(backend.load().map(Box::new)),
                         Work::Set(id, value) => Reply::Set(id, backend.apply(id, &value)),
                         Work::Info => Reply::Info(backend.refresh_info()),
-                        Work::Scan => Reply::Scan(backend.scan()),
+                        Work::Scan => unreachable!("scans have their own lane"),
                         Work::Connect(ssid, password) => {
                             Reply::Connect(backend.connect(&ssid, &password))
                         }
@@ -368,12 +387,28 @@ impl Worker {
                 }
             })
             .map_err(|e| e.to_string())?;
-        Ok(Self { tx, rx, pending: 0 })
+        Ok(Self {
+            tx,
+            scans,
+            rx,
+            pending: 0,
+            scanning: false,
+        })
     }
     pub fn busy(&self) -> bool {
         self.pending > 0
     }
+    pub fn scanning(&self) -> bool {
+        self.scanning
+    }
     pub(super) fn send(&mut self, work: Work) -> Result<(), String> {
+        if matches!(work, Work::Scan) {
+            if !self.scanning {
+                self.scans.send(()).map_err(|e| e.to_string())?;
+                self.scanning = true;
+            }
+            return Ok(());
+        }
         self.tx.send(work).map_err(|e| e.to_string())?;
         self.pending += 1;
         Ok(())
@@ -388,7 +423,11 @@ impl Worker {
         let mut language = None;
         while let Ok(reply) = self.rx.try_recv() {
             changed = true;
-            self.pending = self.pending.saturating_sub(1);
+            if matches!(reply, Reply::Scan(_)) {
+                self.scanning = false;
+            } else {
+                self.pending = self.pending.saturating_sub(1);
+            }
             match reply {
                 Reply::Loaded(Ok(mut loaded)) => {
                     std::mem::swap(&mut state.values, &mut loaded.values);
@@ -460,7 +499,11 @@ impl Worker {
                             state.cursor = state.cursor.min(state.wifi_rows() - 1);
                         }
                     }
-                    Err(error) => state.error = Some((None, error)),
+                    // A scan cut short by switching Wi-Fi off is not an error.
+                    Err(error) if state.value(Id::WifiSwitch) == "1" => {
+                        state.error = Some((None, error));
+                    }
+                    Err(_) => {}
                 },
                 Reply::Connect(result) | Reply::Forget(result) => {
                     state.connecting = None;
