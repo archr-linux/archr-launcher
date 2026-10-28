@@ -3,6 +3,8 @@ use crate::{
     i18n::I18n,
     motion::Tween,
     primitives::{Geometry, Shadow},
+    startup::StartupTrace,
+    startup_phase,
     state::{App, DataSource, QuickItem, Screen},
     status::Status,
     text::{color, Align, Face, Style, TextCache},
@@ -35,6 +37,7 @@ impl ListMotion {
     }
 }
 pub struct Ui<'font, 'texture> {
+    startup: StartupTrace,
     pub sdl: sdl2::Sdl,
     pub canvas: Canvas<Window>,
     _image: Sdl2ImageContext,
@@ -58,14 +61,24 @@ pub struct Ui<'font, 'texture> {
 }
 impl<'font, 'texture> Ui<'font, 'texture> {
     pub fn new(width: u32, height: u32, windowed: bool) -> Result<Self, String> {
+        Self::new_traced(width, height, windowed, StartupTrace::default())
+    }
+    pub fn new_traced(
+        width: u32,
+        height: u32,
+        windowed: bool,
+        trace: StartupTrace,
+    ) -> Result<Self, String> {
         let sdl = sdl2::init()?;
         let video = sdl.video()?;
+        startup_phase!(trace, "SDL_Init video");
         let mut builder = video.window("archr-launcher", width, height);
         builder.position_centered();
         if !windowed {
             builder.fullscreen_desktop();
         }
         let window = builder.build().map_err(|e| e.to_string())?;
+        startup_phase!(trace, "window creation");
         let renderer = window.into_canvas();
         let mut canvas = if video.current_video_driver() == "dummy" {
             renderer.software()
@@ -74,15 +87,23 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         }
         .build()
         .map_err(|e| e.to_string())?;
+        startup_phase!(trace, "renderer / GL context creation");
         canvas.set_blend_mode(BlendMode::Blend);
         let image = sdl2::image::init(InitFlag::PNG | InitFlag::JPG)?;
+        startup_phase!(trace, "SDL_image init");
         Ok(Self {
+            startup: trace,
             sdl,
             canvas,
             _image: image,
             text: None,
             shadow: None,
-            geometry: Geometry::new(),
+            geometry: {
+                let mut geometry = Geometry::new();
+                geometry.startup = trace;
+                startup_phase!(trace, "icons geometry cache");
+                geometry
+            },
             status: None,
             list: ListMotion::new(),
             menu_pill: Tween::new(0., Duration::from_millis(90)),
@@ -156,6 +177,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             }
         }
         let mut text = TextCache::new(ttf, creator, paths);
+        text.trace_startup(self.startup);
         text.measure(
             &self.catalog.text("systems.title"),
             Face::Semibold,
@@ -176,7 +198,9 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         )?;
         self.text = Some(text);
         self.shadow = Some(Shadow::new(creator)?);
+        startup_phase!(self.startup, "shadow texture");
         self.status = Some(Status::new(root, Instant::now()));
+        startup_phase!(self.startup, "status initialization");
         Ok(())
     }
     pub fn page_size(&self, theme: &Theme) -> usize {
@@ -309,7 +333,15 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             image::save_buffer(path, &rgba, width, height, image::ColorType::Rgba8)
                 .map_err(|e| e.to_string())?;
         }
+        startup_phase!(self.startup, "first frame draw");
         self.canvas.present();
+        if self.startup.began().is_some() {
+            self.startup.phase_once("first present");
+            self.geometry.startup = StartupTrace::default();
+            if let Some(text) = &mut self.text {
+                text.trace_startup(StartupTrace::default());
+            }
+        }
         if let Some(status) = &mut self.status {
             status.start();
         }

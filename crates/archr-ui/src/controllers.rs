@@ -3,7 +3,7 @@ use sdl2::{
     controller::GameController, joystick::Joystick, GameControllerSubsystem, JoystickSubsystem,
 };
 
-use crate::{joystick_mapping::RawMappings, state::Button};
+use crate::{joystick_mapping::RawMappings, startup::StartupTrace, startup_phase, state::Button};
 use std::{
     io::Read,
     path::PathBuf,
@@ -25,9 +25,16 @@ pub struct Controllers {
 }
 impl Controllers {
     pub fn new(sdl: &sdl2::Sdl) -> Result<Self, String> {
+        Self::new_traced(sdl, StartupTrace::default())
+    }
+    pub fn new_traced(sdl: &sdl2::Sdl, trace: StartupTrace) -> Result<Self, String> {
+        let joysticks = sdl.joystick()?;
+        startup_phase!(trace, "SDL joystick init");
+        let controllers = sdl.game_controller()?;
+        startup_phase!(trace, "SDL gamecontroller init");
         let mut this = Self {
-            joysticks: sdl.joystick()?,
-            controllers: sdl.game_controller()?,
+            joysticks,
+            controllers,
             devices: Vec::new(),
             mappings: RawMappings::default(),
             loading: None,

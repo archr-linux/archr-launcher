@@ -12,7 +12,7 @@ use archr_index::{
     cache::{self, Overview, SystemEntry},
     Game, SystemDef,
 };
-use archr_ui::i18n::Message;
+use archr_ui::{i18n::Message, startup::StartupTrace, startup_phase};
 use std::collections::{HashMap, HashSet};
 
 pub struct Library {
@@ -38,12 +38,18 @@ pub struct Library {
 impl Library {
     /// Only the overview and (on a cold start) system names are read here.
     pub fn initial(paths: Paths) -> Self {
+        Self::initial_traced(paths, StartupTrace::default())
+    }
+    pub fn initial_traced(paths: Paths, trace: StartupTrace) -> Self {
         let cached = cache::load_overview(&paths.cache);
+        startup_phase!(trace, "overview cache read");
         let counts_known = cached.is_some();
         let (definitions, banner) = if counts_known {
             (Vec::new(), None)
         } else {
-            match worker::definitions(&paths) {
+            let definitions = worker::definitions(&paths);
+            startup_phase!(trace, "system definitions read");
+            match definitions {
                 Ok(defs) => (defs, None),
                 Err(error) => {
                     log::warn!("Cannot load systems: {error}");

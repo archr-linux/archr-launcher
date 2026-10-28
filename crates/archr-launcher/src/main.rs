@@ -14,6 +14,8 @@ use archr_ui::{
     input::{button_event, Repeat},
     render::Ui,
     resolve_theme,
+    startup::StartupTrace,
+    startup_phase,
 };
 use sdl2::{
     event::{Event, WindowEvent},
@@ -25,14 +27,14 @@ use std::{
 };
 
 fn main() {
+    let began = Instant::now();
     init_logging();
-    if let Err(error) = run() {
+    if let Err(error) = run(began, StartupTrace::new(began)) {
         eprintln!("archr-launcher: {error}");
         std::process::exit(1);
     }
 }
-fn run() -> Result<(), String> {
-    let began = Instant::now();
+fn run(began: Instant, trace: StartupTrace) -> Result<(), String> {
     let mut windowed = false;
     let mut script_source = None;
     let mut args = std::env::args().skip(1);
@@ -57,7 +59,9 @@ fn run() -> Result<(), String> {
         .map(script::Script::parse)
         .transpose()?;
     let paths = Paths::new(std::env::var_os("ARCHR_LAUNCHER_ROOT").map(PathBuf::from));
+    startup_phase!(trace, "args/paths");
     let config = SystemCfg::load(&paths.config).ok();
+    startup_phase!(trace, "system.cfg read");
     let language = config
         .as_ref()
         .and_then(|cfg| cfg.get_local("system", None, "language"));
@@ -66,11 +70,13 @@ fn run() -> Result<(), String> {
         language.as_deref(),
         std::env::var("LANG").ok().as_deref(),
     );
+    startup_phase!(trace, "locale selection");
     // No per-system index, controller enumeration or cover work before present.
     let ttf;
     let creator;
-    let mut ui = Ui::new(640, 480, windowed)?;
+    let mut ui = Ui::new_traced(640, 480, windowed, trace)?;
     ttf = sdl2::ttf::init().map_err(|error| error.to_string())?;
+    startup_phase!(trace, "TTF_Init");
     creator = ui.canvas.texture_creator();
     ui.catalog = catalog;
     let name = config
@@ -83,8 +89,9 @@ fn run() -> Result<(), String> {
         &name,
     );
     theme.font = theme.font.as_deref().map(|font| paths.remap(font));
+    startup_phase!(trace, "theme load");
     ui.configure(&ttf, &creator, &theme, paths.root.as_deref())?;
-    let mut library = Library::initial(paths.clone());
+    let mut library = Library::initial_traced(paths.clone(), trace);
     let mut app = App::new(ui.page_size(&theme));
     ui.banner = library.banner.take().map(|m| m.render(&ui.catalog));
     ui.draw(&app, &library, &theme, None)?;
@@ -101,7 +108,7 @@ fn run() -> Result<(), String> {
         (theme.cover.w * width as f32).round().max(1.) as u32,
         (theme.cover.h * height as f32).round().max(1.) as u32,
     );
-    let mut controllers = Controllers::new(&ui.sdl)?;
+    let mut controllers = Controllers::new_traced(&ui.sdl, trace)?;
     controllers.load_mappings(paths.at("/storage/.config/emulationstation/es_input.cfg"));
     let mut events = ui.sdl.event_pump()?;
     let mut repeat = Repeat::default();

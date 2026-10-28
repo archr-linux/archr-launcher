@@ -1,5 +1,5 @@
 //! Cached SDL 2.0.18 meshes and one startup-generated 9-slice shadow.
-use crate::{text::color, theme::Rgba};
+use crate::{startup::StartupTrace, startup_phase, text::color, theme::Rgba};
 use sdl2::{
     pixels::{Color, PixelFormatEnum},
     rect::{FPoint, Rect},
@@ -238,12 +238,14 @@ enum Key {
 /// Per-renderer bounded LRU: static badges, battery pieces and icons are hits;
 /// evicted meshes donate their Vec allocations to the next moving-pill mesh.
 pub(crate) struct Geometry {
+    pub(crate) startup: StartupTrace,
     meshes: VecDeque<(Key, Mesh)>,
 }
 impl Geometry {
     pub fn new() -> Self {
         corner_arcs();
         Self {
+            startup: StartupTrace::default(),
             meshes: VecDeque::with_capacity(CACHE_SIZE),
         }
     }
@@ -265,9 +267,18 @@ impl Geometry {
                 Key::Cover(rect, r) => {
                     mesh.fan(&outline(rect, f32::from_bits(r)), Color::WHITE, rect, true)
                 }
-                Key::Star(rect, c, filled) => mesh.star(rect, c, filled),
-                Key::Clock(rect, c) => mesh.clock(rect, c),
-                Key::Lightning(rect, c) => mesh.lightning(rect, c),
+                Key::Star(rect, c, filled) => {
+                    mesh.star(rect, c, filled);
+                    startup_phase!(self.startup, "icon star");
+                }
+                Key::Clock(rect, c) => {
+                    mesh.clock(rect, c);
+                    startup_phase!(self.startup, "icon clock");
+                }
+                Key::Lightning(rect, c) => {
+                    mesh.lightning(rect, c);
+                    startup_phase!(self.startup, "icon lightning");
+                }
             }
             self.meshes.push_back((key, mesh));
         }

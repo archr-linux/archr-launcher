@@ -4,6 +4,8 @@
 // Keep phase-1 Latin/Cyrillic startup free of CJK font I/O and memory costs.
 use crate::{
     badges::{self, BadgeKey, SUPERSAMPLE},
+    startup::StartupTrace,
+    startup_phase,
     theme::Rgba,
 };
 use sdl2::{
@@ -46,6 +48,8 @@ struct Entry<'a> {
     texture: Texture<'a>,
 }
 pub(crate) struct TextCache<'font, 'texture> {
+    startup: StartupTrace,
+    first_rasterization: StartupTrace,
     ttf: &'font Sdl2TtfContext,
     creator: &'texture TextureCreator<WindowContext>,
     paths: [Vec<PathBuf>; 4],
@@ -60,6 +64,8 @@ impl<'font, 'texture> TextCache<'font, 'texture> {
         paths: [Vec<PathBuf>; 4],
     ) -> Self {
         Self {
+            startup: StartupTrace::default(),
+            first_rasterization: StartupTrace::default(),
             ttf,
             creator,
             paths,
@@ -68,12 +74,25 @@ impl<'font, 'texture> TextCache<'font, 'texture> {
             badges: VecDeque::with_capacity(16),
         }
     }
+    pub fn trace_startup(&mut self, trace: StartupTrace) {
+        self.startup = trace;
+        self.first_rasterization = trace;
+    }
     fn font(&mut self, face: Face, size: u16) -> Result<&Font<'font, 'static>, String> {
         if !self.fonts.contains_key(&(face, size)) {
             let paths = &self.paths[face as usize];
             let mut font = paths
                 .iter()
-                .find_map(|path| self.ttf.load_font(path, size).ok())
+                .find_map(|path| {
+                    let font = self.ttf.load_font(path, size);
+                    startup_phase!(
+                        self.startup,
+                        "font file open [path={}; face={face:?}; size={size}px; ok={}]",
+                        path.display(),
+                        font.is_ok()
+                    );
+                    font.ok()
+                })
                 .ok_or("error.font")?;
             // Inspect the loaded face, not its filename: legacy themes may
             // rename a regular TTF, or fall back when a preferred face is absent.
@@ -107,6 +126,8 @@ impl<'font, 'texture> TextCache<'font, 'texture> {
                 self.font(Face::Semibold, key.size * SUPERSAMPLE as u16)?,
                 key,
             )?;
+            self.first_rasterization
+                .phase_once("first text rasterization");
             let mut texture = self
                 .creator
                 .create_texture_from_surface(surface)
@@ -117,6 +138,7 @@ impl<'font, 'texture> TextCache<'font, 'texture> {
                 self.badges.pop_front();
             }
             self.badges.push_back((key, texture));
+            startup_phase!(self.startup, "badge {}", key.letter);
         }
         Ok(&self.badges.back().expect("cached badge").1)
     }
@@ -207,6 +229,8 @@ impl<'font, 'texture> TextCache<'font, 'texture> {
                 .render(&text)
                 .blended(color(style.color))
                 .map_err(|e| e.to_string())?;
+            self.first_rasterization
+                .phase_once("first text rasterization");
             let texture = self
                 .creator
                 .create_texture_from_surface(surface)
