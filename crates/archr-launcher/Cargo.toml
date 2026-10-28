@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+libc = "0.2"
 archr-io = { path = "../archr-io" }
 archr-config = { path = "../archr-config" }
 archr-ui = { path = "../archr-ui" }

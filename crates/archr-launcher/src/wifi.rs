@@ -4,6 +4,7 @@ use crate::paths::Paths;
 use archr_config::SystemCfg;
 use std::{
     io,
+    os::unix::process::CommandExt,
     process::{Command, Stdio},
     sync::atomic::{AtomicBool, Ordering},
     thread,
@@ -19,6 +20,7 @@ fn start(program: &std::path::Path, arg: &str) -> io::Result<std::process::Child
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
+        .process_group(0)
         .spawn()
 }
 
@@ -30,7 +32,9 @@ fn wait(mut child: std::process::Child, deadline: Duration) -> bool {
             Ok(Some(status)) => return status.success(),
             Ok(None) if Instant::now() < end => thread::sleep(Duration::from_millis(20)),
             _ => {
-                let _ = child.kill();
+                // The child leads its own group; take down what it started too.
+                // SAFETY: plain signal to a group id that is our child's pid.
+                unsafe { libc::kill(-(child.id() as i32), libc::SIGKILL) };
                 let _ = child.wait();
                 return false;
             }
@@ -84,11 +88,26 @@ mod tests {
     use std::{fs, os::unix::fs::PermissionsExt, sync::mpsc};
 
     #[test]
-    fn hung_helper_is_killed_at_the_deadline() {
+    fn hung_helper_and_its_children_are_killed_at_the_deadline() {
+        let root = tempfile::tempdir().unwrap();
+        let pidfile = root.path().join("pid");
         let began = Instant::now();
-        let child = Command::new("/bin/sleep").arg("30").spawn().unwrap();
-        assert!(!wait(child, Duration::from_millis(100)));
+        let child = Command::new("/bin/sh")
+            .arg("-c")
+            .arg(format!("sleep 30 & echo $! > {}; wait", pidfile.display()))
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        assert!(!wait(child, Duration::from_millis(500)));
         assert!(began.elapsed() < Duration::from_secs(5));
+        let pid: i32 = fs::read_to_string(&pidfile)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        thread::sleep(Duration::from_millis(100));
+        // SAFETY: signal 0 only probes for existence.
+        assert_eq!(unsafe { libc::kill(pid, 0) }, -1, "grandchild survived");
     }
 
     #[test]

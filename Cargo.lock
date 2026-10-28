@@ -44,6 +44,7 @@ dependencies = [
  "archr-index",
  "archr-io",
  "archr-ui",
+ "libc",
  "log",
  "sdl2",
  "serde",
