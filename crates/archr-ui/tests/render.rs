@@ -38,6 +38,13 @@ fn grafite_layout_motion_glyphs_and_untrusted_text_render_offscreen() {
             }],
         )]
         .into(),
+        cores: [(
+            "nes".into(),
+            ["a", "b"]
+                .map(|core| ("retroarch".into(), core.into()))
+                .into(),
+        )]
+        .into(),
         ..Data::default()
     };
     let mut app = App::new(10);

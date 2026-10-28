@@ -11,7 +11,7 @@ fn windowed_script_navigates_and_publishes_game() {
         let dir = root.path().join(format!("storage/roms/{system}"));
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("Game.rom"), []).unwrap();
-        xml.push_str(&format!("<system><name>{system}</name><fullname>{system} full</fullname><path>/storage/roms/{system}</path><extension>.rom</extension><emulators><emulator name=\"retroarch\"><cores><core default=\"true\">test</core></cores></emulator></emulators></system>"));
+        xml.push_str(&format!("<system><name>{system}</name><fullname>{system} full</fullname><path>/storage/roms/{system}</path><extension>.rom</extension><emulators><emulator name=\"retroarch\"><cores><core default=\"true\">test</core><core>alternate</core></cores></emulator></emulators></system>"));
     }
     xml.push_str("</systemList>");
     fs::write(config.join("es_systems.cfg"), xml).unwrap();
@@ -44,7 +44,7 @@ fn windowed_script_navigates_and_publishes_game() {
     assert!(next.contains("-P3do"));
     assert!(next.contains(root.path().to_str().unwrap()));
     assert!(next.contains("--emulator=retroarch"));
-    assert!(next.contains("--core=test"));
+    assert!(next.contains("--core=alternate"));
     assert!(!run.join("last-exit").exists());
     let store = fs::read_to_string(
         root.path()
@@ -57,7 +57,7 @@ fn windowed_script_navigates_and_publishes_game() {
             .join("storage/.config/system/configs/system.cfg"),
     )
     .unwrap();
-    assert!(cfg.contains("3do[\"Game.rom\"].core=test"));
+    assert!(cfg.contains("3do[\"Game.rom\"].core=alternate"));
 }
 
 #[test]

@@ -30,6 +30,17 @@ fn fixture() -> (tempfile::TempDir, Paths) {
     fs::write(&paths.config, "global.core=wrong\nnes.emulator=retroarch\nnes.core=fceumm\nnes[\"A.nes\"].core=nestopia\n").unwrap();
     (dir, paths)
 }
+fn ready(paths: &Paths, system: Option<&str>) -> Library {
+    let mut library = Library::initial(paths.clone());
+    library.start();
+    wait(&mut library, |l| l.ready);
+    if let Some(system) = system {
+        library.ensure(system);
+        wait(&mut library, |l| !l.loading(system));
+    }
+    library
+}
+
 fn wait(library: &mut Library, condition: impl Fn(&Library) -> bool) {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
@@ -87,11 +98,7 @@ fn warm_overview_precedes_worker_and_collection_origins_are_real() {
 #[test]
 fn core_lock_is_waited_in_worker_not_in_ui_call() {
     let (_dir, paths) = fixture();
-    let mut library = Library::initial(paths.clone());
-    library.start();
-    wait(&mut library, |library| library.ready);
-    library.ensure("nes");
-    wait(&mut library, |library| !library.games("nes").is_empty());
+    let mut library = ready(&paths, Some("nes"));
     fs::create_dir_all(paths.lock.parent().unwrap()).unwrap();
     fs::write(&paths.lock, std::process::id().to_string()).unwrap();
     library
@@ -120,11 +127,7 @@ fn core_lock_is_waited_in_worker_not_in_ui_call() {
 fn action_flushes_latest_favorites_before_publishing_next() {
     use archr_launcher::state::SessionAction;
     let (_dir, paths) = fixture();
-    let mut library = Library::initial(paths.clone());
-    library.start();
-    wait(&mut library, |library| library.ready);
-    library.ensure("nes");
-    wait(&mut library, |library| !library.games("nes").is_empty());
+    let mut library = ready(&paths, Some("nes"));
     library
         .handle(
             Outcome::ToggleFavorite {
@@ -144,9 +147,7 @@ fn action_flushes_latest_favorites_before_publishing_next() {
 fn failed_final_store_flush_does_not_publish_next() {
     use archr_launcher::state::SessionAction;
     let (_dir, paths) = fixture();
-    let mut library = Library::initial(paths.clone());
-    library.start();
-    wait(&mut library, |library| library.ready);
+    let mut library = ready(&paths, None);
     // No game import/save has been queued. Force every store rename to fail.
     fs::remove_file(paths.store.join("store.toml")).unwrap();
     fs::create_dir(paths.store.join("store.toml")).unwrap();
@@ -161,29 +162,19 @@ fn failed_final_store_flush_does_not_publish_next() {
 fn new_favorites_and_recents_use_relative_identity() {
     let (_dir, paths) = fixture();
     Store::default().save(&paths.store).unwrap();
-    let mut library = Library::initial(paths.clone());
-    library.start();
-    wait(&mut library, |l| l.ready);
-    library.ensure("nes");
-    wait(&mut library, |l| !l.games("nes").is_empty());
-    library
-        .handle(
-            Outcome::ToggleFavorite {
-                system: "nes".into(),
-                game: 0,
-            },
-            "",
-        )
-        .unwrap();
-    library
-        .handle(
-            Outcome::Launch {
-                system: "nes".into(),
-                game: 0,
-            },
-            "",
-        )
-        .unwrap();
+    let mut library = ready(&paths, Some("nes"));
+    for outcome in [
+        Outcome::ToggleFavorite {
+            system: "nes".into(),
+            game: 0,
+        },
+        Outcome::Launch {
+            system: "nes".into(),
+            game: 0,
+        },
+    ] {
+        library.handle(outcome, "").unwrap();
+    }
     let store = Store::load(&paths.store);
     assert_eq!(store.favorites(), ["nes/A.nes"]);
     assert_eq!(store.recent(), ["nes/A.nes"]);
@@ -200,9 +191,7 @@ fn legacy_absolute_favorites_and_recents_migrate_once() {
     ));
     store.save(&paths.store).unwrap();
     for _ in 0..2 {
-        let mut library = Library::initial(paths.clone());
-        library.start();
-        wait(&mut library, |l| l.ready);
+        let mut library = ready(&paths, None);
         for collection in ["@favorites", "@recent"] {
             library.ensure(collection);
         }
@@ -221,9 +210,7 @@ fn legacy_absolute_favorites_and_recents_migrate_once() {
 fn power_actions_cannot_publish_next() {
     use archr_launcher::state::SessionAction;
     let (_root, paths) = fixture();
-    let mut library = Library::initial(paths.clone());
-    library.start();
-    wait(&mut library, |l| l.ready);
+    let mut library = ready(&paths, None);
     for action in [SessionAction::Shutdown, SessionAction::Reboot] {
         assert!(library.handle(Outcome::Action(action), "").is_err());
         assert!(!paths.run.join("next").exists());

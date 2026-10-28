@@ -395,15 +395,22 @@ fn quick_menu_collection_uses_real_game_and_restores_collection_cursor() {
 }
 
 #[test]
-fn quick_menu_actions_emit_session_outcomes() {
-    let data = FakeData::library();
-    for with_game in [false, true] {
-        let mut app = if with_game {
-            in_games("snes", 7)
-        } else {
-            App::new(5)
-        };
+fn quick_menu_tools_and_ports_hide_core_but_keep_all_session_actions() {
+    let mut data = FakeData::library();
+    for system in ["tools", "ports"] {
+        data.games.insert(system.into(), games(1));
+    }
+    data.cores
+        .insert("ports".into(), vec![pair("portmaster", "portmaster")]);
+    for system in [None, Some("snes"), Some("tools"), Some("ports")] {
+        let mut app = system.map_or_else(|| App::new(5), |s| in_games(s, 0));
+        let core_rows = usize::from(system == Some("snes"));
         app.handle(Button::Y, &data);
+        assert_eq!(
+            app.quick_menu_items(&data).len(),
+            3 + core_rows,
+            "{system:?}"
+        );
         for (index, action) in [
             SessionAction::Suspend,
             SessionAction::Reboot,
@@ -412,7 +419,7 @@ fn quick_menu_actions_emit_session_outcomes() {
         .into_iter()
         .enumerate()
         {
-            app.cursor = index + usize::from(with_game);
+            app.cursor = index + core_rows;
             assert_eq!(app.handle(Button::A, &data), Outcome::Action(action));
             assert!(matches!(app.screen, Screen::QuickMenu { .. }));
         }

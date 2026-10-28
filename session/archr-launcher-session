@@ -23,15 +23,14 @@ if [ "${1-}" != --profile-loaded ]; then
             export LANG="$locale.UTF-8" LANGUAGE="$locale.UTF-8"
             export LOCPATH=/storage/.config/emulationstation/locale
         fi
-        suspendmode=$(get_setting system.suspendmode)
-        exec "$2" "$3" --profile-loaded "$suspendmode"
+        exec "$2" "$3" --profile-loaded
     ' archr-session "$profile" "$session_shell" "$0"
 fi
 
 run_dir=/run/archr-launcher
 launcher=/usr/bin/archr-launcher
 fake_suspend=/usr/bin/archr-fake-suspend
-suspend_mode=${2:-off}
+system_cfg=/storage/.config/system/configs/system.cfg
 log_file=/var/log/archr-launcher-session.log
 kill_file=/tmp/.process-kill-data
 sway_attempts=100
@@ -42,6 +41,7 @@ if [ "${ARCHR_SESSION_TEST:-0}" = 1 ]; then
     run_dir=${ARCHR_SESSION_RUN_DIR:?}
     launcher=${ARCHR_SESSION_LAUNCHER:?}
     fake_suspend=${ARCHR_SESSION_FAKE_SUSPEND:?}
+    system_cfg=${ARCHR_SESSION_CONFIG:?}
     log_file=${ARCHR_SESSION_LOG:?}
     kill_file=${ARCHR_SESSION_KILL_FILE:?}
     sway_attempts=${ARCHR_SESSION_SWAY_ATTEMPTS:-100}
@@ -261,7 +261,9 @@ while :; do
             ;;
         'action suspend')
             session_log 'Action suspend'
-            if [ "$suspend_mode" = off ]; then
+            # Exact anchored key and full value, as in get_setting.
+            suspend_mode=$(sed -n 's/^system\.suspendmode=//p' "$system_cfg" 2>/dev/null)
+            if [ "${suspend_mode:-off}" = off ]; then
                 "$fake_suspend" power
             else
                 systemctl suspend

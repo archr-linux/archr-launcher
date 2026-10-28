@@ -36,7 +36,7 @@ cat >"$ARCHR_SESSION_PROFILE" <<'EOF'
 function get_setting() {
   case "$1" in
     system.language) printf '%s\n' pt_BR ;;
-    system.suspendmode) printf '%s\n' "${ARCHR_TEST_SUSPEND_MODE-}" ;;
+    system.suspendmode) sed -n 's/^system\.suspendmode=//p' "$ARCHR_SESSION_CONFIG" ;;
   esac
 }
 export MALI_WAYLAND_AFBC=0
@@ -68,6 +68,10 @@ case "$line" in
     trap '' TERM
     : >"$CASE_DIR/launcher-ready"
     exec /bin/sleep 30
+    ;;
+  MODE_*)
+    printf 'system.suspendmode=%s\n' "${line#MODE_}" >"$ARCHR_SESSION_CONFIG"
+    printf '%s\n' 'action suspend' >"$ARCHR_SESSION_RUN_DIR/next"
     ;;
   CRASH) exit 9 ;;
   WRITE_CRASH) printf '%s\n' 'action reboot' >"$ARCHR_SESSION_RUN_DIR/next"; exit 9 ;;
@@ -138,14 +142,21 @@ printf '%s\n' "$*" >>"$CASE_DIR/sleeps"
 EOF
 chmod +x "$root/bin/"*
 
-run_case() {
+setup_case() {
   name=$1
   export CASE_DIR="$root/$name"
   mkdir -p "$CASE_DIR"
   export ARCHR_SESSION_RUN_DIR="$CASE_DIR/run"
   export ARCHR_SESSION_LOG="$CASE_DIR/session.log"
   export ARCHR_SESSION_KILL_FILE="$CASE_DIR/kill-data"
+  export ARCHR_SESSION_CONFIG="$CASE_DIR/system.cfg"
+  printf '#system.suspendmode=mem\n;system.suspendmode=mem\n' >"$ARCHR_SESSION_CONFIG"
+  [ -z "${ARCHR_TEST_SUSPEND_MODE-}" ] || printf 'system.suspendmode=%s\n' "$ARCHR_TEST_SUSPEND_MODE" >>"$ARCHR_SESSION_CONFIG"
   printf '%s\n' "$2" >"$CASE_DIR/plan"
+}
+
+run_case() {
+  setup_case "$@"
   if [ "$name" = log-cap ]; then
     head -c 262140 /dev/zero >"$ARCHR_SESSION_LOG"
   fi
@@ -212,8 +223,7 @@ run_case clean 'CLEAN
 END'
 [ ! -f "$CASE_DIR/actions" ]
 [ ! -f "$CASE_DIR/sleeps" ]
-printf '%s
-' 'PASS clean exit returns to launcher'
+printf '%s\n' 'PASS clean exit returns to launcher'
 
 # A missing compositor consumes exactly the bounded 100 polls, then continues.
 ARCHR_SESSION_SWAY_ATTEMPTS=100
@@ -261,29 +271,28 @@ END'
 fi
 
 # Exercise both exec-optimized sh -c and an outer shell that must stay alive.
-run_stop_case() {
-  export CASE_DIR="$root/$1"
-  mkdir -p "$CASE_DIR"
-  export ARCHR_SESSION_RUN_DIR="$CASE_DIR/run"
-  export ARCHR_SESSION_LOG="$CASE_DIR/session.log"
-  export ARCHR_SESSION_KILL_FILE="$CASE_DIR/kill-data"
-  ARCHR_SESSION_SWAY_ATTEMPTS=0
-  export ARCHR_SESSION_SWAY_ATTEMPTS
-  printf '%s\n' "$2" END >"$CASE_DIR/plan"
+stop_case() {
+  export ARCHR_SESSION_SWAY_ATTEMPTS=0
+  setup_case "$1" "$2
+END"
   timeout 12 "${SESSION_TEST_SHELL:-sh}" "$session" >"$CASE_DIR/output" 2>&1 &
   test_runner=$!
   i=0
-  while [ ! -f "$CASE_DIR/game-ready" ] && [ "$i" -lt 200 ]; do
+  while [ ! -f "$CASE_DIR/$3" ] && [ "$i" -lt 200 ]; do
     /bin/sleep 0.01
     i=$((i + 1))
   done
-  [ -f "$CASE_DIR/game-ready" ]
+  [ -f "$CASE_DIR/$3" ]
   kill -TERM "$(cat "$CASE_DIR/supervisor-pid")"
   status=0
   wait "$test_runner" || status=$?
   test_runner=
-  [ -f "$CASE_DIR/cleanup" ] || { echo 'FAIL: service stop skipped game cleanup' >&2; exit 1; }
   [ "$status" -eq 0 ]
+}
+
+run_stop_case() {
+  stop_case "$1" "$2" game-ready
+  [ -f "$CASE_DIR/cleanup" ] || { echo 'FAIL: service stop skipped game cleanup' >&2; exit 1; }
   while IFS= read -r pid; do
     if kill -0 "$pid" 2>/dev/null; then
       echo "FAIL: fake game process $pid survived service stop" >&2
@@ -316,27 +325,18 @@ END'
   [ "$(cat "$CASE_DIR/actions")" = "$expected" ]
   [ "$(cat "$CASE_DIR/count")" = 2 ]
 done
-printf '%s\n' 'PASS suspend policy and launcher return'
+ARCHR_TEST_SUSPEND_MODE=off
+export ARCHR_TEST_SUSPEND_MODE
+run_case suspend-changes 'action suspend
+MODE_mem
+MODE_off
+END'
+printf '%s\n' 'fake-suspend power' suspend 'fake-suspend power' >"$CASE_DIR/expected"
+cmp "$CASE_DIR/expected" "$CASE_DIR/actions"
+printf '%s\n' 'PASS suspend policy, live changes and launcher return'
 
-export CASE_DIR="$root/launcher-stop"
-mkdir -p "$CASE_DIR"
-export ARCHR_SESSION_RUN_DIR="$CASE_DIR/run"
-export ARCHR_SESSION_LOG="$CASE_DIR/session.log"
-export ARCHR_SESSION_KILL_FILE="$CASE_DIR/kill-data"
 export ARCHR_SESSION_STOP_SLEEP="$root/bin/stop-sleep"
-export ARCHR_SESSION_SWAY_ATTEMPTS=0
-printf '%s\n' HOLD >"$CASE_DIR/plan"
-timeout 8 "${SESSION_TEST_SHELL:-sh}" "$session" >"$CASE_DIR/output" 2>&1 &
-test_runner=$!
-i=0
-while [ ! -f "$CASE_DIR/launcher-ready" ] && [ "$i" -lt 200 ]; do
-  /bin/sleep 0.01
-  i=$((i + 1))
-done
-[ -f "$CASE_DIR/launcher-ready" ]
-kill -TERM "$(cat "$CASE_DIR/supervisor-pid")"
-wait "$test_runner"
-test_runner=
+stop_case launcher-stop HOLD launcher-ready
 [ "$(cat "$CASE_DIR/stop-sleeps")" = 0.2 ]
 ! grep -q '4 s' "$ARCHR_SESSION_LOG"
 [ ! -e "$ARCHR_SESSION_RUN_DIR/next" ]

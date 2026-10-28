@@ -103,10 +103,32 @@ mod tests {
         ));
     }
     use archr_launcher::{paths::Paths, state::SessionAction};
+    use sdl2::{
+        event::{Event, WindowEvent},
+        keyboard::{Keycode, Mod},
+    };
     use std::{
         fs,
         time::{Duration, Instant},
     };
+
+    fn invoke(ui: &mut Ui<'_, '_>, library: &mut Library, action: Option<SessionAction>) -> bool {
+        let app = App::new(10);
+        let theme = Theme::builtin();
+        let outcome = action.map(Outcome::Action);
+        apply(ui, &app, library, &theme, outcome, "", None).unwrap()
+    }
+
+    fn key_down(key: Keycode) -> Event {
+        Event::KeyDown {
+            timestamp: 0,
+            window_id: 0,
+            keycode: Some(key),
+            scancode: None,
+            keymod: Mod::NOMOD,
+            repeat: false,
+        }
+    }
 
     #[test]
     fn terminal_transitions_cover_failures_and_persistent_power_notices() {
@@ -133,16 +155,7 @@ mod tests {
         ui.configure(&ttf, &creator, &theme, None).unwrap();
         let frame = root.path().join("transition.png");
         ui.screenshot = Some(frame.clone());
-        let exit = apply(
-            &mut ui,
-            &App::new(10),
-            &mut library,
-            &theme,
-            Some(Outcome::Action(SessionAction::Suspend)),
-            "",
-            None,
-        )
-        .unwrap();
+        let exit = invoke(&mut ui, &mut library, Some(SessionAction::Suspend));
         assert!(!exit, "failed handoff must return to the event loop");
         assert!(ui.banner.as_ref().is_some_and(|banner| !banner.is_empty()));
         assert!(
@@ -170,34 +183,16 @@ mod tests {
         // Flush failures must also cancel action and window-close transitions.
         fs::remove_file(paths.store.join("store.toml")).unwrap();
         fs::create_dir(paths.store.join("store.toml")).unwrap();
-        for outcome in [Some(Outcome::Action(SessionAction::Shutdown)), None] {
+        for outcome in [Some(SessionAction::Shutdown), None] {
             ui.banner = None;
-            assert!(!apply(
-                &mut ui,
-                &App::new(10),
-                &mut library,
-                &theme,
-                outcome,
-                "",
-                None
-            )
-            .unwrap());
+            assert!(!invoke(&mut ui, &mut library, outcome));
             assert!(ui.banner.is_some());
             assert!(ui.transition.is_none());
         }
         // Repair the destinations and verify the same launcher can retry.
         fs::remove_dir(paths.store.join("store.toml")).unwrap();
         fs::remove_file(&paths.run).unwrap();
-        assert!(apply(
-            &mut ui,
-            &App::new(10),
-            &mut library,
-            &theme,
-            Some(Outcome::Action(SessionAction::Suspend)),
-            "",
-            None
-        )
-        .unwrap());
+        assert!(invoke(&mut ui, &mut library, Some(SessionAction::Suspend)));
         assert_eq!(
             fs::read_to_string(paths.run.join("next")).unwrap(),
             "action suspend\n"
@@ -224,16 +219,7 @@ printf '%s\n' "$1" >>"$dir/commands"
         ] {
             fs::remove_file(paths.store.join("store.toml")).unwrap();
             ui.screenshot = Some(root.path().join("power.png"));
-            assert!(!apply(
-                &mut ui,
-                &App::new(10),
-                &mut library,
-                &theme,
-                Some(Outcome::Action(action)),
-                "",
-                None
-            )
-            .unwrap());
+            assert!(!invoke(&mut ui, &mut library, Some(action)));
             assert_eq!(ui.transition.as_deref(), Some(notice));
             assert!(!paths.run.join("next").exists());
         }
@@ -247,33 +233,26 @@ printf '%s\n' "$1" >>"$dir/commands"
         ] {
             std::env::set_var("ARCHR_TEST_SYSTEMCTL", program);
             ui.banner = None;
-            assert!(!apply(
-                &mut ui,
-                &App::new(10),
-                &mut library,
-                &theme,
-                Some(Outcome::Action(SessionAction::Reboot)),
-                "",
-                None
-            )
-            .unwrap());
+            assert!(!invoke(&mut ui, &mut library, Some(SessionAction::Reboot)));
             assert!(ui.transition.is_none());
             assert!(ui.banner.is_some());
             assert!(!paths.run.join("next").exists());
         }
-        // Exercise the real event loop: later scripted actions and QUIT must be
-        // ignored after systemctl succeeds; only external SDL Quit ends the notice.
+        // Drive real SDL input while a core write is blocked. The latest power
+        // request must supersede the older deferred suspend, then remain idle.
         let sender = ui.sdl.event().unwrap().event_sender();
         drop(ui);
         std::env::set_var("ARCHR_LAUNCHER_ROOT", root.path());
-        std::env::set_var("ARCHR_LAUNCHER_SCREENSHOT", root.path().join("power.png"));
         std::env::set_var("ARCHR_TEST_SYSTEMCTL", &systemctl);
-        for (sequence, command) in [
-            ("Y,DOWN,DOWN,A,SNAPSHOT,DOWN,A,QUIT", "poweroff\n"),
-            ("Y,DOWN,A,SNAPSHOT,DOWN,A,QUIT", "reboot\n"),
-        ] {
+        fs::create_dir_all(paths.systems.parent().unwrap()).unwrap();
+        fs::create_dir_all(paths.at("/storage/roms/nes")).unwrap();
+        fs::write(paths.at("/storage/roms/nes/A.nes"), []).unwrap();
+        fs::write(&paths.systems, "<systemList><system><name>nes</name><path>/storage/roms/nes</path><extension>.nes</extension><emulators><emulator name=\"retroarch\"><cores><core>a</core><core>b</core></cores></emulator></emulators></system></systemList>").unwrap();
+        for (target, command) in [(3, "poweroff\n"), (2, "reboot\n")] {
+            fs::create_dir_all(paths.lock.parent().unwrap()).unwrap();
+            fs::write(&paths.lock, std::process::id().to_string()).unwrap();
+            let mut phase = 0;
             fs::remove_file(root.path().join("commands")).unwrap();
-            fs::remove_file(root.path().join("power.png")).unwrap();
             let finished = std::sync::atomic::AtomicBool::new(false);
             std::thread::scope(|scope| {
                 let observer = scope.spawn(|| {
@@ -286,6 +265,7 @@ printf '%s\n' "$1" >>"$dir/commands"
                     }
                     let requested = root.path().join("commands").exists();
                     if requested {
+                        sender.push_event(key_down(Keycode::Return)).unwrap();
                         std::thread::sleep(Duration::from_millis(600));
                     }
                     if finished.load(std::sync::atomic::Ordering::Relaxed) {
@@ -301,9 +281,51 @@ printf '%s\n' "$1" >>"$dir/commands"
                 let result = crate::run(
                     began,
                     archr_ui::startup::StartupTrace::new(began),
-                    ["--windowed", "--script", sequence]
-                        .into_iter()
-                        .map(str::to_owned),
+                    ["--windowed"].into_iter().map(str::to_owned),
+                    |app, library, deferred| {
+                        use archr_launcher::state::Screen;
+                        let key = match phase {
+                            0 if library.ready => Some(Keycode::Return),
+                            1 if matches!(app.screen, Screen::Games { .. })
+                                && !library.loading("nes") =>
+                            {
+                                Some(Keycode::Y)
+                            }
+                            2 if matches!(app.screen, Screen::QuickMenu { .. }) => {
+                                Some(Keycode::Right)
+                            }
+                            3 if library.pending_writes == 1 => Some(Keycode::Down),
+                            4 if app.cursor == 1 => Some(Keycode::Return),
+                            5 if deferred.is_some() => Some(Keycode::Down),
+                            6 if target == 3 && app.cursor == 2 => Some(Keycode::Down),
+                            6 | 7 if app.cursor == target => {
+                                assert_eq!(library.pending_writes, 1);
+                                fs::remove_file(&paths.lock).unwrap();
+                                phase = 8;
+                                None
+                            }
+                            8 if library.pending_writes == 0 => {
+                                assert!(!library.write_failed);
+                                assert_eq!(
+                                    deferred,
+                                    Some(&Outcome::Action(SessionAction::Suspend))
+                                );
+                                Some(Keycode::Return)
+                            }
+                            _ => None,
+                        };
+                        if let Some(key) = key {
+                            phase += 1;
+                            sender.push_event(key_down(key)).unwrap();
+                            sender
+                                .push_event(Event::Window {
+                                    timestamp: 0,
+                                    window_id: 0,
+                                    win_event: WindowEvent::FocusLost,
+                                })
+                                .unwrap();
+                        }
+                    },
                 );
                 finished.store(true, std::sync::atomic::Ordering::Relaxed);
                 assert!(
@@ -312,6 +334,7 @@ printf '%s\n' "$1" >>"$dir/commands"
                 );
                 result.unwrap();
             });
+            assert_eq!(phase, 9, "power input followed a real pending core write");
             assert_eq!(
                 fs::read_to_string(root.path().join("commands")).unwrap(),
                 command
@@ -319,7 +342,6 @@ printf '%s\n' "$1" >>"$dir/commands"
             assert!(!paths.run.join("next").exists());
         }
         std::env::remove_var("ARCHR_LAUNCHER_ROOT");
-        std::env::remove_var("ARCHR_LAUNCHER_SCREENSHOT");
         std::env::remove_var("ARCHR_TEST_SYSTEMCTL");
     }
     #[test]

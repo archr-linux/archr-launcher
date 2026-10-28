@@ -118,6 +118,9 @@ fn malformed_and_unsafe_catalogs_fall_back_to_english() {
 fn every_catalog_has_exactly_the_english_keys_categories_and_placeholders() {
     let english: toml::Table = toml::from_str(include_str!("../../../locales/en.toml")).unwrap();
     assert!(english.keys().all(|key| !key.starts_with("cli.")));
+    for key in ["menu.settings", "notice.settings"] {
+        assert!(!english.contains_key(key));
+    }
     for code in ["pt_BR", "es", "ru"] {
         let source = fs::read_to_string(locales().join(format!("{code}.toml"))).unwrap();
         let other: toml::Table = toml::from_str(&source).unwrap();

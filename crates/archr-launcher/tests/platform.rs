@@ -1,11 +1,8 @@
-use archr_launcher::state::{App, Button, QuickItem};
 use std::{
     fs,
     process::{Command, Stdio},
     time::{Duration, Instant},
 };
-#[path = "../../archr-ui/tests/common/mod.rs"]
-mod common;
 
 #[test]
 fn sigterm_closes_fullscreen_and_windowed_without_handoff() {
@@ -60,23 +57,5 @@ fn sigterm_closes_fullscreen_and_windowed_without_handoff() {
             .path()
             .join("storage/.config/archr-launcher/store.toml")
             .exists());
-    }
-}
-
-#[test]
-fn quick_menu_has_only_supported_actions() {
-    let data = common::FakeData::default();
-    let mut app = App::new(5);
-    app.handle(Button::Y, &data);
-    assert_eq!(
-        app.quick_menu_items(&data),
-        [QuickItem::Suspend, QuickItem::Reboot, QuickItem::Shutdown]
-    );
-    for language in ["en", "pt_BR", "es", "ru"] {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join(format!("../../locales/{language}.toml"));
-        let catalog = fs::read_to_string(path).unwrap();
-        assert!(!catalog.contains("menu.settings"));
-        assert!(!catalog.contains("notice.settings"));
     }
 }

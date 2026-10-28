@@ -123,14 +123,13 @@ impl App {
             .collect()
     }
 
-    pub fn quick_menu_items(&self, _data: &dyn DataSource) -> Vec<QuickItem> {
+    pub fn quick_menu_items(&self, data: &dyn DataSource) -> Vec<QuickItem> {
         let Screen::QuickMenu { system, game } = &self.screen else {
             return Vec::new();
         };
         let mut items = Vec::new();
-        if system.is_some() && game.is_some() {
-            // Preserve the Core row even when no current pair is available.
-            // Empty strings represent unknown values rather than a made-up default.
+        if game.is_some() && system.as_ref().is_some_and(|s| data.cores(s).len() > 1) {
+            // Unknown current values still allow choosing a supported pair.
             let (emulator, core) = self.selected_core.clone().unwrap_or_default();
             items.push(QuickItem::Core { emulator, core });
         }

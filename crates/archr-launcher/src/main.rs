@@ -29,7 +29,13 @@ use std::{
 fn main() {
     let began = Instant::now();
     init_logging();
-    if let Err(error) = run(began, StartupTrace::new(began), std::env::args().skip(1)) {
+    if let Err(error) = run(
+        began,
+        StartupTrace::new(began),
+        std::env::args().skip(1),
+        #[cfg(test)]
+        |_, _, _| {},
+    ) {
         eprintln!("archr-launcher: {error}");
         std::process::exit(1);
     }
@@ -38,6 +44,7 @@ fn run(
     began: Instant,
     trace: StartupTrace,
     mut args: impl Iterator<Item = String>,
+    #[cfg(test)] mut observe: impl FnMut(&App, &Library, Option<&Outcome>),
 ) -> Result<(), String> {
     let mut windowed = false;
     let mut script_source = None;
@@ -177,6 +184,8 @@ fn run(
             ui.draw(&app, &library, &theme, cover)?;
             dirty = false;
         }
+        #[cfg(test)]
+        observe(&app, &library, deferred.as_ref());
         let mut button = None;
         let mut close_requested = false;
         if let Some(driver) = &mut script {
@@ -228,14 +237,37 @@ fn run(
                 }
             }
         }
+        let mut outcome = None;
         if close_requested {
             deferred = None;
+            repeat.clear();
+        } else if let Some(button) = button.or_else(|| repeat.poll(Instant::now())) {
+            ui.snap_animations();
+            let requested = app.handle(button, &library);
+            let terminal = matches!(requested, Outcome::Launch { .. } | Outcome::Action(_));
+            if terminal && library.pending_writes > 0 {
+                deferred = Some(requested);
+            } else {
+                if terminal {
+                    deferred = None;
+                }
+                outcome = Some(requested);
+            }
+            dirty = true;
+        }
+        if !close_requested && outcome.is_none() && library.pending_writes == 0 {
+            outcome = deferred.take().filter(|_| !library.write_failed);
+        }
+        if close_requested || outcome.is_some() {
+            if let Some(outcome) = &outcome {
+                arm_terminal_snapshot(&mut ui, &mut script, outcome)?;
+            }
             if transition::apply(
                 &mut ui,
                 &app,
                 &mut library,
                 &theme,
-                None,
+                outcome,
                 &controllers.configuration(),
                 selected.as_ref().and_then(|path| covers.get(path)),
             )? {
@@ -243,53 +275,6 @@ fn run(
             }
             dirty = true;
             banner_until = Instant::now() + Duration::from_secs(8);
-            repeat.clear();
-            continue;
-        }
-        button = button.or_else(|| repeat.poll(Instant::now()));
-        if let Some(button) = button {
-            ui.snap_animations();
-            let outcome = app.handle(button, &library);
-            if matches!(outcome, Outcome::Launch { .. } | Outcome::Action(_))
-                && library.pending_writes > 0
-            {
-                deferred = Some(outcome);
-            } else {
-                arm_terminal_snapshot(&mut ui, &mut script, &outcome)?;
-                if transition::apply(
-                    &mut ui,
-                    &app,
-                    &mut library,
-                    &theme,
-                    Some(outcome),
-                    &controllers.configuration(),
-                    selected.as_ref().and_then(|path| covers.get(path)),
-                )? {
-                    return Ok(());
-                }
-                banner_until = Instant::now() + Duration::from_secs(8);
-            }
-            dirty = true;
-        }
-        if library.pending_writes == 0 {
-            if let Some(outcome) = deferred.take() {
-                if !library.write_failed {
-                    arm_terminal_snapshot(&mut ui, &mut script, &outcome)?;
-                    if transition::apply(
-                        &mut ui,
-                        &app,
-                        &mut library,
-                        &theme,
-                        Some(outcome),
-                        &controllers.configuration(),
-                        selected.as_ref().and_then(|path| covers.get(path)),
-                    )? {
-                        return Ok(());
-                    }
-                    dirty = true;
-                    banner_until = Instant::now() + Duration::from_secs(8);
-                }
-            }
         }
     }
 }
