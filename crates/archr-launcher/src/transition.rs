@@ -127,6 +127,9 @@ pub fn apply(
 fn message(outcome: Option<&Outcome>, data: &dyn DataSource, catalog: &I18n) -> Option<String> {
     Some(match outcome {
         None => catalog.text("notice.closing"),
+        Some(Outcome::MoonlightStream(stream)) => {
+            catalog.format("notice.opening", &[("game", &stream.app)])
+        }
         Some(Outcome::Launch { system, game }) => catalog.format(
             "notice.opening",
             &[(

@@ -180,6 +180,7 @@ fn run(
     let mut settings = archr_launcher::settings::Runtime::new(paths.clone());
     let mut rooms = netplay::Runtime::new(paths.clone());
     let mut was_browsing = true;
+    let mut moonlight = archr_launcher::moonlight::Runtime::new(paths.clone(), (width, height));
     let mut covers = CoverCache::new(
         &creator,
         paths.cache.join("thumbs"),
@@ -217,6 +218,7 @@ fn run(
             ui.invalidate_settings_clock();
         }
         dirty |= settings_dirty;
+        dirty |= moonlight.poll();
         if let Some(language) = language {
             ui.catalog = I18n::load(
                 &paths.at("/usr/share/archr-launcher/locales"),
@@ -273,6 +275,7 @@ fn run(
         covers.request(&neighbours);
         dirty |= covers.poll();
         if dirty {
+            ui.moonlight = moonlight.active.then(|| moonlight.state.clone());
             let cover = selected.as_ref().and_then(|path| covers.get(path));
             ui.draw_with_settings(
                 &app,
@@ -289,7 +292,13 @@ fn run(
         let mut close_requested = false;
         if let Some(driver) = &mut script {
             if let Some(step) = driver.poll(
-                library.ready && !ui.loading && library.pending_writes == 0 && !settings.busy(),
+                library.ready
+                    && !ui.loading
+                    && library.pending_writes == 0
+                    && !settings.busy()
+                    && (!moonlight.active
+                        || !moonlight.state.busy
+                        || moonlight.state.pin.is_some()),
             )? {
                 match step {
                     script::Step::Button(b) => button = Some(b),
@@ -340,8 +349,9 @@ fn run(
         closing |= close_requested;
         if closing {
             settings.close();
+            moonlight.close();
         }
-        close_requested = closing && !settings.mutations_pending();
+        close_requested = closing && !settings.mutations_pending() && !moonlight.state.busy;
         if closing {
             button = None;
             repeat.clear();
@@ -354,6 +364,8 @@ fn run(
 
             let requested = if ui.lobby.is_some() {
                 lobby_input(&mut ui.lobby, &mut rooms, button)
+            } else if moonlight.active {
+                moonlight.handle(button)
             } else if settings.active {
                 settings.handle(button)
             } else {
@@ -361,6 +373,9 @@ fn run(
             };
             let requested = if requested == Outcome::Settings {
                 settings.open();
+                Outcome::None
+            } else if requested == Outcome::Moonlight {
+                moonlight.open();
                 Outcome::None
             } else {
                 requested
@@ -384,9 +399,16 @@ fn run(
             } else {
                 let terminal = matches!(
                     requested,
-                    Outcome::Launch { .. } | Outcome::Netplay(_) | Outcome::Action(_)
+                    Outcome::Launch { .. }
+                        | Outcome::Netplay(_)
+                        | Outcome::MoonlightStream(_)
+                        | Outcome::Action(_)
                 );
-                if terminal && (library.pending_writes > 0 || settings.mutations_pending()) {
+                if terminal
+                    && (library.pending_writes > 0
+                        || settings.mutations_pending()
+                        || moonlight.state.busy)
+                {
                     deferred = Some(requested);
                 } else {
                     if terminal {
@@ -401,6 +423,7 @@ fn run(
             && outcome.is_none()
             && library.pending_writes == 0
             && !settings.mutations_pending()
+            && !moonlight.state.busy
         {
             outcome = deferred.take().filter(|_| !library.write_failed);
         }
@@ -466,7 +489,10 @@ fn arm_terminal_snapshot(
 ) -> Result<(), String> {
     if matches!(
         outcome,
-        Outcome::Launch { .. } | Outcome::Netplay(_) | Outcome::Action(_)
+        Outcome::Launch { .. }
+            | Outcome::Netplay(_)
+            | Outcome::MoonlightStream(_)
+            | Outcome::Action(_)
     ) && script
         .as_mut()
         .is_some_and(script::Script::take_terminal_snapshot)

@@ -14,6 +14,7 @@ use crate::{
     HintButton,
 };
 mod hub;
+mod moonlight;
 mod netplay;
 
 use sdl2::{
@@ -305,6 +306,7 @@ pub struct Ui<'font, 'texture> {
     /// Open Netplay lobby; it replaces the browsing screens while present.
     pub lobby: Option<crate::netplay::Lobby>,
     pub transition: Option<String>,
+    pub moonlight: Option<crate::moonlight::State>,
     /// Active theme directory; its `systems/` folder holds console images.
     pub theme_dir: Option<PathBuf>,
     /// Root-mapped installed icon directory (separate from the selected theme).
@@ -390,6 +392,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             banner: None,
             screenshot: None,
             transition: None,
+            moonlight: None,
             theme_dir: None,
             system_icons_dir: None,
         })
@@ -573,6 +576,11 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             let drawn = self.lobby_page(&lobby, theme);
             self.lobby = Some(lobby);
             drawn?;
+            self.animating = false;
+        } else if let Some(moonlight) = self.moonlight.take() {
+            let result = self.moonlight_page(&moonlight, theme);
+            self.moonlight = Some(moonlight);
+            result?;
             self.animating = false;
         } else if let Some(settings) = settings {
             self.settings_page(settings, theme)?;
@@ -926,7 +934,11 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                             .find(|s| s.name == *name)
                             .map_or(0, |s| s.game_count as usize)
                     };
-                    let count = count.to_string();
+                    let count = if name == crate::moonlight::SYSTEM {
+                        String::new()
+                    } else {
+                        count.to_string()
+                    };
                     let face = selection(selected, Face::Mono, Face::MonoMedium);
                     let color = selection(selected, theme.dim_text, theme.accent_text_secondary);
                     right = self.packed_label(
@@ -947,7 +959,15 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                                 selection(selected, theme.highlight_bg, theme.highlight_text),
                             )?;
                         } else {
-                            self.icon(Glyph::Clock, icon, c)?;
+                            self.icon(
+                                if name == crate::moonlight::SYSTEM {
+                                    Glyph::Moon
+                                } else {
+                                    Glyph::Clock
+                                },
+                                icon,
+                                c,
+                            )?;
                         }
                         x += self.px(26.);
                     }
@@ -1418,10 +1438,15 @@ fn row_style(
     )
 }
 fn library_summary(data: &dyn DataSource, catalog: &I18n) -> String {
-    let systems = data.systems().iter().filter(|s| s.game_count > 0).count();
+    let systems = data
+        .systems()
+        .iter()
+        .filter(|s| !s.name.starts_with('@') && s.game_count > 0)
+        .count();
     let games = data
         .systems()
         .iter()
+        .filter(|s| !s.name.starts_with('@'))
         .map(|s| u64::from(s.game_count))
         .sum::<u64>();
     let count = |key, n: u64| catalog.plural(key, n as f64, &[("count", &n.to_string())]);
@@ -1506,6 +1531,8 @@ pub fn prepare_first_frame<'font>(
             first_icons.push((
                 if name == "@favorites" {
                     Glyph::Star
+                } else if name == crate::moonlight::SYSTEM {
+                    Glyph::Moon
                 } else {
                     Glyph::Clock
                 },
@@ -1522,7 +1549,11 @@ pub fn prepare_first_frame<'font>(
         };
         let count_width = label(
             &mut prepared,
-            &count.to_string(),
+            &if name == crate::moonlight::SYSTEM {
+                String::new()
+            } else {
+                count.to_string()
+            },
             (
                 selection(i == 0, Face::Mono, Face::MonoMedium),
                 13.,
@@ -1557,7 +1588,7 @@ pub fn prepare_first_frame<'font>(
     }
     prepared.prepare_icons(theme_dir, system_icons_dir, first_icons);
     // Entering move mode must not read files on the render thread.
-    prepared.preload_icons(&[Glyph::ArrowUpDown, Glyph::ChevronsUpDown]);
+    prepared.preload_icons(&[Glyph::ArrowUpDown, Glyph::ChevronsUpDown, Glyph::Moon]);
     Ok(prepared)
 }
 
