@@ -31,8 +31,6 @@ pub struct Library {
     config: Option<SystemCfg>,
     overrides: HashMap<(String, String), (String, String)>,
     store: Store,
-    /// Saved system order read before the first frame; the Store replaces it at Boot.
-    early_order: Vec<String>,
     store_writer: Option<StoreWriter>,
     worker: Option<Worker>,
 }
@@ -44,10 +42,11 @@ impl Library {
     pub fn initial_traced(paths: Paths, trace: StartupTrace) -> Self {
         let cached = cache::load_overview(&paths.cache);
         startup_phase!(trace, "overview cache read");
-        // Tiny file, read in the startup worker alongside EGL setup: the first
-        // frame already shows the user's order instead of reordering afterwards.
-        let early_order = Store::load(&paths.store).order().to_vec();
-        startup_phase!(trace, "system order read");
+        // Tiny file, read in the startup worker alongside video setup: the first
+        // frame already shows the user's order, and the Store is complete before
+        // any input can change it.
+        let store = Store::load(&paths.store);
+        startup_phase!(trace, "store read");
         let counts_known = cached.is_some();
         let (definitions, banner) = if counts_known {
             (Vec::new(), None)
@@ -62,6 +61,12 @@ impl Library {
                 }
             }
         };
+        let banner = banner.or_else(|| {
+            store
+                .load_error
+                .is_some()
+                .then(|| Message::new("error.store_load"))
+        });
         let overview = cached.unwrap_or_else(|| Overview {
             systems: definitions
                 .iter()
@@ -89,8 +94,7 @@ impl Library {
             members: HashMap::new(),
             config: None,
             overrides: HashMap::new(),
-            store: Store::default(),
-            early_order,
+            store,
             store_writer: None,
             worker: None,
         }
@@ -167,12 +171,10 @@ impl Library {
                 Update::Boot {
                     systems,
                     config,
-                    store,
                     banner,
                 } => {
                     self.definitions = systems;
                     self.config = config;
-                    self.store = *store;
                     if self.store.migrate(&self.definitions) {
                         self.queue_store();
                     }
@@ -290,7 +292,7 @@ impl Library {
             }
             Outcome::SetOrder(order) => {
                 // The default arrangement is stored as no custom order.
-                if order == App::default_rows(self) {
+                if order.is_empty() || order == App::default_rows(self) {
                     self.store.clear_order();
                 } else {
                     let overview = &self.overview;
@@ -388,11 +390,7 @@ impl DataSource for Library {
         Some((&def.manufacturer, &def.release))
     }
     fn system_order(&self) -> &[String] {
-        if self.ready {
-            self.store.order()
-        } else {
-            &self.early_order
-        }
+        self.store.order()
     }
     fn favorite_count(&self, system: &str) -> usize {
         self.store

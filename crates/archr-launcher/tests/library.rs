@@ -361,3 +361,56 @@ fn saved_order_is_known_before_the_worker_starts() {
     assert!(!library.ready);
     assert_eq!(library.system_order(), ["nes", "@favorites"]);
 }
+
+#[test]
+fn restore_from_the_menu_clears_the_persisted_order() {
+    use archr_launcher::state::{Button, QuickItem};
+    let (_dir, paths) = fixture();
+    let mut library = ready(&paths, None);
+    library
+        .handle(
+            Outcome::SetOrder(["nes", "@favorites"].map(String::from).into()),
+            "",
+        )
+        .unwrap();
+    let mut app = App::new(5);
+    app.handle(Button::Y, &library);
+    assert_eq!(app.quick_menu_items(&library)[1], QuickItem::RestoreOrder);
+    app.handle(Button::Down, &library);
+    let outcome = app.handle(Button::A, &library);
+    library.handle(outcome, "").unwrap();
+    library.finish().unwrap();
+    assert_eq!(App::system_rows(&library), ["@favorites", "nes"]);
+    assert!(Store::load(&paths.store).order().is_empty());
+}
+
+#[test]
+fn confirming_an_order_before_boot_keeps_favorites_and_survives_boot() {
+    let (_dir, paths) = fixture();
+    let mut library = Library::initial(paths.clone());
+    library.start();
+    assert!(!library.ready);
+    let custom = ["nes", "@favorites"].map(String::from).to_vec();
+    library
+        .handle(Outcome::SetOrder(custom.clone()), "")
+        .unwrap();
+    wait(&mut library, |l| l.ready);
+    assert_eq!(
+        library.system_order(),
+        custom,
+        "Boot must not undo the move"
+    );
+    assert_eq!(library.favorite_count("nes"), 1);
+    library.finish().unwrap();
+    let saved = Store::load(&paths.store);
+    assert_eq!(saved.order(), custom);
+    assert_eq!(saved.favorites().len(), 1);
+}
+
+#[test]
+fn invalid_store_banner_is_shown_from_the_initial_library() {
+    let (_dir, paths) = fixture();
+    fs::write(paths.store.join("store.toml"), "favorites = [").unwrap();
+    let library = Library::initial(paths);
+    assert!(library.banner.is_some());
+}

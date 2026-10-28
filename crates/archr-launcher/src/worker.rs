@@ -1,5 +1,5 @@
 //! Background index/configuration work. Construct only after the first present.
-use crate::{handoff::read_last_exit, paths::Paths, store::Store};
+use crate::{handoff::read_last_exit, paths::Paths};
 use archr_config::{rom_key, SystemCfg};
 use archr_index::{
     cache::{self, Overview},
@@ -28,7 +28,6 @@ pub enum Update {
     Boot {
         systems: Vec<SystemDef>,
         config: Option<SystemCfg>,
-        store: Box<Store>,
         banner: Option<Message>,
     },
     Overview(Overview),
@@ -74,14 +73,9 @@ pub fn start(paths: Paths, initial: Vec<SystemDef>) -> Worker {
             }
             _ => {}
         }
-        let store = Store::load(&paths.store);
-        if store.load_error.is_some() {
-            banner = Some(Message::new("error.store_load"));
-        }
         let boot = Update::Boot {
             systems: systems.clone(),
             config: SystemCfg::load(&paths.config).ok(),
-            store: Box::new(store),
             banner,
         };
         if done.send(boot).is_err() {
