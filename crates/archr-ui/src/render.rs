@@ -113,6 +113,11 @@ struct ListMotion {
     key: String,
     scroll: Tween,
     pill: Tween,
+    /// Cursor of the previous frame while a row is lifted, and the neighbour
+    /// it displaced, which glides into its new place.
+    held: Option<usize>,
+    swap_row: usize,
+    swap: Tween,
 }
 impl ListMotion {
     fn new() -> Self {
@@ -120,6 +125,9 @@ impl ListMotion {
             key: String::new(),
             scroll: Tween::new(0., Duration::from_millis(90)),
             pill: Tween::new(0., Duration::from_millis(90)),
+            held: None,
+            swap_row: 0,
+            swap: Tween::new(0., Duration::from_millis(90)),
         }
     }
 }
@@ -334,6 +342,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
     pub fn snap_animations(&mut self) {
         self.list.scroll.snap();
         self.list.pill.snap();
+        self.list.swap.snap();
         self.menu_pill.snap();
         self.cover_fade.snap();
     }
@@ -425,38 +434,6 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             .ok_or_else(|| self.catalog.text("error.font_init"))?;
         text.draw_icon(&mut self.canvas, glyph, panel, ink)
     }
-    /// Dashed 2px outline along the straight edges, inside the rounded corners.
-    fn dashed(&mut self, rect: Rect, c: Rgba) -> Result<(), String> {
-        let (dash, gap, thick) = (self.px(5.), self.px(3.), self.px(2.));
-        let inset = self.px(8.);
-        self.canvas.set_draw_color(color(c));
-        for (start, end, fixed, across) in [
-            (rect.x() + inset, rect.right() - inset, rect.y(), true),
-            (
-                rect.x() + inset,
-                rect.right() - inset,
-                rect.bottom() - thick,
-                true,
-            ),
-            (rect.y() + inset, rect.bottom() - inset, rect.x(), false),
-            (
-                rect.y() + inset,
-                rect.bottom() - inset,
-                rect.right() - thick,
-                false,
-            ),
-        ] {
-            for at in (start..end).step_by((dash + gap) as usize) {
-                let len = dash.min(end - at) as u32;
-                self.canvas.fill_rect(if across {
-                    Rect::new(at, fixed, len, thick as u32)
-                } else {
-                    Rect::new(fixed, at, thick as u32, len)
-                })?;
-            }
-        }
-        Ok(())
-    }
     fn divider(&mut self, x: i32, y: i32, w: u32, c: Rgba) -> Result<(), String> {
         self.canvas.set_draw_color(color(c));
         self.canvas.fill_rect(Rect::new(x, y, w, 1))
@@ -521,6 +498,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         }
         self.animating = self.list.scroll.active(now)
             || self.list.pill.active(now)
+            || self.list.swap.active(now)
             || self.menu_pill.active(now)
             || self.cover_fade.active(now);
         // Explicit debug readback; normal rendering does no disk I/O.
@@ -736,6 +714,21 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             self.list.scroll.retarget(scroll, now);
             self.list.pill.retarget(target, now);
         }
+        if let Some(prev) = self
+            .list
+            .held
+            .filter(|&p| lifted && p.abs_diff(cursor) == 1)
+        {
+            // The displaced row was drawn at the lifted row's new index.
+            let place = |i: usize, selected: usize| y_of(i) + if i > selected { extra } else { 0. };
+            self.list.swap_row = prev;
+            self.list
+                .swap
+                .retarget(place(cursor, prev) - place(prev, cursor), now);
+            self.list.swap.snap();
+            self.list.swap.retarget(0., now);
+        }
+        self.list.held = lifted.then_some(cursor);
         let offset = self.list.scroll.value(now);
         self.canvas.set_clip_rect(Rect::new(
             margin,
@@ -759,7 +752,8 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                     ..theme.highlight_bg
                 };
                 self.rounded(pill, radius, fill, None)?;
-                self.dashed(pill, theme.highlight_bg)?;
+                self.geometry
+                    .dashed(&mut self.canvas, pill, radius, theme.highlight_bg)?;
             } else {
                 self.rounded(pill, radius, theme.highlight_bg, None)?;
             }
@@ -780,7 +774,13 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         let first = ((offset - separator - extra).max(0.) / (row + gap)).floor() as usize;
         let last = ((offset + available) / (row + gap)).ceil() as usize + 1;
         for i in first..len.min(last) {
-            let y = top + (y_of(i) + if i > cursor { extra } else { 0. } - offset).round() as i32;
+            let glide = if i == self.list.swap_row {
+                self.list.swap.value(now)
+            } else {
+                0.
+            };
+            let y = top
+                + (y_of(i) + if i > cursor { extra } else { 0. } + glide - offset).round() as i32;
             let rh = if i == cursor { selected } else { row }.max(1.) as u32;
             if y + rh as i32 <= top || y >= bottom {
                 continue;

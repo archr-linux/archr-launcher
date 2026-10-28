@@ -171,6 +171,42 @@ impl Mesh {
             );
         }
     }
+    /// Dashed stroke centred 1 unit inside the rounded outline; a unit is 1/22
+    /// of the height, so the 44px row gets 2px strokes with 5px dashes.
+    fn dashed(&mut self, rect: Rect, radius: f32, c: Rgba) {
+        let unit = rect.height() as f32 / 22.;
+        let inset = (unit / 2.).round().max(1.) as i32;
+        let inner = Rect::new(
+            rect.x() + inset,
+            rect.y() + inset,
+            rect.width().saturating_sub(2 * inset as u32).max(1),
+            rect.height().saturating_sub(2 * inset as u32).max(1),
+        );
+        let points = outline(inner, radius - inset as f32);
+        let (mut drawing, mut left) = (true, 2.5 * unit);
+        for (&a, &b) in points.iter().zip(points.iter().cycle().skip(1)) {
+            let length = (b.0 - a.0).hypot(b.1 - a.1);
+            let at = |t: f32| {
+                (
+                    a.0 + (b.0 - a.0) * t / length,
+                    a.1 + (b.1 - a.1) * t / length,
+                )
+            };
+            let mut t = 0.;
+            while t < length {
+                let step = left.min(length - t);
+                if drawing {
+                    self.line(at(t), at(t + step), unit, c);
+                }
+                t += step;
+                left -= step;
+                if left <= 0. {
+                    drawing = !drawing;
+                    left = unit * if drawing { 2.5 } else { 1.5 };
+                }
+            }
+        }
+    }
     fn star(&mut self, rect: Rect, c: Rgba, filled: bool) {
         static STAR: OnceLock<[Point; 10]> = OnceLock::new();
         let unit = STAR.get_or_init(|| {
@@ -237,6 +273,7 @@ pub(crate) enum Icon {
 enum Key {
     Rounded(Rect, u32, Rgba, Option<Rgba>),
     Cover(Rect, u32),
+    Dashed(Rect, u32, Rgba),
     Icon(Rect, Rgba, Icon),
 }
 /// Per-renderer bounded LRU: static badges, battery pieces and icons are hits;
@@ -271,6 +308,7 @@ impl Geometry {
                 Key::Cover(rect, r) => {
                     mesh.fan(&outline(rect, f32::from_bits(r)), Color::WHITE, rect, true)
                 }
+                Key::Dashed(rect, r, c) => mesh.dashed(rect, f32::from_bits(r), c),
                 Key::Icon(rect, c, icon) => {
                     match icon {
                         Icon::Star(filled) => mesh.star(rect, c, filled),
@@ -293,6 +331,16 @@ impl Geometry {
         border: Option<Rgba>,
     ) -> Result<(), String> {
         self.mesh(Key::Rounded(rect, radius.to_bits(), fill, border))
+            .draw(canvas, None)
+    }
+    pub fn dashed(
+        &mut self,
+        canvas: &mut Canvas<Window>,
+        rect: Rect,
+        radius: f32,
+        c: Rgba,
+    ) -> Result<(), String> {
+        self.mesh(Key::Dashed(rect, radius.to_bits(), c))
             .draw(canvas, None)
     }
     pub fn cover(
