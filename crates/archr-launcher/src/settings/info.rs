@@ -240,11 +240,12 @@ fn default_interface(routes: &str) -> &str {
         })
         .unwrap_or("")
 }
-fn uptime(seconds: u64) -> String {
-    let (key, count) = if seconds >= 3600 {
-        ("settings.duration_hours", seconds / 3600)
-    } else {
-        ("settings.duration_minutes", seconds / 60)
+fn uptime(seconds: u64, summary: bool) -> String {
+    let (key, count) = match (seconds >= 3600, summary) {
+        (true, false) => ("settings.duration_hours", seconds / 3600),
+        (false, false) => ("settings.duration_minutes", seconds / 60),
+        (true, true) => ("settings.uptime_summary_hours", seconds / 3600),
+        (false, true) => ("settings.uptime_summary_minutes", seconds / 60),
     };
     format!("{key}|count={count}")
 }
@@ -488,7 +489,7 @@ impl Backend {
                             .collect::<Vec<_>>()
                             .join(" · "),
                     ),
-                    ("settings.uptime_label", uptime(seconds)),
+                    ("settings.uptime_label", uptime(seconds, false)),
                 ],
                 meters,
             },
@@ -819,7 +820,7 @@ impl Backend {
             level
                 .map(|v| format!("settings.battery_summary|value={v}|status={status}"))
                 .unwrap_or_default(),
-            uptime(seconds),
+            uptime(seconds, true),
             level,
             vec![
                 (
@@ -861,7 +862,7 @@ impl Backend {
                         charge
                     }
                 }),
-                ("settings.uptime_label", uptime(seconds)),
+                ("settings.uptime_label", uptime(seconds, false)),
             ],
             vec![meter(
                 "settings.battery",
@@ -906,7 +907,12 @@ mod tests {
         );
         assert_eq!(default_interface("eth0 00000000 0103A8C0 0003"), "eth0");
         assert_eq!(default_interface("eth0 00000000 0103A8C0 0001"), "");
-        assert_eq!(uptime(7380), "settings.duration_hours|count=2");
+        assert_eq!(uptime(7380, false), "settings.duration_hours|count=2");
+        assert_eq!(
+            uptime(3540, true),
+            "settings.uptime_summary_minutes|count=59"
+        );
+        assert_eq!(uptime(7380, true), "settings.uptime_summary_hours|count=2");
     }
     #[test]
     fn ipv4_lookup_never_returns_loopback() {

@@ -186,4 +186,6 @@
 "settings.not_charging" = "Не заряжается"
 "settings.temperature_limit" = "{value} · предел {limit}"
 "settings.duration_minutes" = { one = "{count} мин", few = "{count} мин", many = "{count} мин", other = "{count} мин" }
+"settings.uptime_summary_minutes" = { one = "работает {count} мин", few = "работает {count} мин", many = "работает {count} мин", other = "работает {count} мин" }
+"settings.uptime_summary_hours" = { one = "работает {count} ч", few = "работает {count} ч", many = "работает {count} ч", other = "работает {count} ч" }
 "settings.duration_hours" = { one = "{count} ч", few = "{count} ч", many = "{count} ч", other = "{count} ч" }

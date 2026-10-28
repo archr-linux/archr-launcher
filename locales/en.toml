@@ -186,4 +186,6 @@
 "settings.not_charging" = "Not charging"
 "settings.temperature_limit" = "{value} · limit {limit}"
 "settings.duration_minutes" = { one = "{count} min", other = "{count} min" }
+"settings.uptime_summary_minutes" = { one = "up {count} min", other = "up {count} min" }
+"settings.uptime_summary_hours" = { one = "up {count} h", other = "up {count} h" }
 "settings.duration_hours" = { one = "{count} h", other = "{count} h" }
