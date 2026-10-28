@@ -106,19 +106,74 @@ fn slot(
         + if i > cursor { extra } else { 0. }
 }
 
-/// The longest form that fits, at 13px, then the short form shrinking to 10px.
-/// Status text is never ellipsized; the smallest short form is the last resort.
+/// Side of the Lucide chevrons that flank a lifted row.
+const CHEVRON: f32 = 18.;
+
+/// "Name (detail)" without its trailing parenthetical, when it has one.
+fn without_detail(name: &str) -> &str {
+    name.strip_suffix(')')
+        .and_then(|s| s.rsplit_once(" ("))
+        .map_or(name, |(short, _)| short)
+}
+
+/// How much of the move status survives: everything, a compact position, or
+/// the name alone.
+#[derive(Clone, Copy)]
+enum MoveStatus {
+    Full,
+    Short,
+    Name,
+}
+
+fn status_text(
+    catalog: &I18n,
+    name: &str,
+    (n, total): (usize, usize),
+    status: MoveStatus,
+) -> String {
+    let key = match status {
+        MoveStatus::Full => "move.status",
+        MoveStatus::Short => "move.status_short",
+        MoveStatus::Name => return name.to_owned(),
+    };
+    catalog.format(
+        key,
+        &[
+            ("name", name),
+            ("n", &n.to_string()),
+            ("total", &total.to_string()),
+        ],
+    )
+}
+
+/// Status text is never ellipsized: full, compact, then the name without its
+/// parenthetical, shrinking to 10px, and finally without the position.
 fn fit_status(
-    forms: &[String; 2],
+    name: &str,
     width: u32,
+    mut form: impl FnMut(&str, MoveStatus) -> String,
     mut measure: impl FnMut(&str, f32) -> Result<u32, String>,
-) -> Result<(&str, f32), String> {
-    for (form, size) in [(0, 13.), (1, 13.), (1, 12.), (1, 11.)] {
-        if measure(&forms[form], size)? <= width {
-            return Ok((&forms[form], size));
+) -> Result<(String, f32), String> {
+    let short = without_detail(name);
+    let tries = [
+        (name, MoveStatus::Full, 13.),
+        (name, MoveStatus::Short, 13.),
+    ]
+    .into_iter()
+    .chain([
+        (short, MoveStatus::Full, 13.),
+        (short, MoveStatus::Short, 13.),
+    ])
+    .chain([12., 11., 10.].map(|size| (short, MoveStatus::Short, size)))
+    .chain([13., 12., 11., 10.].map(|size| (short, MoveStatus::Name, size)));
+    let mut last = (String::new(), 10.);
+    for (name, status, size) in tries {
+        last = (form(name, status), size);
+        if measure(&last.0, size)? <= width {
+            break;
         }
     }
-    Ok((&forms[1], 10.))
+    Ok(last)
 }
 
 /// Keep system rows single-line; parenthetical detail remains in the artwork panel.
@@ -131,10 +186,7 @@ fn fit_system_name(
     if measure(name, size)? <= width {
         return Ok((name, size));
     }
-    let name = name
-        .strip_suffix(')')
-        .and_then(|s| s.rsplit_once(" ("))
-        .map_or(name, |(short, _)| short);
+    let name = without_detail(name);
     while size > minimum && measure(name, size)? > width {
         size = (size - 1.).max(minimum);
     }
@@ -823,14 +875,18 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 let name = systems.get(i).expect("visible system row");
                 if lifted && selected {
                     x += lift;
-                    let side = self.px(12.);
                     let mid = y + rh as i32 / 2;
-                    for (glyph, top) in [(Glyph::ChevronUp, mid - side), (Glyph::ChevronDown, mid)]
-                    {
-                        let rect = self.frame.square(right - side + self.px(4.), top, 12.);
+                    // Lucide chevrons only fill the middle of their box, so the
+                    // boxes overlap to leave a hairline between the two marks.
+                    for (glyph, top) in [(Glyph::ChevronUp, 12.), (Glyph::ChevronDown, 6.)] {
+                        let rect = self.frame.square(
+                            right - self.px(CHEVRON - 4.),
+                            mid - self.px(top),
+                            CHEVRON,
+                        );
                         self.icon(glyph, rect, theme.highlight_bg)?;
                     }
-                    right -= side + self.px(8.);
+                    right -= self.px(CHEVRON + 4.);
                     let icon = self.frame.square(x, mid - self.px(8.), 16.);
                     self.icon(Glyph::ArrowUpDown, icon, theme.highlight_text)?;
                     x += self.px(26.);
@@ -1021,18 +1077,21 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             let width = (left - self.px(40.)).max(1) as u32;
             let (text, size, ink) = match moving {
                 Some((name, n, total)) => {
-                    let args = [
-                        ("name", system_title(name, data, &self.catalog)),
-                        ("n", n.to_string()),
-                        ("total", total.to_string()),
-                    ];
-                    let args = args.each_ref().map(|(k, v)| (*k, v.as_str()));
-                    let forms = ["move.status", "move.status_short"]
-                        .map(|key| self.catalog.format(key, &args));
-                    let (text, size) = fit_status(&forms, width, |text, size| {
-                        self.measure(text, Face::Regular, size)
-                    })?;
-                    (text.to_owned(), size, theme.text)
+                    let title = system_title(name, data, &self.catalog);
+                    let (catalog, frame, fonts) = (&self.catalog, self.frame, &mut self.text);
+                    let (text, size) = fit_status(
+                        &title,
+                        width,
+                        |name, status| status_text(catalog, name, (n, total), status),
+                        |text, size| {
+                            fonts
+                                .as_mut()
+                                .ok_or_else(|| catalog.text("error.font_init"))?
+                                .measure(text, Face::Regular, frame.font_size(size))
+                                .map_err(|e| localized_error(catalog, e))
+                        },
+                    )?;
+                    (text, size, theme.text)
                 }
                 None => (library_summary(data, &self.catalog), 13., theme.muted),
             };
@@ -1457,6 +1516,13 @@ pub fn prepare_first_frame<'font>(
             frame.px(96.) as u32,
         ));
     }
+    // Entering move mode must not touch the filesystem on the render thread.
+    first_icons.extend([
+        (Glyph::ArrowUpDown, frame.px(14.) as u32),
+        (Glyph::ArrowUpDown, frame.px(16.) as u32),
+        (Glyph::ChevronUp, frame.px(CHEVRON) as u32),
+        (Glyph::ChevronDown, frame.px(CHEVRON) as u32),
+    ]);
     prepared.prepare_icons(theme_dir, system_icons_dir, first_icons);
     Ok(prepared)
 }
@@ -1568,20 +1634,25 @@ mod tests {
                 .map(|key| measure(&i.text(key), 13.).unwrap() + 26)
                 .sum::<u32>()
                 + 32;
-            let width = 640 - 24 - hints - 40 - 24;
+            // The label ends 16px left of the hints; 24px margins on both sides.
+            let width = 640 - 24 - hints - 40 - 24 + 24;
             for name in [
                 "Nintendo 64",
-                "Super Nintendo Entertainment System",
-                "Игровая приставка Sega Mega Drive",
+                "Super Nintendo Entertainment System (Super Famicom)",
+                "MO/TO family (TO7, TO7/70, TO8, TO8D, TO9, TO9+, MO5 and MO6)",
+                "Игровая приставка Sega Mega Drive (Genesis)",
             ] {
-                let args = [("name", name), ("n", "12"), ("total", "34")];
-                let forms = ["move.status", "move.status_short"].map(|key| i.format(key, &args));
-                let (text, size) = fit_status(&forms, width, measure).unwrap();
-                let fits = measure(text, size).unwrap() <= width;
-                assert!(fits || size == 10., "{code}: {name}: {text} at {size}");
-                if name == "Nintendo 64" {
-                    assert!(fits, "{code}: short names fit at some size");
-                }
+                let (text, size) = fit_status(
+                    name,
+                    width,
+                    |name, status| status_text(&i, name, (12, 34), status),
+                    measure,
+                )
+                .unwrap();
+                assert!(
+                    measure(&text, size).unwrap() <= width,
+                    "{code}: {text} at {size}"
+                );
             }
         }
     }

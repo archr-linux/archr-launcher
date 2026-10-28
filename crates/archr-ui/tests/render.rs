@@ -3,7 +3,7 @@ use archr_index::{cache::SystemEntry, Game};
 use archr_ui::{
     render::{prepare_first_frame, Ui},
     startup::StartupTrace,
-    state::{App, Screen},
+    state::{App, Button, Screen},
     Theme,
 };
 use common::FakeData as Data;
@@ -299,5 +299,65 @@ fn first_systems_present_has_prepared_collection_icons() {
         icon.into_iter()
             .any(|at| first[at..at + 3] == [255, 255, 255]),
         "first systems present must show the prepared collection icon"
+    );
+}
+
+#[test]
+fn move_mode_draws_from_prepared_icons_without_touching_the_filesystem() {
+    let _guard = SDL_LOCK.lock().unwrap();
+    std::env::set_var("SDL_VIDEODRIVER", "offscreen");
+    let ttf;
+    let creator;
+    let mut ui = Ui::new(640, 480, true).unwrap();
+    ttf = sdl2::ttf::init().unwrap();
+    creator = ui.canvas.texture_creator();
+    let theme = Theme::builtin();
+    let data = Data {
+        systems: vec![SystemEntry {
+            name: "nes".into(),
+            fullname: "Nintendo".into(),
+            game_count: 1,
+            dir_mtime: 0,
+            source_fingerprint: 0,
+        }],
+        ..Data::default()
+    };
+    let catalog = archr_ui::i18n::I18n::default();
+    // A solid square stands in for the installed arrow: it is only on screen
+    // if the icon was read at startup, since the directory is gone before drawing.
+    let icons = tempfile::tempdir().unwrap();
+    std::fs::write(
+        icons.path().join("arrow-up-down.svg"),
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><rect width="24" height="24" fill="currentColor"/></svg>"#,
+    )
+    .unwrap();
+    let prepared = prepare_first_frame(
+        &ttf,
+        &theme,
+        (None, None, icons.path()),
+        &catalog,
+        &data,
+        (640, 480),
+        StartupTrace::default(),
+    )
+    .unwrap();
+    drop(icons);
+    ui.configure_prepared(&creator, prepared, None).unwrap();
+    ui.catalog = catalog;
+    let mut app = App::new(10);
+    app.handle(Button::Y, &data);
+    app.handle(Button::A, &data);
+    assert!(app.moving().is_some());
+    let shots = tempfile::tempdir().unwrap();
+    let shot = shots.path().join("move.png");
+    ui.draw(&app, &data, &theme, None).unwrap();
+    ui.screenshot = Some(shot.clone());
+    ui.draw(&app, &data, &theme, None).unwrap();
+    let frame = image::open(&shot).unwrap().to_rgba8().into_raw();
+    let at = (72 * 640 + 44) * 4;
+    assert_eq!(
+        frame[at..at + 3],
+        [255, 255, 255],
+        "the lifted row icon must come from startup preparation"
     );
 }
