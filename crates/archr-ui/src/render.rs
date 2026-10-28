@@ -4,11 +4,11 @@ use crate::{
     i18n::I18n,
     icons::Glyph,
     motion::Tween,
-    primitives::{Geometry, Icon, Shadow},
+    primitives::{Geometry, Shadow},
     startup::StartupTrace,
     startup_phase,
     state::{App, DataSource, QuickItem, Screen},
-    status::Status,
+    status::{Battery, Status},
     text::{color, Align, Face, Style, TextCache},
     theme::{Rect01, Rgba, Theme},
 };
@@ -183,7 +183,7 @@ fn status_layout(
     let width = px(12.) * 2
         + clock_width
         + if wifi { px(16.) + px(12.) } else { 0 }
-        + percent_width.map_or(0, |w| px(12.) + px(22.) + px(6.) + w);
+        + percent_width.map_or(0, |w| px(12.) + px(24.) + px(6.) + w);
     let center = header_height as i32 / 2;
     let pill = Rect::new(
         right - width as i32,
@@ -203,8 +203,21 @@ fn status_layout(
         pill,
         wifi: panel(wifi.then_some(px(16.)), px(16.), px(12.)),
         clock: panel(Some(clock_width), px(16.), px(12.)).expect("clock is always visible"),
-        battery: panel(percent_width.map(|_| px(22.)), px(12.), px(6.)),
+        battery: panel(percent_width.map(|_| px(24.)), px(24.), px(6.)),
         percent: panel(percent_width, px(16.), 0),
+    }
+}
+
+fn battery_glyph(battery: Battery) -> Glyph {
+    if battery.charging {
+        Glyph::BatteryCharging
+    } else {
+        match battery.percent {
+            0 => Glyph::Battery,
+            1..=25 => Glyph::BatteryLow,
+            26..=69 => Glyph::BatteryMedium,
+            _ => Glyph::BatteryFull,
+        }
     }
 }
 
@@ -235,6 +248,8 @@ pub struct Ui<'font, 'texture> {
     pub transition: Option<String>,
     /// Active theme directory; its `systems/` folder holds console images.
     pub theme_dir: Option<PathBuf>,
+    /// Root-mapped installed icon directory (separate from the selected theme).
+    pub system_icons_dir: Option<PathBuf>,
 }
 impl<'font, 'texture> Ui<'font, 'texture> {
     pub fn new(width: u32, height: u32, windowed: bool) -> Result<Self, String> {
@@ -299,12 +314,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             creator: None,
             art: None,
             root: None,
-            geometry: {
-                let mut geometry = Geometry::new();
-                geometry.startup = trace;
-                startup_phase!(trace, "icons geometry cache");
-                geometry
-            },
+            geometry: Geometry::new(),
             status: None,
             list: ListMotion::new(),
             menu_pill: Tween::new(0., Duration::from_millis(90)),
@@ -321,6 +331,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             screenshot: None,
             transition: None,
             theme_dir: None,
+            system_icons_dir: None,
         })
     }
     pub fn configure(
@@ -330,11 +341,15 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         theme: &Theme,
         root: Option<&Path>,
     ) -> Result<(), String> {
-        self.configure_prepared(
-            creator,
-            PreparedText::new(ttf, font_paths(theme, root), self.startup),
-            root,
-        )
+        let mut prepared = PreparedText::new(ttf, font_paths(theme, root), self.startup);
+        prepared.prepare_icons(
+            self.theme_dir.as_deref(),
+            self.system_icons_dir
+                .as_deref()
+                .unwrap_or_else(|| Path::new(crate::icons::DEFAULT_ICONS_DIR)),
+            [],
+        );
+        self.configure_prepared(creator, prepared, root)
     }
     pub fn configure_prepared(
         &mut self,
@@ -354,7 +369,8 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         if self.shadow.is_some() {
             startup_phase!(self.startup, "shadow texture");
         }
-        self.text = Some(TextCache::from_prepared(creator, prepared)?);
+        let text = TextCache::from_prepared(creator, prepared)?;
+        self.text = Some(text);
         self.status = Some(Status::new(root, Instant::now()));
         startup_phase!(self.startup, "status initialization");
         Ok(())
@@ -546,7 +562,6 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         self.has_presented = true;
         if self.startup.began().is_some() {
             self.startup.phase_once("first present");
-            self.geometry.startup = StartupTrace::default();
             if let Some(text) = &mut self.text {
                 text.trace_startup(StartupTrace::default());
             }
@@ -594,48 +609,15 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 (battery, layout.battery, layout.percent, percent)
             {
                 self.label(&text, (Face::Mono, 13., theme.muted), panel)?;
-                let battery = Rect::new(icon.x(), icon.y(), self.px(19.) as u32, icon.height());
-                self.rounded(
-                    battery,
-                    self.px(2.) as f32,
-                    theme.surface,
-                    Some(theme.muted),
+                self.icon(
+                    battery_glyph(b),
+                    icon,
+                    if b.charging {
+                        theme.highlight_bg
+                    } else {
+                        theme.muted
+                    },
                 )?;
-                let fill_width = (self.px(15.) as f32 * f32::from(b.percent) / 100.).round() as u32;
-                if fill_width > 0 {
-                    self.rounded(
-                        Rect::new(
-                            battery.x() + self.px(2.),
-                            battery.y() + self.px(2.),
-                            fill_width,
-                            self.px(8.) as u32,
-                        ),
-                        self.frame.scale,
-                        theme.muted,
-                        None,
-                    )?;
-                }
-                let nub = Rect::new(
-                    battery.right() + self.px(1.),
-                    battery.y() + self.px(4.),
-                    self.px(2.) as u32,
-                    self.px(4.) as u32,
-                );
-                self.rounded(nub, self.frame.scale, theme.muted, None)?;
-                if b.charging {
-                    let bolt = Rect::new(
-                        battery.x() + self.px(5.),
-                        battery.y() + self.px(1.),
-                        self.px(9.) as u32,
-                        self.px(10.) as u32,
-                    );
-                    self.geometry.icon(
-                        &mut self.canvas,
-                        Icon::Lightning,
-                        bolt,
-                        theme.highlight_bg,
-                    )?;
-                }
             }
             right = layout.pill.x() - self.px(20.);
         }
@@ -829,9 +811,8 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                         y + (rh as i32 - self.px(14.)) / 2,
                         14.,
                     );
-                    self.geometry.icon(
-                        &mut self.canvas,
-                        Icon::Star(true),
+                    self.icon(
+                        Glyph::Star,
                         star,
                         selection(selected, theme.highlight_bg, theme.highlight_text),
                     )?;
@@ -851,7 +832,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                     }
                     right -= side + self.px(8.);
                     let icon = self.frame.square(x, mid - self.px(8.), 16.);
-                    self.icon(Glyph::Move, icon, theme.highlight_text)?;
+                    self.icon(Glyph::ArrowUpDown, icon, theme.highlight_text)?;
                     x += self.px(26.);
                 } else {
                     let count = if name.starts_with('@') {
@@ -877,14 +858,13 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                             .frame
                             .square(x, y + (rh as i32 - self.px(16.)) / 2, 16.);
                         if name == "@favorites" {
-                            self.geometry.icon(
-                                &mut self.canvas,
-                                Icon::Star(false),
+                            self.icon(
+                                Glyph::Star,
                                 icon,
                                 selection(selected, theme.highlight_bg, theme.highlight_text),
                             )?;
                         } else {
-                            self.geometry.icon(&mut self.canvas, Icon::Clock, icon, c)?;
+                            self.icon(Glyph::Clock, icon, c)?;
                         }
                         x += self.px(26.);
                     }
@@ -1092,12 +1072,21 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 .ok_or_else(|| self.catalog.text("error.font_init"))?
                 .draw_badge(
                     &mut self.canvas,
-                    button,
+                    // The vertical-move hint draws its Lucide icon over a blank badge.
+                    if button == '↕' { ' ' } else { button },
                     size,
                     theme.badge,
                     theme.text,
                     badge,
                 )?;
+            if button == '↕' {
+                let icon = self.frame.square(
+                    badge.x() + (badge.width() as i32 - self.px(14.)) / 2,
+                    badge.y() + (badge.height() as i32 - self.px(14.)) / 2,
+                    14.,
+                );
+                self.icon(Glyph::ArrowUpDown, icon, theme.text)?;
+            }
             right -= self.px(16.);
         }
         Ok(right + self.px(16.))
@@ -1341,7 +1330,7 @@ fn library_summary(data: &dyn DataSource, catalog: &I18n) -> String {
 pub fn prepare_first_frame<'font>(
     ttf: &'font Sdl2TtfContext,
     theme: &Theme,
-    root: Option<&Path>,
+    (root, theme_dir, system_icons_dir): (Option<&Path>, Option<&Path>, &Path),
     catalog: &I18n,
     data: &dyn DataSource,
     (width, height): (u32, u32),
@@ -1391,6 +1380,7 @@ pub fn prepare_first_frame<'font>(
     let list_width = (panel.x() - frame.px(system_art::PANEL_GAP) - margin).max(1) as u32;
     let row = (theme.row_height * height as f32).round();
     let selected = (theme.selected_height * height as f32).round();
+    let mut first_icons = Vec::new();
     for (i, name) in systems.iter().enumerate() {
         let y = top
             + (i as f32 * (row + frame.px(2.) as f32)
@@ -1403,6 +1393,16 @@ pub fn prepare_first_frame<'font>(
             .round() as i32;
         if y >= bottom {
             break;
+        }
+        if name.starts_with('@') {
+            first_icons.push((
+                if name == "@favorites" {
+                    Glyph::Star
+                } else {
+                    Glyph::Clock
+                },
+                frame.px(16.) as u32,
+            ));
         }
         let count = if name.starts_with('@') {
             data.collection_len(name)
@@ -1447,6 +1447,17 @@ pub fn prepare_first_frame<'font>(
             Some(list_width.saturating_sub(frame.px(28.) as u32).max(1)),
         )?;
     }
+    if let Some(name) = systems.first().filter(|name| name.starts_with('@')) {
+        first_icons.push((
+            if name == "@favorites" {
+                Glyph::Star
+            } else {
+                Glyph::Clock
+            },
+            frame.px(96.) as u32,
+        ));
+    }
+    prepared.prepare_icons(theme_dir, system_icons_dir, first_icons);
     Ok(prepared)
 }
 
@@ -1657,6 +1668,34 @@ mod tests {
     }
 
     #[test]
+    fn battery_glyph_tracks_charge_and_level() {
+        for (percent, expected) in [
+            (0, Glyph::Battery),
+            (1, Glyph::BatteryLow),
+            (25, Glyph::BatteryLow),
+            (26, Glyph::BatteryMedium),
+            (69, Glyph::BatteryMedium),
+            (70, Glyph::BatteryFull),
+            (100, Glyph::BatteryFull),
+        ] {
+            assert_eq!(
+                battery_glyph(crate::status::Battery {
+                    percent,
+                    charging: false
+                }),
+                expected
+            );
+            assert_eq!(
+                battery_glyph(crate::status::Battery {
+                    percent,
+                    charging: true
+                }),
+                Glyph::BatteryCharging
+            );
+        }
+    }
+
+    #[test]
     fn status_pill_orders_centers_and_hides_optional_items() {
         for scale in [1., 2.] {
             for wifi in [false, true] {
@@ -1673,6 +1712,9 @@ mod tests {
                     assert_eq!(layout.pill.height(), (26. * scale) as u32);
                     assert_eq!(layout.wifi.is_some(), wifi);
                     assert_eq!(layout.battery.is_some(), percent_width.is_some());
+                    if let Some(battery) = layout.battery {
+                        assert_eq!(battery.width(), (24. * scale) as u32);
+                    }
                     assert_eq!(layout.percent.is_some(), percent_width.is_some());
                     let mut right = layout.pill.x() + (12. * scale) as i32;
                     for rect in [
@@ -1697,9 +1739,11 @@ mod tests {
         }
         let on = status_layout(616, 44, 1., 39, Some(24), true);
         let off = status_layout(616, 44, 1., 39, Some(24), false);
-        assert_eq!(on.pill.width(), 155);
-        assert_eq!(off.pill.width(), 127);
+        assert_eq!(on.pill.width(), 157);
+        assert_eq!(off.pill.width(), 129);
         assert_eq!(on.clock.x() - on.wifi.unwrap().right(), 12);
+        assert_eq!(off.wifi, None);
+        assert_eq!(off.clock.x() - off.pill.x(), 12);
         assert_eq!(on.battery.unwrap().x() - on.clock.right(), 12);
         assert_eq!(on.percent.unwrap().x() - on.battery.unwrap().right(), 6);
     }

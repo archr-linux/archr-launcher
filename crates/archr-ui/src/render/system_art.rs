@@ -1,9 +1,9 @@
 //! Systems screen artwork panel: console image or a generated typographic card.
 use super::{system_title, Frame, Ui};
+use crate::icons::Glyph;
 use crate::{
     covers::CoverCache,
     i18n::I18n,
-    primitives::Icon,
     state::DataSource,
     text::{Align, Face},
     theme::{Rgba, Theme},
@@ -311,11 +311,11 @@ impl Ui<'_, '_> {
                 96.,
             );
             let glyph = if name == "@favorites" {
-                Icon::Star(false)
+                Glyph::Star
             } else {
-                Icon::Clock
+                Glyph::Clock
             };
-            return self.geometry.icon(&mut self.canvas, glyph, icon, ink);
+            return self.icon(glyph, icon, ink);
         }
         let label = generated_label(self.frame, rect, name, theme, |text, face, size| {
             self.measure(text, face, size)

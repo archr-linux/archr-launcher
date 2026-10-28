@@ -1,206 +1,194 @@
-//! Stroked line icons on a 24-unit grid, rasterized once at final size with
-//! coverage from the distance to each segment, which is already antialiased.
-use sdl2::{pixels::PixelFormatEnum, surface::Surface};
-use std::f32::consts::{PI, TAU};
+//! Unmodified Lucide SVGs rasterized at their target size, with resilient theme lookup.
+use sdl2::{rwops::RWops, surface::Surface, sys};
+use std::{
+    collections::HashSet,
+    path::{Path, PathBuf},
+};
 
-#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
-pub(crate) enum Glyph {
-    Recent,
-    Games,
-    Tools,
-    Gear,
-    Download,
-    Wifi,
-    Moon,
-    Restart,
-    Power,
-    Move,
-    ChevronUp,
-    ChevronDown,
+pub(crate) const DEFAULT_ICONS_DIR: &str = "/usr/share/archr-launcher/themes/default/icons";
+
+macro_rules! glyphs {
+    ($($variant:ident => $file:literal),+ $(,)?) => {
+        #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+        pub(crate) enum Glyph { $($variant),+ }
+        impl Glyph {
+            fn file(self) -> &'static str {
+                match self { $(Self::$variant => $file),+ }
+            }
+            fn embedded(self) -> &'static str {
+                match self {
+                    $(Self::$variant => include_str!(concat!("../../../themes/default/icons/", $file, ".svg"))),+
+                }
+            }
+            #[cfg(test)]
+            const ALL: &'static [Self] = &[$(Self::$variant),+];
+        }
+    };
+}
+glyphs! {
+    Recent => "history", Games => "gamepad-2", Tools => "wrench",
+    Gear => "settings", Download => "download", Wifi => "wifi",
+    WifiOff => "wifi-off", Moon => "moon", Restart => "rotate-cw",
+    Power => "power", Clock => "clock", Star => "star",
+    Battery => "battery", BatteryLow => "battery-low",
+    BatteryMedium => "battery-medium", BatteryFull => "battery-full",
+    BatteryCharging => "battery-charging", ArrowUpDown => "arrow-up-down",
+    ChevronUp => "chevron-up", ChevronDown => "chevron-down",
 }
 
-type Path = Vec<(f32, f32)>;
-
-fn arc(cx: f32, cy: f32, radius: f32, from: f32, to: f32) -> Path {
-    (0..=24)
-        .map(|i| {
-            let angle = from + (to - from) * i as f32 / 24.;
-            (cx + radius * angle.cos(), cy + radius * angle.sin())
-        })
-        .collect()
+#[link(name = "SDL2_image")]
+unsafe extern "C" {
+    fn IMG_LoadSizedSVG_RW(
+        src: *mut sys::SDL_RWops,
+        width: libc::c_int,
+        height: libc::c_int,
+    ) -> *mut sys::SDL_Surface;
 }
 
-fn paths(glyph: Glyph) -> Vec<Path> {
-    let circle = |cx, cy, r| arc(cx, cy, r, 0., TAU);
-    match glyph {
-        Glyph::Recent => vec![
-            vec![(4., 2.), (14., 2.), (19., 7.), (19., 13.)],
-            vec![(14., 2.), (14., 7.), (19., 7.)],
-            vec![(4., 2.), (4., 21.), (12., 21.)],
-            vec![(7., 11.), (13., 11.)],
-            vec![(7., 15.), (11., 15.)],
-            circle(17., 17., 5.),
-            vec![(17., 14.), (17., 17.), (19., 18.)],
-        ],
-        Glyph::Games => vec![
-            vec![
-                (5., 8.),
-                (8., 6.),
-                (16., 6.),
-                (19., 8.),
-                (22., 17.),
-                (21., 20.),
-                (18., 20.),
-                (15., 17.),
-                (9., 17.),
-                (6., 20.),
-                (3., 20.),
-                (2., 17.),
-                (5., 8.),
-            ],
-            vec![(8., 10.), (8., 15.)],
-            vec![(5.5, 12.5), (10.5, 12.5)],
-            circle(16., 11., 0.8),
-            circle(19., 13., 0.8),
-        ],
-        Glyph::Tools => vec![
-            vec![
-                (3., 3.),
-                (7., 7.),
-                (8., 5.),
-                (10., 7.),
-                (8., 9.),
-                (17., 18.),
-                (19., 20.),
-                (21., 18.),
-                (19., 16.),
-                (10., 7.),
-            ],
-            vec![
-                (21., 3.),
-                (17., 4.),
-                (16., 7.),
-                (18., 9.),
-                (21., 8.),
-                (20., 12.),
-                (18., 13.),
-            ],
-            vec![
-                (6., 12.),
-                (3., 16.),
-                (3., 19.),
-                (5., 21.),
-                (8., 20.),
-                (12., 16.),
-            ],
-        ],
-        Glyph::Gear => vec![
-            (0..=32)
-                .map(|i| {
-                    let a = -PI / 2. + i as f32 * TAU / 32.;
-                    let r = if i % 4 == 0 || i % 4 == 3 { 10. } else { 7.5 };
-                    (12. + r * a.cos(), 12. + r * a.sin())
-                })
-                .collect(),
-            circle(12., 12., 3.2),
-        ],
-        Glyph::Download => vec![
-            vec![(12., 2.), (12., 16.), (7., 11.)],
-            vec![(12., 16.), (17., 11.)],
-            vec![(3., 17.), (3., 21.), (21., 21.), (21., 17.)],
-        ],
-        Glyph::Wifi => vec![
-            arc(12., 21., 18., -2.25, -0.89),
-            arc(12., 21., 12., -2.22, -0.92),
-            arc(12., 21., 6., -2.15, -0.99),
-            circle(12., 19., 1.),
-        ],
-        Glyph::Moon => vec![
-            arc(12., 12., 10., -1.16, -5.12),
-            arc(21., 12., 10., 2.1, 4.18),
-        ],
-        Glyph::Restart => {
-            // Clockwise ring open at the top; the head sits on its end point.
-            let end = 3.98_f32;
-            let (tip_x, tip_y) = (12. + 8. * end.cos(), 12. + 8. * end.sin());
-            let heading = end + PI / 2.;
-            let wing = |turn: f32| {
-                let a = heading + PI + turn;
-                (tip_x + 5. * a.cos(), tip_y + 5. * a.sin())
-            };
-            vec![
-                arc(12., 12., 8., -1.2, end),
-                vec![wing(0.7), (tip_x, tip_y), wing(-0.7)],
-            ]
+/// One loader per UI cache; bad files and failed sizes are not retried every frame.
+pub(crate) struct IconLoader {
+    theme_dir: Option<PathBuf>,
+    system_icons_dir: PathBuf,
+    failed_files: HashSet<PathBuf>,
+    failed_sizes: HashSet<(Glyph, u32)>,
+    warned: HashSet<Glyph>,
+}
+
+impl IconLoader {
+    pub(crate) fn new(theme_dir: Option<&Path>, system_icons_dir: &Path) -> Self {
+        Self {
+            theme_dir: theme_dir.map(Path::to_path_buf),
+            system_icons_dir: system_icons_dir.to_path_buf(),
+            failed_files: HashSet::new(),
+            failed_sizes: HashSet::new(),
+            warned: HashSet::new(),
         }
-        Glyph::Move => {
-            // Arrowhead at a tip, with wings 3 units back along (dx, dy).
-            let head = |x: f32, y: f32, dx: f32, dy: f32| {
-                vec![
-                    (x + dx - dy, y + dy - dx),
-                    (x, y),
-                    (x + dx + dy, y + dy + dx),
-                ]
-            };
-            vec![
-                vec![(3., 12.), (21., 12.)],
-                vec![(12., 3.), (12., 21.)],
-                head(12., 3., 0., 3.),
-                head(12., 21., 0., -3.),
-                head(3., 12., 3., 0.),
-                head(21., 12., -3., 0.),
-            ]
+    }
+
+    fn warn_once(&mut self, glyph: Glyph, message: &str) {
+        if self.warned.insert(glyph) {
+            log::warn!("Lucide icon {glyph:?}: {message}");
         }
-        Glyph::ChevronUp => vec![vec![(6., 15.), (12., 9.), (18., 15.)]],
-        Glyph::ChevronDown => vec![vec![(6., 9.), (12., 15.), (18., 9.)]],
-        Glyph::Power => vec![
-            arc(12., 12., 9., -PI / 2. + 0.7, 3. * PI / 2. - 0.7),
-            vec![(12., 2.), (12., 12.)],
-        ],
+    }
+
+    pub(crate) fn render(&mut self, glyph: Glyph, size: u32) -> Option<Surface<'static>> {
+        if self.failed_sizes.contains(&(glyph, size)) {
+            return None;
+        }
+        let file = format!("{}.svg", glyph.file());
+        let paths = [
+            self.theme_dir
+                .as_ref()
+                .map(|dir| dir.join("icons").join(&file)),
+            Some(self.system_icons_dir.join(&file)),
+        ];
+        for path in paths.into_iter().flatten() {
+            if self.failed_files.contains(&path) || !path.is_file() {
+                continue;
+            }
+            match std::fs::read_to_string(&path)
+                .map_err(|e| e.to_string())
+                .and_then(|svg| rasterize(&svg, size))
+            {
+                Ok(surface) => return Some(surface),
+                Err(error) => {
+                    self.failed_files.insert(path.clone());
+                    self.warn_once(
+                        glyph,
+                        &format!("{}: {error}; trying fallback", path.display()),
+                    );
+                }
+            }
+        }
+        if let Ok(surface) = rasterize(glyph.embedded(), size) {
+            if !self.system_icons_dir.join(&file).is_file() {
+                self.warn_once(glyph, "installed SVG unavailable; using embedded copy");
+            }
+            return Some(surface);
+        }
+        self.failed_sizes.insert((glyph, size));
+        self.warn_once(glyph, "all SVG sources failed; omitting icon");
+        None
     }
 }
 
-fn distance(p: (f32, f32), a: (f32, f32), b: (f32, f32)) -> f32 {
-    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
-    let len = dx * dx + dy * dy;
-    let t = if len == 0. {
-        0.
+fn rasterize(svg: &str, size: u32) -> Result<Surface<'static>, String> {
+    let svg = svg.replace("currentColor", "#ffffff");
+    let rw = RWops::from_bytes(svg.as_bytes())?;
+    let dimension = i32::try_from(size).map_err(|e| e.to_string())?;
+    // SDL_image borrows the RWops; Surface takes ownership of the result.
+    let raw = unsafe { IMG_LoadSizedSVG_RW(rw.raw(), dimension, dimension) };
+    if raw.is_null() {
+        Err(sdl2::get_error())
     } else {
-        (((p.0 - a.0) * dx + (p.1 - a.1) * dy) / len).clamp(0., 1.)
-    };
-    (p.0 - a.0 - t * dx).hypot(p.1 - a.1 - t * dy)
+        Ok(unsafe { Surface::from_ll(raw) })
+    }
 }
 
-/// White RGBA at `size` pixels, tinted later with a color mod.
-pub(crate) fn render(glyph: Glyph, size: u32) -> Result<Surface<'static>, String> {
-    let side = size;
-    let unit = side as f32 / 24.;
-    let half = (size as f32 * 0.073).max(1.75) / 2.;
-    let segments: Vec<_> = paths(glyph)
-        .iter()
-        .flat_map(|path| path.windows(2).map(|w| (w[0], w[1])).collect::<Vec<_>>())
-        .map(|(a, b)| ((a.0 * unit, a.1 * unit), (b.0 * unit, b.1 * unit)))
-        .collect();
-    let mut surface = Surface::new(side, side, PixelFormatEnum::RGBA32)?;
-    let pitch = surface.pitch() as usize;
-    surface.with_lock_mut(|bytes| {
-        for y in 0..side {
-            for x in 0..side {
-                let p = (x as f32 + 0.5, y as f32 + 0.5);
-                let near = segments
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn embedded_svgs_render_at_target_sizes() {
+        for &glyph in Glyph::ALL {
+            for size in [16, 24, 48] {
+                let surface = rasterize(glyph.embedded(), size).unwrap();
+                assert_eq!((surface.width(), surface.height()), (size, size));
+                assert!(surface
+                    .without_lock()
+                    .unwrap()
                     .iter()
-                    .map(|&(a, b)| distance(p, a, b))
-                    .fold(f32::MAX, f32::min);
-                let coverage = (half + 0.5 - near).clamp(0., 1.);
-                let offset = y as usize * pitch + x as usize * 4;
-                bytes[offset..offset + 4].copy_from_slice(&[
-                    255,
-                    255,
-                    255,
-                    (coverage * 255.) as u8,
-                ]);
+                    .any(|&byte| byte != 0));
             }
         }
-    });
-    Ok(surface)
+    }
+
+    #[test]
+    fn theme_overrides_system_and_bad_file_falls_back_without_retry() {
+        let dir = tempfile::tempdir().unwrap();
+        let theme = dir.path().join("theme");
+        let system = dir.path().join("system");
+        std::fs::create_dir_all(theme.join("icons")).unwrap();
+        std::fs::create_dir_all(&system).unwrap();
+        let rect = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\"><rect width=\"24\" height=\"24\" fill=\"currentColor\"/></svg>";
+        std::fs::write(system.join("wrench.svg"), rect).unwrap();
+        let mut default = IconLoader::new(None, &system);
+        let system_pixels = default.render(Glyph::Tools, 24).unwrap();
+        std::fs::write(
+            theme.join("icons/wrench.svg"),
+            rect.replace("rect", "circle"),
+        )
+        .unwrap();
+        let mut loader = IconLoader::new(Some(&theme), &system);
+        let theme_pixels = loader.render(Glyph::Tools, 24).unwrap();
+        assert_ne!(
+            theme_pixels.without_lock().unwrap(),
+            system_pixels.without_lock().unwrap()
+        );
+        std::fs::write(theme.join("icons/wrench.svg"), "not an SVG").unwrap();
+        let mut loader = IconLoader::new(Some(&theme), &system);
+        let fallback = loader.render(Glyph::Tools, 24).unwrap();
+        assert_eq!(
+            fallback.without_lock().unwrap(),
+            system_pixels.without_lock().unwrap()
+        );
+        assert_eq!(loader.failed_files.len(), 1);
+        std::fs::write(
+            theme.join("icons/wrench.svg"),
+            rect.replace("rect", "circle"),
+        )
+        .unwrap();
+        let cached_fallback = loader.render(Glyph::Tools, 16).unwrap();
+        let system_small = default.render(Glyph::Tools, 16).unwrap();
+        assert_eq!(
+            cached_fallback.without_lock().unwrap(),
+            system_small.without_lock().unwrap()
+        );
+        assert_eq!(loader.warned.len(), 1);
+        std::fs::remove_file(system.join("wrench.svg")).unwrap();
+        assert!(
+            loader.render(Glyph::Tools, 48).is_some(),
+            "embedded copy survives missing install"
+        );
+    }
 }

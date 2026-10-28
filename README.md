@@ -106,11 +106,20 @@ no desenho. Sem display, os mesmos fluxos podem rodar com
 ## Tema Grafite
 
 Instale a pasta `themes/default/` inteira em
-`/usr/share/archr-launcher/themes/default/`, incluindo `fonts/` e as duas licenças
-OFL. Os TTF estáticos são dos releases oficiais Inter 4.1 e JetBrains Mono
+`/usr/share/archr-launcher/themes/default/`, incluindo `fonts/`, `icons/`,
+as duas licenças OFL das fontes e `icons/LICENSE` (Lucide, licença ISC).
+Os TTF estáticos são dos releases oficiais Inter 4.1 e JetBrains Mono
 2.304; não entram no binário. Sem os arquivos, permanece o fallback para
 Liberation/DejaVu. Para experimentar o tema no PC com `ARCHR_LAUNCHER_ROOT`,
 copie essa pasta para `ROOT/usr/share/archr-launcher/themes/default/`.
+
+Os SVGs oficiais Lucide 0.468.0 em `icons/` permanecem inalterados. Um tema
+personalizado pode substituí-los em `<tema>/icons/<nome>.svg`; em seguida,
+o launcher tenta `ROOT/usr/share/archr-launcher/themes/default/icons/` e,
+se ausente ou inválido, usa as cópias incorporadas no binário. Diferentemente
+das imagens de console, não existe pasta de ícones substitutos em `/storage`
+fora do tema ativo. Ícones são rasterizados no tamanho de exibição e tingidos
+pela cor do tema; os do primeiro quadro de sistemas são preparados no worker.
 
 Imagens de console da tela de sistemas: `/storage/.config/archr-launcher/systems/<nome>.{png,jpg,webp}`
 tem precedência sobre `<tema>/systems/<nome>.{png,jpg,webp}`; sem imagem, o

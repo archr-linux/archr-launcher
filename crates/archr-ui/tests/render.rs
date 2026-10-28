@@ -1,13 +1,16 @@
 mod common;
 use archr_index::{cache::SystemEntry, Game};
 use archr_ui::{
-    render::Ui,
+    render::{prepare_first_frame, Ui},
+    startup::StartupTrace,
     state::{App, Screen},
     Theme,
 };
 use common::FakeData as Data;
+static SDL_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 #[test]
 fn grafite_layout_motion_glyphs_and_untrusted_text_render_offscreen() {
+    let _guard = SDL_LOCK.lock().unwrap();
     std::env::set_var("SDL_VIDEODRIVER", "offscreen");
     let ttf;
     let creator;
@@ -221,4 +224,80 @@ fn assert_button_ink_is_centered(rgba: &[u8]) {
             "vertical glyph center {ink_y} vs 455.5"
         );
     }
+}
+
+#[test]
+fn first_hub_present_has_icons() {
+    let _guard = SDL_LOCK.lock().unwrap();
+    std::env::set_var("SDL_VIDEODRIVER", "offscreen");
+    let ttf;
+    let creator;
+    let mut ui = Ui::new(640, 480, true).unwrap();
+    ttf = sdl2::ttf::init().unwrap();
+    creator = ui.canvas.texture_creator();
+    let theme = Theme::builtin();
+    ui.configure(&ttf, &creator, &theme, None).unwrap();
+    let data = Data::default();
+    let mut app = App::new(10);
+    app.screen = Screen::StartHub {
+        row: 0,
+        tile: 0,
+        shortcut: 0,
+    };
+    let shots = tempfile::tempdir().unwrap();
+    let shot = std::env::var_os("ARCHR_ICON_SCREENSHOTS")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| shots.path().to_path_buf())
+        .join("hub-first-present.png");
+    ui.screenshot = Some(shot.clone());
+    ui.draw(&app, &data, &theme, None).unwrap();
+    let first = image::open(&shot).unwrap().to_rgba8().into_raw();
+    let icon = (130..178).flat_map(|y| (126..174).map(move |x| (y * 640 + x) * 4));
+    assert!(
+        icon.into_iter()
+            .any(|at| first[at..at + 3] == [255, 255, 255]),
+        "first hub present must show the Recent icon"
+    );
+}
+
+#[test]
+fn first_systems_present_has_prepared_collection_icons() {
+    let _guard = SDL_LOCK.lock().unwrap();
+    std::env::set_var("SDL_VIDEODRIVER", "offscreen");
+    let ttf;
+    let creator;
+    let mut ui = Ui::new(640, 480, true).unwrap();
+    ttf = sdl2::ttf::init().unwrap();
+    creator = ui.canvas.texture_creator();
+    let theme = Theme::builtin();
+    let mut data = Data::default();
+    data.counts.insert("@favorites".into(), 1);
+    let catalog = archr_ui::i18n::I18n::default();
+    let icons = tempfile::tempdir().unwrap();
+    let prepared = prepare_first_frame(
+        &ttf,
+        &theme,
+        (None, None, icons.path()),
+        &catalog,
+        &data,
+        (640, 480),
+        StartupTrace::default(),
+    )
+    .unwrap();
+    ui.configure_prepared(&creator, prepared, None).unwrap();
+    ui.catalog = catalog;
+    let shots = tempfile::tempdir().unwrap();
+    let shot = std::env::var_os("ARCHR_ICON_SCREENSHOTS")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| shots.path().to_path_buf())
+        .join("systems-first-present.png");
+    ui.screenshot = Some(shot.clone());
+    ui.draw(&App::new(10), &data, &theme, None).unwrap();
+    let first = image::open(&shot).unwrap().to_rgba8().into_raw();
+    let icon = (50..105).flat_map(|y| (25..60).map(move |x| (y * 640 + x) * 4));
+    assert!(
+        icon.into_iter()
+            .any(|at| first[at..at + 3] == [255, 255, 255]),
+        "first systems present must show the prepared collection icon"
+    );
 }

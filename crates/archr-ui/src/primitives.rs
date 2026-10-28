@@ -1,16 +1,12 @@
 //! Cached SDL 2.0.18 meshes and a lazily loaded/generated 9-slice shadow.
-use crate::{startup::StartupTrace, startup_phase, text::color, theme::Rgba};
+use crate::{text::color, theme::Rgba};
 use sdl2::{
     pixels::{Color, PixelFormatEnum},
     rect::{FPoint, Rect},
     render::{BlendMode, Canvas, ScaleMode, Texture, TextureCreator, Vertex},
     video::{Window, WindowContext},
 };
-use std::{
-    collections::VecDeque,
-    f32::consts::{FRAC_PI_2, PI, TAU},
-    sync::OnceLock,
-};
+use std::{collections::VecDeque, f32::consts::FRAC_PI_2, sync::OnceLock};
 
 type Point = (f32, f32);
 const SEGMENTS: usize = 8;
@@ -124,28 +120,6 @@ impl Mesh {
             ]);
         }
     }
-    fn line(&mut self, from: Point, to: Point, width: f32, c: Rgba) {
-        let (dx, dy) = (to.0 - from.0, to.1 - from.1);
-        let length = dx.hypot(dy).max(0.01);
-        let (nx, ny) = (-dy / length * width / 2., dx / length * width / 2.);
-        let base = self.vertices.len() as u16;
-        self.vertices.extend(
-            [
-                (from.0 + nx, from.1 + ny),
-                (to.0 + nx, to.1 + ny),
-                (to.0 - nx, to.1 - ny),
-                (from.0 - nx, from.1 - ny),
-            ]
-            .map(|p| vertex(p, color(c), (0., 0.))),
-        );
-        self.indices
-            .extend([base, base + 1, base + 2, base, base + 2, base + 3]);
-    }
-    fn stroke(&mut self, points: &[Point], width: f32, c: Rgba) {
-        for (&from, &to) in points.iter().zip(points.iter().cycle().skip(1)) {
-            self.line(from, to, width, c);
-        }
-    }
     fn rounded(&mut self, rect: Rect, radius: f32, fill: Rgba, border: Option<Rgba>) {
         let points = outline(rect, radius);
         let outer = outline(border_rect(rect, false), radius + 1.);
@@ -170,6 +144,23 @@ impl Mesh {
                 false,
             );
         }
+    }
+    fn line(&mut self, from: Point, to: Point, width: f32, c: Rgba) {
+        let (dx, dy) = (to.0 - from.0, to.1 - from.1);
+        let length = dx.hypot(dy).max(0.01);
+        let (nx, ny) = (-dy / length * width / 2., dx / length * width / 2.);
+        let base = self.vertices.len() as u16;
+        self.vertices.extend(
+            [
+                (from.0 + nx, from.1 + ny),
+                (to.0 + nx, to.1 + ny),
+                (to.0 - nx, to.1 - ny),
+                (from.0 - nx, from.1 - ny),
+            ]
+            .map(|p| vertex(p, color(c), (0., 0.))),
+        );
+        self.indices
+            .extend([base, base + 1, base + 2, base, base + 2, base + 3]);
     }
     /// Dashed stroke centred 1 unit inside the rounded outline; a unit is 1/22
     /// of the height, so the 44px row gets 2px strokes with 5px dashes.
@@ -207,54 +198,6 @@ impl Mesh {
             }
         }
     }
-    fn star(&mut self, rect: Rect, c: Rgba, filled: bool) {
-        static STAR: OnceLock<[Point; 10]> = OnceLock::new();
-        let unit = STAR.get_or_init(|| {
-            std::array::from_fn(|i| {
-                let a = -FRAC_PI_2 + i as f32 * PI / 5.;
-                let r = if i % 2 == 0 { 1. } else { 0.46 };
-                (r * a.cos(), r * a.sin())
-            })
-        });
-        let center = center(rect);
-        let r = rect.width().min(rect.height()) as f32 / 2.;
-        let points = unit.map(|p| (center.0 + r * p.0, center.1 + r * p.1));
-        if filled {
-            self.fan(&points, color(c), rect, false);
-        } else {
-            self.stroke(&points, 1.4, c);
-        }
-    }
-    fn clock(&mut self, rect: Rect, c: Rgba) {
-        static CIRCLE: OnceLock<[Point; 24]> = OnceLock::new();
-        let unit = CIRCLE.get_or_init(|| {
-            std::array::from_fn(|i| {
-                let a = i as f32 * TAU / 24.;
-                (a.cos(), a.sin())
-            })
-        });
-        let (cx, cy) = center(rect);
-        let r = rect.width() as f32 / 2. - 1.;
-        let points = unit.map(|p| (cx + r * p.0, cy + r * p.1));
-        self.stroke(&points, 1.3, c);
-        self.line((cx, cy - r * 0.55), (cx, cy), 1.3, c);
-        self.line((cx, cy), (cx + r * 0.4, cy + r * 0.25), 1.3, c);
-    }
-    fn lightning(&mut self, rect: Rect, c: Rgba) {
-        let (x, y, w, h) = bounds(rect);
-        self.vertices.extend(
-            [
-                (x + w * 0.85, y),
-                (x + w * 0.05, y + h * 0.6),
-                (x + w * 0.42, y + h * 0.6),
-                (x + w * 0.15, y + h),
-                (x + w * 0.95, y + h * 0.4),
-                (x + w * 0.58, y + h * 0.4),
-            ]
-            .map(|p| vertex(p, color(c), (0., 0.))),
-        );
-        self.indices.extend([0, 1, 2, 0, 2, 5, 2, 3, 4, 2, 4, 5]);
-    }
     fn draw(
         &self,
         canvas: &mut Canvas<Window>,
@@ -263,30 +206,21 @@ impl Mesh {
         canvas.render_geometry(&self.vertices, texture, self.indices.as_slice())
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Icon {
-    Star(bool),
-    Clock,
-    Lightning,
-}
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Key {
     Rounded(Rect, u32, Rgba, Option<Rgba>),
     Cover(Rect, u32),
     Dashed(Rect, u32, Rgba),
-    Icon(Rect, Rgba, Icon),
 }
-/// Per-renderer bounded LRU: static badges, battery pieces and icons are hits;
-/// evicted meshes donate their Vec allocations to the next moving-pill mesh.
+/// Per-renderer bounded LRU for panels and cover meshes. Evicted meshes
+/// donate their Vec allocations to the next moving-pill mesh.
 pub(crate) struct Geometry {
-    pub(crate) startup: StartupTrace,
     meshes: VecDeque<(Key, Mesh)>,
 }
 impl Geometry {
     pub fn new() -> Self {
         corner_arcs();
         Self {
-            startup: StartupTrace::default(),
             meshes: VecDeque::with_capacity(CACHE_SIZE),
         }
     }
@@ -309,14 +243,6 @@ impl Geometry {
                     mesh.fan(&outline(rect, f32::from_bits(r)), Color::WHITE, rect, true)
                 }
                 Key::Dashed(rect, r, c) => mesh.dashed(rect, f32::from_bits(r), c),
-                Key::Icon(rect, c, icon) => {
-                    match icon {
-                        Icon::Star(filled) => mesh.star(rect, c, filled),
-                        Icon::Clock => mesh.clock(rect, c),
-                        Icon::Lightning => mesh.lightning(rect, c),
-                    }
-                    startup_phase!(self.startup, "icon {icon:?}");
-                }
             }
             self.meshes.push_back((key, mesh));
         }
@@ -356,15 +282,6 @@ impl Geometry {
             vertex.color.a = alpha;
         }
         mesh.draw(canvas, Some(texture))
-    }
-    pub fn icon(
-        &mut self,
-        canvas: &mut Canvas<Window>,
-        icon: Icon,
-        rect: Rect,
-        c: Rgba,
-    ) -> Result<(), String> {
-        self.mesh(Key::Icon(rect, c, icon)).draw(canvas, None)
     }
 }
 pub(crate) struct Shadow<'a>(Texture<'a>);
@@ -450,13 +367,5 @@ mod tests {
         );
         assert_eq!(geometry.meshes.len(), CACHE_SIZE);
         assert!(std::ptr::eq(corner_arcs(), corner_arcs()));
-        for icon in [
-            Key::Icon(Rect::new(0, 0, 16, 16), color, Icon::Star(true)),
-            Key::Icon(Rect::new(0, 0, 16, 16), color, Icon::Clock),
-            Key::Icon(Rect::new(0, 0, 8, 14), color, Icon::Lightning),
-        ] {
-            let first = geometry.mesh(icon).vertices.as_ptr();
-            assert_eq!(geometry.mesh(icon).vertices.as_ptr(), first);
-        }
     }
 }
