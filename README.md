@@ -287,6 +287,10 @@ A espera por sway reproduz a do `start_es.sh`: socket Wayland + IPC com saída
 ativa, polling de 100 ms, teto de 10 s. Sem compositor pronto após o teto,
 tenta iniciar a UI e deixa o backoff lidar com uma falha.
 
+A janela usa o `app_id` Wayland fixo `archr-launcher` (o launcher define
+`SDL_VIDEO_WAYLAND_WMCLASS` para si antes de iniciar o vídeo); as regras do sway
+e do OSD devem usar esse nome.
+
 O hotkey de saída (`input_sense`) lê `/tmp/.process-kill-data` e executa
 `killall` com seu conteúdo. No menu, a sessão grava `archr-launcher`, nunca o
 nome do supervisor. Antes do jogo, remove o alvo do menu; `runemu.sh` e seus

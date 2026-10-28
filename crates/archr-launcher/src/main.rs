@@ -26,8 +26,14 @@ use std::{
     time::{Duration, Instant},
 };
 
+/// Wayland app_id matched by the compositor rules (sway focus/seat, OSD).
+const APP_ID: &str = "archr-launcher";
+
 fn main() {
     let began = Instant::now();
+    // SDL reads this once at video init; set it while still single-threaded.
+    // Only the launcher's own helpers inherit it; games start from the session.
+    std::env::set_var("SDL_VIDEO_WAYLAND_WMCLASS", APP_ID);
     init_logging();
     if let Err(error) = run(
         began,
