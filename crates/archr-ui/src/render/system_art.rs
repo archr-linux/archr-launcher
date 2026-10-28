@@ -632,6 +632,7 @@ mod tests {
 
     #[test]
     fn wrap_preserves_long_system_names_manufacturers_and_counts() {
+        let _sdl = crate::SDL_TEST_LOCK.lock().unwrap();
         let ttf = sdl2::ttf::init().unwrap();
         let fonts = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../themes/default/fonts");
         for (text, face, size) in [

@@ -4,6 +4,7 @@
 // Keep phase-1 Latin/Cyrillic startup free of CJK font I/O and memory costs.
 use crate::{
     badges::{self, BadgeKey, SUPERSAMPLE},
+    icons::{self, Glyph},
     startup::StartupTrace,
     startup_phase,
     theme::Rgba,
@@ -240,6 +241,7 @@ pub(crate) struct TextCache<'font, 'texture> {
     creator: &'texture TextureCreator<WindowContext>,
     entries: VecDeque<Entry<'texture>>,
     badges: VecDeque<(BadgeKey, Texture<'texture>)>,
+    icons: HashMap<(Glyph, u32), Texture<'texture>>,
 }
 impl<'font, 'texture> TextCache<'font, 'texture> {
     pub fn from_prepared(
@@ -253,6 +255,7 @@ impl<'font, 'texture> TextCache<'font, 'texture> {
             creator,
             entries: VecDeque::new(),
             badges: VecDeque::with_capacity(16),
+            icons: HashMap::new(),
         };
         for (source, width, style, surface) in prepared.entries {
             let texture = creator
@@ -329,6 +332,35 @@ impl<'font, 'texture> TextCache<'font, 'texture> {
             None,
             panel,
         )
+    }
+    /// Icons are cached white per glyph and size, then tinted to `ink`.
+    pub fn draw_icon(
+        &mut self,
+        canvas: &mut Canvas<Window>,
+        glyph: Glyph,
+        panel: Rect,
+        ink: Rgba,
+    ) -> Result<(), String> {
+        let key = (glyph, panel.width());
+        if !self.icons.contains_key(&key) {
+            let surface = icons::render(glyph, panel.width())?;
+            startup_phase!(
+                self.startup,
+                "icon rasterization [glyph={glyph:?}; size={}px]",
+                panel.width()
+            );
+            let mut texture = self
+                .creator
+                .create_texture_from_surface(surface)
+                .map_err(|e| e.to_string())?;
+            texture.set_blend_mode(BlendMode::Blend);
+            texture.set_scale_mode(ScaleMode::Linear);
+            self.icons.insert(key, texture);
+        }
+        let texture = self.icons.get_mut(&key).expect("cached icon");
+        texture.set_color_mod(ink.r, ink.g, ink.b);
+        texture.set_alpha_mod(ink.a);
+        canvas.copy(texture, None, panel)
     }
     pub fn measure(&mut self, text: &str, face: Face, size: u16) -> Result<u32, String> {
         self.font(face, size)?
@@ -465,6 +497,7 @@ mod tests {
 
     #[test]
     fn ellipsis_is_font_measured_and_unicode_safe() {
+        let _sdl = crate::SDL_TEST_LOCK.lock().unwrap();
         let ttf = sdl2::ttf::init().unwrap();
         let font = load_font(&ttf, "Inter-Regular", 17);
         let fitted = ellipsis(
@@ -478,6 +511,54 @@ mod tests {
         assert_eq!(ellipsis(&font, "Kirby", 180).unwrap(), "Kirby");
         assert_eq!(ellipsis(&font, "Kirby", 1).unwrap(), "");
     }
+    #[test]
+    fn icons_start_empty_and_cache_by_glyph_and_size_not_tint() {
+        let _sdl = crate::SDL_TEST_LOCK.lock().unwrap();
+        std::env::set_var("SDL_VIDEODRIVER", "dummy");
+        let sdl = sdl2::init().unwrap();
+        let video = sdl.video().unwrap();
+        let window = video.window("icons", 96, 96).build().unwrap();
+        let mut canvas = window.into_canvas().software().build().unwrap();
+        let creator = canvas.texture_creator();
+        let ttf = sdl2::ttf::init().unwrap();
+        let prepared = PreparedText::new(
+            &ttf,
+            std::array::from_fn(|_| vec![]),
+            StartupTrace::default(),
+        );
+        let mut cache = TextCache::from_prepared(&creator, prepared).unwrap();
+        assert!(cache.icons.is_empty());
+        let white = Rgba {
+            r: 255,
+            g: 255,
+            b: 255,
+            a: 255,
+        };
+        for (glyph, size) in [(Glyph::Wifi, 16), (Glyph::Wifi, 24), (Glyph::Games, 48)] {
+            let panel = Rect::new(0, 0, size, size);
+            cache.draw_icon(&mut canvas, glyph, panel, white).unwrap();
+            let original = cache.icons[&(glyph, size)].raw();
+            cache
+                .draw_icon(
+                    &mut canvas,
+                    glyph,
+                    panel,
+                    Rgba {
+                        r: 20,
+                        a: 128,
+                        ..white
+                    },
+                )
+                .unwrap();
+            let texture = &cache.icons[&(glyph, size)];
+            assert_eq!(original, texture.raw());
+            assert_eq!(texture.query().width, size);
+            assert_eq!(texture.color_mod(), (20, 255, 255));
+            assert_eq!(texture.alpha_mod(), 128);
+        }
+        assert_eq!(cache.icons.len(), 3);
+    }
+
     #[test]
     fn prepared_text_and_badge_hits_need_no_font_loading_or_layout() {
         let _sdl = crate::SDL_TEST_LOCK.lock().unwrap();

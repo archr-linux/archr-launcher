@@ -272,11 +272,14 @@ esac
         // The real settings helper selects a detached, nonblocking command on
         // each request. The child observes the flush and presentation first.
         let functions = root.path().join("functions");
-        let mut source =
-            fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join(
-                "../../../distribution/projects/ArchR/packages/archr/profile.d/001-functions",
-            ))
-            .unwrap();
+        let source_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .map(|dir| {
+                dir.join("distribution/projects/ArchR/packages/archr/profile.d/001-functions")
+            })
+            .find(|path| path.is_file())
+            .expect("distribution fixture must be reachable from the checkout");
+        let mut source = fs::read(source_path).unwrap();
         source.extend_from_slice(format!("\nJ_CONF=\"{}\"\n", paths.config.display()).as_bytes());
         fs::write(&functions, source).unwrap();
         let fake_suspend = root.path().join("fake-suspend");

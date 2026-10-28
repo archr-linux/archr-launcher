@@ -52,3 +52,11 @@
 "time.days" = { one = "há {count} dia", other = "há {count} dias" }
 "time.months" = { one = "há {count} mês", other = "há {count} meses" }
 "time.years" = { one = "há {count} ano", other = "há {count} anos" }
+"start.title" = "Menu Start"
+"start.games" = "Jogos"
+"start.tools" = "Ferramentas"
+"start.settings" = "Configurações"
+"start.update" = "Atualização"
+"start.wifi_on" = "Wi-Fi · ligado"
+"start.wifi_off" = "Wi-Fi · desligado"
+"start.soon_label" = "{name} · Em breve"

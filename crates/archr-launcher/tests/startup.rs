@@ -53,6 +53,7 @@ fn check_startup(definitions: &str, themed: bool) {
         let before = trace.split("startup first present:").next().unwrap();
         for absent in [
             "SDL_image init",
+            "icon rasterization",
             "badge B",
             "badge X",
             "PNG hit",

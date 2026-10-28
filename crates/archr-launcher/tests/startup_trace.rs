@@ -107,3 +107,29 @@ fn startup_trace_reports_ordered_phases_and_first_events_once() {
         .iter()
         .any(|(phase, _)| phase.starts_with("font file open [") && phase.contains("ok=true")));
 }
+
+#[test]
+fn enabled_wifi_and_hub_navigation_do_not_rasterize_icons_before_present() {
+    let root = tempfile::tempdir().unwrap();
+    let radio = root.path().join("sys/class/rfkill/rfkill0");
+    std::fs::create_dir_all(&radio).unwrap();
+    std::fs::write(radio.join("type"), "wlan\n").unwrap();
+    std::fs::write(radio.join("soft"), "0\n").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_archr-launcher"))
+        .env("ARCHR_LAUNCHER_ROOT", root.path())
+        .env("ARCHR_LAUNCHER_TRACE", "1")
+        .env("SDL_VIDEODRIVER", "offscreen")
+        .args([
+            "--windowed",
+            "--script",
+            "WAIT,START,WAIT,B,START,WAIT,B,QUIT",
+        ])
+        .output()
+        .unwrap();
+    let trace = String::from_utf8(output.stderr).unwrap();
+    assert!(output.status.success(), "{trace}");
+    let (before, _) = trace
+        .split_once("startup first present:")
+        .expect("first present");
+    assert!(!before.contains("icon rasterization"), "{before}");
+}

@@ -52,3 +52,11 @@
 "time.days" = { one = "{count} day ago", other = "{count} days ago" }
 "time.months" = { one = "{count} mo ago", other = "{count} mo ago" }
 "time.years" = { one = "{count} yr ago", other = "{count} yr ago" }
+"start.title" = "Start Menu"
+"start.games" = "Games"
+"start.tools" = "Tools"
+"start.settings" = "Settings"
+"start.update" = "Updates"
+"start.wifi_on" = "Wi-Fi · on"
+"start.wifi_off" = "Wi-Fi · off"
+"start.soon_label" = "{name} · Coming soon"

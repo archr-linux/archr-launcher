@@ -74,6 +74,7 @@ mod tests {
     use super::*;
     #[test]
     fn supersampled_badge_ink_centers_are_within_quarter_final_pixel() {
+        let _sdl = crate::SDL_TEST_LOCK.lock().unwrap();
         let ttf = sdl2::ttf::init().unwrap();
         let font = ttf
             .load_font(
