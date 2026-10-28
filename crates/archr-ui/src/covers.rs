@@ -121,7 +121,7 @@ type Loaded = (PathBuf, io::Result<Thumbnail>);
 
 pub struct CoverCache<'a> {
     creator: &'a TextureCreator<WindowContext>,
-    requests: SyncSender<Vec<PathBuf>>,
+    requests: SyncSender<Vec<Vec<PathBuf>>>,
     ready: Receiver<Loaded>,
     pending: HashSet<PathBuf>,
     textures: VecDeque<(PathBuf, Option<Texture<'a>>)>,
@@ -134,14 +134,21 @@ impl<'a> CoverCache<'a> {
         width: u32,
         height: u32,
     ) -> Self {
-        let (requests, jobs) = mpsc::sync_channel::<Vec<PathBuf>>(1);
+        let (requests, jobs) = mpsc::sync_channel::<Vec<Vec<PathBuf>>>(1);
         let (done, ready) = mpsc::sync_channel(16);
         std::thread::spawn(move || {
             cleanup_thumbnails(&dir);
             while let Ok(paths) = jobs.recv() {
-                for path in paths {
-                    let result = load_thumbnail(&dir, &path, width, height);
-                    if done.send((path, result)).is_err() {
+                for candidates in paths {
+                    let Some(key) = candidates.first() else {
+                        continue;
+                    };
+                    let result = candidates
+                        .iter()
+                        .find(|path| path.is_file())
+                        .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))
+                        .and_then(|path| load_thumbnail(&dir, path, width, height));
+                    if done.send((key.clone(), result)).is_err() {
                         return;
                     }
                 }
@@ -158,17 +165,31 @@ impl<'a> CoverCache<'a> {
 
     /// Request only the visible selection neighbourhood, never an entire system.
     pub fn request(&mut self, paths: &[PathBuf]) {
+        self.queue(paths.iter().map(std::slice::from_ref));
+    }
+
+    /// Resolve each ordered candidate group on the worker; the first path is its cache key.
+    pub fn request_candidates(&mut self, paths: &[Vec<PathBuf>]) {
+        self.queue(paths.iter().map(Vec::as_slice));
+    }
+
+    fn queue<'p>(&mut self, paths: impl Iterator<Item = &'p [PathBuf]>) {
         let missing: Vec<_> = paths
-            .iter()
-            .filter(|path| {
-                !self.pending.contains(*path)
-                    && !self.textures.iter().any(|(cached, _)| cached == *path)
+            .filter(|paths| {
+                paths.first().is_some_and(|key| {
+                    !self.pending.contains(key)
+                        && !self.textures.iter().any(|(cached, _)| cached == key)
+                })
             })
             .take(5)
-            .cloned()
+            .map(<[PathBuf]>::to_vec)
             .collect();
         if !missing.is_empty() && self.requests.try_send(missing.clone()).is_ok() {
-            self.pending.extend(missing);
+            self.pending.extend(
+                missing
+                    .into_iter()
+                    .filter_map(|paths| paths.into_iter().next()),
+            );
         }
     }
 

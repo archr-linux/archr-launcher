@@ -380,6 +380,7 @@ mod tests {
     }
     #[test]
     fn prepared_text_and_badge_hits_need_no_font_loading_or_layout() {
+        let _sdl = crate::SDL_TEST_LOCK.lock().unwrap();
         std::env::set_var("SDL_VIDEODRIVER", "dummy");
         let sdl = sdl2::init().unwrap();
         let video = sdl.video().unwrap();

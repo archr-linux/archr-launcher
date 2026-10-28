@@ -8,10 +8,7 @@ use crate::{
     theme::{Rgba, Theme},
 };
 use sdl2::{rect::Rect, render::TextureCreator, video::WindowContext};
-use std::{
-    collections::HashMap,
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
 pub(super) const PANEL_WIDTH: f32 = 250.;
 pub(super) const PANEL_GAP: f32 = 14.;
@@ -125,8 +122,7 @@ fn wrap(
 pub(super) struct SystemArt<'a> {
     covers: CoverCache<'a>,
     dirs: Vec<PathBuf>,
-    found: HashMap<String, Option<PathBuf>>,
-    wanted: Vec<PathBuf>,
+    wanted: Vec<Vec<PathBuf>>,
 }
 
 impl<'a> SystemArt<'a> {
@@ -139,31 +135,23 @@ impl<'a> SystemArt<'a> {
         Self {
             covers: CoverCache::new(creator, cache, width, height),
             dirs,
-            found: HashMap::new(),
             wanted: Vec::new(),
         }
     }
 
-    fn path(&mut self, name: &str) -> Option<PathBuf> {
-        let dirs: Vec<_> = self.dirs.iter().map(PathBuf::as_path).collect();
-        self.found
-            .entry(name.to_owned())
-            .or_insert_with(|| candidates(&dirs, name).into_iter().find(|p| p.is_file()))
-            .clone()
-    }
-
     /// Selected row first, then its neighbours; collections have no image.
     fn want(&mut self, names: &[&str]) {
+        let dirs: Vec<_> = self.dirs.iter().map(PathBuf::as_path).collect();
         self.wanted = names
             .iter()
             .filter(|name| !name.starts_with('@'))
-            .filter_map(|name| self.path(name))
+            .map(|name| candidates(&dirs, name))
             .collect();
     }
 
     /// Retries a request the loader was too busy to take, then uploads results.
     pub(super) fn tick(&mut self) -> bool {
-        self.covers.request(&self.wanted);
+        self.covers.request_candidates(&self.wanted);
         self.covers.poll()
     }
 }
@@ -219,15 +207,17 @@ impl Ui<'_, '_> {
         self.panel(rect, radius, theme.surface, theme.border)?;
         self.canvas.set_clip_rect(rect);
         let collection = name.starts_with('@');
-        let near: Vec<&str> = rows[cursor.saturating_sub(1)..rows.len().min(cursor + 2)]
-            .iter()
+        let near: Vec<&str> = [Some(cursor), cursor.checked_sub(1), cursor.checked_add(1)]
+            .into_iter()
+            .flatten()
+            .filter_map(|i| rows.get(i))
             .map(String::as_str)
             .collect();
         let mut path = None;
         if let Some(art) = &mut self.art {
             art.want(&near);
             if !collection {
-                path = art.path(name);
+                path = art.wanted.first().and_then(|paths| paths.first()).cloned();
             }
         }
         if !self.console_image(rect, path.as_ref()) {
@@ -451,6 +441,61 @@ mod tests {
         assert_eq!(found[6], Path::new("/t/sfc.png"));
         assert_eq!(found.last().unwrap(), Path::new("/t/snes.webp"));
         assert_eq!(candidates(&[user], "nes").len(), 3);
+    }
+
+    #[test]
+    fn artwork_resolves_candidates_only_after_request_and_caches_misses() {
+        let _sdl = crate::SDL_TEST_LOCK.lock().unwrap();
+        std::env::set_var("SDL_VIDEODRIVER", "offscreen");
+        let ui = Ui::new(640, 480, true).unwrap();
+        let creator = ui.canvas.texture_creator();
+        let root = tempfile::tempdir().unwrap();
+        let user = root.path().join("user");
+        let theme = root.path().join("theme");
+        std::fs::create_dir_all(&user).unwrap();
+        std::fs::create_dir_all(&theme).unwrap();
+        let mut art = SystemArt::new(
+            &creator,
+            root.path().join("cache"),
+            vec![user.clone(), theme.clone()],
+            (2, 2),
+        );
+        art.want(&["sfc", "@favorites"]);
+        // Files appear after want(): only the worker may resolve them.
+        image::RgbaImage::from_pixel(2, 2, image::Rgba([255, 0, 0, 255]))
+            .save(user.join("snes.png"))
+            .unwrap();
+        image::RgbaImage::from_pixel(1, 1, image::Rgba([0, 255, 0, 255]))
+            .save(theme.join("sfc.png"))
+            .unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        loop {
+            art.tick();
+            if art.covers.get(&user.join("sfc.png")).is_some() {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "artwork never loaded");
+            std::thread::yield_now();
+        }
+        assert_eq!(
+            art.covers.get(&user.join("sfc.png")).unwrap().query().width,
+            2,
+            "user alias takes precedence over theme's own image"
+        );
+        // A miss is retained, not probed again on every frame.
+        art.want(&["missing"]);
+        while !art.tick() {
+            assert!(std::time::Instant::now() < deadline, "miss never returned");
+            std::thread::yield_now();
+        }
+        image::RgbaImage::new(1, 1)
+            .save(user.join("missing.png"))
+            .unwrap();
+        for _ in 0..100 {
+            art.tick();
+            assert!(art.covers.get(&user.join("missing.png")).is_none());
+            std::thread::yield_now();
+        }
     }
 
     #[test]
