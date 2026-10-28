@@ -2,9 +2,11 @@
 use crate::{icons::Glyph, keyboard::Keyboard, state::Button, HintButton};
 use std::collections::BTreeMap;
 use std::time::Instant;
+pub mod bluetooth;
 pub(crate) mod information;
 pub mod network;
 mod pages;
+use bluetooth::{Action, Device};
 pub use information::{InfoCard, InfoDetail, InfoMeter, Information};
 use network::Network;
 
@@ -17,6 +19,7 @@ pub enum Page {
     Info,
     InfoDetail(usize),
     Wifi,
+    Bluetooth,
     Services,
     Games,
     Netplay,
@@ -33,6 +36,7 @@ impl Page {
             Self::Region => "settings.region",
             Self::Info | Self::InfoDetail(_) => "settings.info",
             Self::Wifi => "settings.wifi",
+            Self::Bluetooth => "settings.bluetooth",
             Self::Services => "settings.services",
             Self::Games => "settings.games",
             Self::Netplay => "settings.netplay",
@@ -44,7 +48,7 @@ impl Page {
     /// Breadcrumb parents between "Settings" and the page itself.
     pub fn parent(self) -> Option<&'static str> {
         match self {
-            Self::Wifi | Self::Services => Some("settings.network"),
+            Self::Wifi | Self::Bluetooth | Self::Services => Some("settings.network"),
             Self::Netplay | Self::Scraper => Some("settings.games"),
             _ => None,
         }
@@ -55,6 +59,7 @@ impl Page {
             Self::System => SYSTEM,
             Self::Region => REGION,
             Self::Wifi => pages::WIFI,
+            Self::Bluetooth => pages::BLUETOOTH,
             Self::Services => pages::SERVICES,
             Self::Games => pages::GAMES,
             Self::Netplay => pages::NETPLAY,
@@ -81,6 +86,7 @@ pub enum Id {
     KeyboardLayout,
     KeyboardVariant,
     WifiSwitch,
+    BtSwitch,
     Hidden,
     Ssh,
     Samba,
@@ -127,6 +133,8 @@ impl Id {
             Self::KeyboardLayout => ("system.kblayout", "us"),
             Self::KeyboardVariant => ("system.kbvariant", ""),
             Self::WifiSwitch => ("wifi.enabled", "0"),
+            // archr-bluetooth owns this key.
+            Self::BtSwitch => ("controllers.bluetooth.enabled", "0"),
             Self::Ssh => ("ssh.enabled", "0"),
             Self::Samba => ("samba.enabled", "0"),
             Self::Http => ("simplehttp.enabled", "0"),
@@ -170,6 +178,7 @@ impl Id {
             Self::Governor => &["ondemand", "performance", "schedutil", "powersave"],
             Self::Turbo
             | Self::WifiSwitch
+            | Self::BtSwitch
             | Self::Ssh
             | Self::Samba
             | Self::Http
@@ -333,6 +342,7 @@ pub enum Effect {
     Scan,
     Connect(String, String),
     Forget(String),
+    Bluetooth(Action, String),
     Login(String, String),
     Scrape,
     CancelScrape,
@@ -348,6 +358,7 @@ impl std::fmt::Debug for Effect {
             Self::Scan => write!(f, "Scan"),
             Self::Connect(ssid, _) => write!(f, "Connect({ssid:?}, <hidden>)"),
             Self::Forget(ssid) => write!(f, "Forget({ssid:?})"),
+            Self::Bluetooth(action, addr) => write!(f, "Bluetooth({action:?}, {addr:?})"),
             Self::Login(user, _) => write!(f, "Login({user:?}, <hidden>)"),
             Self::Scrape => write!(f, "Scrape"),
             Self::CancelScrape => write!(f, "CancelScrape"),
@@ -392,6 +403,9 @@ pub struct Settings {
     pub reboot_prompt: bool,
     pub info: Information,
     pub networks: Vec<Network>,
+    pub bt: Vec<Device>,
+    pub bt_scanned: Option<Instant>,
+    pub bt_scanning: bool,
     pub scanned: Option<Instant>,
     /// A radio scan is running; the list shown meanwhile is the previous one.
     pub scanning: bool,
@@ -427,6 +441,9 @@ impl Default for Settings {
             reboot_prompt: false,
             info: Information::default(),
             networks: Vec::new(),
+            bt: Vec::new(),
+            bt_scanned: None,
+            bt_scanning: false,
             scanned: None,
             scanning: false,
             connecting: None,
@@ -592,6 +609,33 @@ impl Settings {
                 (HintButton::Start, "hint.confirm"),
                 (Key('B'), "hint.back"),
             ],
+            Page::Bluetooth => match self.bt_device() {
+                Some(device) => match (device.paired, device.connected) {
+                    (true, true) => &[
+                        (Key('A'), "settings.disconnect"),
+                        (Key('X'), "settings.forget"),
+                        (Key('Y'), "settings.refresh"),
+                        (Key('B'), "hint.back"),
+                    ],
+                    (true, false) => &[
+                        (Key('A'), "settings.connect"),
+                        (Key('X'), "settings.forget"),
+                        (Key('Y'), "settings.refresh"),
+                        (Key('B'), "hint.back"),
+                    ],
+                    _ => &[
+                        (Key('A'), "settings.bt_pair"),
+                        (Key('Y'), "settings.refresh"),
+                        (Key('B'), "hint.back"),
+                    ],
+                },
+                None if self.value(Id::BtSwitch) == "1" => &[
+                    (Pair('L', 'R'), "settings.change"),
+                    (Key('Y'), "settings.refresh"),
+                    (Key('B'), "hint.back"),
+                ],
+                None => &[(Pair('L', 'R'), "settings.change"), (Key('B'), "hint.back")],
+            },
             Page::Wifi => match self.wifi_network() {
                 Some(network) if network.known || network.connected => &[
                     (Key('A'), "settings.connect"),

@@ -43,6 +43,25 @@ fn pages() -> Vec<(&'static str, Settings)> {
     forget.confirm_forget = Some("Casa_5G".into());
     let mut connecting = wifi.clone();
     connecting.connecting = Some("Casa".into());
+    let mut bluetooth = ready();
+    bluetooth.values.insert(Id::BtSwitch, "1".into());
+    bluetooth.bt = crate::settings::bluetooth::parse_devices(
+        "<device id=\"00:1A:2B:3C:4D:5E\" name=\"JBL Go 3\" type=\"\" connected=\"no\" />\n\
+         <device id=\"11:22:33:44:55:66\" name=\"8BitDo SN30 Pro\" type=\"joystick\" connected=\"yes\" />",
+        "<device id=\"AA:BB:CC:DD:EE:01\" name=\"Xbox Wireless Controller\" status=\"added\" type=\"joystick\" />",
+    );
+    bluetooth.open(Page::Wifi);
+    bluetooth.open(Page::Bluetooth);
+    bluetooth.bt_scanned = now.checked_sub(Duration::from_secs(5));
+    bluetooth.cursor = 1;
+    let mut bt_forget = bluetooth.clone();
+    bt_forget.cursor = 2;
+    bt_forget.confirm_forget = Some("00:1A:2B:3C:4D:5E".into());
+    let mut bt_pairing = bluetooth.clone();
+    bt_pairing.connecting = Some("Xbox Wireless Controller".into());
+    let mut bt_off = ready();
+    bt_off.open(Page::Wifi);
+    bt_off.open(Page::Bluetooth);
     let mut services = ready();
     services.open(Page::Wifi);
     services.open(Page::Services);
@@ -114,6 +133,10 @@ fn pages() -> Vec<(&'static str, Settings)> {
         ("password", password),
         ("forget", forget),
         ("connecting", connecting),
+        ("bluetooth", bluetooth),
+        ("bluetooth-forget", bt_forget),
+        ("bluetooth-pairing", bt_pairing),
+        ("bluetooth-off", bt_off),
         ("services", services),
         ("region", region),
         ("netplay", netplay),

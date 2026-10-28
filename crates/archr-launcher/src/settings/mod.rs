@@ -1,4 +1,5 @@
 //! Serial settings worker. No process, config lock or sysfs access on SDL's thread.
+mod bluetooth;
 mod info;
 mod pages;
 mod runtime;
@@ -54,6 +55,16 @@ impl Backend {
     }
     /// Fixtures have a private executable namespace: missing scripts cannot fall
     /// through to host programs. Capture to files to avoid pipe backpressure.
+    /// A system tool, in the fixture namespace when tests set a root.
+    fn tool(&self, name: &str) -> Command {
+        let mut command = Command::new(self.paths.at(&format!("/usr/bin/{name}")));
+        if let Some(root) = &self.paths.root {
+            command
+                .env("ARCHR_LAUNCHER_ROOT", root)
+                .env("PATH", self.paths.at("/usr/bin"));
+        }
+        command
+    }
     fn command(&self, name: &str, args: &[&str]) -> Result<String, String> {
         self.command_with_timeout(name, args, Duration::from_secs(20))
     }
@@ -63,13 +74,8 @@ impl Backend {
         args: &[&str],
         timeout: Duration,
     ) -> Result<String, String> {
-        let mut command = Command::new(self.paths.at(&format!("/usr/bin/{name}")));
+        let mut command = self.tool(name);
         command.args(args);
-        if let Some(root) = &self.paths.root {
-            command
-                .env("ARCHR_LAUNCHER_ROOT", root)
-                .env("PATH", self.paths.at("/usr/bin"));
-        }
         let output =
             crate::process::capture(&mut command, timeout, &AtomicBool::new(false), 64 * 1024)
                 .map_err(|e| format!("{name}: {e}"))?;
@@ -314,6 +320,8 @@ pub(super) enum Work {
     Set(Id, String),
     Info,
     Scan,
+    BtScan,
+    Bt(archr_ui::settings::bluetooth::Action, String),
     Connect(String, String),
     Forget(String),
     Variants(String),
@@ -328,6 +336,8 @@ enum Reply {
         u64,
         Result<(Vec<archr_ui::settings::network::Network>, String), String>,
     ),
+    BtScan(Result<Vec<archr_ui::settings::bluetooth::Device>, String>),
+    Bt(Result<(), String>),
     Connect(Result<(), String>),
     Forget(Result<(), String>),
     Variants(Vec<(String, String)>),
@@ -340,11 +350,14 @@ const SCAN_TIMEOUT: Duration = Duration::from_secs(45);
 pub struct Worker {
     tx: mpsc::Sender<Work>,
     scans: mpsc::Sender<u64>,
+    bt_scans: mpsc::Sender<()>,
     rx: mpsc::Receiver<Reply>,
     pending: usize,
     scanning: bool,
     /// A scan was requested while one ran: dispatch again when it ends.
     rescan: bool,
+    bt_scanning: bool,
+    bt_rescan: bool,
     /// Bumped on every Wi-Fi switch change; older scans' replies are stale.
     generation: u64,
 }
@@ -353,8 +366,22 @@ impl Worker {
         let (tx, requests) = mpsc::channel();
         let (results, rx) = mpsc::channel();
         let (scans, scan_requests) = mpsc::channel();
+        let (bt_scans, bt_requests) = mpsc::channel();
         let scan_results = results.clone();
-        let scan_paths = paths.clone();
+        let bt_results = results.clone();
+        let (scan_paths, bt_paths) = (paths.clone(), paths.clone());
+        // Discovery listens for ~10 s: its own lane, like the Wi-Fi scan.
+        thread::Builder::new()
+            .name("launcher-bluetooth".into())
+            .spawn(move || {
+                let backend = Backend::new(bt_paths);
+                while bt_requests.recv().is_ok() {
+                    if bt_results.send(Reply::BtScan(backend.bt_scan())).is_err() {
+                        break;
+                    }
+                }
+            })
+            .map_err(|e| e.to_string())?;
         thread::Builder::new()
             .name("launcher-scan".into())
             .spawn(move || {
@@ -378,7 +405,8 @@ impl Worker {
                         Work::Load => Reply::Loaded(backend.load().map(Box::new)),
                         Work::Set(id, value) => Reply::Set(id, backend.apply(id, &value)),
                         Work::Info => Reply::Info(backend.refresh_info()),
-                        Work::Scan => unreachable!("scans have their own lane"),
+                        Work::Scan | Work::BtScan => unreachable!("scans have their own lane"),
+                        Work::Bt(action, addr) => Reply::Bt(backend.bt_act(action, &addr)),
                         Work::Connect(ssid, password) => {
                             Reply::Connect(backend.connect(&ssid, &password))
                         }
@@ -400,10 +428,13 @@ impl Worker {
         Ok(Self {
             tx,
             scans,
+            bt_scans,
             rx,
             pending: 0,
             scanning: false,
             rescan: false,
+            bt_scanning: false,
+            bt_rescan: false,
             generation: 0,
         })
     }
@@ -412,6 +443,18 @@ impl Worker {
     }
     pub fn scanning(&self) -> bool {
         self.scanning
+    }
+    pub fn bt_scanning(&self) -> bool {
+        self.bt_scanning
+    }
+    fn bt_scan(&mut self) -> Result<(), String> {
+        if self.bt_scanning {
+            self.bt_rescan = true;
+            return Ok(());
+        }
+        self.bt_scans.send(()).map_err(|e| e.to_string())?;
+        self.bt_scanning = true;
+        Ok(())
     }
     fn scan(&mut self) -> Result<(), String> {
         if self.scanning {
@@ -427,6 +470,9 @@ impl Worker {
     pub(super) fn send(&mut self, work: Work) -> Result<(), String> {
         if matches!(work, Work::Scan) {
             return self.scan();
+        }
+        if matches!(work, Work::BtScan) {
+            return self.bt_scan();
         }
         if matches!(work, Work::Set(Id::WifiSwitch, _)) {
             self.generation += 1;
@@ -445,7 +491,12 @@ impl Worker {
         let mut language = None;
         while let Ok(reply) = self.rx.try_recv() {
             changed = true;
-            if let Reply::Scan(generation, _) = &reply {
+            if matches!(reply, Reply::BtScan(_)) {
+                self.bt_scanning = false;
+                if std::mem::take(&mut self.bt_rescan) {
+                    let _ = self.bt_scan();
+                }
+            } else if let Reply::Scan(generation, _) = &reply {
                 self.scanning = false;
                 let stale = *generation != self.generation;
                 if std::mem::take(&mut self.rescan) {
@@ -493,6 +544,9 @@ impl Worker {
                     let wifi = (id == Id::WifiSwitch)
                         .then(|| result.as_deref().ok() == Some("1"))
                         .filter(|_| result.is_ok());
+                    let bluetooth = (id == Id::BtSwitch)
+                        .then(|| result.as_deref().ok().map(|v| v == "1"))
+                        .flatten();
                     let new_layout = (id == Id::KeyboardLayout)
                         .then(|| result.as_ref().ok().cloned())
                         .flatten();
@@ -502,6 +556,17 @@ impl Worker {
                     if let Some(layout) = new_layout {
                         state.values.insert(Id::KeyboardVariant, String::new());
                         let _ = self.send(Work::Variants(layout));
+                    }
+                    match bluetooth {
+                        Some(true) => {
+                            let _ = self.send(Work::BtScan);
+                        }
+                        Some(false) => {
+                            state.bt.clear();
+                            state.bt_scanned = None;
+                            state.cursor = state.cursor.min(state.bt_rows() - 1);
+                        }
+                        None => {}
                     }
                     match wifi {
                         Some(true) => {
@@ -537,6 +602,28 @@ impl Worker {
                     }
                     Err(_) => {}
                 },
+                Reply::BtScan(result) => match result {
+                    // A late scan never repopulates a list the user switched off.
+                    Ok(devices) if state.value(Id::BtSwitch) == "1" => {
+                        state.bt = devices;
+                        state.bt_scanned = Some(std::time::Instant::now());
+                        if state.page() == Page::Bluetooth {
+                            state.cursor = state.cursor.min(state.bt_rows() - 1);
+                        }
+                    }
+                    Err(error) if state.value(Id::BtSwitch) == "1" => state.fail(None, error),
+                    _ => {}
+                },
+                Reply::Bt(result) => {
+                    state.connecting = None;
+                    match result {
+                        Ok(()) => {
+                            state.error = None;
+                            let _ = self.send(Work::BtScan);
+                        }
+                        Err(error) => state.fail(None, error),
+                    }
+                }
                 Reply::Connect(result) | Reply::Forget(result) => {
                     state.connecting = None;
                     match result {
