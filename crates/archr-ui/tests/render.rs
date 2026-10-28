@@ -6,8 +6,10 @@ use archr_ui::{
     Theme,
 };
 use common::FakeData as Data;
+static SDL_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 #[test]
 fn grafite_layout_motion_glyphs_and_untrusted_text_render_offscreen() {
+    let _guard = SDL_LOCK.lock().unwrap();
     std::env::set_var("SDL_VIDEODRIVER", "offscreen");
     let ttf;
     let creator;
@@ -195,4 +197,41 @@ fn assert_button_ink_is_centered(rgba: &[u8]) {
             "vertical glyph center {ink_y} vs 455.5"
         );
     }
+}
+
+#[test]
+fn hub_icons_wait_until_after_first_present() {
+    let _guard = SDL_LOCK.lock().unwrap();
+    std::env::set_var("SDL_VIDEODRIVER", "offscreen");
+    let ttf;
+    let creator;
+    let mut ui = Ui::new(640, 480, true).unwrap();
+    ttf = sdl2::ttf::init().unwrap();
+    creator = ui.canvas.texture_creator();
+    let theme = Theme::builtin();
+    ui.configure(&ttf, &creator, &theme, None).unwrap();
+    let data = Data::default();
+    let mut app = App::new(10);
+    app.screen = Screen::StartHub {
+        row: 0,
+        tile: 0,
+        shortcut: 0,
+    };
+    ui.draw(&app, &data, &theme, None).unwrap();
+    let first = ui
+        .canvas
+        .read_pixels(None, sdl2::pixels::PixelFormatEnum::RGBA32)
+        .unwrap();
+    ui.draw(&app, &data, &theme, None).unwrap();
+    let second = ui
+        .canvas
+        .read_pixels(None, sdl2::pixels::PixelFormatEnum::RGBA32)
+        .unwrap();
+    assert!(
+        first
+            .chunks_exact(4)
+            .zip(second.chunks_exact(4))
+            .any(|(a, b)| a != b),
+        "icons appear only after first present"
+    );
 }

@@ -242,6 +242,7 @@ pub(crate) struct TextCache<'font, 'texture> {
     entries: VecDeque<Entry<'texture>>,
     badges: VecDeque<(BadgeKey, Texture<'texture>)>,
     icons: HashMap<(Glyph, u32), Texture<'texture>>,
+    pub(crate) icon_theme_dir: Option<PathBuf>,
 }
 impl<'font, 'texture> TextCache<'font, 'texture> {
     pub fn from_prepared(
@@ -256,6 +257,7 @@ impl<'font, 'texture> TextCache<'font, 'texture> {
             entries: VecDeque::new(),
             badges: VecDeque::with_capacity(16),
             icons: HashMap::new(),
+            icon_theme_dir: None,
         };
         for (source, width, style, surface) in prepared.entries {
             let texture = creator
@@ -343,7 +345,7 @@ impl<'font, 'texture> TextCache<'font, 'texture> {
     ) -> Result<(), String> {
         let key = (glyph, panel.width());
         if !self.icons.contains_key(&key) {
-            let surface = icons::render(glyph, panel.width())?;
+            let surface = icons::render(glyph, panel.width(), self.icon_theme_dir.as_deref())?;
             startup_phase!(
                 self.startup,
                 "icon rasterization [glyph={glyph:?}; size={}px]",

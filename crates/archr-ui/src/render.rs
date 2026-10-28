@@ -5,7 +5,7 @@ use crate::{
     i18n::I18n,
     icons::Glyph,
     motion::Tween,
-    primitives::{Geometry, Icon, Shadow},
+    primitives::{Geometry, Shadow},
     startup::StartupTrace,
     startup_phase,
     state::{App, DataSource, QuickItem, Screen},
@@ -187,6 +187,7 @@ pub struct Ui<'font, 'texture> {
     cover_visible: bool,
     cover_fade: Tween,
     animating: bool,
+    first_present: bool,
     frame: Frame,
     pub catalog: I18n,
     pub loading: bool,
@@ -259,12 +260,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             creator: None,
             art: None,
             root: None,
-            geometry: {
-                let mut geometry = Geometry::new();
-                geometry.startup = trace;
-                startup_phase!(trace, "icons geometry cache");
-                geometry
-            },
+            geometry: Geometry::new(),
             status: None,
             list: ListMotion::new(),
             menu_pill: Tween::new(0., Duration::from_millis(90)),
@@ -273,6 +269,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             cover_visible: false,
             cover_fade: Tween::new(0., Duration::from_millis(120)),
             animating: false,
+            first_present: false,
             frame: Frame::new(width, height),
             catalog: I18n::default(),
             loading: false,
@@ -313,7 +310,9 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         if self.shadow.is_some() {
             startup_phase!(self.startup, "shadow texture");
         }
-        self.text = Some(TextCache::from_prepared(creator, prepared)?);
+        let mut text = TextCache::from_prepared(creator, prepared)?;
+        text.icon_theme_dir = self.theme_dir.clone();
+        self.text = Some(text);
         self.status = Some(Status::new(root, Instant::now()));
         startup_phase!(self.startup, "status initialization");
         Ok(())
@@ -418,6 +417,9 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         self.rounded(rect, radius, fill, Some(border))
     }
     fn icon(&mut self, glyph: Glyph, panel: Rect, ink: Rgba) -> Result<(), String> {
+        if !self.first_present {
+            return Ok(());
+        }
         let text = self
             .text
             .as_mut()
@@ -480,9 +482,9 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         }
         startup_phase!(self.startup, "first frame draw");
         self.canvas.present();
+        self.first_present = true;
         if self.startup.began().is_some() {
             self.startup.phase_once("first present");
-            self.geometry.startup = StartupTrace::default();
             if let Some(text) = &mut self.text {
                 text.trace_startup(StartupTrace::default());
             }
@@ -562,15 +564,10 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                     let bolt = Rect::new(
                         battery.x() + self.px(5.),
                         battery.y() + self.px(1.),
-                        self.px(9.) as u32,
+                        self.px(10.) as u32,
                         self.px(10.) as u32,
                     );
-                    self.geometry.icon(
-                        &mut self.canvas,
-                        Icon::Lightning,
-                        bolt,
-                        theme.highlight_bg,
-                    )?;
+                    self.icon(Glyph::Lightning, bolt, theme.highlight_bg)?;
                 }
             }
             right = layout.pill.x() - self.px(20.);
@@ -736,9 +733,8 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                         y + (rh as i32 - self.px(14.)) / 2,
                         14.,
                     );
-                    self.geometry.icon(
-                        &mut self.canvas,
-                        Icon::Star(true),
+                    self.icon(
+                        Glyph::Star,
                         star,
                         selection(selected, theme.highlight_bg, theme.highlight_text),
                     )?;
@@ -770,14 +766,13 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                         .frame
                         .square(x, y + (rh as i32 - self.px(16.)) / 2, 16.);
                     if name == "@favorites" {
-                        self.geometry.icon(
-                            &mut self.canvas,
-                            Icon::Star(false),
+                        self.icon(
+                            Glyph::Star,
                             icon,
                             selection(selected, theme.highlight_bg, theme.highlight_text),
                         )?;
                     } else {
-                        self.geometry.icon(&mut self.canvas, Icon::Clock, icon, c)?;
+                        self.icon(Glyph::Clock, icon, c)?;
                     }
                     x += self.px(26.);
                 }

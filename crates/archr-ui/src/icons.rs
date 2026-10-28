@@ -1,8 +1,9 @@
-//! Stroked line icons on a 24-unit grid, rasterized once at final size with
-//! coverage from the distance to each segment, which is already antialiased.
-use sdl2::{pixels::PixelFormatEnum, surface::Surface};
-use std::f32::consts::{PI, TAU};
+//! Lucide SVG icons rasterized at their final size on first draw.
+use sdl2::{rwops::RWops, surface::Surface, sys};
+use std::path::Path;
 
+// The config screen uses these variants on its parallel integration branch.
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub(crate) enum Glyph {
     Recent,
@@ -11,173 +12,144 @@ pub(crate) enum Glyph {
     Gear,
     Download,
     Wifi,
+    WifiOff,
     Moon,
     Restart,
     Power,
+    Sound,
+    Globe,
+    Palette,
+    Trophy,
+    Storage,
+    Clock,
+    Lightning,
+    Star,
+    Gamepad,
+    Play,
+    Cpu,
 }
 
-type Path = Vec<(f32, f32)>;
-
-fn arc(cx: f32, cy: f32, radius: f32, from: f32, to: f32) -> Path {
-    (0..=24)
-        .map(|i| {
-            let angle = from + (to - from) * i as f32 / 24.;
-            (cx + radius * angle.cos(), cy + radius * angle.sin())
-        })
-        .collect()
-}
-
-fn paths(glyph: Glyph) -> Vec<Path> {
-    let circle = |cx, cy, r| arc(cx, cy, r, 0., TAU);
-    match glyph {
-        Glyph::Recent => vec![
-            vec![(4., 2.), (14., 2.), (19., 7.), (19., 13.)],
-            vec![(14., 2.), (14., 7.), (19., 7.)],
-            vec![(4., 2.), (4., 21.), (12., 21.)],
-            vec![(7., 11.), (13., 11.)],
-            vec![(7., 15.), (11., 15.)],
-            circle(17., 17., 5.),
-            vec![(17., 14.), (17., 17.), (19., 18.)],
-        ],
-        Glyph::Games => vec![
-            vec![
-                (5., 8.),
-                (8., 6.),
-                (16., 6.),
-                (19., 8.),
-                (22., 17.),
-                (21., 20.),
-                (18., 20.),
-                (15., 17.),
-                (9., 17.),
-                (6., 20.),
-                (3., 20.),
-                (2., 17.),
-                (5., 8.),
-            ],
-            vec![(8., 10.), (8., 15.)],
-            vec![(5.5, 12.5), (10.5, 12.5)],
-            circle(16., 11., 0.8),
-            circle(19., 13., 0.8),
-        ],
-        Glyph::Tools => vec![
-            vec![
-                (3., 3.),
-                (7., 7.),
-                (8., 5.),
-                (10., 7.),
-                (8., 9.),
-                (17., 18.),
-                (19., 20.),
-                (21., 18.),
-                (19., 16.),
-                (10., 7.),
-            ],
-            vec![
-                (21., 3.),
-                (17., 4.),
-                (16., 7.),
-                (18., 9.),
-                (21., 8.),
-                (20., 12.),
-                (18., 13.),
-            ],
-            vec![
-                (6., 12.),
-                (3., 16.),
-                (3., 19.),
-                (5., 21.),
-                (8., 20.),
-                (12., 16.),
-            ],
-        ],
-        Glyph::Gear => vec![
-            (0..=32)
-                .map(|i| {
-                    let a = -PI / 2. + i as f32 * TAU / 32.;
-                    let r = if i % 4 == 0 || i % 4 == 3 { 10. } else { 7.5 };
-                    (12. + r * a.cos(), 12. + r * a.sin())
-                })
-                .collect(),
-            circle(12., 12., 3.2),
-        ],
-        Glyph::Download => vec![
-            vec![(12., 2.), (12., 16.), (7., 11.)],
-            vec![(12., 16.), (17., 11.)],
-            vec![(3., 17.), (3., 21.), (21., 21.), (21., 17.)],
-        ],
-        Glyph::Wifi => vec![
-            arc(12., 21., 18., -2.25, -0.89),
-            arc(12., 21., 12., -2.22, -0.92),
-            arc(12., 21., 6., -2.15, -0.99),
-            circle(12., 19., 1.),
-        ],
-        Glyph::Moon => vec![
-            arc(12., 12., 10., -1.16, -5.12),
-            arc(21., 12., 10., 2.1, 4.18),
-        ],
-        Glyph::Restart => {
-            // Clockwise ring open at the top; the head sits on its end point.
-            let end = 3.98_f32;
-            let (tip_x, tip_y) = (12. + 8. * end.cos(), 12. + 8. * end.sin());
-            let heading = end + PI / 2.;
-            let wing = |turn: f32| {
-                let a = heading + PI + turn;
-                (tip_x + 5. * a.cos(), tip_y + 5. * a.sin())
-            };
-            vec![
-                arc(12., 12., 8., -1.2, end),
-                vec![wing(0.7), (tip_x, tip_y), wing(-0.7)],
-            ]
+impl Glyph {
+    fn file(self) -> &'static str {
+        match self {
+            Self::Recent => "history",
+            Self::Games => "gamepad-2",
+            Self::Tools => "wrench",
+            Self::Gear => "settings",
+            Self::Download => "download",
+            Self::Wifi => "wifi",
+            Self::WifiOff => "wifi-off",
+            Self::Moon => "moon",
+            Self::Restart => "rotate-cw",
+            Self::Power => "power",
+            Self::Sound => "volume-2",
+            Self::Globe => "globe",
+            Self::Palette => "palette",
+            Self::Trophy => "trophy",
+            Self::Storage => "hard-drive",
+            Self::Clock => "clock",
+            Self::Lightning => "zap",
+            Self::Star => "star",
+            Self::Gamepad => "gamepad",
+            Self::Play => "play",
+            Self::Cpu => "cpu",
         }
-        Glyph::Power => vec![
-            arc(12., 12., 9., -PI / 2. + 0.7, 3. * PI / 2. - 0.7),
-            vec![(12., 2.), (12., 12.)],
-        ],
     }
 }
 
-fn distance(p: (f32, f32), a: (f32, f32), b: (f32, f32)) -> f32 {
-    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
-    let len = dx * dx + dy * dy;
-    let t = if len == 0. {
-        0.
-    } else {
-        (((p.0 - a.0) * dx + (p.1 - a.1) * dy) / len).clamp(0., 1.)
-    };
-    (p.0 - a.0 - t * dx).hypot(p.1 - a.1 - t * dy)
+// Keep the upstream SVG files untouched; tune this one number if 16px needs it.
+const STROKE_WIDTH: &str = "2";
+
+#[link(name = "SDL2_image")]
+unsafe extern "C" {
+    fn IMG_LoadSizedSVG_RW(
+        src: *mut sys::SDL_RWops,
+        width: libc::c_int,
+        height: libc::c_int,
+    ) -> *mut sys::SDL_Surface;
 }
 
-/// White RGBA at `size` pixels, tinted later with a color mod.
-pub(crate) fn render(glyph: Glyph, size: u32) -> Result<Surface<'static>, String> {
-    let side = size;
-    let unit = side as f32 / 24.;
-    let half = (size as f32 * 0.073).max(1.75) / 2.;
-    let segments: Vec<_> = paths(glyph)
-        .iter()
-        .flat_map(|path| path.windows(2).map(|w| (w[0], w[1])).collect::<Vec<_>>())
-        .map(|(a, b)| ((a.0 * unit, a.1 * unit), (b.0 * unit, b.1 * unit)))
-        .collect();
-    let mut surface = Surface::new(side, side, PixelFormatEnum::RGBA32)?;
-    let pitch = surface.pitch() as usize;
-    surface.with_lock_mut(|bytes| {
-        for y in 0..side {
-            for x in 0..side {
-                let p = (x as f32 + 0.5, y as f32 + 0.5);
-                let near = segments
+pub(crate) fn render(
+    glyph: Glyph,
+    size: u32,
+    theme_dir: Option<&Path>,
+) -> Result<Surface<'static>, String> {
+    let file = format!("{}.svg", glyph.file());
+    let selected = theme_dir.map(|dir| dir.join("icons").join(&file));
+    let system = Path::new("/usr/share/archr-launcher/themes/default/icons").join(&file);
+    let bundled = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../themes/default/icons")
+        .join(&file);
+    let path = selected
+        .as_deref()
+        .filter(|path| path.is_file())
+        .or_else(|| system.is_file().then_some(system.as_path()))
+        .unwrap_or(&bundled);
+    let svg = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let svg = svg.replace("currentColor", "#ffffff").replace(
+        "stroke-width=\"2\"",
+        &format!("stroke-width=\"{STROKE_WIDTH}\""),
+    );
+    let rw = RWops::from_bytes(svg.as_bytes())?;
+    let dimension = i32::try_from(size).map_err(|e| e.to_string())?;
+    // SDL_image borrows the RWops (it does not close it); Surface takes ownership of the result.
+    let raw = unsafe { IMG_LoadSizedSVG_RW(rw.raw(), dimension, dimension) };
+    if raw.is_null() {
+        Err(format!("{}: {}", path.display(), sdl2::get_error()))
+    } else {
+        Ok(unsafe { Surface::from_ll(raw) })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn bundled_svgs_render_white_at_exact_target_sizes() {
+        for glyph in [
+            Glyph::Recent,
+            Glyph::Games,
+            Glyph::Tools,
+            Glyph::Gear,
+            Glyph::Download,
+            Glyph::Wifi,
+            Glyph::WifiOff,
+            Glyph::Moon,
+            Glyph::Restart,
+            Glyph::Power,
+            Glyph::Sound,
+            Glyph::Globe,
+            Glyph::Palette,
+            Glyph::Trophy,
+            Glyph::Storage,
+            Glyph::Clock,
+            Glyph::Lightning,
+            Glyph::Star,
+            Glyph::Gamepad,
+            Glyph::Play,
+            Glyph::Cpu,
+        ] {
+            for size in [16, 24, 48] {
+                let surface = render(glyph, size, None).unwrap();
+                assert_eq!((surface.width(), surface.height()), (size, size));
+                assert!(surface
+                    .without_lock()
+                    .unwrap()
                     .iter()
-                    .map(|&(a, b)| distance(p, a, b))
-                    .fold(f32::MAX, f32::min);
-                let coverage = (half + 0.5 - near).clamp(0., 1.);
-                let offset = y as usize * pitch + x as usize * 4;
-                bytes[offset..offset + 4].copy_from_slice(&[
-                    255,
-                    255,
-                    255,
-                    (coverage * 255.) as u8,
-                ]);
+                    .any(|&byte| byte != 0));
             }
         }
-    });
-    Ok(surface)
+    }
+    #[test]
+    fn theme_icon_overrides_bundled_without_changing_source() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("icons")).unwrap();
+        std::fs::write(dir.path().join("icons/wrench.svg"), "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\"><rect width=\"24\" height=\"24\" fill=\"currentColor\"/></svg>").unwrap();
+        let override_icon = render(Glyph::Tools, 24, Some(dir.path())).unwrap();
+        let default_icon = render(Glyph::Tools, 24, Some(Path::new("/nonexistent"))).unwrap();
+        assert_ne!(
+            override_icon.without_lock().unwrap(),
+            default_icon.without_lock().unwrap()
+        );
+    }
 }

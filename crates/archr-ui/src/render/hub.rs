@@ -143,7 +143,11 @@ impl Ui<'_, '_> {
                 theme.dim_text
             };
             self.icon(
-                glyph,
+                if index == 2 && !wifi_on {
+                    Glyph::WifiOff
+                } else {
+                    glyph
+                },
                 Rect::new(x + px(11.), px(289.), px(24.) as u32, px(24.) as u32),
                 ink,
             )?;
