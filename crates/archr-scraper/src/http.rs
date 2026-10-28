@@ -1,9 +1,9 @@
 //! HTTP seam: the engine only sees `Http`, so tests never touch the network.
 use archr_io::read_bounded;
 use std::{
-    io::Write,
+    io::{Read, Write},
     path::PathBuf,
-    process::{Command, Stdio},
+    process::{Child, Command, Stdio},
     sync::atomic::{AtomicBool, Ordering::Relaxed},
     thread,
     time::Duration,
@@ -28,72 +28,150 @@ pub trait Http: Send + Sync {
     fn get(&self, url: &str, limit: u64, cancel: &AtomicBool) -> Result<Response, NetError>;
 }
 
-/// The system `curl` (already in the image for ES; it brings TLS and CA
-/// certificates). The URL travels on stdin, never in argv.
-pub struct Curl {
-    pub tmp: PathBuf,
-    pub user_agent: String,
+/// An https URL on screenscraper.fr or a subdomain, nothing else: plain
+/// lowercase hostname (no userinfo, port, fragment, backslash or control
+/// characters). Every URL we fetch carries our login, so this gates all hops.
+pub fn trusted(url: &str) -> bool {
+    let Some(rest) = url.strip_prefix("https://") else {
+        return false;
+    };
+    let clean = url
+        .bytes()
+        .all(|b| b.is_ascii_graphic() && !matches!(b, b'"' | b'\\' | b'#'));
+    let host = rest.split(['/', '?']).next().unwrap_or("");
+    let plain = !host.is_empty()
+        && host
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'.' || b == b'-');
+    clean && plain && (host == "screenscraper.fr" || host.ends_with(".screenscraper.fr"))
 }
 
 fn fail<E>(_: E) -> NetError {
     NetError::Failed
 }
 
-fn quoted(text: &str) -> String {
-    format!("\"{}\"", text.replace('\\', "\\\\").replace('"', "\\\""))
+/// curl config value; control characters would end the line, so they are refused.
+fn quoted(text: &str) -> Result<String, NetError> {
+    if text.chars().any(char::is_control) {
+        return Err(NetError::Failed);
+    }
+    Ok(format!(
+        "\"{}\"",
+        text.replace('\\', "\\\\").replace('"', "\\\"")
+    ))
 }
 
-impl Http for Curl {
-    fn get(&self, url: &str, limit: u64, cancel: &AtomicBool) -> Result<Response, NetError> {
+/// Kills and reaps the child on every path out of a request.
+struct Reaped(Child);
+impl Drop for Reaped {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// The system `curl` (already in the image for ES; it brings TLS and CA
+/// certificates). The URL travels on stdin, never in argv; no user curlrc, no
+/// globbing, no inherited environment (the developer login may be in it), and
+/// redirects are followed here, one validated hop at a time.
+pub struct Curl {
+    pub tmp: PathBuf,
+    pub user_agent: String,
+}
+
+impl Curl {
+    fn once(
+        &self,
+        url: &str,
+        limit: u64,
+        cancel: &AtomicBool,
+    ) -> Result<(u16, String, Vec<u8>), NetError> {
         std::fs::create_dir_all(&self.tmp).map_err(fail)?;
         let out = tempfile::NamedTempFile::new_in(&self.tmp).map_err(fail)?;
+        let config = format!(
+            "user-agent = {}\nurl = {}\noutput = {}\nwrite-out = \"%{{http_code}} %{{redirect_url}}\"\n",
+            quoted(&self.user_agent)?,
+            quoted(url)?,
+            quoted(&out.path().to_string_lossy())?,
+        );
         let timeout = if limit > 16 << 20 { 240 } else { 30 };
-        let mut child = Command::new("curl")
-            .args(["-s", "-L", "--max-redirs", "3", "--proto", "=https"])
-            .args(["--proto-redir", "=https", "--connect-timeout", "10"])
-            .args(["--max-time", &timeout.to_string()])
+        let mut command = Command::new("curl");
+        command
+            .args([
+                "-q",
+                "-s",
+                "--globoff",
+                "--max-redirs",
+                "0",
+                "--proto",
+                "=https",
+            ])
+            .args([
+                "--connect-timeout",
+                "10",
+                "--max-time",
+                &timeout.to_string(),
+            ])
             .args(["--max-filesize", &limit.to_string(), "-K", "-"])
+            .env_clear()
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(fail)?;
-        let config = format!(
-            "user-agent = {}\nurl = {}\noutput = {}\nwrite-out = \"%{{http_code}}\"\n",
-            quoted(&self.user_agent),
-            quoted(url),
-            quoted(&out.path().to_string_lossy()),
-        );
-        if child
-            .stdin
-            .take()
-            .is_none_or(|mut stdin| stdin.write_all(config.as_bytes()).is_err())
-        {
-            let _ = child.kill();
-            return Err(NetError::Failed);
+            .stderr(Stdio::null());
+        for key in ["PATH", "SSL_CERT_FILE", "SSL_CERT_DIR"] {
+            if let Some(value) = std::env::var_os(key) {
+                command.env(key, value);
+            }
         }
-        let status = loop {
+        let mut child = Reaped(command.spawn().map_err(fail)?);
+        let mut stdin = child.0.stdin.take().ok_or(NetError::Failed)?;
+        stdin.write_all(config.as_bytes()).map_err(fail)?;
+        drop(stdin);
+        let code = loop {
             if cancel.load(Relaxed) {
-                let _ = child.kill();
-                let _ = child.wait();
                 return Err(NetError::Cancelled);
             }
-            match child.try_wait() {
-                Ok(Some(_)) => break child.wait_with_output().map_err(fail)?,
-                Ok(None) => thread::sleep(Duration::from_millis(50)),
-                Err(_) => return Err(NetError::Failed),
+            match child.0.try_wait().map_err(fail)? {
+                Some(status) => break status.code(),
+                None => thread::sleep(Duration::from_millis(50)),
             }
         };
-        match status.status.code() {
+        match code {
             Some(0) => {}
             Some(28) => return Err(NetError::Timeout),
             _ => return Err(NetError::Failed),
         }
-        let code = String::from_utf8_lossy(&status.stdout).trim().parse();
+        let mut line = String::new();
+        child
+            .0
+            .stdout
+            .take()
+            .ok_or(NetError::Failed)?
+            .take(4096)
+            .read_to_string(&mut line)
+            .map_err(fail)?;
+        let (status, location) = line.split_once(' ').unwrap_or((&line, ""));
         let body = read_bounded(out.as_file(), limit).map_err(fail)?;
-        Ok(Response {
-            status: code.map_err(fail)?,
+        Ok((
+            status.parse().map_err(fail)?,
+            location.trim().to_owned(),
             body,
-        })
+        ))
+    }
+}
+
+impl Http for Curl {
+    fn get(&self, url: &str, limit: u64, cancel: &AtomicBool) -> Result<Response, NetError> {
+        let mut url = url.to_owned();
+        for _ in 0..4 {
+            if !trusted(&url) {
+                return Err(NetError::Failed);
+            }
+            let (status, location, body) = self.once(&url, limit, cancel)?;
+            if !matches!(status, 301 | 302 | 303 | 307 | 308) {
+                return Ok(Response { status, body });
+            }
+            url = location;
+        }
+        Err(NetError::Failed)
     }
 }

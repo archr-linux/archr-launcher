@@ -10,17 +10,17 @@
 //! ```
 //! `available()` says whether this build carries the developer login.
 //! `Engine::verify()` (blocking, call it from a worker) tests the user's login.
+mod api;
 mod creds;
 mod engine;
 mod hash;
 mod http;
 mod systems;
-mod xml;
+mod validate;
 
 pub use creds::Credentials;
 pub use engine::{
     available, Engine, Event, Job, Media, Options, Progress, Report, Stop, Timing, UserInfo,
 };
-pub use hash::Md5;
-pub use http::{Curl, Http, NetError, Response};
+pub use http::{trusted, Curl, Http, NetError, Response};
 pub use systems::system_id;

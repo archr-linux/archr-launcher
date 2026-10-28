@@ -1,8 +1,8 @@
 //! Engine behaviour against a mocked HTTP layer: no test touches the network.
 use archr_index::{scan_system, SystemDef};
 use archr_scraper::{
-    Credentials, Engine, Event, Http, Job, Md5, Media, NetError, Options, Report, Response, Stop,
-    Timing,
+    trusted, Credentials, Curl, Engine, Event, Http, Job, Media, NetError, Options, Report,
+    Response, Stop, Timing,
 };
 use std::{
     fs,
@@ -11,7 +11,25 @@ use std::{
     time::{Duration, Instant},
 };
 
-const PNG: &[u8] = b"\x89PNG\r\n\x1a\nfake";
+fn png(width: u32, height: u32) -> Vec<u8> {
+    let mut out = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
+    out.extend(width.to_be_bytes());
+    out.extend(height.to_be_bytes());
+    out.extend(b"\x08\x02\0\0\0\0\0\0\0\0\0\0\0IEND\xAEB`\x82");
+    out
+}
+
+fn jpeg(width: u16, height: u16) -> Vec<u8> {
+    let mut out = vec![0xFF, 0xD8, 0xFF, 0xC0, 0, 17, 8];
+    out.extend(height.to_be_bytes());
+    out.extend(width.to_be_bytes());
+    out.extend([3, 1, 0x22, 0, 2, 0x11, 1, 3, 0x11, 1, 0xFF, 0xD9]);
+    out
+}
+
+fn mp4() -> Vec<u8> {
+    b"\0\0\0\x10ftypisom\0\0\0\0\0\0\0\x08moov".to_vec()
+}
 const DEV: &str = "devid=tester&devpassword=hunter2";
 
 type Handler = dyn Fn(&str) -> Option<(u16, Vec<u8>)> + Send + Sync;
@@ -50,7 +68,7 @@ fn engine(http: Arc<Mock>, cache: &Path) -> Engine {
 }
 
 fn user_xml() -> Vec<u8> {
-    b"<Data><ssuser><maxthreads>1</maxthreads><requeststoday>5</requeststoday><maxrequestsperday>20000</maxrequestsperday></ssuser></Data>".to_vec()
+    b"<Data><ssuser><id>ana</id><maxthreads>1</maxthreads><requeststoday>5</requeststoday><maxrequestsperday>20000</maxrequestsperday></ssuser></Data>".to_vec()
 }
 
 fn game_xml(id: &str) -> Vec<u8> {
@@ -98,26 +116,10 @@ fn happy(url: &str) -> Option<(u16, Vec<u8>)> {
     } else if url.contains("jeuInfos.php") {
         Some((200, game_xml("7")))
     } else if url.contains("/m/") {
-        Some((200, PNG.to_vec()))
+        Some((200, png(64, 48)))
     } else {
         Some((404, b"not found".to_vec()))
     }
-}
-
-#[test]
-fn md5_matches_rfc_vectors() {
-    let hex = |text: &[u8]| {
-        let mut md5 = Md5::new();
-        md5.update(text);
-        md5.finish()
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect::<String>()
-    };
-    assert_eq!(hex(b""), "d41d8cd98f00b204e9800998ecf8427e");
-    assert_eq!(hex(b"abc"), "900150983cd24fb0d6963f7d28e17f72");
-    let long = vec![b'a'; 1000];
-    assert_eq!(hex(&long), "cabe45dcc9ae5b66ba86600cca6b8ba8");
 }
 
 #[test]
@@ -128,20 +130,21 @@ fn scrapes_missing_art_into_the_media_layout_the_library_reads() {
         &["Alpha (USA).sfc", "Beta.sfc", "Done.sfc"],
     );
     fs::create_dir_all(sys.path.join("media/images")).unwrap();
-    fs::write(sys.path.join("media/images/Done.png"), PNG).unwrap();
+    fs::write(sys.path.join("media/images/Done.png"), png(1, 1)).unwrap();
     let http = mock(happy);
     let job = engine(http.clone(), &dir.path().join("cache")).start(
         vec![sys.clone()],
         Options {
-            language: "pt-BR".into(),
+            media: vec![Media::Box2d, Media::Screenshot, Media::Wheel],
             ..Options::new("pt-BR")
         },
     );
     let (events, report) = finish(&job);
     assert_eq!(report.stop, Stop::Completed);
-    assert_eq!((report.progress.total, report.progress.skipped), (2, 1));
-    assert_eq!((report.progress.done, report.progress.scraped), (2, 2));
-    assert_eq!(events.last().unwrap().done, 2);
+    // Done.sfc has its cover but still lacks the requested screenshot/wheel.
+    assert_eq!((report.progress.total, report.progress.skipped), (3, 0));
+    assert_eq!((report.progress.done, report.progress.scraped), (3, 3));
+    assert_eq!(events.last().unwrap().done, 3);
     for stem in ["Alpha (USA)", "Beta"] {
         assert!(sys.path.join(format!("media/images/{stem}.png")).is_file());
         assert!(sys
@@ -266,7 +269,7 @@ fn bad_login_and_unreachable_network_end_the_run() {
 }
 
 #[test]
-fn video_is_opt_in_and_html_error_pages_are_not_saved_as_art() {
+fn video_is_opt_in_and_error_pages_are_not_saved_as_art() {
     let dir = tempfile::tempdir().unwrap();
     let sys = system(dir.path(), &["A.sfc"]);
     let http = mock(|url| {
@@ -278,7 +281,7 @@ fn video_is_opt_in_and_html_error_pages_are_not_saved_as_art() {
         } else if url.contains("/m/box") {
             Some((200, b"CRCOK: error text".to_vec()))
         } else if url.contains("/m/video") {
-            Some((200, b"\0\0\0\x20ftypisom".to_vec()))
+            Some((200, mp4()))
         } else {
             happy(url)
         }
@@ -286,7 +289,8 @@ fn video_is_opt_in_and_html_error_pages_are_not_saved_as_art() {
     let mut opts = Options::new("en");
     opts.media = vec![Media::Box2d, Media::Video];
     let (_, report) = finish(&engine(http, dir.path()).start(vec![sys.clone()], opts));
-    assert_eq!(report.progress.scraped, 1);
+    // The corrupt cover is a retryable failure, never saved.
+    assert_eq!((report.progress.scraped, report.progress.failed), (0, 1));
     assert!(!sys.path.join("media/images/A.png").exists());
     assert!(sys.path.join("media/videos/A.mp4").is_file());
 }
@@ -318,4 +322,279 @@ fn verify_reports_the_account_limits() {
     assert_eq!((info.threads, info.max_requests_per_day), (1, 20000));
     let denied = engine(mock(|_| Some((403, vec![]))), dir.path()).verify();
     assert_eq!(denied, Err(Stop::Auth));
+}
+
+// ---- regression tests for the review findings ----
+
+fn cue_system(root: &Path) -> SystemDef {
+    let sys = system(root, &["Disc (USA).cue"]);
+    SystemDef {
+        extensions: vec![".cue".into()],
+        ..sys
+    }
+}
+
+#[test]
+fn unsafe_media_hosts_are_never_trusted() {
+    for bad in [
+        "https://example.invalid#.screenscraper.fr",
+        "https://example.invalid#.screenscraper.fr/x",
+        "https://user@www.screenscraper.fr/x",
+        "https://www.screenscraper.fr@evil.example/x",
+        "https://www.screenscraper.fr:444/x",
+        "https://www.screenscraper.fr.evil.example/x",
+        "https://WWW.screenscraper.fr/x",
+        "https://www.screenscraper.fr\\@evil/x",
+        "http://www.screenscraper.fr/x",
+        "https://www.screenscraper.fr/x\nhelp\n#",
+        "https://www.screenscraper.fr/x\"",
+    ] {
+        assert!(!trusted(bad), "{bad:?}");
+    }
+    assert!(trusted("https://www.screenscraper.fr/medias/1?a=1&b=2"));
+    assert!(trusted("https://screenscraper.fr/x"));
+}
+
+/// A stand-in `curl` on PATH records how it was invoked.
+fn fake_curl(dir: &Path, reply: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    let script = format!(
+        "#!/bin/sh\necho \"$@\" > {d}/args\nenv > {d}/env\ncat > {d}/stdin\n\
+out=$(sed -n 's/^output = \"\\(.*\\)\"$/\\1/p' {d}/stdin)\nprintf hello > \"$out\"\nprintf '{reply}'\n",
+        d = dir.display()
+    );
+    let path = dir.join("curl");
+    fs::write(&path, script).unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+#[test]
+fn curl_is_hardened_and_config_injection_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let never = AtomicBool::new(false);
+    let url = "https://www.screenscraper.fr/api2/x?devid=a&devpassword=b";
+    let curl = |agent: &str| Curl {
+        tmp: dir.path().join("tmp"),
+        user_agent: agent.into(),
+    };
+    // Control characters (a newline would inject a curl directive) never reach curl.
+    for bad in [
+        "https://www.screenscraper.fr/x\nhelp\n#",
+        "https://www.screenscraper.fr/\rx",
+    ] {
+        assert!(curl("ua").get(bad, 1024, &never).is_err());
+    }
+    assert!(curl("ua\nhelp").get(url, 1024, &never).is_err());
+
+    std::env::set_var("SCREENSCRAPER_DEV_LOGIN", "devid=leak&devpassword=leak");
+    std::env::set_var("PATH", format!("{}:/usr/bin:/bin", dir.path().display()));
+    fake_curl(dir.path(), "200 ");
+    let response = curl("ua \"q\"").get(url, 1024, &never).unwrap();
+    assert_eq!(
+        (response.status, response.body.as_slice()),
+        (200, &b"hello"[..])
+    );
+    let args = fs::read_to_string(dir.path().join("args")).unwrap();
+    assert!(args.starts_with("-q "), "{args}");
+    assert!(args.contains("--globoff") && args.contains("--max-redirs 0"));
+    assert!(!args.contains("screenscraper") && !args.contains("devpassword"));
+    let stdin = fs::read_to_string(dir.path().join("stdin")).unwrap();
+    assert!(stdin.contains("url = \"https://www.screenscraper.fr/api2/x?devid=a&devpassword=b\""));
+    assert!(stdin.contains("user-agent = \"ua \\\"q\\\"\""));
+    let env = fs::read_to_string(dir.path().join("env")).unwrap();
+    assert!(!env.contains("SCREENSCRAPER_DEV_LOGIN") && !env.contains("leak"));
+
+    // A redirect off the allowlist is refused; one back onto it is followed.
+    fake_curl(dir.path(), "302 https://evil.example/x");
+    assert!(curl("ua").get(url, 1024, &never).is_err());
+    fake_curl(dir.path(), "301 https://example.invalid#.screenscraper.fr");
+    assert!(curl("ua").get(url, 1024, &never).is_err());
+}
+
+#[test]
+fn partial_download_holds_back_the_cover_and_is_retried() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = dir.path().join("cache");
+    let sys = system(dir.path(), &["A.sfc"]);
+    let xml = "<Data><jeu id=\"1\"><medias>\
+<media type=\"box-2D\" region=\"us\">https://www.screenscraper.fr/m/box</media>\
+<media type=\"ss\">https://www.screenscraper.fr/m/ss</media></medias></jeu></Data>";
+    let broken = mock(move |url| {
+        if url.contains("jeuInfos.php") {
+            Some((200, xml.as_bytes().to_vec()))
+        } else if url.ends_with("/m/ss") {
+            Some((500, b"later".to_vec()))
+        } else {
+            happy(url)
+        }
+    });
+    let mut opts = Options::new("en");
+    opts.media = vec![Media::Box2d, Media::Screenshot];
+    let (_, first) = finish(&engine(broken, &cache).start(vec![sys.clone()], opts.clone()));
+    assert_eq!((first.progress.scraped, first.progress.failed), (0, 1));
+    assert!(!sys.path.join("media/images/A.png").exists());
+
+    let fixed = mock(move |url| {
+        if url.contains("jeuInfos.php") {
+            Some((200, xml.as_bytes().to_vec()))
+        } else {
+            happy(url)
+        }
+    });
+    let (_, second) = finish(&engine(fixed, &cache).start(vec![sys.clone()], opts));
+    assert_eq!((second.progress.total, second.progress.scraped), (1, 1));
+    assert!(sys.path.join("media/images/A.png").is_file());
+    assert!(sys.path.join("media/screenshots/A.png").is_file());
+}
+
+#[test]
+fn truncated_or_oversized_images_are_failures_not_art() {
+    for (body, saved) in [
+        (b"\x89PNG".to_vec(), false),
+        (png(64, 48)[..30].to_vec(), false),
+        (png(100_000, 100_000), false),
+        (jpeg(9000, 4), false),
+        (jpeg(64, 48)[..20].to_vec(), false),
+        (jpeg(64, 48), true),
+        (png(64, 48), true),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let sys = system(dir.path(), &["A.sfc"]);
+        let http = mock(move |url| {
+            if url.ends_with("/m/7/box-eu") || url.contains("/box-br") {
+                Some((200, body.clone()))
+            } else {
+                happy(url)
+            }
+        });
+        let (_, report) =
+            finish(&engine(http, dir.path()).start(vec![sys.clone()], Options::new("en")));
+        let kept =
+            fs::read_dir(sys.path.join("media/images")).is_ok_and(|mut d| d.next().is_some());
+        assert_eq!((kept, report.progress.failed == 0), (saved, saved));
+    }
+}
+
+#[test]
+fn journal_is_keyed_by_the_requested_assets() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = dir.path().join("cache");
+    let sys = system(dir.path(), &["A.sfc"]);
+    let (_, first) =
+        finish(&engine(mock(happy), &cache).start(vec![sys.clone()], Options::new("en")));
+    assert_eq!(first.progress.scraped, 1);
+    // Same game, video added later: not skipped by the old journal entry.
+    let http = mock(|url| {
+        if url.contains("jeuInfos.php") {
+            Some((200, b"<Data><jeu id=\"1\"><medias><media type=\"video\">https://www.screenscraper.fr/m/v</media></medias></jeu></Data>".to_vec()))
+        } else if url.ends_with("/m/v") {
+            Some((200, mp4()))
+        } else {
+            happy(url)
+        }
+    });
+    let mut opts = Options::new("en");
+    opts.media = vec![Media::Box2d, Media::Video];
+    let (_, second) = finish(&engine(http, &cache).start(vec![sys.clone()], opts));
+    assert_eq!((second.progress.total, second.progress.scraped), (1, 1));
+    assert!(sys.path.join("media/videos/A.mp4").is_file());
+}
+
+#[test]
+fn games_that_cannot_be_hashed_go_straight_to_name_search() {
+    let dir = tempfile::tempdir().unwrap();
+    let sys = cue_system(dir.path());
+    let http = mock(|url| {
+        assert!(
+            !url.contains("jeuInfos.php"),
+            "no digest, so no hash lookup"
+        );
+        if url.contains("jeuRecherche.php") {
+            Some((
+                200,
+                format!("<Data><jeux>{}</jeux></Data>", jeu_body()).into_bytes(),
+            ))
+        } else {
+            happy(url)
+        }
+    });
+    let (_, report) =
+        finish(&engine(http.clone(), dir.path()).start(vec![sys], Options::new("en")));
+    assert_eq!(report.progress.scraped, 1);
+    assert!(http
+        .seen
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|u| u.ends_with("recherche=Disc")));
+}
+
+#[test]
+fn account_minute_limit_sets_the_request_pace() {
+    let dir = tempfile::tempdir().unwrap();
+    let sys = system(dir.path(), &["A.sfc"]);
+    let stamps = Arc::new(Mutex::new(Vec::new()));
+    let log = stamps.clone();
+    let http = mock(move |url| {
+        log.lock().unwrap().push(Instant::now());
+        if url.contains("ssuserInfos.php") {
+            Some((200, b"<Data><ssuser><id>ana</id><maxrequestspermin>600</maxrequestspermin></ssuser></Data>".to_vec()))
+        } else {
+            happy(url)
+        }
+    });
+    finish(&engine(http, dir.path()).start(vec![sys], Options::new("en")));
+    let times = stamps.lock().unwrap();
+    assert!(times.len() >= 3);
+    assert!(times
+        .windows(2)
+        .all(|w| w[1] - w[0] >= Duration::from_millis(90)));
+}
+
+#[test]
+fn blacklist_and_restricted_access_end_the_run_distinctly() {
+    let dir = tempfile::tempdir().unwrap();
+    let sys = system(dir.path(), &["A.sfc", "B.sfc"]);
+    for (status, stop) in [
+        (426, Stop::Outdated),
+        (401, Stop::Restricted),
+        (403, Stop::Auth),
+    ] {
+        let http = mock(move |url| {
+            if url.contains("jeuInfos.php") {
+                Some((status, vec![]))
+            } else {
+                happy(url)
+            }
+        });
+        let (_, report) =
+            finish(&engine(http, dir.path()).start(vec![sys.clone()], Options::new("en")));
+        assert_eq!(report.stop, stop);
+        assert_eq!(report.progress.done, 0);
+    }
+}
+
+#[test]
+fn verify_rejects_malformed_success_replies_and_other_accounts() {
+    let dir = tempfile::tempdir().unwrap();
+    for body in [
+        &b"maintenance"[..],
+        b"<Data><ssuser>",
+        b"<Data></Data>",
+        b"<html/>",
+    ] {
+        let http = mock(move |_| Some((200, body.to_vec())));
+        assert_eq!(
+            engine(http, dir.path()).verify(),
+            Err(Stop::Closed),
+            "{body:?}"
+        );
+    }
+    let other = mock(|_| {
+        Some((
+            200,
+            b"<Data><ssuser><id>someone-else</id></ssuser></Data>".to_vec(),
+        ))
+    });
+    assert_eq!(engine(other, dir.path()).verify(), Err(Stop::Auth));
 }

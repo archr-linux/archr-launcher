@@ -1,9 +1,10 @@
 use crate::{
+    api::{self, Game as Hit, Media as Art},
     creds::Credentials,
     hash::digest,
-    http::{Curl, Http, NetError},
+    http::{trusted, Curl, Http, NetError},
     systems::system_id,
-    xml::{parse, El},
+    validate,
 };
 use archr_index::{clean_name, scan_system, Game, SystemDef};
 use archr_io::atomic_publish;
@@ -70,13 +71,13 @@ pub struct Options {
 }
 
 impl Options {
-    /// Box art, screenshot and wheel; video off; only games without art; resumable.
+    /// Box art only (the library reads nothing else yet); only games without art; resumable.
     pub fn new(language: &str) -> Self {
         Self {
             systems: Vec::new(),
             only_missing: true,
             resume: true,
-            media: vec![Media::Box2d, Media::Screenshot, Media::Wheel],
+            media: vec![Media::Box2d],
             language: language.to_owned(),
         }
     }
@@ -102,8 +103,12 @@ pub enum Stop {
     Cancelled,
     /// Daily request quota reached (or account closed for unknown ROMs).
     Quota,
-    /// Developer or user login refused.
+    /// Developer or user login refused (HTTP 403).
     Auth,
+    /// Service limited to eligible members (HTTP 401): not a wrong password.
+    Restricted,
+    /// This application is blacklisted or outdated (HTTP 426).
+    Outdated,
     /// API closed by the service.
     Closed,
     /// Repeated network failures.
@@ -127,6 +132,7 @@ pub struct UserInfo {
     pub threads: usize,
     pub requests_today: i64,
     pub max_requests_per_day: i64,
+    pub max_requests_per_min: i64,
 }
 
 #[derive(Clone, Copy)]
@@ -206,14 +212,11 @@ impl Engine {
     }
 
     /// Blocking: asks the service who the configured user is. Worker only.
+    /// Fails unless the reply is a well-formed account block (for the
+    /// configured user, when there is one).
     pub fn verify(&self) -> Result<UserInfo, Stop> {
         let never = AtomicBool::new(false);
-        let run = Run::new(&never, 1);
-        match self.call(&self.url("ssuserInfos.php", &[]), 1 << 20, &run) {
-            Ok(body) => Ok(user_info(&body)),
-            Err(Call::Stop(stop)) => Err(stop),
-            Err(_) => Err(Stop::Network),
-        }
+        self.account(&Run::new(&never, self.timing.spacing))
     }
 
     /// Starts the background job. Never blocks the caller.
@@ -247,6 +250,30 @@ impl Engine {
         url
     }
 
+    fn account(&self, run: &Run) -> Result<UserInfo, Stop> {
+        let body = match self.call(&self.url("ssuserInfos.php", &[]), 1 << 20, run) {
+            Ok(body) => body,
+            Err(Call::Stop(stop)) => return Err(stop),
+            Err(Call::NotFound) => return Err(Stop::Closed),
+            Err(Call::Failed) => return Err(Stop::Network),
+        };
+        let user = api::account(&body).ok_or(Stop::Closed)?;
+        if self
+            .creds
+            .as_ref()
+            .is_some_and(|c| !user.id.trim().eq_ignore_ascii_case(c.user.trim()))
+        {
+            return Err(Stop::Auth);
+        }
+        let count = |n: Option<i64>| n.unwrap_or(0).max(0);
+        Ok(UserInfo {
+            threads: count(user.maxthreads).max(1) as usize,
+            requests_today: count(user.requeststoday),
+            max_requests_per_day: count(user.maxrequestsperday),
+            max_requests_per_min: count(user.maxrequestspermin),
+        })
+    }
+
     fn run(
         &self,
         systems: &[SystemDef],
@@ -255,19 +282,24 @@ impl Engine {
         send: &Sender<Event>,
     ) -> Report {
         let mut progress = Progress::default();
-        let stop = |stop, progress: Progress| Report { stop, progress };
-        let mut run = Run::new(cancel, 1);
-        let info = match self.call(&self.url("ssuserInfos.php", &[]), 1 << 20, &run) {
-            Ok(body) => user_info(&body),
-            Err(Call::Stop(s)) => return stop(s, progress),
-            Err(_) => UserInfo::default(), // unknown level: assume the minimum
+        let ended = |stop, progress: Progress| Report { stop, progress };
+        let mut run = Run::new(cancel, self.timing.spacing);
+        let info = match self.account(&run) {
+            Ok(info) => info,
+            Err(stop) => return ended(stop, progress),
         };
-        run.threads = info.threads.clamp(1, MAX_THREADS);
+        let threads = (info.threads).clamp(1, MAX_THREADS);
+        if info.max_requests_per_min > 0 {
+            run.spacing = Duration::from_millis(60_000 / info.max_requests_per_min as u64);
+            *run.next_slot.lock().unwrap() = Instant::now() + run.spacing;
+        }
         if info.max_requests_per_day > 0 {
             run.budget
                 .store(info.max_requests_per_day - info.requests_today, Relaxed);
         }
 
+        let regions = regions(&options.language);
+        let signature = signature(options, &regions);
         let journal = self.cache.join(JOURNAL);
         let finished: HashSet<String> = match options.resume {
             true => fs::read_to_string(&journal)
@@ -285,10 +317,11 @@ impl Engine {
             };
             for game in scan_system(system) {
                 if cancel.load(Relaxed) {
-                    return stop(Stop::Cancelled, progress);
+                    return ended(Stop::Cancelled, progress);
                 }
-                let key = journal_key(system, &game);
-                if (options.only_missing && game.image.is_some()) || finished.contains(&key) {
+                let key = format!("{}\t{signature}", journal_key(system, &game));
+                let needed = needed(options, system, &game);
+                if needed.is_empty() || finished.contains(&key) {
                     progress.skipped += 1;
                 } else {
                     items.push(Item {
@@ -296,6 +329,7 @@ impl Engine {
                         id,
                         game,
                         key,
+                        needed,
                     });
                 }
             }
@@ -315,16 +349,14 @@ impl Engine {
         };
         let _ = send.send(Event::Progress(shared.snapshot()));
 
-        let regions = regions(&options.language);
         thread::scope(|scope| {
-            for _ in 0..run.threads {
+            for _ in 0..threads {
                 scope.spawn(|| {
                     while !cancel.load(Relaxed) {
                         let Some(item) = items.get(shared.next.fetch_add(1, Relaxed)) else {
                             break;
                         };
-                        let outcome = self.scrape(&run, options, &regions, item);
-                        match outcome {
+                        match self.scrape(&run, &regions, item) {
                             Err(reason) => {
                                 shared.reason.lock().unwrap().get_or_insert(reason);
                                 cancel.store(true, Relaxed);
@@ -344,17 +376,11 @@ impl Engine {
             (None, true) => Stop::Cancelled,
             (None, false) => Stop::Completed,
         };
-        stop(reason, shared.snapshot())
+        ended(reason, shared.snapshot())
     }
 
     /// `Err` is a run-ending condition; per-game problems are `Ok(Failed)`.
-    fn scrape(
-        &self,
-        run: &Run,
-        options: &Options,
-        regions: &[&str],
-        item: &Item,
-    ) -> Result<Outcome, Stop> {
+    fn scrape(&self, run: &Run, regions: &[&str], item: &Item) -> Result<Outcome, Stop> {
         let sys = item.id.to_string();
         let name = item
             .game
@@ -362,45 +388,37 @@ impl Engine {
             .file_name()
             .unwrap_or_default()
             .to_string_lossy();
-        let mut params = vec![
-            ("systemeid", sys.as_str()),
-            ("romtype", "rom"),
-            ("romnom", &name),
-        ];
-        let hashes = rom_hashes(&item.game.path, run.cancel);
-        let size;
-        if let Some(d) = &hashes {
-            size = d.size.to_string();
-            params.extend([
-                ("crc", d.crc32.as_str()),
+        // The hash lookup needs a digest and size; without one go by name.
+        let mut found = None;
+        if let Some(d) = rom_hashes(&item.game.path, run.cancel) {
+            let size = d.size.to_string();
+            let params = [
+                ("systemeid", sys.as_str()),
+                ("romtype", "rom"),
+                ("romnom", &name),
+                ("crc", &d.crc32),
                 ("md5", &d.md5),
                 ("romtaille", &size),
-            ]);
+            ];
+            match self.call(&self.url("jeuInfos.php", &params), 4 << 20, run) {
+                Ok(body) => found = api::game(&body),
+                Err(Call::NotFound) => {}
+                Err(Call::Failed) => return Ok(Outcome::Failed),
+                Err(Call::Stop(stop)) => return Err(stop),
+            }
         }
-        let found = match self.call(&self.url("jeuInfos.php", &params), 4 << 20, run) {
-            Ok(body) => parse(&body).and_then(|root| root.take("jeu")),
-            Err(Call::NotFound) => None,
-            Err(Call::Failed) => return Ok(Outcome::Failed),
-            Err(Call::Stop(stop)) => return Err(stop),
-        };
-        let game = match found {
-            Some(game) => game,
+        let hit = match found {
+            Some(hit) => hit,
             None => {
-                let query = clean_name(
-                    &item
-                        .game
-                        .path
-                        .file_stem()
-                        .unwrap_or_default()
-                        .to_string_lossy(),
-                );
+                let stem = item.game.path.file_stem().unwrap_or_default();
+                let query = clean_name(&stem.to_string_lossy());
                 let url = self.url(
                     "jeuRecherche.php",
                     &[("systemeid", &sys), ("recherche", &query)],
                 );
                 match self.call(&url, 4 << 20, run) {
-                    Ok(body) => match parse(&body).and_then(first_game) {
-                        Some(game) => game,
+                    Ok(body) => match api::search(&body) {
+                        Some(hit) => hit,
                         None => return Ok(Outcome::NotFound),
                     },
                     Err(Call::NotFound) => return Ok(Outcome::NotFound),
@@ -409,41 +427,60 @@ impl Engine {
                 }
             }
         };
-        let medias: Vec<&El> = game
-            .child("medias")
-            .map_or(vec![], |m| m.children("media").collect());
+        self.download(run, regions, item, &hit)
+    }
+
+    /// Non-cover assets are written as they arrive; the cover (last) only if
+    /// everything else worked, so a present cover means the game is complete.
+    fn download(
+        &self,
+        run: &Run,
+        regions: &[&str],
+        item: &Item,
+        hit: &Hit,
+    ) -> Result<Outcome, Stop> {
         let stem = item.game.path.file_stem().unwrap_or_default();
         let (mut saved, mut failed) = (0, 0);
-        for &kind in &options.media {
+        for &kind in &item.needed {
             let (types, dir, limit): (&[&str], _, _) = match kind {
                 Media::Box2d => (&["box-2D"], "images", IMAGE_LIMIT),
                 Media::Screenshot => (&["ss"], "screenshots", IMAGE_LIMIT),
                 Media::Wheel => (&["wheel", "wheel-hd"], "wheel", IMAGE_LIMIT),
                 Media::Video => (&["video-normalized", "video"], "videos", VIDEO_LIMIT),
             };
-            let Some(url) = pick(&medias, types, regions) else {
+            let Some(url) = pick(hit.medias(), types, regions) else {
                 continue;
             };
-            match self.call(&url, limit, run) {
-                Ok(body) => {
-                    let Some(ext) = sniff(&body, kind == Media::Video) else {
-                        continue;
-                    };
-                    let mut file = stem.to_os_string();
-                    file.push(format!(".{ext}"));
-                    let dest = item.system.path.join("media").join(dir).join(file);
-                    match atomic_publish(&dest, false, |f| f.write_all(&body)) {
-                        Ok(()) => saved += 1,
-                        Err(_) => failed += 1,
-                    }
-                }
+            if kind == Media::Box2d && failed > 0 {
+                break;
+            }
+            let body = match self.call(&url, limit, run) {
+                Ok(body) => body,
                 Err(Call::Stop(stop)) => return Err(stop),
+                Err(_) => {
+                    failed += 1;
+                    continue;
+                }
+            };
+            let ext = match kind {
+                Media::Video => validate::video(&body).then_some("mp4"),
+                _ => validate::image(&body),
+            };
+            let Some(ext) = ext else {
+                failed += 1;
+                continue;
+            };
+            let mut file = stem.to_os_string();
+            file.push(format!(".{ext}"));
+            let dest = item.system.path.join("media").join(dir).join(file);
+            match atomic_publish(&dest, false, |f| f.write_all(&body)) {
+                Ok(()) => saved += 1,
                 Err(_) => failed += 1,
             }
         }
         Ok(match (saved, failed) {
+            (_, 1..) => Outcome::Failed,
             (0, 0) => Outcome::NotFound,
-            (0, _) => Outcome::Failed,
             _ => Outcome::Scraped,
         })
     }
@@ -452,18 +489,20 @@ impl Engine {
     /// Never logs the URL (it carries credentials).
     fn call(&self, url: &str, limit: u64, run: &Run) -> Result<Vec<u8>, Call> {
         for attempt in 0..3 {
-            run.pace(self.timing.spacing)?;
-            let retry = match self.http.get(url, limit, run.cancel) {
+            run.pace()?;
+            match self.http.get(url, limit, run.cancel) {
                 Ok(response) => match response.status {
                     200 => {
                         run.network.store(0, Relaxed);
                         return Ok(response.body);
                     }
                     404 => return Err(Call::NotFound),
-                    401 | 403 => return Err(Call::Stop(Stop::Auth)),
+                    401 => return Err(Call::Stop(Stop::Restricted)),
+                    403 => return Err(Call::Stop(Stop::Auth)),
+                    426 => return Err(Call::Stop(Stop::Outdated)),
                     430 | 431 => return Err(Call::Stop(Stop::Quota)),
                     423 => return Err(Call::Stop(Stop::Closed)),
-                    429 | 500..=599 => true,
+                    429 | 500..=599 => {}
                     _ => return Err(Call::Failed),
                 },
                 Err(NetError::Cancelled) => return Err(Call::Stop(Stop::Cancelled)),
@@ -472,10 +511,9 @@ impl Engine {
                     if run.network.fetch_add(1, Relaxed) + 1 >= NETWORK_GIVE_UP {
                         return Err(Call::Stop(Stop::Network));
                     }
-                    true
                 }
-            };
-            if retry && attempt < 2 {
+            }
+            if attempt < 2 {
                 run.sleep(self.timing.retry)?;
             }
         }
@@ -488,6 +526,8 @@ struct Item<'a> {
     id: u32,
     game: Game,
     key: String,
+    /// Assets still to fetch, cover last.
+    needed: Vec<Media>,
 }
 
 enum Outcome {
@@ -507,6 +547,7 @@ impl Shared {
     fn snapshot(&self) -> Progress {
         self.progress.lock().unwrap().clone()
     }
+    /// Only complete games are journaled; a failed asset is retried next run.
     fn record(&self, item: &Item, outcome: Outcome) {
         let mut p = self.progress.lock().unwrap();
         p.done += 1;
@@ -526,18 +567,19 @@ impl Shared {
 /// Per-run request state shared by the worker threads.
 struct Run<'a> {
     cancel: &'a AtomicBool,
-    threads: usize,
-    /// Requests left today (negative budget never starts: i64::MAX if unknown).
+    /// Shared gap between requests (the account's per-minute limit, if known).
+    spacing: Duration,
+    /// Requests left today (i64::MAX if unknown).
     budget: AtomicI64,
     network: AtomicU32,
     next_slot: Mutex<Instant>,
 }
 
 impl<'a> Run<'a> {
-    fn new(cancel: &'a AtomicBool, threads: usize) -> Self {
+    fn new(cancel: &'a AtomicBool, spacing: Duration) -> Self {
         Self {
             cancel,
-            threads,
+            spacing,
             budget: AtomicI64::new(i64::MAX),
             network: AtomicU32::new(0),
             next_slot: Mutex::new(Instant::now()),
@@ -545,7 +587,7 @@ impl<'a> Run<'a> {
     }
 
     /// Spends one request from the daily budget and waits for the shared slot.
-    fn pace(&self, spacing: Duration) -> Result<(), Call> {
+    fn pace(&self) -> Result<(), Call> {
         if self.budget.fetch_sub(1, Relaxed) <= 0 {
             return Err(Call::Stop(Stop::Quota));
         }
@@ -553,7 +595,7 @@ impl<'a> Run<'a> {
             let mut slot = self.next_slot.lock().unwrap();
             let now = Instant::now();
             let start = (*slot).max(now);
-            *slot = start + spacing;
+            *slot = start + self.spacing;
             start - now
         };
         self.sleep(wait)
@@ -576,6 +618,50 @@ fn journal_key(system: &SystemDef, game: &Game) -> String {
     format!("{}/{}", system.name, relative.display())
 }
 
+/// What a finished game depends on: the asset set and the art region.
+fn signature(options: &Options, regions: &[&str]) -> String {
+    let mut kinds: Vec<String> = options.media.iter().map(|m| format!("{m:?}")).collect();
+    kinds.sort();
+    format!("{}@{}", kinds.join("+"), regions[0])
+}
+
+const fn folder(kind: Media) -> &'static str {
+    match kind {
+        Media::Box2d => "images",
+        Media::Screenshot => "screenshots",
+        Media::Wheel => "wheel",
+        Media::Video => "videos",
+    }
+}
+
+/// Requested assets still missing for `game` (all of them unless `only_missing`),
+/// with the cover last.
+fn needed(options: &Options, system: &SystemDef, game: &Game) -> Vec<Media> {
+    let stem = game.path.file_stem().unwrap_or_default();
+    let present = |kind: Media| match kind {
+        Media::Box2d => game.image.is_some(),
+        _ => ["png", "jpg", "mp4"].iter().any(|ext| {
+            let mut file = stem.to_os_string();
+            file.push(format!(".{ext}"));
+            system
+                .path
+                .join("media")
+                .join(folder(kind))
+                .join(file)
+                .is_file()
+        }),
+    };
+    let mut kinds: Vec<Media> = options
+        .media
+        .iter()
+        .copied()
+        .filter(|&kind| !(options.only_missing && present(kind)))
+        .collect();
+    kinds.sort_by_key(|&kind| kind == Media::Box2d);
+    kinds.dedup();
+    kinds
+}
+
 /// Hashes only real files within the size cap; cue/m3u sheets and folders go by name.
 fn rom_hashes(path: &Path, cancel: &AtomicBool) -> Option<crate::hash::Digest> {
     let meta = fs::metadata(path)
@@ -586,31 +672,6 @@ fn rom_hashes(path: &Path, cancel: &AtomicBool) -> Option<crate::hash::Digest> {
     (!sheet && meta.len() > 0)
         .then(|| digest(path, cancel).ok())
         .flatten()
-}
-
-fn user_info(body: &[u8]) -> UserInfo {
-    let number = |el: &El, name: &str| {
-        el.child(name)
-            .and_then(|n| n.text.trim().parse::<i64>().ok())
-    };
-    let Some(root) = parse(body) else {
-        return UserInfo::default();
-    };
-    let Some(user) = root.child("ssuser") else {
-        return UserInfo::default();
-    };
-    UserInfo {
-        threads: number(user, "maxthreads").unwrap_or(1).max(1) as usize,
-        requests_today: number(user, "requeststoday").unwrap_or(0),
-        max_requests_per_day: number(user, "maxrequestsperday").unwrap_or(0),
-    }
-}
-
-/// `jeuRecherche` answers `<Data><jeux><jeu id=..>`; empty `<jeu/>` means no match.
-fn first_game(root: El) -> Option<El> {
-    let mut jeux = root.take("jeux")?;
-    let at = jeux.kids.iter().position(|k| k.attr("id").is_some())?;
-    Some(jeux.kids.swap_remove(at))
 }
 
 /// Preferred art regions for a launcher language, then ES's generic fallbacks.
@@ -626,36 +687,24 @@ fn regions(language: &str) -> Vec<&'static str> {
     out
 }
 
-/// First media of the wanted `types` (in order) by region preference. Only
-/// https URLs on screenscraper.fr are followed: they embed our login.
-fn pick(medias: &[&El], types: &[&str], regions: &[&str]) -> Option<String> {
+/// First media of the wanted `types` (in order) by region preference, on a
+/// trusted host only: the URL embeds our login.
+fn pick(medias: &[Art], types: &[&str], regions: &[&str]) -> Option<String> {
     types.iter().find_map(|kind| {
         regions.iter().find_map(|region| {
             medias
                 .iter()
-                .filter(|m| m.attr("type") == Some(kind))
-                .find(|m| m.attr("region").unwrap_or("") == *region)
-                .and_then(|m| trusted_url(m.text.trim()))
+                .filter(|m| m.kind == *kind && m.region == *region)
+                .find_map(|m| {
+                    let url = m
+                        .url
+                        .trim()
+                        .replace(' ', "%20")
+                        .replace("#screenscraperserveur#", "https://www.screenscraper.fr/");
+                    trusted(&url).then_some(url)
+                })
         })
     })
-}
-
-fn trusted_url(raw: &str) -> Option<String> {
-    let url = raw
-        .replace(' ', "%20")
-        .replace("#screenscraperserveur#", "https://www.screenscraper.fr/");
-    let host = url.strip_prefix("https://")?.split(['/', '?']).next()?;
-    (host == "screenscraper.fr" || host.ends_with(".screenscraper.fr")).then_some(url)
-}
-
-/// Extension by content: the service answers errors as text with status 200.
-fn sniff(body: &[u8], video: bool) -> Option<&'static str> {
-    match body {
-        [0x89, b'P', b'N', b'G', ..] if !video => Some("png"),
-        [0xFF, 0xD8, 0xFF, ..] if !video => Some("jpg"),
-        [_, _, _, _, b'f', b't', b'y', b'p', ..] if video => Some("mp4"),
-        _ => None,
-    }
 }
 
 fn encode(text: &str) -> String {
