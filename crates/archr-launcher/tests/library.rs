@@ -470,3 +470,19 @@ fn systems_without_emulators_launch_their_catalog_command() {
     );
     assert!(!paths.run.join("next").exists());
 }
+
+#[test]
+fn a_command_that_wraps_an_emulator_is_not_tools() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = Paths::new(Some(dir.path().to_owned()));
+    for name in ["ports", "other"] {
+        let roms = paths.at(&format!("/storage/roms/{name}"));
+        fs::create_dir_all(&roms).unwrap();
+        fs::write(roms.join("G.sh"), []).unwrap();
+    }
+    let catalog = paths.at("/storage/.config/archr/systems.cfg");
+    fs::create_dir_all(catalog.parent().unwrap()).unwrap();
+    fs::write(&catalog, "<systemList><system><name>ports</name><fullname>Ports</fullname><path>/storage/roms/ports</path><extension>.sh</extension><command>/usr/bin/runemu.sh %ROM% -P%SYSTEM%</command></system><system><name>other</name><fullname>Other</fullname><path>/storage/roms/other</path><extension>.sh</extension><command>/usr/bin/x --emu %EMULATOR% %ROM%</command></system></systemList>").unwrap();
+    let library = ready(&paths, None);
+    assert!(!library.is_tools("ports") && !library.is_tools("other"));
+}

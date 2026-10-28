@@ -200,8 +200,12 @@ impl Store {
     }
 }
 
+/// A catalog command that launches a program, not an emulator wrapper.
 pub(crate) fn is_tools(system: &SystemDef) -> bool {
-    system.emulators.is_empty() && !system.command.is_empty()
+    !system.command.is_empty()
+        && system.emulators.is_empty()
+        && !system.command.contains("runemu.sh")
+        && !system.command.contains("%EMULATOR%")
 }
 pub fn game_key(system: &SystemDef, path: &Path) -> Option<String> {
     let relative = path.strip_prefix(&system.path).ok()?.to_str()?;
