@@ -1642,8 +1642,7 @@ mod tests {
         let ttf = sdl2::ttf::init().unwrap();
         let fonts = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../themes/default/fonts");
         let font = |size: f32| {
-            ttf.load_font(fonts.join("Inter-Regular.ttf"), size as u16)
-                .unwrap()
+            crate::text::production_font(&ttf, &fonts.join("Inter-Regular.ttf"), size as u16)
         };
         let measure = |text: &str, size: f32| Ok(font(size).size_of(text).unwrap().0);
         for code in ["en", "pt_BR", "es", "ru"] {
@@ -1710,7 +1709,7 @@ mod tests {
             let initial = selection(selected, 17., 18.);
             let path = fonts.join(format!("{face}.ttf"));
             let measure = |text: &str, size: f32| {
-                let font = ttf.load_font(&path, size as u16).unwrap();
+                let font = crate::text::production_font(&ttf, &path, size as u16);
                 Ok(font.size_of(text).unwrap().0)
             };
             for (text, width, want) in [

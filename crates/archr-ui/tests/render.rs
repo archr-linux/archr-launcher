@@ -215,12 +215,14 @@ fn assert_button_ink_is_centered(rgba: &[u8]) {
             ink_x - center,
             ink_y - 455.5
         );
+        // Hinted ink sits on whole pixels: at most half a pixel off when its
+        // width parity differs from the circle's, never resampled to fit.
         assert!(
-            (ink_x - center).abs() <= 0.25,
+            (ink_x - center).abs() <= 0.5,
             "horizontal glyph center {ink_x} vs {center}"
         );
         assert!(
-            (ink_y - 455.5).abs() <= 0.25,
+            (ink_y - 455.5).abs() <= 0.5,
             "vertical glyph center {ink_y} vs 455.5"
         );
     }

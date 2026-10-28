@@ -1,5 +1,6 @@
 //! Cached status: only the status worker touches sysfs. It starts after
 //! present; the render thread consumes a typed snapshot without waiting.
+//! Battery is re-read every 2 s, the radio every 30 s; only changes publish.
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -8,6 +9,9 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+/// Charger plug/unplug must show promptly; two small sysfs reads every 2 s.
+const BATTERY_REFRESH: Duration = Duration::from_secs(2);
+/// Everything else (the Wi-Fi radio) is refreshed slowly or on an explicit signal.
 const REFRESH: Duration = Duration::from_secs(30);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Battery {
@@ -16,14 +20,20 @@ pub struct Battery {
 }
 /// Off-thread acquisition shared by the status pill and information cards.
 pub fn read_battery(root: &Path) -> Option<Battery> {
+    battery_at(&find_battery(root)?)
+}
+/// The first power supply named `battery` or of type `Battery`, by name order.
+fn find_battery(root: &Path) -> Option<PathBuf> {
     let base = root.join("sys/class/power_supply");
     let mut sources: Vec<_> = fs::read_dir(base).ok()?.filter_map(Result::ok).collect();
     sources.sort_by_key(|e| e.file_name());
-    let path = sources.into_iter().map(|e| e.path()).find(|p| {
+    sources.into_iter().map(|e| e.path()).find(|p| {
         p.file_name().is_some_and(|v| v == "battery")
             || archr_io::read_utf8(&p.join("type"), 4096, archr_io::Symlinks::Follow)
                 .is_ok_and(|s| s.trim() == "Battery")
-    })?;
+    })
+}
+fn battery_at(path: &Path) -> Option<Battery> {
     let percent = archr_io::read_utf8(&path.join("capacity"), 4096, archr_io::Symlinks::Follow)
         .ok()?
         .trim()
@@ -33,20 +43,34 @@ pub fn read_battery(root: &Path) -> Option<Battery> {
         .is_ok_and(|s| s.trim() == "Charging");
     (percent <= 100).then_some(Battery { percent, charging })
 }
+/// Polled every 2 s: the directory is found once and searched for again only
+/// after a failed read, so a steady tick costs exactly two small reads.
 struct BatterySource {
-    path: PathBuf,
+    root: PathBuf,
+    dir: Option<PathBuf>,
     next_read: Instant,
 }
 impl BatterySource {
+    fn new(root: PathBuf, now: Instant) -> Self {
+        Self {
+            root,
+            dir: None,
+            next_read: now,
+        }
+    }
     fn poll(&mut self, now: Instant) -> Option<Option<Battery>> {
         if now < self.next_read {
             return None;
         }
-        self.next_read = now + REFRESH;
-        Some(read_battery(&self.path))
+        self.next_read = now + BATTERY_REFRESH;
+        if let Some(battery) = self.dir.as_deref().and_then(battery_at) {
+            return Some(Some(battery));
+        }
+        self.dir = find_battery(&self.root);
+        Some(self.dir.as_deref().and_then(battery_at))
     }
 }
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, PartialEq)]
 struct Snapshot {
     battery: Option<Battery>,
     wifi: bool,
@@ -67,20 +91,28 @@ impl Worker {
         thread::Builder::new()
             .name("launcher-status".into())
             .spawn(move || {
-                let mut source = BatterySource {
-                    path: path.clone(),
-                    next_read: Instant::now(),
-                };
+                let mut source = BatterySource::new(path.clone(), Instant::now());
+                let mut snapshot = Snapshot::default();
+                let mut next_wifi = Instant::now();
                 loop {
-                    let battery = source
-                        .poll(Instant::now())
-                        .unwrap_or_else(|| published.lock().expect("status snapshot").battery);
-                    *published.lock().expect("status snapshot") = Snapshot {
-                        battery,
-                        wifi: wifi_on(&path),
-                    };
-                    match stopped.recv_timeout(REFRESH) {
-                        Ok(Signal::Refresh) | Err(mpsc::RecvTimeoutError::Timeout) => {}
+                    let now = Instant::now();
+                    let mut next = snapshot;
+                    if let Some(battery) = source.poll(now) {
+                        next.battery = battery;
+                    }
+                    if now >= next_wifi {
+                        next.wifi = wifi_on(&path);
+                        next_wifi = now + REFRESH;
+                    }
+                    // Publish only real changes; the render thread redraws on them.
+                    if next != snapshot {
+                        snapshot = next;
+                        *published.lock().expect("status snapshot") = snapshot;
+                    }
+                    let wake = source.next_read.min(next_wifi);
+                    match stopped.recv_timeout(wake.saturating_duration_since(Instant::now())) {
+                        Ok(Signal::Refresh) => next_wifi = Instant::now(),
+                        Err(mpsc::RecvTimeoutError::Timeout) => {}
                         Ok(Signal::Stop) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
                     }
                 }
@@ -289,17 +321,50 @@ mod tests {
     }
 
     #[test]
-    fn worker_source_is_optional_and_throttled_for_thirty_seconds() {
+    fn charger_changes_reach_the_pill_within_one_battery_period() {
+        let root = tempfile::tempdir().unwrap();
+        let battery = root.path().join("sys/class/power_supply/battery");
+        fs::create_dir_all(&battery).unwrap();
+        fs::write(battery.join("capacity"), "50").unwrap();
+        fs::write(battery.join("status"), "Discharging").unwrap();
+        let mut status = Status::new(Some(root.path()), Instant::now());
+        status.start();
+        // Redraw requests not explained by a minute change of the clock.
+        let poll = |status: &mut Status| {
+            let clock = status.clock.clone();
+            usize::from(status.poll(Instant::now()) && status.clock == clock)
+        };
+        let wait = |status: &mut Status, charging: bool| {
+            let deadline = Instant::now() + BATTERY_REFRESH + Duration::from_secs(1);
+            let mut redraws = 0;
+            while status.battery.map(|b| b.charging) != Some(charging) {
+                assert!(Instant::now() < deadline, "charger state not picked up");
+                std::thread::sleep(Duration::from_millis(5));
+                redraws += poll(status);
+            }
+            redraws
+        };
+        assert_eq!(wait(&mut status, false), 1);
+        fs::write(battery.join("status"), "Charging").unwrap();
+        // Exactly one redraw per real change; idle polls in between request none.
+        assert_eq!(wait(&mut status, true), 1);
+        for _ in 0..50 {
+            std::thread::sleep(Duration::from_millis(5));
+            assert_eq!(poll(&mut status), 0);
+        }
+        fs::write(battery.join("status"), "Discharging").unwrap();
+        assert_eq!(wait(&mut status, false), 1);
+    }
+
+    #[test]
+    fn battery_source_is_optional_and_throttled_to_two_seconds() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("sys/class/power_supply/battery");
         fs::create_dir_all(&path).unwrap();
         fs::write(path.join("capacity"), "87").unwrap();
         fs::write(path.join("status"), "Charging").unwrap();
         let now = Instant::now();
-        let mut source = BatterySource {
-            path: root.path().into(),
-            next_read: now,
-        };
+        let mut source = BatterySource::new(root.path().into(), now);
         assert_eq!(
             source.poll(now),
             Some(Some(Battery {
@@ -308,11 +373,43 @@ mod tests {
             }))
         );
         fs::write(path.join("capacity"), "12").unwrap();
-        assert_eq!(source.poll(now + Duration::from_secs(29)), None);
-        assert_eq!(source.poll(now + REFRESH).unwrap().unwrap().percent, 12);
+        assert_eq!(source.poll(now + Duration::from_millis(1999)), None);
+        assert_eq!(
+            source.poll(now + BATTERY_REFRESH).unwrap().unwrap().percent,
+            12
+        );
         fs::write(path.join("capacity"), "999").unwrap();
-        assert_eq!(source.poll(now + REFRESH * 2), Some(None));
+        assert_eq!(source.poll(now + BATTERY_REFRESH * 2), Some(None));
         fs::remove_file(path.join("capacity")).unwrap();
-        assert_eq!(source.poll(now + REFRESH * 3), Some(None));
+        assert_eq!(source.poll(now + BATTERY_REFRESH * 3), Some(None));
+    }
+
+    #[test]
+    fn battery_directory_is_cached_and_searched_again_only_after_a_failed_read() {
+        let root = tempfile::tempdir().unwrap();
+        let supplies = root.path().join("sys/class/power_supply");
+        let supply = |name: &str, percent: &str| {
+            let dir = supplies.join(name);
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(dir.join("type"), "Battery\n").unwrap();
+            fs::write(dir.join("capacity"), percent).unwrap();
+        };
+        supply("rk817-battery", "40");
+        let now = Instant::now();
+        let mut source = BatterySource::new(root.path().into(), now);
+        let percent = |source: &mut BatterySource, tick: u32| {
+            source
+                .poll(now + BATTERY_REFRESH * tick)
+                .unwrap()
+                .map(|b| b.percent)
+        };
+        assert_eq!(percent(&mut source, 0), Some(40));
+        // An earlier-sorting supply appears: the cached directory keeps winning.
+        supply("axp-battery", "90");
+        assert_eq!(percent(&mut source, 1), Some(40));
+        // Only a failed read triggers a new search.
+        fs::remove_dir_all(supplies.join("rk817-battery")).unwrap();
+        assert_eq!(percent(&mut source, 2), Some(90));
+        assert_eq!(source.dir, Some(supplies.join("axp-battery")));
     }
 }

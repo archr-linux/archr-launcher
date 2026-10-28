@@ -3,7 +3,7 @@
 // image-provided font), loaded only for a CJK locale or an uncovered glyph.
 // Keep phase-1 Latin/Cyrillic startup free of CJK font I/O and memory costs.
 use crate::{
-    badges::{self, BadgeKey, SUPERSAMPLE},
+    badges::{self, BadgeKey},
     icons::{self, Glyph},
     startup::StartupTrace,
     startup_phase,
@@ -22,6 +22,66 @@ use std::{
     collections::{HashMap, VecDeque},
     path::{Path, PathBuf},
 };
+
+/// Text crispness on 1:1 low-DPI panels (R36S, 640x480).
+///
+/// The bundled Inter and JetBrains Mono carry ttfautohint bytecode that, under
+/// FreeType's v40 interpreter, only hints the y axis: vertical stems keep their
+/// fractional x and always land as one solid plus one grey column. Every face
+/// is therefore loaded with `fpgm`/`prep` renamed and
+/// `maxp.maxSizeOfInstructions` zeroed in memory, so FreeType treats it as
+/// unhinted and uses its own autohinter. With `TTF_HINTING_MONO` that hinter
+/// snaps stems in both axes; SDL_ttf still renders blended, anti-aliased
+/// coverage. Files on disk are untouched. Approved on device against Normal,
+/// Light, None, the v35 interpreter, gamma boosts and Inter Medium.
+fn force_autohint(bytes: &mut [u8]) {
+    let be16 = |b: &[u8], at: usize| b.get(at..at + 2).map(|v| u16::from_be_bytes([v[0], v[1]]));
+    let be32 = |b: &[u8], at: usize| {
+        b.get(at..at + 4)
+            .map(|v| u32::from_be_bytes([v[0], v[1], v[2], v[3]]))
+    };
+    // Plain TrueType only. CFF (OTTO) has no bytecode and a 6-byte maxp;
+    // collections and WOFF have other headers. Leave all of those untouched.
+    if !matches!(bytes.get(..4), Some(&[0, 1, 0, 0] | b"true")) {
+        return;
+    }
+    let Some(tables) = be16(bytes, 4) else { return };
+    let records = (0..usize::from(tables)).map(|i| 12 + 16 * i);
+    let maxp = records.clone().find_map(|record| {
+        let (offset, length) = (be32(bytes, record + 8)?, be32(bytes, record + 12)?);
+        (bytes.get(record..record + 4)? == b"maxp").then_some((offset as usize, length))
+    });
+    let Some((maxp, length)) = maxp else { return };
+    if length < 32 || be32(bytes, maxp) != Some(0x0001_0000) || bytes.len() < maxp + 28 {
+        return;
+    }
+    bytes[maxp + 26..maxp + 28].fill(0);
+    for record in records {
+        if let Some(tag) = bytes.get_mut(record..record + 4) {
+            if tag == b"fpgm" || tag == b"prep" {
+                tag[0] = b'_';
+            }
+        }
+    }
+}
+
+/// Test reference face, loaded exactly as `Fonts` loads it: patched + mono.
+/// The bytes are leaked; tests only.
+#[cfg(test)]
+pub(crate) fn production_font<'a>(
+    ttf: &'a Sdl2TtfContext,
+    path: &Path,
+    size: u16,
+) -> Font<'a, 'static> {
+    let mut bytes = std::fs::read(path).unwrap();
+    force_autohint(&mut bytes);
+    let bytes: &'static [u8] = Box::leak(bytes.into_boxed_slice());
+    let mut font = ttf
+        .load_font_from_rwops(RWops::from_bytes(bytes).unwrap(), size)
+        .unwrap();
+    font.set_hinting(sdl2::ttf::Hinting::Mono);
+    font
+}
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub(crate) enum Face {
@@ -114,7 +174,8 @@ impl<'font> Fonts<'font> {
                 let font = std::fs::read(&path)
                     .map_err(|e| e.to_string())
                     .and_then(|bytes| {
-                        let bytes = bytes.into_boxed_slice();
+                        let mut bytes = bytes.into_boxed_slice();
+                        force_autohint(&mut bytes);
                         if bytes.len() > i32::MAX as usize {
                             return Err("Font exceeds SDL RWops size limit".into());
                         }
@@ -133,9 +194,12 @@ impl<'font> Fonts<'font> {
                     path.display(),
                     font.is_ok()
                 );
-                let Ok((font, bytes)) = font else { continue };
-                // Static Inter SemiBold reports legacy style Regular; inspect
-                // the family as well and never synthesize a shipped weight twice.
+                let Ok((mut font, bytes)) = font else {
+                    continue;
+                };
+                font.set_hinting(sdl2::ttf::Hinting::Mono); // see force_autohint
+                                                            // Static Inter SemiBold reports legacy style Regular; inspect
+                                                            // the family as well and never synthesize a shipped weight twice.
                 let weight = format!(
                     "{} {}",
                     font.face_family_name().unwrap_or_default(),
@@ -331,10 +395,7 @@ impl<'font, 'texture> TextCache<'font, 'texture> {
             let hit = self.badges.remove(index).expect("located badge");
             self.badges.push_back(hit);
         } else {
-            let surface = badges::render(
-                self.font(Face::Semibold, key.size * SUPERSAMPLE as u16)?,
-                key,
-            )?;
+            let surface = badges::render(self.font(Face::Semibold, key.size)?, key)?;
             self.first_rasterization
                 .phase_once("first text rasterization");
             let mut texture = self
@@ -342,7 +403,6 @@ impl<'font, 'texture> TextCache<'font, 'texture> {
                 .create_texture_from_surface(surface)
                 .map_err(|e| e.to_string())?;
             texture.set_blend_mode(BlendMode::Blend);
-            texture.set_scale_mode(ScaleMode::Linear);
             if self.badges.len() == 16 {
                 self.badges.pop_front();
             }
@@ -530,7 +590,85 @@ mod tests {
     }
 
     fn load_font<'a>(ttf: &'a Sdl2TtfContext, name: &str, size: u16) -> Font<'a, 'static> {
-        ttf.load_font(bundled_font(name), size).unwrap()
+        production_font(ttf, &bundled_font(name), size)
+    }
+
+    #[test]
+    fn autohint_patch_only_touches_plain_truetype() {
+        let inter = std::fs::read(bundled_font("Inter-Regular")).unwrap();
+        let with_magic = |magic: &[u8; 4]| [&magic[..], &inter[4..]].concat();
+        // Truncated and garbage input must never panic.
+        for len in [0, 3, 4, 6, 12, 40, 200, inter.len() / 2] {
+            force_autohint(&mut inter[..len].to_vec());
+        }
+        let mut garbage: Vec<u8> = (0..4096u32)
+            .map(|i| (i.wrapping_mul(2_654_435_761) >> 13) as u8)
+            .collect();
+        garbage[..4].copy_from_slice(b"true");
+        force_autohint(&mut garbage);
+        // A plain TrueType header whose maxp is CFF-sized (6 bytes).
+        let mut short_maxp = inter.clone();
+        let record = (0..usize::from(u16::from_be_bytes([inter[4], inter[5]])))
+            .map(|i| 12 + 16 * i)
+            .find(|r| &inter[*r..r + 4] == b"maxp")
+            .unwrap();
+        short_maxp[record + 12..record + 16].copy_from_slice(&6u32.to_be_bytes());
+        for untouched in [
+            with_magic(b"OTTO"),
+            with_magic(b"ttcf"),
+            with_magic(b"wOFF"),
+            short_maxp,
+        ] {
+            let mut patched = untouched.clone();
+            force_autohint(&mut patched);
+            assert!(patched == untouched, "{:?}", &untouched[..4]);
+        }
+        let mut truetype = with_magic(b"true");
+        force_autohint(&mut truetype);
+        assert!(
+            truetype != with_magic(b"true"),
+            "Apple 'true' fonts are patched"
+        );
+    }
+    #[test]
+    fn every_face_uses_the_autohinter_with_mono_hinting() {
+        let _sdl = crate::SDL_TEST_LOCK.lock().unwrap();
+        let ttf = sdl2::ttf::init().unwrap();
+        let names = [
+            "Inter-Regular",
+            "Inter-SemiBold",
+            "JetBrainsMono-Regular",
+            "JetBrainsMono-Medium",
+        ];
+        let mut fonts = Fonts::new(&ttf, names.map(|name| vec![bundled_font(name)]));
+        let coverage = |font: &Font<'_, '_>| {
+            let surface = font
+                .render("Nintendo 15:23")
+                .blended(Color::WHITE)
+                .unwrap()
+                .convert_format(sdl2::pixels::PixelFormatEnum::RGBA32)
+                .unwrap();
+            surface.with_lock(|bytes| bytes.iter().skip(3).step_by(4).copied().collect::<Vec<_>>())
+        };
+        for (face, name) in [Face::Regular, Face::Semibold, Face::Mono, Face::MonoMedium]
+            .into_iter()
+            .zip(names)
+        {
+            let font = fonts.font(face, 17).unwrap();
+            assert_eq!(font.get_hinting(), sdl2::ttf::Hinting::Mono, "{name}");
+            let mut stock = ttf.load_font(bundled_font(name), 17).unwrap();
+            stock.set_hinting(sdl2::ttf::Hinting::Mono);
+            assert_ne!(
+                coverage(font),
+                coverage(&stock),
+                "{name} still runs its bytecode"
+            );
+            let bytes = &fonts.fonts[fonts.resolved[&face]]._bytes;
+            let tags = (0..usize::from(u16::from_be_bytes([bytes[4], bytes[5]])))
+                .map(|i| &bytes[12 + 16 * i..16 + 16 * i])
+                .collect::<Vec<_>>();
+            assert!(!tags.iter().any(|t| *t == b"fpgm" || *t == b"prep"));
+        }
     }
 
     #[test]
@@ -726,8 +864,7 @@ mod tests {
         );
         for (_, texture) in &cache.badges {
             let q = texture.query();
-            assert_eq!((q.width, q.height), (80, 80));
-            assert_eq!(texture.scale_mode(), ScaleMode::Linear);
+            assert_eq!((q.width, q.height), (20, 20), "drawn 1:1, never resampled");
         }
         let handle = cache.font(Face::Semibold, 44).unwrap().raw();
         for size in [12, 17, 44, 13, 44] {
@@ -853,7 +990,7 @@ mod tests {
                 .unwrap()
                 .get_style()
                 .contains(FontStyle::BOLD),
-            "a regular-only fallback needs synthesized bold at 4× regardless of filename"
+            "a regular-only fallback needs synthesized bold regardless of filename"
         );
         // Read/open/rasterize on a scoped worker, then remove the source file.
         // Resizing still works after handover because the face owns its bytes.
