@@ -34,6 +34,7 @@ log_file=/var/log/archr-launcher-session.log
 kill_file=/tmp/.process-kill-data
 sway_attempts=100
 sleep_bin=sleep
+stop_sleep=sleep
 # Overrides are only for hermetic host tests, never read in normal operation.
 if [ "${ARCHR_SESSION_TEST:-0}" = 1 ]; then
     run_dir=${ARCHR_SESSION_RUN_DIR:?}
@@ -43,6 +44,7 @@ if [ "${ARCHR_SESSION_TEST:-0}" = 1 ]; then
     kill_file=${ARCHR_SESSION_KILL_FILE:?}
     sway_attempts=${ARCHR_SESSION_SWAY_ATTEMPTS:-100}
     sleep_bin=${ARCHR_SESSION_SLEEP:?}
+    stop_sleep=${ARCHR_SESSION_STOP_SLEEP:?}
 fi
 
 # Same UI exports as 001-functions, 050-sway.conf and es_settings. Quirk exports
@@ -74,6 +76,56 @@ session_log() {
     cap_log
 }
 
+child_pid=
+child_group=0
+launching=0
+stop_requested=0
+
+child_alive() {
+    [ -n "$child_pid" ] || return 1
+    if [ "$child_group" -eq 1 ]; then
+        kill -0 -- "-$child_pid" 2>/dev/null
+    else
+        kill -0 "$child_pid" 2>/dev/null
+    fi
+}
+
+signal_child() {
+    [ -n "$child_pid" ] || return 0
+    if [ "$child_group" -eq 1 ]; then
+        # A very early stop may precede setsid; fall back to its child PID.
+        kill "-$1" -- "-$child_pid" 2>/dev/null && return 0
+    fi
+    kill "-$1" "$child_pid" 2>/dev/null || :
+}
+
+stop_session() {
+    trap '' TERM INT HUP
+    session_log 'Stopping session; allowing up to 4 s for child cleanup'
+    rm -f "$run_dir/next" "$kill_file"
+    signal_child TERM
+    # Wait for the entire game group, not just sh -c: its wrapper may still be
+    # cleaning up after that shell exits. The service cgroup is the final guard.
+    remaining=40
+    while child_alive && [ "$remaining" -gt 0 ]; do
+        "$stop_sleep" 0.1
+        remaining=$((remaining - 1))
+    done
+    if child_alive; then
+        session_log 'Child cleanup timed out; killing remaining processes'
+        signal_child KILL
+    fi
+    [ -z "$child_pid" ] || wait "$child_pid" 2>/dev/null
+    exit 0
+}
+
+request_stop() {
+    stop_requested=1
+    # Do not lose a signal between starting a child and recording its PID.
+    [ "$launching" -eq 1 ] || stop_session
+}
+trap request_stop TERM INT HUP
+
 # Match start_es.sh: Wayland socket AND an active output, 100 ms, at most 10 s.
 i=0
 while [ "$i" -lt "$sway_attempts" ]; do
@@ -98,14 +150,25 @@ while :; do
     # input_sense uses killall with this file, never a PID or a process group.
     # The launcher and supervisor have different names; do not target the latter.
     printf '%s\n' archr-launcher >"$kill_file"
-    "$launcher"
+    # A leftover belongs to an interrupted cycle, never the next invocation.
+    rm -f "$run_dir/next" || exit 1
+    launching=1
+    child_group=0
+    "$launcher" &
+    child_pid=$!
+    launching=0
+    [ "$stop_requested" -eq 0 ] || stop_session
+    wait "$child_pid"
     launcher_status=$?
+    child_pid=
     cap_log
+    if [ "$launcher_status" -ne 0 ]; then
+        rm -f "$run_dir/next" || exit 1
+        session_log "Launcher exited with $launcher_status; retrying in 1 s"
+        "$sleep_bin" 1
+        continue
+    fi
     if [ ! -f "$run_dir/next" ]; then
-        if [ "$launcher_status" -ne 0 ]; then
-            session_log "Launcher exited with $launcher_status; retrying in 1 s"
-            "$sleep_bin" 1
-        fi
         continue
     fi
 
@@ -120,8 +183,24 @@ while :; do
             # may refine it (e.g. -9 mupen64plus). Never overwrite it mid-game.
             rm -f "$kill_file"
             session_log 'Starting game'
-            sh -c "$command"
+            launching=1
+            child_group=0
+            # ArchR's target BusyBox enables setsid; keep a PID-only fallback
+            # for minimal hosts. Never place the supervisor in this group.
+            if command -v setsid >/dev/null 2>&1; then
+                setsid sh -c "$command" &
+                child_group=1
+            else
+                session_log 'setsid unavailable; tracking game child PID only'
+                sh -c "$command" &
+            fi
+            child_pid=$!
+            launching=0
+            [ "$stop_requested" -eq 0 ] || stop_session
+            wait "$child_pid"
             game_status=$?
+            child_pid=
+            child_group=0
             session_log "Game exited with $game_status"
             printf '%s\n' "$game_status" >"$run_dir/last-exit.tmp" &&
                 mv -f "$run_dir/last-exit.tmp" "$run_dir/last-exit" || exit 1

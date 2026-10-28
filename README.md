@@ -207,8 +207,8 @@ da árvore local, sem `.git`, caches e `target/`; não usa `PKG_SOURCE_DIR`, que
 apenas renomeia a pasta extraída. Os arquivos de código, sessão, temas e locales
 entram no stamp de unpack, invalidando o snapshot quando mudam. Mantenha o mesmo
 override nas etapas de build/instalação da imagem. Sem override, usa o commit
-remoto. O projeto ainda precisa declarar a licença do código; por enquanto o
-pacote registra `unknown`, sem alterar as licenças OFL das fontes.
+remoto. O código é GPL-2.0-or-later (texto em `LICENSE`); as fontes mantêm
+suas licenças OFL independentes.
 
 Depois de incluir o pacote na imagem, para optar pela sessão, altere **somente**
 a linha `UI_SERVICE` em `/storage/.config/profile.d/090-ui_service`, preservando
@@ -240,8 +240,19 @@ serviços, governador e demais estados. Seu `quit()` ainda grava
 `emulationstation`; a próxima volta da sessão troca esse alvo por
 `archr-launcher`. Nenhum desses scripts da distro foi modificado.
 
-Cada `next` é lido sem reinterpretar escapes e removido antes da execução;
-`last-exit` recebe o código decimal via arquivo temporário + rename. O log fica
+Antes de cada execução do launcher, a sessão descarta qualquer `next` antigo.
+Só aceita um novo pedido se o launcher sair com código 0; uma falha descarta o
+pedido e aplica backoff de 1 s. Cada `next` aceito é lido sem reinterpretar
+escapes e removido antes da execução; `last-exit` recebe o código decimal via
+arquivo temporário + rename.
+
+Jogos rodam em um grupo separado com `setsid` (habilitado no BusyBox do ArchR).
+TERM, INT e HUP fazem o supervisor sinalizar o grupo e aguardar até cerca de 4 s
+para limpeza dos wrappers, antes de encerrar processos remanescentes. Sem
+`setsid`, acompanha somente o PID filho; a unidade mantém o fallback do cgroup
+(`KillMode=control-group`, `KillSignal=SIGTERM`, `TimeoutStopSec=6`).
+
+O log fica
 em `/var/log/archr-launcher-session.log`, truncado ao atingir 256 KiB. Somente
 eventos do supervisor entram nesse arquivo; stdout/stderr dos filhos seguem
 para o journal da unidade, evitando crescimento sem limite durante um jogo.

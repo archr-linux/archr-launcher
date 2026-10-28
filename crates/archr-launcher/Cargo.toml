@@ -2,6 +2,7 @@
 name = "archr-launcher"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 
 [dependencies]
 archr-config = { path = "../archr-config" }
