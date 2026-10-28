@@ -60,6 +60,22 @@ pub fn map_event(e: &Event) -> Option<Button> {
             _ => None,
         },
         Event::JoyAxisMotion {
+            axis_idx: 0, value, ..
+        }
+        | Event::ControllerAxisMotion {
+            axis: sdl2::controller::Axis::LeftX,
+            value,
+            ..
+        } => {
+            if value < 0 {
+                Some(Button::L)
+            } else if value > 0 {
+                Some(Button::R)
+            } else {
+                None
+            }
+        }
+        Event::JoyAxisMotion {
             axis_idx: 1, value, ..
         }
         | Event::ControllerAxisMotion {
@@ -67,9 +83,9 @@ pub fn map_event(e: &Event) -> Option<Button> {
             value,
             ..
         } => {
-            if value < -16000 {
+            if value < 0 {
                 Some(Button::Up)
-            } else if value > 16000 {
+            } else if value > 0 {
                 Some(Button::Down)
             } else {
                 None
@@ -79,13 +95,24 @@ pub fn map_event(e: &Event) -> Option<Button> {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Source {
+    Key(Keycode),
+    ControllerButton(u32, Pad),
+    JoystickButton(u32, u8),
+    Hat(u32, u8),
+    Axis(u32, u8),
+}
+
 #[derive(Default)]
 pub struct Repeat {
     held: Option<(Button, Instant)>,
+    sources: Vec<(Source, Button)>,
 }
 impl Repeat {
     pub fn press(&mut self, button: Button, now: Instant) {
-        if matches!(button, Button::Up | Button::Down) && self.held.map(|(b, _)| b) != Some(button)
+        if matches!(button, Button::Up | Button::Down | Button::L | Button::R)
+            && self.held.map(|(b, _)| b) != Some(button)
         {
             self.held = Some((button, now + Duration::from_millis(300)));
         }
@@ -100,6 +127,73 @@ impl Repeat {
     }
     pub fn clear(&mut self) {
         self.held = None;
+        self.sources.clear();
+    }
+    fn event(&mut self, event: &Event, mut button: Option<Button>, now: Instant) -> Option<Button> {
+        let (source, axis) = match *event {
+            Event::KeyDown {
+                keycode: Some(key),
+                repeat: false,
+                ..
+            }
+            | Event::KeyUp {
+                keycode: Some(key), ..
+            } => (Source::Key(key), None),
+            Event::ControllerButtonDown { which, button, .. }
+            | Event::ControllerButtonUp { which, button, .. } => {
+                (Source::ControllerButton(which, button), None)
+            }
+            Event::JoyButtonDown {
+                which, button_idx, ..
+            }
+            | Event::JoyButtonUp {
+                which, button_idx, ..
+            } => (Source::JoystickButton(which, button_idx), None),
+            Event::JoyHatMotion { which, hat_idx, .. } => (Source::Hat(which, hat_idx), None),
+            Event::JoyAxisMotion {
+                which,
+                axis_idx,
+                value,
+                ..
+            } => (Source::Axis(which, axis_idx), Some(value)),
+            Event::ControllerAxisMotion {
+                which, axis, value, ..
+            } => (Source::Axis(which, axis as u8), Some(value)),
+            _ => return None,
+        };
+        let previous = self.sources.iter().position(|(s, _)| *s == source);
+        if matches!(
+            event,
+            Event::KeyUp { .. } | Event::ControllerButtonUp { .. } | Event::JoyButtonUp { .. }
+        ) {
+            button = None;
+        }
+        if let Some(value) = axis {
+            let magnitude = value.unsigned_abs();
+            // Enter above 60%; retain the same direction down to 40%.
+            if magnitude < 13107
+                || (magnitude <= 19660 && previous.map(|i| self.sources[i].1) != button)
+            {
+                button = None;
+            }
+        }
+        if previous.map(|i| self.sources[i].1) == button {
+            return None;
+        }
+        if let Some(index) = previous {
+            let (_, old) = self.sources.remove(index);
+            if !self.sources.iter().any(|(_, b)| *b == old) {
+                self.release(old);
+            }
+        }
+        let button = button?;
+        let duplicate = self.sources.iter().any(|(_, b)| *b == button);
+        self.sources.push((source, button));
+        if duplicate {
+            return None;
+        }
+        self.press(button, now);
+        Some(button)
     }
     pub fn poll(&mut self, now: Instant) -> Option<Button> {
         let (button, deadline) = self.held?;
@@ -142,36 +236,9 @@ pub fn button_event(
         {
             return None
         }
-        Event::KeyUp { .. } | Event::ControllerButtonUp { .. } | Event::JoyButtonUp { .. } => {
-            if let Some(button) = mapped_button(event, controllers) {
-                repeat.release(button);
-            }
-            return None;
-        }
-        Event::JoyHatMotion {
-            state: sdl2::joystick::HatState::Centered,
-            ..
-        }
-        | Event::JoyAxisMotion {
-            value: -16000..=16000,
-            ..
-        }
-        | Event::ControllerAxisMotion {
-            axis: sdl2::controller::Axis::LeftY,
-            value: -16000..=16000,
-            ..
-        } => {
-            repeat.clear();
-            return None;
-        }
         _ => {}
     }
-    let button = mapped_button(event, controllers)?;
-    if repeat.is_held(button) {
-        return None;
-    }
-    repeat.press(button, Instant::now());
-    Some(button)
+    repeat.event(event, mapped_button(event, controllers), Instant::now())
 }
 
 fn mapped_button(event: &Event, controllers: &Controllers) -> Option<Button> {
@@ -184,5 +251,182 @@ fn mapped_button(event: &Event, controllers: &Controllers) -> Option<Button> {
         | Event::ControllerButtonUp { .. }
         | Event::ControllerAxisMotion { .. } => controllers.map_device_event(event),
         _ => map_event(event),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn native_stick_navigates_and_repeats_like_dpad() {
+        use sdl2::controller::Axis::{LeftX, LeftY};
+        for (axis_id, value, button) in [
+            (LeftX, -32768, Button::L),
+            (LeftX, 32767, Button::R),
+            (LeftY, -32768, Button::Up),
+            (LeftY, 32767, Button::Down),
+        ] {
+            let now = Instant::now();
+            let mut repeat = Repeat::default();
+            let event = axis(axis_id, value);
+            assert_eq!(repeat.event(&event, map_event(&event), now), Some(button));
+            assert_eq!(repeat.poll(now + Duration::from_millis(299)), None);
+            assert_eq!(repeat.poll(now + Duration::from_millis(300)), Some(button));
+            assert_eq!(repeat.poll(now + Duration::from_millis(379)), None);
+            assert_eq!(repeat.poll(now + Duration::from_millis(380)), Some(button));
+            let centered = axis(axis_id, 0);
+            assert_eq!(repeat.event(&centered, None, now), None);
+            assert_eq!(repeat.poll(now + Duration::from_secs(1)), None);
+        }
+    }
+
+    fn axis(axis: sdl2::controller::Axis, value: i16) -> Event {
+        Event::ControllerAxisMotion {
+            timestamp: 0,
+            which: 1,
+            axis,
+            value,
+        }
+    }
+
+    #[test]
+    fn stick_hysteresis_rearms_only_below_forty_percent() {
+        let now = Instant::now();
+        let mut repeat = Repeat::default();
+        for (value, expected) in [
+            (0, None),
+            (-19660, None),
+            (-19661, Some(Button::Up)),
+            (-18000, None),
+            (-13107, None),
+            (-13106, None),
+            (-19000, None),
+            (-32768, Some(Button::Up)),
+            (32767, Some(Button::Down)),
+            (0, None),
+        ] {
+            let event = axis(sdl2::controller::Axis::LeftY, value);
+            assert_eq!(
+                repeat.event(&event, map_event(&event), now),
+                expected,
+                "value={value}"
+            );
+        }
+        assert_eq!(repeat.poll(now + Duration::from_secs(1)), None);
+    }
+
+    #[test]
+    fn hat_and_axis_share_one_press_and_repeat_deadline() {
+        for axis_first in [false, true] {
+            let now = Instant::now();
+            let mut repeat = Repeat::default();
+            let stick = Event::JoyAxisMotion {
+                timestamp: 0,
+                which: 1,
+                axis_idx: 1,
+                value: -32768,
+            };
+            let hat = Event::JoyHatMotion {
+                timestamp: 0,
+                which: 1,
+                hat_idx: 0,
+                state: HatState::Up,
+            };
+            let events = if axis_first {
+                [&stick, &hat]
+            } else {
+                [&hat, &stick]
+            };
+            assert_eq!(
+                repeat.event(events[0], map_event(events[0]), now),
+                Some(Button::Up)
+            );
+            assert_eq!(
+                repeat.event(
+                    events[1],
+                    map_event(events[1]),
+                    now + Duration::from_millis(100)
+                ),
+                None
+            );
+            let centered = Event::JoyHatMotion {
+                timestamp: 0,
+                which: 1,
+                hat_idx: 0,
+                state: HatState::Centered,
+            };
+            assert_eq!(repeat.event(&centered, None, now), None);
+            for axis_id in [
+                sdl2::controller::Axis::LeftX,
+                sdl2::controller::Axis::RightY,
+            ] {
+                let event = axis(axis_id, 0);
+                assert_eq!(repeat.event(&event, map_event(&event), now), None);
+            }
+            assert_eq!(repeat.poll(now + Duration::from_millis(299)), None);
+            assert_eq!(
+                repeat.poll(now + Duration::from_millis(300)),
+                Some(Button::Up)
+            );
+            let centered = Event::JoyAxisMotion {
+                timestamp: 0,
+                which: 1,
+                axis_idx: 1,
+                value: 0,
+            };
+            assert_eq!(repeat.event(&centered, None, now), None);
+            assert_eq!(repeat.poll(now + Duration::from_secs(1)), None);
+        }
+    }
+
+    #[test]
+    fn es_stick_axes_use_configured_ids_and_signs_without_native_duplicates() {
+        use crate::joystick_mapping::RawMappings;
+        let mappings = RawMappings::parse(
+            r#"<inputList><inputConfig type="joystick" deviceGUID="pad">
+            <input name="leftanalogup" type="axis" id="5" value="1"/>
+            <input name="leftanalogdown" type="axis" id="5" value="-1"/>
+            <input name="leftanalogleft" type="axis" id="2" value="1"/>
+            <input name="leftanalogright" type="axis" id="2" value="-1"/>
+            <input name="up" type="hat" id="0" value="1"/>
+        </inputConfig></inputList>"#,
+        )
+        .unwrap();
+        let now = Instant::now();
+        for (axis_idx, value, expected) in [
+            (5, 32767, Button::Up),
+            (5, -32768, Button::Down),
+            (2, 32767, Button::L),
+            (2, -32768, Button::R),
+        ] {
+            let mut repeat = Repeat::default();
+            let event = Event::JoyAxisMotion {
+                timestamp: 0,
+                which: 1,
+                axis_idx,
+                value,
+            };
+            let mapped = mappings.map_device("pad", "", true, &event);
+            assert_eq!(repeat.event(&event, mapped, now), Some(expected));
+            assert_eq!(repeat.event(&event, mapped, now), None);
+            assert_eq!(
+                repeat.poll(now + Duration::from_millis(300)),
+                Some(expected)
+            );
+            assert_eq!(
+                repeat.poll(now + Duration::from_millis(380)),
+                Some(expected)
+            );
+            assert_eq!(
+                mappings.map_device(
+                    "pad",
+                    "",
+                    true,
+                    &axis(sdl2::controller::Axis::LeftY, -32768)
+                ),
+                None
+            );
+        }
     }
 }

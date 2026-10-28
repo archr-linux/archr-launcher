@@ -49,10 +49,12 @@ impl RawMappings {
                         "b" => Some(Button::B),
                         "x" => Some(Button::X),
                         "y" => Some(Button::Y),
-                        "leftshoulder" | "left" | "pageup" => Some(Button::L),
-                        "rightshoulder" | "right" | "pagedown" => Some(Button::R),
-                        "up" => Some(Button::Up),
-                        "down" => Some(Button::Down),
+                        "leftshoulder" | "left" | "pageup" | "leftanalogleft" => Some(Button::L),
+                        "rightshoulder" | "right" | "pagedown" | "leftanalogright" => {
+                            Some(Button::R)
+                        }
+                        "up" | "leftanalogup" => Some(Button::Up),
+                        "down" | "leftanalogdown" => Some(Button::Down),
                         "start" => Some(Button::Start),
                         "select" => Some(Button::Select),
                         _ => None,
@@ -135,8 +137,7 @@ impl RawMappings {
                 } => {
                     binding.kind == "axis"
                         && binding.id == axis_idx
-                        && ((binding.value < 0 && value < -16000)
-                            || (binding.value > 0 && value > 16000))
+                        && ((binding.value == -1 && value < 0) || (binding.value == 1 && value > 0))
                 }
                 Event::JoyHatMotion { hat_idx, state, .. } => {
                     binding.kind == "hat"
