@@ -36,22 +36,31 @@ use std::{
 /// Light, None, the v35 interpreter, gamma boosts and Inter Medium.
 fn force_autohint(bytes: &mut [u8]) {
     let be16 = |b: &[u8], at: usize| b.get(at..at + 2).map(|v| u16::from_be_bytes([v[0], v[1]]));
+    let be32 = |b: &[u8], at: usize| {
+        b.get(at..at + 4)
+            .map(|v| u32::from_be_bytes([v[0], v[1], v[2], v[3]]))
+    };
+    // Plain TrueType only. CFF (OTTO) has no bytecode and a 6-byte maxp;
+    // collections and WOFF have other headers. Leave all of those untouched.
+    if !matches!(bytes.get(..4), Some(&[0, 1, 0, 0] | b"true")) {
+        return;
+    }
     let Some(tables) = be16(bytes, 4) else { return };
-    for record in (0..usize::from(tables)).map(|i| 12 + 16 * i) {
-        let Some(tag) = bytes.get(record..record + 4) else {
-            return;
-        };
-        match tag {
-            b"fpgm" | b"prep" => bytes[record] = b'_',
-            b"maxp" => {
-                let at = bytes.get(record + 8..record + 12).map_or(usize::MAX, |v| {
-                    u32::from_be_bytes([v[0], v[1], v[2], v[3]]) as usize
-                });
-                if let Some(field) = bytes.get_mut(at.saturating_add(26)..at.saturating_add(28)) {
-                    field.fill(0);
-                }
+    let records = (0..usize::from(tables)).map(|i| 12 + 16 * i);
+    let maxp = records.clone().find_map(|record| {
+        let (offset, length) = (be32(bytes, record + 8)?, be32(bytes, record + 12)?);
+        (bytes.get(record..record + 4)? == b"maxp").then_some((offset as usize, length))
+    });
+    let Some((maxp, length)) = maxp else { return };
+    if length < 32 || be32(bytes, maxp) != Some(0x0001_0000) || bytes.len() < maxp + 28 {
+        return;
+    }
+    bytes[maxp + 26..maxp + 28].fill(0);
+    for record in records {
+        if let Some(tag) = bytes.get_mut(record..record + 4) {
+            if tag == b"fpgm" || tag == b"prep" {
+                tag[0] = b'_';
             }
-            _ => {}
         }
     }
 }
@@ -167,16 +176,12 @@ impl<'font> Fonts<'font> {
                     path.display(),
                     font.is_ok()
                 );
-                let Ok((font, bytes)) = font else { continue };
-                // See force_autohint. SAFETY: freshly loaded, exclusively owned handle.
-                unsafe {
-                    sdl2::sys::ttf::TTF_SetFontHinting(
-                        font.raw(),
-                        sdl2::sys::ttf::TTF_HINTING_MONO as i32,
-                    )
+                let Ok((mut font, bytes)) = font else {
+                    continue;
                 };
-                // Static Inter SemiBold reports legacy style Regular; inspect
-                // the family as well and never synthesize a shipped weight twice.
+                font.set_hinting(sdl2::ttf::Hinting::Mono); // see force_autohint
+                                                            // Static Inter SemiBold reports legacy style Regular; inspect
+                                                            // the family as well and never synthesize a shipped weight twice.
                 let weight = format!(
                     "{} {}",
                     font.face_family_name().unwrap_or_default(),
@@ -574,6 +579,43 @@ mod tests {
         font
     }
 
+    #[test]
+    fn autohint_patch_only_touches_plain_truetype() {
+        let inter = std::fs::read(bundled_font("Inter-Regular")).unwrap();
+        let with_magic = |magic: &[u8; 4]| [&magic[..], &inter[4..]].concat();
+        // Truncated and garbage input must never panic.
+        for len in [0, 3, 4, 6, 12, 40, 200, inter.len() / 2] {
+            force_autohint(&mut inter[..len].to_vec());
+        }
+        let mut garbage: Vec<u8> = (0..4096u32)
+            .map(|i| (i.wrapping_mul(2_654_435_761) >> 13) as u8)
+            .collect();
+        garbage[..4].copy_from_slice(b"true");
+        force_autohint(&mut garbage);
+        // A plain TrueType header whose maxp is CFF-sized (6 bytes).
+        let mut short_maxp = inter.clone();
+        let record = (0..usize::from(u16::from_be_bytes([inter[4], inter[5]])))
+            .map(|i| 12 + 16 * i)
+            .find(|r| &inter[*r..r + 4] == b"maxp")
+            .unwrap();
+        short_maxp[record + 12..record + 16].copy_from_slice(&6u32.to_be_bytes());
+        for untouched in [
+            with_magic(b"OTTO"),
+            with_magic(b"ttcf"),
+            with_magic(b"wOFF"),
+            short_maxp,
+        ] {
+            let mut patched = untouched.clone();
+            force_autohint(&mut patched);
+            assert!(patched == untouched, "{:?}", &untouched[..4]);
+        }
+        let mut truetype = with_magic(b"true");
+        force_autohint(&mut truetype);
+        assert!(
+            truetype != with_magic(b"true"),
+            "Apple 'true' fonts are patched"
+        );
+    }
     #[test]
     fn every_face_uses_the_autohinter_with_mono_hinting() {
         let _sdl = crate::SDL_TEST_LOCK.lock().unwrap();
