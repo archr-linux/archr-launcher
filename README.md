@@ -106,10 +106,14 @@ no desenho. Sem display, os mesmos fluxos podem rodar com
   escritas sem bloquear o event loop.
 - Sistemas com emuladores usam o contrato do `runemu.sh`. Sistemas sem
   emuladores (`tools`, `moonlight`, `imageviewer`) executam o `<command>` do
-  catálogo pelo mesmo `next`; `%ROM%`, `%BASENAME%` e `%SYSTEM%` viram uma
-  palavra de shell cada, ou são escapados dentro de aspas duplas (weston:
-  `--command="%ROM%"`). Outros marcadores, ou um marcador entre aspas simples,
-  são recusados com `error.no_core` em vez de adivinhados.
+  catálogo pelo mesmo `next`. Nomes de arquivo nunca entram no modelo: os
+  valores são exportados em `ARCHR_ROM`, `ARCHR_BASENAME` e `ARCHR_SYSTEM`, e
+  cada marcador vira uma referência à variável. Só três formas são aceitas:
+  palavra inteira sem aspas (`foot %ROM%`), palavra inteira entre aspas duplas
+  (`"%ROM%"`) e `--command="%ROM%"` (o weston-terminal a repassa a outro
+  `sh -c`, que expande a variável herdada). Barra invertida, crase, `$(`,
+  marcador desconhecido ou qualquer outro contexto: recusado com
+  `error.no_core`, e o modelo vai para o log.
 - Falhas do jogo são lidas de `last-exit`, exibidas por alguns segundos e
   apontam para `/var/log/exec.log`, usado por `runemu.sh`.
 

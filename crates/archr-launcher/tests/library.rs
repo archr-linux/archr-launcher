@@ -350,11 +350,13 @@ fn systems_without_emulators_launch_their_catalog_command() {
         game: 0,
     };
     assert!(library.handle(launch("tools"), "pad").unwrap());
+    let rom = tools.join("Mount NFS.sh");
     assert_eq!(
         fs::read_to_string(paths.run.join("next")).unwrap(),
         format!(
-            "game /usr/bin/foot '{}'\n",
-            tools.join("Mount NFS.sh").display()
+            "game ARCHR_ROM='{}'; ARCHR_BASENAME='Mount NFS'; ARCHR_SYSTEM='tools'; \
+             export ARCHR_ROM ARCHR_BASENAME ARCHR_SYSTEM; /usr/bin/foot \"$ARCHR_ROM\"\n",
+            rom.display()
         )
     );
     fs::remove_file(paths.run.join("next")).unwrap();

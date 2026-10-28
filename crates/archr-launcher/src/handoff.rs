@@ -59,58 +59,109 @@ pub fn launch_command_with(
     ))
 }
 
-/// Expand a catalog `<command>` for a system without emulators, as ES did.
-/// `%ROM%`, `%BASENAME%` and `%SYSTEM%` become single quoted shell words, or are
-/// escaped inside double quotes (weston: `--command="%ROM%"`). Any other
-/// placeholder, or one inside single quotes, is rejected rather than guessed.
+/// Expand a catalog `<command>` for a system without emulators.
+///
+/// File names never enter the template: the values are exported as
+/// `ARCHR_ROM`, `ARCHR_BASENAME` and `ARCHR_SYSTEM`, and each placeholder
+/// becomes a reference to its variable. Fail-closed grammar; a placeholder is
+/// accepted only as:
+/// - a whole unquoted word: `foot %ROM%` -> `foot "$ARCHR_ROM"`;
+/// - a whole double-quoted word: `"%ROM%"` -> `"$ARCHR_ROM"`;
+/// - `--command="%ROM%"` (weston-terminal runs it through another `sh -c`):
+///   `--command='"$ARCHR_ROM"'`, expanded by that inner shell from the
+///   inherited environment.
+///
+/// Templates with backslashes, backticks or `$(`, unknown placeholders and
+/// any other placeholder context are refused.
 pub fn catalog_command(template: &str, rom: &Path, system: &str) -> io::Result<String> {
-    let invalid = |message: String| io::Error::new(io::ErrorKind::InvalidInput, message);
-    let rom_text = rom
-        .to_str()
-        .ok_or_else(|| invalid("ROM path must be valid UTF-8".to_owned()))?;
+    let refuse = |reason: &str| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{reason} in catalog command {template:?}"),
+        )
+    };
+    let rom_text = rom.to_str().ok_or_else(|| refuse("non-UTF-8 ROM path"))?;
+    if template.contains(['\\', '`']) || template.contains("$(") {
+        return Err(refuse("shell escape or substitution"));
+    }
     let basename = rom.file_stem().and_then(|stem| stem.to_str()).unwrap_or("");
-    let mut command = String::with_capacity(template.len() + rom_text.len());
+    let mut command = String::new();
+    for (name, value) in [
+        ("ARCHR_ROM", rom_text),
+        ("ARCHR_BASENAME", basename),
+        ("ARCHR_SYSTEM", system),
+    ] {
+        command.push_str(&assignment(name, value));
+    }
+    command.push_str("export ARCHR_ROM ARCHR_BASENAME ARCHR_SYSTEM; ");
+    let word_start = |text: &str| text.is_empty() || text.ends_with(char::is_whitespace);
+    let word_end = |text: &str| text.is_empty() || text.starts_with(char::is_whitespace);
     let (mut single, mut double) = (false, false);
-    let mut rest = template;
-    while let Some(c) = rest.chars().next() {
-        let placeholder = rest
+    let mut index = 0;
+    while let Some(c) = template[index..].chars().next() {
+        let name = template[index..]
             .strip_prefix('%')
             .and_then(|tail| tail.find('%').map(|end| &tail[..end]))
             .filter(|name| {
                 !name.is_empty() && name.bytes().all(|b| b.is_ascii_uppercase() || b == b'_')
             });
-        if let Some(name) = placeholder {
-            let value = match name {
-                "ROM" => rom_text,
-                "BASENAME" => basename,
-                "SYSTEM" => system,
-                _ => return Err(invalid(format!("unsupported placeholder %{name}%"))),
-            };
-            if single {
-                return Err(invalid(format!("single-quoted placeholder %{name}%")));
+        let Some(name) = name else {
+            match c {
+                '\'' if !double => single = !single,
+                '"' if !single => double = !double,
+                _ => {}
             }
-            if double {
-                for c in value.chars() {
-                    if matches!(c, '"' | '\\' | '$' | '`') {
-                        command.push('\\');
-                    }
-                    command.push(c);
-                }
-            } else {
-                command.push_str(&quote(value));
-            }
-            rest = &rest[name.len() + 2..];
+            command.push(c);
+            index += c.len_utf8();
             continue;
+        };
+        if !matches!(name, "ROM" | "BASENAME" | "SYSTEM") {
+            return Err(refuse(&format!("unsupported placeholder %{name}%")));
         }
-        match c {
-            '\'' if !double => single = !single,
-            '"' if !single => double = !double,
-            _ => {}
+        let reference = format!("\"$ARCHR_{name}\"");
+        let (before, after) = (&template[..index], &template[index + name.len() + 2..]);
+        let closed = after.strip_prefix('"').filter(|rest| word_end(rest));
+        if !single && !double && word_start(before) && word_end(after) {
+            command.push_str(&reference);
+            index += name.len() + 2;
+        } else if double && closed.is_some() {
+            // The opening quote is already in the output; replace it.
+            command.pop();
+            if before.strip_suffix('"').is_some_and(word_start) {
+                command.push_str(&reference);
+            } else if before.strip_suffix("--command=\"").is_some_and(word_start) {
+                command.push_str(&format!("'{reference}'"));
+            } else {
+                return Err(refuse(&format!(
+                    "placeholder %{name}% inside a quoted word"
+                )));
+            }
+            double = false;
+            index += name.len() + 3;
+        } else {
+            return Err(refuse(&format!(
+                "placeholder %{name}% inside a word or quotes"
+            )));
         }
-        command.push(c);
-        rest = &rest[c.len_utf8()..];
+    }
+    if single || double {
+        return Err(refuse("unbalanced quotes"));
     }
     Ok(command)
+}
+
+/// One `NAME=value; ` assignment on a single line. `printf %b` restores
+/// newlines (the handoff is one line); the `x` keeps trailing ones.
+fn assignment(name: &str, value: &str) -> String {
+    if value.contains('\n') {
+        let escaped = value.replace('\\', "\\\\").replace('\n', "\\n");
+        format!(
+            "{name}=$(printf '%bx' {}); {name}=${{{name}%x}}; ",
+            quote(&escaped)
+        )
+    } else {
+        format!("{name}={}; ", quote(value))
+    }
 }
 
 fn quote(argument: &str) -> String {
@@ -205,48 +256,116 @@ mod tests {
         );
     }
 
-    #[test]
-    fn catalog_command_quotes_each_placeholder_as_one_word() {
-        let dir = tempfile::tempdir().unwrap();
-        let bin = dir.path().join("args");
-        fs::write(&bin, "#!/bin/sh\nprintf '%s\\n' \"$@\"\n").unwrap();
-        fs::set_permissions(&bin, fs::Permissions::from_mode(0o700)).unwrap();
-        let rom = Path::new("/storage/.config/modules/Tom's $(x) `y` \\ \"Mount\" NFS.sh");
-        let template = format!(
-            "{} %ROM% --base=%BASENAME% \"--rom=%ROM%\" -P%SYSTEM% 100%",
-            bin.display()
+    const NAMES: [&str; 6] = [
+        "plain.sh",
+        "Tom's \"Mount\" NFS.sh",
+        "cost $HOME and ${x}.sh",
+        "tick `id` and $(id).sh",
+        "back\\slash 100%ROM%.sh",
+        "two\nlines\n.sh",
+    ];
+
+    /// Write `#!/bin/sh` scripts that print their $0 and arguments to `out`.
+    fn tool(dir: &Path, name: &str, out: &Path) -> std::path::PathBuf {
+        let path = dir.join(name);
+        let body = format!(
+            "#!/bin/sh\nprintf '%s\\0' \"$0\" \"$@\" >>{}\n",
+            quote(out.to_str().unwrap())
         );
-        let command = catalog_command(&template, rom, "tools").unwrap();
+        fs::write(&path, body).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+        path
+    }
+
+    fn run(command: &str) {
         let result = Command::new("sh").arg("-c").arg(command).output().unwrap();
-        assert!(result.status.success());
-        assert_eq!(
-            String::from_utf8(result.stdout)
-                .unwrap()
-                .lines()
-                .collect::<Vec<_>>(),
-            vec![
-                rom.to_str().unwrap(),
-                "--base=Tom's $(x) `y` \\ \"Mount\" NFS",
-                &format!("--rom={}", rom.to_str().unwrap()),
-                "-Ptools",
-                "100%"
-            ]
-        );
-        assert_eq!(
-            catalog_command("/usr/bin/true", rom, "imageviewer").unwrap(),
-            "/usr/bin/true"
+        assert!(
+            result.status.success(),
+            "{command}: {}",
+            String::from_utf8_lossy(&result.stderr)
         );
     }
 
     #[test]
-    fn catalog_command_rejects_what_it_cannot_expand_safely() {
+    fn catalog_command_passes_hostile_names_through_the_environment() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("out");
+        let bin = tool(dir.path(), "args", &out);
+        for name in NAMES {
+            let rom = dir.path().join(name);
+            let template = format!("{} %ROM% \"%BASENAME%\" -P %SYSTEM% 100%", bin.display());
+            let command = catalog_command(&template, &rom, "tools").unwrap();
+            assert!(!command.contains('\n'), "handoff must stay one line");
+            let _ = fs::remove_file(&out);
+            run(&command);
+            let stem = rom.file_stem().unwrap().to_str().unwrap();
+            let expected = [
+                bin.to_str().unwrap(),
+                rom.to_str().unwrap(),
+                stem,
+                "-P",
+                "tools",
+                "100%",
+            ];
+            assert_eq!(
+                fs::read_to_string(&out).unwrap(),
+                expected.map(|arg| format!("{arg}\0")).concat(),
+                "{name:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn catalog_command_reaches_the_inner_shell_of_weston_terminal() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("out");
+        // Like the patched weston-terminal: run --command with `$SHELL -c`.
+        let weston = dir.path().join("weston-terminal");
+        fs::write(
+            &weston,
+            "#!/bin/sh\nfor arg; do case $arg in --command=*) exec sh -c \"${arg#--command=}\";; esac; done\nexit 9\n",
+        )
+        .unwrap();
+        fs::set_permissions(&weston, fs::Permissions::from_mode(0o700)).unwrap();
+        for name in NAMES {
+            let rom = tool(dir.path(), name, &out);
+            let template = format!("{} --command=\"%ROM%\"", weston.display());
+            let _ = fs::remove_file(&out);
+            run(&catalog_command(&template, &rom, "tools").unwrap());
+            assert_eq!(
+                fs::read_to_string(&out).unwrap(),
+                format!("{}\0", rom.display()),
+                "{name:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn catalog_command_refuses_every_other_placeholder_context() {
         let rom = Path::new("/roms/ok.sh");
-        for template in ["/usr/bin/runemu.sh %ROM% --core=%CORE%", "foot '%ROM%'"] {
+        for template in [
+            "/usr/bin/runemu.sh %ROM% --core=%CORE%",
+            "foot \\\"%ROM%\\\"",
+            "foot \"\\\"%ROM%\\\"\"",
+            "foot '%ROM%'",
+            "foot `%ROM%`",
+            "foot \"$(cat %ROM%)\"",
+            "foot --file=%ROM%",
+            "foot x%ROM%",
+            "foot \"a %ROM%\"",
+            "foot \"%ROM%\"x",
+            "sh -c \"%ROM%; true\"",
+            "weston-terminal x--command=\"%ROM%\"",
+            "foot \"%ROM%",
+        ] {
             assert_eq!(
                 catalog_command(template, rom, "tools").unwrap_err().kind(),
                 io::ErrorKind::InvalidInput,
                 "{template}"
             );
         }
+        assert!(catalog_command("/usr/bin/true", rom, "imageviewer")
+            .unwrap()
+            .ends_with("; /usr/bin/true"));
     }
 }
