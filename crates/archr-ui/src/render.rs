@@ -126,7 +126,7 @@ impl ListMotion {
 }
 struct StatusLayout {
     pill: Rect,
-    wifi: Rect,
+    wifi: Option<Rect>,
     clock: Rect,
     battery: Option<Rect>,
     percent: Option<Rect>,
@@ -138,12 +138,12 @@ fn status_layout(
     scale: f32,
     clock_width: u32,
     percent_width: Option<u32>,
+    wifi: bool,
 ) -> StatusLayout {
     let px = |v: f32| (v * scale).round().max(1.) as u32;
     let width = px(12.) * 2
         + clock_width
-        + px(16.)
-        + px(12.)
+        + if wifi { px(16.) + px(12.) } else { 0 }
         + percent_width.map_or(0, |w| px(12.) + px(24.) + px(6.) + w);
     let center = header_height as i32 / 2;
     let pill = Rect::new(
@@ -162,7 +162,7 @@ fn status_layout(
     };
     StatusLayout {
         pill,
-        wifi: panel(Some(px(16.)), px(16.), px(12.)).expect("wifi indicator always visible"),
+        wifi: panel(wifi.then_some(px(16.)), px(16.), px(12.)),
         clock: panel(Some(clock_width), px(16.), px(12.)).expect("clock is always visible"),
         battery: panel(percent_width.map(|_| px(24.)), px(24.), px(6.)),
         percent: panel(percent_width, px(16.), 0),
@@ -538,22 +538,17 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 .as_deref()
                 .map(|s| self.measure(s, Face::Mono, 13.))
                 .transpose()?;
-            let layout = status_layout(right, h, self.frame.scale, clock_width, percent_width);
+            let layout =
+                status_layout(right, h, self.frame.scale, clock_width, percent_width, wifi);
             self.rounded(
                 layout.pill,
                 layout.pill.height() as f32 / 2.,
                 theme.surface,
                 Some(theme.border),
             )?;
-            self.icon(
-                if wifi { Glyph::Wifi } else { Glyph::WifiOff },
-                layout.wifi,
-                if wifi {
-                    theme.highlight_bg
-                } else {
-                    theme.muted
-                },
-            )?;
+            if let Some(icon) = layout.wifi {
+                self.icon(Glyph::Wifi, icon, theme.highlight_bg)?;
+            }
             self.label(&clock, (Face::Mono, 13., theme.muted), layout.clock)?;
             if let (Some(b), Some(icon), Some(panel), Some(text)) =
                 (battery, layout.battery, layout.percent, percent)
@@ -1517,49 +1512,53 @@ mod tests {
     #[test]
     fn status_pill_orders_centers_and_hides_optional_items() {
         for scale in [1., 2.] {
-            for percent_width in [None, Some(24)] {
-                let layout = status_layout(
-                    (616. * scale) as i32,
-                    (44. * scale) as u32,
-                    scale,
-                    (39. * scale) as u32,
-                    percent_width.map(|w| (w as f32 * scale) as u32),
-                );
-                assert_eq!(layout.pill.right(), (616. * scale) as i32);
-                assert_eq!(layout.pill.height(), (26. * scale) as u32);
-                assert_eq!(layout.wifi.width(), (16. * scale) as u32);
-                assert_eq!(layout.battery.is_some(), percent_width.is_some());
-                if let Some(battery) = layout.battery {
-                    assert_eq!(battery.width(), (24. * scale) as u32);
-                }
-                assert_eq!(layout.percent.is_some(), percent_width.is_some());
-                let mut right = layout.pill.x() + (12. * scale) as i32;
-                for rect in [
-                    Some(layout.wifi),
-                    Some(layout.clock),
-                    layout.battery,
-                    layout.percent,
-                ]
-                .into_iter()
-                .flatten()
-                {
-                    assert!(
-                        rect.x() >= right,
-                        "status items overlap or are out of order"
+            for wifi in [false, true] {
+                for percent_width in [None, Some(24)] {
+                    let layout = status_layout(
+                        (616. * scale) as i32,
+                        (44. * scale) as u32,
+                        scale,
+                        (39. * scale) as u32,
+                        percent_width.map(|w| (w as f32 * scale) as u32),
+                        wifi,
                     );
-                    assert_eq!(rect.center().y(), (22. * scale) as i32);
-                    right = rect.right();
+                    assert_eq!(layout.pill.right(), (616. * scale) as i32);
+                    assert_eq!(layout.pill.height(), (26. * scale) as u32);
+                    assert_eq!(layout.wifi.is_some(), wifi);
+                    assert_eq!(layout.battery.is_some(), percent_width.is_some());
+                    if let Some(battery) = layout.battery {
+                        assert_eq!(battery.width(), (24. * scale) as u32);
+                    }
+                    assert_eq!(layout.percent.is_some(), percent_width.is_some());
+                    let mut right = layout.pill.x() + (12. * scale) as i32;
+                    for rect in [
+                        layout.wifi,
+                        Some(layout.clock),
+                        layout.battery,
+                        layout.percent,
+                    ]
+                    .into_iter()
+                    .flatten()
+                    {
+                        assert!(
+                            rect.x() >= right,
+                            "status items overlap or are out of order"
+                        );
+                        assert_eq!(rect.center().y(), (22. * scale) as i32);
+                        right = rect.right();
+                    }
+                    assert_eq!(right + (12. * scale) as i32, layout.pill.right());
                 }
-                assert_eq!(right + (12. * scale) as i32, layout.pill.right());
             }
         }
-        let layout = status_layout(616, 44, 1., 39, Some(24));
-        assert_eq!(layout.pill.width(), 157);
-        assert_eq!(layout.clock.x() - layout.wifi.right(), 12);
-        assert_eq!(layout.battery.unwrap().x() - layout.clock.right(), 12);
-        assert_eq!(
-            layout.percent.unwrap().x() - layout.battery.unwrap().right(),
-            6
-        );
+        let on = status_layout(616, 44, 1., 39, Some(24), true);
+        let off = status_layout(616, 44, 1., 39, Some(24), false);
+        assert_eq!(on.pill.width(), 157);
+        assert_eq!(off.pill.width(), 129);
+        assert_eq!(on.clock.x() - on.wifi.unwrap().right(), 12);
+        assert_eq!(off.wifi, None);
+        assert_eq!(off.clock.x() - off.pill.x(), 12);
+        assert_eq!(on.battery.unwrap().x() - on.clock.right(), 12);
+        assert_eq!(on.percent.unwrap().x() - on.battery.unwrap().right(), 6);
     }
 }
