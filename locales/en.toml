@@ -138,6 +138,8 @@
 "settings.refresh_interval" = "Refreshes every 2 s"
 "settings.cpu_summary" = { one = "{model} · {count} core", other = "{model} · {count} cores" }
 "settings.cores" = { one = "{count} core", other = "{count} cores" }
+"settings.cores_bits" = { one = "{count} core · {bits}-bit", other = "{count} cores · {bits}-bit" }
+"settings.cores_type_bits" = "{count} × {type} · {bits}-bit"
 "settings.used_total" = "{used} of {total}"
 "settings.system_partition" = "system {used} of {total}"
 "settings.in_use" = "{value}% in use"

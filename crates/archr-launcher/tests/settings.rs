@@ -356,6 +356,10 @@ CPU part : 0xd03
     let info = backend.load().unwrap().info;
     assert!(info.cards[0].detail.heading.contains("SUN50I-H616"));
     assert!(info.cards[0].detail.subtitle.contains("Cortex-A53"));
+    assert!(info.cards[0]
+        .detail
+        .subtitle
+        .ends_with(&format!("|bits={}", usize::BITS)));
 }
 
 #[test]

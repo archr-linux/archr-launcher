@@ -138,6 +138,8 @@
 "settings.refresh_interval" = "Обновление каждые 2 с"
 "settings.cpu_summary" = { one = "{model} · {count} ядро", few = "{model} · {count} ядра", many = "{model} · {count} ядер", other = "{model} · {count} ядра" }
 "settings.cores" = { one = "{count} ядро", few = "{count} ядра", many = "{count} ядер", other = "{count} ядра" }
+"settings.cores_bits" = { one = "{count} ядро · {bits} бит", few = "{count} ядра · {bits} бит", many = "{count} ядер · {bits} бит", other = "{count} ядра · {bits} бит" }
+"settings.cores_type_bits" = "{count} × {type} · {bits} бит"
 "settings.used_total" = "{used} из {total}"
 "settings.system_partition" = "система {used} из {total}"
 "settings.in_use" = "Занято {value}%"

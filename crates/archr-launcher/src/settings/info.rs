@@ -457,9 +457,18 @@ impl Backend {
             detail: InfoDetail {
                 heading: identity.cpu.clone(),
                 subtitle: if identity.core_type.is_empty() {
-                    format!("settings.cores|count={}", identity.cores)
+                    format!(
+                        "settings.cores_bits|count={}|bits={}",
+                        identity.cores,
+                        usize::BITS
+                    )
                 } else {
-                    format!("{} × {}", identity.cores, identity.core_type)
+                    format!(
+                        "settings.cores_type_bits|count={}|type={}|bits={}",
+                        identity.cores,
+                        identity.core_type,
+                        usize::BITS
+                    )
                 },
                 rows: vec![
                     ("settings.frequency", mhz(current, 1000)),
