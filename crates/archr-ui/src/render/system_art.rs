@@ -1,11 +1,11 @@
 //! Systems screen artwork panel: console image or a generated typographic card.
-use super::{system_title, Frame, PreparedText, Ui};
+use super::{system_title, Frame, Ui};
 use crate::{
     covers::CoverCache,
     i18n::I18n,
     primitives::Icon,
     state::DataSource,
-    text::{Align, Face, Style},
+    text::{Align, Face},
     theme::{Rgba, Theme},
 };
 use sdl2::{rect::Rect, render::TextureCreator, video::WindowContext};
@@ -469,50 +469,6 @@ fn panel_labels(
         )?;
     }
     Ok(labels)
-}
-
-/// Prepare exactly the generated panel shown before the artwork worker starts.
-pub(super) fn prepare_panel(
-    prepared: &mut PreparedText<'_>,
-    frame: Frame,
-    name: &str,
-    data: &dyn DataSource,
-    catalog: &I18n,
-    theme: &Theme,
-) -> Result<(), String> {
-    let rect = panel_rect(frame, theme);
-    let mut labels = Vec::new();
-    if !name.starts_with('@') {
-        labels.push(generated_label(
-            frame,
-            rect,
-            name,
-            theme,
-            |text, face, size| prepared.measure(text, face, frame.font_size(size)),
-        )?);
-    }
-    labels.extend(panel_labels(
-        frame,
-        rect,
-        name,
-        data,
-        catalog,
-        theme,
-        |text, face, size| prepared.measure(text, face, frame.font_size(size)),
-    )?);
-    for label in labels {
-        let (face, size, color) = label.style;
-        prepared.label(
-            &label.text,
-            Style {
-                face,
-                size: frame.font_size(size),
-                color,
-            },
-            label.rect.width(),
-        )?;
-    }
-    Ok(())
 }
 
 #[cfg(test)]

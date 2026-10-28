@@ -43,13 +43,15 @@ O tema vem de `launcher.theme` em
 
 `ARCHR_LAUNCHER_TRACE=1` emite checkpoints cumulativos até o primeiro present.
 Meça em release, no mesmo display/renderer e com caches quentes.
-Uma única thread prepara fontes em memória e surfaces de texto/badges enquanto
+Uma única thread prepara fontes em memória e surfaces de texto enquanto
 SDL cria janela/EGL/renderer na thread principal. `worker join` marca a entrega;
 `CPU surfaces upload` registra o envio ao renderer. SDL_ttf é inicializado antes
 da thread e seus handles nunca são usados concorrentemente. Não há cache de
-badges/sombras em disco; texto e sombra do painel de sistemas também são
-preparados no worker. Assets fora da primeira tela continuam lazy. A resolução
-das imagens dos sistemas só começa após o primeiro present, no worker de capas.
+badges/sombras em disco. O primeiro present mostra cabeçalho e lista preparados,
+reutilizando as métricas de texto calculadas no worker. O painel de sistemas
+(texto, sombra e arte) e o rodapé aparecem nos quadros seguintes, sem mudar o
+resultado final. A resolução das imagens só começa após o primeiro present,
+no worker de capas; imagens ausentes são um resultado normal, sem aviso.
 
 ## Navegação automatizada
 

@@ -73,8 +73,6 @@ fn startup_trace_reports_ordered_phases_and_first_events_once() {
             "overview cache read",
             "system definitions read",
             "first text rasterization",
-            "badge Y",
-            "badge A",
             "CPU assets ready",
             "worker join",
         ],

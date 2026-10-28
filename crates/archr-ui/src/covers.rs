@@ -117,7 +117,7 @@ fn cleanup_thumbnails(dir: &Path) {
     }
 }
 
-type Loaded = (PathBuf, io::Result<Thumbnail>);
+type Loaded = (PathBuf, io::Result<Option<Thumbnail>>);
 
 pub struct CoverCache<'a> {
     creator: &'a TextureCreator<WindowContext>,
@@ -146,8 +146,8 @@ impl<'a> CoverCache<'a> {
                     let result = candidates
                         .iter()
                         .find(|path| path.is_file())
-                        .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))
-                        .and_then(|path| load_thumbnail(&dir, path, width, height));
+                        .map(|path| load_thumbnail(&dir, path, width, height))
+                        .transpose();
                     if done.send((key.clone(), result)).is_err() {
                         return;
                     }
@@ -198,19 +198,27 @@ impl<'a> CoverCache<'a> {
         while let Ok((path, result)) = self.ready.try_recv() {
             self.pending.remove(&path);
             let texture = result.map_err(|error| error.to_string()).and_then(|thumb| {
-                let mut texture = self
-                    .creator
-                    .create_texture_static(PixelFormatEnum::RGBA32, thumb.width, thumb.height)
-                    .map_err(|error| error.to_string())?;
-                texture
-                    .update(None, &thumb.rgba, thumb.width as usize * 4)
-                    .map_err(|error| error.to_string())?;
-                texture.set_blend_mode(sdl2::render::BlendMode::Blend);
-                texture.set_scale_mode(sdl2::render::ScaleMode::Linear);
-                Ok(texture)
+                thumb
+                    .map(|thumb| {
+                        let mut texture = self
+                            .creator
+                            .create_texture_static(
+                                PixelFormatEnum::RGBA32,
+                                thumb.width,
+                                thumb.height,
+                            )
+                            .map_err(|error| error.to_string())?;
+                        texture
+                            .update(None, &thumb.rgba, thumb.width as usize * 4)
+                            .map_err(|error| error.to_string())?;
+                        texture.set_blend_mode(sdl2::render::BlendMode::Blend);
+                        texture.set_scale_mode(sdl2::render::ScaleMode::Linear);
+                        Ok(texture)
+                    })
+                    .transpose()
             });
             let texture = match texture {
-                Ok(texture) => Some(texture),
+                Ok(texture) => texture,
                 Err(error) => {
                     log::warn!("Cover {}: {error}", path.display());
                     None
