@@ -36,6 +36,51 @@ impl ListMotion {
         }
     }
 }
+struct StatusLayout {
+    pill: Rect,
+    wifi: Option<Rect>,
+    clock: Rect,
+    battery: Option<Rect>,
+    percent: Option<Rect>,
+}
+
+fn status_layout(
+    right: i32,
+    header_height: u32,
+    scale: f32,
+    clock_width: u32,
+    percent_width: Option<u32>,
+    wifi: bool,
+) -> StatusLayout {
+    let px = |v: f32| (v * scale).round().max(1.) as u32;
+    let width = px(12.) * 2
+        + clock_width
+        + if wifi { px(16.) + px(12.) } else { 0 }
+        + percent_width.map_or(0, |w| px(12.) + px(22.) + px(6.) + w);
+    let center = header_height as i32 / 2;
+    let pill = Rect::new(
+        right - width as i32,
+        center - px(26.) as i32 / 2,
+        width,
+        px(26.),
+    );
+    let mut x = pill.x() + px(12.) as i32;
+    let mut panel = |width: Option<u32>, height: u32, gap: u32| {
+        width.map(|w| {
+            let rect = Rect::new(x, center - height as i32 / 2, w, height);
+            x += (w + gap) as i32;
+            rect
+        })
+    };
+    StatusLayout {
+        pill,
+        wifi: panel(wifi.then_some(px(16.)), px(16.), px(12.)),
+        clock: panel(Some(clock_width), px(16.), px(12.)).expect("clock is always visible"),
+        battery: panel(percent_width.map(|_| px(22.)), px(12.), px(6.)),
+        percent: panel(percent_width, px(16.), 0),
+    }
+}
+
 pub struct Ui<'font, 'texture> {
     startup: StartupTrace,
     pub sdl: sdl2::Sdl,
@@ -364,10 +409,24 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             .map(|s| (s.clock.clone(), s.battery, s.wifi));
         let mut right = width as i32 - pad;
         if let Some((clock, battery, wifi)) = status {
-            if wifi {
-                self.canvas.set_draw_color(color(theme.muted));
-                let x = right - self.px(9.);
-                let y = h as i32 / 2;
+            let percent = battery.map(|b| format!("{}%", b.percent));
+            let clock_width = self.measure(&clock, Face::Mono, 13.)?;
+            let percent_width = percent
+                .as_deref()
+                .map(|s| self.measure(s, Face::Mono, 13.))
+                .transpose()?;
+            let layout = status_layout(right, h, self.scale, clock_width, percent_width, wifi);
+            self.rounded(
+                layout.pill,
+                layout.pill.height() as f32 / 2.,
+                theme.surface,
+                Some(theme.border),
+            )?;
+            if let Some(icon) = layout.wifi {
+                self.canvas.set_draw_color(color(theme.highlight_bg));
+                let x = icon.center().x();
+                // The arcs and dot occupy ten pixels, centered within the 16px box.
+                let y = icon.center().y() + self.px(3.);
                 for radius in [4., 8.] {
                     let r = self.px(radius);
                     let points = [
@@ -384,33 +443,27 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                     self.px(2.) as u32,
                     self.px(2.) as u32,
                 ))?;
-                right -= self.px(30.);
             }
-            if let Some(b) = battery {
-                let text = format!("{}%", b.percent);
-                let w = self.measure(&text, Face::Mono, 13.)?;
-                self.label(
-                    &text,
-                    Face::Mono,
-                    13.,
-                    theme.muted,
-                    Rect::new(right - w as i32, 0, w, h),
-                    Align::Left,
-                )?;
-                right -= w as i32 + self.px(6.);
-                let battery = Rect::new(
-                    right - self.px(22.),
-                    h as i32 / 2 - self.px(6.),
-                    self.px(18.) as u32,
-                    self.px(12.) as u32,
-                );
+            self.label(
+                &clock,
+                Face::Mono,
+                13.,
+                theme.muted,
+                layout.clock,
+                Align::Left,
+            )?;
+            if let (Some(b), Some(icon), Some(panel), Some(text)) =
+                (battery, layout.battery, layout.percent, percent)
+            {
+                self.label(&text, Face::Mono, 13., theme.muted, panel, Align::Left)?;
+                let battery = Rect::new(icon.x(), icon.y(), self.px(19.) as u32, icon.height());
                 self.rounded(
                     battery,
                     self.px(2.) as f32,
-                    theme.background,
+                    theme.surface,
                     Some(theme.muted),
                 )?;
-                let fill_width = (self.px(13.) as f32 * f32::from(b.percent) / 100.).round() as u32;
+                let fill_width = (self.px(15.) as f32 * f32::from(b.percent) / 100.).round() as u32;
                 if fill_width > 0 {
                     self.rounded(
                         Rect::new(
@@ -434,25 +487,15 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 if b.charging {
                     let bolt = Rect::new(
                         battery.x() + self.px(5.),
-                        battery.y() - self.px(1.),
-                        self.px(8.) as u32,
-                        self.px(14.) as u32,
+                        battery.y() + self.px(1.),
+                        self.px(9.) as u32,
+                        self.px(10.) as u32,
                     );
                     self.geometry
-                        .lightning(&mut self.canvas, bolt, theme.highlight_text)?;
+                        .lightning(&mut self.canvas, bolt, theme.highlight_bg)?;
                 }
-                right = battery.x() - self.px(14.);
             }
-            let w = self.measure(&clock, Face::Mono, 13.)?;
-            self.label(
-                &clock,
-                Face::Mono,
-                13.,
-                theme.muted,
-                Rect::new(right - w as i32, 0, w, h),
-                Align::Left,
-            )?;
-            right -= w as i32 + self.px(20.);
+            right = layout.pill.x() - self.px(20.);
         }
         if let Screen::Games { system } = screen {
             let title = system_title(system, data, &self.catalog);
@@ -1237,5 +1280,58 @@ fn system_title(name: &str, data: &dyn DataSource, catalog: &I18n) -> String {
             .find(|s| s.name == name)
             .map(|s| s.fullname.clone())
             .unwrap_or_else(|| name.to_owned()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn status_pill_orders_centers_and_hides_optional_items() {
+        for scale in [1., 2.] {
+            for wifi in [false, true] {
+                for percent_width in [None, Some(24)] {
+                    let layout = status_layout(
+                        (616. * scale) as i32,
+                        (44. * scale) as u32,
+                        scale,
+                        (39. * scale) as u32,
+                        percent_width.map(|w| (w as f32 * scale) as u32),
+                        wifi,
+                    );
+                    assert_eq!(layout.pill.right(), (616. * scale) as i32);
+                    assert_eq!(layout.pill.height(), (26. * scale) as u32);
+                    assert_eq!(layout.wifi.is_some(), wifi);
+                    assert_eq!(layout.battery.is_some(), percent_width.is_some());
+                    assert_eq!(layout.percent.is_some(), percent_width.is_some());
+                    let mut right = layout.pill.x() + (12. * scale) as i32;
+                    for rect in [
+                        layout.wifi,
+                        Some(layout.clock),
+                        layout.battery,
+                        layout.percent,
+                    ]
+                    .into_iter()
+                    .flatten()
+                    {
+                        assert!(
+                            rect.x() >= right,
+                            "status items overlap or are out of order"
+                        );
+                        assert_eq!(rect.center().y(), (22. * scale) as i32);
+                        right = rect.right();
+                    }
+                    assert_eq!(right + (12. * scale) as i32, layout.pill.right());
+                }
+            }
+        }
+        let on = status_layout(616, 44, 1., 39, Some(24), true);
+        let off = status_layout(616, 44, 1., 39, Some(24), false);
+        assert_eq!(on.pill.width(), 155);
+        assert_eq!(off.pill.width(), 127);
+        assert_eq!(on.clock.x() - on.wifi.unwrap().right(), 12);
+        assert_eq!(on.battery.unwrap().x() - on.clock.right(), 12);
+        assert_eq!(on.percent.unwrap().x() - on.battery.unwrap().right(), 6);
     }
 }
