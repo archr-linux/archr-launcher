@@ -81,15 +81,14 @@ mod tests {
     fn badges_are_final_size_with_area_sampled_edges_and_centered_ink() {
         let _sdl = crate::SDL_TEST_LOCK.lock().unwrap();
         let ttf = sdl2::ttf::init().unwrap();
-        let font = ttf
-            .load_font(
-                concat!(
-                    env!("CARGO_MANIFEST_DIR"),
-                    "/../../themes/default/fonts/Inter-SemiBold.ttf"
-                ),
-                11,
-            )
-            .unwrap();
+        let font = crate::text::production_font(
+            &ttf,
+            std::path::Path::new(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../themes/default/fonts/Inter-SemiBold.ttf"
+            )),
+            11,
+        );
         let background = Rgba {
             r: 28,
             g: 37,

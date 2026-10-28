@@ -693,9 +693,7 @@ mod tests {
                 12,
             ),
         ] {
-            let font = ttf
-                .load_font(fonts.join(format!("{face}.ttf")), size)
-                .unwrap();
+            let font = crate::text::production_font(&ttf, &fonts.join(format!("{face}.ttf")), size);
             let lines = wrap(text, 218, |s| Ok(font.size_of(s).unwrap().0)).unwrap();
             assert_eq!(lines.join(" "), text);
             assert!(lines

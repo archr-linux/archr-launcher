@@ -65,6 +65,24 @@ fn force_autohint(bytes: &mut [u8]) {
     }
 }
 
+/// Test reference face, loaded exactly as `Fonts` loads it: patched + mono.
+/// The bytes are leaked; tests only.
+#[cfg(test)]
+pub(crate) fn production_font<'a>(
+    ttf: &'a Sdl2TtfContext,
+    path: &Path,
+    size: u16,
+) -> Font<'a, 'static> {
+    let mut bytes = std::fs::read(path).unwrap();
+    force_autohint(&mut bytes);
+    let bytes: &'static [u8] = Box::leak(bytes.into_boxed_slice());
+    let mut font = ttf
+        .load_font_from_rwops(RWops::from_bytes(bytes).unwrap(), size)
+        .unwrap();
+    font.set_hinting(sdl2::ttf::Hinting::Mono);
+    font
+}
+
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub(crate) enum Face {
     Regular,
@@ -571,16 +589,8 @@ mod tests {
             .join(format!("{name}.ttf"))
     }
 
-    /// Reference face loaded the way production loads it (see force_autohint).
     fn load_font<'a>(ttf: &'a Sdl2TtfContext, name: &str, size: u16) -> Font<'a, 'static> {
-        let mut bytes = std::fs::read(bundled_font(name)).unwrap();
-        force_autohint(&mut bytes);
-        let bytes: &'static [u8] = Box::leak(bytes.into_boxed_slice());
-        let mut font = ttf
-            .load_font_from_rwops(RWops::from_bytes(bytes).unwrap(), size)
-            .unwrap();
-        font.set_hinting(sdl2::ttf::Hinting::Mono);
-        font
+        production_font(ttf, &bundled_font(name), size)
     }
 
     #[test]
