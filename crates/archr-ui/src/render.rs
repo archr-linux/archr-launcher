@@ -425,6 +425,38 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             .ok_or_else(|| self.catalog.text("error.font_init"))?;
         text.draw_icon(&mut self.canvas, glyph, panel, ink)
     }
+    /// Dashed 2px outline along the straight edges, inside the rounded corners.
+    fn dashed(&mut self, rect: Rect, c: Rgba) -> Result<(), String> {
+        let (dash, gap, thick) = (self.px(5.), self.px(3.), self.px(2.));
+        let inset = self.px(8.);
+        self.canvas.set_draw_color(color(c));
+        for (start, end, fixed, across) in [
+            (rect.x() + inset, rect.right() - inset, rect.y(), true),
+            (
+                rect.x() + inset,
+                rect.right() - inset,
+                rect.bottom() - thick,
+                true,
+            ),
+            (rect.y() + inset, rect.bottom() - inset, rect.x(), false),
+            (
+                rect.y() + inset,
+                rect.bottom() - inset,
+                rect.right() - thick,
+                false,
+            ),
+        ] {
+            for at in (start..end).step_by((dash + gap) as usize) {
+                let len = dash.min(end - at) as u32;
+                self.canvas.fill_rect(if across {
+                    Rect::new(at, fixed, len, thick as u32)
+                } else {
+                    Rect::new(fixed, at, thick as u32, len)
+                })?;
+            }
+        }
+        Ok(())
+    }
     fn divider(&mut self, x: i32, y: i32, w: u32, c: Rgba) -> Result<(), String> {
         self.canvas.set_draw_color(color(c));
         self.canvas.fill_rect(Rect::new(x, y, w, 1))
@@ -452,11 +484,22 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             } else {
                 Vec::new()
             };
-            self.list(backdrop, &rows, cursor, data, theme)?;
+            let lifted = app.moving().is_some();
+            self.list(backdrop, (&rows, lifted), cursor, data, theme)?;
             // Keep the first present to the prepared list; the panel follows
             // on the redraw requested when tick starts the artwork worker.
             if self.has_presented && matches!(backdrop, Screen::Systems) {
                 self.system_panel(&rows, cursor, data, theme)?;
+                if lifted {
+                    // The artwork is secondary while a row is being placed.
+                    let panel = system_art::panel_rect(self.frame, theme);
+                    let veil = Rgba {
+                        a: 140,
+                        ..theme.background
+                    };
+                    self.canvas.set_draw_color(color(veil));
+                    self.canvas.fill_rect(panel)?;
+                }
             }
             if let Screen::Games { system } = backdrop {
                 self.cover(system, cursor, data, theme, cover)?;
@@ -629,7 +672,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
     fn list(
         &mut self,
         screen: &Screen,
-        systems: &[String],
+        (systems, lifted): (&[String], bool),
         cursor: usize,
         data: &dyn DataSource,
         theme: &Theme,
@@ -700,19 +743,26 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             list_width,
             (bottom - top).max(1) as u32,
         ));
+        // A lifted row sits slightly right of the list, in an outline.
+        let lift = if lifted { self.px(6.) } else { 0 };
         if len > 0 {
             let pill = Rect::new(
-                margin,
+                margin + lift,
                 top + (self.list.pill.value(now) - offset).round() as i32,
-                list_width,
+                list_width - lift as u32,
                 selected.max(1.) as u32,
             );
-            self.rounded(
-                pill,
-                theme.radius_item * height as f32,
-                theme.highlight_bg,
-                None,
-            )?;
+            let radius = theme.radius_item * height as f32;
+            if lifted {
+                let fill = Rgba {
+                    a: 40,
+                    ..theme.highlight_bg
+                };
+                self.rounded(pill, radius, fill, None)?;
+                self.dashed(pill, theme.highlight_bg)?;
+            } else {
+                self.rounded(pill, radius, theme.highlight_bg, None)?;
+            }
         }
         if collections > 0 {
             let y = top
@@ -758,39 +808,54 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 game.name.clone()
             } else {
                 let name = systems.get(i).expect("visible system row");
-                let count = if name.starts_with('@') {
-                    data.collection_len(name)
-                } else {
-                    data.systems()
-                        .iter()
-                        .find(|s| s.name == *name)
-                        .map_or(0, |s| s.game_count as usize)
-                };
-                let count = count.to_string();
-                let face = selection(selected, Face::Mono, Face::MonoMedium);
-                let color = selection(selected, theme.dim_text, theme.accent_text_secondary);
-                right = self.packed_label(
-                    &count,
-                    (face, 13., color),
-                    (right, y, rh),
-                    u32::MAX,
-                    Align::Right,
-                )? - self.px(14.);
-                if name.starts_with('@') {
-                    let icon = self
-                        .frame
-                        .square(x, y + (rh as i32 - self.px(16.)) / 2, 16.);
-                    if name == "@favorites" {
-                        self.geometry.icon(
-                            &mut self.canvas,
-                            Icon::Star(false),
-                            icon,
-                            selection(selected, theme.highlight_bg, theme.highlight_text),
-                        )?;
-                    } else {
-                        self.geometry.icon(&mut self.canvas, Icon::Clock, icon, c)?;
+                if lifted && selected {
+                    x += lift;
+                    let side = self.px(12.);
+                    let mid = y + rh as i32 / 2;
+                    for (glyph, top) in [(Glyph::ChevronUp, mid - side), (Glyph::ChevronDown, mid)]
+                    {
+                        let rect = self.frame.square(right - side + self.px(4.), top, 12.);
+                        self.icon(glyph, rect, theme.highlight_bg)?;
                     }
+                    right -= side + self.px(8.);
+                    let icon = self.frame.square(x, mid - self.px(8.), 16.);
+                    self.icon(Glyph::Move, icon, theme.highlight_text)?;
                     x += self.px(26.);
+                } else {
+                    let count = if name.starts_with('@') {
+                        data.collection_len(name)
+                    } else {
+                        data.systems()
+                            .iter()
+                            .find(|s| s.name == *name)
+                            .map_or(0, |s| s.game_count as usize)
+                    };
+                    let count = count.to_string();
+                    let face = selection(selected, Face::Mono, Face::MonoMedium);
+                    let color = selection(selected, theme.dim_text, theme.accent_text_secondary);
+                    right = self.packed_label(
+                        &count,
+                        (face, 13., color),
+                        (right, y, rh),
+                        u32::MAX,
+                        Align::Right,
+                    )? - self.px(14.);
+                    if name.starts_with('@') {
+                        let icon = self
+                            .frame
+                            .square(x, y + (rh as i32 - self.px(16.)) / 2, 16.);
+                        if name == "@favorites" {
+                            self.geometry.icon(
+                                &mut self.canvas,
+                                Icon::Star(false),
+                                icon,
+                                selection(selected, theme.highlight_bg, theme.highlight_text),
+                            )?;
+                        } else {
+                            self.geometry.icon(&mut self.canvas, Icon::Clock, icon, c)?;
+                        }
+                        x += self.px(26.);
+                    }
                 }
                 system_title(name, data, &self.catalog)
             };
@@ -923,7 +988,13 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         let h = (theme.footer_height * height as f32).round().max(1.) as u32;
         let y = height as i32 - h as i32;
         self.divider(0, y, width, theme.border)?;
+        let moving = app.moving();
         let hint_keys: &[(char, &str)] = match app.screen {
+            Screen::Systems if moving.is_some() => &[
+                ('↕', "hint.move"),
+                ('A', "hint.confirm"),
+                ('B', "hint.cancel"),
+            ],
             Screen::Systems => &[('A', "hint.open"), ('Y', "hint.menu")],
             Screen::Games { .. } => &[
                 ('A', "hint.play"),
@@ -935,9 +1006,23 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         };
         let left = self.hints(hint_keys, theme, width, y, h)?;
         if matches!(app.screen, Screen::Systems) {
+            let (text, ink) = match moving {
+                Some((name, n, total)) => (
+                    self.catalog.format(
+                        "move.status",
+                        &[
+                            ("name", &system_title(name, data, &self.catalog)),
+                            ("n", &n.to_string()),
+                            ("total", &total.to_string()),
+                        ],
+                    ),
+                    theme.text,
+                ),
+                None => (library_summary(data, &self.catalog), theme.muted),
+            };
             self.label(
-                &library_summary(data, &self.catalog),
-                (Face::Regular, 13., theme.muted),
+                &text,
+                (Face::Regular, 13., ink),
                 Rect::new(self.px(24.), y, (left - self.px(40.)).max(1) as u32, h),
             )?;
         }

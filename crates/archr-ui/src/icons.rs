@@ -14,6 +14,9 @@ pub(crate) enum Glyph {
     Moon,
     Restart,
     Power,
+    Move,
+    ChevronUp,
+    ChevronDown,
 }
 
 type Path = Vec<(f32, f32)>;
@@ -130,6 +133,26 @@ fn paths(glyph: Glyph) -> Vec<Path> {
                 vec![wing(0.7), (tip_x, tip_y), wing(-0.7)],
             ]
         }
+        Glyph::Move => {
+            // Arrowhead at a tip, with wings 3 units back along (dx, dy).
+            let head = |x: f32, y: f32, dx: f32, dy: f32| {
+                vec![
+                    (x + dx - dy, y + dy - dx),
+                    (x, y),
+                    (x + dx + dy, y + dy + dx),
+                ]
+            };
+            vec![
+                vec![(3., 12.), (21., 12.)],
+                vec![(12., 3.), (12., 21.)],
+                head(12., 3., 0., 3.),
+                head(12., 21., 0., -3.),
+                head(3., 12., 3., 0.),
+                head(21., 12., -3., 0.),
+            ]
+        }
+        Glyph::ChevronUp => vec![vec![(6., 15.), (12., 9.), (18., 15.)]],
+        Glyph::ChevronDown => vec![vec![(6., 9.), (12., 15.), (18., 9.)]],
         Glyph::Power => vec![
             arc(12., 12., 9., -PI / 2. + 0.7, 3. * PI / 2. - 0.7),
             vec![(12., 2.), (12., 12.)],
