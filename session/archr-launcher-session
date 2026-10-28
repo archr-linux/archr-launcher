@@ -30,7 +30,7 @@ fi
 run_dir=/run/archr-launcher
 launcher=/usr/bin/archr-launcher
 fake_suspend=/usr/bin/archr-fake-suspend
-system_cfg=/storage/.config/system/configs/system.cfg
+functions=/etc/profile.d/001-functions
 log_file=/var/log/archr-launcher-session.log
 kill_file=/tmp/.process-kill-data
 sway_attempts=100
@@ -41,7 +41,7 @@ if [ "${ARCHR_SESSION_TEST:-0}" = 1 ]; then
     run_dir=${ARCHR_SESSION_RUN_DIR:?}
     launcher=${ARCHR_SESSION_LAUNCHER:?}
     fake_suspend=${ARCHR_SESSION_FAKE_SUSPEND:?}
-    system_cfg=${ARCHR_SESSION_CONFIG:?}
+    functions=${ARCHR_SESSION_FUNCTIONS:?}
     log_file=${ARCHR_SESSION_LOG:?}
     kill_file=${ARCHR_SESSION_KILL_FILE:?}
     sway_attempts=${ARCHR_SESSION_SWAY_ATTEMPTS:-100}
@@ -261,8 +261,7 @@ while :; do
             ;;
         'action suspend')
             session_log 'Action suspend'
-            # Exact anchored key and full value, as in get_setting.
-            suspend_mode=$(sed -n 's/^system\.suspendmode=//p' "$system_cfg" 2>/dev/null)
+            suspend_mode=$(/usr/bin/bash -c '. "$1"; get_setting system.suspendmode' archr-suspend "$functions")
             if [ "${suspend_mode:-off}" = off ]; then
                 "$fake_suspend" power
             else
