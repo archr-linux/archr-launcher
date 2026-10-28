@@ -1,7 +1,7 @@
 //! Unmodified Lucide SVGs rasterized at their target size, with resilient theme lookup.
 use sdl2::{rwops::RWops, surface::Surface, sys};
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     path::{Path, PathBuf},
 };
 
@@ -49,6 +49,9 @@ unsafe extern "C" {
 pub(crate) struct IconLoader {
     theme_dir: Option<PathBuf>,
     system_icons_dir: PathBuf,
+    /// SVG sources read ahead of time (None: no such file), so a later draw
+    /// rasterizes from memory instead of reading the filesystem.
+    preloaded: HashMap<PathBuf, Option<String>>,
     failed_files: HashSet<PathBuf>,
     failed_sizes: HashSet<(Glyph, u32)>,
     warned: HashSet<Glyph>,
@@ -59,9 +62,32 @@ impl IconLoader {
         Self {
             theme_dir: theme_dir.map(Path::to_path_buf),
             system_icons_dir: system_icons_dir.to_path_buf(),
+            preloaded: HashMap::new(),
             failed_files: HashSet::new(),
             failed_sizes: HashSet::new(),
             warned: HashSet::new(),
+        }
+    }
+
+    fn candidates(&self, glyph: Glyph) -> [Option<PathBuf>; 2] {
+        let file = format!("{}.svg", glyph.file());
+        [
+            self.theme_dir
+                .as_ref()
+                .map(|dir| dir.join("icons").join(&file)),
+            Some(self.system_icons_dir.join(&file)),
+        ]
+    }
+
+    pub(crate) fn preload(&mut self, glyphs: &[Glyph]) {
+        for glyph in glyphs {
+            for path in self.candidates(*glyph).into_iter().flatten() {
+                let source = path
+                    .is_file()
+                    .then(|| std::fs::read_to_string(&path).ok())
+                    .flatten();
+                self.preloaded.insert(path, source);
+            }
         }
     }
 
@@ -76,20 +102,18 @@ impl IconLoader {
             return None;
         }
         let file = format!("{}.svg", glyph.file());
-        let paths = [
-            self.theme_dir
-                .as_ref()
-                .map(|dir| dir.join("icons").join(&file)),
-            Some(self.system_icons_dir.join(&file)),
-        ];
+        let paths = self.candidates(glyph);
         for path in paths.into_iter().flatten() {
-            if self.failed_files.contains(&path) || !path.is_file() {
+            if self.failed_files.contains(&path) {
                 continue;
             }
-            match std::fs::read_to_string(&path)
-                .map_err(|e| e.to_string())
-                .and_then(|svg| rasterize(&svg, size))
-            {
+            let source = match self.preloaded.get(&path) {
+                Some(Some(source)) => Ok(source.clone()),
+                Some(None) => continue,
+                None if !path.is_file() => continue,
+                None => std::fs::read_to_string(&path).map_err(|e| e.to_string()),
+            };
+            match source.and_then(|svg| rasterize(&svg, size)) {
                 Ok(surface) => return Some(surface),
                 Err(error) => {
                     self.failed_files.insert(path.clone());
@@ -101,7 +125,12 @@ impl IconLoader {
             }
         }
         if let Ok(surface) = rasterize(glyph.embedded(), size) {
-            if !self.system_icons_dir.join(&file).is_file() {
+            let installed = self.system_icons_dir.join(&file);
+            if !self
+                .preloaded
+                .get(&installed)
+                .map_or_else(|| installed.is_file(), Option::is_some)
+            {
                 self.warn_once(glyph, "installed SVG unavailable; using embedded copy");
             }
             return Some(surface);

@@ -233,6 +233,10 @@ impl<'font> PreparedText<'font> {
             }
         }
     }
+    /// Reads icon SVG sources now; rasterizing them later touches no files.
+    pub(crate) fn preload_icons(&mut self, glyphs: &[Glyph]) {
+        self.icon_loader.preload(glyphs);
+    }
     pub(crate) fn label(&mut self, source: &str, style: Style, width: u32) -> Result<(), String> {
         let source = bounded_source(source);
         if self

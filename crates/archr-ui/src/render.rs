@@ -1516,14 +1516,9 @@ pub fn prepare_first_frame<'font>(
             frame.px(96.) as u32,
         ));
     }
-    // Entering move mode must not touch the filesystem on the render thread.
-    first_icons.extend([
-        (Glyph::ArrowUpDown, frame.px(14.) as u32),
-        (Glyph::ArrowUpDown, frame.px(16.) as u32),
-        (Glyph::ChevronUp, frame.px(CHEVRON) as u32),
-        (Glyph::ChevronDown, frame.px(CHEVRON) as u32),
-    ]);
     prepared.prepare_icons(theme_dir, system_icons_dir, first_icons);
+    // Entering move mode must not read files on the render thread.
+    prepared.preload_icons(&[Glyph::ArrowUpDown, Glyph::ChevronUp, Glyph::ChevronDown]);
     Ok(prepared)
 }
 
