@@ -155,3 +155,64 @@ fn failed_final_store_flush_does_not_publish_next() {
         .is_err());
     assert!(!paths.run.join("next").exists());
 }
+
+#[test]
+#[ignore = "step 4 / item 8: keys must be relative to each system directory"]
+fn new_favorites_and_recents_use_relative_identity() {
+    let (_dir, paths) = fixture();
+    Store::default().save(&paths.store).unwrap();
+    let mut library = Library::initial(paths.clone());
+    library.start();
+    wait(&mut library, |l| l.ready);
+    library.ensure("nes");
+    wait(&mut library, |l| !l.games("nes").is_empty());
+    library
+        .handle(
+            Outcome::ToggleFavorite {
+                system: "nes".into(),
+                game: 0,
+            },
+            "",
+        )
+        .unwrap();
+    library
+        .handle(
+            Outcome::Launch {
+                system: "nes".into(),
+                game: 0,
+            },
+            "",
+        )
+        .unwrap();
+    let store = Store::load(&paths.store);
+    assert_eq!(store.favorites(), ["nes/A.nes"]);
+    assert_eq!(store.recent(), ["nes/A.nes"]);
+}
+
+#[test]
+#[ignore = "step 4 / item 8: migrate legacy absolute identities idempotently"]
+fn legacy_absolute_favorites_and_recents_migrate_once() {
+    let (_dir, paths) = fixture();
+    let mut store = Store::load(&paths.store);
+    store.push_recent(&format!(
+        "nes/{}",
+        paths.at("/storage/roms/nes/A.nes").display()
+    ));
+    store.save(&paths.store).unwrap();
+    for _ in 0..2 {
+        let mut library = Library::initial(paths.clone());
+        library.start();
+        wait(&mut library, |l| l.ready);
+        for collection in ["@favorites", "@recent"] {
+            library.ensure(collection);
+        }
+        wait(&mut library, |l| {
+            l.games("@favorites").len() == 1 && l.games("@recent").len() == 1
+        });
+        assert_eq!(library.origin("@favorites", 0), Some(("nes".into(), 0)));
+        library.finish().unwrap();
+        let store = Store::load(&paths.store);
+        assert_eq!(store.favorites(), ["nes/A.nes"]);
+        assert_eq!(store.recent(), ["nes/A.nes"]);
+    }
+}

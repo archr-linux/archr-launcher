@@ -1,16 +1,9 @@
-use std::collections::HashMap;
+#[path = "../../archr-ui/tests/common/mod.rs"]
+mod common;
+use common::FakeData;
 
 use archr_index::{cache::SystemEntry, Game};
-use archr_launcher::state::{App, Button, DataSource, Outcome, QuickItem, Screen, SessionAction};
-
-#[derive(Default)]
-struct FakeData {
-    systems: Vec<SystemEntry>,
-    games: HashMap<String, Vec<Game>>,
-    origins: HashMap<(String, usize), (String, usize)>,
-    cores: HashMap<String, Vec<(String, String)>>,
-    current: HashMap<(String, usize), (String, String)>,
-}
+use archr_launcher::state::{App, Button, Outcome, QuickItem, Screen, SessionAction};
 
 impl FakeData {
     fn library() -> Self {
@@ -43,32 +36,6 @@ impl FakeData {
             .insert(("@favorites".into(), 1), ("nes".into(), 2));
         self.origins
             .insert(("@recent".into(), 0), ("snes".into(), 7));
-    }
-}
-
-impl DataSource for FakeData {
-    fn systems(&self) -> &[SystemEntry] {
-        &self.systems
-    }
-
-    fn games(&self, system: &str) -> &[Game] {
-        self.games.get(system).map(Vec::as_slice).unwrap_or(&[])
-    }
-
-    fn origin(&self, system: &str, game: usize) -> Option<(String, usize)> {
-        if system.starts_with('@') {
-            self.origins.get(&(system.into(), game)).cloned()
-        } else {
-            self.games(system).get(game).map(|_| (system.into(), game))
-        }
-    }
-
-    fn cores(&self, system: &str) -> Vec<(String, String)> {
-        self.cores.get(system).cloned().unwrap_or_default()
-    }
-
-    fn current_core(&self, system: &str, game: usize) -> Option<(String, String)> {
-        self.current.get(&(system.into(), game)).cloned()
     }
 }
 
@@ -241,24 +208,15 @@ fn stale_cursor_clamps_before_launch() {
 }
 
 #[test]
-fn page_movement_cannot_overflow() {
+fn page_bounds_cover_overflow_and_zero() {
     let data = FakeData::library();
-    let mut app = in_games("snes", 7);
-    app.page_size = usize::MAX;
-    app.handle(Button::R, &data);
-    assert_eq!(app.cursor, 11);
-    app.handle(Button::L, &data);
-    assert_eq!(app.cursor, 0);
-}
-
-#[test]
-fn zero_page_size_does_not_move_cursor() {
-    let data = FakeData::library();
-    let mut app = in_games("snes", 7);
-    app.page_size = 0;
-    for button in [Button::L, Button::R] {
-        app.handle(button, &data);
-        assert_eq!(app.cursor, 7);
+    for (size, right, left) in [(usize::MAX, 11, 0), (0, 7, 7)] {
+        let mut app = in_games("snes", 7);
+        app.page_size = size;
+        for (button, expected) in [(Button::R, right), (Button::L, left)] {
+            assert_eq!(app.handle(button, &data), Outcome::None);
+            assert_eq!(app.cursor, expected);
+        }
     }
 }
 
@@ -642,29 +600,29 @@ fn assert_core_sequence_without_data_changes(button: Button, expected: &[(&str, 
 }
 
 #[test]
-fn consecutive_r_cycles_all_cores_and_wraps_with_unchanged_data() {
-    assert_core_sequence_without_data_changes(
-        Button::R,
-        &[
-            ("standalone", "native"),
-            ("retroarch", "bsnes"),
-            ("retroarch", "snes9x"),
-            ("standalone", "native"),
-        ],
-    );
-}
-
-#[test]
-fn consecutive_l_cycles_all_cores_and_wraps_with_unchanged_data() {
-    assert_core_sequence_without_data_changes(
-        Button::L,
-        &[
-            ("retroarch", "bsnes"),
-            ("standalone", "native"),
-            ("retroarch", "snes9x"),
-            ("retroarch", "bsnes"),
-        ],
-    );
+fn consecutive_shoulders_cycle_all_cores_with_unchanged_data() {
+    for (button, expected) in [
+        (
+            Button::R,
+            [
+                ("standalone", "native"),
+                ("retroarch", "bsnes"),
+                ("retroarch", "snes9x"),
+                ("standalone", "native"),
+            ],
+        ),
+        (
+            Button::L,
+            [
+                ("retroarch", "bsnes"),
+                ("standalone", "native"),
+                ("retroarch", "snes9x"),
+                ("retroarch", "bsnes"),
+            ],
+        ),
+    ] {
+        assert_core_sequence_without_data_changes(button, &expected);
+    }
 }
 
 #[test]

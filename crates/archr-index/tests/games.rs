@@ -25,14 +25,6 @@ fn touch(root: &Path, relative: &str) -> PathBuf {
 }
 
 #[test]
-fn clean_name_strips_region_and_dump_tags() {
-    assert_eq!(
-        clean_name("Super Mario World (USA) [!]"),
-        "Super Mario World"
-    );
-}
-
-#[test]
 fn scan_filters_by_extension_case_insensitive() {
     let directory = tempfile::tempdir().unwrap();
     touch(directory.path(), "Mario.SFC");
@@ -80,30 +72,20 @@ fn fallback_media_then_images_folder() {
 }
 
 #[test]
-fn malformed_gamelist_falls_back_to_names() {
-    let directory = tempfile::tempdir().unwrap();
-    touch(directory.path(), "Game (USA) [!].sfc");
-    let image = touch(directory.path(), "media/images/Game (USA) [!].png");
-    // A fully read entry must not survive a later parse failure.
-    fs::write(directory.path().join("gamelist.xml"),
-        "<gameList><game><path>./Game (USA) [!].sfc</path><name>Wrong</name><favorite>true</favorite></game><game>")
-        .unwrap();
-    let games = scan_system(&system(directory.path()));
-
-    assert_eq!(games.len(), 1);
-    assert_eq!(games[0].name, "Game");
-    assert_eq!(games[0].image, Some(image));
-    assert!(!games[0].favorite);
-    assert_eq!(games[0].last_played, None);
-}
-
-#[test]
-fn clean_name_removes_inline_nested_groups_and_keeps_nonempty_fallback() {
-    assert_eq!(clean_name("  Game (USA) II [Rev A]  "), "Game II");
-    assert_eq!(clean_name("Game (Region (USA)) [a[b]]"), "Game");
-    assert_eq!(clean_name("(USA) [!]"), "(USA) [!]");
-    assert_eq!(clean_name("Café 日本語 [!]"), "Café 日本語");
-    assert_eq!(clean_name("Game (unfinished"), "Game (unfinished");
+fn clean_names_preserve_text_and_nonempty_fallbacks() {
+    for (input, expected) in [
+        ("Super Mario World (USA) [!]", "Super Mario World"),
+        ("  Game (USA) II [Rev A]  ", "Game II"),
+        ("Game (Region (USA)) [a[b]]", "Game"),
+        ("(USA) [!]", "(USA) [!]"),
+        ("Café 日本語 [!]", "Café 日本語"),
+        ("Game (unfinished", "Game (unfinished"),
+    ] {
+        assert_eq!(clean_name(input), expected, "{input:?}");
+    }
+    for input in ["", "   "] {
+        assert!(!clean_name(input).is_empty());
+    }
 }
 
 #[test]
@@ -301,6 +283,7 @@ fn empty_gamelist_name_uses_clean_name() {
 fn malformed_xml_is_ignored_atomically() {
     let directory = tempfile::tempdir().unwrap();
     touch(directory.path(), "Game.sfc");
+    let image = touch(directory.path(), "media/images/Game.png");
     for xml in [
         "",
         "<wrongRoot/>",
@@ -310,31 +293,17 @@ fn malformed_xml_is_ignored_atomically() {
         "<gameList><game><path>Game.sfc</path><name>Wrong</name></game><game></gameList>",
         "<gameList><game><path>Game.sfc</path><name>Wrong</name></game>unexpected</gameList>",
         "<gameList><game bad=unquoted><path>Game.sfc</path><name>Wrong</name></game></gameList>",
+        "<gameList><game><path>Game.sfc</path><name>Wrong</name><favorite>true</favorite><lastplayed>20240102T030405</lastplayed></game><!-- invalid -- comment --></gameList>",
+        "<gameList><game><path>Game.sfc</path><name>Wrong</name><favorite>true</favorite></game><game>",
     ] {
         fs::write(directory.path().join("gamelist.xml"), xml).unwrap();
-        assert_eq!(
-            scan_system(&system(directory.path()))[0].name,
-            "Game",
-            "accepted XML: {xml}"
-        );
+        let games = scan_system(&system(directory.path()));
+        assert_eq!(games.len(), 1, "{xml}");
+        assert_eq!(games[0].name, "Game", "{xml}");
+        assert_eq!(games[0].image.as_ref(), Some(&image), "{xml}");
+        assert!(!games[0].favorite, "{xml}");
+        assert_eq!(games[0].last_played, None, "{xml}");
     }
-}
-
-#[test]
-fn malformed_comments_discard_the_entire_gamelist() {
-    let directory = tempfile::tempdir().unwrap();
-    touch(directory.path(), "Game (USA).sfc");
-    let image = touch(directory.path(), "media/images/Game (USA).png");
-    fs::write(directory.path().join("gamelist.xml"),
-        "<gameList><game><path>Game (USA).sfc</path><name>Wrong</name><favorite>true</favorite><lastplayed>20240102T030405</lastplayed></game><!-- invalid -- comment --></gameList>")
-        .unwrap();
-
-    let games = scan_system(&system(directory.path()));
-    assert_eq!(games.len(), 1);
-    assert_eq!(games[0].name, "Game");
-    assert_eq!(games[0].image, Some(image));
-    assert!(!games[0].favorite);
-    assert_eq!(games[0].last_played, None);
 }
 
 #[test]
@@ -369,12 +338,6 @@ fn lastplayed_parses_utc_and_rejects_invalid_calendar_values() {
             "timestamp: {text}"
         );
     }
-}
-
-#[test]
-fn clean_name_never_returns_an_empty_display_name() {
-    assert!(!clean_name("").is_empty());
-    assert!(!clean_name("   ").is_empty());
 }
 
 #[cfg(unix)]

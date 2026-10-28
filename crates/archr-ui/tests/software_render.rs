@@ -1,28 +1,6 @@
-use archr_index::{cache::SystemEntry, Game};
-use archr_ui::{
-    render::Ui,
-    state::{App, DataSource},
-    Theme,
-};
-
-struct Empty;
-impl DataSource for Empty {
-    fn systems(&self) -> &[SystemEntry] {
-        &[]
-    }
-    fn games(&self, _: &str) -> &[Game] {
-        &[]
-    }
-    fn origin(&self, _: &str, _: usize) -> Option<(String, usize)> {
-        None
-    }
-    fn cores(&self, _: &str) -> Vec<(String, String)> {
-        vec![]
-    }
-    fn current_core(&self, _: &str, _: usize) -> Option<(String, String)> {
-        None
-    }
-}
+mod common;
+use archr_ui::{render::Ui, state::App, Theme};
+use common::FakeData;
 
 #[test]
 fn software_renderer_keeps_text_when_texture_limits_are_unspecified() {
@@ -34,7 +12,8 @@ fn software_renderer_keeps_text_when_texture_limits_are_unspecified() {
     creator = ui.canvas.texture_creator();
     let theme = Theme::builtin();
     ui.configure(&ttf, &creator, &theme, None).unwrap();
-    ui.draw(&App::new(9), &Empty, &theme, None).unwrap();
+    ui.draw(&App::new(9), &FakeData::default(), &theme, None)
+        .unwrap();
     let pixels = ui
         .canvas
         .read_pixels(None, sdl2::pixels::PixelFormatEnum::RGBA32)

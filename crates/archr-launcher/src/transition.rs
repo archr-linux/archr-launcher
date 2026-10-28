@@ -68,6 +68,12 @@ fn message(outcome: Option<&Outcome>, data: &dyn DataSource, catalog: &I18n) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    mod common {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../archr-ui/tests/common/mod.rs"
+        ));
+    }
     use archr_launcher::{paths::Paths, state::SessionAction};
     use std::{
         fs,
@@ -170,36 +176,67 @@ mod tests {
         );
     }
     #[test]
-    fn terminal_labels_match_requested_actions_and_display_game_name() {
-        use archr_index::{cache::SystemEntry, Game};
-        struct Data(Vec<Game>);
-        impl DataSource for Data {
-            fn systems(&self) -> &[SystemEntry] {
-                &[]
-            }
-            fn games(&self, _: &str) -> &[Game] {
-                &self.0
-            }
-            fn origin(&self, _: &str, _: usize) -> Option<(String, usize)> {
-                None
-            }
-            fn cores(&self, _: &str) -> Vec<(String, String)> {
-                vec![]
-            }
-            fn current_core(&self, _: &str, _: usize) -> Option<(String, String)> {
-                None
-            }
+    #[ignore = "step 2: power commands belong to the launcher and must stay on the notice"]
+    fn power_actions_stay_on_the_notice_without_handoff() {
+        std::env::set_var("SDL_VIDEODRIVER", "offscreen");
+        let root = tempfile::tempdir().unwrap();
+        let paths = Paths::new(Some(root.path().to_owned()));
+        let mut library = Library::initial(paths.clone());
+        library.start();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !library.ready {
+            library.poll();
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(5));
         }
-        let data = Data(vec![Game {
-            name: "Super Mario".into(),
-            path: "game.nes".into(),
-            image: None,
-            video: None,
-            favorite: false,
-            year: None,
-            players: None,
-            last_played: None,
-        }]);
+        let ttf;
+        let creator;
+        let mut ui = Ui::new(640, 480, true).unwrap();
+        ttf = sdl2::ttf::init().unwrap();
+        creator = ui.canvas.texture_creator();
+        let theme = Theme::builtin();
+        ui.catalog = I18n::load(root.path(), Some("pt_BR"), None);
+        ui.configure(&ttf, &creator, &theme, None).unwrap();
+        for (action, notice) in [
+            (SessionAction::Shutdown, "Desligando…"),
+            (SessionAction::Reboot, "Reiniciando…"),
+        ] {
+            assert!(!apply(
+                &mut ui,
+                &App::new(10),
+                &mut library,
+                &theme,
+                Some(Outcome::Action(action)),
+                "",
+                None
+            )
+            .unwrap());
+            assert_eq!(ui.transition.as_deref(), Some(notice));
+            assert!(!paths.run.join("next").exists());
+            assert!(paths.store.join("store.toml").exists());
+        }
+    }
+
+    #[test]
+    fn terminal_labels_match_requested_actions_and_display_game_name() {
+        use archr_index::Game;
+        let data = common::FakeData {
+            games: [(
+                "nes".into(),
+                vec![Game {
+                    name: "Super Mario".into(),
+                    path: "game.nes".into(),
+                    image: None,
+                    video: None,
+                    favorite: false,
+                    year: None,
+                    players: None,
+                    last_played: None,
+                }],
+            )]
+            .into(),
+            ..common::FakeData::default()
+        };
         assert_eq!(
             message(
                 Some(&Outcome::Launch {

@@ -1,30 +1,11 @@
+mod common;
 use archr_index::{cache::SystemEntry, Game};
 use archr_ui::{
     render::Ui,
-    state::{App, DataSource, Screen},
+    state::{App, Screen},
     Theme,
 };
-struct Data {
-    systems: Vec<SystemEntry>,
-    games: Vec<Game>,
-}
-impl DataSource for Data {
-    fn systems(&self) -> &[SystemEntry] {
-        &self.systems
-    }
-    fn games(&self, _: &str) -> &[Game] {
-        &self.games
-    }
-    fn origin(&self, _: &str, _: usize) -> Option<(String, usize)> {
-        None
-    }
-    fn cores(&self, _: &str) -> Vec<(String, String)> {
-        vec![]
-    }
-    fn current_core(&self, _: &str, _: usize) -> Option<(String, String)> {
-        None
-    }
-}
+use common::FakeData as Data;
 #[test]
 fn grafite_layout_motion_glyphs_and_untrusted_text_render_offscreen() {
     std::env::set_var("SDL_VIDEODRIVER", "offscreen");
@@ -43,16 +24,21 @@ fn grafite_layout_motion_glyphs_and_untrusted_text_render_offscreen() {
             dir_mtime: 0,
             source_fingerprint: 0,
         }],
-        games: vec![Game {
-            path: "A.nes".into(),
-            name: "Ga\0me".into(),
-            image: None,
-            video: None,
-            favorite: false,
-            year: None,
-            players: None,
-            last_played: None,
-        }],
+        games: [(
+            "nes".into(),
+            vec![Game {
+                path: "A.nes".into(),
+                name: "Ga\0me".into(),
+                image: None,
+                video: None,
+                favorite: false,
+                year: None,
+                players: None,
+                last_played: None,
+            }],
+        )]
+        .into(),
+        ..Data::default()
     };
     let mut app = App::new(10);
     ui.draw(&app, &data, &theme, None).unwrap();
@@ -116,14 +102,19 @@ fn grafite_layout_motion_glyphs_and_untrusted_text_render_offscreen() {
     );
     let scroll_data = Data {
         systems: data.systems.clone(),
-        games: (0..64)
-            .map(|i| {
-                let mut game = data.games[0].clone();
-                game.name = format!("Game {i}");
-                game.path = format!("game-{i}.nes").into();
-                game
-            })
-            .collect(),
+        games: [(
+            "nes".into(),
+            (0..64)
+                .map(|i| {
+                    let mut game = data.games["nes"][0].clone();
+                    game.name = format!("Game {i}");
+                    game.path = format!("game-{i}.nes").into();
+                    game
+                })
+                .collect(),
+        )]
+        .into(),
+        ..Data::default()
     };
     app.screen = Screen::Games {
         system: "nes".into(),

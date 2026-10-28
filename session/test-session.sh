@@ -24,6 +24,7 @@ mkdir -p "$root/bin"
 export PATH="$root/bin:$PATH"
 export ARCHR_SESSION_TEST=1
 export ARCHR_SESSION_LAUNCHER=archr-launcher
+export ARCHR_SESSION_FAKE_SUSPEND="$root/bin/archr-fake-suspend"
 export ARCHR_SESSION_SETTINGS="$root/bin/archr-settings"
 export ARCHR_SESSION_SWAY_ATTEMPTS=0
 export ARCHR_SESSION_SLEEP="$root/bin/sleep"
@@ -33,7 +34,12 @@ export ARCHR_SESSION_SHELL=${SESSION_TEST_SHELL:-sh}
 export ARCHR_TEST_EMULATOR="$root/bin/fake) emulator"
 cat >"$ARCHR_SESSION_PROFILE" <<'EOF'
 # Deliberately Bash-only, like ArchR's real /etc/profile.d/001-functions.
-function get_setting() { printf '%s\n' pt_BR; }
+function get_setting() {
+  case "$1" in
+    system.language) printf '%s\n' pt_BR ;;
+    system.suspendmode) printf '%s\n' "${ARCHR_TEST_SUSPEND_MODE-}" ;;
+  esac
+}
 export MALI_WAYLAND_AFBC=0
 export SDL_VIDEODRIVER=wayland
 EOF
@@ -58,6 +64,11 @@ case "$line" in
   END)
     : >"$CASE_DIR/finished"
     kill -TERM "$PPID"
+    ;;
+  HOLD)
+    trap '' TERM
+    : >"$CASE_DIR/launcher-ready"
+    exec /bin/sleep 30
     ;;
   CRASH) exit 9 ;;
   WRITE_CRASH) printf '%s\n' 'action reboot' >"$ARCHR_SESSION_RUN_DIR/next"; exit 9 ;;
@@ -111,6 +122,15 @@ EOF
 cat >"$root/bin/archr-settings" <<'EOF'
 #!/bin/sh
 printf '%s\n' settings >>"$CASE_DIR/actions"
+EOF
+cat >"$root/bin/archr-fake-suspend" <<'EOF'
+#!/bin/sh
+printf '%s\n' "fake-suspend $*" >>"$CASE_DIR/actions"
+EOF
+cat >"$root/bin/stop-sleep" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >>"$CASE_DIR/stop-sleeps"
+exec /bin/sleep "$@"
 EOF
 cat >"$root/bin/swaymsg" <<'EOF'
 #!/bin/sh
@@ -300,5 +320,52 @@ run_stop_case() {
 }
 run_stop_case service-stop 'game runemu.sh LONG'
 run_stop_case service-stop-shell 'game runemu.sh LONG; :'
+
+# Pending step 2; opt in with SESSION_PLATFORM_CONTRACTS=1.
+if [ "${SESSION_PLATFORM_CONTRACTS:-0}" = 1 ]; then
+  run_case removed-actions 'action shutdown
+action reboot
+action settings
+END'
+  [ ! -f "$CASE_DIR/actions" ]
+  printf '%s\n' 'PASS removed actions cannot execute in supervisor'
+  for mode in absent off mem; do
+    ARCHR_TEST_SUSPEND_MODE=$mode
+    [ "$mode" != absent ] || ARCHR_TEST_SUSPEND_MODE=
+    export ARCHR_TEST_SUSPEND_MODE
+    run_case "suspend-$mode" 'action suspend
+END'
+    expected='fake-suspend power'
+    [ "$mode" != mem ] || expected=suspend
+    [ "$(cat "$CASE_DIR/actions")" = "$expected" ]
+    [ "$(cat "$CASE_DIR/count")" = 2 ]
+  done
+  printf '%s\n' 'PASS suspend policy and launcher return'
+
+  export CASE_DIR="$root/launcher-stop"
+  mkdir -p "$CASE_DIR"
+  export ARCHR_SESSION_RUN_DIR="$CASE_DIR/run"
+  export ARCHR_SESSION_LOG="$CASE_DIR/session.log"
+  export ARCHR_SESSION_KILL_FILE="$CASE_DIR/kill-data"
+  export ARCHR_SESSION_STOP_SLEEP="$root/bin/stop-sleep"
+  export ARCHR_SESSION_SWAY_ATTEMPTS=0
+  printf '%s\n' HOLD >"$CASE_DIR/plan"
+  timeout 8 "${SESSION_TEST_SHELL:-sh}" "$session" >"$CASE_DIR/output" 2>&1 &
+  test_runner=$!
+  i=0
+  while [ ! -f "$CASE_DIR/launcher-ready" ] && [ "$i" -lt 200 ]; do
+    /bin/sleep 0.01
+    i=$((i + 1))
+  done
+  [ -f "$CASE_DIR/launcher-ready" ]
+  kill -TERM "$(cat "$CASE_DIR/supervisor-pid")"
+  wait "$test_runner"
+  test_runner=
+  [ "$(cat "$CASE_DIR/stop-sleeps")" = 0.2 ]
+  ! grep -q '4 s' "$ARCHR_SESSION_LOG"
+  [ ! -e "$ARCHR_SESSION_RUN_DIR/next" ]
+  [ "$(cat "$CASE_DIR/count")" = 1 ]
+  printf '%s\n' 'PASS launcher-only stop has no game cleanup window'
+fi
 
 echo 'All session tests passed.'

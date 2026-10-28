@@ -1,40 +1,12 @@
 //! Manual wall-time sample of animated draw + present on the PC offscreen backend.
-use archr_index::{cache::SystemEntry, Game};
-use archr_ui::{
-    render::Ui,
-    state::{App, DataSource},
-    Theme,
-};
+mod common;
+use archr_index::cache::SystemEntry;
+use archr_ui::{render::Ui, state::App, Theme};
+use common::FakeData as Data;
 use std::{
     fs,
     time::{Duration, Instant},
 };
-
-struct Data(Vec<SystemEntry>);
-impl DataSource for Data {
-    fn systems(&self) -> &[SystemEntry] {
-        &self.0
-    }
-    fn games(&self, _: &str) -> &[Game] {
-        &[]
-    }
-    fn origin(&self, _: &str, _: usize) -> Option<(String, usize)> {
-        None
-    }
-    fn cores(&self, _: &str) -> Vec<(String, String)> {
-        vec![]
-    }
-    fn current_core(&self, _: &str, _: usize) -> Option<(String, String)> {
-        None
-    }
-    fn collection_len(&self, name: &str) -> usize {
-        match name {
-            "@favorites" => 12,
-            "@recent" => 8,
-            _ => 0,
-        }
-    }
-}
 
 #[test]
 #[ignore = "manual PC animation timing; run with --ignored --nocapture"]
@@ -47,8 +19,8 @@ fn selection_animation_frame_time() {
     fs::write(battery.join("status"), "Discharging").unwrap();
     let theme =
         Theme::load(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../themes/default"));
-    let data = Data(
-        [
+    let data = Data {
+        systems: [
             ("gba", "Game Boy Advance", 4),
             ("snes", "Super Nintendo", 10),
             ("genesis", "Mega Drive", 3),
@@ -66,7 +38,9 @@ fn selection_animation_frame_time() {
             source_fingerprint: 0,
         })
         .collect(),
-    );
+        counts: [("@favorites".into(), 12), ("@recent".into(), 8)].into(),
+        ..Data::default()
+    };
     let ttf;
     let creator;
     let mut ui = Ui::new(640, 480, true).unwrap();
