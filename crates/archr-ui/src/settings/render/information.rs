@@ -160,14 +160,14 @@ impl View<'_, '_, '_> {
                         self.theme.border,
                     )?;
                 }
-                self.note((38., y + 2., 145., 34.), &self.tr(key), 14.)?;
+                self.note((38., y, 160., 34.), &self.tr(key), 14.)?;
                 let value = if value.is_empty() {
                     self.tr("settings.unavailable")
                 } else {
                     self.tr(value)
                 };
                 self.text_face(
-                    (190., y + 2., 184., 34.),
+                    (205., y, 169., 34.),
                     &value,
                     (14., self.theme.text, Align::Right),
                     Face::Mono,

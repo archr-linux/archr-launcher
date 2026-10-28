@@ -40,6 +40,12 @@ fn all_locales_and_pages_render_and_selected_on_toggle_has_contrast() {
             Page::System,
             Page::Region,
             Page::Info,
+            Page::InfoDetail(0),
+            Page::InfoDetail(1),
+            Page::InfoDetail(2),
+            Page::InfoDetail(3),
+            Page::InfoDetail(4),
+            Page::InfoDetail(5),
             Page::Soon("settings.network"),
         ] {
             let mut state = Settings::default();
@@ -47,7 +53,7 @@ fn all_locales_and_pages_render_and_selected_on_toggle_has_contrast() {
                 state.open(page);
             }
             state.loading = false;
-            if page == Page::Info {
+            if matches!(page, Page::Info | Page::InfoDetail(_)) {
                 state.info.device = "R36S".into();
                 state.info.kernel = "6.6.63-archr".into();
                 state.info.version = "2.1.1".into();
@@ -63,7 +69,13 @@ fn all_locales_and_pages_render_and_selected_on_toggle_has_contrast() {
                 .map(|_| archr_ui::settings::InfoCard {
                     lines: vec!["640 × 480".into(), "panfrost".into()],
                     percent: Some(70),
-                    ..Default::default()
+                    detail: archr_ui::settings::InfoDetail {
+                        rows: vec![
+                            ("settings.design_capacity", "@3200 mAh".into()),
+                            ("settings.min_max", "@408 · @1512 MHz".into()),
+                        ],
+                        ..Default::default()
+                    },
                 })
                 .collect();
             }
