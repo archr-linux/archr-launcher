@@ -68,7 +68,10 @@ impl Settings {
             Id::NetplayHost | Id::CustomServer => 253,
             _ => keyboard.max,
         };
-        keyboard.optional = id == Id::WifiSwitch && self.wifi_hidden;
+        // Clearing a Netplay field restores its default; an open hidden network
+        // has no password. Ports, addresses and SSIDs stay mandatory.
+        keyboard.optional = matches!(id, Id::Nickname | Id::NetplayHost | Id::CustomServer)
+            || (id == Id::WifiSwitch && self.wifi_hidden);
         self.keyboard = Some(keyboard);
         self.keyboard_target = Some(id);
         self.open(Page::Keyboard);

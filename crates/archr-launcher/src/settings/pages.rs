@@ -284,12 +284,8 @@ impl Backend {
                     }
                 }
                 Id::Nickname => {
-                    // RetroArch's nickname rule, as the launch handoff applies it.
-                    if value.len() <= 32
-                        && value
-                            .chars()
-                            .all(|c| c.is_ascii_alphanumeric() || " _.".contains(c))
-                    {
+                    use crate::handoff::{nick_char, NICK_MAX};
+                    if value.len() <= NICK_MAX && value.chars().all(nick_char) {
                         self.save(id, value).map(|_| value.into())
                     } else {
                         Err("settings.invalid_nickname".into())
