@@ -6,7 +6,7 @@ fn locales() -> std::path::PathBuf {
 }
 
 #[test]
-fn cldr_plural_rules() {
+fn launcher_plural_rules() {
     for (n, want) in [
         (1., "one"),
         (2., "few"),
@@ -28,10 +28,39 @@ fn cldr_plural_rules() {
         assert_eq!(plural_category(lang, 2.), "other");
         assert_eq!(plural_category(lang, 1.5), "other");
     }
-    for n in [0., 1., 0.5, 1.5] {
-        assert_eq!(plural_category("pt_BR", n), "one");
+    for (n, want) in [
+        (0., "other"),
+        (1., "one"),
+        (2., "other"),
+        (0.5, "other"),
+        (1.5, "other"),
+    ] {
+        assert_eq!(plural_category("pt_BR", n), want);
     }
-    assert_eq!(plural_category("pt_BR", 2.), "other");
+}
+
+#[test]
+fn portuguese_and_english_game_and_favorite_counts() {
+    for (lang, games, favorites) in [
+        (
+            "pt_BR",
+            ["0 jogos", "1 jogo", "2 jogos"],
+            ["0 favoritos", "1 favorito", "2 favoritos"],
+        ),
+        (
+            "en",
+            ["0 games", "1 game", "2 games"],
+            ["0 favorites", "1 favorite", "2 favorites"],
+        ),
+    ] {
+        let catalog = I18n::load(&locales(), Some(lang), None);
+        for n in 0..=2 {
+            let count = n.to_string();
+            for (key, want) in [("games.count", games[n]), ("favorites.count", favorites[n])] {
+                assert_eq!(catalog.plural(key, n as f64, &[("count", &count)]), want);
+            }
+        }
+    }
 }
 
 #[test]
