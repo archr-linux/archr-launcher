@@ -43,6 +43,7 @@ dependencies = [
  "archr-config",
  "archr-index",
  "archr-io",
+ "archr-scraper",
  "archr-ui",
  "crc32fast",
  "libc",

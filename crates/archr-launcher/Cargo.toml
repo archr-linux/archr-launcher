@@ -11,6 +11,7 @@ archr-config = { path = "../archr-config" }
 archr-ui = { path = "../archr-ui" }
 sdl2 = { version = "0.38", features = ["ttf", "image"] }
 archr-index = { path = "../archr-index" }
+archr-scraper = { path = "../archr-scraper" }
 log = "0.4"
 serde_json = "1"
 crc32fast = "1"

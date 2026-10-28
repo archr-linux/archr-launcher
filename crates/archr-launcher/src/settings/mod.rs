@@ -304,6 +304,8 @@ pub(super) enum Work {
     Connect(String, String),
     Forget(String),
     Variants(String),
+    Login(String, String),
+    Scrape,
 }
 enum Reply {
     Loaded(Result<Box<Settings>, String>),
@@ -313,6 +315,8 @@ enum Reply {
     Connect(Result<(), String>),
     Forget(Result<(), String>),
     Variants(Vec<(String, String)>),
+    Login(Result<usize, String>),
+    Scrape(Result<archr_scraper::Job, String>),
 }
 pub struct Worker {
     tx: mpsc::Sender<Work>,
@@ -340,6 +344,10 @@ impl Worker {
                         Work::Variants(layout) => {
                             Reply::Variants(backend.keyboard_names(&["list-variants", &layout]))
                         }
+                        Work::Login(user, password) => {
+                            Reply::Login(backend.login(&user, &password))
+                        }
+                        Work::Scrape => Reply::Scrape(backend.scrape()),
                     };
                     if results.send(reply).is_err() {
                         break;
@@ -358,7 +366,11 @@ impl Worker {
         Ok(())
     }
     /// Language is returned only after durable success, never speculatively.
-    pub(super) fn poll(&mut self, state: &mut Settings) -> (bool, Option<String>) {
+    pub(super) fn poll(
+        &mut self,
+        state: &mut Settings,
+        job: &mut Option<archr_scraper::Job>,
+    ) -> (bool, Option<String>) {
         let mut changed = false;
         let mut language = None;
         while let Ok(reply) = self.rx.try_recv() {
@@ -372,6 +384,10 @@ impl Worker {
                     state.access_ip = loaded.access_ip;
                     state.info = loaded.info;
                     state.error = loaded.error;
+                    state.scrape.available = loaded.scrape.available;
+                    if !state.scrape.verifying {
+                        state.scrape.user = loaded.scrape.user;
+                    }
                     state.loading = false;
                 }
                 Reply::Loaded(Err(error)) => {
@@ -437,6 +453,26 @@ impl Worker {
                         Err(error) => state.error = Some((None, error)),
                     }
                 }
+                Reply::Login(result) => {
+                    state.scrape.verifying = false;
+                    match result {
+                        Ok(threads) => {
+                            state.scrape.threads = threads;
+                            state.error = None;
+                        }
+                        Err(error) => {
+                            state.scrape.user.clear();
+                            state.error = Some((None, error));
+                        }
+                    }
+                }
+                Reply::Scrape(result) => match result {
+                    Ok(started) => {
+                        state.scrape.running = true;
+                        *job = Some(started);
+                    }
+                    Err(error) => state.error = Some((None, error)),
+                },
             }
         }
         (changed, language)

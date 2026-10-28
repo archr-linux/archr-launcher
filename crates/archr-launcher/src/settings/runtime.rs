@@ -15,6 +15,7 @@ pub struct Runtime {
     next_scan: Instant,
     /// Seconds shown in the Wi-Fi footer, redrawn as they change.
     scan_age: u64,
+    job: Option<archr_scraper::Job>,
     closing: bool,
 }
 impl Runtime {
@@ -27,6 +28,7 @@ impl Runtime {
             next_info: Instant::now(),
             next_scan: Instant::now(),
             scan_age: 0,
+            job: None,
             closing: false,
         }
     }
@@ -68,7 +70,13 @@ impl Runtime {
             Effect::Scan => self.send(Work::Scan),
             Effect::Connect(ssid, password) => self.send(Work::Connect(ssid, password)),
             Effect::Forget(ssid) => self.send(Work::Forget(ssid)),
-            Effect::Login(..) | Effect::Scrape | Effect::CancelScrape => {}
+            Effect::Login(user, password) => self.send(Work::Login(user, password)),
+            Effect::Scrape => self.send(Work::Scrape),
+            Effect::CancelScrape => {
+                if let Some(job) = &self.job {
+                    job.cancel();
+                }
+            }
             Effect::Reboot => return Outcome::Action(SessionAction::Reboot),
             Effect::None => {}
         }
@@ -77,11 +85,40 @@ impl Runtime {
         }
         Outcome::None
     }
+    /// Engine events arrive on the engine's own thread; this never blocks.
+    fn poll_scrape(&mut self) -> bool {
+        let Some(job) = &self.job else {
+            return false;
+        };
+        let mut changed = false;
+        while let Some(event) = job.poll() {
+            changed = true;
+            let (progress, stop) = match event {
+                archr_scraper::Event::Progress(progress) => (progress, None),
+                archr_scraper::Event::Done(report) => (report.progress, Some(report.stop)),
+            };
+            let scrape = &mut self.state.scrape;
+            scrape.system = progress.system;
+            scrape.done = progress.done;
+            scrape.total = progress.total;
+            scrape.scraped = progress.scraped;
+            scrape.missing = progress.not_found + progress.failed;
+            if let Some(stop) = stop {
+                scrape.running = false;
+                scrape.outcome = Some(super::pages::scrape_outcome(stop));
+                self.job = None;
+                break;
+            }
+        }
+        changed
+    }
+
     pub fn poll(&mut self) -> (bool, Option<String>) {
         let (mut dirty, language) = match self.worker.as_mut() {
-            Some(worker) => worker.poll(&mut self.state),
+            Some(worker) => worker.poll(&mut self.state, &mut self.job),
             None => (false, None),
         };
+        dirty |= self.poll_scrape();
         let now = Instant::now();
         let wifi = self.active
             && self.state.page() == Page::Wifi

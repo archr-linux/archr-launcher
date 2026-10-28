@@ -1,5 +1,6 @@
 //! Settings effects owned by the network, regional and games pages.
 use super::*;
+use archr_scraper::{Credentials, Engine, Job, Media, Options, Stop};
 use archr_ui::settings::network::{parse_scanlist, wpa_valid, Network};
 use std::os::unix::process::CommandExt;
 
@@ -17,6 +18,18 @@ fn wifi_error(error: String) -> String {
         "settings.wpa_length".into()
     } else {
         "settings.wifi_connect_failed".into()
+    }
+}
+pub(super) fn scrape_outcome(stop: Stop) -> &'static str {
+    match stop {
+        Stop::Completed => "settings.scrape_done",
+        Stop::Cancelled => "settings.scrape_cancelled",
+        Stop::Quota => "settings.scrape_quota",
+        Stop::Auth => "settings.scrape_auth",
+        Stop::Restricted => "settings.scrape_restricted",
+        Stop::Outdated => "settings.scrape_outdated",
+        Stop::Closed => "settings.scrape_closed",
+        Stop::Network => "settings.scrape_network",
     }
 }
 
@@ -109,6 +122,65 @@ impl Backend {
         let layout = state.value(Id::KeyboardLayout).to_owned();
         let variants = self.keyboard_names(&["list-variants", &layout]);
         keyboard_choices(state, Id::KeyboardVariant, variants);
+        state.scrape.available = archr_scraper::available();
+        state.scrape.user = Credentials::load(&self.paths.store)
+            .map(|c| c.user)
+            .unwrap_or_default();
+        let mut systems = vec![String::new()];
+        for system in crate::worker::definitions(&self.paths).unwrap_or_default() {
+            if archr_scraper::system_id(&system.name).is_some() {
+                state
+                    .labels
+                    .insert((Id::ScraperSystems, system.name.clone()), system.fullname);
+                systems.push(system.name);
+            }
+        }
+        state.options.insert(Id::ScraperSystems, systems);
+    }
+    /// Blocking login check; the login is stored only once the service accepts it.
+    pub(super) fn login(&self, user: &str, password: &str) -> Result<usize, String> {
+        let creds = Credentials {
+            user: user.trim().into(),
+            password: password.into(),
+        };
+        let engine = Engine::production(self.paths.cache.clone(), Some(creds.clone()))
+            .ok_or("settings.scraper_unavailable")?;
+        let info = engine
+            .verify()
+            .map_err(|stop| scrape_outcome(stop).to_owned())?;
+        fs::create_dir_all(&self.paths.store).map_err(|e| e.to_string())?;
+        creds.save(&self.paths.store).map_err(|e| e.to_string())?;
+        Ok(info.threads)
+    }
+    /// Starts the engine's own background job from the saved options.
+    pub(super) fn scrape(&self) -> Result<Job, String> {
+        let cfg = self.cfg()?;
+        let get = |id: Id| {
+            cfg.get_setting(id.key(), None, None)
+                .unwrap_or_else(|| id.default_value().into())
+        };
+        let engine = Engine::production(
+            self.paths.cache.clone(),
+            Credentials::load(&self.paths.store),
+        )
+        .ok_or("settings.scraper_unavailable")?;
+        let mut options = Options::new(&get(Id::Language));
+        options.only_missing = get(Id::ScraperMissing) == "1";
+        options.systems = Some(get(Id::ScraperSystems))
+            .filter(|s| !s.is_empty())
+            .into_iter()
+            .collect();
+        options.media = get(Id::ScraperMedia)
+            .split(',')
+            .filter_map(|kind| match kind {
+                "box" => Some(Media::Box2d),
+                "screenshot" => Some(Media::Screenshot),
+                "wheel" => Some(Media::Wheel),
+                _ => None,
+            })
+            .collect();
+        fs::create_dir_all(&self.paths.cache).map_err(|e| e.to_string())?;
+        Ok(engine.start(crate::worker::definitions(&self.paths)?, options))
     }
     pub(super) fn apply_page(&self, id: Id, value: &str) -> Option<Result<String, String>> {
         if !matches!(
@@ -132,6 +204,9 @@ impl Backend {
                 | Id::CustomServer
                 | Id::OnlyRelay
                 | Id::MissingGames
+                | Id::ScraperSystems
+                | Id::ScraperMedia
+                | Id::ScraperMissing
         ) {
             return None;
         }
@@ -221,6 +296,13 @@ impl Backend {
                         self.save(id, value).map(|_| value.into())
                     } else {
                         Err("settings.invalid_address".into())
+                    }
+                }
+                Id::ScraperSystems => {
+                    if value.is_empty() || archr_scraper::system_id(value).is_some() {
+                        self.save(id, value).map(|_| value.into())
+                    } else {
+                        Err("Invalid option".into())
                     }
                 }
                 _ => self.save(id, value).map(|_| value.into()),
@@ -424,6 +506,22 @@ mod tests {
             calls(&root),
             "swaymsg input * xkb_variant \"\"; input * xkb_layout us\narchr-keyboard set us \n"
         );
+    }
+    #[test]
+    fn scraper_stays_disabled_without_the_build_credential() {
+        let (_root, paths) = fixture("");
+        let backend = Backend::new(paths.clone());
+        let mut state = Settings::default();
+        backend.load_pages(&SystemCfg::load(&paths.config).unwrap(), &mut state);
+        assert_eq!(state.scrape.available, archr_scraper::available());
+        if !archr_scraper::available() {
+            assert_eq!(
+                backend.login("user", "secret"),
+                Err("settings.scraper_unavailable".into())
+            );
+            assert!(backend.scrape().is_err());
+            assert!(!paths.store.join("scraper.toml").exists());
+        }
     }
     #[test]
     fn invalid_port_and_nickname_are_not_published() {
