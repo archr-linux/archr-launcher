@@ -107,7 +107,7 @@ impl Ui<'_, '_> {
         let side = px(46.);
         let gap = px(14.);
         let start = center - (side * 6 + gap * 5) / 2;
-        let wifi_on = self.status.as_ref().is_some_and(|s| s.wifi);
+        let wifi_on = self.wifi_enabled();
         for (index, &(_, glyph)) in SHORTCUTS.iter().enumerate() {
             let focus = row == 1 && shortcut == index;
             let enabled = index >= 2;
