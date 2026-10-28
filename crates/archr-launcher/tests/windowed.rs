@@ -134,3 +134,32 @@ fn snapshot_after_launch_button_captures_the_opening_overlay() {
         );
     });
 }
+
+#[test]
+fn missing_system_art_is_quiet_but_corrupt_art_is_reported() {
+    let root = tempfile::tempdir().unwrap();
+    let config = root.path().join("storage/.config/emulationstation");
+    let roms = root.path().join("storage/roms/music");
+    fs::create_dir_all(&config).unwrap();
+    fs::create_dir_all(&roms).unwrap();
+    fs::write(roms.join("Demo.rom"), []).unwrap();
+    fs::write(config.join("es_systems.cfg"), "<systemList><system><name>music</name><fullname>Music</fullname><path>/storage/roms/music</path><extension>.rom</extension></system></systemList>").unwrap();
+    let art = root
+        .path()
+        .join("storage/.config/archr-launcher/systems/music.png");
+    for corrupt in [false, true] {
+        if corrupt {
+            fs::create_dir_all(art.parent().unwrap()).unwrap();
+            fs::write(&art, "not a PNG").unwrap();
+        }
+        let output = Command::new(env!("CARGO_BIN_EXE_archr-launcher"))
+            .env("ARCHR_LAUNCHER_ROOT", root.path())
+            .env("SDL_VIDEODRIVER", "offscreen")
+            .args(["--windowed", "--script", "WAIT,WAIT,WAIT,QUIT"])
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(output.status.success(), "{stderr}");
+        assert_eq!(stderr.contains("Cover "), corrupt, "{stderr}");
+    }
+}

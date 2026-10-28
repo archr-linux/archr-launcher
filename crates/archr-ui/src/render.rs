@@ -1,7 +1,6 @@
 //! Grafite presentation at 640×480, scaled by height, with event-driven idle.
 pub use crate::text::PreparedText;
 use crate::{
-    badges::BadgeKey,
     i18n::I18n,
     icons::Glyph,
     motion::Tween,
@@ -187,6 +186,7 @@ pub struct Ui<'font, 'texture> {
     cover_visible: bool,
     cover_fade: Tween,
     animating: bool,
+    has_presented: bool,
     frame: Frame,
     pub catalog: I18n,
     pub loading: bool,
@@ -273,6 +273,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             cover_visible: false,
             cover_fade: Tween::new(0., Duration::from_millis(120)),
             animating: false,
+            has_presented: false,
             frame: Frame::new(width, height),
             catalog: I18n::default(),
             loading: false,
@@ -447,13 +448,17 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             self.hub(app, data, theme)?;
         } else {
             self.list(backdrop, cursor, data, theme)?;
-            if matches!(backdrop, Screen::Systems) {
+            // Keep the first present to the prepared list; the panel follows
+            // on the redraw requested when tick starts the artwork worker.
+            if self.has_presented && matches!(backdrop, Screen::Systems) {
                 self.system_panel(&App::system_rows(data), cursor, data, theme)?;
             }
             if let Screen::Games { system } = backdrop {
                 self.cover(system, cursor, data, theme, cover)?;
             }
-            self.footer(app, data, theme)?;
+            if self.has_presented {
+                self.footer(app, data, theme)?;
+            }
         }
         if matches!(app.screen, Screen::QuickMenu { .. }) {
             self.menu(app, data, theme)?;
@@ -480,6 +485,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         }
         startup_phase!(self.startup, "first frame draw");
         self.canvas.present();
+        self.has_presented = true;
         if self.startup.began().is_some() {
             self.startup.phase_once("first present");
             self.geometry.startup = StartupTrace::default();
@@ -1308,38 +1314,6 @@ pub fn prepare_first_frame<'font>(
             (Face::Regular, 16., theme.muted),
             Some(list_width.saturating_sub(frame.px(28.) as u32).max(1)),
         )?;
-    }
-    let mut right = width as i32 - frame.px(24.);
-    for key in ["hint.menu", "hint.open"] {
-        right -= label(
-            &mut prepared,
-            &catalog.text(key),
-            (Face::Regular, 13., theme.muted),
-            None,
-        )? as i32
-            + frame.px(6.)
-            + frame.px(20.)
-            + frame.px(16.);
-    }
-    // hints() excludes the final inter-hint gap from its returned left edge.
-    label(
-        &mut prepared,
-        &library_summary(data, catalog),
-        (Face::Regular, 13., theme.muted),
-        Some((right + frame.px(16.) - frame.px(40.)).max(1) as u32),
-    )?;
-    for letter in ['Y', 'A'] {
-        prepared.badge(BadgeKey {
-            letter,
-            diameter: frame.px(20.) as u32,
-            size: frame.font_size(11.),
-            background: theme.badge,
-            foreground: theme.text,
-        })?;
-    }
-    if let Some(name) = systems.first() {
-        prepared.shadow = Some(Shadow::surface()?);
-        system_art::prepare_panel(&mut prepared, frame, name, data, catalog, theme)?;
     }
     Ok(prepared)
 }

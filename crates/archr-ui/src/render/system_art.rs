@@ -1,11 +1,11 @@
 //! Systems screen artwork panel: console image or a generated typographic card.
-use super::{system_title, Frame, PreparedText, Ui};
+use super::{system_title, Frame, Ui};
 use crate::{
     covers::CoverCache,
     i18n::I18n,
     primitives::Icon,
     state::DataSource,
-    text::{Align, Face, Style},
+    text::{Align, Face},
     theme::{Rgba, Theme},
 };
 use sdl2::{rect::Rect, render::TextureCreator, video::WindowContext};
@@ -452,12 +452,19 @@ fn panel_labels(
     let maker = data
         .manufacturer(name)
         .map(|(maker, year)| {
-            [maker, year]
-                .into_iter()
-                .filter(|part| !part.is_empty())
-                .collect::<Vec<_>>()
-                .join(" · ")
-                .to_uppercase()
+            let mut parts = Vec::new();
+            for (index, part) in [maker, year].into_iter().enumerate() {
+                // ES definitions embed private-use icon glyphs and put the
+                // category "System" where real manufacturer/year data is absent.
+                let part = part.chars().filter(|c| !matches!(*c,
+                    '\u{e000}'..='\u{f8ff}' | '\u{f0000}'..='\u{ffffd}' | '\u{100000}'..='\u{10fffd}'
+                )).collect::<String>().trim().to_uppercase();
+                if !part.is_empty() && part != "SYSTEM"
+                    && !(index == 1 && part == "0000") && !parts.contains(&part) {
+                    parts.push(part);
+                }
+            }
+            parts.join(" · ")
         })
         .filter(|maker| !maker.is_empty());
     if let Some(maker) = maker {
@@ -471,53 +478,66 @@ fn panel_labels(
     Ok(labels)
 }
 
-/// Prepare exactly the generated panel shown before the artwork worker starts.
-pub(super) fn prepare_panel(
-    prepared: &mut PreparedText<'_>,
-    frame: Frame,
-    name: &str,
-    data: &dyn DataSource,
-    catalog: &I18n,
-    theme: &Theme,
-) -> Result<(), String> {
-    let rect = panel_rect(frame, theme);
-    let mut labels = Vec::new();
-    if !name.starts_with('@') {
-        labels.push(generated_label(
-            frame,
-            rect,
-            name,
-            theme,
-            |text, face, size| prepared.measure(text, face, frame.font_size(size)),
-        )?);
-    }
-    labels.extend(panel_labels(
-        frame,
-        rect,
-        name,
-        data,
-        catalog,
-        theme,
-        |text, face, size| prepared.measure(text, face, frame.font_size(size)),
-    )?);
-    for label in labels {
-        let (face, size, color) = label.style;
-        prepared.label(
-            &label.text,
-            Style {
-                face,
-                size: frame.font_size(size),
-                color,
-            },
-            label.rect.width(),
-        )?;
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn metadata_shows_only_known_manufacturer_and_year_without_icon_placeholders() {
+        struct Metadata<'a>(&'a str, &'a str);
+        impl DataSource for Metadata<'_> {
+            fn systems(&self) -> &[archr_index::cache::SystemEntry] {
+                &[]
+            }
+            fn games(&self, _: &str) -> &[archr_index::Game] {
+                &[]
+            }
+            fn origin(&self, _: &str, _: usize) -> Option<(String, usize)> {
+                None
+            }
+            fn cores(&self, _: &str) -> Vec<(String, String)> {
+                vec![]
+            }
+            fn current_core(&self, _: &str, _: usize) -> Option<(String, String)> {
+                None
+            }
+            fn manufacturer(&self, _: &str) -> Option<(&str, &str)> {
+                Some((self.0, self.1))
+            }
+        }
+        let theme = Theme::builtin();
+        let frame = Frame::new(640, 480);
+        for (maker, year, expected) in [
+            ("\u{f013} System", "System", ""),
+            ("", "", ""),
+            ("  ", "  ", ""),
+            ("Nintendo", "", "NINTENDO"),
+            ("", "1983", "1983"),
+            (" Nintendo ", " 1983 ", "NINTENDO · 1983"),
+            ("\u{f013} Nintendo", "1983", "NINTENDO · 1983"),
+            ("Nintendo", "0000", "NINTENDO"),
+            ("Nintendo", "Nintendo", "NINTENDO"),
+            ("System", "1983", "1983"),
+        ] {
+            let labels = panel_labels(
+                frame,
+                panel_rect(frame, &theme),
+                "music",
+                &Metadata(maker, year),
+                &I18n::default(),
+                &theme,
+                |text, _, _| Ok(text.chars().count() as u32 * 5),
+            )
+            .unwrap();
+            let meta = labels
+                .iter()
+                .filter(|label| label.style.0 == Face::Regular)
+                .map(|label| label.text.as_str())
+                .collect::<Vec<_>>()
+                .join(" ");
+            assert_eq!(meta, expected, "maker={maker:?}, year={year:?}");
+        }
+    }
 
     #[test]
     fn lookup_prefers_user_then_theme_and_own_name_before_alias() {
