@@ -233,8 +233,10 @@ if command -v archr-keyboard >/dev/null 2>&1; then
     layout=${keyboard%% *}
     variant=${keyboard#* }
     if [ -n "$layout" ]; then
-        swaymsg input '*' xkb_layout "$layout" >/dev/null 2>&1 || :
-        swaymsg input '*' xkb_variant "$variant" >/dev/null 2>&1 || :
+        # One transaction; clear the variant before the layout changes.
+        sway_input="input * xkb_variant \"\"; input * xkb_layout $layout"
+        [ -n "$variant" ] && sway_input="$sway_input; input * xkb_variant $variant"
+        swaymsg "$sway_input" >/dev/null 2>&1 || :
     fi
 fi
 session_log 'Starting launcher session'
