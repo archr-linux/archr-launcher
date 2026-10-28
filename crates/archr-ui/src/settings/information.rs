@@ -184,6 +184,6 @@ mod tests {
         let catalog =
             crate::i18n::I18n::load(std::path::Path::new("/nonexistent"), Some("pt_BR"), None);
         assert_eq!(value(&catalog, "hint.confirm"), "Confirmar");
-        assert_eq!(value(&catalog, "alsa.card"), "alsa.card");
+        assert_eq!(value(&catalog, "Alsa.card"), "Alsa.card");
     }
 }
