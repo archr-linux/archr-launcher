@@ -386,3 +386,30 @@ Os testes também validam o bridge de profile Bash para sh e o alvo do hotkey;
 com Python 3 disponível, criam sockets locais para testar sway pronto. Testes
 com RetroArch, standalone, ports e medição da primeira tela continuam sendo
 validações no aparelho, não substituídas pelos testes do host.
+
+## Moonlight
+
+A coleção virtual Moonlight aparece apenas quando `/usr/bin/moonlight` existe;
+ela substitui a entrada antiga do catálogo, sem ROMs ou arquivos do ES.
+Adicione o IPv4/IPv6 do PC pelo teclado da tela. `A` pareia/inicia, `X` atualiza,
+`Y` abre resolução, quadros, bitrate, codec e despareamento (com confirmação).
+O PIN emitido pelo CLI aparece enquanto o pareamento aguarda confirmação no PC;
+`B` cancela. Para encerrar o stream, use a combinação nativa do Moonlight:
+Start + Select + L1 + R1 (ou Ctrl+Alt+Shift+Q no teclado).
+
+O contrato segue moonlight-embedded `a6bf7154a743d4f74a1b377e730f188352a1b80c`:
+`list` fornece nomes, não IDs; `pair`/`unpair` podem falhar com status zero, por
+isso o launcher confere os marcadores de sucesso. Consultas e despareamento têm
+limite de 15 s; pareamento, 120 s, com saída limitada e cancelamento do grupo.
+O stream roda pelo supervisor da sessão, sem um limite de duração artificial.
+
+Computadores conhecidos (até 16 IPs) e opções ficam em
+`/storage/.config/archr-launcher/moonlight.cfg`, via trava e publicação atômica
+no worker. As opções são salvas ao sair do painel com `B`/`Y`. O CLI recebe
+`/storage/.config/moonlight/moonlight.conf` e usa as chaves em
+`/storage/.cache/moonlight`; o launcher não lê certificados nem depende do ES.
+Resolução inicial: tamanho do painel; demais padrões: 60 fps, 5000 Kbps, H.264.
+Host e app seguem no ambiente do handoff, nunca inseridos como código de shell.
+O fluxo por IP dispensa mDNS; nomes do PC e capas não são inventados a partir da
+lista textual do CLI. Validação real com Sunshine/PC continua necessária no
+aparelho; testes do host usam executáveis falsos sob `ARCHR_LAUNCHER_ROOT`.

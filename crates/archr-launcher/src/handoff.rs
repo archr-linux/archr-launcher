@@ -167,7 +167,7 @@ pub fn catalog_command(template: &str, rom: &Path, system: &str) -> io::Result<S
 
 /// One `NAME=value; ` assignment on a single line. `printf %b` restores
 /// newlines (the handoff is one line); the `x` keeps trailing ones.
-fn assignment(name: &str, value: &str) -> String {
+pub(crate) fn assignment(name: &str, value: &str) -> String {
     if value.contains('\n') {
         let escaped = value.replace('\\', "\\\\").replace('\n', "\\n");
         format!(

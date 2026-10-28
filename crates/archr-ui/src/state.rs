@@ -47,6 +47,7 @@ pub enum Outcome {
     None,
     Settings,
     ToggleWifi,
+    MoonlightStream(crate::moonlight::Stream),
     Launch {
         system: String,
         game: usize,

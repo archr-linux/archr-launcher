@@ -102,7 +102,7 @@ fn candidates(dirs: &[&Path], name: &str) -> Vec<PathBuf> {
 }
 
 /// Greedy word wrapping, splitting oversized words without dropping characters.
-fn wrap(
+pub(super) fn wrap(
     text: &str,
     width: u32,
     mut measure: impl FnMut(&str) -> Result<u32, String>,
@@ -312,6 +312,8 @@ impl Ui<'_, '_> {
             );
             let glyph = if name == "@favorites" {
                 Glyph::Star
+            } else if name == crate::moonlight::SYSTEM {
+                Glyph::Moon
             } else {
                 Glyph::Clock
             };
@@ -427,7 +429,9 @@ fn panel_labels(
             .map_or(0, |s| s.game_count as usize)
     };
     let count = |key, n: usize| catalog.plural(key, n as f64, &[("count", &n.to_string())]);
-    let stats = if name.starts_with('@') {
+    let stats = if name == crate::moonlight::SYSTEM {
+        catalog.text("moonlight.description")
+    } else if name.starts_with('@') {
         count("games.count", games)
     } else {
         catalog.format(

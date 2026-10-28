@@ -9,4 +9,5 @@ mod worker;
 
 mod persistence;
 
+pub mod moonlight;
 pub mod settings;
