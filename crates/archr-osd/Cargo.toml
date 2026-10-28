@@ -1,0 +1,10 @@
+[package]
+name = "archr-osd"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+libc = "0.2"
+resvg = { version = "0.45", default-features = false }
+smithay-client-toolkit = { version = "0.19", default-features = false }
