@@ -15,13 +15,14 @@ const DEADLINE: Duration = Duration::from_secs(10);
 static BUSY: AtomicBool = AtomicBool::new(false);
 
 fn start(program: &std::path::Path, arg: &str) -> io::Result<std::process::Child> {
-    Command::new(program)
-        .arg(arg)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .process_group(0)
-        .spawn()
+    crate::process::spawn(
+        Command::new(program)
+            .arg(arg)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .process_group(0),
+    )
 }
 
 /// True when the child exits successfully within `deadline`; a hung one is killed.

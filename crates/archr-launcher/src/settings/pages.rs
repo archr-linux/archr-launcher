@@ -84,7 +84,7 @@ impl Backend {
         if let Some(root) = &self.paths.root {
             command.env("ARCHR_LAUNCHER_ROOT", root);
         }
-        match command.spawn() {
+        match crate::process::spawn(&mut command) {
             Ok(mut child) => {
                 thread::spawn(move || child.wait());
             }
