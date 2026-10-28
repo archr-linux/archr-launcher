@@ -344,21 +344,14 @@ fn run(
                 moonlight.handle(button)
             } else if settings.active {
                 settings.handle(button)
-            } else if button == archr_ui::state::Button::A
-                && app.screen == Screen::Systems
-                && app.moving().is_none()
-                && app
-                    .rows(&library)
-                    .get(app.cursor)
-                    .is_some_and(|id| id == archr_ui::moonlight::SYSTEM)
-            {
-                moonlight.open();
-                Outcome::None
             } else {
                 app.handle(button, &library)
             };
             let requested = if requested == Outcome::Settings {
                 settings.open();
+                Outcome::None
+            } else if requested == Outcome::Moonlight {
+                moonlight.open();
                 Outcome::None
             } else {
                 requested

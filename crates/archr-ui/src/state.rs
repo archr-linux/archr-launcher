@@ -47,6 +47,7 @@ pub enum Outcome {
     None,
     Settings,
     ToggleWifi,
+    Moonlight,
     MoonlightStream(crate::moonlight::Stream),
     Launch {
         system: String,
@@ -203,6 +204,9 @@ impl App {
             Screen::Systems => match b {
                 Button::A => {
                     if let Some(system) = Self::system_rows(data).get(self.cursor) {
+                        if system == crate::moonlight::SYSTEM {
+                            return Outcome::Moonlight;
+                        }
                         self.enter(Screen::Games {
                             system: system.clone(),
                         });

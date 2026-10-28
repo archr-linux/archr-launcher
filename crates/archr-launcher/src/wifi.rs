@@ -8,7 +8,7 @@ use std::{
     process::{Command, Stdio},
     sync::atomic::{AtomicBool, Ordering},
     thread,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 const DEADLINE: Duration = Duration::from_secs(10);
@@ -25,21 +25,9 @@ fn start(program: &std::path::Path, arg: &str) -> io::Result<std::process::Child
 }
 
 /// True when the child exits successfully within `deadline`; a hung one is killed.
-fn wait(mut child: std::process::Child, deadline: Duration) -> bool {
-    let end = Instant::now() + deadline;
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => return status.success(),
-            Ok(None) if Instant::now() < end => thread::sleep(Duration::from_millis(20)),
-            _ => {
-                // The child leads its own group; take down what it started too.
-                // SAFETY: plain signal to a group id that is our child's pid.
-                unsafe { libc::kill(-(child.id() as i32), libc::SIGKILL) };
-                let _ = child.wait();
-                return false;
-            }
-        }
-    }
+fn wait(child: std::process::Child, deadline: Duration) -> bool {
+    crate::process::wait(child, deadline, &AtomicBool::new(false), || Ok(()))
+        .is_ok_and(|status| status.success())
 }
 
 /// Switches the radio and records it in `wifi.enabled` so it survives a reboot.
@@ -85,7 +73,7 @@ pub fn toggle(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{fs, os::unix::fs::PermissionsExt, sync::mpsc};
+    use std::{fs, os::unix::fs::PermissionsExt, sync::mpsc, time::Instant};
 
     #[test]
     fn hung_helper_and_its_children_are_killed_at_the_deadline() {

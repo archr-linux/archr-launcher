@@ -5,15 +5,7 @@ use crate::paths::Paths;
 use archr_config::SystemCfg;
 use archr_ui::settings::{Id, Information, Page, Settings};
 pub use runtime::Runtime;
-use std::{
-    fs,
-    io::{Read, Seek, SeekFrom},
-    os::unix::process::CommandExt,
-    process::{Command, Stdio},
-    sync::mpsc,
-    thread,
-    time::{Duration, Instant},
-};
+use std::{fs, process::Command, sync::atomic::AtomicBool, sync::mpsc, thread, time::Duration};
 
 pub struct Backend {
     paths: Paths,
@@ -57,49 +49,30 @@ impl Backend {
     /// Fixtures have a private executable namespace: missing scripts cannot fall
     /// through to host programs. Capture to files to avoid pipe backpressure.
     fn command(&self, name: &str, args: &[&str]) -> Result<String, String> {
-        let mut stdout = tempfile::tempfile().map_err(|e| e.to_string())?;
-        let mut stderr = tempfile::tempfile().map_err(|e| e.to_string())?;
         let mut command = Command::new(self.paths.at(&format!("/usr/bin/{name}")));
-        command
-            .args(args)
-            .process_group(0)
-            .stdin(Stdio::null())
-            .stdout(stdout.try_clone().map_err(|e| e.to_string())?)
-            .stderr(stderr.try_clone().map_err(|e| e.to_string())?);
+        command.args(args);
         if let Some(root) = &self.paths.root {
             command
                 .env("ARCHR_LAUNCHER_ROOT", root)
                 .env("PATH", self.paths.at("/usr/bin"));
         }
-        let mut child = command.spawn().map_err(|e| format!("{name}: {e}"))?;
-        let deadline = Instant::now() + Duration::from_secs(20);
-        let status = loop {
-            match child.try_wait().map_err(|e| e.to_string())? {
-                Some(status) => break status,
-                None if Instant::now() < deadline => thread::sleep(Duration::from_millis(10)),
-                None => {
-                    // SAFETY: the child owns its new process group; never signal
-                    // the launcher's group or an arbitrary configured PID.
-                    unsafe {
-                        libc::kill(-(child.id() as i32), libc::SIGKILL);
-                    }
-                    let _ = child.wait();
-                    return Err(format!("{name}: timeout"));
-                }
-            }
-        };
-        let capture = |file: &mut fs::File| -> Result<String, String> {
-            file.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
-            let mut text = String::new();
-            file.take(64 * 1024)
-                .read_to_string(&mut text)
-                .map_err(|e| e.to_string())?;
-            Ok(text.trim().to_owned())
-        };
-        if status.success() {
-            capture(&mut stdout)
+        let output = crate::process::capture(
+            &mut command,
+            Duration::from_secs(20),
+            &AtomicBool::new(false),
+            64 * 1024,
+        )
+        .map_err(|e| format!("{name}: {e}"))?;
+        if output.status.success() {
+            String::from_utf8(output.stdout)
+                .map(|s| s.trim().to_owned())
+                .map_err(|e| e.to_string())
         } else {
-            Err(format!("{name}: {status}; {}", capture(&mut stderr)?))
+            Err(format!(
+                "{name}: {}; {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim()
+            ))
         }
     }
     pub fn load(&self) -> Result<Settings, String> {

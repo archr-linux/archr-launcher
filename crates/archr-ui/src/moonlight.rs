@@ -1,5 +1,6 @@
 //! Moonlight presentation model; no filesystem, networking or processes here.
-use crate::state::Button;
+mod keyboard;
+pub use keyboard::Keyboard;
 
 pub const SYSTEM: &str = "@moonlight";
 
@@ -28,8 +29,8 @@ impl Codec {
     }
     pub fn label(self) -> &'static str {
         match self {
-            Self::H264 => "H.264",
-            Self::H265 => "H.265",
+            Self::H264 => "moonlight.h264",
+            Self::H265 => "moonlight.h265",
             Self::Auto => "moonlight.auto",
         }
     }
@@ -154,55 +155,5 @@ impl State {
         );
         rows.push(Row::Add);
         rows
-    }
-}
-
-/// IP-only keyboard. Its alphabet cannot introduce flags, shell syntax or names
-/// that overflow the upstream fixed-size host-config buffer (main.c).
-#[derive(Clone, Debug, Default)]
-pub struct Keyboard {
-    pub text: String,
-    pub cursor: usize,
-}
-pub const KEYS: [&str; 20] = [
-    "1",
-    "2",
-    "3",
-    "4",
-    "5",
-    "6",
-    "7",
-    "8",
-    "9",
-    "0",
-    ".",
-    ":",
-    "a",
-    "b",
-    "c",
-    "d",
-    "e",
-    "f",
-    "moonlight.delete",
-    "moonlight.connect",
-];
-impl Keyboard {
-    pub fn handle(&mut self, button: Button) -> Option<String> {
-        match button {
-            Button::L => self.cursor = (self.cursor + 19) % 20,
-            Button::R => self.cursor = (self.cursor + 1) % 20,
-            Button::Up => self.cursor = (self.cursor + 15) % 20,
-            Button::Down => self.cursor = (self.cursor + 5) % 20,
-            Button::X => {
-                self.text.pop();
-            }
-            Button::A if self.cursor == 18 => {
-                self.text.pop();
-            }
-            Button::A if self.cursor == 19 => return Some(self.text.clone()),
-            Button::A if self.text.len() < 45 => self.text.push_str(KEYS[self.cursor]),
-            _ => {}
-        }
-        None
     }
 }

@@ -10,16 +10,15 @@ use archr_ui::{
 use std::{
     fs::{self, OpenOptions},
     io::{self, Read},
-    net::IpAddr,
-    os::{fd::AsRawFd, unix::process::CommandExt},
-    process::{Child, Command, Stdio},
+    net::Ipv4Addr,
+    process::Command,
     sync::{
         atomic::{AtomicBool, Ordering},
         mpsc::{self, Receiver, Sender},
         Arc,
     },
     thread,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 /// A virtual row, never a cached ROM system or an EmulationStation dependency.
@@ -42,9 +41,8 @@ pub(crate) fn collection(overview: &mut archr_index::cache::Overview, available:
 }
 
 const CONFIG: &str = "/storage/.config/moonlight/moonlight.conf";
-const LIMIT: usize = 256 * 1024;
+const LIMIT: u64 = 256 * 1024;
 const MAX_HOSTS: usize = 16;
-const PIN_PREFIX: &str = "Please enter the following PIN on the target PC: ";
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Reply {
@@ -53,16 +51,21 @@ pub enum Reply {
     Paired,
     Unpaired,
 }
-pub fn parse_output(output: &str, action: &str, success: bool) -> Result<Reply, String> {
+pub fn parse_output(
+    output: &str,
+    error: &str,
+    action: &str,
+    success: bool,
+) -> Result<Reply, String> {
     if action == "list"
-        && output
+        && error
             .lines()
             .any(|l| l.trim() == "You must pair with the PC first")
     {
         return Ok(Reply::NeedsPair);
     }
     if !success {
-        return Err(output.to_owned());
+        return Err(error.to_owned());
     }
     match action {
         "pair" if output.lines().any(|l| l.trim() == "Succesfully paired") => Ok(Reply::Paired),
@@ -70,11 +73,11 @@ pub fn parse_output(output: &str, action: &str, success: bool) -> Result<Reply, 
             Ok(Reply::Unpaired)
         }
         "list" => {
-            if output.contains("Can't get app list")
-                || output.contains("Can't connect")
-                || output.contains("Gamestream error:")
+            if error.contains("Can't get app list")
+                || error.contains("Can't connect")
+                || error.contains("Gamestream error:")
             {
-                return Err(output.to_owned());
+                return Err(error.to_owned());
             }
             let apps = output
                 .lines()
@@ -88,17 +91,11 @@ pub fn parse_output(output: &str, action: &str, success: bool) -> Result<Reply, 
                 .collect();
             Ok(Reply::Apps(apps))
         }
-        _ => Err(output.to_owned()),
+        _ => Err(error.to_owned()),
     }
 }
-pub fn parse_pin(output: &str) -> Option<String> {
-    output.lines().find_map(|line| {
-        let pin = line.trim_end_matches('\r').strip_prefix(PIN_PREFIX)?;
-        (pin.len() == 4 && pin.bytes().all(|b| b.is_ascii_digit())).then(|| pin.to_owned())
-    })
-}
 fn address(host: &str) -> Result<String, String> {
-    host.parse::<IpAddr>()
+    host.parse::<Ipv4Addr>()
         .map(|ip| ip.to_string())
         .map_err(|_| "moonlight.invalid_ip".into())
 }
@@ -141,42 +138,16 @@ pub fn stream_command(paths: &Paths, stream: &Stream) -> Result<String, String> 
     Ok(line)
 }
 
-// Kill/reap the entire child process group on deadline, cancellation, I/O error,
-// or even a successful exit with orphaned descendants. Never leave a pairing job.
-struct Running(Child);
-impl Drop for Running {
-    fn drop(&mut self) {
-        // SAFETY: the child was spawned into its own group, whose id is its PID.
-        unsafe {
-            libc::kill(-(self.0.id() as i32), libc::SIGKILL);
-        }
-        let _ = self.0.wait();
-    }
-}
-fn nonblocking(pipe: &impl AsRawFd) -> io::Result<()> {
-    // SAFETY: borrowed live descriptor; fcntl does not take ownership.
-    let flags = unsafe { libc::fcntl(pipe.as_raw_fd(), libc::F_GETFL) };
-    if flags < 0
-        || unsafe { libc::fcntl(pipe.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0
-    {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(())
-}
-fn drain(pipe: &mut impl Read, output: &mut Vec<u8>) -> io::Result<()> {
-    let mut chunk = [0; 4096];
+// OS entropy and CLI work both stay on the worker, not on the render thread.
+fn random_pin() -> io::Result<String> {
+    let mut rng = fs::File::open("/dev/urandom")?;
     loop {
-        match pipe.read(&mut chunk) {
-            Ok(0) => return Ok(()),
-            Ok(n) => {
-                if output.len() + n > LIMIT {
-                    return Err(io::Error::other("Moonlight output limit exceeded"));
-                }
-                output.extend_from_slice(&chunk[..n]);
-            }
-            Err(e) if e.kind() == io::ErrorKind::WouldBlock => return Ok(()),
-            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
-            Err(e) => return Err(e),
+        let mut bytes = [0; 2];
+        rng.read_exact(&mut bytes)?;
+        let value = u16::from_ne_bytes(bytes);
+        if value < 59994 {
+            // rejection avoids modulo bias; upstream rejects zero
+            return Ok(format!("{:04}", value % 9999 + 1));
         }
     }
 }
@@ -186,7 +157,7 @@ fn execute(
     host: &str,
     timeout: Duration,
     cancel: &AtomicBool,
-    mut pin: impl FnMut(String),
+    pin: Option<&str>,
 ) -> Result<Reply, String> {
     address(host)?;
     let mut command = Command::new(paths.at("/usr/bin/moonlight"));
@@ -196,59 +167,20 @@ fn execute(
         .arg(paths.at(CONFIG))
         .arg("-keydir")
         .arg(paths.at("/storage/.cache/moonlight"))
-        .arg(host)
-        .env("LC_ALL", "C")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .process_group(0);
-    let result = (|| -> io::Result<_> {
-        let mut child = Running(command.spawn()?);
-        let mut stdout = child
-            .0
-            .stdout
-            .take()
-            .ok_or_else(|| io::Error::other("missing stdout"))?;
-        let mut stderr = child
-            .0
-            .stderr
-            .take()
-            .ok_or_else(|| io::Error::other("missing stderr"))?;
-        nonblocking(&stdout)?;
-        nonblocking(&stderr)?;
-        let (mut out, mut err) = (vec![], vec![]);
-        let start = Instant::now();
-        let mut sent_pin = false;
-        loop {
-            if cancel.load(Ordering::Relaxed) {
-                return Err(io::Error::new(io::ErrorKind::Interrupted, "cancelled"));
-            }
-            if start.elapsed() >= timeout {
-                return Err(io::Error::new(
-                    io::ErrorKind::TimedOut,
-                    "Moonlight timed out",
-                ));
-            }
-            drain(&mut stdout, &mut out)?;
-            drain(&mut stderr, &mut err)?;
-            if action == "pair" && !sent_pin {
-                if let Some(value) = parse_pin(&String::from_utf8_lossy(&out)) {
-                    pin(value);
-                    sent_pin = true;
-                }
-            }
-            if let Some(status) = child.0.try_wait()? {
-                drain(&mut stdout, &mut out)?;
-                drain(&mut stderr, &mut err)?;
-                out.push(b'\n');
-                out.extend(err);
-                return Ok((String::from_utf8_lossy(&out).into_owned(), status.success()));
-            }
-            thread::sleep(Duration::from_millis(20));
-        }
-    })();
-    let (output, success) = result.map_err(|e| e.to_string())?;
-    parse_output(&output, action, success)
+        .env("LC_ALL", "C");
+    if let Some(pin) = pin {
+        command.args(["-pin", pin]);
+    }
+    // Upstream does not consume the host operand after `--`.
+    command.arg(host);
+    let output =
+        crate::process::capture(&mut command, timeout, cancel, LIMIT).map_err(|e| e.to_string())?;
+    parse_output(
+        &String::from_utf8_lossy(&output.stdout),
+        &String::from_utf8_lossy(&output.stderr),
+        action,
+        output.status.success(),
+    )
 }
 
 fn load(paths: &Paths, panel: (u32, u32)) -> Result<(Vec<String>, Options), String> {
@@ -323,7 +255,8 @@ fn save(paths: &Paths, hosts: &[String], options: &Options) -> Result<(), String
 
 enum Event {
     Loaded(Result<(Vec<String>, Options), String>),
-    Pin(String),
+    Pairing(String),
+    Forgotten(Result<(Vec<String>, bool), String>),
     Done(Result<Option<Reply>, String>),
 }
 pub struct Runtime {
@@ -404,10 +337,36 @@ impl Runtime {
                         Err(e) => self.fail(e),
                     }
                 }
-                Event::Pin(pin) => self.state.pin = Some(pin),
+                Event::Pairing(pin) => self.state.pin = Some(pin),
+                Event::Forgotten(result) => {
+                    self.state.busy = false;
+                    match result {
+                        Ok((hosts, remote_ok)) => {
+                            self.state.hosts = hosts;
+                            self.state.host = self
+                                .state
+                                .host
+                                .min(self.state.hosts.len().saturating_sub(1));
+                            self.state.apps.clear();
+                            self.state.status = Status::Unknown;
+                            self.state.cursor = 0;
+                            self.state.option = None;
+                            // Leave the warning visible; X refreshes the remaining PC.
+                            self.state.error =
+                                (!remote_ok).then_some("moonlight.remote_unpair_failed");
+                        }
+                        Err(e) => self.fail(e),
+                    }
+                }
                 Event::Done(result) => {
                     self.state.busy = false;
                     self.state.pin = None;
+                    if self.cancel.load(Ordering::Relaxed) {
+                        if self.active {
+                            self.refresh();
+                        }
+                        continue;
+                    }
                     match result {
                         Ok(Some(Reply::Apps(apps))) => {
                             self.state.apps = apps;
@@ -418,7 +377,7 @@ impl Runtime {
                             self.state.status = Status::NeedsPair;
                         }
                         Ok(Some(Reply::Paired)) => {
-                            if self.active && !self.cancel.load(Ordering::Relaxed) {
+                            if self.active {
                                 self.refresh();
                             }
                         }
@@ -426,9 +385,7 @@ impl Runtime {
                         Err(e) => {
                             self.state.apps.clear();
                             self.state.status = Status::Offline;
-                            if !self.cancel.load(Ordering::Relaxed) {
-                                self.fail(e);
-                            }
+                            self.fail(e);
                         }
                     }
                     self.state.cursor = self
@@ -447,7 +404,7 @@ impl Runtime {
         let host = self.state.address().unwrap_or_default().to_owned();
         let paths = self.paths.clone();
         let tx = self.tx.clone();
-        let hosts = self.state.hosts.clone();
+        let mut hosts = self.state.hosts.clone();
         let options = self.state.options.clone();
         self.cancel = Arc::new(AtomicBool::new(false));
         let cancel = self.cancel.clone();
@@ -462,19 +419,35 @@ impl Runtime {
                     }
                     action
                         .map(|action| {
+                            let pin = if action == "pair" {
+                                let pin = random_pin().map_err(|e| e.to_string())?;
+                                let _ = tx.send(Event::Pairing(pin.clone()));
+                                Some(pin)
+                            } else {
+                                None
+                            };
                             execute(
                                 &paths,
                                 action,
                                 &host,
                                 Duration::from_secs(if action == "pair" { 120 } else { 15 }),
                                 &cancel,
-                                |pin| {
-                                    let _ = tx.send(Event::Pin(pin));
-                                },
+                                pin.as_deref(),
                             )
                         })
                         .transpose()
                 })();
+                if action == Some("unpair") {
+                    // Confirmation authorizes local forgetting even if the PC is offline.
+                    let remote_ok = matches!(result, Ok(Some(Reply::Unpaired)));
+                    if let Err(ref e) = result {
+                        log::warn!("Moonlight remote unpair: {e}");
+                    }
+                    hosts.retain(|h| h != &host);
+                    let forgotten = save(&paths, &hosts, &options).map(|()| (hosts, remote_ok));
+                    let _ = tx.send(Event::Forgotten(forgotten));
+                    return;
+                }
                 let _ = tx.send(Event::Done(result));
             }) {
             Ok(worker) => self.worker = Some(worker),

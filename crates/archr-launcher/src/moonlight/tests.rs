@@ -1,5 +1,5 @@
 use super::*;
-use std::os::unix::fs::PermissionsExt;
+use std::{os::unix::fs::PermissionsExt, time::Instant};
 
 fn fixture(script: &str) -> (tempfile::TempDir, Paths) {
     let root = tempfile::tempdir().unwrap();
@@ -22,30 +22,70 @@ fn wait(runtime: &mut Runtime, until: impl Fn(&Runtime) -> bool) {
     }
 }
 #[test]
-fn pin_is_delivered_before_exit_and_cancellation_reaps_the_child() {
-    let (_root, paths) =
-        fixture("printf 'Please enter the following PIN on the target PC: 0042\\n'; exec sleep 30");
-    let cancel = AtomicBool::new(false);
-    let start = Instant::now();
-    let result = execute(
-        &paths,
-        "pair",
-        "::1",
-        Duration::from_secs(2),
-        &cancel,
-        |pin| {
-            assert_eq!(pin, "0042");
-            cancel.store(true, Ordering::Relaxed);
-        },
+fn generated_pin_is_passed_as_argv_and_visible_before_cli_finishes() {
+    let (_root, paths) = fixture(
+        r#"
+case "$1" in
+list) echo 'You must pair with the PC first' >&2; exit 1;;
+pair) printf '%s' "$7" > "$(dirname "$0")/pin"; [ "$6" = -pin ] && [ "$8" = 127.0.0.1 ] || exit 9; exec sleep 30;;
+esac
+"#,
     );
-    assert!(
-        cancel.load(Ordering::Relaxed),
-        "PIN must arrive while process is alive"
-    );
-    assert!(result.unwrap_err().contains("cancelled"));
-    assert!(start.elapsed() < Duration::from_secs(1));
-    for bad in ["123", "12345", "a123"] {
-        assert!(parse_pin(&format!("{PIN_PREFIX}{bad}\n")).is_none());
+    let mut runtime = Runtime::new(paths.clone(), (640, 480));
+    wait(&mut runtime, |r| !r.state.busy);
+    runtime.state.hosts = vec!["127.0.0.1".into()];
+    runtime.open();
+    wait(&mut runtime, |r| !r.state.busy);
+    runtime.handle(Button::A);
+    wait(&mut runtime, |r| {
+        r.state.pin.is_some() && paths.at("/usr/bin/pin").exists()
+    });
+    let pin = runtime.state.pin.as_ref().unwrap();
+    assert_eq!(pin.len(), 4);
+    assert!((1..=9999).contains(&pin.parse::<u16>().unwrap()));
+    assert_eq!(fs::read_to_string(paths.at("/usr/bin/pin")).unwrap(), *pin);
+    assert!(runtime.state.busy);
+    runtime.close();
+    wait(&mut runtime, |r| !r.state.busy);
+}
+#[test]
+fn reopening_a_cancelled_query_refreshes_instead_of_showing_offline() {
+    let (_root, paths) = fixture("printf '1. Desktop\\n'");
+    let mut runtime = Runtime::new(paths, (640, 480));
+    wait(&mut runtime, |r| !r.state.busy);
+    runtime.state.hosts = vec!["127.0.0.1".into()];
+    runtime.state.busy = true;
+    runtime.close();
+    runtime.open();
+    runtime
+        .tx
+        .send(Event::Done(Err("cancelled".into())))
+        .unwrap();
+    wait(&mut runtime, |r| !r.state.busy);
+    assert_eq!(runtime.state.status, Status::Online);
+    assert_eq!(runtime.state.apps, ["Desktop"]);
+    assert_eq!(runtime.state.error, None);
+}
+#[test]
+fn unpair_forgets_and_persists_even_when_the_computer_is_offline() {
+    for success in [true, false] {
+        let (_root, paths) = fixture(if success {
+            "echo 'Succesfully unpaired'"
+        } else {
+            "echo 'Cannot connect' >&2; exit 1"
+        });
+        let mut runtime = Runtime::new(paths.clone(), (640, 480));
+        wait(&mut runtime, |r| !r.state.busy);
+        runtime.state.hosts = vec!["127.0.0.1".into()];
+        runtime.state.confirm_unpair = true;
+        runtime.handle(Button::A);
+        wait(&mut runtime, |r| !r.state.busy);
+        assert!(runtime.state.hosts.is_empty());
+        assert!(load(&paths, (640, 480)).unwrap().0.is_empty());
+        assert_eq!(
+            runtime.state.error,
+            (!success).then_some("moonlight.remote_unpair_failed")
+        );
     }
 }
 #[test]
@@ -58,7 +98,7 @@ fn deadline_kills_the_process_group_and_output_is_bounded() {
         "127.0.0.1",
         Duration::from_millis(60),
         &cancel,
-        |_| {},
+        None,
     );
     assert!(result.unwrap_err().contains("timed out"));
     thread::sleep(Duration::from_millis(400));
@@ -74,7 +114,7 @@ fn deadline_kills_the_process_group_and_output_is_bounded() {
         "127.0.0.1",
         Duration::from_secs(1),
         &cancel,
-        |_| {}
+        None
     )
     .unwrap_err()
     .contains("output limit"));
@@ -99,7 +139,7 @@ esac
             "127.0.0.1",
             Duration::from_secs(1),
             &cancel,
-            |_| {}
+            None
         )
         .unwrap(),
         Reply::NeedsPair
@@ -111,7 +151,7 @@ esac
             "127.0.0.1",
             Duration::from_secs(1),
             &cancel,
-            |_| {}
+            None
         )
         .is_err());
     }
@@ -123,10 +163,15 @@ fn add_ip_and_options_round_trip_through_launcher_owned_store() {
     wait(&mut runtime, |r| !r.state.busy);
     runtime.open();
     runtime.handle(Button::A);
-    runtime.state.keyboard = Some(Keyboard {
-        text: "127.0.0.1".into(),
-        cursor: 19,
-    });
+    for key in "127.0.0.1".chars() {
+        while Keyboard::KEYS[runtime.state.keyboard.as_ref().unwrap().cursor()] != key.to_string() {
+            runtime.handle(Button::R);
+        }
+        runtime.handle(Button::A);
+    }
+    while runtime.state.keyboard.as_ref().unwrap().cursor() != 12 {
+        runtime.handle(Button::R);
+    }
     runtime.handle(Button::A);
     wait(&mut runtime, |r| !r.state.busy);
     assert_eq!(runtime.state.status, Status::Online);
@@ -172,7 +217,7 @@ fn stale_hosts_and_invalid_options_are_not_executed() {
     )
     .unwrap();
     let (hosts, options) = load(&paths, (800, 480)).unwrap();
-    assert_eq!(hosts, ["127.0.0.1", "::1"]);
+    assert_eq!(hosts, ["127.0.0.1"]);
     assert_eq!(options, Options::new(800, 480));
 }
 
@@ -181,7 +226,7 @@ fn dropping_runtime_after_fatal_ui_error_still_reaps_pairing() {
     let (_root, paths) = fixture(
         r#"
 case "$1" in
-list) echo 'You must pair with the PC first'; exit 1;;
+list) echo 'You must pair with the PC first' >&2; exit 1;;
 pair) echo $$ > "$(dirname "$0")/pid"; echo 'Please enter the following PIN on the target PC: 1234'; exec sleep 30;;
 esac
 "#,
@@ -192,7 +237,9 @@ esac
     runtime.open();
     wait(&mut runtime, |r| !r.state.busy);
     runtime.handle(Button::A);
-    wait(&mut runtime, |r| r.state.pin.is_some());
+    wait(&mut runtime, |r| {
+        r.state.pin.is_some() && paths.at("/usr/bin/pid").exists()
+    });
     let pid: i32 = fs::read_to_string(paths.at("/usr/bin/pid"))
         .unwrap()
         .trim()
@@ -222,4 +269,24 @@ fn closing_does_not_start_another_query_after_queued_pair_success() {
         !runtime.state.busy,
         "closed screen must not start a list query"
     );
+}
+
+#[test]
+fn successful_helper_also_reaps_background_descendants() {
+    let (root, paths) =
+        fixture("(sleep 0.3; touch \"$(dirname \"$0\")/leaked\") & printf '1. Desktop\\n'");
+    assert_eq!(
+        execute(
+            &paths,
+            "list",
+            "127.0.0.1",
+            Duration::from_secs(1),
+            &AtomicBool::new(false),
+            None
+        )
+        .unwrap(),
+        Reply::Apps(vec!["Desktop".into()])
+    );
+    thread::sleep(Duration::from_millis(400));
+    assert!(!root.path().join("usr/bin/leaked").exists());
 }

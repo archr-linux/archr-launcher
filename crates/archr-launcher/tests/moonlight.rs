@@ -6,37 +6,35 @@ use archr_ui::moonlight::{Options, Stream};
 use std::{fs, os::unix::fs::PermissionsExt, process::Command};
 
 #[test]
-fn parses_pinned_embedded_output_without_inventing_app_ids() {
-    let reply = parse_output(
-        "Connecting to 192.168.1.5...\r\n1. Steam Big Picture\r\n2. Desktop\r\n3. 12. A game\r\n",
-        "list",
-        true,
-    )
-    .unwrap();
+fn parses_separate_pinned_streams_without_treating_app_names_as_errors() {
     assert_eq!(
-        reply,
-        Reply::Apps(vec![
-            "Steam Big Picture".into(),
-            "Desktop".into(),
-            "12. A game".into()
-        ])
+        parse_output(
+            "Connecting...\n1. Can't connect\n2. Desktop\nYou must pair with the PC first\n",
+            "",
+            "list",
+            true
+        )
+        .unwrap(),
+        Reply::Apps(vec!["Can't connect".into(), "Desktop".into()])
     );
     assert_eq!(
-        parse_output("You must pair with the PC first\n", "list", false).unwrap(),
+        parse_output("", "You must pair with the PC first\n", "list", false).unwrap(),
         Reply::NeedsPair
     );
     assert_eq!(
-        parse_output("Succesfully paired\n", "pair", true).unwrap(),
+        parse_output("Succesfully paired\n", "", "pair", true).unwrap(),
         Reply::Paired
     );
     assert_eq!(
-        parse_output("Succesfully unpaired\n", "unpair", true).unwrap(),
+        parse_output("Succesfully unpaired\n", "", "unpair", true).unwrap(),
         Reply::Unpaired
     );
-    assert!(parse_output("Failed to pair to server: rejected\n", "pair", true).is_err());
-    assert!(parse_output("Failed to unpair to server: rejected\n", "unpair", true).is_err());
-    assert!(parse_output("Can't get app list\n", "list", false).is_err());
-    assert!(parse_output("1. Desktop\n", "list", false).is_err());
+    for action in ["pair", "unpair"] {
+        assert!(parse_output("", "Failed to pair to server: rejected\n", action, true).is_err());
+        assert!(parse_output("", "Succesfully paired\n", action, true).is_err());
+    }
+    assert!(parse_output("1. Desktop\n", "Can't get app list\n", "list", true).is_err());
+    assert!(parse_output("1. Desktop\n", "", "list", false).is_err());
 }
 
 #[test]
@@ -99,6 +97,8 @@ fn stream_handoff_passes_names_as_data_and_options_as_exact_argv() {
     );
     assert!(!root.path().join("BAD").exists());
     let mut invalid = stream.clone();
+    invalid.host = "::1".into();
+    assert!(stream_command(&paths, &invalid).is_err());
     invalid.host = "-help".into();
     assert!(stream_command(&paths, &invalid).is_err());
     invalid.host = "1.2.3.4; touch BAD".into();
@@ -131,6 +131,12 @@ fn virtual_collection_requires_binary_and_survives_overview_refresh() {
     let (_root, paths) = fixture();
     let mut library = Library::initial(paths.clone());
     assert_eq!(App::system_rows(&library), ["@moonlight"]);
+    let mut app = App::new(5);
+    assert_eq!(
+        app.handle(archr_ui::state::Button::A, &library),
+        archr_ui::state::Outcome::Moonlight
+    );
+    assert_eq!(app.screen, archr_ui::state::Screen::Systems);
     library.start();
     let end = std::time::Instant::now() + std::time::Duration::from_secs(3);
     while !library.counts_known || !library.ready {
