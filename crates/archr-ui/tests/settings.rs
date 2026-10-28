@@ -65,13 +65,14 @@ fn malformed_negative_and_extreme_slider_values_are_normalized_before_stepping()
 
 #[test]
 fn localized_values_and_footer_affordances_match_actions() {
+    use archr_ui::HintButton::{Key, Pair};
     let ru = archr_ui::i18n::I18n::load(std::path::Path::new("/nonexistent"), Some("ru"), None);
     let mut s = Settings::default();
     s.loading = false;
     s.open(Page::Sound);
     assert_eq!(
         s.hints().iter().map(|h| h.0).collect::<Vec<_>>(),
-        ['L', 'R', 'B']
+        [Pair('L', 'R'), Key('B')]
     );
     s.values.insert(Id::Idle, "5".into());
     assert_eq!(s.display_value(Id::Idle, &ru), "5 мин");
@@ -90,13 +91,13 @@ fn localized_values_and_footer_affordances_match_actions() {
     s.cursor = 3;
     assert_eq!(
         s.hints().iter().map(|h| h.0).collect::<Vec<_>>(),
-        ['L', 'R', 'A', 'B']
+        [Pair('L', 'R'), Key('A'), Key('B')]
     );
     s.cursor = 4;
     assert_eq!(
         s.hints().iter().map(|h| h.0).collect::<Vec<_>>(),
-        ['A', 'B']
+        [Key('A'), Key('B')]
     );
     s.open(Page::Info);
-    assert_eq!(s.hints(), &[('B', "hint.back")]);
+    assert_eq!(s.hints(), &[(Key('B'), "hint.back")]);
 }

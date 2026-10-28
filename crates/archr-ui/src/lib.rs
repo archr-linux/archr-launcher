@@ -26,3 +26,15 @@ pub mod status;
 mod text;
 
 pub mod settings;
+
+/// A footer action may be bound to one button or a grouped pair.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HintButton {
+    Key(char),
+    Pair(char, char),
+}
+impl From<char> for HintButton {
+    fn from(key: char) -> Self {
+        Self::Key(key)
+    }
+}

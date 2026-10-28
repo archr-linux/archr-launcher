@@ -1,5 +1,5 @@
 //! Declarative settings pages and pure navigation. Effects belong to the host.
-use crate::state::Button;
+use crate::{state::Button, HintButton};
 use std::collections::BTreeMap;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -251,27 +251,23 @@ impl Settings {
         };
         catalog.text(key)
     }
-    pub fn hints(&self) -> &'static [(char, &'static str)] {
+    pub fn hints(&self) -> &'static [(HintButton, &'static str)] {
+        use HintButton::{Key, Pair};
         match self.page() {
             Page::Root => &[
-                ('A', "hint.open"),
-                ('B', "hint.back"),
-                ('Y', "settings.info_short"),
+                (Key('A'), "hint.open"),
+                (Key('B'), "hint.back"),
+                (Key('Y'), "settings.info_short"),
             ],
             page => match page.rows().get(self.cursor).map(|r| r.kind) {
-                Some(Kind::Action) => &[('A', "hint.choose"), ('B', "hint.back")],
+                Some(Kind::Action) => &[(Key('A'), "hint.choose"), (Key('B'), "hint.back")],
                 Some(Kind::Toggle) => &[
-                    ('L', "settings.change"),
-                    ('R', "settings.change"),
-                    ('A', "hint.choose"),
-                    ('B', "hint.back"),
+                    (Pair('L', 'R'), "settings.change"),
+                    (Key('A'), "hint.choose"),
+                    (Key('B'), "hint.back"),
                 ],
-                Some(_) => &[
-                    ('L', "settings.change"),
-                    ('R', "settings.change"),
-                    ('B', "hint.back"),
-                ],
-                None => &[('B', "hint.back")],
+                Some(_) => &[(Pair('L', 'R'), "settings.change"), (Key('B'), "hint.back")],
+                None => &[(Key('B'), "hint.back")],
             },
         }
     }

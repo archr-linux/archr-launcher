@@ -11,6 +11,7 @@ use crate::{
     status::Status,
     text::{color, Align, Face, Style, TextCache},
     theme::{Rect01, Rgba, Theme},
+    HintButton,
 };
 mod hub;
 use sdl2::{
@@ -1023,9 +1024,9 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         }
         Ok(())
     }
-    fn hints(
+    fn hints<B: Copy + Into<HintButton>>(
         &mut self,
-        hints: &[(char, &str)],
+        hints: &[(B, &str)],
         theme: &Theme,
         width: u32,
         y: i32,
@@ -1033,6 +1034,11 @@ impl<'font, 'texture> Ui<'font, 'texture> {
     ) -> Result<i32, String> {
         let mut right = width as i32 - self.px(24.);
         for &(button, key) in hints.iter().rev() {
+            let buttons = match button.into() {
+                HintButton::Key(key) => [Some(key), None],
+                HintButton::Pair(left, right) => [Some(left), Some(right)],
+            };
+            let paired = buttons[1].is_some();
             let label = self.catalog.text(key);
             right = self.packed_label(
                 &label,
@@ -1041,22 +1047,34 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 u32::MAX,
                 Align::Left,
             )? - self.px(6.)
-                - self.px(20.);
-            let badge = self
-                .frame
-                .square(right, y + (h as i32 - self.px(20.)) / 2, 20.);
-            let size = self.px(11.).clamp(8, 128) as u16;
-            self.text
-                .as_mut()
-                .ok_or_else(|| self.catalog.text("error.font_init"))?
-                .draw_badge(
-                    &mut self.canvas,
-                    button,
-                    size,
-                    theme.badge,
-                    theme.text,
-                    badge,
+                - self.px(if paired { 50. } else { 20. });
+            if paired {
+                self.label_aligned(
+                    "/",
+                    (Face::Regular, 13., theme.muted),
+                    Rect::new(right + self.px(20.), y, self.px(10.) as u32, h),
+                    Align::Center,
                 )?;
+            }
+            for (n, button) in buttons.into_iter().flatten().enumerate() {
+                let badge = self.frame.square(
+                    right + self.px(n as f32 * 30.),
+                    y + (h as i32 - self.px(20.)) / 2,
+                    20.,
+                );
+                let size = self.px(11.).clamp(8, 128) as u16;
+                self.text
+                    .as_mut()
+                    .ok_or_else(|| self.catalog.text("error.font_init"))?
+                    .draw_badge(
+                        &mut self.canvas,
+                        button,
+                        size,
+                        theme.badge,
+                        theme.text,
+                        badge,
+                    )?;
+            }
             right -= self.px(16.);
         }
         Ok(right + self.px(16.))
