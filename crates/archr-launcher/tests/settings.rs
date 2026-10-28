@@ -300,3 +300,86 @@ fn information_collects_detail_rows_and_core_deltas_without_commands() {
         .any(|(_, v)| v == "192.168.3.1"));
     assert!(second.cards[0].lines[0].contains("Rockchip RK3326"));
 }
+
+#[test]
+fn cpu_hotplug_preserves_core_identity_and_reappearing_core_has_no_delta() {
+    let (dir, backend) = fixture();
+    let path = dir.path().join("proc/stat");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(
+        &path,
+        "cpu0 10 0 10 80
+cpu2 90 0 10 100
+",
+    )
+    .unwrap();
+    backend.load().unwrap();
+    fs::write(
+        &path,
+        "cpu2 140 0 10 150
+",
+    )
+    .unwrap();
+    let info = backend.load().unwrap().info;
+    assert_eq!(info.cards[0].detail.meters[0].label, "CPU2");
+    assert_eq!(info.cards[0].detail.meters[0].percent, Some(50));
+    fs::write(
+        &path,
+        "cpu0 30 0 10 100
+cpu2 190 0 10 200
+",
+    )
+    .unwrap();
+    let info = backend.load().unwrap().info;
+    assert_eq!(info.cards[0].detail.meters[0].percent, None);
+    assert_eq!(info.cards[0].detail.meters[1].percent, Some(50));
+}
+#[test]
+fn arm64_identity_uses_compatible_and_cpu_part_without_hardware_field() {
+    let (dir, backend) = fixture();
+    for (path, value) in [
+        (
+            "proc/cpuinfo",
+            "processor : 0
+CPU part : 0xd03
+",
+        ),
+        (
+            "sys/firmware/devicetree/base/compatible",
+            "board,example\0allwinner,sun50i-h616\0",
+        ),
+    ] {
+        let path = dir.path().join(path);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, value).unwrap();
+    }
+    let info = backend.load().unwrap().info;
+    assert!(info.cards[0].detail.heading.contains("SUN50I-H616"));
+    assert!(info.cards[0].detail.subtitle.contains("Cortex-A53"));
+}
+
+#[test]
+fn battery_formats_integer_current_and_capacity_without_a_restart_timer() {
+    let (dir, backend) = fixture();
+    for (name, value) in [
+        ("capacity", "83"),
+        ("status", "Discharging"),
+        ("voltage_now", "4100000"),
+        ("current_now", "650000"),
+        ("charge_full_design", "3200000"),
+    ] {
+        let path = dir.path().join("sys/class/power_supply/battery").join(name);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, value).unwrap();
+    }
+    let info = backend.load().unwrap().info;
+    let rows = &info.cards[5].detail.rows;
+    for (key, expected) in [
+        ("settings.voltage", "@4.10 V"),
+        ("settings.current", "@650 mA"),
+        ("settings.design_capacity", "@3200 mAh"),
+    ] {
+        assert!(rows.iter().any(|(k, v)| *k == key && v == expected));
+    }
+    assert!(!rows.iter().any(|(k, _)| *k == "settings.on_battery"));
+}
