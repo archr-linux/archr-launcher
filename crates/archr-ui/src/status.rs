@@ -45,9 +45,13 @@ struct Snapshot {
     battery: Option<Battery>,
     wifi: bool,
 }
+enum Signal {
+    Refresh,
+    Stop,
+}
 struct Worker {
     value: Arc<Mutex<Snapshot>>,
-    stop: mpsc::Sender<()>,
+    stop: mpsc::Sender<Signal>,
 }
 impl Worker {
     fn start(path: PathBuf) -> std::io::Result<Self> {
@@ -62,26 +66,33 @@ impl Worker {
                     next_read: Instant::now(),
                 };
                 loop {
-                    if let Some(battery) = source.poll(Instant::now()) {
-                        let snapshot = Snapshot {
-                            battery,
-                            wifi: wifi_on(&path),
-                        };
-                        *published.lock().expect("status snapshot") = snapshot;
-                    }
-                    if stopped.recv_timeout(REFRESH) != Err(mpsc::RecvTimeoutError::Timeout) {
-                        break;
+                    let battery = source
+                        .poll(Instant::now())
+                        .unwrap_or_else(|| published.lock().expect("status snapshot").battery);
+                    *published.lock().expect("status snapshot") = Snapshot {
+                        battery,
+                        wifi: wifi_on(&path),
+                    };
+                    match stopped.recv_timeout(REFRESH) {
+                        Ok(Signal::Refresh) | Err(mpsc::RecvTimeoutError::Timeout) => {}
+                        Ok(Signal::Stop) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
                     }
                 }
             })?;
         Ok(Self { value, stop })
+    }
+    fn refresh_signal(&self) -> impl FnOnce() + Send + 'static {
+        let sender = self.stop.clone();
+        move || {
+            let _ = sender.send(Signal::Refresh);
+        }
     }
 }
 impl Drop for Worker {
     fn drop(&mut self) {
         // Wake a sleeping worker. Never join a potentially slow sysfs read on
         // the presentation thread; a read already in progress finishes there.
-        let _ = self.stop.send(());
+        let _ = self.stop.send(Signal::Stop);
     }
 }
 pub struct Status {
@@ -119,6 +130,9 @@ impl Status {
             Err(error) => log::warn!("Cannot start status worker: {error}"),
         }
     }
+    pub fn refresh_signal(&self) -> Option<impl FnOnce() + Send + 'static> {
+        self.worker.as_ref().map(Worker::refresh_signal)
+    }
     pub fn poll(&mut self, _now: Instant) -> bool {
         let snapshot = self
             .worker
@@ -150,16 +164,16 @@ impl Status {
         changed
     }
 }
+/// Radio state is the wlan rfkill soft block, which `wifictl` flips at once; link
+/// flags would lag behind it and depend on the interface name.
 fn wifi_on(root: &Path) -> bool {
-    let path = root.join("sys/class/net/wlan0");
-    // IFF_UP also covers an enabled radio that is not associated with an AP.
-    if let Some(flags) = fs::read_to_string(path.join("flags"))
-        .ok()
-        .and_then(|s| u32::from_str_radix(s.trim().trim_start_matches("0x"), 16).ok())
-    {
-        return flags & 1 != 0;
-    }
-    fs::read_to_string(path.join("operstate")).is_ok_and(|s| matches!(s.trim(), "up" | "dormant"))
+    let Ok(entries) = fs::read_dir(root.join("sys/class/rfkill")) else {
+        return false;
+    };
+    let read = |dir: &Path, name: &str| fs::read_to_string(dir.join(name)).unwrap_or_default();
+    entries
+        .flatten()
+        .any(|e| read(&e.path(), "type").trim() == "wlan" && read(&e.path(), "soft").trim() == "0")
 }
 fn local_clock(unix: u64) -> String {
     let seconds = unix as libc::time_t;
@@ -223,21 +237,49 @@ mod tests {
         }
     }
 
+    fn radio(root: &Path, name: &str, kind: &str, soft: &str) {
+        let dir = root.join("sys/class/rfkill").join(name);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("type"), format!("{kind}\n")).unwrap();
+        fs::write(dir.join("soft"), format!("{soft}\n")).unwrap();
+    }
+
     #[test]
-    fn wifi_is_root_prefixed_optional_and_tracks_enabled_disconnected_radios() {
+    fn wifi_follows_the_wlan_soft_block_under_the_root() {
         let root = tempfile::tempdir().unwrap();
         assert!(!wifi_on(root.path()));
-        let path = root.path().join("sys/class/net/wlan0");
-        fs::create_dir_all(&path).unwrap();
-        for (state, expected) in [("up\n", true), ("dormant", true), ("down", false)] {
-            fs::write(path.join("operstate"), state).unwrap();
-            assert_eq!(wifi_on(root.path()), expected);
-        }
-        fs::write(path.join("flags"), "0x1003\n").unwrap();
-        assert!(wifi_on(root.path()));
-        fs::write(path.join("operstate"), "up").unwrap();
-        fs::write(path.join("flags"), "0x1002").unwrap();
+        radio(root.path(), "rfkill0", "bluetooth", "0");
         assert!(!wifi_on(root.path()));
+        radio(root.path(), "rfkill1", "wlan", "1");
+        assert!(!wifi_on(root.path()));
+        radio(root.path(), "rfkill1", "wlan", "0");
+        assert!(wifi_on(root.path()));
+    }
+
+    #[test]
+    fn refresh_signal_reads_wifi_without_waiting_for_periodic_poll() {
+        let root = tempfile::tempdir().unwrap();
+        radio(root.path(), "rfkill0", "wlan", "1");
+        let battery = root.path().join("sys/class/power_supply/battery");
+        fs::create_dir_all(&battery).unwrap();
+        fs::write(battery.join("capacity"), "67").unwrap();
+        let mut status = Status::new(Some(root.path()), Instant::now());
+        status.start();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        // The first read is complete once the battery is published; the next
+        // change is then attributable to the explicit signal.
+        while status.battery.is_none() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(2));
+            status.poll(Instant::now());
+        }
+        assert!(status.battery.is_some() && !status.wifi);
+        radio(root.path(), "rfkill0", "wlan", "0");
+        status.refresh_signal().unwrap()();
+        while !status.wifi && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(2));
+            status.poll(Instant::now());
+        }
+        assert!(status.wifi);
     }
 
     #[test]

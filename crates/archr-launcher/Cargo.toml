@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+libc = "0.2"
 archr-io = { path = "../archr-io" }
 archr-config = { path = "../archr-config" }
 archr-ui = { path = "../archr-ui" }
@@ -14,4 +15,3 @@ log = "0.4"
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 tempfile = "3"
-libc = "0.2"

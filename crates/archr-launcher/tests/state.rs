@@ -519,10 +519,12 @@ fn reserved_and_unmapped_buttons_do_nothing() {
     for mut app in [App::new(5), in_games("snes", 7)] {
         let screen = app.screen.clone();
         let cursor = app.cursor;
-        for button in [Button::Start, Button::Select] {
-            assert_eq!(app.handle(button, &data), Outcome::None);
+        assert_eq!(app.handle(Button::Select, &data), Outcome::None);
+        assert_eq!(app.screen, screen);
+        assert_eq!(app.cursor, cursor);
+        if matches!(screen, Screen::Games { .. }) {
+            assert_eq!(app.handle(Button::Start, &data), Outcome::None);
             assert_eq!(app.screen, screen);
-            assert_eq!(app.cursor, cursor);
         }
         app.handle(Button::Y, &data);
         let screen = app.screen.clone();
