@@ -32,3 +32,5 @@
 | snes.png | Console photo: Evan Amos, public domain, via Wikimedia Commons. |
 | supergrafx.png | Console photo: Evan Amos, public domain, via Wikimedia Commons. |
 | tg16.png | Console photo: Evan Amos, public domain, via Wikimedia Commons. |
+| moonlight.png | Image: ArchR project, provided by the maintainer. |
+| ports.png | Image: ArchR project, provided by the maintainer. |
