@@ -13,9 +13,8 @@ use archr_ui::{
     i18n::I18n,
     input::{button_event, Repeat},
     render::Ui,
-    resolve_theme,
     startup::StartupTrace,
-    startup_phase,
+    startup_phase, theme_dir, Theme,
 };
 use sdl2::{
     event::{Event, WindowEvent},
@@ -93,11 +92,15 @@ fn run(
         .as_ref()
         .and_then(|cfg| cfg.get("launcher", None, "theme"))
         .unwrap_or_else(|| "default".to_owned());
-    let mut theme = resolve_theme(
-        &paths.at("/storage/.config/archr-launcher/themes"),
-        &paths.at("/usr/share/archr-launcher/themes"),
-        &name,
-    );
+    let theme_roots = [
+        paths.at("/storage/.config/archr-launcher/themes"),
+        paths.at("/usr/share/archr-launcher/themes"),
+    ];
+    ui.theme_dir = theme_dir(&theme_roots[0], &theme_roots[1], &name);
+    let mut theme = ui
+        .theme_dir
+        .as_deref()
+        .map_or_else(Theme::builtin, Theme::load);
     theme.font = theme.font.as_deref().map(|font| paths.remap(font));
     startup_phase!(trace, "theme load");
     ui.configure(&ttf, &creator, &theme, paths.root.as_deref())?;

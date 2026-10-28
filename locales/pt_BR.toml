@@ -44,6 +44,8 @@
 "time.yesterday" = "ontem"
 "systems.count" = { one = "{count} sistema", other = "{count} sistemas" }
 "games.count" = { one = "{count} jogo", other = "{count} jogos" }
+"favorites.count" = { one = "{count} favorito", other = "{count} favoritos" }
+"panel.stats" = "{games} · {favorites}"
 "metadata.players" = { one = "{count} jogador", other = "{count} jogadores" }
 "time.minutes" = { one = "há {count} min", other = "há {count} min" }
 "time.hours" = { one = "há {count} h", other = "há {count} h" }

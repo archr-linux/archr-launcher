@@ -23,6 +23,9 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+mod system_art;
+use system_art::SystemArt;
+
 #[derive(Clone, Copy)]
 struct Frame {
     width: u32,
@@ -152,6 +155,8 @@ pub struct Ui<'font, 'texture> {
     text: Option<TextCache<'font, 'texture>>,
     shadow: Option<Shadow<'texture>>,
     creator: Option<&'texture TextureCreator<WindowContext>>,
+    art: Option<SystemArt<'texture>>,
+    root: Option<PathBuf>,
     raster_cache: Option<RasterCache>,
     geometry: Geometry,
     status: Option<Status>,
@@ -168,6 +173,8 @@ pub struct Ui<'font, 'texture> {
     pub banner: Option<String>,
     pub screenshot: Option<PathBuf>,
     pub transition: Option<String>,
+    /// Active theme directory; its `systems/` folder holds console images.
+    pub theme_dir: Option<PathBuf>,
 }
 impl<'font, 'texture> Ui<'font, 'texture> {
     pub fn new(width: u32, height: u32, windowed: bool) -> Result<Self, String> {
@@ -237,6 +244,8 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             text: None,
             shadow: None,
             creator: None,
+            art: None,
+            root: None,
             raster_cache: None,
             geometry: {
                 let mut geometry = Geometry::new();
@@ -258,6 +267,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             banner: None,
             screenshot: None,
             transition: None,
+            theme_dir: None,
         })
     }
     pub fn configure(
@@ -317,6 +327,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             }
         }
         self.creator = Some(creator);
+        self.root = root.map(Path::to_path_buf);
         self.raster_cache =
             if self.experiments.enabled("badgecache") || self.experiments.enabled("shadowcache") {
                 let dir = root
@@ -380,7 +391,12 @@ impl<'font, 'texture> Ui<'font, 'texture> {
     }
     /// Timer work, separate from rendering; sysfs refresh is rate limited.
     pub fn tick(&mut self) -> bool {
-        self.status.as_mut().is_some_and(|s| s.poll(Instant::now()))
+        // Artwork loading starts after the first frame, never before it.
+        let created = self.art.is_none() && self.creator.is_some();
+        self.ensure_art();
+        let art = self.art.as_mut().is_some_and(SystemArt::tick);
+        let status = self.status.as_mut().is_some_and(|s| s.poll(Instant::now()));
+        created || art || status
     }
     fn px(&self, value: f32) -> i32 {
         self.frame.px(value)
@@ -476,6 +492,9 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         let (backdrop, cursor) = app.backdrop();
         self.header(backdrop, cursor, data, theme)?;
         self.list(backdrop, cursor, data, theme)?;
+        if matches!(backdrop, Screen::Systems) {
+            self.system_panel(&App::system_rows(data), cursor, data, theme)?;
+        }
         if let Screen::Games { system } = backdrop {
             self.cover(system, cursor, data, theme, cover)?;
         }
@@ -686,7 +705,8 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         let list_width = if is_games {
             (theme.list_width * width as f32).round() as u32
         } else {
-            width.saturating_sub(margin.max(0) as u32 * 2)
+            let panel = system_art::panel_rect(self.frame, theme);
+            (panel.x() - self.px(system_art::PANEL_GAP) - margin).max(1) as u32
         }
         .max(1);
         let [row, selected] = if is_games {

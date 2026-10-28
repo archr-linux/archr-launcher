@@ -135,6 +135,12 @@ OFL. Os TTF estáticos são dos releases oficiais Inter 4.1 e JetBrains Mono
 Liberation/DejaVu. Para experimentar o tema no PC com `ARCHR_LAUNCHER_ROOT`,
 copie essa pasta para `ROOT/usr/share/archr-launcher/themes/default/`.
 
+Imagens de console da tela de sistemas: `/storage/.config/archr-launcher/systems/<nome>.{png,jpg,webp}`
+tem precedência sobre `<tema>/systems/<nome>.{png,jpg,webp}`; sem imagem, o
+painel mostra um cartão tipográfico gerado. `<nome>` é o `<name>` do
+`es_systems.cfg`; sistemas parentes (ex. `megadrive` e `genesis`) usam a mesma
+foto por uma tabela de apelidos em `render/system_art.rs`.
+
 Todos os tokens de `theme.toml` são opcionais, com fallback individual.
 `accent`, `accent_text` e `dim` também aceitam os nomes antigos `highlight_bg`,
 `highlight_text` e `dim_text`; os novos nomes têm precedência. Fontes continuam

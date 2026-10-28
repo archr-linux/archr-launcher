@@ -74,6 +74,13 @@ pub trait DataSource {
     /// Resolves a displayed row to its real system and game index, including
     /// identity mappings for real systems. None makes game actions no-ops.
     fn origin(&self, system: &str, game: usize) -> Option<(String, usize)>;
+    /// Manufacturer and release year from es_systems.cfg; either may be empty.
+    fn manufacturer(&self, _system: &str) -> Option<(&str, &str)> {
+        None
+    }
+    fn favorite_count(&self, _system: &str) -> usize {
+        0
+    }
     fn cores(&self, system: &str) -> Vec<(String, String)>;
     fn current_core(&self, system: &str, game: usize) -> Option<(String, String)>;
 }

@@ -3,7 +3,7 @@
 pub mod i18n;
 pub mod theme;
 
-pub use theme::{resolve_theme, Rect01, Rgba, SystemScreen, Theme};
+pub use theme::{resolve_theme, theme_dir, Rect01, Rgba, SystemScreen, Theme};
 
 pub mod covers;
 

@@ -44,6 +44,8 @@
 "time.yesterday" = "вчера"
 "systems.count" = { one = "{count} система", few = "{count} системы", many = "{count} систем", other = "{count} системы" }
 "games.count" = { one = "{count} игра", few = "{count} игры", many = "{count} игр", other = "{count} игры" }
+"favorites.count" = { one = "{count} в избранном", few = "{count} в избранном", many = "{count} в избранном", other = "{count} в избранном" }
+"panel.stats" = "{games} · {favorites}"
 "metadata.players" = { one = "{count} игрок", few = "{count} игрока", many = "{count} игроков", other = "{count} игрока" }
 "time.minutes" = { one = "{count} мин. назад", few = "{count} мин. назад", many = "{count} мин. назад", other = "{count} мин. назад" }
 "time.hours" = { one = "{count} ч. назад", few = "{count} ч. назад", many = "{count} ч. назад", other = "{count} ч. назад" }

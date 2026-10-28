@@ -44,6 +44,8 @@
 "time.yesterday" = "yesterday"
 "systems.count" = { one = "{count} system", other = "{count} systems" }
 "games.count" = { one = "{count} game", other = "{count} games" }
+"favorites.count" = { one = "{count} favorite", other = "{count} favorites" }
+"panel.stats" = "{games} · {favorites}"
 "metadata.players" = { one = "{count} player", other = "{count} players" }
 "time.minutes" = { one = "{count} min ago", other = "{count} min ago" }
 "time.hours" = { one = "{count} hr ago", other = "{count} hr ago" }
