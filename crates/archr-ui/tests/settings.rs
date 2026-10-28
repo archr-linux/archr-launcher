@@ -42,3 +42,21 @@ fn system_info_shortcut_and_gpu_reboot_confirmation() {
     assert_eq!(s.handle(Button::B), Effect::None);
     assert!(!s.reboot_prompt);
 }
+
+#[test]
+fn malformed_negative_and_extreme_slider_values_are_normalized_before_stepping() {
+    for (stored, normalized, right) in [
+        ("oops", "60", "65"),
+        ("-200", "0", "5"),
+        ("32767", "100", "100"),
+        ("999999999999999999999999999999999999999999", "100", "100"),
+    ] {
+        assert_eq!(Id::Volume.normalize(stored), normalized);
+        let mut s = Settings::default();
+        s.loading = false;
+        s.open(Page::Sound);
+        s.values.insert(Id::Volume, stored.into());
+        assert_eq!(s.handle(Button::R), Effect::Set(Id::Volume, right.into()));
+    }
+    assert_eq!(Id::Brightness.normalize("-32768"), "5");
+}

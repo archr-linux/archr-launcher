@@ -63,6 +63,40 @@ impl Id {
             Self::Timezone => "system.timezone",
         }
     }
+    pub fn choices(self) -> &'static [&'static str] {
+        match self {
+            Self::Gpu => &["libmali", "panfrost"],
+            Self::Language => &["en_US", "pt_BR", "es_ES", "ru_RU"],
+            Self::Idle | Self::IdleGame => &["0", "1", "3", "5", "10", "15", "30"],
+            Self::Governor => &["ondemand", "performance", "schedutil", "powersave"],
+            Self::Turbo => &["0", "1"],
+            _ => &[],
+        }
+    }
+    pub fn normalize(self, value: &str) -> String {
+        if !matches!(self, Self::Volume | Self::Brightness) {
+            return value.into();
+        }
+        let min = if self == Self::Brightness { 5 } else { 0 };
+        let value = value.trim();
+        let number = value.parse::<i128>().unwrap_or_else(|_| {
+            if !value.trim_start_matches(['-', '+']).is_empty()
+                && value
+                    .trim_start_matches(['-', '+'])
+                    .bytes()
+                    .all(|b| b.is_ascii_digit())
+            {
+                if value.starts_with('-') {
+                    i128::MIN
+                } else {
+                    i128::MAX
+                }
+            } else {
+                self.default_value().parse().expect("numeric default")
+            }
+        });
+        number.clamp(min, 100).to_string()
+    }
     pub fn default_value(self) -> &'static str {
         match self {
             Self::Volume => "60",
@@ -207,27 +241,10 @@ impl Default for Settings {
             stack: vec![(Page::Root, 0)],
             cursor: 0,
             values: BTreeMap::new(),
-            options: BTreeMap::from([
-                (Id::Gpu, vec!["libmali".into(), "panfrost".into()]),
-                (
-                    Id::Language,
-                    ["en_US", "pt_BR", "es_ES", "ru_RU"]
-                        .map(str::to_owned)
-                        .to_vec(),
-                ),
-                (
-                    Id::Idle,
-                    ["0", "1", "3", "5", "10", "15", "30"]
-                        .map(str::to_owned)
-                        .to_vec(),
-                ),
-                (
-                    Id::IdleGame,
-                    ["0", "1", "3", "5", "10", "15", "30"]
-                        .map(str::to_owned)
-                        .to_vec(),
-                ),
-            ]),
+            options: [Id::Gpu, Id::Language, Id::Idle, Id::IdleGame]
+                .into_iter()
+                .map(|id| (id, id.choices().iter().map(|v| (*v).into()).collect()))
+                .collect(),
             pending: None,
             loading: true,
             error: None,
@@ -309,13 +326,17 @@ impl Settings {
                         }
                     }
                     Kind::Slider { min, max, step } if button != Button::A => {
-                        let old = old.parse::<i16>().unwrap_or(i16::from(min));
-                        (old + if button == Button::L {
-                            -i16::from(step)
+                        let old = row
+                            .id
+                            .normalize(old)
+                            .parse::<u8>()
+                            .expect("normalized slider");
+                        if button == Button::L {
+                            old.saturating_sub(step)
                         } else {
-                            i16::from(step)
-                        })
-                        .clamp(i16::from(min), i16::from(max))
+                            old.saturating_add(step)
+                        }
+                        .clamp(min, max)
                         .to_string()
                     }
                     Kind::Value if button != Button::A => {
