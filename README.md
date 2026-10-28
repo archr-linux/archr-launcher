@@ -199,18 +199,28 @@ uma medição no PC não substitui a sonda no aparelho.
 
 Entrada temporária: `Y` na lista de sistemas → `Configurações` → `A`.
 `B` volta pela pilha de páginas; na raiz retorna ao launcher. `Y` na raiz
-abre Informações do sistema. O futuro menu Start pode emitir `Outcome::Settings`.
+abre Informações do sistema. O menu Start também abre as configurações.
 Som e tela, Sistema e Região e idioma aplicam alterações imediatamente;
 as outras categorias mostram “Em breve”. Atualização mostra a versão instalada,
 sem iniciar o atualizador. O driver de GPU oferece confirmação de reinício.
 
 As páginas são descritas em `archr-ui::settings`; o host usa
 `archr-launcher::settings::Runtime`. Um worker serial executa scripts com argv,
-limite de 20 s e código de saída real, e usa `archr-config` para gravações
-atômicas sob a trava compartilhada. `suspendmode` é a exceção de ordenação:
-o script precisa ver a chave antiga. Erros mantêm o valor anterior e mostram
-o diagnóstico na página. Informações do sistema são sondadas fora do SDL
-a cada quatro segundos enquanto a página está aberta.
+limite de 20 s e código de saída real. Volume usa `pactl` diretamente e brilho
+usa o backlight; após sucesso, `archr-config` publica a chave atomicamente sob a
+trava compartilhada. Saída de áudio, governador, fuso, idioma e inatividade
+também têm o launcher como único dono da chave. `gpudriver`, `suspendmode` e
+`turbomode` são donos exclusivos das suas chaves: o launcher chama o script e
+confere a gravação, sem escrever antes ou depois. Esses três scripts ainda
+precisam de modo runtime-only e propagação de falhas no sistema; suas gravações
+legadas não ganham atomicidade por serem chamadas daqui. A mesma propagação deve
+ser conferida em `set-audio`, `archr-config tz` e nas funções de governador.
+Erros mostram o status com quebra de linha limitada; detalhes completos vão ao
+log. Leituras usam `archr-io`, rejeitando arquivos não regulares e limitando os
+dados. Informações
+são sondadas fora do SDL quatro segundos após a conclusão anterior; a saída
+aguarda apenas mutações, nunca sondagens descartáveis. O driver de GPU ativo
+é obtido pelo binding; a preferência divergente é marcada para após reiniciar.
 
 As opções de suspensão por inatividade gravam `idle.timeout` e
 `idle.timeout.game`, em minutos: 0, 1, 3, 5, 10, 15 ou 30; ambas começam em
