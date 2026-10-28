@@ -124,6 +124,8 @@ pub struct CoverCache<'a> {
     requests: SyncSender<Vec<Vec<PathBuf>>>,
     ready: Receiver<Loaded>,
     pending: HashSet<PathBuf>,
+    /// Requests issued before `clear`; their results may predate the new art.
+    stale: HashSet<PathBuf>,
     textures: VecDeque<(PathBuf, Option<Texture<'a>>)>,
 }
 
@@ -159,6 +161,7 @@ impl<'a> CoverCache<'a> {
             requests,
             ready,
             pending: HashSet::new(),
+            stale: HashSet::new(),
             textures: VecDeque::new(),
         }
     }
@@ -197,6 +200,9 @@ impl<'a> CoverCache<'a> {
         let mut changed = false;
         while let Ok((path, result)) = self.ready.try_recv() {
             self.pending.remove(&path);
+            if self.stale.remove(&path) {
+                continue;
+            }
             let texture = result.map_err(|error| error.to_string()).and_then(|thumb| {
                 thumb
                     .map(|thumb| {
@@ -233,6 +239,12 @@ impl<'a> CoverCache<'a> {
         changed
     }
 
+    /// Forget decoded covers, including "no cover" results, after art changed
+    /// on disk. Thumbnails on disk are keyed by source mtime and stay valid.
+    pub fn clear(&mut self) {
+        self.textures.clear();
+        self.stale.extend(self.pending.drain());
+    }
     pub fn get(&mut self, path: &PathBuf) -> Option<&Texture<'a>> {
         let index = self
             .textures

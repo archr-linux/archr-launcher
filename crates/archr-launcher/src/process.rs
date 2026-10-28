@@ -44,6 +44,22 @@ pub(crate) fn wait(
     }
 }
 
+/// Spawn, retrying ETXTBSY: a thread that forks while another thread still
+/// holds a just-written executable open (until its exec closes the O_CLOEXEC
+/// descriptor) makes exec of that file fail briefly.
+pub(crate) fn spawn(command: &mut Command) -> io::Result<Child> {
+    let mut attempt = 0;
+    loop {
+        match command.spawn() {
+            Err(error) if error.raw_os_error() == Some(libc::ETXTBSY) && attempt < 5 => {
+                attempt += 1;
+                thread::sleep(Duration::from_millis(10 * attempt));
+            }
+            result => return result,
+        }
+    }
+}
+
 /// Separate anonymous captures avoid pipe backpressure. The worker checks their
 /// sizes every poll and bounds the final read (including output after leader exit).
 pub(crate) fn capture(
@@ -57,12 +73,12 @@ pub(crate) fn capture(
     if cancel.load(Ordering::Relaxed) {
         return Err(io::Error::new(io::ErrorKind::Interrupted, "cancelled"));
     }
-    let child = command
+    command
         .process_group(0)
         .stdin(Stdio::null())
         .stdout(stdout.try_clone()?)
-        .stderr(stderr.try_clone()?)
-        .spawn()?;
+        .stderr(stderr.try_clone()?);
+    let child = spawn(command)?;
     let overflow = || io::Error::other("command output limit exceeded");
     let status = wait(child, timeout, cancel, || {
         if stdout.metadata()?.len() > limit || stderr.metadata()?.len() > limit {

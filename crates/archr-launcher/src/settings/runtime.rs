@@ -6,12 +6,20 @@ use crate::{
 };
 use archr_ui::settings::{Effect, Page, Settings};
 use std::time::{Duration, Instant};
+/// Active radio scans are not free: refresh an open Wi-Fi page once a minute.
+const SCAN_INTERVAL: Duration = Duration::from_secs(60);
 pub struct Runtime {
     pub state: Settings,
     pub active: bool,
     paths: Paths,
     worker: Option<Worker>,
     next_info: Instant,
+    next_scan: Instant,
+    /// Seconds shown in the Wi-Fi footer, redrawn as they change.
+    scan_age: u64,
+    job: Option<(archr_scraper::Job, Vec<String>)>,
+    /// Systems whose art changed, for the library to reload.
+    scraped: Option<Vec<String>>,
     closing: bool,
 }
 impl Runtime {
@@ -22,6 +30,10 @@ impl Runtime {
             paths,
             worker: None,
             next_info: Instant::now(),
+            next_scan: Instant::now(),
+            scan_age: 0,
+            job: None,
+            scraped: None,
             closing: false,
         }
     }
@@ -51,26 +63,92 @@ impl Runtime {
     }
     pub fn mutations_pending(&self) -> bool {
         self.state.pending.is_some()
+            || self.state.connecting.is_some()
+            || !self.state.slides.is_empty()
     }
     pub fn close(&mut self) {
         self.closing = true;
     }
     pub fn handle(&mut self, button: Button) -> Outcome {
+        let before = self.state.page();
         match self.state.handle(button) {
             Effect::Close => self.active = false,
             Effect::Set(id, value) => self.send(Work::Set(id, value)),
+            // Radio scans: on entry, on X, and every minute while open.
+            Effect::Scan => self.next_scan = Instant::now(),
+            Effect::Connect(ssid, password) => self.send(Work::Connect(ssid, password)),
+            Effect::Forget(ssid) => self.send(Work::Forget(ssid)),
+            Effect::Login(user, password) => self.send(Work::Login(user, password)),
+            Effect::Scrape if self.job.is_some() => self.state.scrape.starting = false,
+            Effect::Scrape => self.send(Work::Scrape),
+            Effect::CancelScrape => {
+                if let Some((job, _)) = &self.job {
+                    job.cancel();
+                }
+            }
             Effect::Reboot => return Outcome::Action(SessionAction::Reboot),
             Effect::None => {}
         }
+        if before != Page::Wifi && self.state.page() == Page::Wifi {
+            self.next_scan = Instant::now();
+        }
         Outcome::None
     }
+    /// Engine events arrive on the engine's own thread; this never blocks.
+    fn poll_scrape(&mut self) -> bool {
+        let Some((job, _)) = &self.job else {
+            return false;
+        };
+        let mut changed = false;
+        while let Some(event) = job.poll() {
+            changed = true;
+            let (progress, stop) = match event {
+                archr_scraper::Event::Progress(progress) => (progress, None),
+                archr_scraper::Event::Done(report) => (report.progress, Some(report.stop)),
+            };
+            let scrape = &mut self.state.scrape;
+            scrape.system = progress.system;
+            scrape.done = progress.done;
+            scrape.total = progress.total;
+            scrape.scraped = progress.scraped;
+            scrape.missing = progress.not_found + progress.failed;
+            if let Some(stop) = stop {
+                scrape.running = false;
+                scrape.outcome = Some(super::pages::scrape_outcome(stop));
+                // Cancelled and failed runs may still have saved some art.
+                self.scraped = self.job.take().map(|(_, systems)| systems);
+                break;
+            }
+        }
+        changed
+    }
+
+    /// Systems to reload once a scraping run has ended.
+    pub fn take_scraped(&mut self) -> Option<Vec<String>> {
+        self.scraped.take()
+    }
     pub fn poll(&mut self) -> (bool, Option<String>) {
-        let (dirty, language) = self
-            .worker
-            .as_mut()
-            .map(|w| w.poll(&mut self.state))
-            .unwrap_or_default();
+        let (mut dirty, language) = match self.worker.as_mut() {
+            Some(worker) => worker.poll(&mut self.state, &mut self.job),
+            None => (false, None),
+        };
+        dirty |= self.poll_scrape();
         let now = Instant::now();
+        let wifi = self.active
+            && self.state.page() == Page::Wifi
+            && self.state.value(archr_ui::settings::Id::WifiSwitch) == "1";
+        if wifi && !self.closing && !self.busy() && now >= self.next_scan {
+            self.next_scan = now + SCAN_INTERVAL;
+            self.send(Work::Scan);
+        }
+        let age = self
+            .state
+            .scanned
+            .map_or(0, |at| now.saturating_duration_since(at).as_secs());
+        if wifi && age != self.scan_age {
+            self.scan_age = age;
+            dirty = true;
+        }
         // Completion, not dispatch, starts the interval, even for a slow probe.
         if dirty {
             self.next_info = now + Duration::from_secs(2);

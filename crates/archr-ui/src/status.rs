@@ -4,7 +4,10 @@
 use std::{
     fs,
     path::{Path, PathBuf},
-    sync::{mpsc, Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc, Arc, Mutex,
+    },
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -82,15 +85,30 @@ enum Signal {
 struct Worker {
     value: Arc<Mutex<Snapshot>>,
     stop: mpsc::Sender<Signal>,
+    clock_12: Arc<AtomicBool>,
 }
 impl Worker {
     fn start(path: PathBuf) -> std::io::Result<Self> {
         let value = Arc::new(Mutex::new(Snapshot::default()));
         let published = value.clone();
         let (stop, stopped) = mpsc::channel();
+        let clock_12 = Arc::new(AtomicBool::new(false));
+        let worker_clock = clock_12.clone();
         thread::Builder::new()
             .name("launcher-status".into())
             .spawn(move || {
+                let config = archr_io::read_utf8(
+                    &path.join("storage/.config/system/configs/system.cfg"),
+                    1024 * 1024,
+                    archr_io::Symlinks::Follow,
+                )
+                .unwrap_or_default();
+                worker_clock.store(
+                    config
+                        .lines()
+                        .any(|line| line.trim() == "launcher.clock.format=12"),
+                    Ordering::Release,
+                );
                 let mut source = BatterySource::new(path.clone(), Instant::now());
                 let mut snapshot = Snapshot::default();
                 let mut next_wifi = Instant::now();
@@ -117,7 +135,11 @@ impl Worker {
                     }
                 }
             })?;
-        Ok(Self { value, stop })
+        Ok(Self {
+            value,
+            stop,
+            clock_12,
+        })
     }
     fn refresh_signal(&self) -> impl FnOnce() + Send + 'static {
         let sender = self.stop.clone();
@@ -141,6 +163,7 @@ pub struct Status {
     worker: Option<Worker>,
     started: bool,
     minute: u64,
+    clock_12: bool,
 }
 impl Status {
     pub fn new(root: Option<&Path>, now: Instant) -> Self {
@@ -153,6 +176,7 @@ impl Status {
             worker: None,
             started: false,
             minute: u64::MAX,
+            clock_12: false,
         };
         status.poll(now);
         status
@@ -176,11 +200,31 @@ impl Status {
             .worker
             .as_ref()
             .and_then(|w| w.value.try_lock().ok().map(|s| *s));
+        if let Some(worker) = &self.worker {
+            let mode = worker.clock_12.load(Ordering::Acquire);
+            if mode != self.clock_12 {
+                self.clock_12 = mode;
+                self.invalidate_clock();
+            }
+        }
         let unix = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
         self.update(unix, snapshot)
+    }
+    /// A successful settings publish changes the live pill on the next frame.
+    pub fn set_clock_format(&mut self, format: &str) -> bool {
+        let next = format == "12";
+        if self.clock_12 == next {
+            return false;
+        }
+        self.clock_12 = next;
+        if let Some(worker) = &self.worker {
+            worker.clock_12.store(next, Ordering::Release);
+        }
+        self.invalidate_clock();
+        true
     }
     /// Recompute even within the same minute after a timezone change.
     pub fn invalidate_clock(&mut self) {
@@ -195,7 +239,7 @@ impl Status {
         }
         if unix / 60 != self.minute {
             self.minute = unix / 60;
-            let clock = local_clock(unix);
+            let clock = local_clock(unix, self.clock_12);
             changed |= self.clock != clock;
             self.clock = clock;
         }
@@ -215,7 +259,7 @@ pub fn wifi_on(root: &Path) -> bool {
         .flatten()
         .any(|e| read(&e.path(), "type").trim() == "wlan" && read(&e.path(), "soft").trim() == "0")
 }
-fn local_clock(unix: u64) -> String {
+fn local_clock(unix: u64, clock_12: bool) -> String {
     let seconds = unix as libc::time_t;
     let mut local = std::mem::MaybeUninit::<libc::tm>::uninit();
     // SAFETY: both pointers reference correctly aligned live allocations;
@@ -226,12 +270,32 @@ fn local_clock(unix: u64) -> String {
     }
     // SAFETY: a non-null return confirms the output was initialized.
     let local = unsafe { local.assume_init() };
-    format!("{:02}:{:02}", local.tm_hour, local.tm_min)
+    if clock_12 {
+        let hour = (local.tm_hour + 11) % 12 + 1;
+        format!(
+            "{hour:02}:{:02} {}",
+            local.tm_min,
+            if local.tm_hour < 12 { "AM" } else { "PM" }
+        )
+    } else {
+        format!("{:02}:{:02}", local.tm_hour, local.tm_min)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn clock_format_changes_cached_pill_without_waiting_a_minute() {
+        let mut status = Status::new(None, Instant::now());
+        let unix = 1_700_000_040;
+        status.update(unix, None);
+        assert!(status.set_clock_format("12"));
+        assert!(status.update(unix, None));
+        assert!(status.clock.contains("AM") || status.clock.contains("PM"));
+        assert!(!status.set_clock_format("12"));
+    }
+
     #[test]
     fn timezone_change_invalidates_a_clock_cached_within_the_minute() {
         let mut status = Status::new(None, Instant::now());

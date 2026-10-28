@@ -4,6 +4,7 @@
 use crate::{handoff::assignment, paths::Paths};
 use archr_config::SystemCfg;
 use archr_ui::{
+    keyboard::Mode,
     moonlight::{Codec, Keyboard, Options, Row, State, Status, Stream},
     state::{Button, Outcome},
 };
@@ -544,7 +545,9 @@ impl Runtime {
                         self.state.host = i;
                         self.refresh();
                     }
-                    Row::Add => self.state.keyboard = Some(Keyboard::default()),
+                    Row::Add => {
+                        self.state.keyboard = Some(Keyboard::new(Mode::Ipv4, String::new()))
+                    }
                 },
                 _ => {}
             }

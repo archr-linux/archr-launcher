@@ -318,7 +318,8 @@ impl Ui<'_, '_> {
         } else if state.keyboard.is_some() {
             vec![
                 ('A'.into(), "hint.choose"),
-                ('X'.into(), "moonlight.delete"),
+                ('Y'.into(), "moonlight.delete"),
+                (HintButton::Start, "moonlight.connect"),
                 ('B'.into(), "hint.cancel"),
             ]
         } else if state.option == Some(4) {
@@ -370,41 +371,16 @@ impl Ui<'_, '_> {
             theme.text,
         )?;
         self.moon_text(
-            &format!("{}_", keyboard.text()),
+            &format!("{}_", keyboard.display()),
             (68., 124., 504., 34.),
             18.,
             theme.text,
         )?;
-        for (i, key) in Keyboard::KEYS.iter().enumerate() {
-            let x = 68. + (i % 5) as f32 * 102.;
-            let y = 170. + (i / 5) as f32 * 43.;
-            let selected = keyboard.cursor() == i;
-            self.rounded(
-                self.moon_rect((x, y, 96., 38.)),
-                self.px(8.) as f32,
-                if selected {
-                    theme.highlight_bg
-                } else {
-                    theme.badge
-                },
-                None,
-            )?;
-            let text = if i >= 11 {
-                self.catalog.text(key)
-            } else {
-                key.to_string()
-            };
-            self.moon_text(
-                &text,
-                (x + 8., y, 80., 38.),
-                15.,
-                if selected {
-                    theme.highlight_text
-                } else {
-                    theme.text
-                },
-            )?;
-        }
+        let labels = (
+            self.catalog.text("settings.space"),
+            self.catalog.text("moonlight.connect"),
+        );
+        self.keyboard_keys(keyboard, 172., (&labels.0, &labels.1), theme)?;
         if let Some(error) = error {
             self.moon_text(
                 &self.catalog.text(error),

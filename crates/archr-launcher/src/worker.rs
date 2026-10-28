@@ -23,6 +23,8 @@ pub enum Work {
         emulator: String,
         core: String,
     },
+    /// Rescan a loaded system whose files changed (new scraped art).
+    Reload(String),
 }
 pub enum Update {
     Boot {
@@ -102,6 +104,14 @@ pub fn start(paths: Paths, initial: Vec<SystemDef>) -> Worker {
         let mut loaded = HashSet::new();
         while let Some(job) = next_work(&jobs, &mut pending) {
             let update = match job {
+                Work::Reload(name) => {
+                    loaded.remove(&name);
+                    pending.push_front(Work::Games {
+                        name,
+                        background: false,
+                    });
+                    continue;
+                }
                 Work::Games { name, .. } => {
                     if !loaded.insert(name.clone()) {
                         continue;
@@ -222,5 +232,39 @@ mod tests {
         assert!(
             matches!(next_work(&jobs,&mut pending),Some(Work::Games {name,..}) if name=="background-one")
         );
+    }
+    #[test]
+    fn reload_rescans_a_loaded_system_and_sees_new_art() {
+        let root = tempfile::tempdir().unwrap();
+        let paths = Paths::new(Some(root.path().to_owned()));
+        let dir = root.path().join("roms/snes");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("Game.sfc"), b"rom").unwrap();
+        let system = SystemDef {
+            name: "snes".into(),
+            path: dir.clone(),
+            extensions: vec![".sfc".into()],
+            ..Default::default()
+        };
+        let worker = start(paths, vec![system]);
+        let games = |worker: &Worker| loop {
+            if let Update::Games(_, games) = worker
+                .ready
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .unwrap()
+            {
+                return games;
+            }
+        };
+        let load = || Work::Games {
+            name: "snes".into(),
+            background: false,
+        };
+        worker.send.send(load()).unwrap();
+        assert_eq!(games(&worker)[0].image, None);
+        fs::create_dir_all(dir.join("images")).unwrap();
+        fs::write(dir.join("images/Game.png"), b"png").unwrap();
+        worker.send.send(Work::Reload("snes".into())).unwrap();
+        assert!(games(&worker)[0].image.is_some());
     }
 }

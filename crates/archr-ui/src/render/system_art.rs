@@ -50,6 +50,8 @@ const IMAGE_ALIASES: &[(&str, &str)] = &[
 
 /// Watermark text where the uppercased system name would be long or unclear.
 const SHORT_NAMES: &[(&str, &str)] = &[
+    // The Moonlight collection is drawn like a system, as its plain name.
+    ("@moonlight", "MOONLIGHT"),
     ("amigacd32", "CD32"),
     ("amstradcpc", "CPC"),
     ("atari2600", "2600"),
@@ -303,7 +305,7 @@ impl Ui<'_, '_> {
 
     fn generated_card(&mut self, rect: Rect, name: &str, theme: &Theme) -> Result<(), String> {
         let ink = theme.surface_elevated;
-        if name.starts_with('@') {
+        if name.starts_with('@') && name != crate::moonlight::SYSTEM {
             let side = self.px(96.);
             let icon = self.frame.square(
                 rect.right() - self.px(24.) - side,
@@ -312,8 +314,6 @@ impl Ui<'_, '_> {
             );
             let glyph = if name == "@favorites" {
                 Glyph::Star
-            } else if name == crate::moonlight::SYSTEM {
-                Glyph::Moon
             } else {
                 Glyph::Clock
             };

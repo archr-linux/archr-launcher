@@ -226,6 +226,19 @@ while [ "$i" -lt "$sway_attempts" ]; do
     "$sleep_bin" 0.1
     i=$((i + 1))
 done
+# The packaged sway config defaults to US. Restore the persisted choice after
+# the compositor is ready, without depending on any EmulationStation files.
+if command -v archr-keyboard >/dev/null 2>&1; then
+    keyboard=$(archr-keyboard get 2>/dev/null || :)
+    layout=${keyboard%% *}
+    variant=${keyboard#* }
+    if [ -n "$layout" ]; then
+        # One transaction; clear the variant before the layout changes.
+        sway_input="input * xkb_variant \"\"; input * xkb_layout $layout"
+        [ -n "$variant" ] && sway_input="$sway_input; input * xkb_variant $variant"
+        swaymsg "$sway_input" >/dev/null 2>&1 || :
+    fi
+fi
 session_log 'Starting launcher session'
 
 while :; do

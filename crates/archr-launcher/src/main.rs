@@ -217,7 +217,18 @@ fn run(
         {
             ui.invalidate_settings_clock();
         }
+        // The clock format's own reply: a failed scan elsewhere never blocks it.
+        if previous_setting == Some(archr_ui::settings::Id::ClockFormat)
+            && settings.state.pending.is_none()
+        {
+            ui.set_settings_clock_format(settings.state.value(archr_ui::settings::Id::ClockFormat));
+        }
         dirty |= settings_dirty;
+        if let Some(systems) = settings.take_scraped() {
+            library.reload(&systems);
+            covers.clear();
+            dirty = true;
+        }
         dirty |= moonlight.poll();
         if let Some(language) = language {
             ui.catalog = I18n::load(

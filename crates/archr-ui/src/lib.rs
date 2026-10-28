@@ -27,6 +27,7 @@ pub mod startup;
 pub mod status;
 mod text;
 
+pub mod keyboard;
 pub mod moonlight;
 pub mod settings;
 
@@ -35,6 +36,7 @@ pub mod settings;
 pub enum HintButton {
     Key(char),
     Pair(char, char),
+    Start,
 }
 impl From<char> for HintButton {
     fn from(key: char) -> Self {

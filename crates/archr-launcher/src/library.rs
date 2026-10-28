@@ -144,6 +144,18 @@ impl Library {
             self.requested.insert(system.to_owned(), !background);
         }
     }
+    /// After scraping: rescan the systems already loaded, off-thread. The old
+    /// list stays on screen until the new one arrives; the media fingerprint
+    /// changed, so the worker rebuilds the cache instead of reusing it.
+    pub fn reload(&mut self, systems: &[String]) {
+        for name in systems {
+            if (self.games.contains_key(name) || self.requested.contains_key(name))
+                && self.send(Work::Reload(name.clone())).is_ok()
+            {
+                self.requested.insert(name.clone(), true);
+            }
+        }
+    }
     fn send(&self, work: Work) -> Result<(), String> {
         let worker = self.worker.as_ref().ok_or("error.index")?;
         worker.send.send(work).map_err(|error| error.to_string())
@@ -295,7 +307,7 @@ impl Library {
                 let nickname = self
                     .config
                     .as_ref()
-                    .and_then(|config| config.get_setting("netplay.nickname", None, None))
+                    .and_then(|config| config.get_setting("global.netplay.nickname", None, None))
                     .unwrap_or_else(|| "ArchR Player".to_owned());
                 let runemu = self.paths.at("/usr/bin/runemu.sh");
                 let game = (&*join.system, &*join.core, &*join.emulator, controllers);

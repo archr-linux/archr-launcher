@@ -1,16 +1,9 @@
 use archr_launcher::{paths::Paths, settings::Backend};
 use archr_ui::settings::Id;
-use std::{
-    fs,
-    os::unix::fs::PermissionsExt,
-    sync::{Mutex, MutexGuard},
-};
+use std::{fs, os::unix::fs::PermissionsExt};
 use tempfile::{tempdir, TempDir};
-// Parallel helper spawns can inherit another test's script write fd until exec,
-// causing ETXTBSY. Hold this guard through script creation and helper completion.
-static FIXTURE_LOCK: Mutex<()> = Mutex::new(());
-fn fixture() -> (MutexGuard<'static, ()>, TempDir, Backend) {
-    let guard = FIXTURE_LOCK.lock().unwrap();
+// The shared process runner retries ETXTBSY from parallel fixture scripts.
+fn fixture() -> (TempDir, Backend) {
     let dir = tempdir().unwrap();
     let paths = Paths::new(Some(dir.path().to_owned()));
     fs::create_dir_all(paths.config.parent().unwrap()).unwrap();
@@ -20,7 +13,7 @@ fn fixture() -> (MutexGuard<'static, ()>, TempDir, Backend) {
     fs::write(paths.at("/sys/power/state"), "freeze mem disk").unwrap();
     fs::write(&paths.config, "system.suspendmode=off\naudio.volume=60\n").unwrap();
     let backend = Backend::new(paths);
-    (guard, dir, backend)
+    (dir, backend)
 }
 fn script(dir: &TempDir, name: &str, body: &str) {
     let path = dir.path().join("usr/bin").join(name);
@@ -29,7 +22,7 @@ fn script(dir: &TempDir, name: &str, body: &str) {
 }
 #[test]
 fn scripts_are_single_owners_and_runtime_only_operations_publish_after_success() {
-    let (_guard, dir, backend) = fixture();
+    let (dir, backend) = fixture();
     script(&dir, "suspendmode", "case \"$(/bin/cat \"$ARCHR_LAUNCHER_ROOT/storage/.config/system/configs/system.cfg\")\" in *system.suspendmode=off*) printf 'system.suspendmode=mem\n' > \"$ARCHR_LAUNCHER_ROOT/storage/.config/system/configs/system.cfg\";; *) exit 23;; esac");
     assert_eq!(backend.apply(Id::Suspend, "mem").unwrap(), "mem");
     script(&dir, "pactl", "case \"$(/bin/cat \"$ARCHR_LAUNCHER_ROOT/storage/.config/system/configs/system.cfg\")\" in *audio.volume=65*) exit 24;; *) exit 0;; esac");
@@ -37,7 +30,7 @@ fn scripts_are_single_owners_and_runtime_only_operations_publish_after_success()
 }
 #[test]
 fn failure_reports_status_and_stderr_without_publishing_value() {
-    let (_guard, dir, backend) = fixture();
+    let (dir, backend) = fixture();
     script(&dir, "volume", "false; exit 0"); // Legacy helper masks the runtime error.
     script(&dir, "pactl", "echo 'sink unavailable' >&2; exit 7");
     let error = backend.apply(Id::Volume, "65").unwrap_err();
@@ -53,7 +46,7 @@ fn failure_reports_status_and_stderr_without_publishing_value() {
 }
 #[test]
 fn invalid_values_never_reach_scripts_or_config() {
-    let (_guard, _dir, backend) = fixture();
+    let (_dir, backend) = fixture();
     for (id, value) in [
         (Id::Volume, "101"),
         (Id::Brightness, "0"),
@@ -67,7 +60,7 @@ fn invalid_values_never_reach_scripts_or_config() {
 }
 #[test]
 fn load_parses_comma_timezones_and_includes_current_suspend_mode() {
-    let (_guard, dir, backend) = fixture();
+    let (dir, backend) = fixture();
     script(
         &dir,
         "timeinfo",
@@ -82,7 +75,7 @@ fn load_parses_comma_timezones_and_includes_current_suspend_mode() {
 
 #[test]
 fn inactivity_keys_store_minutes_and_default_to_never() {
-    let (_guard, _dir, backend) = fixture();
+    let (_dir, backend) = fixture();
     let state = backend.load().unwrap();
     for (id, key) in [
         (Id::Idle, "idle.timeout"),
@@ -107,7 +100,7 @@ fn worker_does_not_block_input_and_commits_only_after_success() {
     };
     use archr_ui::settings::Page;
     use std::time::{Duration, Instant};
-    let (_guard, dir, _) = fixture();
+    let (dir, _) = fixture();
     script(&dir, "set-audio", "printf 'Speakers\\n'");
     script(&dir, "timeinfo", "printf 'UTC,\\n'");
     script(
@@ -127,8 +120,10 @@ fn worker_does_not_block_input_and_commits_only_after_success() {
     let began = Instant::now();
     assert_eq!(runtime.handle(Button::R), Outcome::None);
     assert!(began.elapsed() < Duration::from_millis(50));
-    assert_eq!(runtime.state.pending, Some(Id::Volume));
-    assert_eq!(runtime.state.value(Id::Volume), "60");
+    // Sliders are optimistic: no "applying" state, the close gate still waits.
+    assert_eq!(runtime.state.pending, None);
+    assert_eq!(runtime.state.value(Id::Volume), "65");
+    assert!(runtime.mutations_pending());
     runtime.handle(Button::B);
     assert_eq!(runtime.state.page(), Page::Root);
     while runtime.busy() {
@@ -137,11 +132,12 @@ fn worker_does_not_block_input_and_commits_only_after_success() {
         std::thread::yield_now();
     }
     assert_eq!(runtime.state.value(Id::Volume), "65");
+    assert!(!runtime.mutations_pending());
 }
 
 #[test]
 fn load_uses_live_volume_and_first_backlight_percent() {
-    let (_guard, dir, backend) = fixture();
+    let (dir, backend) = fixture();
     script(
         &dir,
         "pactl",
@@ -163,7 +159,7 @@ fn load_uses_live_volume_and_first_backlight_percent() {
 
 #[test]
 fn load_normalizes_stored_sliders_and_rejects_nonregular_probes() {
-    let (_guard, dir, backend) = fixture();
+    let (dir, backend) = fixture();
     let cfg = dir.path().join("storage/.config/system/configs/system.cfg");
     fs::write(&cfg, "audio.volume=32767\ndisplay.brightness=-500\n").unwrap();
     fs::create_dir_all(dir.path().join("proc")).unwrap();
@@ -180,7 +176,7 @@ fn load_normalizes_stored_sliders_and_rejects_nonregular_probes() {
 #[test]
 fn information_distinguishes_active_driver_and_detects_hardware_and_metrics() {
     use std::os::unix::fs::symlink;
-    let (_guard, dir, backend) = fixture();
+    let (dir, backend) = fixture();
     let root = dir.path();
     for (path, value) in [
         (
@@ -250,7 +246,7 @@ fn information_distinguishes_active_driver_and_detects_hardware_and_metrics() {
 
 #[test]
 fn brightness_publishes_once_after_success_and_keeps_config_on_sysfs_failure() {
-    let (_guard, dir, backend) = fixture();
+    let (dir, backend) = fixture();
     let panel = dir.path().join("sys/class/backlight/panel");
     fs::create_dir_all(&panel).unwrap();
     fs::write(panel.join("max_brightness"), format!("{:<4096}", "255\n")).unwrap();
@@ -269,7 +265,7 @@ fn brightness_publishes_once_after_success_and_keeps_config_on_sysfs_failure() {
 
 #[test]
 fn information_collects_detail_rows_and_core_deltas_without_commands() {
-    let (_guard, dir, backend) = fixture();
+    let (dir, backend) = fixture();
     for (path, value) in [
         ("proc/cpuinfo", "processor : 0\nHardware : Rockchip RK3326\n"),
         ("proc/stat", "cpu 10 0 10 80 0 0 0 0\ncpu0 10 0 10 80 0 0 0 0\n"),
@@ -311,7 +307,7 @@ fn information_collects_detail_rows_and_core_deltas_without_commands() {
 
 #[test]
 fn cpu_hotplug_preserves_core_identity_and_reappearing_core_has_no_delta() {
-    let (_guard, dir, backend) = fixture();
+    let (dir, backend) = fixture();
     let path = dir.path().join("proc/stat");
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(
@@ -344,7 +340,7 @@ cpu2 190 0 10 200
 }
 #[test]
 fn arm64_identity_uses_compatible_and_cpu_part_without_hardware_field() {
-    let (_guard, dir, backend) = fixture();
+    let (dir, backend) = fixture();
     for (path, value) in [
         (
             "proc/cpuinfo",
@@ -372,7 +368,7 @@ CPU part : 0xd03
 
 #[test]
 fn battery_formats_integer_current_and_capacity_without_a_restart_timer() {
-    let (_guard, dir, backend) = fixture();
+    let (dir, backend) = fixture();
     for (name, value) in [
         ("capacity", "83"),
         ("status", "Discharging"),
@@ -394,4 +390,34 @@ fn battery_formats_integer_current_and_capacity_without_a_restart_timer() {
         assert!(rows.iter().any(|(k, v)| *k == key && v == expected));
     }
     assert!(!rows.iter().any(|(k, _)| *k == "settings.on_battery"));
+}
+
+#[test]
+fn stale_saved_audio_device_is_never_offered_and_one_sink_is_read_only() {
+    use archr_ui::{settings::Page, state::Button};
+    let (dir, backend) = fixture();
+    fs::write(
+        dir.path().join("storage/.config/system/configs/system.cfg"),
+        "audio.device=headphone\n",
+    )
+    .unwrap();
+    script(
+        &dir,
+        "set-audio",
+        "case \"$1\" in list|get) printf 'Built-in Audio Internal Speaker\\n';; *) exit 1;; esac",
+    );
+    script(&dir, "timeinfo", "printf 'UTC\\n'");
+    let mut state = backend.load().unwrap();
+    assert_eq!(
+        state.options[&Id::Audio],
+        ["Built-in Audio Internal Speaker"]
+    );
+    assert_eq!(state.value(Id::Audio), "Built-in Audio Internal Speaker");
+    assert!(state.fixed(Id::Audio));
+    state.open(Page::Sound);
+    state.cursor = 2;
+    for button in [Button::L, Button::R, Button::A] {
+        assert_eq!(state.handle(button), archr_ui::settings::Effect::None);
+    }
+    assert_eq!(state.hints().len(), 1);
 }

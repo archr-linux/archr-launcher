@@ -13,7 +13,7 @@ fn variable_heights_keep_selection_and_section_visible_and_snap_on_page_change()
         600.,
         now + Duration::from_millis(100),
     );
-    assert_eq!(settled, 145.);
+    assert_eq!(settled, 151.);
     assert!(533. - settled >= VIEW_TOP && 579. - settled <= VIEW_BOTTOM);
     let section = Placement {
         top: 180.,
@@ -33,7 +33,7 @@ fn variable_heights_keep_selection_and_section_visible_and_snap_on_page_change()
         scroll.tween.target, 109.,
         "scrolling up reveals the section header"
     );
-    assert_eq!(scroll.offset(Page::Region, 533., 579., 600., now), 145.);
+    assert_eq!(scroll.offset(Page::Region, 533., 579., 600., now), 151.);
     assert!(
         !scroll.tween.active(now),
         "page changes snap to the selected row, not zero"
@@ -42,8 +42,8 @@ fn variable_heights_keep_selection_and_section_visible_and_snap_on_page_change()
 }
 #[test]
 fn compact_placements_use_real_heights_and_three_pixel_gaps() {
-    let rows = Page::Region.rows();
-    let positions = placements(rows);
+    let rows = Page::Sound.rows();
+    let positions = placements(Page::Sound, rows);
     assert_eq!(positions[0].top, VIEW_TOP);
     for (row, place) in rows.iter().zip(&positions) {
         assert_eq!(place.height, if row.subtitle.is_some() { 46. } else { 40. });
@@ -94,9 +94,10 @@ fn capture_long_page_scrolled_in_both_languages() {
                 label,
                 subtitle: (n % 3 == 0).then_some("settings.instant"),
                 kind: Kind::Value,
+                section: None,
             })
             .collect();
-        let mut positions = placements(&rows);
+        let mut positions = placements(Page::System, &rows);
         for (i, place) in positions.iter_mut().enumerate() {
             place.top += (i / 4 + 1) as f32 * SECTION_HEIGHT;
             if i % 4 == 0 {
@@ -123,7 +124,7 @@ fn capture_long_page_scrolled_in_both_languages() {
             ui: &mut ui,
             theme: &theme,
         }
-        .rows_at(&state, &rows, &positions)
+        .rows_at(&state, &rows, &positions, RIGHT)
         .unwrap();
         let pixels = ui
             .canvas

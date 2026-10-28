@@ -57,7 +57,7 @@ fn card(
     }
 }
 /// The libc-owned list is freed on every return path. No command/path dependency.
-fn ipv4_interface(preferred: &str) -> Option<(String, String)> {
+pub(super) fn ipv4_interface(preferred: &str) -> Option<(String, String)> {
     struct Addresses(*mut libc::ifaddrs);
     impl Drop for Addresses {
         fn drop(&mut self) {

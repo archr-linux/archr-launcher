@@ -1,4 +1,5 @@
 use super::*;
+use archr_ui::keyboard::Key;
 use std::{os::unix::fs::PermissionsExt, time::Instant};
 
 fn fixture(script: &str) -> (tempfile::TempDir, Paths) {
@@ -156,6 +157,20 @@ esac
         .is_err());
     }
 }
+/// Moves along the shared keyboard's rows to the first matching key and types it.
+fn press(runtime: &mut Runtime, target: impl Fn(Key) -> bool) {
+    loop {
+        let keyboard = runtime.state.keyboard.as_ref().unwrap();
+        let (row, column) = keyboard.selected();
+        let keys = keyboard.rows()[row];
+        if target(keys[column]) {
+            break;
+        }
+        let here = keys.iter().any(|k| target(*k));
+        runtime.handle(if here { Button::R } else { Button::Down });
+    }
+    runtime.handle(Button::A);
+}
 #[test]
 fn add_ip_and_options_round_trip_through_launcher_owned_store() {
     let (_root, paths) = fixture("printf 'Connecting to 127.0.0.1...\\n1. Desktop\\n'");
@@ -164,15 +179,12 @@ fn add_ip_and_options_round_trip_through_launcher_owned_store() {
     runtime.open();
     runtime.handle(Button::A);
     for key in "127.0.0.1".chars() {
-        while Keyboard::KEYS[runtime.state.keyboard.as_ref().unwrap().cursor()] != key.to_string() {
-            runtime.handle(Button::R);
-        }
-        runtime.handle(Button::A);
+        press(
+            &mut runtime,
+            |k| matches!(k, Key::Char(t) if t == key.to_string()),
+        );
     }
-    while runtime.state.keyboard.as_ref().unwrap().cursor() != 12 {
-        runtime.handle(Button::R);
-    }
-    runtime.handle(Button::A);
+    press(&mut runtime, |k| k == Key::Submit);
     wait(&mut runtime, |r| !r.state.busy);
     assert_eq!(runtime.state.status, Status::Online);
     assert_eq!(runtime.state.apps, ["Desktop"]);

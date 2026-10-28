@@ -1,12 +1,17 @@
 //! Shared, bounded settings layout. The common text cache only sees fitted lines.
 use super::*;
-use crate::settings::{Id, Kind, Page, Settings, CATEGORIES};
+use crate::settings::{Id, Kind, Page, Row, Settings, CATEGORIES};
 #[path = "render/information.rs"]
 mod information;
+#[path = "render/network.rs"]
+mod network;
 const VIEW_TOP: f32 = 50.;
-const VIEW_BOTTOM: f32 = 434.;
+const VIEW_BOTTOM: f32 = 428.;
+const FOOTER: f32 = 432.;
 const ROW_GAP: f32 = 3.;
 const SECTION_HEIGHT: f32 = 21.;
+/// Right edge of full-width rows; pages with a side panel stop earlier.
+const RIGHT: f32 = 624.;
 #[derive(Clone, Copy)]
 struct Placement {
     top: f32,
@@ -26,15 +31,24 @@ impl Placement {
         self.top + self.height
     }
 }
-fn placements(rows: &[crate::settings::Row]) -> Vec<Placement> {
+/// Mockup row heights: dense Netplay and Services lists, 40/46 elsewhere.
+fn placements(page: Page, rows: &[Row]) -> Vec<Placement> {
     let mut top = VIEW_TOP;
     rows.iter()
         .map(|row| {
-            let height = if row.subtitle.is_some() { 46. } else { 40. };
+            if row.section.is_some() {
+                top += SECTION_HEIGHT;
+            }
+            let height = match page {
+                Page::Netplay => 34.,
+                Page::Services => 38.,
+                _ if row.subtitle.is_some() => 46.,
+                _ => 40.,
+            };
             let place = Placement {
                 top,
                 height,
-                section: None,
+                section: row.section,
             };
             top += height + ROW_GAP;
             place
@@ -85,6 +99,11 @@ impl Ui<'_, '_> {
     pub fn invalidate_settings_clock(&mut self) {
         if let Some(status) = &mut self.status {
             status.invalidate_clock();
+        }
+    }
+    pub fn set_settings_clock_format(&mut self, format: &str) {
+        if let Some(status) = &mut self.status {
+            status.set_clock_format(format);
         }
     }
     pub(super) fn settings_page(&mut self, state: &Settings, theme: &Theme) -> Result<(), String> {
@@ -180,23 +199,8 @@ impl View<'_, '_, '_> {
         style: (f32, Rgba, Align),
         face: Face,
     ) -> Result<(), String> {
-        let rect = self.rect(bounds);
-        let (mut size, ink, align) = style;
-        let (lines, size) = loop {
-            let lines = self.lines_face(text, size, rect.width(), face)?;
-            let limit = (bounds.3 / (size + 3.)).floor().max(1.) as usize;
-            if lines.len() <= limit {
-                break (lines, size);
-            }
-            if size <= 12. {
-                log::warn!("Settings text unavailable in this layout: {text}");
-                break (
-                    self.lines(&self.tr("settings.unavailable"), style.0, rect.width())?,
-                    style.0,
-                );
-            }
-            size = (size - 1.).max(12.);
-        };
+        let (_, ink, align) = style;
+        let (lines, size) = self.fit(bounds, text, style.0, face)?;
         let step = size + 3.;
         let top = bounds.1 + (bounds.3 - lines.len() as f32 * step) / 2.;
         for (n, line) in lines.iter().enumerate() {
@@ -209,34 +213,91 @@ impl View<'_, '_, '_> {
         }
         Ok(())
     }
+    /// Lines and size that fit the bounds, or the localized "unavailable".
+    fn fit(
+        &mut self,
+        bounds: Bounds,
+        text: &str,
+        start: f32,
+        face: Face,
+    ) -> Result<(Vec<String>, f32), String> {
+        let rect = self.rect(bounds);
+        let mut size = start;
+        Ok(loop {
+            let lines = self.lines_face(text, size, rect.width(), face)?;
+            let limit = (bounds.3 / (size + 3.)).floor().max(1.) as usize;
+            if lines.len() <= limit {
+                break (lines, size);
+            }
+            if size <= 12. {
+                log::warn!("Settings text unavailable in this layout: {text}");
+                break (
+                    self.lines(&self.tr("settings.unavailable"), start, rect.width())?,
+                    start,
+                );
+            }
+            size = (size - 1.).max(12.);
+        })
+    }
     fn label(&mut self, bounds: Bounds, text: &str, size: f32) -> Result<(), String> {
         self.text(bounds, text, (size, self.theme.text, Align::Left))
     }
     fn note(&mut self, bounds: Bounds, text: &str, size: f32) -> Result<(), String> {
         self.text(bounds, text, (size, self.theme.muted, Align::Left))
     }
+    /// "Settings / Parent /" in muted 13 px, the current page in 15 px semibold.
+    fn breadcrumbs(&mut self, state: &Settings, right: f32) -> Result<(), String> {
+        let page = state.page();
+        let mut trail = Vec::new();
+        let current = match page {
+            Page::Root => self.tr("settings.title"),
+            Page::Keyboard => {
+                trail.push(self.tr("settings.title"));
+                trail.push(self.tr(state.parent_page().title()));
+                self.keyboard_name(state)
+            }
+            _ => {
+                trail.push(self.tr("settings.title"));
+                trail.extend(page.parent().map(|key| self.tr(key)));
+                self.tr(page.title())
+            }
+        };
+        let trail: Vec<String> = trail.into_iter().map(|t| format!("{t} /")).collect();
+        let (mut small, mut large) = (13., 15.);
+        let widths = loop {
+            let mut widths = Vec::new();
+            for part in &trail {
+                widths.push(self.ui.measure(part, Face::Regular, small)? as f32 + 8.);
+            }
+            widths.push(self.ui.measure(&current, Face::Semibold, large)? as f32);
+            if widths.iter().sum::<f32>() <= right - 24. || small <= 12. {
+                break widths;
+            }
+            small -= 0.5;
+            large -= 1.;
+        };
+        let mut x = 24.;
+        for (part, width) in trail.iter().zip(&widths) {
+            self.text(
+                (x, 1., *width, 44.),
+                part,
+                (small, self.theme.muted, Align::Left),
+            )?;
+            x += width;
+        }
+        self.text_face(
+            (x, 0., (right - x).max(40.), 44.),
+            &current,
+            (large, self.theme.text, Align::Left),
+            Face::Semibold,
+        )
+    }
     fn draw(&mut self, state: &Settings) -> Result<(), String> {
         let right = self.ui.status_header(self.theme)? as f32 / self.ui.frame.scale;
-        let title = if let Page::InfoDetail(index) = state.page() {
-            format!(
-                "{} › {}",
-                self.tr("settings.info"),
-                self.tr(crate::settings::information::ITEMS[index.min(5)].0)
-            )
-        } else if state.page() == Page::Info {
-            self.tr("settings.info")
-        } else if state.page() == Page::Root {
-            self.tr("settings.title")
-        } else {
-            format!(
-                "{} / {}",
-                self.tr("settings.title"),
-                self.tr(state.page().title())
-            )
-        };
         if let Page::InfoDetail(index) = state.page() {
             let base = self.tr("settings.info");
             let item = self.tr(crate::settings::information::ITEMS[index.min(5)].0);
+            let title = format!("{base} › {item}");
             let mut size = 15.;
             while size > 12. && self.ui.measure(&title, Face::Semibold, size)? as f32 > right - 24.
             {
@@ -267,14 +328,17 @@ impl View<'_, '_, '_> {
                 (size, self.theme.text, Align::Left),
                 Face::Semibold,
             )?;
-        } else {
+        } else if state.page() == Page::Info {
             self.text_face(
                 (24., 0., right - 24., 44.),
-                &title,
+                &self.tr("settings.info"),
                 (15., self.theme.text, Align::Left),
                 Face::Semibold,
             )?;
+        } else {
+            self.breadcrumbs(state, right)?;
         }
+        let rows: Vec<Row> = state.visible_rows().into_iter().copied().collect();
         match state.page() {
             Page::Root => self.root(state)?,
             Page::Info => self.info(state)?,
@@ -287,84 +351,124 @@ impl View<'_, '_, '_> {
                     (20., self.theme.text, Align::Center),
                 )?;
             }
-            page => self.rows(state, page.rows())?,
+            Page::Wifi => self.wifi(state)?,
+            Page::Keyboard => self.keyboard(state)?,
+            Page::Scraper => {
+                self.rows_at(state, &rows, &placements(Page::Scraper, &rows), 384.)?;
+                self.scraper_panel(state)?;
+            }
+            page => self.rows_at(state, &rows, &placements(page, &rows), RIGHT)?,
         }
-        if state.error.as_ref().is_some_and(|(id, _)| {
+        if let Some((id, error)) = state.error.as_ref().filter(|(id, _)| {
             !matches!(state.page(), Page::Info | Page::InfoDetail(_))
-                && (id.is_none()
-                    || state.page() == Page::Root
-                    || state.page().rows().iter().any(|r| Some(r.id) == *id))
+                && (id.is_none() || rows.iter().any(|r| Some(r.id) == *id))
         }) {
             let bounds = if state.page() == Page::Root {
                 (386., 318., 230., 110.)
+            } else if state.page() == Page::Keyboard {
+                (24., 296., 592., 40.)
             } else {
-                (24., 394., 592., 40.)
+                (24., 384., 592., 40.)
             };
             self.panel(bounds, false)?;
             let (x, y, w, h) = bounds;
-            self.label(
-                (x + 12., y + 8., w - 24., h - 16.),
-                &self.tr("settings.failed"),
-                12.,
-            )?;
+            // Known failures arrive as locale keys; anything else stays generic.
+            let message = if error.starts_with("settings.") {
+                self.tr(error)
+            } else {
+                log::debug!("Settings error on {id:?}: {error}");
+                self.tr("settings.failed")
+            };
+            self.label((x + 12., y + 4., w - 24., h - 8.), &message, 13.)?;
         }
-        let footer = if matches!(state.page(), Page::Info | Page::InfoDetail(_)) {
-            432.
-        } else {
-            440.
-        };
+        let footer = FOOTER;
         self.ui.divider(
             0,
             self.ui.px(footer),
             self.ui.frame.width,
             self.theme.border,
         )?;
-        self.ui.hints(
+        let left = self.ui.hints(
             state.hints(),
             self.theme,
             self.ui.frame.width,
             self.ui.px(footer),
             self.ui.px(480. - footer) as u32,
-        )?;
-        if matches!(state.page(), Page::Info | Page::InfoDetail(_)) {
-            let key = if state.page() == Page::Info {
+        )? as f32
+            / self.ui.frame.scale;
+        let status = if state.loading {
+            Some(self.tr("loading"))
+        } else if matches!(state.page(), Page::Info | Page::InfoDetail(_)) {
+            Some(self.tr(if state.page() == Page::Info {
                 "settings.updated_now"
             } else {
                 "settings.refresh_interval"
-            };
-            self.note((24., footer, 170., 48.), &self.tr(key), 12.)?;
+            }))
+        } else if state.page() == Page::Wifi {
+            state.scanned.map(|at| {
+                let seconds = self.ui.frame.now.saturating_duration_since(at).as_secs();
+                self.ui
+                    .catalog
+                    .format("settings.updated_ago", &[("count", &seconds.to_string())])
+            })
+        } else {
+            None
+        };
+        if let Some(status) = status {
+            self.note((24., footer, (left - 36.).max(60.), 48.), &status, 13.)?;
         }
-        if state.loading {
-            self.note((24., 440., 160., 40.), &self.tr("loading"), 12.)?;
-        }
-        if state.reboot_prompt {
+        let dialog = if state.reboot_prompt {
+            Some((self.tr("settings.reboot_question"), true))
+        } else if let Some(ssid) = &state.confirm_forget {
+            Some((
+                self.ui
+                    .catalog
+                    .format("settings.forget_question", &[("name", ssid)]),
+                true,
+            ))
+        } else {
+            state.connecting.as_ref().map(|ssid| {
+                (
+                    self.ui
+                        .catalog
+                        .format("settings.connecting", &[("name", ssid)]),
+                    false,
+                )
+            })
+        };
+        if let Some((question, choice)) = dialog {
             self.ui.scrim(self.theme, 1.)?;
             self.panel((80., 158., 480., 164.), false)?;
-            self.label(
-                (104., 174., 432., 80.),
-                &self.tr("settings.reboot_question"),
-                18.,
-            )?;
-            self.ui.hints(
-                &[('A', "menu.reboot"), ('B', "settings.later")],
-                self.theme,
-                self.ui.px(550.) as u32,
-                self.ui.px(264.),
-                self.ui.px(34.) as u32,
-            )?;
+            self.label((104., 174., 432., 80.), &question, 18.)?;
+            if !choice {
+                self.note((104., 262., 432., 40.), &self.tr("settings.wait"), 14.)?;
+            } else if state.reboot_prompt {
+                self.ui.hints(
+                    &[('A', "menu.reboot"), ('B', "settings.later")],
+                    self.theme,
+                    self.ui.px(550.) as u32,
+                    self.ui.px(264.),
+                    self.ui.px(34.) as u32,
+                )?;
+            } else {
+                self.ui.hints(
+                    &[('A', "settings.forget"), ('B', "hint.cancel")],
+                    self.theme,
+                    self.ui.px(550.) as u32,
+                    self.ui.px(264.),
+                    self.ui.px(34.) as u32,
+                )?;
+            }
         }
         Ok(())
     }
-    fn rows(&mut self, state: &Settings, rows: &[crate::settings::Row]) -> Result<(), String> {
-        self.rows_at(state, rows, &placements(rows))
-    }
-    /// Sections and variable-height rows share one geometry with scrolling.
-    /// The pages branch can pass its existing placements through this adapter.
-    fn rows_at(
+    /// Shared scrolling list: sections, clipping and the eased offset.
+    fn list(
         &mut self,
         state: &Settings,
-        rows: &[crate::settings::Row],
         positions: &[Placement],
+        right: f32,
+        mut draw: impl FnMut(&mut Self, usize, f32, Placement, bool) -> Result<(), String>,
     ) -> Result<(), String> {
         let selected = positions.get(state.cursor).copied().unwrap_or(Placement {
             top: VIEW_TOP,
@@ -379,11 +483,14 @@ impl View<'_, '_, '_> {
             bottom,
             self.ui.frame.now,
         );
-        self.ui
-            .canvas
-            .set_clip_rect(self.rect((16., VIEW_TOP, 608., VIEW_BOTTOM - VIEW_TOP)));
+        self.ui.canvas.set_clip_rect(self.rect((
+            16.,
+            VIEW_TOP,
+            right - 16.,
+            VIEW_BOTTOM - VIEW_TOP,
+        )));
         let result = (|| {
-            for (n, (row, position)) in rows.iter().zip(positions).enumerate() {
+            for (n, position) in positions.iter().enumerate() {
                 let y = position.top - offset;
                 if position.bottom() - offset < VIEW_TOP
                     || position.selected_top() - offset >= VIEW_BOTTOM
@@ -391,72 +498,98 @@ impl View<'_, '_, '_> {
                     continue;
                 }
                 if let Some(section) = position.section {
-                    self.note(
-                        (24., y - SECTION_HEIGHT, 592., SECTION_HEIGHT),
-                        &self.tr(section),
-                        12.,
+                    let heading = self.tr(section).to_uppercase();
+                    self.text(
+                        (28., y - SECTION_HEIGHT, right - 40., SECTION_HEIGHT),
+                        &heading,
+                        (11., self.theme.muted, Align::Left),
                     )?;
                 }
                 let selected = n == state.cursor;
-                let ink = self.ink(selected);
-                let face = selection(selected, Face::Regular, Face::Semibold);
-                let label = self.tr(row.label);
-                let expand = row.subtitle.is_none()
-                    && row.kind == Kind::Value
-                    && self.ui.measure(
-                        &state.display_value(row.id, &self.ui.catalog),
-                        face,
-                        14.,
-                    )? > 228;
-                let label_width = if expand {
-                    self.ui.measure(&label, face, 15.)?.clamp(120, 278) as f32
-                } else {
-                    278.
-                };
-                let control_x = 30. + label_width + 16.;
-                let control = (control_x, y, 610. - control_x, position.height);
-                self.row_panel((16., y, 608., position.height), selected)?;
-                self.text_face(
-                    (
-                        30.,
-                        y,
-                        label_width,
-                        if row.subtitle.is_some() {
-                            25.
-                        } else {
-                            position.height
-                        },
-                    ),
-                    &label,
-                    (15., ink, Align::Left),
-                    face,
-                )?;
-                if let Some(key) = row.subtitle {
-                    self.text(
-                        (30., y + 25., 278., 21.),
-                        &self.tr(key),
-                        (
-                            12.,
-                            selection(selected, self.theme.muted, self.theme.accent_text_secondary),
-                            Align::Left,
-                        ),
-                    )?;
-                }
-                if state.pending == Some(row.id) {
-                    self.text_face(
-                        control,
-                        &self.tr("settings.applying"),
-                        (14., ink, Align::Right),
-                        face,
-                    )?;
-                } else {
-                    self.control(row.id, row.kind, state, selected, control)?;
-                }
+                self.row_panel((16., y, right - 16., position.height), selected)?;
+                draw(self, n, y, *position, selected)?;
             }
             Ok(())
         })();
         self.ui.canvas.set_clip_rect(None);
         result
+    }
+    /// Sections and variable-height rows share one geometry with scrolling.
+    fn rows_at(
+        &mut self,
+        state: &Settings,
+        rows: &[Row],
+        positions: &[Placement],
+        right: f32,
+    ) -> Result<(), String> {
+        self.list(state, positions, right, |view, n, y, position, selected| {
+            view.row(state, &rows[n], (y, position.height), right, selected)
+        })
+    }
+    fn row(
+        &mut self,
+        state: &Settings,
+        row: &Row,
+        (y, height): (f32, f32),
+        right: f32,
+        selected: bool,
+    ) -> Result<(), String> {
+        let ink = if state.disabled(row.id) {
+            selection(selected, self.theme.muted, self.theme.accent_text_secondary)
+        } else {
+            self.ink(selected)
+        };
+        let face = selection(selected, Face::Regular, Face::Semibold);
+        let label = self.tr(row.label);
+        let subtitle = state.subtitle(row).map(|text| self.tr(&text));
+        let full = (right - 46.) * 0.48;
+        let expand = subtitle.is_none()
+            && row.kind == Kind::Value
+            && self
+                .ui
+                .measure(&state.display_value(row.id, &self.ui.catalog), face, 14.)?
+                as f32
+                > right - full - 66.;
+        let label_width = if expand {
+            (self.ui.measure(&label, face, 15.)? as f32).clamp(120., full)
+        } else {
+            full
+        };
+        let control_x = 30. + label_width + 16.;
+        let control = (control_x, y, right - 14. - control_x, height);
+        let sub_height = ((height - 4.) / 2.).floor();
+        let title_height = if subtitle.is_some() {
+            height - sub_height
+        } else {
+            height
+        };
+        self.text_face(
+            (30., y, label_width, title_height),
+            &label,
+            (15., ink, Align::Left),
+            face,
+        )?;
+        if let Some(subtitle) = subtitle {
+            self.text(
+                (30., y + title_height - 2., label_width, sub_height),
+                &subtitle,
+                (
+                    12.,
+                    selection(selected, self.theme.muted, self.theme.accent_text_secondary),
+                    Align::Left,
+                ),
+            )?;
+        }
+        if state.pending == Some(row.id) {
+            self.text_face(
+                control,
+                &self.tr("settings.applying"),
+                (14., ink, Align::Right),
+                face,
+            )
+        } else {
+            self.control(row.id, row.kind, state, selected, control)
+        }
     }
     fn capsule(&mut self, bounds: Bounds, ink: Rgba) -> Result<(), String> {
         let rect = self.rect(bounds);
@@ -480,7 +613,11 @@ impl View<'_, '_, '_> {
         selected: bool,
         (x, y, w, h): Bounds,
     ) -> Result<(), String> {
-        let ink = self.ink(selected);
+        let ink = if state.disabled(id) {
+            selection(selected, self.theme.muted, self.theme.accent_text_secondary)
+        } else {
+            self.ink(selected)
+        };
         match kind {
             Kind::Slider { .. } => {
                 let v = id
@@ -514,10 +651,24 @@ impl View<'_, '_, '_> {
             }
             _ => {
                 let v = state.display_value(id, &self.ui.catalog);
-                if kind == Kind::Value {
+                let chevrons = kind == Kind::Value
+                    && !Settings::text_input(id)
+                    && !state.disabled(id)
+                    && !state.fixed(id)
+                    && id != Id::ScraperSource;
+                if chevrons {
+                    // "‹ value ›" hugs the value, as in the mockups.
+                    let face = selection(selected, Face::Regular, Face::Semibold);
+                    let (lines, size) = self.fit((x + 20., y, w - 40., h), &v, 14., face)?;
+                    let mut width = 0.;
+                    for line in &lines {
+                        width = f32::max(width, self.ui.measure(line, face, size)? as f32);
+                    }
+                    let width = width / self.ui.frame.scale;
+                    let left = (x + w - 20. - width - 20.).max(x);
                     self.ui.icon(
                         Glyph::ChevronLeft,
-                        self.rect((x, y + (h - 14.) / 2., 14., 14.)),
+                        self.rect((left, y + (h - 14.) / 2., 14., 14.)),
                         ink,
                     )?;
                     self.ui.icon(
@@ -526,8 +677,9 @@ impl View<'_, '_, '_> {
                         ink,
                     )?;
                 }
+                let inset = if chevrons { 20. } else { 0. };
                 self.text_face(
-                    (x + 20., y, w - 40., h),
+                    (x + inset, y, w - 2. * inset, h),
                     &v,
                     (14., ink, Align::Right),
                     selection(selected, Face::Regular, Face::Semibold),
@@ -539,6 +691,11 @@ impl View<'_, '_, '_> {
     fn root(&mut self, state: &Settings) -> Result<(), String> {
         for (n, (page, _, glyph)) in CATEGORIES.iter().enumerate() {
             let key = page.title();
+            let key = if *page == Page::Wifi {
+                "settings.network"
+            } else {
+                key
+            };
             let y = 50. + n as f32 * 39.;
             let selected = n == state.cursor;
             let ink = self.ink(selected);
@@ -548,7 +705,11 @@ impl View<'_, '_, '_> {
             self.text((58., y, 300., 36.), &self.tr(key), (15., ink, Align::Left))?;
         }
         let (page, detail, _) = CATEGORIES[state.cursor.min(CATEGORIES.len() - 1)];
-        let key = page.title();
+        let key = if page == Page::Wifi {
+            "settings.network"
+        } else {
+            page.title()
+        };
         self.panel((386., 66., 230., 240.), false)?;
         self.label((402., 82., 198., 64.), &self.tr(key), 18.)?;
         self.note((402., 146., 198., 112.), &self.tr(detail), 15.)?;
@@ -560,6 +721,9 @@ impl View<'_, '_, '_> {
     }
 }
 
+#[cfg(test)]
+#[path = "../../tests/support/settings_capture.rs"]
+mod capture_tests;
 #[cfg(test)]
 #[path = "../../tests/support/settings_scroll.rs"]
 mod scroll_tests;

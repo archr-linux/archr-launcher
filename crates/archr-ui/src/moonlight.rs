@@ -1,6 +1,5 @@
 //! Moonlight presentation model; no filesystem, networking or processes here.
-mod keyboard;
-pub use keyboard::Keyboard;
+pub use crate::keyboard::Keyboard;
 
 pub const SYSTEM: &str = "@moonlight";
 

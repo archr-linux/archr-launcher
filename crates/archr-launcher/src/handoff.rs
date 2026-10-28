@@ -65,6 +65,11 @@ pub fn is_ip(text: &str) -> bool {
     text.parse::<std::net::IpAddr>().is_ok()
 }
 
+/// RetroArch nickname rule, shared with the settings page that saves it.
+pub(crate) const NICK_MAX: usize = 32;
+pub(crate) fn nick_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || " _.".contains(c)
+}
 /// Lobby join: the runemu contract plus the ES netplay arguments
 /// `--connect IP --port PORT --nick NICK`, `--spectate` to watch instead of play and,
 /// for relay (MITM) rooms, `--mitm-session ID`.
@@ -95,8 +100,8 @@ pub fn netplay_command(
     }
     let nick: String = nick
         .chars()
-        .filter(|c| c.is_ascii_alphanumeric() || " _.".contains(*c))
-        .take(32)
+        .filter(|c| nick_char(*c))
+        .take(NICK_MAX)
         .collect();
     let nick = if nick.trim().is_empty() {
         "ArchR Player".to_owned()

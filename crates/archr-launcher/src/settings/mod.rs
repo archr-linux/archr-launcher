@@ -1,5 +1,6 @@
 //! Serial settings worker. No process, config lock or sysfs access on SDL's thread.
 mod info;
+mod pages;
 mod runtime;
 use crate::paths::Paths;
 use archr_config::SystemCfg;
@@ -54,6 +55,14 @@ impl Backend {
     /// Fixtures have a private executable namespace: missing scripts cannot fall
     /// through to host programs. Capture to files to avoid pipe backpressure.
     fn command(&self, name: &str, args: &[&str]) -> Result<String, String> {
+        self.command_with_timeout(name, args, Duration::from_secs(20))
+    }
+    fn command_with_timeout(
+        &self,
+        name: &str,
+        args: &[&str],
+        timeout: Duration,
+    ) -> Result<String, String> {
         let mut command = Command::new(self.paths.at(&format!("/usr/bin/{name}")));
         command.args(args);
         if let Some(root) = &self.paths.root {
@@ -61,13 +70,9 @@ impl Backend {
                 .env("ARCHR_LAUNCHER_ROOT", root)
                 .env("PATH", self.paths.at("/usr/bin"));
         }
-        let output = crate::process::capture(
-            &mut command,
-            Duration::from_secs(20),
-            &AtomicBool::new(false),
-            64 * 1024,
-        )
-        .map_err(|e| format!("{name}: {e}"))?;
+        let output =
+            crate::process::capture(&mut command, timeout, &AtomicBool::new(false), 64 * 1024)
+                .map_err(|e| format!("{name}: {e}"))?;
         if output.status.success() {
             String::from_utf8(output.stdout)
                 .map(|s| s.trim().to_owned())
@@ -90,6 +95,7 @@ impl Backend {
                 }
             }
         }
+        self.load_pages(&cfg, &mut state);
         if let Ok(output) = self.command("pactl", &["get-sink-volume", "@DEFAULT_SINK@"]) {
             if let Some(volume) = output
                 .split_whitespace()
@@ -120,8 +126,14 @@ impl Backend {
         ] {
             match self.command(program, args) {
                 Ok(output) => {
+                    // set-audio lists one sink name per line; names may hold commas.
+                    let separators: &[char] = if id == Id::Audio {
+                        &['\n']
+                    } else {
+                        &['\n', ',']
+                    };
                     let mut options: Vec<String> = output
-                        .split(['\n', ','])
+                        .split(separators)
                         .map(str::trim)
                         .filter(|s| !s.is_empty())
                         .map(str::to_owned)
@@ -129,8 +141,10 @@ impl Backend {
                     if id == Id::Timezone {
                         options.push("UTC".into());
                     }
+                    // The sink list is authoritative: a stale saved name
+                    // (an old ES "headphone") is never offered.
                     let current = state.value(id).to_owned();
-                    if !current.is_empty() {
+                    if id != Id::Audio && !current.is_empty() {
                         options.push(current);
                     }
                     options.sort();
@@ -140,11 +154,16 @@ impl Backend {
                 Err(error) => errors.push(error),
             }
         }
-        if let Ok(current) = self.command("set-audio", &["get"]) {
-            if !current.is_empty() {
-                state.values.insert(Id::Audio, current);
-            }
-        }
+        let sinks = state.options.get(&Id::Audio).cloned().unwrap_or_default();
+        let current = self
+            .command("set-audio", &["get"])
+            .ok()
+            .filter(|sink| sinks.contains(sink))
+            .or_else(|| sinks.first().cloned());
+        match current {
+            Some(sink) => state.values.insert(Id::Audio, sink),
+            None => state.values.remove(&Id::Audio),
+        };
         let current = state.value(Id::Suspend).to_owned();
         let mut modes: Vec<String> = self
             .read("/sys/power/state")
@@ -176,6 +195,9 @@ impl Backend {
         Ok(state)
     }
     pub fn apply(&self, id: Id, value: &str) -> Result<String, String> {
+        if let Some(result) = self.apply_page(id, value) {
+            return result;
+        }
         let valid = match id {
             Id::Volume | Id::Brightness => value
                 .parse::<u8>()
@@ -203,6 +225,7 @@ impl Backend {
                 !value.is_empty() && !value.contains(['\n', '\r', '\0']) && value.len() <= 1024
             }
             Id::Update => false,
+            _ => false,
         };
         if !valid {
             return Err("Invalid setting value".into());
@@ -290,11 +313,23 @@ pub(super) enum Work {
     Load,
     Set(Id, String),
     Info,
+    Scan,
+    Connect(String, String),
+    Forget(String),
+    Variants(String),
+    Login(String, String),
+    Scrape,
 }
 enum Reply {
     Loaded(Result<Box<Settings>, String>),
     Set(Id, Result<String, String>),
     Info(Information),
+    Scan(Result<(Vec<archr_ui::settings::network::Network>, String), String>),
+    Connect(Result<(), String>),
+    Forget(Result<(), String>),
+    Variants(Vec<(String, String)>),
+    Login(Result<(String, usize), String>),
+    Scrape(Result<(archr_scraper::Job, Vec<String>), String>),
 }
 pub struct Worker {
     tx: mpsc::Sender<Work>,
@@ -314,6 +349,18 @@ impl Worker {
                         Work::Load => Reply::Loaded(backend.load().map(Box::new)),
                         Work::Set(id, value) => Reply::Set(id, backend.apply(id, &value)),
                         Work::Info => Reply::Info(backend.refresh_info()),
+                        Work::Scan => Reply::Scan(backend.scan()),
+                        Work::Connect(ssid, password) => {
+                            Reply::Connect(backend.connect(&ssid, &password))
+                        }
+                        Work::Forget(ssid) => Reply::Forget(backend.forget(&ssid)),
+                        Work::Variants(layout) => {
+                            Reply::Variants(backend.keyboard_names(&["list-variants", &layout]))
+                        }
+                        Work::Login(user, password) => {
+                            Reply::Login(backend.login(&user, &password))
+                        }
+                        Work::Scrape => Reply::Scrape(backend.scrape()),
                     };
                     if results.send(reply).is_err() {
                         break;
@@ -332,7 +379,11 @@ impl Worker {
         Ok(())
     }
     /// Language is returned only after durable success, never speculatively.
-    pub fn poll(&mut self, state: &mut Settings) -> (bool, Option<String>) {
+    pub(super) fn poll(
+        &mut self,
+        state: &mut Settings,
+        job: &mut Option<(archr_scraper::Job, Vec<String>)>,
+    ) -> (bool, Option<String>) {
         let mut changed = false;
         let mut language = None;
         while let Ok(reply) = self.rx.try_recv() {
@@ -342,8 +393,14 @@ impl Worker {
                 Reply::Loaded(Ok(mut loaded)) => {
                     std::mem::swap(&mut state.values, &mut loaded.values);
                     state.options = loaded.options;
+                    state.labels = loaded.labels;
+                    state.access_ip = loaded.access_ip;
                     state.info = loaded.info;
                     state.error = loaded.error;
+                    state.scrape.available = loaded.scrape.available;
+                    if !state.scrape.verifying {
+                        state.scrape.user = loaded.scrape.user;
+                    }
                     state.loading = false;
                 }
                 Reply::Loaded(Err(error)) => {
@@ -358,9 +415,83 @@ impl Worker {
                     if id == Id::Language {
                         language = result.as_ref().ok().cloned();
                     }
-                    state.complete(id, result);
+                    let wifi = (id == Id::WifiSwitch)
+                        .then(|| result.as_deref().ok() == Some("1"))
+                        .filter(|_| result.is_ok());
+                    let new_layout = (id == Id::KeyboardLayout)
+                        .then(|| result.as_ref().ok().cloned())
+                        .flatten();
+                    if let Some(next) = state.settle(id, result) {
+                        let _ = self.send(Work::Set(id, next));
+                    }
+                    if let Some(layout) = new_layout {
+                        state.values.insert(Id::KeyboardVariant, String::new());
+                        let _ = self.send(Work::Variants(layout));
+                    }
+                    match wifi {
+                        Some(true) => {
+                            let _ = self.send(Work::Scan);
+                        }
+                        Some(false) => {
+                            state.networks.clear();
+                            state.scanned = None;
+                            state.cursor = state.cursor.min(state.wifi_rows() - 1);
+                        }
+                        None => {}
+                    }
                 }
                 Reply::Info(info) => state.info = info,
+                Reply::Variants(names) => {
+                    pages::keyboard_choices(state, Id::KeyboardVariant, names);
+                }
+                Reply::Scan(result) => match result {
+                    Ok((networks, address)) => {
+                        // A late scan never repopulates a list the user switched off.
+                        if state.value(Id::WifiSwitch) == "1" {
+                            state.networks = networks;
+                            state.scanned = Some(std::time::Instant::now());
+                        }
+                        state.access_ip = address;
+                        if state.page() == Page::Wifi {
+                            state.cursor = state.cursor.min(state.wifi_rows() - 1);
+                        }
+                    }
+                    Err(error) => state.error = Some((None, error)),
+                },
+                Reply::Connect(result) | Reply::Forget(result) => {
+                    state.connecting = None;
+                    match result {
+                        Ok(()) => {
+                            state.error = None;
+                            let _ = self.send(Work::Scan);
+                        }
+                        Err(error) => state.error = Some((None, error)),
+                    }
+                }
+                Reply::Login(result) => {
+                    state.scrape.verifying = false;
+                    match result {
+                        // Only a verified, saved login becomes the shown account.
+                        Ok((user, threads)) => {
+                            state.scrape.user = user;
+                            state.scrape.threads = threads;
+                            state.error = None;
+                        }
+                        Err(error) => state.error = Some((None, error)),
+                    }
+                }
+                Reply::Scrape(result) => {
+                    state.scrape.starting = false;
+                    match result {
+                        // Never replace (and so cancel) a job already running.
+                        Ok(started) if job.is_some() => drop(started),
+                        Ok(started) => {
+                            state.scrape.running = true;
+                            *job = Some(started);
+                        }
+                        Err(error) => state.error = Some((None, error)),
+                    }
+                }
             }
         }
         (changed, language)
