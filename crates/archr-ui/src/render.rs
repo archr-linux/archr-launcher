@@ -75,6 +75,14 @@ fn localized_error(catalog: &I18n, error: String) -> String {
     }
 }
 
+fn selection<T>(selected: bool, normal: T, highlighted: T) -> T {
+    if selected {
+        highlighted
+    } else {
+        normal
+    }
+}
+
 struct ListMotion {
     key: String,
     scroll: Tween,
@@ -340,6 +348,19 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             .draw(&mut self.canvas, text, style, panel, align)
             .map_err(|e| localized_error(&self.catalog, e))
     }
+    fn packed_label(
+        &mut self,
+        text: &str,
+        style: (Face, f32, Rgba),
+        (right, y, h): (i32, i32, u32),
+        cap: u32,
+        align: Align,
+    ) -> Result<i32, String> {
+        let w = self.measure(text, style.0, style.1)?.min(cap);
+        let left = right - w as i32;
+        self.label_aligned(text, style, Rect::new(left, y, w, h), align)?;
+        Ok(left)
+    }
     fn measure(&mut self, text: &str, face: Face, size: f32) -> Result<u32, String> {
         let size = self.frame.font_size(size);
         self.text
@@ -597,18 +618,12 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             width.saturating_sub(margin.max(0) as u32 * 2)
         }
         .max(1);
-        let row = ((if is_games {
-            theme.game_row_height
+        let [row, selected] = if is_games {
+            [theme.game_row_height, theme.game_selected_height]
         } else {
-            theme.row_height
-        }) * height as f32)
-            .round();
-        let selected = ((if is_games {
-            theme.game_selected_height
-        } else {
-            theme.selected_height
-        }) * height as f32)
-            .round();
+            [theme.row_height, theme.selected_height]
+        }
+        .map(|h| (h * height as f32).round());
         let extra = selected - row;
         let gap = self.px(2.) as f32;
         let separator = if collections > 0 {
@@ -683,9 +698,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             }
             let selected = i == cursor;
             let distance = i.abs_diff(cursor);
-            let c = if selected {
-                theme.highlight_text
-            } else if i < collections {
+            let c = if i < collections {
                 theme.muted
             } else if distance >= 4 {
                 theme.dim_text
@@ -694,11 +707,8 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             } else {
                 theme.text
             };
-            let face = if selected {
-                Face::Semibold
-            } else {
-                Face::Regular
-            };
+            let c = selection(selected, c, theme.highlight_text);
+            let face = selection(selected, Face::Regular, Face::Semibold);
             let size = theme.font_size * 480. - if is_games { 1. } else { 0. }
                 + if selected { 1. } else { 0. };
             let mut x = margin + self.px(14.);
@@ -715,11 +725,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                         &mut self.canvas,
                         Icon::Star(true),
                         star,
-                        if selected {
-                            theme.highlight_text
-                        } else {
-                            theme.highlight_bg
-                        },
+                        selection(selected, theme.highlight_bg, theme.highlight_text),
                     )?;
                     right -= self.px(24.);
                 }
@@ -735,27 +741,15 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                         .map_or(0, |s| s.game_count as usize)
                 };
                 let count = count.to_string();
-                let count_face = if selected {
-                    Face::MonoMedium
-                } else {
-                    Face::Mono
-                };
-                let cw = self.measure(&count, count_face, 13.)?;
-                self.label_aligned(
+                let face = selection(selected, Face::Mono, Face::MonoMedium);
+                let color = selection(selected, theme.dim_text, theme.accent_text_secondary);
+                right = self.packed_label(
                     &count,
-                    (
-                        count_face,
-                        13.,
-                        if selected {
-                            theme.accent_text_secondary
-                        } else {
-                            theme.dim_text
-                        },
-                    ),
-                    Rect::new(right - cw as i32, y, cw, rh),
+                    (face, 13., color),
+                    (right, y, rh),
+                    u32::MAX,
                     Align::Right,
-                )?;
-                right -= cw as i32 + self.px(14.);
+                )? - self.px(14.);
                 if name.starts_with('@') {
                     let icon = self
                         .frame
@@ -765,11 +759,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                             &mut self.canvas,
                             Icon::Star(false),
                             icon,
-                            if selected {
-                                theme.highlight_text
-                            } else {
-                                theme.highlight_bg
-                            },
+                            selection(selected, theme.highlight_bg, theme.highlight_text),
                         )?;
                     } else {
                         self.geometry.icon(&mut self.canvas, Icon::Clock, icon, c)?;
@@ -920,26 +910,16 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 .iter()
                 .map(|s| u64::from(s.game_count))
                 .sum::<u64>();
+            let count = |key, n: u64| {
+                self.catalog
+                    .plural(key, n as f64, &[("count", &n.to_string())])
+            };
             self.label(
                 &self.catalog.format(
                     "library.summary",
                     &[
-                        (
-                            "systems",
-                            &self.catalog.plural(
-                                "systems.count",
-                                systems as f64,
-                                &[("count", &systems.to_string())],
-                            ),
-                        ),
-                        (
-                            "games",
-                            &self.catalog.plural(
-                                "games.count",
-                                games as f64,
-                                &[("count", &games.to_string())],
-                            ),
-                        ),
+                        ("systems", &count("systems.count", systems as u64)),
+                        ("games", &count("games.count", games)),
                     ],
                 ),
                 (Face::Regular, 13., theme.muted),
@@ -959,14 +939,14 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         let mut right = width as i32 - self.px(24.);
         for &(button, key) in hints.iter().rev() {
             let label = self.catalog.text(key);
-            let label = label.as_str();
-            let w = self.measure(label, Face::Regular, 13.)?;
-            self.label(
-                label,
+            right = self.packed_label(
+                &label,
                 (Face::Regular, 13., theme.muted),
-                Rect::new(right - w as i32, y, w, h),
-            )?;
-            right -= w as i32 + self.px(6.) + self.px(20.);
+                (right, y, h),
+                u32::MAX,
+                Align::Left,
+            )? - self.px(6.)
+                - self.px(20.);
             let badge = self
                 .frame
                 .square(right, y + (h as i32 - self.px(20.)) / 2, 20.);
@@ -995,6 +975,27 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         self.canvas.set_draw_color(color(scrim));
         self.canvas.fill_rect(Rect::new(0, 0, width, height))
     }
+    fn modal(&mut self, theme: &Theme, spec: (f32, f32, f32, i32)) -> Result<Rect, String> {
+        let (w, clearance, h, optical_offset) = spec;
+        let Frame { width, height, .. } = self.frame;
+        let w = (self.px(w) as u32)
+            .min(width.saturating_sub(self.px(clearance) as u32))
+            .max(1);
+        let h = self.px(h) as u32;
+        let panel = Rect::new(
+            (width - w) as i32 / 2,
+            (height.saturating_sub(h) as i32 / 2 + optical_offset).max(0),
+            w,
+            h,
+        );
+        self.panel(
+            panel,
+            theme.radius_card * height as f32,
+            theme.surface_elevated,
+            theme.border,
+        )?;
+        Ok(panel)
+    }
     fn menu(&mut self, app: &App, data: &dyn DataSource, theme: &Theme) -> Result<(), String> {
         let Frame {
             width, height, now, ..
@@ -1003,23 +1004,9 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         self.scrim(theme, 1.2)?;
         let items = app.quick_menu_items(data);
         let has_core = matches!(items.first(), Some(QuickItem::Core));
-        let panel_h = self.px(if has_core { 300. } else { 256. }) as u32;
-        let panel_w = (self.px(340.) as u32)
-            .min(width.saturating_sub(self.px(32.) as u32))
-            .max(1);
-        let panel = Rect::new(
-            (width - panel_w) as i32 / 2,
-            // Optical centering: the approved modal sits 20px above center.
-            ((height.saturating_sub(panel_h)) as i32 / 2 - self.px(20.)).max(0),
-            panel_w,
-            panel_h,
-        );
-        self.panel(
-            panel,
-            theme.radius_card * height as f32,
-            theme.surface_elevated,
-            theme.border,
-        )?;
+        let panel_h = if has_core { 300. } else { 256. };
+        // Optical centering: the approved modal sits 20px above center.
+        let panel = self.modal(theme, (340., 32., panel_h, -self.px(20.)))?;
         let (title, subtitle) = if let Screen::QuickMenu {
             game: Some((system, game)),
         } = &app.screen
@@ -1088,11 +1075,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 self.divider(x, y - self.px(6.), content_w, theme.border)?;
             }
             let selected = index == app.cursor;
-            let c = if selected {
-                theme.highlight_text
-            } else {
-                theme.text
-            };
+            let c = selection(selected, theme.text, theme.highlight_text);
             let label = match item {
                 QuickItem::Core => "menu.core",
                 QuickItem::Suspend => "menu.suspend",
@@ -1101,50 +1084,25 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             };
             let label = self.catalog.text(label);
             let label = label.as_str();
-            let face = if selected {
-                Face::Semibold
-            } else {
-                Face::Regular
-            };
+            let face = selection(selected, Face::Regular, Face::Semibold);
             let mut label_width = content_w;
             if let QuickItem::Core = item {
                 let (_, core) = app.selected_core();
                 let default_core = self.catalog.text("menu.default");
                 let core = if core.is_empty() { &default_core } else { core };
                 let space = self.px(8.);
-                let lw = self.measure("L", Face::Mono, 12.)?;
-                let rw = self.measure("R", Face::Mono, 12.)?;
-                let cw = self.measure(core, Face::Regular, 15.)?.min(content_w / 2);
                 let end = panel.right() - self.px(24.);
-                let cc = if selected {
-                    theme.accent_text_secondary
-                } else {
-                    theme.muted
-                };
-                self.label(
-                    "R",
-                    (Face::Mono, 12., cc),
-                    Rect::new(end - rw as i32, y, rw, item_height),
-                )?;
-                self.label_aligned(
-                    core,
-                    (Face::Regular, 15., c),
-                    Rect::new(end - rw as i32 - space - cw as i32, y, cw, item_height),
-                    Align::Right,
-                )?;
-                self.label(
-                    "L",
-                    (Face::Mono, 12., cc),
-                    Rect::new(
-                        end - rw as i32 - space * 2 - cw as i32 - lw as i32,
-                        y,
-                        lw,
-                        item_height,
-                    ),
-                )?;
-                label_width = content_w
-                    .saturating_sub(cw + lw + rw + (space * 3) as u32)
-                    .max(1);
+                let cc = selection(selected, theme.muted, theme.accent_text_secondary);
+                let mut right = end;
+                for (text, style, cap, align) in [
+                    ("R", (Face::Mono, 12., cc), u32::MAX, Align::Left),
+                    (core, (Face::Regular, 15., c), content_w / 2, Align::Right),
+                    ("L", (Face::Mono, 12., cc), u32::MAX, Align::Left),
+                ] {
+                    right = self.packed_label(text, style, (right, y, item_height), cap, align)?
+                        - space;
+                }
+                label_width = content_w.saturating_sub((end - right) as u32).max(1);
             }
             self.label(
                 label,
@@ -1163,25 +1121,9 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         Ok(())
     }
     fn notice(&mut self, message: &str, theme: &Theme) -> Result<(), String> {
-        let Frame { width, height, .. } = self.frame;
         self.scrim(theme, 1.0)?;
         let lines: Vec<_> = message.split('\n').take(3).collect();
-        let w = (self.px(380.) as u32)
-            .min(width.saturating_sub(self.px(48.) as u32))
-            .max(1);
-        let h = self.px(64. + lines.len() as f32 * 24.) as u32;
-        let panel = Rect::new(
-            (width - w) as i32 / 2,
-            (height.saturating_sub(h)) as i32 / 2,
-            w,
-            h,
-        );
-        self.panel(
-            panel,
-            theme.radius_card * height as f32,
-            theme.surface_elevated,
-            theme.border,
-        )?;
+        let panel = self.modal(theme, (380., 48., 64. + lines.len() as f32 * 24., 0))?;
         for (i, line) in lines.iter().enumerate() {
             self.label_aligned(
                 line,

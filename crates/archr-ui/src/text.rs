@@ -27,7 +27,7 @@ pub(crate) enum Face {
     Mono,
     MonoMedium,
 }
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Style {
     pub face: Face,
     pub size: u16,
@@ -42,9 +42,7 @@ pub(crate) enum Align {
 struct Entry<'a> {
     source: String,
     width: u32,
-    face: Face,
-    size: u16,
-    color: Rgba,
+    style: Style,
     texture: Texture<'a>,
 }
 pub(crate) struct TextCache<'font, 'texture> {
@@ -219,13 +217,10 @@ impl<'font, 'texture> TextCache<'font, 'texture> {
             end -= 1;
         }
         let source = &text[..end];
-        let index = self.entries.iter().position(|e| {
-            e.source == source
-                && e.width == limit
-                && e.face == style.face
-                && e.size == style.size
-                && e.color == style.color
-        });
+        let index = self
+            .entries
+            .iter()
+            .position(|e| e.source == source && e.width == limit && e.style == style);
         let entry = if let Some(index) = index {
             self.entries.remove(index).expect("located text")
         } else {
@@ -247,9 +242,7 @@ impl<'font, 'texture> TextCache<'font, 'texture> {
             Entry {
                 source: source.to_owned(),
                 width: limit,
-                face: style.face,
-                size: style.size,
-                color: style.color,
+                style,
                 texture,
             }
         };
@@ -308,18 +301,21 @@ fn ellipsis(font: &Font<'_, '_>, text: &str, limit: u32) -> Result<String, Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn bundled_font(name: &str) -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../themes/default/fonts")
+            .join(format!("{name}.ttf"))
+    }
+
+    fn load_font<'a>(ttf: &'a Sdl2TtfContext, name: &str, size: u16) -> Font<'a, 'static> {
+        ttf.load_font(bundled_font(name), size).unwrap()
+    }
+
     #[test]
     fn ellipsis_is_font_measured_and_unicode_safe() {
         let ttf = sdl2::ttf::init().unwrap();
-        let font = ttf
-            .load_font(
-                concat!(
-                    env!("CARGO_MANIFEST_DIR"),
-                    "/../../themes/default/fonts/Inter-Regular.ttf"
-                ),
-                17,
-            )
-            .unwrap();
+        let font = load_font(&ttf, "Inter-Regular", 17);
         let fitted = ellipsis(
             &font,
             "The Legend of Zelda: A Link to the Past — edição 日本語",
@@ -341,14 +337,8 @@ mod tests {
         let creator = canvas.texture_creator();
         let ttf = sdl2::ttf::init().unwrap();
         let mut paths: [Vec<PathBuf>; 4] = std::array::from_fn(|_| vec![]);
-        paths[0].push(PathBuf::from(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../themes/default/fonts/Inter-Regular.ttf"
-        )));
-        paths[1].push(PathBuf::from(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../themes/default/fonts/Inter-SemiBold.ttf"
-        )));
+        paths[0].push(bundled_font("Inter-Regular"));
+        paths[1].push(bundled_font("Inter-SemiBold"));
         let mut cache = TextCache::new(&ttf, &creator, paths);
         let style = Style {
             face: Face::Regular,
@@ -389,15 +379,7 @@ mod tests {
         for size in [12, 17, 44, 13, 44] {
             let font = cache.font(Face::Semibold, size).unwrap();
             assert_eq!(font.raw(), handle, "resizing must reuse the physical face");
-            let reference = ttf
-                .load_font(
-                    concat!(
-                        env!("CARGO_MANIFEST_DIR"),
-                        "/../../themes/default/fonts/Inter-SemiBold.ttf"
-                    ),
-                    size,
-                )
-                .unwrap();
+            let reference = load_font(&ttf, "Inter-SemiBold", size);
             assert_eq!(
                 font.size_of("Ação Русский").unwrap(),
                 reference.size_of("Ação Русский").unwrap()
@@ -492,14 +474,7 @@ mod tests {
         }
         let root = tempfile::tempdir().unwrap();
         let body = root.path().join("body.ttf");
-        std::fs::copy(
-            concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/../../themes/default/fonts/Inter-Regular.ttf"
-            ),
-            &body,
-        )
-        .unwrap();
+        std::fs::copy(bundled_font("Inter-Regular"), &body).unwrap();
         cache.paths[1].push(body);
         assert!(
             cache

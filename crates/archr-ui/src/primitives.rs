@@ -59,6 +59,14 @@ pub(crate) fn between(left: i32, top: i32, right: i32, bottom: i32) -> Rect {
         (bottom - top).max(1) as u32,
     )
 }
+fn border_rect(rect: Rect, inner: bool) -> Rect {
+    let delta = if inner { 1 } else { -1 };
+    let [w, h] = [rect.width(), rect.height()].map(|n| if inner { n - 2 } else { n + 2 });
+    Rect::new(rect.x() + delta, rect.y() + delta, w, h)
+}
+fn slice_axis(start: i32, end: i32, pad: i32, corner: i32, shift: i32) -> [i32; 4] {
+    [start - pad, start + corner, end - corner, end + pad].map(|n| n + shift)
+}
 fn outline(rect: Rect, radius: f32) -> [Point; POINTS] {
     let (x, y, w, h) = bounds(rect);
     let r = radius.min(w / 2.).min(h / 2.).max(0.);
@@ -140,15 +148,7 @@ impl Mesh {
     }
     fn rounded(&mut self, rect: Rect, radius: f32, fill: Rgba, border: Option<Rgba>) {
         let points = outline(rect, radius);
-        let outer = outline(
-            Rect::new(
-                rect.x() - 1,
-                rect.y() - 1,
-                rect.width() + 2,
-                rect.height() + 2,
-            ),
-            radius + 1.,
-        );
+        let outer = outline(border_rect(rect, false), radius + 1.);
         let edge = border.unwrap_or(fill);
         for (&p, &q) in points.iter().zip(&outer) {
             self.vertices.push(vertex(p, color(edge), (0., 0.)));
@@ -162,12 +162,7 @@ impl Mesh {
         }
         self.fan(&points, color(edge), rect, false);
         if border.is_some() && rect.width() > 2 && rect.height() > 2 {
-            let inner = Rect::new(
-                rect.x() + 1,
-                rect.y() + 1,
-                rect.width() - 2,
-                rect.height() - 2,
-            );
+            let inner = border_rect(rect, true);
             self.fan(
                 &outline(inner, (radius - 1.).max(0.)),
                 color(fill),
@@ -351,18 +346,8 @@ impl<'a> Shadow<'a> {
         let pad = (16. * scale).round() as i32;
         let corner = (12. * scale).round() as i32;
         let shift = (8. * scale).round() as i32;
-        let xs = [
-            rect.x() - pad,
-            rect.x() + corner,
-            rect.right() - corner,
-            rect.right() + pad,
-        ];
-        let ys = [
-            rect.y() - pad + shift,
-            rect.y() + corner + shift,
-            rect.bottom() - corner + shift,
-            rect.bottom() + pad + shift,
-        ];
+        let xs = slice_axis(rect.x(), rect.right(), pad, corner, 0);
+        let ys = slice_axis(rect.y(), rect.bottom(), pad, corner, shift);
         let src = [0, 28, 36, 64];
         for y in 0..3 {
             for x in 0..3 {
