@@ -195,6 +195,35 @@ Os testes puros cobrem miniaturas por caminho/mtime, limites de cache, bindings,
 coleções e resolução de núcleos. A meta de 0,3 s precisa ser medida no RK3326;
 uma medição no PC não substitui a sonda no aparelho.
 
+## Configurações
+
+Entrada temporária: `Y` na lista de sistemas → `Configurações` → `A`.
+`B` volta pela pilha de páginas; na raiz retorna ao launcher. `Y` na raiz
+abre Informações do sistema. O futuro menu Start pode emitir `Outcome::Settings`.
+Som e tela, Sistema e Região e idioma aplicam alterações imediatamente;
+as outras categorias mostram “Em breve”. Atualização mostra a versão instalada,
+sem iniciar o atualizador. O driver de GPU oferece confirmação de reinício.
+
+As páginas são descritas em `archr-ui::settings`; o host usa
+`archr-launcher::settings::Runtime`. Um worker serial executa scripts com argv,
+limite de 20 s e código de saída real, e usa `archr-config` para gravações
+atômicas sob a trava compartilhada. `suspendmode` é a exceção de ordenação:
+o script precisa ver a chave antiga. Erros mantêm o valor anterior e mostram
+o diagnóstico na página. Informações do sistema são sondadas fora do SDL
+a cada quatro segundos enquanto a página está aberta.
+
+Os sons da interface usam `launcher.ui_sound` (0/1, padrão 0).
+As opções de suspensão por inatividade gravam `idle.timeout` e
+`idle.timeout.game`, em minutos: 0, 1, 3, 5, 10, 15 ou 30; ambas começam em
+0 (“Nunca”). O launcher apenas grava essas duas chaves: o detector de
+inatividade é responsabilidade do sistema, inclusive durante jogos.
+O idioma recarrega o catálogo do launcher após a gravação; os locales das
+ferramentas e emuladores continuam dependendo da preparação feita pelo serviço.
+
+Os testes usam `ARCHR_LAUNCHER_ROOT` e executáveis falsos em `ROOT/usr/bin`,
+com esse diretório no `PATH`; nenhum script ausente pode cair no host.
+O driver `SNAPSHOT` também aguarda as operações pendentes de configurações.
+
 ## Idiomas
 
 Instale `locales/*.toml` em `/usr/share/archr-launcher/locales/` (também sob

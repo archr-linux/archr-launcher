@@ -7,3 +7,5 @@ pub mod paths;
 mod worker;
 
 mod persistence;
+
+pub mod settings;

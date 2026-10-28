@@ -4,8 +4,6 @@ use archr_launcher::{
     state::{App, DataSource, Outcome, SessionAction},
 };
 use archr_ui::{i18n::I18n, render::Ui, Theme};
-#[cfg(not(test))]
-use std::ffi::OsString;
 use std::{
     os::unix::process::CommandExt,
     process::{Command, Stdio},
@@ -37,14 +35,17 @@ pub fn apply(
     let result = match outcome {
         Some(Outcome::Action(action)) => library.finish().and_then(|()| {
             #[cfg(not(test))]
-            let systemctl = OsString::from("/usr/bin/systemctl");
+            let systemctl = library.paths.at("/usr/bin/systemctl").into_os_string();
             // Unit tests must never invoke the host's power manager.
             #[cfg(test)]
             let systemctl = std::env::var_os("ARCHR_TEST_SYSTEMCTL").unwrap_or_default();
             let (program, argument) = match action {
                 SessionAction::Suspend => {
                     #[cfg(not(test))]
-                    let functions = OsString::from("/etc/profile.d/001-functions");
+                    let functions = library
+                        .paths
+                        .at("/etc/profile.d/001-functions")
+                        .into_os_string();
                     #[cfg(test)]
                     let functions = std::env::var_os("ARCHR_TEST_FUNCTIONS").unwrap_or_default();
                     let mode = Command::new("/usr/bin/bash")
@@ -64,7 +65,10 @@ pub fn apply(
                         "" | "off"
                     ) {
                         #[cfg(not(test))]
-                        let fake_suspend = OsString::from("/usr/bin/archr-fake-suspend");
+                        let fake_suspend = library
+                            .paths
+                            .at("/usr/bin/archr-fake-suspend")
+                            .into_os_string();
                         #[cfg(test)]
                         let fake_suspend =
                             std::env::var_os("ARCHR_TEST_FAKE_SUSPEND").unwrap_or_default();
@@ -269,16 +273,17 @@ esac
             assert!(ui.banner.is_some());
             assert!(!paths.run.join("next").exists());
         }
-        // The real settings helper selects a detached, nonblocking command on
+        // The settings helper selects a detached, nonblocking command on
         // each request. The child observes the flush and presentation first.
         let functions = root.path().join("functions");
-        let mut source =
-            fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join(
-                "../../../distribution/projects/ArchR/packages/archr/profile.d/001-functions",
-            ))
-            .unwrap();
-        source.extend_from_slice(format!("\nJ_CONF=\"{}\"\n", paths.config.display()).as_bytes());
-        fs::write(&functions, source).unwrap();
+        // Self-contained shell lookup fixture; no sibling checkout dependency.
+        fs::write(&functions, format!(r#"get_setting() {{
+    for key in "system.$1" "$1" "global.$1"; do
+        value=$(awk -v key="$key" 'index($0,key "=")==1 {{sub(/^[^=]*=/, ""); gsub(/^[ \t]+|[ \t]+$/, ""); print; exit}}' '{}')
+        if [ -n "$value" ]; then printf '%s\n' "$value"; return; fi
+    done
+}}
+"#, paths.config.display())).unwrap();
         let fake_suspend = root.path().join("fake-suspend");
         fs::copy(&systemctl, &fake_suspend).unwrap();
         std::env::set_var("ARCHR_TEST_FUNCTIONS", &functions);

@@ -13,6 +13,5 @@ archr-index = { path = "../archr-index" }
 log = "0.4"
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
-
-[dev-dependencies]
 tempfile = "3"
+libc = "0.2"

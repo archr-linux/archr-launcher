@@ -112,6 +112,7 @@ fn run(
     );
     library.start();
     let (width, height) = ui.canvas.output_size()?;
+    let mut settings = archr_launcher::settings::Runtime::new(paths.clone(), config.as_ref());
     let mut covers = CoverCache::new(
         &creator,
         paths.cache.join("thumbs"),
@@ -124,6 +125,7 @@ fn run(
     let mut repeat = Repeat::default();
     let mut dirty = false;
     let mut deferred = None;
+    let mut closing = false;
     let mut banner_until = Instant::now() + Duration::from_secs(8);
     loop {
         // A successful power request owns the screen until the OS stops us.
@@ -138,6 +140,26 @@ fn run(
                 _ => {}
             }
             continue;
+        }
+        let previous_setting = settings.state.pending;
+        let (settings_dirty, language) = settings.poll();
+        if settings_dirty
+            && previous_setting == Some(archr_ui::settings::Id::Timezone)
+            && settings.state.pending.is_none()
+            && settings.state.error.is_none()
+        {
+            ui.invalidate_settings_clock();
+        }
+        dirty |= settings_dirty;
+        if let Some(language) = language {
+            ui.catalog = I18n::load(
+                &paths.at("/usr/share/archr-launcher/locales"),
+                Some(&language),
+                None,
+            );
+        }
+        if dirty {
+            ui.settings = settings.active.then(|| settings.state.clone());
         }
         controllers.poll_mappings();
         dirty |= ui.tick() || ui.animating();
@@ -188,9 +210,9 @@ fn run(
         let mut button = None;
         let mut close_requested = false;
         if let Some(driver) = &mut script {
-            if let Some(step) =
-                driver.poll(library.ready && !ui.loading && library.pending_writes == 0)?
-            {
+            if let Some(step) = driver.poll(
+                library.ready && !ui.loading && library.pending_writes == 0 && !settings.busy(),
+            )? {
                 match step {
                     script::Step::Button(b) => button = Some(b),
                     script::Step::Quit => close_requested = true,
@@ -237,14 +259,32 @@ fn run(
             }
         }
         let mut outcome = None;
+        closing |= close_requested;
+        close_requested = closing && !settings.busy();
+        if closing {
+            button = None;
+            repeat.clear();
+        }
         if close_requested {
             deferred = None;
             repeat.clear();
         } else if let Some(button) = button.or_else(|| repeat.poll(Instant::now())) {
             ui.snap_animations();
-            let requested = app.handle(button, &library);
+            settings.feedback(&ui.sdl);
+            let requested = if settings.active {
+                settings.handle(button)
+            } else {
+                app.handle(button, &library)
+            };
+            let requested = if requested == Outcome::Settings {
+                settings.open();
+                Outcome::None
+            } else {
+                requested
+            };
+            ui.settings = settings.active.then(|| settings.state.clone());
             let terminal = matches!(requested, Outcome::Launch { .. } | Outcome::Action(_));
-            if terminal && library.pending_writes > 0 {
+            if terminal && (library.pending_writes > 0 || settings.busy()) {
                 deferred = Some(requested);
             } else {
                 if terminal {
@@ -254,7 +294,8 @@ fn run(
             }
             dirty = true;
         }
-        if !close_requested && outcome.is_none() && library.pending_writes == 0 {
+        if !close_requested && outcome.is_none() && library.pending_writes == 0 && !settings.busy()
+        {
             outcome = deferred.take().filter(|_| !library.write_failed);
         }
         if close_requested || outcome.is_some() {

@@ -244,3 +244,24 @@ fn configuration_write_cannot_publish_an_unreadable_oversized_file() {
     .is_err());
     assert_eq!(fs::read_to_string(path).unwrap(), "global.core=old\n");
 }
+
+#[test]
+fn shell_get_setting_skips_empty_and_checks_all_scopes() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("system.cfg");
+    fs::write(
+        &path,
+        "snes[\"x.sfc\"].volume=\nsnes.volume=70\nsystem.volume=60\nvolume=50\nglobal.volume=40\n",
+    )
+    .unwrap();
+    let cfg = SystemCfg::load(&path).unwrap();
+    assert_eq!(
+        cfg.get_setting("volume", Some("snes"), Some("x.sfc")),
+        Some("70".into())
+    );
+    assert_eq!(cfg.get_setting("volume", None, None), Some("60".into()));
+    assert_eq!(
+        cfg.get_setting("system.volume", None, None),
+        Some("60".into())
+    );
+}

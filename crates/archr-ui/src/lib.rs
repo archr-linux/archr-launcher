@@ -23,3 +23,5 @@ mod raster_cache;
 pub mod startup;
 pub mod status;
 mod text;
+
+pub mod settings;

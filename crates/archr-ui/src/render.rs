@@ -143,6 +143,9 @@ fn status_layout(
     }
 }
 
+#[path = "settings/render.rs"]
+mod settings_render;
+
 pub struct Ui<'font, 'texture> {
     startup: StartupTrace,
     experiments: Experiments,
@@ -164,6 +167,7 @@ pub struct Ui<'font, 'texture> {
     animating: bool,
     frame: Frame,
     pub catalog: I18n,
+    pub settings: Option<crate::settings::Settings>,
     pub loading: bool,
     pub banner: Option<String>,
     pub screenshot: Option<PathBuf>,
@@ -253,6 +257,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             cover_fade: Tween::new(0., Duration::from_millis(120)),
             animating: false,
             frame: Frame::new(width, height),
+            settings: None,
             catalog: I18n::default(),
             loading: false,
             banner: None,
@@ -473,17 +478,30 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         } = self.frame;
         self.canvas.set_draw_color(color(theme.background));
         self.canvas.clear();
-        let (backdrop, cursor) = app.backdrop();
-        self.header(backdrop, cursor, data, theme)?;
-        self.list(backdrop, cursor, data, theme)?;
-        if let Screen::Games { system } = backdrop {
-            self.cover(system, cursor, data, theme, cover)?;
-        }
-        self.footer(app, data, theme)?;
-        if matches!(app.screen, Screen::QuickMenu { .. }) {
-            self.menu(app, data, theme)?;
+        if let Some(settings) = self.settings.take() {
+            let result = self.settings_page(&settings, theme, data);
+            self.animating = settings
+                .pending
+                .is_some_and(|id| settings.page().rows().iter().any(|row| row.id == id));
+            self.settings = Some(settings);
+            result?;
         } else {
-            self.menu_open = false;
+            let (backdrop, cursor) = app.backdrop();
+            self.header(backdrop, cursor, data, theme)?;
+            self.list(backdrop, cursor, data, theme)?;
+            if let Screen::Games { system } = backdrop {
+                self.cover(system, cursor, data, theme, cover)?;
+            }
+            self.footer(app, data, theme)?;
+            if matches!(app.screen, Screen::QuickMenu { .. }) {
+                self.menu(app, data, theme)?;
+            } else {
+                self.menu_open = false;
+            }
+            self.animating = self.list.scroll.active(now)
+                || self.list.pill.active(now)
+                || self.menu_pill.active(now)
+                || self.cover_fade.active(now);
         }
         if let Some(banner) = self.banner.clone() {
             self.notice(&banner, theme)?;
@@ -491,10 +509,6 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         if let Some(message) = self.transition.clone() {
             self.notice(&message, theme)?;
         }
-        self.animating = self.list.scroll.active(now)
-            || self.list.pill.active(now)
-            || self.menu_pill.active(now)
-            || self.cover_fade.active(now);
         // Explicit debug readback. Raster PNG I/O is limited to first asset use.
         if let Some(path) = self.screenshot.take() {
             let rgba = self
@@ -1075,7 +1089,11 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         self.scrim(theme, 1.2)?;
         let items = app.quick_menu_items(data);
         let has_core = matches!(items.first(), Some(QuickItem::Core));
-        let panel_h = if has_core { 300. } else { 256. };
+        let panel_h = if has_core || items.first() == Some(&QuickItem::Settings) {
+            300.
+        } else {
+            256.
+        };
         // Optical centering: the approved modal sits 20px above center.
         let panel = self.modal(theme, (340., 32., panel_h, -self.px(20.)))?;
         let (title, subtitle) = if let Screen::QuickMenu {
@@ -1148,6 +1166,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             let selected = index == app.cursor;
             let c = selection(selected, theme.text, theme.highlight_text);
             let label = match item {
+                QuickItem::Settings => "settings.title",
                 QuickItem::Core => "menu.core",
                 QuickItem::Suspend => "menu.suspend",
                 QuickItem::Reboot => "menu.reboot",

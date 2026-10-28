@@ -130,6 +130,10 @@ impl Status {
             .as_secs();
         self.update(unix, snapshot)
     }
+    /// Recompute even within the same minute after a timezone change.
+    pub fn invalidate_clock(&mut self) {
+        self.minute = u64::MAX;
+    }
     fn update(&mut self, unix: u64, snapshot: Option<Snapshot>) -> bool {
         let mut changed = false;
         if let Some(Snapshot { battery, wifi }) = snapshot {
@@ -174,6 +178,18 @@ fn local_clock(unix: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn timezone_change_invalidates_a_clock_cached_within_the_minute() {
+        let mut status = Status::new(None, Instant::now());
+        let unix = 1_700_000_040;
+        status.minute = unix / 60;
+        status.clock = "stale timezone".into();
+        assert!(!status.update(unix, None));
+        status.invalidate_clock();
+        assert!(status.update(unix, None));
+        assert_ne!(status.clock, "stale timezone");
+    }
+
     #[test]
     fn redraw_only_when_displayed_clock_or_snapshot_changes() {
         let mut status = Status::new(None, Instant::now());
