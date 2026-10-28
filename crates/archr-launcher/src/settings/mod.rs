@@ -1,4 +1,5 @@
 //! Serial settings worker. No process, config lock or sysfs access on SDL's thread.
+mod games;
 mod info;
 mod pages;
 mod runtime;
@@ -312,6 +313,8 @@ impl Backend {
 pub(super) enum Work {
     Load,
     Set(Id, String),
+    /// A Games page row of the named system.
+    Game(String, Id, String),
     Info,
     Scan,
     Connect(String, String),
@@ -377,6 +380,9 @@ impl Worker {
                     let reply = match work {
                         Work::Load => Reply::Loaded(backend.load().map(Box::new)),
                         Work::Set(id, value) => Reply::Set(id, backend.apply(id, &value)),
+                        Work::Game(system, id, value) => {
+                            Reply::Set(id, backend.apply_game(&system, id, &value))
+                        }
                         Work::Info => Reply::Info(backend.refresh_info()),
                         Work::Scan => unreachable!("scans have their own lane"),
                         Work::Connect(ssid, password) => {
@@ -467,6 +473,8 @@ impl Worker {
                     state.info = loaded.info;
                     state.error = loaded.error;
                     state.scrape.available = loaded.scrape.available;
+                    state.games.replace(loaded.games.systems);
+                    state.sync_games();
                     if !state.scrape.verifying {
                         state.scrape.user = loaded.scrape.user;
                     }
