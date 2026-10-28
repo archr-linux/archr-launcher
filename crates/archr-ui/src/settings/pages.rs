@@ -158,14 +158,14 @@ impl Settings {
         match button {
             Button::Up => self.cursor = self.cursor.saturating_sub(1),
             Button::Down => self.cursor = (self.cursor + 1).min(last),
-            // X forgets a saved network and refreshes the list anywhere else.
-            Button::X => match self.wifi_network() {
-                Some(network) if network.known || network.connected => {
+            // X forgets a saved network (Config-wifi); Y refreshes anywhere.
+            Button::X => {
+                let network = self.wifi_network()?;
+                if network.known || network.connected {
                     self.confirm_forget = Some(network.ssid.clone());
                 }
-                _ if self.value(Id::WifiSwitch) == "1" => return Some(Effect::Scan),
-                _ => {}
-            },
+            }
+            Button::Y if self.value(Id::WifiSwitch) == "1" => return Some(Effect::Scan),
             Button::A if self.cursor == services => self.open(Page::Services),
             Button::A if self.cursor == hidden => {
                 self.wifi_hidden = true;
@@ -231,7 +231,7 @@ impl Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::settings::network::Network;
+    use crate::{settings::network::Network, HintButton};
     fn network(ssid: &str, security: &str, known: bool) -> Network {
         Network {
             ssid: ssid.into(),
@@ -402,14 +402,25 @@ mod tests {
         assert_eq!(state.handle(Button::Start), Effect::None);
     }
     #[test]
-    fn x_refreshes_except_on_a_saved_network() {
+    fn y_refreshes_everywhere_and_x_forgets_only_saved_networks() {
         let mut state = wifi();
         state.values.insert(Id::WifiSwitch, "1".into());
         state.networks.push(network("Guest", "open", false));
         state.networks.push(network("Home", "psk", true));
-        assert_eq!(state.handle(Button::X), Effect::Scan);
+        for cursor in 0..state.wifi_rows() {
+            state.cursor = cursor;
+            assert_eq!(state.handle(Button::Y), Effect::Scan);
+            let forget = state
+                .hints()
+                .contains(&(HintButton::Key('X'), "settings.forget"));
+            assert_eq!(forget, cursor == 2);
+            assert!(state
+                .hints()
+                .contains(&(HintButton::Key('Y'), "settings.refresh")));
+        }
         state.cursor = 1;
-        assert_eq!(state.handle(Button::X), Effect::Scan);
+        assert_eq!(state.handle(Button::X), Effect::None);
+        assert_eq!(state.confirm_forget, None);
         state.cursor = 2;
         assert_eq!(state.handle(Button::X), Effect::None);
         assert_eq!(state.confirm_forget.as_deref(), Some("Home"));

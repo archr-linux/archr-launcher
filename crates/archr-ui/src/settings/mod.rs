@@ -578,21 +578,22 @@ impl Settings {
                 Some(network) if network.known || network.connected => &[
                     (Key('A'), "settings.connect"),
                     (Key('X'), "settings.forget"),
+                    (Key('Y'), "settings.refresh"),
                     (Key('B'), "hint.back"),
                 ],
                 Some(_) => &[
                     (Key('A'), "settings.connect"),
-                    (Key('X'), "settings.refresh"),
+                    (Key('Y'), "settings.refresh"),
                     (Key('B'), "hint.back"),
                 ],
                 None if self.cursor > 0 => &[
                     (Key('A'), "hint.open"),
-                    (Key('X'), "settings.refresh"),
+                    (Key('Y'), "settings.refresh"),
                     (Key('B'), "hint.back"),
                 ],
                 None => &[
                     (Pair('L', 'R'), "settings.change"),
-                    (Key('X'), "settings.refresh"),
+                    (Key('Y'), "settings.refresh"),
                     (Key('B'), "hint.back"),
                 ],
             },
