@@ -276,9 +276,13 @@ simultaneamente e não use `systemctl enable` para contornar o seletor.
 
 A sessão carrega `/etc/profile` uma vez em Bash, pois os profiles da distro
 contêm funções Bash, e usa `exec` para substituí-lo pelo supervisor POSIX sh.
-Preserva os exports dos quirks/usuário e configura Wayland, SDL e o locale já
-gerado pelo ES, sem chamar `es_settings`: esse script também gera locales,
-reinicia `tz-data`, importa o ambiente do systemd e escolhe o alvo do hotkey.
+Antes do launcher, faz o que o `es_settings` fazia para o ES: executa
+`/usr/bin/archr-apply-locale` (fuso e idioma; pode gerar o locale na primeira
+vez) e importa no systemd as variáveis listadas em `/etc/profile.d/999-export`.
+Os dois são opcionais e uma falha não impede a UI. `LOCPATH` é removido: o glibc
+acha os locales por `/usr/lib/locale`. Preserva os exports dos quirks/usuário e
+configura Wayland e SDL; o banco de controles é o `gamecontrollerdb.txt` do
+usuário ou, sem ele, o de `/usr/config/SDL-GameControllerDB`.
 A espera por sway reproduz a do `start_es.sh`: socket Wayland + IPC com saída
 ativa, polling de 100 ms, teto de 10 s. Sem compositor pronto após o teto,
 tenta iniciar a UI e deixa o backoff lidar com uma falha.

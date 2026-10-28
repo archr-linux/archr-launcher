@@ -4,27 +4,39 @@
 
 # ArchR's /etc/profile contains Bash functions and loads device/user quirks.
 # Source it in Bash once, then replace that process with this POSIX supervisor.
-# Do NOT source es_settings: it regenerates locales, restarts tz-data, imports
-# the manager environment and sets the EmulationStation kill target.
+# Before the UI, do what es_settings did for EmulationStation: apply timezone
+# and language (archr-apply-locale) and hand the quirk exports to systemd so
+# units started later see them. Both are optional; neither blocks the UI.
 if [ "${1-}" != --profile-loaded ]; then
     profile=/etc/profile
     session_shell=/bin/sh
+    apply_locale=/usr/bin/archr-apply-locale
+    quirk_exports=/etc/profile.d/999-export
     if [ "${ARCHR_SESSION_TEST:-0}" = 1 ]; then
         profile=${ARCHR_SESSION_PROFILE:?}
         session_shell=${ARCHR_SESSION_SHELL:?}
+        apply_locale=${ARCHR_SESSION_APPLY_LOCALE:?}
+        quirk_exports=${ARCHR_SESSION_EXPORTS:?}
     fi
     exec /usr/bin/bash -c '
         . "$1"
+        if [ -x "$4" ]; then
+            "$4" >/dev/null || echo "archr-launcher-session: $4 failed" >&2
+        fi
+        if [ -r "$5" ]; then
+            names=$(sed "s/#.*//" "$5" | grep -o "[A-Z_][A-Z0-9_]*")
+            [ -z "$names" ] || systemctl import-environment $names || :
+        fi
         # Functions such as get_setting do not survive exec into POSIX sh.
-        # Reuse generated ES locales, but never run localedef on UI startup.
+        # glibc finds generated locales through /usr/lib/locale; a LOCPATH
+        # inherited from the manager may still point at the ES folder.
+        unset I18NPATH LOCPATH
         locale=$(get_setting system.language)
         if [ -n "$locale" ]; then
-            unset I18NPATH LANG LANGUAGE LOCPATH
             export LANG="$locale.UTF-8" LANGUAGE="$locale.UTF-8"
-            export LOCPATH=/storage/.config/emulationstation/locale
         fi
         exec "$2" "$3" --profile-loaded
-    ' archr-session "$profile" "$session_shell" "$0"
+    ' archr-session "$profile" "$session_shell" "$0" "$apply_locale" "$quirk_exports"
 fi
 
 run_dir=/run/archr-launcher
@@ -45,14 +57,21 @@ if [ "${ARCHR_SESSION_TEST:-0}" = 1 ]; then
     stop_sleep=${ARCHR_SESSION_STOP_SLEEP:?}
 fi
 
-# Same UI exports as 001-functions, 050-sway.conf and es_settings. Quirk exports
-# already arrived through /etc/profile; keep them, including GPU/SDL overrides.
+# Same UI exports as 001-functions and 050-sway.conf. Quirk exports already
+# arrived through /etc/profile; keep them, including GPU/SDL overrides.
 export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/var/run/0-runtime-dir}
 export WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-wayland-1}
 export SWAYSOCK=${SWAYSOCK:-$XDG_RUNTIME_DIR/sway-ipc.0.sock}
 export SDL_VIDEODRIVER=${SDL_VIDEODRIVER:-wayland}
 export SDL_AUDIODRIVER=pulseaudio
-export SDL_GAMECONTROLLERCONFIG_FILE=${SDL_GAMECONTROLLERCONFIG_FILE:-/storage/.config/SDL-GameControllerDB/gamecontrollerdb.txt}
+# Controller mappings come only from this database; fall back to the packaged
+# copy when the user one was never created.
+if [ -z "${SDL_GAMECONTROLLERCONFIG_FILE-}" ]; then
+    SDL_GAMECONTROLLERCONFIG_FILE=/storage/.config/SDL-GameControllerDB/gamecontrollerdb.txt
+    [ -f "$SDL_GAMECONTROLLERCONFIG_FILE" ] ||
+        SDL_GAMECONTROLLERCONFIG_FILE=/usr/config/SDL-GameControllerDB/gamecontrollerdb.txt
+fi
+export SDL_GAMECONTROLLERCONFIG_FILE
 export XKB_CONFIG_ROOT=${XKB_CONFIG_ROOT:-/usr/share/X11/xkb}
 
 mkdir -p "$run_dir" || exit 1
