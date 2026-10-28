@@ -161,6 +161,40 @@ fn all_locales_and_pages_render_and_selected_on_toggle_has_contrast() {
                 );
             }
             if page == Page::Info {
+                for card in &mut state.info.cards {
+                    card.lines = vec!["x".into()];
+                    card.percent = None;
+                }
+                state.info.cards[0].lines = ["a", "b", "c", "d", "e"].map(str::to_owned).to_vec();
+                ui.draw_with_settings(
+                    &App::new(9),
+                    &FakeData::default(),
+                    &theme,
+                    None,
+                    Some(&state),
+                )
+                .unwrap();
+                let complete = ui
+                    .canvas
+                    .read_pixels(None, sdl2::pixels::PixelFormatEnum::RGBA32)
+                    .unwrap();
+                state.info.cards[0].lines.clear();
+                ui.draw_with_settings(
+                    &App::new(9),
+                    &FakeData::default(),
+                    &theme,
+                    None,
+                    Some(&state),
+                )
+                .unwrap();
+                assert!(
+                    complete
+                        != ui
+                            .canvas
+                            .read_pixels(None, sdl2::pixels::PixelFormatEnum::RGBA32)
+                            .unwrap(),
+                    "use all available card space before falling back"
+                );
                 state.info.device = "W".repeat(264);
                 state.info.cards[0].lines = vec!["W\n".repeat(264)];
                 state.info.cards[4].lines = vec!["W".repeat(264)];
