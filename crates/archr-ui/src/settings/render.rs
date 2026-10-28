@@ -397,7 +397,7 @@ impl View<'_, '_, '_> {
         )? as f32
             / self.ui.frame.scale;
         let status = if state.loading {
-            Some(self.tr("loading"))
+            Some(self.ui.catalog.text("loading"))
         } else if matches!(state.page(), Page::Info | Page::InfoDetail(_)) {
             Some(self.tr(if state.page() == Page::Info {
                 "settings.updated_now"

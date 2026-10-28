@@ -325,3 +325,83 @@ fn portuguese_language_alias_serves_all_regions_from_brazilian_catalog() {
         assert_eq!(i.text("hint.play"), "Jogar");
     }
 }
+
+fn keys(path: &Path) -> std::collections::BTreeSet<String> {
+    fs::read_to_string(path)
+        .unwrap()
+        .lines()
+        .filter_map(|line| {
+            line.strip_prefix('"')?
+                .split_once("\" =")
+                .map(|k| k.0.to_owned())
+        })
+        .collect()
+}
+fn sources(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
+    for entry in fs::read_dir(dir).unwrap().flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            sources(&path, out);
+        } else if path.extension().is_some_and(|e| e == "rs") {
+            out.push(path);
+        }
+    }
+}
+
+/// Literals that look like catalog keys but name files or config entries.
+const CONFIG_KEYS: &[&str] = &[
+    "moonlight.cfg",
+    "moonlight.height",
+    "moonlight.hosts",
+    "moonlight.width",
+    "netplay.lobby",
+    "netplay.port",
+    "netplay.relay_only",
+    "netplay.show_missing",
+];
+
+#[test]
+fn every_key_used_in_code_exists_in_the_catalog() {
+    let known = keys(&locales().join("en.toml"));
+    let groups: std::collections::BTreeSet<_> = known
+        .iter()
+        .filter_map(|k| k.split_once('.').map(|g| g.0))
+        .collect();
+    let mut files = Vec::new();
+    for krate in ["archr-ui", "archr-launcher"] {
+        sources(
+            &Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../")
+                .join(krate)
+                .join("src"),
+            &mut files,
+        );
+    }
+    let mut missing = Vec::new();
+    for file in files {
+        for literal in fs::read_to_string(&file)
+            .unwrap()
+            .split('"')
+            .skip(1)
+            .step_by(2)
+        {
+            let key = literal.split('|').next().unwrap();
+            let shaped = !key.ends_with('.')
+                && !CONFIG_KEYS.contains(&key)
+                && key.contains('.')
+                && key
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '.')
+                && key.split_once('.').is_some_and(|(g, _)| groups.contains(g));
+            if shaped && !known.contains(key) {
+                missing.push(format!("{key} ({})", file.display()));
+            }
+        }
+    }
+    missing.sort();
+    missing.dedup();
+    assert!(
+        missing.is_empty(),
+        "keys without a catalog entry: {missing:#?}"
+    );
+}
