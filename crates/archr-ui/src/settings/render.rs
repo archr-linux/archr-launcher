@@ -654,6 +654,7 @@ impl View<'_, '_, '_> {
                 let chevrons = kind == Kind::Value
                     && !Settings::text_input(id)
                     && !state.disabled(id)
+                    && !state.fixed(id)
                     && id != Id::ScraperSource;
                 if chevrons {
                     // "‹ value ›" hugs the value, as in the mockups.

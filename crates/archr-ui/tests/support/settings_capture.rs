@@ -102,6 +102,9 @@ fn pages() -> Vec<(&'static str, Settings)> {
     unavailable.open(Page::Scraper);
     let mut sound = ready();
     sound.open(Page::Sound);
+    let sink = "Built-in Audio Internal Speaker".to_owned();
+    sound.options.insert(Id::Audio, vec![sink.clone()]);
+    sound.values.insert(Id::Audio, sink);
     sound.handle(Button::R);
     sound.handle(Button::R);
     assert!(!sound.slides.is_empty() && sound.pending.is_none());

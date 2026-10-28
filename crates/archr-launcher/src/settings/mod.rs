@@ -126,8 +126,14 @@ impl Backend {
         ] {
             match self.command(program, args) {
                 Ok(output) => {
+                    // set-audio lists one sink name per line; names may hold commas.
+                    let separators: &[char] = if id == Id::Audio {
+                        &['\n']
+                    } else {
+                        &['\n', ',']
+                    };
                     let mut options: Vec<String> = output
-                        .split(['\n', ','])
+                        .split(separators)
                         .map(str::trim)
                         .filter(|s| !s.is_empty())
                         .map(str::to_owned)
@@ -135,8 +141,10 @@ impl Backend {
                     if id == Id::Timezone {
                         options.push("UTC".into());
                     }
+                    // The sink list is authoritative: a stale saved name
+                    // (an old ES "headphone") is never offered.
                     let current = state.value(id).to_owned();
-                    if !current.is_empty() {
+                    if id != Id::Audio && !current.is_empty() {
                         options.push(current);
                     }
                     options.sort();
@@ -146,11 +154,16 @@ impl Backend {
                 Err(error) => errors.push(error),
             }
         }
-        if let Ok(current) = self.command("set-audio", &["get"]) {
-            if !current.is_empty() {
-                state.values.insert(Id::Audio, current);
-            }
-        }
+        let sinks = state.options.get(&Id::Audio).cloned().unwrap_or_default();
+        let current = self
+            .command("set-audio", &["get"])
+            .ok()
+            .filter(|sink| sinks.contains(sink))
+            .or_else(|| sinks.first().cloned());
+        match current {
+            Some(sink) => state.values.insert(Id::Audio, sink),
+            None => state.values.remove(&Id::Audio),
+        };
         let current = state.value(Id::Suspend).to_owned();
         let mut modes: Vec<String> = self
             .read("/sys/power/state")

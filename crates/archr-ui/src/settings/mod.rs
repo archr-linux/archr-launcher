@@ -519,6 +519,11 @@ impl Settings {
             })
             .collect()
     }
+    /// Rows with at most one choice show their value and accept no input
+    /// (one audio sink: the jack switches speaker and headphones itself).
+    pub fn fixed(&self, id: Id) -> bool {
+        id == Id::Audio && self.options.get(&id).is_none_or(|sinks| sinks.len() <= 1)
+    }
     /// Disabled rows are drawn muted and accept no input.
     pub fn disabled(&self, id: Id) -> bool {
         match id {
@@ -601,7 +606,7 @@ impl Settings {
                 ],
             },
             _ => match self.visible_rows().get(self.cursor) {
-                Some(row) if self.disabled(row.id) => BACK,
+                Some(row) if self.disabled(row.id) || self.fixed(row.id) => BACK,
                 Some(row) => match row.kind {
                     Kind::Action => &[(Key('A'), "hint.choose"), (Key('B'), "hint.back")],
                     Kind::Toggle => &[
@@ -717,7 +722,7 @@ impl Settings {
                 let Some(row) = rows.get(self.cursor) else {
                     return Effect::None;
                 };
-                if self.disabled(row.id) {
+                if self.disabled(row.id) || self.fixed(row.id) {
                     return Effect::None;
                 }
                 if button == Button::A {

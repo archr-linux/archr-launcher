@@ -391,3 +391,33 @@ fn battery_formats_integer_current_and_capacity_without_a_restart_timer() {
     }
     assert!(!rows.iter().any(|(k, _)| *k == "settings.on_battery"));
 }
+
+#[test]
+fn stale_saved_audio_device_is_never_offered_and_one_sink_is_read_only() {
+    use archr_ui::{settings::Page, state::Button};
+    let (dir, backend) = fixture();
+    fs::write(
+        dir.path().join("storage/.config/system/configs/system.cfg"),
+        "audio.device=headphone\n",
+    )
+    .unwrap();
+    script(
+        &dir,
+        "set-audio",
+        "case \"$1\" in list|get) printf 'Built-in Audio Internal Speaker\\n';; *) exit 1;; esac",
+    );
+    script(&dir, "timeinfo", "printf 'UTC\\n'");
+    let mut state = backend.load().unwrap();
+    assert_eq!(
+        state.options[&Id::Audio],
+        ["Built-in Audio Internal Speaker"]
+    );
+    assert_eq!(state.value(Id::Audio), "Built-in Audio Internal Speaker");
+    assert!(state.fixed(Id::Audio));
+    state.open(Page::Sound);
+    state.cursor = 2;
+    for button in [Button::L, Button::R, Button::A] {
+        assert_eq!(state.handle(button), archr_ui::settings::Effect::None);
+    }
+    assert_eq!(state.hints().len(), 1);
+}
