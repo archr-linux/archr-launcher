@@ -8,6 +8,8 @@ use archr_ui::settings::{Effect, Page, Settings};
 use std::time::{Duration, Instant};
 /// Active radio scans are not free: refresh an open Wi-Fi page once a minute.
 const SCAN_INTERVAL: Duration = Duration::from_secs(60);
+/// A Bluetooth scan itself listens ~10 s; this is the whole period.
+const BT_INTERVAL: Duration = Duration::from_secs(30);
 pub struct Runtime {
     pub state: Settings,
     pub active: bool,
@@ -15,6 +17,7 @@ pub struct Runtime {
     worker: Option<Worker>,
     next_info: Instant,
     next_scan: Instant,
+    next_bt_scan: Instant,
     /// Seconds shown in the Wi-Fi footer, redrawn as they change.
     scan_age: u64,
     job: Option<(archr_scraper::Job, Vec<String>)>,
@@ -31,6 +34,7 @@ impl Runtime {
             worker: None,
             next_info: Instant::now(),
             next_scan: Instant::now(),
+            next_bt_scan: Instant::now(),
             scan_age: 0,
             job: None,
             scraped: None,
@@ -44,13 +48,17 @@ impl Runtime {
             }
             self.worker.as_mut().expect("worker started").send(work)
         })();
-        self.state.scanning = self.worker.as_ref().is_some_and(Worker::scanning);
+        self.sync_scanning();
         if let Err(error) = result {
             log::warn!("Settings worker failed: {error}");
             self.state.fail(self.state.pending, error);
             self.state.pending = None;
             self.state.loading = false;
         }
+    }
+    fn sync_scanning(&mut self) {
+        self.state.scanning = self.worker.as_ref().is_some_and(Worker::scanning);
+        self.state.bt_scanning = self.worker.as_ref().is_some_and(Worker::bt_scanning);
     }
     pub fn open(&mut self) {
         self.active = true;
@@ -76,7 +84,11 @@ impl Runtime {
             Effect::Close => self.active = false,
             Effect::Set(id, value) => self.send(Work::Set(id, value)),
             // Radio scans: on entry, on X, and every minute while open.
-            Effect::Scan => self.next_scan = Instant::now(),
+            Effect::Scan => {
+                let now = Instant::now();
+                (self.next_scan, self.next_bt_scan) = (now, now);
+            }
+            Effect::Bluetooth(action, addr) => self.send(Work::Bt(action, addr)),
             Effect::Connect(ssid, password) => self.send(Work::Connect(ssid, password)),
             Effect::Forget(ssid) => self.send(Work::Forget(ssid)),
             Effect::Login(user, password) => self.send(Work::Login(user, password)),
@@ -92,6 +104,9 @@ impl Runtime {
         }
         if before != Page::Wifi && self.state.page() == Page::Wifi {
             self.next_scan = Instant::now();
+        }
+        if before != Page::Bluetooth && self.state.page() == Page::Bluetooth {
+            self.next_bt_scan = Instant::now();
         }
         Outcome::None
     }
@@ -143,12 +158,27 @@ impl Runtime {
             self.send(Work::Scan);
             dirty = true;
         }
-        self.state.scanning = self.worker.as_ref().is_some_and(Worker::scanning);
-        let age = self
-            .state
-            .scanned
-            .map_or(0, |at| now.saturating_duration_since(at).as_secs());
-        if wifi && age != self.scan_age {
+        let bluetooth = self.active
+            && self.state.page() == Page::Bluetooth
+            && self.state.value(archr_ui::settings::Id::BtSwitch) == "1";
+        if bluetooth
+            && !self.closing
+            && !self.state.bt_scanning
+            && self.state.connecting.is_none()
+            && now >= self.next_bt_scan
+        {
+            self.next_bt_scan = now + BT_INTERVAL;
+            self.send(Work::BtScan);
+            dirty = true;
+        }
+        self.sync_scanning();
+        let scanned = if bluetooth {
+            self.state.bt_scanned
+        } else {
+            self.state.scanned
+        };
+        let age = scanned.map_or(0, |at| now.saturating_duration_since(at).as_secs());
+        if (wifi || bluetooth) && age != self.scan_age {
             self.scan_age = age;
             dirty = true;
         }

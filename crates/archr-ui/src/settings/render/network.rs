@@ -29,6 +29,39 @@ impl View<'_, '_, '_> {
             view.wifi_row(state, n, (y, place.height), selected)
         })
     }
+    /// The radio switch heading a list, with the divider under it.
+    pub(super) fn switch(
+        &mut self,
+        state: &Settings,
+        id: Id,
+        label: &str,
+        (y, h): (f32, f32),
+        selected: bool,
+    ) -> Result<(), String> {
+        let ink = self.ink(selected);
+        let face = selection(selected, Face::Regular, Face::Semibold);
+        self.text_face(
+            (28., y, 300., h),
+            &self.tr(label),
+            (15., ink, Align::Left),
+            face,
+        )?;
+        let control = (300., y, 312., h);
+        if state.pending == Some(id) {
+            return self.text(
+                control,
+                &self.tr("settings.applying"),
+                (14., ink, Align::Right),
+            );
+        }
+        self.control(id, Kind::Toggle, state, selected, control)?;
+        self.ui.divider(
+            self.ui.px(28.),
+            self.ui.px(y + h + ROW_GAP + 4.),
+            self.ui.px(584.) as u32,
+            self.theme.border,
+        )
+    }
     fn wifi_row(
         &mut self,
         state: &Settings,
@@ -39,35 +72,14 @@ impl View<'_, '_, '_> {
         let ink = self.ink(selected);
         let face = selection(selected, Face::Regular, Face::Semibold);
         if n == 0 {
-            self.text_face(
-                (28., y, 300., h),
-                &self.tr("settings.wifi"),
-                (15., ink, Align::Left),
-                face,
-            )?;
-            let control = (300., y, 312., h);
-            return if state.pending == Some(Id::WifiSwitch) {
-                self.text(
-                    control,
-                    &self.tr("settings.applying"),
-                    (14., ink, Align::Right),
-                )
-            } else {
-                self.control(Id::WifiSwitch, Kind::Toggle, state, selected, control)?;
-                self.ui.divider(
-                    self.ui.px(28.),
-                    self.ui.px(y + h + ROW_GAP + 4.),
-                    self.ui.px(584.) as u32,
-                    self.theme.border,
-                )
-            };
+            return self.switch(state, Id::WifiSwitch, "settings.wifi", (y, h), selected);
         }
         let Some(network) = state.networks.get(n - 1) else {
-            let services = n == state.wifi_rows() - 1;
-            let key = if services {
-                "settings.services"
-            } else {
-                "settings.hidden"
+            let last = state.wifi_rows() - 1;
+            let key = match last - n {
+                0 => "settings.bluetooth",
+                1 => "settings.services",
+                _ => "settings.hidden",
             };
             let ink = selection(selected, self.theme.muted, self.theme.highlight_text);
             self.text_face(
@@ -76,7 +88,7 @@ impl View<'_, '_, '_> {
                 (15., ink, Align::Left),
                 face,
             )?;
-            if services {
+            if n + 2 > last {
                 self.ui.icon(
                     Glyph::ChevronRight,
                     self.rect((596., y + (h - 14.) / 2., 14., 14.)),

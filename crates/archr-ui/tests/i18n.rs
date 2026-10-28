@@ -352,6 +352,7 @@ fn sources(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
 const CONFIG_KEYS: &[&str] = &[
     "audio.device",
     "audio.volume",
+    "controllers.bluetooth.enabled",
     "display.brightness",
     "global.netplay",
     "global.netplay.customserver",

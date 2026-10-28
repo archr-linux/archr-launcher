@@ -127,7 +127,13 @@ impl Backend {
             .collect()
     }
     pub(super) fn load_pages(&self, cfg: &SystemCfg, state: &mut Settings) {
-        for page in [Page::Wifi, Page::Services, Page::Netplay, Page::Scraper] {
+        for page in [
+            Page::Wifi,
+            Page::Bluetooth,
+            Page::Services,
+            Page::Netplay,
+            Page::Scraper,
+        ] {
             for row in page.rows() {
                 if !row.id.key().is_empty() {
                     if let Some(value) = cfg.get_setting(row.id.key(), None, None) {
@@ -221,6 +227,7 @@ impl Backend {
         if !matches!(
             id,
             Id::WifiSwitch
+                | Id::BtSwitch
                 | Id::Ssh
                 | Id::Samba
                 | Id::Http
@@ -252,6 +259,8 @@ impl Backend {
                     Err("Invalid option".into())
                 }
                 Id::Ssh | Id::Samba | Id::Http => self.service(id, value),
+                // archr-bluetooth persists its own key.
+                Id::BtSwitch => self.bt_switch(value == "1").map(|()| value.into()),
                 Id::WifiSwitch => {
                     self.command(
                         "wifictl",

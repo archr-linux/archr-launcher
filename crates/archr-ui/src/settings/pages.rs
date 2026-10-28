@@ -1,11 +1,14 @@
 //! Rows and input for the network, games and keyboard pages.
-use super::{described, network::wpa_valid, row, Effect, Id, Kind, Page, Row, Settings};
+use super::{
+    bluetooth::Action, described, network::wpa_valid, row, Effect, Id, Kind, Page, Row, Settings,
+};
 use crate::{
     keyboard::{Keyboard, Mode},
     state::Button,
 };
 
 pub const WIFI: &[Row] = &[row(Id::WifiSwitch, "settings.wifi", Kind::Toggle)];
+pub const BLUETOOTH: &[Row] = &[row(Id::BtSwitch, "settings.bluetooth", Kind::Toggle)];
 pub const SERVICES: &[Row] = &[
     described(Id::Ssh, "settings.ssh", "settings.ssh_detail")
         .kind(Kind::Toggle)
@@ -83,9 +86,9 @@ impl Settings {
             .flatten()
             .and_then(|n| self.networks.get(n))
     }
-    /// Rows after the networks: hidden network, then network services.
+    /// Rows after the networks: hidden network, network services, Bluetooth.
     pub fn wifi_rows(&self) -> usize {
-        self.networks.len() + 3
+        self.networks.len() + 4
     }
     pub(super) fn page_input(&mut self, button: Button) -> Option<Effect> {
         if self.connecting.is_some() {
@@ -93,15 +96,18 @@ impl Settings {
         }
         if let Some(ssid) = self.confirm_forget.clone() {
             self.confirm_forget = None;
-            return Some(if button == Button::A {
-                Effect::Forget(ssid)
-            } else {
+            return Some(if button != Button::A {
                 Effect::None
+            } else if self.page() == Page::Bluetooth {
+                Effect::Bluetooth(Action::Forget, ssid)
+            } else {
+                Effect::Forget(ssid)
             });
         }
         match self.page() {
             Page::Keyboard => Some(self.keyboard_input(button)),
             Page::Wifi => self.wifi_input(button),
+            Page::Bluetooth => self.bt_input(button),
             _ => None,
         }
     }
@@ -153,8 +159,7 @@ impl Settings {
     }
     fn wifi_input(&mut self, button: Button) -> Option<Effect> {
         let last = self.wifi_rows() - 1;
-        let services = last;
-        let hidden = last - 1;
+        let (bluetooth, services, hidden) = (last, last - 1, last - 2);
         match button {
             Button::Up => self.cursor = self.cursor.saturating_sub(1),
             Button::Down => self.cursor = (self.cursor + 1).min(last),
@@ -166,6 +171,7 @@ impl Settings {
                 }
             }
             Button::Y if self.value(Id::WifiSwitch) == "1" => return Some(Effect::Scan),
+            Button::A if self.cursor == bluetooth => self.open(Page::Bluetooth),
             Button::A if self.cursor == services => self.open(Page::Services),
             Button::A if self.cursor == hidden => {
                 self.wifi_hidden = true;
@@ -274,7 +280,7 @@ mod tests {
     #[test]
     fn open_hidden_network_confirms_an_empty_password_with_start() {
         let mut state = wifi();
-        state.cursor = state.wifi_rows() - 2;
+        state.cursor = state.wifi_rows() - 3;
         state.handle(Button::A);
         state.handle(Button::A);
         assert_eq!(state.handle(Button::Start), Effect::None);
@@ -300,14 +306,16 @@ mod tests {
         );
     }
     #[test]
-    fn wifi_routes_to_services_and_back() {
+    fn wifi_routes_to_services_and_bluetooth_and_back() {
         let mut state = wifi();
-        state.cursor = state.wifi_rows() - 1;
-        state.handle(Button::A);
-        assert_eq!(state.page(), Page::Services);
-        assert_eq!(state.parent_page(), Page::Wifi);
-        state.handle(Button::B);
-        assert_eq!(state.page(), Page::Wifi);
+        for (offset, page) in [(2, Page::Services), (1, Page::Bluetooth)] {
+            state.cursor = state.wifi_rows() - offset;
+            state.handle(Button::A);
+            assert_eq!(state.page(), page);
+            assert_eq!(state.parent_page(), Page::Wifi);
+            state.handle(Button::B);
+            assert_eq!(state.page(), Page::Wifi);
+        }
     }
     #[test]
     fn netplay_fields_open_the_right_keyboard_mode() {

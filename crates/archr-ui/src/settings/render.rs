@@ -1,6 +1,8 @@
 //! Shared, bounded settings layout. The common text cache only sees fitted lines.
 use super::*;
 use crate::settings::{Id, Kind, Page, Row, Settings, CATEGORIES};
+#[path = "render/bluetooth.rs"]
+mod bluetooth;
 #[path = "render/information.rs"]
 mod information;
 #[path = "render/network.rs"]
@@ -405,6 +407,7 @@ impl View<'_, '_, '_> {
                 )?;
             }
             Page::Wifi => self.wifi(state)?,
+            Page::Bluetooth => self.bluetooth(state)?,
             Page::Keyboard => self.keyboard(state)?,
             Page::Scraper => {
                 self.rows_at(state, &rows, &placements(Page::Scraper, &rows), 384.)?;
@@ -475,15 +478,17 @@ impl View<'_, '_, '_> {
             } else {
                 "settings.refresh_interval"
             }))
-        } else if state.page() == Page::Wifi && state.scanning {
-            Some(self.tr("settings.refreshing"))
-        } else if state.page() == Page::Wifi {
-            state.scanned.map(|at| {
-                let seconds = self.ui.frame.now.saturating_duration_since(at).as_secs();
-                self.ui
-                    .catalog
-                    .format("settings.updated_ago", &[("count", &seconds.to_string())])
-            })
+        } else if let Some((busy, at)) = state.refreshing() {
+            if busy {
+                Some(self.tr("settings.refreshing"))
+            } else {
+                at.map(|at| {
+                    let seconds = self.ui.frame.now.saturating_duration_since(at).as_secs();
+                    self.ui
+                        .catalog
+                        .format("settings.updated_ago", &[("count", &seconds.to_string())])
+                })
+            }
         } else {
             None
         };
@@ -492,13 +497,19 @@ impl View<'_, '_, '_> {
         }
         let dialog = if state.reboot_prompt {
             Some((self.tr("settings.reboot_question"), true))
-        } else if let Some(ssid) = &state.confirm_forget {
-            Some((
-                self.ui
-                    .catalog
-                    .format("settings.forget_question", &[("name", ssid)]),
-                true,
-            ))
+        } else if let Some(name) = &state.confirm_forget {
+            let bluetooth = state.page() == Page::Bluetooth;
+            let name = state
+                .bt
+                .iter()
+                .find(|d| bluetooth && d.addr == *name)
+                .map_or(name, |d| &d.name);
+            let key = if bluetooth {
+                "settings.bt_forget_question"
+            } else {
+                "settings.forget_question"
+            };
+            Some((self.ui.catalog.format(key, &[("name", name)]), true))
         } else {
             state.connecting.as_ref().map(|ssid| {
                 (
