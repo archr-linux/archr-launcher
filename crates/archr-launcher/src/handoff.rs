@@ -71,8 +71,9 @@ pub fn launch_command_with(
 ///   `--command='"$ARCHR_ROM"'`, expanded by that inner shell from the
 ///   inherited environment.
 ///
-/// Templates with backslashes, backticks or `$(`, unknown placeholders and
-/// any other placeholder context are refused.
+/// Templates with backslashes, backticks, `$(` or `((`, unknown placeholders,
+/// a placeholder that follows `-c`, `eval` or `let` (its value would be run as
+/// code) and any other placeholder context are refused.
 pub fn catalog_command(template: &str, rom: &Path, system: &str) -> io::Result<String> {
     let refuse = |reason: &str| {
         io::Error::new(
@@ -81,7 +82,7 @@ pub fn catalog_command(template: &str, rom: &Path, system: &str) -> io::Result<S
         )
     };
     let rom_text = rom.to_str().ok_or_else(|| refuse("non-UTF-8 ROM path"))?;
-    if template.contains(['\\', '`']) || template.contains("$(") {
+    if template.contains(['\\', '`']) || template.contains("$(") || template.contains("((") {
         return Err(refuse("shell escape or substitution"));
     }
     let basename = rom.file_stem().and_then(|stem| stem.to_str()).unwrap_or("");
@@ -94,8 +95,14 @@ pub fn catalog_command(template: &str, rom: &Path, system: &str) -> io::Result<S
         command.push_str(&assignment(name, value));
     }
     command.push_str("export ARCHR_ROM ARCHR_BASENAME ARCHR_SYSTEM; ");
-    let word_start = |text: &str| text.is_empty() || text.ends_with(char::is_whitespace);
-    let word_end = |text: &str| text.is_empty() || text.starts_with(char::is_whitespace);
+    let blank = |c: char| matches!(c, ' ' | '\t');
+    let word_start = |text: &str| text.is_empty() || text.ends_with(blank);
+    let word_end = |text: &str| text.is_empty() || text.starts_with(blank);
+    // `text` ends where the placeholder's word starts.
+    let evaluated = |text: &str| {
+        let previous = text.trim_end_matches(blank).rsplit(blank).next();
+        matches!(previous, Some("-c" | "eval" | "let"))
+    };
     let (mut single, mut double) = (false, false);
     let mut index = 0;
     while let Some(c) = template[index..].chars().next() {
@@ -121,6 +128,14 @@ pub fn catalog_command(template: &str, rom: &Path, system: &str) -> io::Result<S
         let reference = format!("\"$ARCHR_{name}\"");
         let (before, after) = (&template[..index], &template[index + name.len() + 2..]);
         let closed = after.strip_prefix('"').filter(|rest| word_end(rest));
+        let word = before
+            .strip_suffix("--command=\"")
+            .or_else(|| before.strip_suffix('"'))
+            .filter(|_| double)
+            .unwrap_or(before);
+        if evaluated(word) {
+            return Err(refuse(&format!("placeholder %{name}% run as code")));
+        }
         if !single && !double && word_start(before) && word_end(after) {
             command.push_str(&reference);
             index += name.len() + 2;
@@ -357,6 +372,14 @@ mod tests {
             "sh -c \"%ROM%; true\"",
             "weston-terminal x--command=\"%ROM%\"",
             "foot \"%ROM%",
+            "sh -c %ROM%",
+            "bash -c \"%ROM%\"",
+            "eval %ROM%",
+            "let %ROM%",
+            "/bin/sh -c\t%ROM%",
+            "foot \"%ROM%\" -c %SYSTEM%",
+            "(( %ROM% ))",
+            "foot\u{a0}%ROM%",
         ] {
             assert_eq!(
                 catalog_command(template, rom, "tools").unwrap_err().kind(),

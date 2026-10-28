@@ -112,7 +112,8 @@ no desenho. Sem display, os mesmos fluxos podem rodar com
   palavra inteira sem aspas (`foot %ROM%`), palavra inteira entre aspas duplas
   (`"%ROM%"`) e `--command="%ROM%"` (o weston-terminal a repassa a outro
   `sh -c`, que expande a variável herdada). Barra invertida, crase, `$(`,
-  marcador desconhecido ou qualquer outro contexto: recusado com
+  `((`, marcador logo após `-c`, `eval` ou `let`, marcador desconhecido ou
+  qualquer outro contexto: recusado com
   `error.no_core`, e o modelo vai para o log.
 - Falhas do jogo são lidas de `last-exit`, exibidas por alguns segundos e
   apontam para `/var/log/exec.log`, usado por `runemu.sh`.
