@@ -447,6 +447,20 @@ fn png_without_pixels() -> Vec<u8> {
     out
 }
 
+/// A tiny grayscale JPEG whose frame header claims a progressive 8192x8192
+/// image: what once made the decoder allocate ~200 MiB for a 385 KiB file.
+fn huge_progressive_jpeg() -> Vec<u8> {
+    let mut out = std::io::Cursor::new(Vec::new());
+    image::GrayImage::new(8, 8)
+        .write_to(&mut out, image::ImageFormat::Jpeg)
+        .unwrap();
+    let mut bytes = out.into_inner();
+    let sof = bytes.windows(2).position(|w| w == [0xFF, 0xC0]).unwrap();
+    bytes[sof + 1] = 0xC2;
+    bytes[sof + 5..sof + 9].copy_from_slice(&[0x20, 0x00, 0x20, 0x00]);
+    bytes
+}
+
 #[test]
 fn only_complete_decodable_images_are_saved() {
     let whole_png = png(64, 48);
@@ -459,8 +473,11 @@ fn only_complete_decodable_images_are_saved() {
             false,
         ),
         ("png without pixels", png_without_pixels(), false),
-        ("png too wide", png(9000, 1), false),
-        ("jpeg too wide", jpeg(9000, 1), false),
+        ("png too wide", png(4097, 1), false),
+        ("jpeg too wide", jpeg(4097, 1), false),
+        ("png over 4 megapixels", png(2049, 2049), false),
+        ("progressive 8192x8192 jpeg", huge_progressive_jpeg(), false),
+        ("png at the limit", png(2048, 2048), true),
         (
             "truncated jpeg",
             whole_jpeg[..whole_jpeg.len() / 2].to_vec(),

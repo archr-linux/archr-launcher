@@ -30,7 +30,9 @@ const JOURNAL: &str = "scraper-journal.txt";
 const MAX_THREADS: usize = 4;
 const HASH_LIMIT: u64 = 256 << 20;
 const IMAGE_LIMIT: u64 = 8 << 20;
-const MAX_SIDE: u32 = 8192;
+/// Box art never needs more than this.
+const MAX_SIDE: u32 = 4096;
+const MAX_PIXELS: u64 = 4 << 20;
 const NETWORK_GIVE_UP: u32 = 6;
 
 /// Developer login, injected by the build environment in ES's own format
@@ -668,25 +670,29 @@ fn needed(options: &Options, system: &SystemDef, game: &Game) -> Vec<Media> {
     kinds
 }
 
-/// Extension when `bytes` is a complete PNG/JPEG that decodes within the size
-/// limits. The service answers errors as text with status 200.
+/// Extension when `bytes` is a complete PNG/JPEG that decodes. The size is
+/// read from the header first: decoder scratch (progressive JPEG) ignores the
+/// allocation limit. Decodes are serialized so worker threads never stack up
+/// big buffers on a small device. The service answers errors as text with 200.
 fn image_ext(bytes: &[u8]) -> Option<&'static str> {
-    use image::{ImageFormat, ImageReader, Limits};
+    use image::{ImageFormat, ImageReader};
+    static ONE_DECODE: Mutex<()> = Mutex::new(());
+    let reader = || ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format();
     let decode = || {
-        let mut reader = ImageReader::new(std::io::Cursor::new(bytes))
-            .with_guessed_format()
-            .ok()?;
-        let ext = match reader.format()? {
+        let ext = match reader().ok()?.format()? {
             ImageFormat::Png => "png",
             ImageFormat::Jpeg => "jpg",
             _ => return None,
         };
-        let mut limits = Limits::default();
-        limits.max_image_width = Some(MAX_SIDE);
-        limits.max_image_height = Some(MAX_SIDE);
-        limits.max_alloc = Some(64 << 20);
-        reader.limits(limits);
-        reader.decode().ok().map(|_| ext)
+        let (width, height) = reader().ok()?.into_dimensions().ok()?;
+        if width > MAX_SIDE
+            || height > MAX_SIDE
+            || u64::from(width) * u64::from(height) > MAX_PIXELS
+        {
+            return None;
+        }
+        let _one = ONE_DECODE.lock().unwrap_or_else(|e| e.into_inner());
+        reader().ok()?.decode().ok().map(|_| ext)
     };
     // A decoder bug must not take the worker (and the final event) down.
     std::panic::catch_unwind(decode).ok().flatten()
