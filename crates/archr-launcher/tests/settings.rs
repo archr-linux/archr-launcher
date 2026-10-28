@@ -102,7 +102,7 @@ fn worker_does_not_block_input_and_commits_only_after_success() {
     script(&dir, "set-audio", "printf 'Speakers\\n'");
     script(&dir, "timeinfo", "printf 'UTC,\\n'");
     script(&dir, "volume", "/bin/sleep 0.2; exit 0");
-    let mut runtime = Runtime::new(Paths::new(Some(dir.path().to_owned())), None);
+    let mut runtime = Runtime::new(Paths::new(Some(dir.path().to_owned())));
     runtime.open();
     let deadline = Instant::now() + Duration::from_secs(3);
     while runtime.state.loading {

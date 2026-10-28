@@ -32,14 +32,14 @@ fn all_locales_and_pages_render_and_selected_on_toggle_has_contrast() {
                 state.open(page);
             }
             state.loading = false;
-            if page == Page::Sound {
+            if page == Page::System {
                 state.cursor = 3;
-                state.values.insert(Id::UiSound, "1".into());
+                state.values.insert(Id::Turbo, "1".into());
             }
             ui.settings = Some(state);
             ui.draw(&App::new(9), &FakeData::default(), &theme, None)
                 .unwrap();
-            if page == Page::Sound {
+            if page == Page::System {
                 let pixels = ui
                     .canvas
                     .read_pixels(None, sdl2::pixels::PixelFormatEnum::RGBA32)

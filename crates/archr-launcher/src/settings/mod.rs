@@ -193,7 +193,7 @@ impl Backend {
             Id::Volume | Id::Brightness => value
                 .parse::<u8>()
                 .is_ok_and(|n| n <= 100 && (id != Id::Brightness || n >= 5)),
-            Id::UiSound | Id::Turbo => matches!(value, "0" | "1"),
+            Id::Turbo => matches!(value, "0" | "1"),
             Id::Gpu => matches!(value, "panfrost" | "libmali"),
             Id::Governor => matches!(
                 value,

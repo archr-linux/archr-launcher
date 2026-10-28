@@ -36,7 +36,6 @@ pub enum Id {
     Volume,
     Brightness,
     Audio,
-    UiSound,
     Idle,
     IdleGame,
     Gpu,
@@ -53,7 +52,6 @@ impl Id {
             Self::Volume => "audio.volume",
             Self::Brightness => "display.brightness",
             Self::Audio => "audio.device",
-            Self::UiSound => "launcher.ui_sound",
             Self::Idle => "idle.timeout",
             Self::IdleGame => "idle.timeout.game",
             Self::Gpu => "gpu.driver",
@@ -69,7 +67,7 @@ impl Id {
         match self {
             Self::Volume => "60",
             Self::Brightness => "50",
-            Self::UiSound | Self::Turbo | Self::Idle | Self::IdleGame => "0",
+            Self::Turbo | Self::Idle | Self::IdleGame => "0",
             Self::Gpu => "libmali",
             Self::Suspend => "off",
             Self::Governor => "ondemand",
@@ -122,7 +120,6 @@ const SOUND: &[Row] = &[
     slider(Id::Volume, "settings.volume", 0),
     slider(Id::Brightness, "settings.brightness", 5),
     row(Id::Audio, "settings.audio", Kind::Value),
-    row(Id::UiSound, "settings.ui_sound", Kind::Toggle),
     described(Id::Idle, "settings.idle", "settings.idle_subtitle"),
     described(
         Id::IdleGame,

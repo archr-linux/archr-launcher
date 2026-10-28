@@ -113,7 +113,7 @@ fn run(
     );
     library.start();
     let (width, height) = ui.canvas.output_size()?;
-    let mut settings = archr_launcher::settings::Runtime::new(paths.clone(), config.as_ref());
+    let mut settings = archr_launcher::settings::Runtime::new(paths.clone());
     let mut covers = CoverCache::new(
         &creator,
         paths.cache.join("thumbs"),
@@ -271,7 +271,7 @@ fn run(
             repeat.clear();
         } else if let Some(button) = button.or_else(|| repeat.poll(Instant::now())) {
             ui.snap_animations();
-            settings.feedback(&ui.sdl);
+
             let requested = if settings.active {
                 settings.handle(button)
             } else {

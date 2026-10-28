@@ -212,7 +212,6 @@ o script precisa ver a chave antiga. Erros mantêm o valor anterior e mostram
 o diagnóstico na página. Informações do sistema são sondadas fora do SDL
 a cada quatro segundos enquanto a página está aberta.
 
-Os sons da interface usam `launcher.ui_sound` (0/1, padrão 0).
 As opções de suspensão por inatividade gravam `idle.timeout` e
 `idle.timeout.game`, em minutos: 0, 1, 3, 5, 10, 15 ou 30; ambas começam em
 0 (“Nunca”). O launcher apenas grava essas duas chaves: o detector de
