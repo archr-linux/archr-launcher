@@ -17,15 +17,17 @@ fn breadcrumbs_restore_focus_and_root_back_closes() {
 }
 
 #[test]
-fn sliders_clamp_and_busy_rows_cannot_be_changed_twice() {
+fn sliders_clamp_and_coalesce_while_a_value_is_applied() {
     let mut s = Settings::default();
     s.loading = false;
     s.open(Page::Sound);
     s.values.insert(Id::Volume, "100".into());
     assert_eq!(s.handle(Button::R), Effect::None);
     assert_eq!(s.handle(Button::L), Effect::Set(Id::Volume, "95".into()));
+    // Shown at once; the next press waits for the reply, then only the latest applies.
     assert_eq!(s.handle(Button::L), Effect::None);
-    assert_eq!(s.value(Id::Volume), "100"); // committed only after worker success
+    assert_eq!(s.value(Id::Volume), "90");
+    assert_eq!(s.settle(Id::Volume, Ok("95".into())), Some("90".into()));
 }
 
 #[test]

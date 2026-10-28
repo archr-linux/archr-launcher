@@ -400,6 +400,8 @@ pub struct Settings {
     pub wifi_hidden: bool,
     pub access_ip: String,
     pub scrape: Scrape,
+    /// Sliders in flight: last confirmed value and the newest unsent one.
+    pub slides: BTreeMap<Id, (String, Option<String>)>,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -427,6 +429,7 @@ impl Default for Settings {
             wifi_hidden: false,
             access_ip: String::new(),
             scrape: Scrape::default(),
+            slides: BTreeMap::new(),
         }
     }
 }
@@ -654,6 +657,30 @@ impl Settings {
             Err(error) => self.error = Some((Some(id), error)),
         }
     }
+    /// A slider reply: returns the newest value still to apply, if any.
+    /// Sliders never show "applying"; a failure reverts to the real value.
+    pub fn settle(&mut self, id: Id, result: Result<String, String>) -> Option<String> {
+        let Some((confirmed, queued)) = self.slides.get_mut(&id) else {
+            self.complete(id, result);
+            return None;
+        };
+        match result {
+            Ok(value) => {
+                *confirmed = value;
+                if let Some(next) = queued.take() {
+                    return Some(next);
+                }
+                let (confirmed, _) = self.slides.remove(&id).expect("slide");
+                self.values.insert(id, confirmed);
+            }
+            Err(error) => {
+                let (confirmed, _) = self.slides.remove(&id).expect("slide");
+                self.values.insert(id, confirmed);
+                self.error = Some((Some(id), error));
+            }
+        }
+        None
+    }
     pub fn handle(&mut self, button: Button) -> Effect {
         if self.reboot_prompt {
             return match button {
@@ -745,6 +772,19 @@ impl Settings {
                     }
                     _ => return Effect::None,
                 };
+                if next != old && matches!(row.kind, Kind::Slider { .. }) {
+                    // Optimistic: show it now, apply in the background and
+                    // coalesce presses made while a value is being applied.
+                    let old = old.to_owned();
+                    self.values.insert(row.id, next.clone());
+                    self.error = None;
+                    if let Some((_, queued)) = self.slides.get_mut(&row.id) {
+                        *queued = Some(next);
+                        return Effect::None;
+                    }
+                    self.slides.insert(row.id, (old, None));
+                    return Effect::Set(row.id, next);
+                }
                 if next != old {
                     self.pending = Some(row.id);
                     self.error = None;
@@ -815,5 +855,30 @@ mod tests {
             state.handle(Button::R),
             Effect::Set(Id::ClockFormat, "12".into())
         );
+    }
+    #[test]
+    fn sliders_apply_optimistically_coalesce_and_revert_on_failure() {
+        let mut state = Settings {
+            loading: false,
+            ..Default::default()
+        };
+        state.open(Page::Sound);
+        assert_eq!(
+            state.handle(Button::R),
+            Effect::Set(Id::Volume, "65".into())
+        );
+        assert_eq!(state.pending, None);
+        assert_eq!(state.value(Id::Volume), "65");
+        assert_eq!(state.handle(Button::R), Effect::None);
+        assert_eq!(state.handle(Button::R), Effect::None);
+        assert_eq!(state.value(Id::Volume), "75");
+        assert_eq!(state.settle(Id::Volume, Ok("65".into())), Some("75".into()));
+        assert_eq!(state.value(Id::Volume), "75");
+        assert_eq!(state.settle(Id::Volume, Ok("75".into())), None);
+        assert!(state.slides.is_empty());
+        state.handle(Button::R);
+        assert_eq!(state.settle(Id::Volume, Err("pactl".into())), None);
+        assert_eq!(state.value(Id::Volume), "75");
+        assert_eq!(state.error, Some((Some(Id::Volume), "pactl".into())));
     }
 }

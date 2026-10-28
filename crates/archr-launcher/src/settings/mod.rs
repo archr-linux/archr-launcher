@@ -408,7 +408,9 @@ impl Worker {
                     let new_layout = (id == Id::KeyboardLayout)
                         .then(|| result.as_ref().ok().cloned())
                         .flatten();
-                    state.complete(id, result);
+                    if let Some(next) = state.settle(id, result) {
+                        let _ = self.send(Work::Set(id, next));
+                    }
                     if let Some(layout) = new_layout {
                         state.values.insert(Id::KeyboardVariant, String::new());
                         let _ = self.send(Work::Variants(layout));

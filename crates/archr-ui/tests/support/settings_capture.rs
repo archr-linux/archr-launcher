@@ -100,7 +100,13 @@ fn pages() -> Vec<(&'static str, Settings)> {
     let mut unavailable = ready();
     unavailable.open(Page::Games);
     unavailable.open(Page::Scraper);
+    let mut sound = ready();
+    sound.open(Page::Sound);
+    sound.handle(Button::R);
+    sound.handle(Button::R);
+    assert!(!sound.slides.is_empty() && sound.pending.is_none());
     vec![
+        ("sound-sliding", sound),
         ("wifi", wifi),
         ("password", password),
         ("forget", forget),

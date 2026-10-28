@@ -62,7 +62,9 @@ impl Runtime {
         self.worker.as_ref().is_some_and(Worker::busy)
     }
     pub fn mutations_pending(&self) -> bool {
-        self.state.pending.is_some() || self.state.connecting.is_some()
+        self.state.pending.is_some()
+            || self.state.connecting.is_some()
+            || !self.state.slides.is_empty()
     }
     pub fn close(&mut self) {
         self.closing = true;

@@ -120,8 +120,10 @@ fn worker_does_not_block_input_and_commits_only_after_success() {
     let began = Instant::now();
     assert_eq!(runtime.handle(Button::R), Outcome::None);
     assert!(began.elapsed() < Duration::from_millis(50));
-    assert_eq!(runtime.state.pending, Some(Id::Volume));
-    assert_eq!(runtime.state.value(Id::Volume), "60");
+    // Sliders are optimistic: no "applying" state, the close gate still waits.
+    assert_eq!(runtime.state.pending, None);
+    assert_eq!(runtime.state.value(Id::Volume), "65");
+    assert!(runtime.mutations_pending());
     runtime.handle(Button::B);
     assert_eq!(runtime.state.page(), Page::Root);
     while runtime.busy() {
@@ -130,6 +132,7 @@ fn worker_does_not_block_input_and_commits_only_after_success() {
         std::thread::yield_now();
     }
     assert_eq!(runtime.state.value(Id::Volume), "65");
+    assert!(!runtime.mutations_pending());
 }
 
 #[test]
