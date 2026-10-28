@@ -1,9 +1,10 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
     io::{self, Write},
     path::Path,
 };
 
+use archr_index::{Game, SystemDef};
 use serde::{Deserialize, Serialize};
 
 use archr_io::{atomic_publish, read_utf8, Symlinks::Follow};
@@ -11,15 +12,17 @@ use archr_io::{atomic_publish, read_utf8, Symlinks::Follow};
 const MAX_STORE_BYTES: u64 = 256 * 1024;
 const MAX_RECENT: usize = 30;
 
-/// Launcher-owned favorites and recents, keyed by `system/rom-path` verbatim.
+/// Launcher-owned favorites and recents, keyed by `system/relative-rom-path`.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Store {
     #[serde(skip)]
     pub(crate) load_error: Option<String>,
     favorites: Vec<String>,
+    #[serde(skip)]
+    members: HashSet<String>,
     recent: Vec<String>,
-    imported_systems: Vec<String>,
+    imported_systems: BTreeSet<String>,
     imported_times: HashMap<String, u64>,
 }
 
@@ -33,11 +36,7 @@ impl Store {
         });
         match result {
             Ok(mut store) => {
-                for keys in [&mut store.favorites, &mut store.recent] {
-                    let mut seen = HashSet::new();
-                    keys.retain(|key| seen.insert(key.clone()));
-                }
-                store.recent.truncate(MAX_RECENT);
+                store.migrate(&[]);
                 store
             }
             Err(error) if error.kind() == io::ErrorKind::NotFound => Self::default(),
@@ -69,9 +68,10 @@ impl Store {
     }
 
     pub fn toggle_favorite(&mut self, key: &str) {
-        if self.is_favorite(key) {
+        if self.members.remove(key) {
             self.favorites.retain(|favorite| favorite != key);
         } else {
+            self.members.insert(key.to_owned());
             self.favorites.push(key.to_owned());
         }
     }
@@ -83,19 +83,52 @@ impl Store {
         self.recent.truncate(MAX_RECENT);
     }
 
+    /// Convert only absolute paths below their configured system directory.
+    /// Unknown systems/paths stay intact; no filesystem or symlink resolution.
+    pub fn migrate(&mut self, systems: &[SystemDef]) -> bool {
+        let mut changed = false;
+        let mut normalize = |key: &mut String| {
+            let relative = key.split_once('/').and_then(|(name, path)| {
+                systems
+                    .iter()
+                    .find(|sys| sys.name == name)
+                    .and_then(|sys| game_key(sys, Path::new(path)))
+            });
+            if let Some(relative) = relative {
+                changed |= *key != relative;
+                *key = relative;
+            }
+        };
+        for keys in [&mut self.favorites, &mut self.recent] {
+            let mut seen = HashSet::new();
+            keys.retain_mut(|key| {
+                normalize(key);
+                seen.insert(key.clone())
+            });
+        }
+        let mut times = HashMap::<String, u64>::new();
+        for (mut key, time) in self.imported_times.drain() {
+            normalize(&mut key);
+            let entry = times.entry(key).or_default();
+            *entry = (*entry).max(time);
+        }
+        self.imported_times = times;
+        self.recent.truncate(MAX_RECENT);
+        self.members = self.favorites.iter().cloned().collect();
+        changed
+    }
+
     /// Import ES metadata once per system, only after its games are loaded.
     /// Launcher history stays ahead of imported entries; ES entries retain UTC order.
-    pub fn import_games(&mut self, system: &str, games: &[archr_index::Game]) -> bool {
-        if self.imported_systems.iter().any(|name| name == system) {
+    pub fn import_games(&mut self, system: &SystemDef, games: &[Game]) -> bool {
+        if !self.imported_systems.insert(system.name.clone()) {
             return false;
         }
-        self.imported_systems.push(system.to_owned());
         for game in games {
-            let Some(path) = game.path.to_str() else {
+            let Some(key) = game_key(system, &game.path) else {
                 continue;
             };
-            let key = format!("{system}/{path}");
-            if game.favorite && !self.is_favorite(&key) {
+            if game.favorite && self.members.insert(key.clone()) {
                 self.favorites.push(key.clone());
             }
             if let Some(time) = game.last_played {
@@ -115,7 +148,7 @@ impl Store {
     }
 
     pub fn is_favorite(&self, key: &str) -> bool {
-        self.favorites.iter().any(|favorite| favorite == key)
+        self.members.contains(key)
     }
 
     pub fn favorites(&self) -> &[String] {
@@ -126,4 +159,9 @@ impl Store {
     pub fn recent(&self) -> &[String] {
         &self.recent
     }
+}
+
+pub fn game_key(system: &SystemDef, path: &Path) -> Option<String> {
+    let relative = path.strip_prefix(&system.path).ok()?.to_str()?;
+    Some(format!("{}/{relative}", system.name))
 }

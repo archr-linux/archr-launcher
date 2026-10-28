@@ -6,6 +6,7 @@
 //! decoding are size-limited and reject truncated payloads and trailing bytes.
 
 use std::fs;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
@@ -18,13 +19,13 @@ use crate::{scan_system_with_mapper, Game, SystemDef};
 
 const MAGIC: &[u8; 4] = b"ALAX";
 const HEADER_BYTES: u64 = 8;
-pub const CACHE_VERSION: u32 = 3;
+pub const CACHE_VERSION: u32 = 4;
 /// Maximum overview file size, including the header (1 MiB).
 pub const MAX_OVERVIEW_BYTES: u64 = 1024 * 1024;
 /// Maximum per-system cache file size, including the header (32 MiB).
 pub const MAX_SYSTEM_CACHE_BYTES: u64 = 32 * 1024 * 1024;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Overview {
     pub systems: Vec<SystemEntry>,
 }
@@ -42,7 +43,7 @@ pub struct SystemEntry {
 
 #[derive(Serialize, Deserialize)]
 struct GameCache {
-    dir_mtime: u64,
+    source_fingerprint: u64,
     games: Vec<Game>,
 }
 
@@ -54,13 +55,7 @@ pub fn load_overview(cache_dir: &Path) -> Option<Overview> {
 /// Scan every system, including empty/missing ones (which receive a zero count).
 /// This is background work, not part of the startup path.
 pub fn build_overview(systems: &[SystemDef]) -> Overview {
-    refresh_overview(
-        &Overview {
-            systems: Vec::new(),
-        },
-        systems,
-    )
-    .0
+    refresh_overview(&Overview::default(), systems).0
 }
 
 /// Stat unchanged systems without scanning. Definition/path/extension changes,
@@ -78,9 +73,9 @@ pub fn refresh_overview_with_mapper(
             .iter()
             .map(|sys| {
                 let previous = old.systems.iter().find(|entry| entry.name == sys.name);
-                let current = overview_fingerprint(sys);
+                let current = fingerprint(sys);
                 let count = previous
-                    .filter(|entry| current == Some(entry.source_fingerprint))
+                    .filter(|entry| current.map(|(_, hash)| hash) == Some(entry.source_fingerprint))
                     .map(|entry| entry.game_count)
                     .unwrap_or_else(|| {
                         u32::try_from(scan_system_with_mapper(sys, mapper).len())
@@ -90,8 +85,8 @@ pub fn refresh_overview_with_mapper(
                     name: sys.name.clone(),
                     fullname: sys.fullname.clone(),
                     game_count: count,
-                    dir_mtime: fingerprint(&sys.path).unwrap_or(0),
-                    source_fingerprint: current.unwrap_or(0),
+                    dir_mtime: current.map_or(0, |(newest, _)| newest),
+                    source_fingerprint: current.map_or(0, |(_, hash)| hash),
                 }
             })
             .collect(),
@@ -99,38 +94,16 @@ pub fn refresh_overview_with_mapper(
     let changed = overview != *old;
     (overview, changed)
 }
-fn overview_fingerprint(sys: &SystemDef) -> Option<u64> {
-    let stamp = fingerprint(&sys.path).or_else(|| {
-        fs::symlink_metadata(&sys.path)
-            .err()
-            .filter(|error| error.kind() == io::ErrorKind::NotFound)
-            .map(|_| 0)
-    })?;
-    let mut hash = 0xcbf29ce484222325u64;
-    for bytes in std::iter::once(sys.path.as_os_str().as_encoded_bytes())
-        .chain(sys.extensions.iter().map(|extension| extension.as_bytes()))
-        .chain(std::iter::once(stamp.to_le_bytes().as_slice()))
-    {
-        for byte in bytes {
-            hash = (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3);
-        }
-        hash = (hash ^ 255).wrapping_mul(0x100000001b3);
-    }
-    Some(hash)
-}
 
 /// Atomically replace the overview, creating the cache directory if necessary.
 pub fn save_overview(cache_dir: &Path, overview: &Overview) -> io::Result<()> {
-    write_cache(
-        &cache_dir.join("overview.bin"),
-        overview,
-        MAX_OVERVIEW_BYTES,
-    )
+    let path = cache_dir.join("overview.bin");
+    write_cache(&path, overview, MAX_OVERVIEW_BYTES)
 }
 
 /// Load cached games when the directory/gamelist/media fingerprint matches.
 /// Otherwise scan and best-effort rewrite the cache; write errors never hide ROMs.
-/// Changes inside nested ROM subfolders are not detected by the v1 fingerprint.
+/// Changes confined to nested ROM subfolders still need a parent/gamelist update.
 pub fn load_games(cache_dir: &Path, sys: &SystemDef) -> Vec<Game> {
     load_games_with_mapper(cache_dir, sys, &Path::to_owned)
 }
@@ -140,18 +113,21 @@ pub fn load_games_with_mapper(
     mapper: &dyn Fn(&Path) -> PathBuf,
 ) -> Vec<Game> {
     let path = cache_dir.join("systems").join(system_filename(&sys.name));
-    let dir_mtime = fingerprint(&sys.path);
-    if let Some(current) = dir_mtime {
+    let source_fingerprint = fingerprint(sys).map(|(_, hash)| hash);
+    if let Some(current) = source_fingerprint {
         if let Some(cached) = read_cache::<GameCache>(&path, MAX_SYSTEM_CACHE_BYTES) {
-            if cached.dir_mtime == current {
+            if cached.source_fingerprint == current {
                 return cached.games;
             }
         }
     }
 
     let games = scan_system_with_mapper(sys, mapper);
-    if let Some(dir_mtime) = dir_mtime {
-        let cached = GameCache { dir_mtime, games };
+    if let Some(source_fingerprint) = source_fingerprint {
+        let cached = GameCache {
+            source_fingerprint,
+            games,
+        };
         // A read-only/full/unavailable cache is not an indexing failure.
         let _ = write_cache(&path, &cached, MAX_SYSTEM_CACHE_BYTES);
         cached.games
@@ -219,13 +195,16 @@ fn system_filename(name: &str) -> PathBuf {
 /// A fixed number of stat calls, never directory listings. Missing optional
 /// paths are ignored; other metadata errors disable cache reuse rather than
 /// turning an unreadable fingerprint into an apparently valid one.
-fn fingerprint(system_dir: &Path) -> Option<u64> {
-    let root = fs::metadata(system_dir).ok()?;
-    if !root.is_dir() {
+fn fingerprint(sys: &SystemDef) -> Option<(u64, u64)> {
+    if !fs::metadata(&sys.path).ok()?.is_dir() {
         return None;
     }
-    let mut newest = root.modified().ok()?;
+    let mut hash = DefaultHasher::new();
+    sys.path.hash(&mut hash);
+    sys.extensions.hash(&mut hash);
+    let mut newest = 0;
     for relative in [
+        "",
         "gamelist.xml",
         "media/images",
         "media/covers",
@@ -235,16 +214,17 @@ fn fingerprint(system_dir: &Path) -> Option<u64> {
         "images",
         "videos",
     ] {
-        match fs::metadata(system_dir.join(relative)) {
-            Ok(metadata) => newest = newest.max(metadata.modified().ok()?),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        let stamp = match fs::metadata(sys.path.join(relative)) {
+            Ok(metadata) => {
+                let modified = metadata.modified().ok()?.duration_since(UNIX_EPOCH).ok()?;
+                let nanos = u64::try_from(modified.as_nanos()).ok()?;
+                newest = newest.max(nanos);
+                Some((nanos, metadata.is_file().then_some(metadata.len())))
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound && !relative.is_empty() => None,
             Err(_) => return None,
-        }
+        };
+        stamp.hash(&mut hash);
     }
-    newest
-        .duration_since(UNIX_EPOCH)
-        .ok()?
-        .as_nanos()
-        .try_into()
-        .ok()
+    Some((newest, hash.finish()))
 }

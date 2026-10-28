@@ -118,6 +118,76 @@ fn stale_mtime_triggers_rescan() {
 }
 
 #[test]
+fn system_identity_changes_invalidate_games_and_overview() {
+    for change in [
+        "extensions",
+        "path",
+        "gamelist",
+        "media",
+        "removed",
+        "same-stamp",
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let roms = dir.path().join("roms");
+        fs::create_dir_all(roms.join("images")).unwrap();
+        fs::write(roms.join("Game.sfc"), []).unwrap();
+        fs::write(roms.join("Game.zip"), []).unwrap();
+        let gamelist = roms.join("gamelist.xml");
+        fs::write(&gamelist, "<gameList/>").unwrap();
+        set_mtime(&gamelist, 100);
+        set_mtime(&roms.join("images"), 100);
+        set_mtime(&roms, 1000);
+        let mut sys = system(&roms);
+        let cache = dir.path().join("cache");
+        assert_eq!(load_games(&cache, &sys)[0].name, "Game");
+        let old = build_overview(std::slice::from_ref(&sys));
+        let expected = match change {
+            "extensions" => {
+                sys.extensions = vec![".zip".into()];
+                "Game"
+            }
+            "path" => {
+                sys.path = dir.path().join("other");
+                fs::create_dir(&sys.path).unwrap();
+                fs::write(sys.path.join("Other.sfc"), []).unwrap();
+                set_mtime(&sys.path, 1000);
+                "Other"
+            }
+            "gamelist" | "same-stamp" => {
+                fs::write(
+                    &gamelist,
+                    "<gameList><game><path>Game.sfc</path><name>New title</name></game></gameList>",
+                )
+                .unwrap();
+                set_mtime(&gamelist, if change == "same-stamp" { 100 } else { 200 });
+                "New title"
+            }
+            "media" => {
+                fs::write(roms.join("images/Game.png"), []).unwrap();
+                set_mtime(&roms.join("images"), 200);
+                "Game"
+            }
+            "removed" => {
+                fs::remove_file(&gamelist).unwrap();
+                "Game"
+            }
+            _ => unreachable!(),
+        };
+        set_mtime(&roms, 1000);
+        let games = load_games(&cache, &sys);
+        assert_eq!(games[0].name, expected, "{change}");
+        if change == "extensions" {
+            assert_eq!(games[0].path.extension().unwrap(), "zip");
+        }
+        if change == "media" {
+            assert_eq!(games[0].image, Some(roms.join("images/Game.png")));
+        }
+        let (_, changed) = archr_index::cache::refresh_overview(&old, &[sys]);
+        assert!(changed, "{change}");
+    }
+}
+
+#[test]
 fn empty_systems_have_zero_count() {
     let dir = tempfile::tempdir().unwrap();
     let empty = dir.path().join("empty");
@@ -163,7 +233,7 @@ fn unchanged_fingerprint_uses_cache_and_preserves_all_game_fields() {
         "<gameList><game><path>Game.sfc</path><name>Custom title</name><image>cover.png</image><video>clip.mp4</video><favorite>true</favorite><lastplayed>20260102T030405</lastplayed></game></gameList>").unwrap();
     let sys = system(&roms);
     let cache = dir.path().join("cache");
-    let fingerprint = build_overview(std::slice::from_ref(&sys)).systems[0].dir_mtime;
+    let fingerprint = build_overview(std::slice::from_ref(&sys)).systems[0].source_fingerprint;
     let games = load_games(&cache, &sys);
     assert_eq!(games.len(), 1);
     assert_eq!(games[0].path, roms.join("Game.sfc"));

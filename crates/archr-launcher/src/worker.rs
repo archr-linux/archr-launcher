@@ -28,7 +28,7 @@ pub enum Update {
     Boot {
         systems: Vec<SystemDef>,
         config: Option<SystemCfg>,
-        store: Store,
+        store: Box<Store>,
         banner: Option<Message>,
     },
     Overview(Overview),
@@ -81,7 +81,7 @@ pub fn start(paths: Paths, initial: Vec<SystemDef>) -> Worker {
         let boot = Update::Boot {
             systems: systems.clone(),
             config: SystemCfg::load(&paths.config).ok(),
-            store,
+            store: Box::new(store),
             banner,
         };
         if done.send(boot).is_err() {
@@ -92,9 +92,7 @@ pub fn start(paths: Paths, initial: Vec<SystemDef>) -> Worker {
         let overview_systems = systems.clone();
         let overview_done = done.clone();
         std::thread::spawn(move || {
-            let old = cache::load_overview(&overview_paths.cache).unwrap_or(cache::Overview {
-                systems: Vec::new(),
-            });
+            let old = cache::load_overview(&overview_paths.cache).unwrap_or_default();
             let (overview, changed) =
                 cache::refresh_overview_with_mapper(&old, &overview_systems, &|path| {
                     overview_paths.remap(path)

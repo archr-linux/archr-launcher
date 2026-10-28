@@ -4,7 +4,7 @@ use crate::{
     paths::Paths,
     persistence::StoreWriter,
     state::{DataSource, Outcome},
-    store::Store,
+    store::{game_key, Store},
     worker::{self, Update, Work, Worker},
 };
 use archr_config::SystemCfg;
@@ -13,7 +13,7 @@ use archr_index::{
     Game, SystemDef,
 };
 use archr_ui::{i18n::Message, startup::StartupTrace, startup_phase};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 pub struct Library {
     pub paths: Paths,
@@ -26,9 +26,8 @@ pub struct Library {
     definitions: Vec<SystemDef>,
     games: HashMap<String, Vec<Game>>,
     origins: HashMap<String, Vec<(String, usize)>>,
-    requested: HashSet<String>,
-    urgent: HashSet<String>,
-    collections: HashSet<String>,
+    members: HashMap<String, (String, usize)>,
+    requested: HashMap<String, bool>,
     config: Option<SystemCfg>,
     overrides: HashMap<(String, String), (String, String)>,
     store: Store,
@@ -80,9 +79,8 @@ impl Library {
             definitions,
             games: HashMap::new(),
             origins: HashMap::new(),
-            requested: HashSet::new(),
-            urgent: HashSet::new(),
-            collections: HashSet::new(),
+            requested: HashMap::new(),
+            members: HashMap::new(),
             config: None,
             overrides: HashMap::new(),
             store: Store::default(),
@@ -98,51 +96,42 @@ impl Library {
         if !self.ready {
             return;
         }
-        if system.starts_with('@') {
-            let Some(keys) = self.collection_keys(system) else {
-                return;
-            };
+        if let Some(keys) = self.collection_keys(system) {
             let names: Vec<_> = keys
                 .iter()
                 .filter_map(|key| key.split_once('/').map(|(name, _)| name.to_owned()))
                 .collect();
-            let entered = self.collections.insert(system.to_owned());
             for name in names {
                 self.ensure_system(&name, true);
             }
-            if entered {
-                self.refresh_collections();
+            if !self.origins.contains_key(system) {
+                self.origins.insert(system.to_owned(), Vec::new());
+                self.refresh_collection(system);
             }
-        } else {
+        } else if !system.starts_with('@') {
             self.ensure_system(system, false);
         }
     }
     fn ensure_system(&mut self, system: &str, background: bool) {
         if self.games.contains_key(system)
-            || (if background {
-                &self.requested
-            } else {
-                &self.urgent
-            })
-            .contains(system)
+            || self
+                .requested
+                .get(system)
+                .is_some_and(|urgent| background || *urgent)
         {
             return;
         }
-        if let Some(worker) = &self.worker {
-            if worker
-                .send
-                .send(Work::Games {
-                    name: system.to_owned(),
-                    background,
-                })
-                .is_ok()
-            {
-                self.requested.insert(system.to_owned());
-                if !background {
-                    self.urgent.insert(system.to_owned());
-                }
-            }
+        let work = Work::Games {
+            name: system.to_owned(),
+            background,
+        };
+        if self.send(work).is_ok() {
+            self.requested.insert(system.to_owned(), !background);
         }
+    }
+    fn send(&self, work: Work) -> Result<(), String> {
+        let worker = self.worker.as_ref().ok_or("error.index")?;
+        worker.send.send(work).map_err(|error| error.to_string())
     }
     fn collection_keys(&self, name: &str) -> Option<&[String]> {
         match name {
@@ -176,7 +165,10 @@ impl Library {
                 } => {
                     self.definitions = systems;
                     self.config = config;
-                    self.store = store;
+                    self.store = *store;
+                    if self.store.migrate(&self.definitions) {
+                        self.queue_store();
+                    }
                     if banner.is_some() {
                         self.banner = banner;
                     }
@@ -186,11 +178,23 @@ impl Library {
                     self.overview = overview;
                     self.counts_known = true;
                 }
-                Update::Games(system, games) => {
-                    if self.store.import_games(&system, &games) {
-                        self.queue_store();
+                Update::Games(system, mut games) => {
+                    if let Some(definition) = self.definitions.iter().find(|sys| sys.name == system)
+                    {
+                        if self.store.import_games(definition, &games) {
+                            self.queue_store();
+                        }
+                        for (index, game) in games.iter_mut().enumerate() {
+                            if let Some(key) = game_key(definition, &game.path) {
+                                game.favorite = self.store.is_favorite(&key);
+                                self.members.insert(key, (system.clone(), index));
+                            }
+                        }
                     }
                     self.games.insert(system, games);
+                    for name in ["@favorites", "@recent"] {
+                        self.refresh_collection(name);
+                    }
                 }
                 Update::CoreSaved(system, rom, result) => {
                     self.pending_writes = self.pending_writes.saturating_sub(1);
@@ -212,9 +216,6 @@ impl Library {
             self.banner = Some(Message::new("error.store_save"));
             changed = true;
         }
-        if changed {
-            self.refresh_collections();
-        }
         changed
     }
     pub fn handle(&mut self, outcome: Outcome, controllers: &str) -> Result<bool, String> {
@@ -223,8 +224,17 @@ impl Library {
             Outcome::ToggleFavorite { system, game } => {
                 let key = self.game_key(&system, game).ok_or("error.game_missing")?;
                 self.store.toggle_favorite(&key);
+                let favorite = self.store.is_favorite(&key);
+                self.games.get_mut(&system).unwrap()[game].favorite = favorite;
+                if let Some(index) = self.origins.get("@recent").and_then(|origins| {
+                    origins
+                        .iter()
+                        .position(|origin| origin.0 == system && origin.1 == game)
+                }) {
+                    self.games.get_mut("@recent").unwrap()[index].favorite = favorite;
+                }
                 self.queue_store();
-                self.refresh_collections();
+                self.refresh_collection("@favorites");
             }
             Outcome::SetCore {
                 system,
@@ -243,30 +253,21 @@ impl Library {
                     (system.clone(), rom.clone()),
                     (emulator.clone(), core.clone()),
                 );
-                self.worker
-                    .as_ref()
-                    .ok_or("error.index")?
-                    .send
-                    .send(Work::Core {
-                        system,
-                        rom,
-                        emulator,
-                        core,
-                    })
-                    .map_err(|error| error.to_string())?;
+                self.send(Work::Core {
+                    system,
+                    rom,
+                    emulator,
+                    core,
+                })?;
                 self.pending_writes += 1;
                 self.write_failed = false;
             }
             Outcome::Launch { system, game } => {
-                let rom = &self
-                    .games(&system)
-                    .get(game)
-                    .ok_or("error.game_missing")?
-                    .path;
+                let selected = self.games(&system).get(game).ok_or("error.game_missing")?;
                 let (emulator, core) = self.current_core(&system, game).ok_or("error.no_core")?;
                 let command = launch_command_with(
                     &self.paths.at("/usr/bin/runemu.sh"),
-                    rom,
+                    &selected.path,
                     &system,
                     &core,
                     &emulator,
@@ -275,6 +276,7 @@ impl Library {
                 .map_err(|error| error.to_string())?;
                 let key = self.game_key(&system, game).ok_or("error.game_missing")?;
                 self.store.push_recent(&key);
+                self.refresh_collection("@recent");
                 self.flush_store()?;
                 write_next(&self.paths.run, &command).map_err(|error| error.to_string())?;
                 return Ok(true);
@@ -305,50 +307,42 @@ impl Library {
             .ok_or("error.persistence")?
             .flush(self.store.clone())
     }
-    fn game_key(&self, system: &str, index: usize) -> Option<String> {
-        self.games(system)
-            .get(index)?
-            .path
-            .to_str()
-            .map(|path| format!("{system}/{path}"))
+    fn definition(&self, name: &str) -> Option<&SystemDef> {
+        self.definitions.iter().find(|system| system.name == name)
     }
-    fn refresh_collections(&mut self) {
-        for (system, games) in &mut self.games {
-            if system.starts_with('@') {
+    fn game_key(&self, system: &str, index: usize) -> Option<String> {
+        game_key(
+            self.definition(system)?,
+            &self.games(system).get(index)?.path,
+        )
+    }
+    fn refresh_collection(&mut self, name: &str) {
+        if !self.origins.contains_key(name) {
+            return;
+        }
+        let keys = self.collection_keys(name).unwrap();
+        let desired: Vec<_> = keys
+            .iter()
+            .filter_map(|key| self.members.get(key).cloned())
+            .collect();
+        let mut games = self.games.remove(name).unwrap_or_default();
+        let origins = self.origins.get_mut(name).unwrap();
+        for (index, origin) in desired.iter().enumerate() {
+            if origins.get(index) == Some(origin) {
                 continue;
             }
-            for game in games {
-                game.favorite = self
-                    .store
-                    .is_favorite(&format!("{system}/{}", game.path.display()));
+            if let Some(offset) = origins[index..].iter().position(|entry| entry == origin) {
+                // Keep payloads in place; only a newly visible member needs a clone.
+                origins.swap(index, index + offset);
+                games.swap(index, index + offset);
+            } else {
+                origins.insert(index, origin.clone());
+                games.insert(index, self.games[&origin.0][origin.1].clone());
             }
         }
-        for (name, keys) in [
-            ("@favorites", self.store.favorites()),
-            ("@recent", self.store.recent()),
-        ] {
-            if !self.collections.contains(name) {
-                continue;
-            }
-            let mut collection = Vec::new();
-            let mut origins = Vec::new();
-            for key in keys {
-                let Some((system, path)) = key.split_once('/') else {
-                    continue;
-                };
-                if let Some((index, game)) = self.games.get(system).and_then(|games| {
-                    games
-                        .iter()
-                        .enumerate()
-                        .find(|(_, game)| game.path.to_str() == Some(path))
-                }) {
-                    collection.push(game.clone());
-                    origins.push((system.to_owned(), index));
-                }
-            }
-            self.games.insert(name.to_owned(), collection);
-            self.origins.insert(name.to_owned(), origins);
-        }
+        origins.truncate(desired.len());
+        games.truncate(desired.len());
+        self.games.insert(name.to_owned(), games);
     }
 }
 impl DataSource for Library {
@@ -359,37 +353,27 @@ impl DataSource for Library {
         self.collection_keys(collection).map_or(0, <[String]>::len)
     }
     fn games(&self, system: &str) -> &[Game] {
-        self.games
-            .get(system)
-            .map(Vec::as_slice)
-            .unwrap_or_default()
+        self.games.get(system).map_or(&[], Vec::as_slice)
     }
     fn origin(&self, system: &str, game: usize) -> Option<(String, usize)> {
         if system.starts_with('@') {
             self.origins.get(system)?.get(game).cloned()
         } else {
-            self.games(system)
-                .get(game)
-                .map(|_| (system.to_owned(), game))
+            self.games(system).get(game)?;
+            Some((system.to_owned(), game))
         }
     }
     fn cores(&self, system: &str) -> Vec<(String, String)> {
-        self.definitions
-            .iter()
-            .find(|definition| definition.name == system)
-            .map(|definition| {
-                definition
-                    .emulators
+        self.definition(system)
+            .into_iter()
+            .flat_map(|definition| &definition.emulators)
+            .flat_map(|emulator| {
+                emulator
+                    .cores
                     .iter()
-                    .flat_map(|emulator| {
-                        emulator
-                            .cores
-                            .iter()
-                            .map(|core| (emulator.name.clone(), core.name.clone()))
-                    })
-                    .collect()
+                    .map(|core| (emulator.name.clone(), core.name.clone()))
             })
-            .unwrap_or_default()
+            .collect()
     }
     fn current_core(&self, system: &str, game: usize) -> Option<(String, String)> {
         let game = self.games(system).get(game)?;
@@ -398,9 +382,7 @@ impl DataSource for Library {
             return Some(pair.clone());
         }
         let default = self
-            .definitions
-            .iter()
-            .find(|definition| definition.name == system)
+            .definition(system)
             .and_then(SystemDef::default_emulator_core);
         let get = |key| {
             self.config
