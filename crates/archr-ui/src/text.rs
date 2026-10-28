@@ -3,7 +3,7 @@
 // image-provided font), loaded only for a CJK locale or an uncovered glyph.
 // Keep phase-1 Latin/Cyrillic startup free of CJK font I/O and memory costs.
 use crate::{
-    badges::{self, BadgeKey, SUPERSAMPLE},
+    badges::{self, BadgeKey},
     icons::{self, Glyph},
     startup::StartupTrace,
     startup_phase,
@@ -368,10 +368,7 @@ impl<'font, 'texture> TextCache<'font, 'texture> {
             let hit = self.badges.remove(index).expect("located badge");
             self.badges.push_back(hit);
         } else {
-            let surface = badges::render(
-                self.font(Face::Semibold, key.size * SUPERSAMPLE as u16)?,
-                key,
-            )?;
+            let surface = badges::render(self.font(Face::Semibold, key.size)?, key)?;
             self.first_rasterization
                 .phase_once("first text rasterization");
             let mut texture = self
@@ -379,7 +376,6 @@ impl<'font, 'texture> TextCache<'font, 'texture> {
                 .create_texture_from_surface(surface)
                 .map_err(|e| e.to_string())?;
             texture.set_blend_mode(BlendMode::Blend);
-            texture.set_scale_mode(ScaleMode::Linear);
             if self.badges.len() == 16 {
                 self.badges.pop_front();
             }
@@ -770,8 +766,7 @@ mod tests {
         );
         for (_, texture) in &cache.badges {
             let q = texture.query();
-            assert_eq!((q.width, q.height), (80, 80));
-            assert_eq!(texture.scale_mode(), ScaleMode::Linear);
+            assert_eq!((q.width, q.height), (20, 20), "drawn 1:1, never resampled");
         }
         let handle = cache.font(Face::Semibold, 44).unwrap().raw();
         for size in [12, 17, 44, 13, 44] {
@@ -897,7 +892,7 @@ mod tests {
                 .unwrap()
                 .get_style()
                 .contains(FontStyle::BOLD),
-            "a regular-only fallback needs synthesized bold at 4× regardless of filename"
+            "a regular-only fallback needs synthesized bold regardless of filename"
         );
         // Read/open/rasterize on a scoped worker, then remove the source file.
         // Resizing still works after handover because the face owns its bytes.
