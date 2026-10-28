@@ -42,7 +42,6 @@ pub fn launch_command_with(
             "executable path must be valid UTF-8",
         )
     })?;
-    let quote = |argument: &str| format!("'{}'", argument.replace('\'', "'\\''"));
     // Keep the fixed production executable literal; quote test executable paths.
     let bin = if bin == "/usr/bin/runemu.sh" {
         bin.to_owned()
@@ -58,6 +57,54 @@ pub fn launch_command_with(
         quote(&format!("--emulator={emulator}")),
         quote(&format!("--controllers={controllers}")),
     ))
+}
+
+/// Expand a catalog `<command>` for a system without emulators, as ES did.
+/// `%ROM%`, `%BASENAME%` and `%SYSTEM%` become single quoted shell words; any
+/// other placeholder, or one inside quotes, is rejected rather than guessed.
+pub fn catalog_command(template: &str, rom: &Path, system: &str) -> io::Result<String> {
+    let invalid = |message: String| io::Error::new(io::ErrorKind::InvalidInput, message);
+    let rom_text = rom
+        .to_str()
+        .ok_or_else(|| invalid("ROM path must be valid UTF-8".to_owned()))?;
+    let basename = rom.file_stem().and_then(|stem| stem.to_str()).unwrap_or("");
+    let mut command = String::with_capacity(template.len() + rom_text.len());
+    let (mut single, mut double) = (false, false);
+    let mut rest = template;
+    while let Some(c) = rest.chars().next() {
+        let placeholder = rest
+            .strip_prefix('%')
+            .and_then(|tail| tail.find('%').map(|end| &tail[..end]))
+            .filter(|name| {
+                !name.is_empty() && name.bytes().all(|b| b.is_ascii_uppercase() || b == b'_')
+            });
+        if let Some(name) = placeholder {
+            let value = match name {
+                "ROM" => rom_text,
+                "BASENAME" => basename,
+                "SYSTEM" => system,
+                _ => return Err(invalid(format!("unsupported placeholder %{name}%"))),
+            };
+            if single || double {
+                return Err(invalid(format!("quoted placeholder %{name}%")));
+            }
+            command.push_str(&quote(value));
+            rest = &rest[name.len() + 2..];
+            continue;
+        }
+        match c {
+            '\'' if !double => single = !single,
+            '"' if !single => double = !double,
+            _ => {}
+        }
+        command.push(c);
+        rest = &rest[c.len_utf8()..];
+    }
+    Ok(command)
+}
+
+fn quote(argument: &str) -> String {
+    format!("'{}'", argument.replace('\'', "'\\''"))
 }
 
 /// Publish exactly one supervisor instruction, rejecting multiline or NUL data
@@ -146,5 +193,50 @@ mod tests {
                 "--controllers=player 1 \"pad\"; $(echo injected) 'two'"
             ]
         );
+    }
+
+    #[test]
+    fn catalog_command_quotes_each_placeholder_as_one_word() {
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("args");
+        fs::write(&bin, "#!/bin/sh\nprintf '%s\\n' \"$@\"\n").unwrap();
+        fs::set_permissions(&bin, fs::Permissions::from_mode(0o700)).unwrap();
+        let rom = Path::new("/storage/.config/modules/Tom's $(x) \"Mount\" NFS.sh");
+        let template = format!("{} %ROM% --base=%BASENAME% -P%SYSTEM% 100%", bin.display());
+        let command = catalog_command(&template, rom, "tools").unwrap();
+        let result = Command::new("sh").arg("-c").arg(command).output().unwrap();
+        assert!(result.status.success());
+        assert_eq!(
+            String::from_utf8(result.stdout)
+                .unwrap()
+                .lines()
+                .collect::<Vec<_>>(),
+            vec![
+                rom.to_str().unwrap(),
+                "--base=Tom's $(x) \"Mount\" NFS",
+                "-Ptools",
+                "100%"
+            ]
+        );
+        assert_eq!(
+            catalog_command("/usr/bin/true", rom, "imageviewer").unwrap(),
+            "/usr/bin/true"
+        );
+    }
+
+    #[test]
+    fn catalog_command_rejects_what_it_cannot_expand_safely() {
+        let rom = Path::new("/roms/ok.sh");
+        for template in [
+            "/usr/bin/runemu.sh %ROM% --core=%CORE%",
+            "foot \"%ROM%\"",
+            "foot '%ROM%'",
+        ] {
+            assert_eq!(
+                catalog_command(template, rom, "tools").unwrap_err().kind(),
+                io::ErrorKind::InvalidInput,
+                "{template}"
+            );
+        }
     }
 }

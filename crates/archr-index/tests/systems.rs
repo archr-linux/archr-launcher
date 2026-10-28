@@ -15,6 +15,9 @@ fn parses_three_systems() {
     assert_eq!(systems[0].name, "3do");
     assert_eq!(systems[0].fullname, "3DO");
     assert_eq!(systems[0].path, Path::new("/storage/roms/3do"));
+    assert!(systems[0]
+        .command
+        .starts_with("/usr/bin/runemu.sh %ROM% -P%SYSTEM%"));
     assert_eq!(systems[1].name, "amiga");
     assert_eq!(systems[1].fullname, "Amiga");
     assert_eq!(systems[1].path, Path::new("/storage/roms/amiga"));

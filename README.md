@@ -104,6 +104,11 @@ no desenho. Sem display, os mesmos fluxos podem rodar com
 - Escritas de núcleo são serializadas em worker; emulador e núcleo são publicados
   juntos, sob uma única trava/rename do `system.cfg`. Um lançamento aguarda essas
   escritas sem bloquear o event loop.
+- Sistemas com emuladores usam o contrato do `runemu.sh`. Sistemas sem
+  emuladores (`tools`, `moonlight`, `imageviewer`) executam o `<command>` do
+  catálogo pelo mesmo `next`; `%ROM%`, `%BASENAME%` e `%SYSTEM%` viram uma
+  palavra de shell cada. Outros marcadores, ou um marcador entre aspas, são
+  recusados com `error.no_core` em vez de adivinhados.
 - Falhas do jogo são lidas de `last-exit`, exibidas por alguns segundos e
   apontam para `/var/log/exec.log`, usado por `runemu.sh`.
 

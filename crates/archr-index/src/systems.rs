@@ -15,6 +15,8 @@ pub struct SystemDef {
     pub release: String,
     pub path: PathBuf,
     pub extensions: Vec<String>,
+    /// Launch template for systems without emulators (e.g. `tools`).
+    pub command: String,
     pub emulators: Vec<Emulator>,
 }
 
@@ -95,6 +97,7 @@ fn read_system<R: BufRead>(reader: &mut Reader<R>) -> Result<SystemDef, IndexErr
                     .map(str::to_lowercase)
                     .collect();
             }
+            b"command" => system.command = read_text(reader)?,
             b"emulators" => read_children(reader, b"emulators", |reader, child| {
                 if child.name().as_ref() == b"emulator" {
                     system.emulators.push(read_emulator(reader, child)?);
