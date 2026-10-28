@@ -15,6 +15,8 @@
 "menu.suspend" = "Suspender"
 "menu.reboot" = "Reiniciar"
 "menu.shutdown" = "Desligar"
+"menu.move" = "Mover"
+"menu.restore_order" = "Restaurar ordem padrão"
 "menu.default" = "Padrão"
 "notice.opening" = "Abrindo {game}…"
 "notice.game" = "jogo"

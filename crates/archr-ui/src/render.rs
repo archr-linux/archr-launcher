@@ -447,11 +447,16 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         if matches!(app.screen, Screen::StartHub { .. }) {
             self.hub(app, data, theme)?;
         } else {
-            self.list(backdrop, cursor, data, theme)?;
+            let rows = if matches!(backdrop, Screen::Systems) {
+                app.rows(data)
+            } else {
+                Vec::new()
+            };
+            self.list(backdrop, &rows, cursor, data, theme)?;
             // Keep the first present to the prepared list; the panel follows
             // on the redraw requested when tick starts the artwork worker.
             if self.has_presented && matches!(backdrop, Screen::Systems) {
-                self.system_panel(&App::system_rows(data), cursor, data, theme)?;
+                self.system_panel(&rows, cursor, data, theme)?;
             }
             if let Screen::Games { system } = backdrop {
                 self.cover(system, cursor, data, theme, cover)?;
@@ -624,6 +629,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
     fn list(
         &mut self,
         screen: &Screen,
+        systems: &[String],
         cursor: usize,
         data: &dyn DataSource,
         theme: &Theme,
@@ -631,7 +637,6 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         let Frame {
             width, height, now, ..
         } = self.frame;
-        let systems = App::system_rows(data);
         let (key, len, collections, is_games) = match screen {
             Screen::Games { system } => (system.clone(), data.games(system).len(), 0, true),
             _ => (
@@ -1014,7 +1019,8 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         self.scrim(theme, 1.2)?;
         let items = app.quick_menu_items(data);
         let has_core = matches!(items.first(), Some(QuickItem::Core));
-        let panel_h = if has_core { 300. } else { 256. };
+        let (base_h, base_items) = if has_core { (300., 4) } else { (256., 3) };
+        let panel_h = base_h + 42. * items.len().saturating_sub(base_items) as f32;
         // Optical centering: the approved modal sits 20px above center.
         let panel = self.modal(theme, (340., 32., panel_h, -self.px(20.)))?;
         let (title, subtitle) = if let Screen::QuickMenu {
@@ -1048,7 +1054,10 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         )?;
         let top = panel.y() + self.px(64.);
         let row = self.px(42.);
-        let divider_index = if has_core { 2 } else { 1 };
+        let divider_index = items
+            .iter()
+            .position(|item| *item == QuickItem::Reboot)
+            .unwrap_or(1);
         let core_extra = if has_core { self.px(4.) } else { 0 };
         let separator = self.px(10.);
         let offset = |index: usize| {
@@ -1088,6 +1097,8 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             let c = selection(selected, theme.text, theme.highlight_text);
             let label = match item {
                 QuickItem::Core => "menu.core",
+                QuickItem::Move => "menu.move",
+                QuickItem::RestoreOrder => "menu.restore_order",
                 QuickItem::Suspend => "menu.suspend",
                 QuickItem::Reboot => "menu.reboot",
                 QuickItem::Shutdown => "menu.shutdown",

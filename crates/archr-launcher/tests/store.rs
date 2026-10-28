@@ -199,3 +199,16 @@ fn save_accepts_exactly_256_kib_and_rejects_further_growth() {
     assert_eq!(fs::read(path).unwrap(), previous);
     assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
 }
+
+#[test]
+fn system_order_roundtrips_and_clears() {
+    let dir = tempdir().unwrap();
+    let mut store = Store::load(dir.path());
+    assert!(store.order().is_empty());
+    store.set_order(["snes", "@recent"].map(String::from).into());
+    store.save(dir.path()).unwrap();
+    assert_eq!(Store::load(dir.path()).order(), ["snes", "@recent"]);
+    store.set_order(Vec::new());
+    store.save(dir.path()).unwrap();
+    assert!(Store::load(dir.path()).order().is_empty());
+}

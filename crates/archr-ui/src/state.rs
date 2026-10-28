@@ -2,6 +2,7 @@
 
 use archr_index::{cache::SystemEntry, Game};
 mod hub;
+mod order;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Button {
@@ -60,11 +61,15 @@ pub enum Outcome {
         core: String,
     },
     Action(SessionAction),
+    /// Replaces the saved system order; empty restores the default order.
+    SetOrder(Vec<String>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum QuickItem {
     Core,
+    Move,
+    RestoreOrder,
     Suspend,
     Reboot,
     Shutdown,
@@ -88,6 +93,10 @@ pub trait DataSource {
     fn favorite_count(&self, _system: &str) -> usize {
         0
     }
+    /// Saved system ids in user order; empty while the default order applies.
+    fn system_order(&self) -> &[String] {
+        &[]
+    }
     fn cores(&self, system: &str) -> Vec<(String, String)>;
     fn current_core(&self, system: &str, game: usize) -> Option<(String, String)>;
 }
@@ -97,6 +106,7 @@ pub struct App {
     pub cursor: usize,
     pub page_size: usize,
     history: Vec<(Screen, usize)>,
+    moving: Option<order::Moving>,
     selected_core: Option<(String, String)>,
 }
 
@@ -107,6 +117,7 @@ impl App {
             cursor: 0,
             page_size,
             history: Vec::new(),
+            moving: None,
             selected_core: None,
         }
     }
@@ -121,35 +132,17 @@ impl App {
         (&self.screen, self.cursor)
     }
 
-    /// Shared row ordering for navigation and rendering.
-    pub fn system_rows(data: &dyn DataSource) -> Vec<String> {
-        ["@favorites", "@recent"]
-            .into_iter()
-            .filter(|name| data.collection_len(name) > 0)
-            .map(str::to_owned)
-            .chain(
-                data.systems()
-                    .iter()
-                    .filter(|system| system.game_count > 0)
-                    .map(|system| system.name.clone()),
-            )
-            .collect()
-    }
-
     pub fn quick_menu_items(&self, data: &dyn DataSource) -> &'static [QuickItem] {
-        const ITEMS: &[QuickItem] = &[
-            QuickItem::Core,
-            QuickItem::Suspend,
-            QuickItem::Reboot,
-            QuickItem::Shutdown,
-        ];
+        use QuickItem::*;
+        const GAME: &[QuickItem] = &[Core, Suspend, Reboot, Shutdown];
         match &self.screen {
-            Screen::QuickMenu { game } => {
-                let core = game
-                    .as_ref()
-                    .is_some_and(|(system, _)| data.cores(system).len() > 1);
-                &ITEMS[usize::from(!core)..]
+            Screen::QuickMenu {
+                game: Some((system, _)),
+            } => &GAME[usize::from(data.cores(system).len() <= 1)..],
+            Screen::QuickMenu { game: None } if data.system_order().is_empty() => {
+                &[Move, Suspend, Reboot, Shutdown]
             }
+            Screen::QuickMenu { game: None } => &[Move, RestoreOrder, Suspend, Reboot, Shutdown],
             _ => &[],
         }
     }
@@ -162,6 +155,9 @@ impl App {
     /// Returns effects for the caller to apply. Core selection is tracked locally
     /// while the quick menu is open, independently of persistence timing.
     pub fn handle(&mut self, b: Button, data: &dyn DataSource) -> Outcome {
+        if self.moving.is_some() {
+            return self.handle_move(b);
+        }
         if matches!(self.screen, Screen::Systems) && b == Button::Start {
             self.screen = Screen::StartHub {
                 row: 0,
@@ -238,6 +234,14 @@ impl App {
                 let items = self.quick_menu_items(data);
                 match (b, items.get(self.cursor)) {
                     (Button::B, _) => self.back(),
+                    (Button::A, Some(QuickItem::Move)) => {
+                        self.back();
+                        self.begin_move(data);
+                    }
+                    (Button::A, Some(QuickItem::RestoreOrder)) => {
+                        self.back();
+                        return self.restore_order(data);
+                    }
                     (Button::A, Some(QuickItem::Suspend)) => {
                         return Outcome::Action(SessionAction::Suspend);
                     }

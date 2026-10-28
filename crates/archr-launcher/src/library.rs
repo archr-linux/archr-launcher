@@ -3,7 +3,7 @@ use crate::{
     handoff::{launch_command_with, write_next},
     paths::Paths,
     persistence::StoreWriter,
-    state::{DataSource, Outcome},
+    state::{App, DataSource, Outcome},
     store::{game_key, Store},
     worker::{self, Update, Work, Worker},
 };
@@ -281,6 +281,13 @@ impl Library {
                 write_next(&self.paths.run, &command).map_err(|error| error.to_string())?;
                 return Ok(true);
             }
+            Outcome::SetOrder(order) => {
+                // An order equal to the default is stored as no custom order.
+                let custom = order != App::default_rows(self);
+                self.store
+                    .set_order(if custom { order } else { Vec::new() });
+                self.queue_store();
+            }
             Outcome::Action(_) | Outcome::ToggleWifi => return Err("error.operation".to_owned()),
         }
         Ok(false)
@@ -366,6 +373,9 @@ impl DataSource for Library {
     fn manufacturer(&self, system: &str) -> Option<(&str, &str)> {
         let def = self.definition(system)?;
         Some((&def.manufacturer, &def.release))
+    }
+    fn system_order(&self) -> &[String] {
+        self.store.order()
     }
     fn favorite_count(&self, system: &str) -> usize {
         self.store

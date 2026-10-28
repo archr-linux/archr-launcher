@@ -329,3 +329,24 @@ fn invalid_store_is_visible_and_never_replaced_on_exit() {
     library.finish().unwrap();
     assert_eq!(fs::read_to_string(path).unwrap(), "broken [");
 }
+
+#[test]
+fn system_order_is_saved_off_thread_reloaded_and_default_order_clears_it() {
+    let (_dir, paths) = fixture();
+    let mut library = ready(&paths, None);
+    let custom = ["nes", "@favorites"].map(String::from).to_vec();
+    assert!(!library
+        .handle(Outcome::SetOrder(custom.clone()), "")
+        .unwrap());
+    assert_eq!(App::system_rows(&library), ["nes", "@favorites"]);
+    library.finish().unwrap();
+    assert_eq!(Store::load(&paths.store).order(), custom);
+    let mut reopened = ready(&paths, None);
+    assert_eq!(App::system_rows(&reopened), ["nes", "@favorites"]);
+    // Saving the default arrangement is the same as having no custom order.
+    let default = ["@favorites", "nes"].map(String::from).to_vec();
+    reopened.handle(Outcome::SetOrder(default), "").unwrap();
+    assert!(reopened.system_order().is_empty());
+    reopened.finish().unwrap();
+    assert!(Store::load(&paths.store).order().is_empty());
+}

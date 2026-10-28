@@ -190,16 +190,13 @@ fn run(
         controllers.poll_mappings();
         dirty |= ui.tick() || ui.animating();
         let selected_system = if app.screen == Screen::Systems {
-            App::system_rows(&library).get(app.cursor).cloned()
+            app.rows(&library).get(app.cursor).cloned()
         } else {
             None
         };
         if library.poll() {
             if let Some(name) = selected_system {
-                if let Some(index) = App::system_rows(&library)
-                    .iter()
-                    .position(|system| *system == name)
-                {
+                if let Some(index) = app.rows(&library).iter().position(|system| *system == name) {
                     app.cursor = index;
                 }
             }

@@ -15,6 +15,8 @@
 "menu.suspend" = "Sleep"
 "menu.reboot" = "Restart"
 "menu.shutdown" = "Power off"
+"menu.move" = "Move"
+"menu.restore_order" = "Restore default order"
 "menu.default" = "Default"
 "notice.opening" = "Opening {game}…"
 "notice.game" = "game"

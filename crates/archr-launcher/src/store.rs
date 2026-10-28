@@ -22,6 +22,8 @@ pub struct Store {
     #[serde(skip)]
     members: HashSet<String>,
     recent: Vec<String>,
+    /// System ids in user order; empty means the default order.
+    order: Vec<String>,
     imported_systems: BTreeSet<String>,
     imported_times: HashMap<String, u64>,
 }
@@ -146,6 +148,14 @@ impl Store {
         self.imported_times
             .retain(|key, _| self.recent.contains(key));
         true
+    }
+
+    pub fn order(&self) -> &[String] {
+        &self.order
+    }
+
+    pub fn set_order(&mut self, order: Vec<String>) {
+        self.order = order;
     }
 
     pub fn is_favorite(&self, key: &str) -> bool {
