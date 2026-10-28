@@ -100,7 +100,7 @@ fn candidates(dirs: &[&Path], name: &str) -> Vec<PathBuf> {
     found
 }
 
-/// Greedy wrap into at most two lines; the second may still need an ellipsis.
+/// Greedy word wrapping, splitting oversized words without dropping characters.
 fn wrap(
     text: &str,
     width: u32,
@@ -108,13 +108,26 @@ fn wrap(
 ) -> Result<Vec<String>, String> {
     let mut lines: Vec<String> = Vec::new();
     for word in text.split_whitespace() {
-        let joined = lines.last().map(|line| format!("{line} {word}"));
-        match joined {
-            Some(joined) if lines.len() >= 2 || measure(&joined)? <= width => {
-                *lines.last_mut().expect("joined from a line") = joined;
+        if let Some(line) = lines.last_mut() {
+            let joined = format!("{line} {word}");
+            if measure(&joined)? <= width {
+                *line = joined;
+                continue;
             }
-            _ => lines.push(word.to_owned()),
         }
+        if measure(word)? <= width {
+            lines.push(word.to_owned());
+            continue;
+        }
+        let mut line = String::new();
+        for c in word.chars() {
+            let joined = format!("{line}{c}");
+            if !line.is_empty() && measure(&joined)? > width {
+                lines.push(std::mem::take(&mut line));
+            }
+            line.push(c);
+        }
+        lines.push(line);
     }
     Ok(lines)
 }
@@ -323,6 +336,23 @@ impl Ui<'_, '_> {
         )
     }
 
+    /// Stack complete measured lines upward from the metadata baseline.
+    fn stacked_label(
+        &mut self,
+        text: &str,
+        style: (Face, f32, Rgba),
+        (x, mut bottom, width): (i32, i32, u32),
+        step: f32,
+    ) -> Result<i32, String> {
+        let lines = wrap(text, width, |s| self.measure(s, style.0, style.1))?;
+        let step = self.px(step);
+        for line in lines.iter().rev() {
+            bottom -= step;
+            self.label(line, style, Rect::new(x, bottom, width, step as u32))?;
+        }
+        Ok(bottom)
+    }
+
     fn panel_text(
         &mut self,
         rect: Rect,
@@ -359,25 +389,19 @@ impl Ui<'_, '_> {
                 ],
             )
         };
-        let line = self.px(16.);
-        bottom -= line;
-        self.label(
+        bottom = self.stacked_label(
             &stats,
             (Face::Mono, 12., theme.muted),
-            Rect::new(x, bottom, width, line as u32),
-        )?;
-        bottom -= self.px(4.);
+            (x, bottom, width),
+            16.,
+        )? - self.px(4.);
         let title = system_title(name, data, &self.catalog);
-        let lines = wrap(&title, width, |s| self.measure(s, Face::Semibold, 22.))?;
-        let step = self.px(27.);
-        for text in lines.iter().rev() {
-            bottom -= step;
-            self.label(
-                text,
-                (Face::Semibold, 22., theme.text),
-                Rect::new(x, bottom, width, step as u32),
-            )?;
-        }
+        bottom = self.stacked_label(
+            &title,
+            (Face::Semibold, 22., theme.text),
+            (x, bottom, width),
+            27.,
+        )?;
         let maker = data
             .manufacturer(name)
             .map(|(maker, year)| {
@@ -390,11 +414,11 @@ impl Ui<'_, '_> {
             })
             .filter(|maker| !maker.is_empty());
         if let Some(maker) = maker {
-            bottom -= self.px(18.);
-            self.label(
+            self.stacked_label(
                 &maker,
                 (Face::Regular, 12., theme.muted),
-                Rect::new(x, bottom, width, self.px(16.) as u32),
+                (x, bottom, width),
+                18.,
             )?;
         }
         Ok(())
@@ -517,7 +541,39 @@ mod tests {
     }
 
     #[test]
-    fn wrap_breaks_at_words_and_caps_at_two_lines() {
+    fn wrap_preserves_long_system_names_manufacturers_and_counts() {
+        let ttf = sdl2::ttf::init().unwrap();
+        let fonts = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../themes/default/fonts");
+        for (text, face, size) in [
+            ("Super Nintendo Entertainment System", "Inter-SemiBold", 22),
+            (
+                "International Business Machines · 1981",
+                "Inter-Regular",
+                12,
+            ),
+            (
+                "18446744073709551615 jogos · 18446744073709551615 favoritos",
+                "JetBrainsMono-Regular",
+                12,
+            ),
+        ] {
+            let font = ttf
+                .load_font(fonts.join(format!("{face}.ttf")), size)
+                .unwrap();
+            let lines = wrap(text, 218, |s| Ok(font.size_of(s).unwrap().0)).unwrap();
+            assert_eq!(lines.join(" "), text);
+            assert!(lines
+                .iter()
+                .all(|line| font.size_of(line).unwrap().0 <= 218));
+        }
+        let word = "SistemaSemEspaços日本語";
+        let lines = wrap(word, 30, |s| Ok(s.chars().count() as u32 * 10)).unwrap();
+        assert_eq!(lines.concat(), word);
+        assert!(lines.iter().all(|line| line.chars().count() <= 3));
+    }
+
+    #[test]
+    fn wrap_breaks_at_words_without_losing_overflow() {
         let width = |s: &str| Ok(s.len() as u32 * 10);
         assert_eq!(
             wrap("Super Nintendo", 200, width).unwrap(),
@@ -529,7 +585,7 @@ mod tests {
         );
         assert_eq!(
             wrap("a bb ccc dddd eeeee", 30, width).unwrap(),
-            ["a", "bb ccc dddd eeeee"]
+            ["a", "bb", "ccc", "ddd", "d", "eee", "ee"]
         );
         assert!(wrap("", 100, width).unwrap().is_empty());
     }
