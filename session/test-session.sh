@@ -30,17 +30,38 @@ export ARCHR_SESSION_STOP_SLEEP=/bin/sleep
 export ARCHR_SESSION_PROFILE="$root/profile"
 export ARCHR_SESSION_SHELL=${SESSION_TEST_SHELL:-sh}
 export ARCHR_TEST_EMULATOR="$root/bin/fake) emulator"
+export ARCHR_SESSION_APPLY_LOCALE="$root/bin/apply-locale"
+export ARCHR_SESSION_EXPORTS="$root/exports"
+export ARCHR_SESSION_USER_CONTROLLER_DB="$root/user-db"
+export ARCHR_SESSION_PACKAGED_CONTROLLER_DB="$root/packaged-db"
+: >"$ARCHR_SESSION_PACKAGED_CONTROLLER_DB"
+# The profile selects pt_BR; it is already generated unless a case says not.
+export ARCHR_SESSION_LOCALE_DIR="$root/locale"
+mkdir -p "$ARCHR_SESSION_LOCALE_DIR/pt_BR.UTF-8"
+: >"$ARCHR_SESSION_LOCALE_DIR/pt_BR.UTF-8/LC_NAME"
+# A manager environment imported by the ES-era archr-apply-locale.
+export LOCPATH=/storage/.config/emulationstation/locale
+cat >"$ARCHR_SESSION_EXPORTS" <<'EOF'
+### If you add a variable, export it here.
+export  MALI_WAYLAND_AFBC \
+	SDL_VIDEODRIVER
+EOF
 cat >"$ARCHR_SESSION_PROFILE" <<'EOF'
 # Deliberately Bash-only to exercise the profile bridge.
 function get_setting() { printf '%s\n' pt_BR; }
 export MALI_WAYLAND_AFBC=0 SDL_VIDEODRIVER=wayland
+# A user database the profile names but nobody created.
+export SDL_GAMECONTROLLERCONFIG_FILE=/nonexistent/gamecontrollerdb.txt
 EOF
 
 cat >"$root/bin/archr-launcher" <<'EOF'
 #!/bin/sh
 set -eu
 [ "$LANG" = pt_BR.UTF-8 ]
-[ "$LOCPATH" = /storage/.config/emulationstation/locale ]
+[ -z "${LOCPATH+set}" ]
+printf '%s\n' "$SDL_GAMECONTROLLERCONFIG_FILE" >"$CASE_DIR/controller-db"
+[ -f "$CASE_DIR/locale-applied" ] || [ ! -e "$ARCHR_SESSION_APPLY_LOCALE" ] ||
+  [ -f "$CASE_DIR/detached" ]
 [ "$MALI_WAYLAND_AFBC" = 0 ]
 [ "$SDL_VIDEODRIVER" = wayland ]
 [ "$SDL_AUDIODRIVER" = pulseaudio ]
@@ -109,7 +130,26 @@ wait "$child"
 EOF
 cat >"$root/bin/systemctl" <<'EOF'
 #!/bin/sh
-printf '%s\n' "$*" >>"$CASE_DIR/actions"
+case "$1" in
+  import-environment) printf '%s\n' "$*" >>"$CASE_DIR/imports" ;;
+  *) printf '%s\n' "$*" >>"$CASE_DIR/actions" ;;
+esac
+EOF
+cat >"$root/bin/systemd-run" <<'EOF'
+#!/bin/sh
+# Like the real one: return at once and run the unit command elsewhere.
+printf '%s\n' "$*" >"$CASE_DIR/detached"
+for command; do :; done
+"$command" >/dev/null 2>&1 </dev/null &
+EOF
+cat >"$ARCHR_SESSION_APPLY_LOCALE" <<'EOF'
+#!/bin/sh
+# Like a failed localedef: report, exit 1 and still let the UI start.
+# Detached, it takes long enough that a waiting session would be caught.
+[ ! -f "$CASE_DIR/detached" ] || /bin/sleep 2
+: >"$CASE_DIR/locale-applied"
+echo 'LOCPATH=/storage/.config/emulationstation/locale'
+exit 1
 EOF
 cat >"$root/bin/stop-sleep" <<'EOF'
 #!/bin/sh
@@ -164,7 +204,17 @@ run_case game 'game runemu.sh /roms/demo.zip -Pnes --core=auto --emulator=retroa
 END'
 [ "$(cat "$ARCHR_SESSION_RUN_DIR/last-exit")" = 37 ]
 [ ! -f "$CASE_DIR/sleeps" ]
+[ -f "$CASE_DIR/locale-applied" ]
+[ "$(cat "$CASE_DIR/imports")" = 'import-environment MALI_WAYLAND_AFBC SDL_VIDEODRIVER' ]
+[ "$(cat "$CASE_DIR/controller-db")" = "$ARCHR_SESSION_PACKAGED_CONTROLLER_DB" ]
 printf '%s\n' 'PASS game round-trip and kill-target reset'
+
+: >"$ARCHR_SESSION_USER_CONTROLLER_DB"
+run_case user-controller-db 'CLEAN
+END'
+[ "$(cat "$CASE_DIR/controller-db")" = "$ARCHR_SESSION_USER_CONTROLLER_DB" ]
+rm -f "$ARCHR_SESSION_USER_CONTROLLER_DB"
+printf '%s\n' 'PASS missing inherited controller database falls back'
 
 # Literal ROM includes double/single quotes, spaces, backslash and an unexpanded $.
 run_case quoting 'game runemu.sh '\''/roms/It'\''\'\'''\''s "Mega" $cash\ cart.zip'\'' '\''-Psnes'\'' '\''--core=auto'\'' '\''--emulator=retroarch'\'' '\''--controllers=pad one'\''
@@ -206,6 +256,27 @@ END'
 [ ! -f "$CASE_DIR/actions" ]
 [ ! -f "$CASE_DIR/sleeps" ]
 printf '%s\n' 'PASS clean exit returns to launcher'
+
+# Missing locale tool and quirk list: the session still starts.
+ARCHR_SESSION_APPLY_LOCALE="$root/missing-apply-locale"
+ARCHR_SESSION_EXPORTS="$root/missing-exports"
+run_case no-locale-tool 'CLEAN
+END'
+[ ! -f "$CASE_DIR/locale-applied" ]
+[ ! -f "$CASE_DIR/imports" ]
+printf '%s\n' 'PASS locale tool and quirk list are optional'
+ARCHR_SESSION_APPLY_LOCALE="$root/bin/apply-locale"
+ARCHR_SESSION_EXPORTS="$root/exports"
+
+# A locale still to be generated must not delay the launcher.
+ARCHR_SESSION_LOCALE_DIR="$root/no-locales"
+run_case locale-detached 'CLEAN
+END'
+grep -q -- '--unit=archr-apply-locale --nice=19 -p IOSchedulingClass=idle' "$CASE_DIR/detached"
+[ ! -f "$CASE_DIR/locale-applied" ]
+[ "$(cat "$CASE_DIR/imports")" = 'import-environment MALI_WAYLAND_AFBC SDL_VIDEODRIVER' ]
+printf '%s\n' 'PASS locale generation runs detached; launcher starts at once'
+ARCHR_SESSION_LOCALE_DIR="$root/locale"
 
 # A missing compositor consumes exactly the bounded 100 polls, then continues.
 ARCHR_SESSION_SWAY_ATTEMPTS=100

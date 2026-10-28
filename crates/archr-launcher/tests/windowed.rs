@@ -3,7 +3,7 @@ use std::{fs, process::Command};
 #[test]
 fn windowed_script_navigates_and_publishes_game() {
     let root = tempfile::tempdir().unwrap();
-    let config = root.path().join("storage/.config/emulationstation");
+    let config = root.path().join("storage/.config/archr");
     fs::create_dir_all(&config).unwrap();
     let systems = ["3do", "amiga", "nes"];
     let mut xml = String::from("<systemList>");
@@ -14,7 +14,7 @@ fn windowed_script_navigates_and_publishes_game() {
         xml.push_str(&format!("<system><name>{system}</name><fullname>{system} full</fullname><path>/storage/roms/{system}</path><extension>.rom</extension><emulators><emulator name=\"retroarch\"><cores><core default=\"true\">test</core><core>alternate</core></cores></emulator></emulators></system>"));
     }
     xml.push_str("</systemList>");
-    fs::write(config.join("es_systems.cfg"), xml).unwrap();
+    fs::write(config.join("systems.cfg"), xml).unwrap();
     let run = root.path().join("run/archr-launcher");
     fs::create_dir_all(&run).unwrap();
     fs::write(run.join("last-exit"), "7\n").unwrap();
@@ -84,12 +84,12 @@ fn missing_systems_still_allow_quick_menu_and_fallback_is_logged() {
 #[test]
 fn snapshot_after_launch_button_captures_the_opening_overlay() {
     let root = tempfile::tempdir().unwrap();
-    let config = root.path().join("storage/.config/emulationstation");
+    let config = root.path().join("storage/.config/archr");
     let roms = root.path().join("storage/roms/snes");
     fs::create_dir_all(&config).unwrap();
     fs::create_dir_all(&roms).unwrap();
     fs::write(roms.join("Kirby.sfc"), []).unwrap();
-    fs::write(config.join("es_systems.cfg"), "<systemList><system><name>snes</name><fullname>Super Nintendo</fullname><path>/storage/roms/snes</path><extension>.sfc</extension><emulators><emulator name=\"retroarch\"><cores><core>snes9x</core></cores></emulator></emulators></system></systemList>").unwrap();
+    fs::write(config.join("systems.cfg"), "<systemList><system><name>snes</name><fullname>Super Nintendo</fullname><path>/storage/roms/snes</path><extension>.sfc</extension><emulators><emulator name=\"retroarch\"><cores><core>snes9x</core></cores></emulator></emulators></system></systemList>").unwrap();
     use sdl2::image::SaveSurface;
     let mut cover =
         sdl2::surface::Surface::new(210, 280, sdl2::pixels::PixelFormatEnum::RGBA32).unwrap();
@@ -138,12 +138,12 @@ fn snapshot_after_launch_button_captures_the_opening_overlay() {
 #[test]
 fn missing_system_art_is_quiet_but_corrupt_art_is_reported() {
     let root = tempfile::tempdir().unwrap();
-    let config = root.path().join("storage/.config/emulationstation");
+    let config = root.path().join("storage/.config/archr");
     let roms = root.path().join("storage/roms/music");
     fs::create_dir_all(&config).unwrap();
     fs::create_dir_all(&roms).unwrap();
     fs::write(roms.join("Demo.rom"), []).unwrap();
-    fs::write(config.join("es_systems.cfg"), "<systemList><system><name>music</name><fullname>Music</fullname><path>/storage/roms/music</path><extension>.rom</extension></system></systemList>").unwrap();
+    fs::write(config.join("systems.cfg"), "<systemList><system><name>music</name><fullname>Music</fullname><path>/storage/roms/music</path><extension>.rom</extension></system></systemList>").unwrap();
     let art = root
         .path()
         .join("storage/.config/archr-launcher/systems/music.png");

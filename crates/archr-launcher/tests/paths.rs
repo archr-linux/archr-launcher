@@ -22,10 +22,29 @@ fn root_prefix_includes_user_config_lock_run_and_executable() {
     )
     .unwrap();
     assert!(command.starts_with(&format!("'{}' ", executable.display())));
-    let user = root
-        .path()
-        .join("storage/.config/emulationstation/es_systems.cfg");
-    std::fs::create_dir_all(user.parent().unwrap()).unwrap();
-    std::fs::write(&user, "<systemList/>").unwrap();
-    assert_eq!(Paths::new(Some(root.path().to_owned())).systems, user);
+}
+
+#[test]
+fn systems_catalog_prefers_archr_then_legacy_es_paths() {
+    use archr_launcher::paths::CATALOGS;
+    let root = tempfile::tempdir().unwrap();
+    let at = |path: &str| root.path().join(path.trim_start_matches('/'));
+    // Nothing installed: report the packaged ArchR catalog as missing.
+    assert_eq!(
+        Paths::new(Some(root.path().to_owned())).systems,
+        at("/usr/share/archr/systems.cfg")
+    );
+    // Install lowest precedence first; each newer file must win.
+    for path in CATALOGS.iter().rev() {
+        std::fs::create_dir_all(at(path).parent().unwrap()).unwrap();
+        std::fs::write(at(path), "<systemList/>").unwrap();
+        assert_eq!(Paths::new(Some(root.path().to_owned())).systems, at(path));
+    }
+    // A directory never shadows a real catalog.
+    std::fs::remove_file(at(CATALOGS[0])).unwrap();
+    std::fs::create_dir(at(CATALOGS[0])).unwrap();
+    assert_eq!(
+        Paths::new(Some(root.path().to_owned())).systems,
+        at(CATALOGS[1])
+    );
 }

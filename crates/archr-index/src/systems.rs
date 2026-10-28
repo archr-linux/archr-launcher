@@ -15,6 +15,8 @@ pub struct SystemDef {
     pub release: String,
     pub path: PathBuf,
     pub extensions: Vec<String>,
+    /// Launch template for systems without emulators (e.g. `tools`).
+    pub command: String,
     pub emulators: Vec<Emulator>,
 }
 
@@ -48,10 +50,10 @@ impl SystemDef {
     }
 }
 
-/// Read EmulationStation's system list without building an XML DOM.
+/// Read a systems catalog (es_systems.cfg XML format) without building a DOM.
 /// Unknown elements are skipped, preserving the order of systems and cores.
-pub fn load_systems(es_systems: &Path) -> Result<Vec<SystemDef>, IndexError> {
-    let source = read_bytes(es_systems, 1024 * 1024, Follow)?;
+pub fn load_systems(catalog: &Path) -> Result<Vec<SystemDef>, IndexError> {
+    let source = read_bytes(catalog, 1024 * 1024, Follow)?;
     let mut reader = Reader::from_reader(source.as_slice());
     reader.config_mut().expand_empty_elements = true;
     let mut buffer = Vec::new();
@@ -95,6 +97,7 @@ fn read_system<R: BufRead>(reader: &mut Reader<R>) -> Result<SystemDef, IndexErr
                     .map(str::to_lowercase)
                     .collect();
             }
+            b"command" => system.command = read_text(reader)?,
             b"emulators" => read_children(reader, b"emulators", |reader, child| {
                 if child.name().as_ref() == b"emulator" {
                     system.emulators.push(read_emulator(reader, child)?);

@@ -1,6 +1,6 @@
 //! Lazy library adapter for the navigation model.
 use crate::{
-    handoff::{launch_command_with, write_next},
+    handoff::{catalog_command, launch_command_with, write_next},
     paths::Paths,
     persistence::StoreWriter,
     state::{App, DataSource, Outcome},
@@ -272,17 +272,7 @@ impl Library {
                 self.write_failed = false;
             }
             Outcome::Launch { system, game } => {
-                let selected = self.games(&system).get(game).ok_or("error.game_missing")?;
-                let (emulator, core) = self.current_core(&system, game).ok_or("error.no_core")?;
-                let command = launch_command_with(
-                    &self.paths.at("/usr/bin/runemu.sh"),
-                    &selected.path,
-                    &system,
-                    &core,
-                    &emulator,
-                    controllers,
-                )
-                .map_err(|error| error.to_string())?;
+                let command = self.launch_command(&system, game, controllers)?;
                 let key = self.game_key(&system, game).ok_or("error.game_missing")?;
                 self.store.push_recent(&key);
                 self.refresh_collection("@recent");
@@ -306,6 +296,34 @@ impl Library {
             Outcome::Action(_) | Outcome::ToggleWifi => return Err("error.operation".to_owned()),
         }
         Ok(false)
+    }
+    /// Emulated systems use the runemu contract; systems without emulators
+    /// (tools, moonlight) run their catalog `<command>`.
+    fn launch_command(
+        &self,
+        system: &str,
+        game: usize,
+        controllers: &str,
+    ) -> Result<String, String> {
+        let rom = &self
+            .games(system)
+            .get(game)
+            .ok_or("error.game_missing")?
+            .path;
+        if let Some((emulator, core)) = self.current_core(system, game) {
+            let runemu = self.paths.at("/usr/bin/runemu.sh");
+            return launch_command_with(&runemu, rom, system, &core, &emulator, controllers)
+                .map_err(|error| error.to_string());
+        }
+        let template = self
+            .definition(system)
+            .map(|definition| definition.command.as_str())
+            .filter(|command| !command.is_empty())
+            .ok_or("error.no_core")?;
+        catalog_command(template, rom, system).map_err(|error| {
+            log::warn!("Cannot launch {system}: {error}");
+            "error.no_core".to_owned()
+        })
     }
     fn queue_store(&self) {
         if let Some(writer) = &self.store_writer {

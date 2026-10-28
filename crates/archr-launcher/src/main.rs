@@ -26,8 +26,14 @@ use std::{
     time::{Duration, Instant},
 };
 
+/// Wayland app_id matched by the compositor rules (sway focus/seat, OSD).
+const APP_ID: &str = "archr-launcher";
+
 fn main() {
     let began = Instant::now();
+    // SDL reads this once at video init; set it while still single-threaded.
+    // Only the launcher's own helpers inherit it; games start from the session.
+    std::env::set_var("SDL_VIDEO_WAYLAND_WMCLASS", APP_ID);
     init_logging();
     if let Err(error) = run(
         began,
@@ -172,7 +178,6 @@ fn run(
         (theme.cover.h * height as f32).round().max(1.) as u32,
     );
     let mut controllers = Controllers::new_traced(&ui.sdl, trace)?;
-    controllers.load_mappings(paths.at("/storage/.config/emulationstation/es_input.cfg"));
     let mut events = ui.sdl.event_pump()?;
     let mut repeat = Repeat::default();
     let mut dirty = false;
@@ -210,7 +215,6 @@ fn run(
                 None,
             );
         }
-        controllers.poll_mappings();
         dirty |= ui.tick() || ui.animating();
         let selected_system = if app.screen == Screen::Systems {
             app.rows(&library).get(app.cursor).cloned()

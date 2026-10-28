@@ -33,7 +33,7 @@
 "empty.games" = "Nenhum jogo encontrado"
 "empty.systems" = "Nenhum sistema encontrado"
 "library.summary" = "{systems} · {games}"
-"error.systems" = "Não foi possível ler os sistemas.\nConfira es_systems.cfg."
+"error.systems" = "Não foi possível ler os sistemas.\nConfira systems.cfg."
 "error.core_save" = "Não foi possível salvar o núcleo.\nConfira o espaço e as permissões."
 "error.store_load" = "Não foi possível carregar os dados.\nArquivo preservado; gravação desativada."
 "error.store_save" = "Não foi possível salvar os dados.\nConfira o espaço e as permissões."

@@ -88,7 +88,7 @@ pub trait DataSource {
     /// Resolves a displayed row to its real system and game index, including
     /// identity mappings for real systems. None makes game actions no-ops.
     fn origin(&self, system: &str, game: usize) -> Option<(String, usize)>;
-    /// Manufacturer and release year from es_systems.cfg; either may be empty.
+    /// Manufacturer and release year from the systems catalog; either may be empty.
     fn manufacturer(&self, _system: &str) -> Option<(&str, &str)> {
         None
     }
