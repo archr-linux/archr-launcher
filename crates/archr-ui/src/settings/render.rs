@@ -148,7 +148,14 @@ impl View<'_, '_, '_> {
                     let selected = n == state.cursor;
                     let ink = self.ink(selected);
                     let label = self.tr(row.label);
-                    let label_width = if row.subtitle.is_none() && row.kind == Kind::Value {
+                    let expand = row.subtitle.is_none()
+                        && row.kind == Kind::Value
+                        && self.ui.measure(
+                            &state.display_value(row.id, &self.ui.catalog),
+                            Face::Regular,
+                            14.,
+                        )? > 228;
+                    let label_width = if expand {
                         self.ui.measure(&label, Face::Regular, 15.)?.clamp(120, 278) as f32
                     } else {
                         278.

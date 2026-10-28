@@ -131,7 +131,10 @@ fn all_locales_and_pages_render_and_selected_on_toggle_has_contrast() {
                 .unwrap();
                 let unavailable = ui
                     .canvas
-                    .read_pixels(None, sdl2::pixels::PixelFormatEnum::RGBA32)
+                    .read_pixels(
+                        Some(sdl2::rect::Rect::new(352, 196, 228, 58)),
+                        sdl2::pixels::PixelFormatEnum::RGBA32,
+                    )
                     .unwrap();
                 state.values.insert(Id::Audio, String::new());
                 ui.draw_with_settings(
@@ -142,7 +145,7 @@ fn all_locales_and_pages_render_and_selected_on_toggle_has_contrast() {
                     Some(&state),
                 )
                 .unwrap();
-                assert!(unavailable == ui.canvas.read_pixels(None,sdl2::pixels::PixelFormatEnum::RGBA32).unwrap(),"unrenderable external data must show localized unavailable, never terminate or truncate");
+                assert!(unavailable == ui.canvas.read_pixels(Some(sdl2::rect::Rect::new(352,196,228,58)),sdl2::pixels::PixelFormatEnum::RGBA32).unwrap(),"unrenderable external data must show localized unavailable, never terminate or truncate");
                 state.values.insert(Id::Audio, "W".repeat(90));
                 ui.draw_with_settings(
                     &App::new(9),
@@ -152,11 +155,15 @@ fn all_locales_and_pages_render_and_selected_on_toggle_has_contrast() {
                     Some(&state),
                 )
                 .unwrap();
-                assert_ne!(
-                    unavailable,
-                    ui.canvas
-                        .read_pixels(None, sdl2::pixels::PixelFormatEnum::RGBA32)
-                        .unwrap(),
+                assert!(
+                    unavailable
+                        != ui
+                            .canvas
+                            .read_pixels(
+                                Some(sdl2::rect::Rect::new(352, 196, 228, 58)),
+                                sdl2::pixels::PixelFormatEnum::RGBA32
+                            )
+                            .unwrap(),
                     "reallocated row width must allow complete multi-line values"
                 );
             }
