@@ -721,5 +721,8 @@ impl View<'_, '_, '_> {
 }
 
 #[cfg(test)]
+#[path = "../../tests/support/settings_capture.rs"]
+mod capture_tests;
+#[cfg(test)]
 #[path = "../../tests/support/settings_scroll.rs"]
 mod scroll_tests;
