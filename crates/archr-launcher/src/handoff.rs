@@ -98,6 +98,11 @@ pub fn netplay_command(
         .filter(|c| c.is_ascii_alphanumeric() || " _.".contains(*c))
         .take(32)
         .collect();
+    let nick = if nick.trim().is_empty() {
+        "ArchR Player".to_owned()
+    } else {
+        nick
+    };
     let base = launch_command_with(bin, rom, system, core, emulator, controllers)?;
     let mut command = String::new();
     for (name, value) in [

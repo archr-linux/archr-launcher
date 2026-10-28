@@ -649,3 +649,58 @@ fn a_running_refresh_is_reused_when_the_lobby_is_reopened() {
     );
     assert_eq!(lobby.rooms.len(), 1);
 }
+
+#[test]
+fn empty_filtered_nickname_falls_back_to_the_default() {
+    let dir = tempfile::tempdir().unwrap();
+    let runemu = dir.path().join("runemu.sh");
+    let out = dir.path().join("args");
+    fs::write(
+        &runemu,
+        format!(
+            "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\"; done > '{}'\n",
+            out.display()
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&runemu, fs::Permissions::from_mode(0o755)).unwrap();
+    for nick in ["Игрок", "Zé--", "é", "   ", ""] {
+        let line = netplay_command(
+            &runemu,
+            Path::new("/r"),
+            ("s", "c", "e", ""),
+            ("1.2.3.4", 1, nick, ""),
+            false,
+        )
+        .unwrap();
+        assert!(Command::new("sh")
+            .arg("-c")
+            .arg(&line)
+            .status()
+            .unwrap()
+            .success());
+        let sent = fs::read_to_string(&out)
+            .unwrap()
+            .lines()
+            .last()
+            .unwrap()
+            .to_owned();
+        assert_eq!(
+            sent,
+            if nick == "Zé--" { "Z" } else { "ArchR Player" },
+            "{nick:?}"
+        );
+    }
+}
+
+#[test]
+fn a_dead_refresh_ends_the_loading_state() {
+    // No curl and no catalog: the refresh finishes, but a panic must end loading too.
+    let (_dir, paths) = fixture(&[], "[]");
+    let mut runtime = archr_launcher::netplay::Runtime::new(paths);
+    let mut lobby = archr_ui::netplay::Lobby::default();
+    runtime.simulate_dead_refresh();
+    assert!(runtime.poll(&mut lobby));
+    assert!(!lobby.loading && lobby.failed && lobby.rooms.is_empty());
+    assert!(!runtime.poll(&mut lobby));
+}

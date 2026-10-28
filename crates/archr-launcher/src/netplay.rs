@@ -539,10 +539,18 @@ impl Runtime {
         });
         self.pending = Some(receive);
     }
+    /// Test hook: a refresh whose thread ended without sending a result.
+    #[doc(hidden)]
+    pub fn simulate_dead_refresh(&mut self) {
+        self.pending = Some(channel().1);
+    }
     /// True when the lobby changed. A closed lobby drops the reply.
     pub fn poll(&mut self, lobby: &mut Lobby) -> bool {
-        let Some(Ok((rooms, failed))) = self.pending.as_ref().map(Receiver::try_recv) else {
-            return false;
+        let (rooms, failed) = match self.pending.as_ref().map(Receiver::try_recv) {
+            Some(Ok(done)) => done,
+            // The refresh thread died without answering: report a failed lobby.
+            Some(Err(std::sync::mpsc::TryRecvError::Disconnected)) => (Vec::new(), true),
+            _ => return false,
         };
         self.pending = None;
         lobby.set(rooms, failed);
