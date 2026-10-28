@@ -1,6 +1,5 @@
-//! Stroked line icons on a 24-unit grid, rasterized once at 4x with coverage
-//! from the distance to each segment, then filtered down by the renderer.
-use crate::badges::SUPERSAMPLE;
+//! Stroked line icons on a 24-unit grid, rasterized once at final size with
+//! coverage from the distance to each segment, which is already antialiased.
 use sdl2::{pixels::PixelFormatEnum, surface::Surface};
 use std::f32::consts::{PI, TAU};
 
@@ -149,11 +148,11 @@ fn distance(p: (f32, f32), a: (f32, f32), b: (f32, f32)) -> f32 {
     (p.0 - a.0 - t * dx).hypot(p.1 - a.1 - t * dy)
 }
 
-/// White RGBA at `size * SUPERSAMPLE` pixels, tinted later with a color mod.
+/// White RGBA at `size` pixels, tinted later with a color mod.
 pub(crate) fn render(glyph: Glyph, size: u32) -> Result<Surface<'static>, String> {
-    let side = size * SUPERSAMPLE;
+    let side = size;
     let unit = side as f32 / 24.;
-    let half = (size as f32 * 0.073).max(1.75) * SUPERSAMPLE as f32 / 2.;
+    let half = (size as f32 * 0.073).max(1.75) / 2.;
     let segments: Vec<_> = paths(glyph)
         .iter()
         .flat_map(|path| path.windows(2).map(|w| (w[0], w[1])).collect::<Vec<_>>())
