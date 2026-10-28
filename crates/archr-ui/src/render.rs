@@ -952,7 +952,8 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                         u32::MAX,
                         Align::Right,
                     )? - self.px(14.);
-                    if name.starts_with('@') {
+                    // Moonlight is drawn like a regular system row, without an icon.
+                    if name.starts_with('@') && name != crate::moonlight::SYSTEM {
                         let icon = self
                             .frame
                             .square(x, y + (rh as i32 - self.px(16.)) / 2, 16.);
@@ -963,15 +964,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                                 selection(selected, theme.highlight_bg, theme.highlight_text),
                             )?;
                         } else {
-                            self.icon(
-                                if name == crate::moonlight::SYSTEM {
-                                    Glyph::MonitorPlay
-                                } else {
-                                    Glyph::Clock
-                                },
-                                icon,
-                                c,
-                            )?;
+                            self.icon(Glyph::Clock, icon, c)?;
                         }
                         x += self.px(26.);
                     }
@@ -1554,12 +1547,10 @@ pub fn prepare_first_frame<'font>(
         if y >= bottom {
             break;
         }
-        if name.starts_with('@') {
+        if name.starts_with('@') && name != crate::moonlight::SYSTEM {
             first_icons.push((
                 if name == "@favorites" {
                     Glyph::Star
-                } else if name == crate::moonlight::SYSTEM {
-                    Glyph::MonitorPlay
                 } else {
                     Glyph::Clock
                 },
@@ -1614,7 +1605,7 @@ pub fn prepare_first_frame<'font>(
         )?;
     }
     prepared.prepare_icons(theme_dir, system_icons_dir, first_icons);
-    // Deferred settings, move and Moonlight overlays must not read icons on the render thread.
+    // Deferred settings and move overlays must not read icons on the render thread.
     prepared.preload_icons(&[
         Glyph::ArrowUpDown,
         Glyph::ChevronsUpDown,
@@ -1628,7 +1619,6 @@ pub fn prepare_first_frame<'font>(
         Glyph::SignalHigh,
         Glyph::Lock,
         Glyph::Check,
-        Glyph::MonitorPlay,
     ]);
     Ok(prepared)
 }
