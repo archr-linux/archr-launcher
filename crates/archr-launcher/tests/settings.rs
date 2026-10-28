@@ -28,7 +28,7 @@ fn scripts_are_single_owners_and_runtime_only_operations_publish_after_success()
     backend.apply(Id::Volume, "65").unwrap();
 }
 #[test]
-fn failure_reports_status_and_stderr_and_restores_value() {
+fn failure_reports_status_and_stderr_without_publishing_value() {
     let (dir, backend) = fixture();
     script(&dir, "volume", "false; exit 0"); // Legacy helper masks the runtime error.
     script(&dir, "pactl", "echo 'sink unavailable' >&2; exit 7");
@@ -162,4 +162,75 @@ fn load_normalizes_stored_sliders_and_rejects_nonregular_probes() {
     assert!(began.elapsed() < std::time::Duration::from_secs(1));
     assert_eq!(state.value(Id::Volume), "100");
     assert_eq!(state.value(Id::Brightness), "5");
+}
+
+#[test]
+fn information_distinguishes_active_driver_and_detects_hardware_and_metrics() {
+    use std::os::unix::fs::symlink;
+    let (dir, backend) = fixture();
+    let root = dir.path();
+    for (path, value) in [
+        (
+            "proc/cpuinfo",
+            "processor : 0\nmodel name : Example x86 CPU\n",
+        ),
+        ("proc/uptime", "7380.0 9000.0"),
+        ("sys/class/thermal/thermal_zone0/temp", "43000"),
+        ("sys/class/graphics/fb0/virtual_size", "640,480"),
+        (
+            "sys/devices/system/cpu/cpufreq/policy0/scaling_governor",
+            "performance",
+        ),
+    ] {
+        let p = root.join(path);
+        fs::create_dir_all(p.parent().unwrap()).unwrap();
+        fs::write(p, value).unwrap();
+    }
+    let display = root.join("sys/class/drm/card0/device/driver");
+    fs::create_dir_all(display.parent().unwrap()).unwrap();
+    symlink("/drivers/rockchip-drm", display).unwrap();
+    let driver = root.join("sys/class/drm/renderD128/device/driver");
+    fs::create_dir_all(driver.parent().unwrap()).unwrap();
+    symlink("/drivers/panfrost", &driver).unwrap();
+    let info = backend.load().unwrap().info;
+    assert_eq!(info.uptime, "2:03");
+    assert_eq!(info.cards.len(), 6);
+    assert!(info.cards[0].lines.contains(&"Example x86 CPU".into()));
+    assert!(info.cards[0].lines.contains(&"performance".into()));
+    assert!(info.cards[0].lines.iter().any(|l| l.contains("43 °C")));
+    assert!(info.cards[1]
+        .lines
+        .contains(&"settings.active|panfrost".into()));
+    assert!(info.cards[1]
+        .lines
+        .contains(&"settings.after_reboot|libmali".into()));
+    assert!(info.cards[1].lines.contains(&"640 × 480".into()));
+    fs::remove_file(driver).unwrap();
+    assert!(backend.load().unwrap().info.cards[1]
+        .lines
+        .contains(&"settings.active|?".into()));
+    assert!(!info
+        .cards
+        .iter()
+        .flat_map(|c| &c.lines)
+        .any(|l| l.contains("Cortex-A35") || l.contains("Mali-G31")));
+}
+
+#[test]
+fn brightness_publishes_once_after_success_and_keeps_config_on_sysfs_failure() {
+    let (dir, backend) = fixture();
+    let panel = dir.path().join("sys/class/backlight/panel");
+    fs::create_dir_all(&panel).unwrap();
+    fs::write(panel.join("max_brightness"), "255").unwrap();
+    fs::write(panel.join("brightness"), "128").unwrap();
+    script(&dir, "brightness", "exit 29"); // Must never invoke the owning legacy helper.
+    assert_eq!(backend.apply(Id::Brightness, "75").unwrap(), "75");
+    assert_eq!(fs::read_to_string(panel.join("brightness")).unwrap(), "191");
+    fs::remove_file(panel.join("brightness")).unwrap();
+    fs::create_dir(panel.join("brightness")).unwrap();
+    assert!(backend
+        .apply(Id::Brightness, "80")
+        .unwrap_err()
+        .contains("brightness"));
+    assert_eq!(backend.load().unwrap().value(Id::Brightness), "75");
 }

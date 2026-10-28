@@ -159,9 +159,6 @@ fn run(
                 None,
             );
         }
-        if dirty {
-            ui.settings = settings.active.then(|| settings.state.clone());
-        }
         controllers.poll_mappings();
         dirty |= ui.tick() || ui.animating();
         let selected_system = if app.screen == Screen::Systems {
@@ -203,7 +200,13 @@ fn run(
         dirty |= covers.poll();
         if dirty {
             let cover = selected.as_ref().and_then(|path| covers.get(path));
-            ui.draw(&app, &library, &theme, cover)?;
+            ui.draw_with_settings(
+                &app,
+                &library,
+                &theme,
+                cover,
+                settings.active.then_some(&settings.state),
+            )?;
             dirty = false;
         }
         #[cfg(test)]
@@ -286,7 +289,6 @@ fn run(
             } else {
                 requested
             };
-            ui.settings = settings.active.then(|| settings.state.clone());
             if requested == Outcome::ToggleWifi {
                 if let Err(error) =
                     wifi::toggle(&paths, !ui.wifi_enabled(), ui.wifi_refresh_signal())

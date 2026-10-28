@@ -150,7 +150,7 @@ impl Ui<'_, '_> {
         }
         if row == 1 {
             let key = SHORTCUTS[shortcut].0;
-            let label = if shortcut < 2 {
+            let label = if shortcut == 1 {
                 self.catalog
                     .format("start.soon_label", &[("name", &self.catalog.text(key))])
             } else if shortcut == 2 {

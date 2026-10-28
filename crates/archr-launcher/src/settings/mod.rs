@@ -3,7 +3,7 @@ mod info;
 mod runtime;
 use crate::paths::Paths;
 use archr_config::SystemCfg;
-use archr_ui::settings::{Id, Page, Settings};
+use archr_ui::settings::{Id, Information, Page, Settings};
 pub use runtime::Runtime;
 use std::{
     fs,
@@ -17,16 +17,35 @@ use std::{
 
 pub struct Backend {
     paths: Paths,
+    identity: std::sync::OnceLock<Information>,
 }
 impl Backend {
     pub fn new(paths: Paths) -> Self {
-        Self { paths }
+        Self {
+            paths,
+            identity: std::sync::OnceLock::new(),
+        }
     }
     fn read(&self, path: &str) -> String {
         archr_io::read_utf8(&self.paths.at(path), 64 * 1024, archr_io::Symlinks::Follow)
             .unwrap_or_default()
             .trim()
             .to_owned()
+    }
+    fn backlight(&self) -> Result<std::path::PathBuf, String> {
+        fs::read_dir(self.paths.at("/sys/class/backlight"))
+            .map_err(|e| e.to_string())?
+            .filter_map(Result::ok)
+            .map(|e| e.path())
+            .min()
+            .ok_or_else(|| "No backlight available".into())
+    }
+    fn number(path: &std::path::Path) -> Result<u64, String> {
+        archr_io::read_utf8(path, 128, archr_io::Symlinks::Follow)
+            .map_err(|e| e.to_string())?
+            .trim()
+            .parse()
+            .map_err(|e: std::num::ParseIntError| e.to_string())
     }
     fn cfg(&self) -> Result<SystemCfg, String> {
         SystemCfg::load(&self.paths.config).map_err(|e| e.to_string())
@@ -102,21 +121,8 @@ impl Backend {
                 state.values.insert(Id::Volume, volume.to_string());
             }
         }
-        let mut backlights: Vec<_> = fs::read_dir(self.paths.at("/sys/class/backlight"))
-            .ok()
-            .into_iter()
-            .flatten()
-            .filter_map(Result::ok)
-            .collect();
-        backlights.sort_by_key(|d| d.file_name());
-        if let Some(panel) = backlights.first() {
-            let number = |name| {
-                archr_io::read_utf8(&panel.path().join(name), 128, archr_io::Symlinks::Follow)
-                    .ok()?
-                    .trim()
-                    .parse::<u64>()
-                    .ok()
-            };
+        if let Ok(panel) = self.backlight() {
+            let number = |name| Self::number(&panel.join(name)).ok();
             if let (Some(raw), Some(max)) = (number("brightness"), number("max_brightness")) {
                 if let Some(percent) = raw
                     .saturating_mul(100)
@@ -181,11 +187,13 @@ impl Backend {
             .map(|v| (*v).into())
             .collect();
         state.options.insert(Id::Governor, governors);
-        self.refresh_info(&mut state);
-        state.values.insert(Id::Update, state.version.clone());
+        state.info = self.refresh_info();
+        state.values.insert(Id::Update, state.info.version.clone());
         state.loading = false;
         if !errors.is_empty() {
-            state.error = Some((None, errors.join("; ")));
+            let error = errors.join("; ");
+            log::warn!("Settings discovery failed: {error}");
+            state.error = Some((None, error));
         }
         Ok(state)
     }
@@ -256,23 +264,10 @@ impl Backend {
                 )?;
             }
             Id::Brightness => {
-                let mut panels: Vec<_> = fs::read_dir(self.paths.at("/sys/class/backlight"))
-                    .map_err(|e| e.to_string())?
-                    .filter_map(Result::ok)
-                    .collect();
-                panels.sort_by_key(|p| p.file_name());
-                let panel = panels.first().ok_or("No backlight available")?;
-                let max = archr_io::read_utf8(
-                    &panel.path().join("max_brightness"),
-                    128,
-                    archr_io::Symlinks::Follow,
-                )
-                .map_err(|e| e.to_string())?
-                .trim()
-                .parse::<u64>()
-                .map_err(|e| e.to_string())?;
+                let panel = self.backlight()?;
+                let max = Self::number(&panel.join("max_brightness"))?;
                 let raw = max.saturating_mul(value.parse().expect("validated percent")) / 100;
-                fs::write(panel.path().join("brightness"), raw.max(1).to_string())
+                fs::write(panel.join("brightness"), raw.max(1).to_string())
                     .map_err(|e| format!("brightness: {e}"))?;
             }
             Id::Audio => {
@@ -321,7 +316,7 @@ pub(super) enum Work {
 enum Reply {
     Loaded(Result<Box<Settings>, String>),
     Set(Id, Result<String, String>),
-    Info(Settings),
+    Info(Information),
 }
 pub struct Worker {
     tx: mpsc::Sender<Work>,
@@ -340,11 +335,7 @@ impl Worker {
                     let reply = match work {
                         Work::Load => Reply::Loaded(backend.load().map(Box::new)),
                         Work::Set(id, value) => Reply::Set(id, backend.apply(id, &value)),
-                        Work::Info => {
-                            let mut state = Settings::default();
-                            backend.refresh_info(&mut state);
-                            Reply::Info(state)
-                        }
+                        Work::Info => Reply::Info(backend.refresh_info()),
                     };
                     if results.send(reply).is_err() {
                         break;
@@ -373,29 +364,25 @@ impl Worker {
                 Reply::Loaded(Ok(mut loaded)) => {
                     std::mem::swap(&mut state.values, &mut loaded.values);
                     state.options = loaded.options;
-                    state.cards = loaded.cards;
-                    state.version = loaded.version;
-                    state.device = loaded.device;
-                    state.kernel = loaded.kernel;
+                    state.info = loaded.info;
                     state.error = loaded.error;
                     state.loading = false;
                 }
                 Reply::Loaded(Err(error)) => {
+                    log::warn!("Loading settings failed: {error}");
                     state.error = Some((None, error));
                     state.loading = false;
                 }
                 Reply::Set(id, result) => {
+                    if let Err(error) = &result {
+                        log::warn!("Setting {} failed: {error}", id.key());
+                    }
                     if id == Id::Language {
                         language = result.as_ref().ok().cloned();
                     }
                     state.complete(id, result);
                 }
-                Reply::Info(info) => {
-                    state.cards = info.cards;
-                    state.device = info.device;
-                    state.kernel = info.kernel;
-                    state.version = info.version;
-                }
+                Reply::Info(info) => state.info = info,
             }
         }
         (changed, language)

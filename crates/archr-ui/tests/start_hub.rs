@@ -113,7 +113,7 @@ fn shortcuts_remember_columns_and_toggle_from_snapshot() {
     app.handle(Button::L, &data);
     app.handle(Button::L, &data);
     app.handle(Button::L, &data);
-    assert_eq!(app.handle(Button::A, &data), Outcome::None);
+    assert_eq!(app.handle(Button::A, &data), Outcome::Settings);
 }
 #[test]
 fn focus_never_lands_on_a_disabled_tile() {

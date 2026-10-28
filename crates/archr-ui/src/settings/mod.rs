@@ -47,21 +47,27 @@ pub enum Id {
     Timezone,
 }
 impl Id {
-    pub fn key(self) -> &'static str {
+    fn metadata(self) -> (&'static str, &'static str) {
         match self {
-            Self::Volume => "audio.volume",
-            Self::Brightness => "display.brightness",
-            Self::Audio => "audio.device",
-            Self::Idle => "idle.timeout",
-            Self::IdleGame => "idle.timeout.game",
-            Self::Gpu => "gpu.driver",
-            Self::Suspend => "system.suspendmode",
-            Self::Governor => "system.cpugovernor",
-            Self::Turbo => "enable.turbo-mode",
-            Self::Update => "",
-            Self::Language => "system.language",
-            Self::Timezone => "system.timezone",
+            Self::Volume => ("audio.volume", "60"),
+            Self::Brightness => ("display.brightness", "50"),
+            Self::Audio => ("audio.device", ""),
+            Self::Idle => ("idle.timeout", "0"),
+            Self::IdleGame => ("idle.timeout.game", "0"),
+            Self::Gpu => ("gpu.driver", "libmali"),
+            Self::Suspend => ("system.suspendmode", "off"),
+            Self::Governor => ("system.cpugovernor", "ondemand"),
+            Self::Turbo => ("enable.turbo-mode", "0"),
+            Self::Update => ("", ""),
+            Self::Language => ("system.language", "en_US"),
+            Self::Timezone => ("system.timezone", "America/Sao_Paulo"),
         }
+    }
+    pub fn key(self) -> &'static str {
+        self.metadata().0
+    }
+    pub fn default_value(self) -> &'static str {
+        self.metadata().1
     }
     pub fn choices(self) -> &'static [&'static str] {
         match self {
@@ -79,36 +85,19 @@ impl Id {
         }
         let min = if self == Self::Brightness { 5 } else { 0 };
         let value = value.trim();
-        let number = value.parse::<i128>().unwrap_or_else(|_| {
-            if !value.trim_start_matches(['-', '+']).is_empty()
-                && value
-                    .trim_start_matches(['-', '+'])
-                    .bytes()
-                    .all(|b| b.is_ascii_digit())
-            {
-                if value.starts_with('-') {
-                    i128::MIN
-                } else {
-                    i128::MAX
-                }
+        let digits = value.strip_prefix(['-', '+']).unwrap_or(value);
+        let number = if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) {
+            if value.starts_with('-') {
+                0
             } else {
-                self.default_value().parse().expect("numeric default")
+                digits
+                    .bytes()
+                    .fold(0u8, |v, b| v.saturating_mul(10).saturating_add(b - b'0'))
             }
-        });
+        } else {
+            self.default_value().parse().expect("numeric default")
+        };
         number.clamp(min, 100).to_string()
-    }
-    pub fn default_value(self) -> &'static str {
-        match self {
-            Self::Volume => "60",
-            Self::Brightness => "50",
-            Self::Turbo | Self::Idle | Self::IdleGame => "0",
-            Self::Gpu => "libmali",
-            Self::Suspend => "off",
-            Self::Governor => "ondemand",
-            Self::Language => "en_US",
-            Self::Timezone => "America/Sao_Paulo",
-            _ => "",
-        }
     }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -172,40 +161,22 @@ const REGION: &[Row] = &[
     row(Id::Language, "settings.language", Kind::Value),
     row(Id::Timezone, "settings.timezone", Kind::Value),
 ];
-pub const CATEGORIES: &[(Page, &str, &str)] = &[
-    (
-        Page::Soon("settings.network"),
-        "settings.network",
-        "settings.network_detail",
-    ),
-    (Page::Sound, "settings.sound", "settings.sound_detail"),
-    (
-        Page::Soon("settings.controls"),
-        "settings.controls",
-        "settings.controls_detail",
-    ),
-    (
-        Page::Soon("settings.games"),
-        "settings.games",
-        "settings.games_detail",
-    ),
-    (Page::Region, "settings.region", "settings.region_detail"),
+pub const CATEGORIES: &[(Page, &str)] = &[
+    (Page::Soon("settings.network"), "settings.network_detail"),
+    (Page::Sound, "settings.sound_detail"),
+    (Page::Soon("settings.controls"), "settings.controls_detail"),
+    (Page::Soon("settings.games"), "settings.games_detail"),
+    (Page::Region, "settings.region_detail"),
     (
         Page::Soon("settings.appearance"),
-        "settings.appearance",
         "settings.appearance_detail",
     ),
     (
         Page::Soon("settings.achievements"),
-        "settings.achievements",
         "settings.achievements_detail",
     ),
-    (Page::System, "settings.system", "settings.system_detail"),
-    (
-        Page::Soon("settings.storage"),
-        "settings.storage",
-        "settings.storage_detail",
-    ),
+    (Page::System, "settings.system_detail"),
+    (Page::Soon("settings.storage"), "settings.storage_detail"),
 ];
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Effect {
@@ -220,6 +191,14 @@ pub struct InfoCard {
     pub lines: Vec<String>,
     pub percent: Option<u8>,
 }
+#[derive(Clone, Default)]
+pub struct Information {
+    pub version: String,
+    pub device: String,
+    pub kernel: String,
+    pub uptime: String,
+    pub cards: Vec<InfoCard>,
+}
 #[derive(Clone)]
 pub struct Settings {
     stack: Vec<(Page, usize)>,
@@ -230,10 +209,7 @@ pub struct Settings {
     pub loading: bool,
     pub error: Option<(Option<Id>, String)>,
     pub reboot_prompt: bool,
-    pub version: String,
-    pub device: String,
-    pub kernel: String,
-    pub cards: Vec<InfoCard>,
+    pub info: Information,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -249,14 +225,56 @@ impl Default for Settings {
             loading: true,
             error: None,
             reboot_prompt: false,
-            version: String::new(),
-            device: String::new(),
-            kernel: String::new(),
-            cards: Vec::new(),
+            info: Information::default(),
         }
     }
 }
 impl Settings {
+    pub fn display_value(&self, id: Id, catalog: &crate::i18n::I18n) -> String {
+        let value = self.value(id);
+        let key = match (id, value) {
+            (Id::Language, "en_US") => "settings.lang_en",
+            (Id::Language, "pt_BR") => "settings.lang_pt",
+            (Id::Language, "es_ES") => "settings.lang_es",
+            (Id::Language, "ru_RU") => "settings.lang_ru",
+            (Id::Idle | Id::IdleGame, "0") => "settings.never",
+            (Id::Idle | Id::IdleGame, v) => {
+                return catalog.format("settings.minutes", &[("count", v)])
+            }
+            (Id::Suspend, "off") => "settings.off",
+            (Id::Suspend, "default") => "menu.default",
+            (Id::Suspend, "mem") => "settings.suspend_mem",
+            (Id::Suspend, "freeze") => "settings.suspend_freeze",
+            (Id::Suspend, "standby") => "settings.suspend_standby",
+            (_, "") => "settings.unavailable",
+            _ => return value.into(),
+        };
+        catalog.text(key)
+    }
+    pub fn hints(&self) -> &'static [(char, &'static str)] {
+        match self.page() {
+            Page::Root => &[
+                ('A', "hint.open"),
+                ('B', "hint.back"),
+                ('Y', "settings.info_short"),
+            ],
+            page => match page.rows().get(self.cursor).map(|r| r.kind) {
+                Some(Kind::Action) => &[('A', "hint.choose"), ('B', "hint.back")],
+                Some(Kind::Toggle) => &[
+                    ('L', "settings.change"),
+                    ('R', "settings.change"),
+                    ('A', "hint.choose"),
+                    ('B', "hint.back"),
+                ],
+                Some(_) => &[
+                    ('L', "settings.change"),
+                    ('R', "settings.change"),
+                    ('B', "hint.back"),
+                ],
+                None => &[('B', "hint.back")],
+            },
+        }
+    }
     pub fn page(&self) -> Page {
         self.stack.last().expect("root page").0
     }

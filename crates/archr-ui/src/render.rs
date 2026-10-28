@@ -169,7 +169,6 @@ pub struct Ui<'font, 'texture> {
     animating: bool,
     frame: Frame,
     pub catalog: I18n,
-    pub settings: Option<crate::settings::Settings>,
     pub loading: bool,
     pub banner: Option<String>,
     pub screenshot: Option<PathBuf>,
@@ -259,7 +258,6 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             cover_fade: Tween::new(0., Duration::from_millis(120)),
             animating: false,
             frame: Frame::new(width, height),
-            settings: None,
             catalog: I18n::default(),
             loading: false,
             banner: None,
@@ -487,19 +485,25 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         theme: &Theme,
         cover: Option<&Texture<'_>>,
     ) -> Result<(), String> {
+        self.draw_with_settings(app, data, theme, cover, None)
+    }
+    pub fn draw_with_settings(
+        &mut self,
+        app: &App,
+        data: &dyn DataSource,
+        theme: &Theme,
+        cover: Option<&Texture<'_>>,
+        settings: Option<&crate::settings::Settings>,
+    ) -> Result<(), String> {
         self.frame = Frame::from_size(self.canvas.output_size()?);
         let Frame {
             width, height, now, ..
         } = self.frame;
         self.canvas.set_draw_color(color(theme.background));
         self.canvas.clear();
-        if let Some(settings) = self.settings.take() {
-            let result = self.settings_page(&settings, theme, data);
-            self.animating = settings
-                .pending
-                .is_some_and(|id| settings.page().rows().iter().any(|row| row.id == id));
-            self.settings = Some(settings);
-            result?;
+        if let Some(settings) = settings {
+            self.settings_page(settings, theme)?;
+            self.animating = false; // Static applying label; completion marks the frame dirty.
         } else {
             let (backdrop, cursor) = app.backdrop();
             self.header(backdrop, cursor, data, theme)?;
@@ -550,13 +554,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         }
         Ok(())
     }
-    fn header(
-        &mut self,
-        screen: &Screen,
-        cursor: usize,
-        data: &dyn DataSource,
-        theme: &Theme,
-    ) -> Result<(), String> {
+    fn status_header(&mut self, theme: &Theme) -> Result<i32, String> {
         let Frame { width, height, .. } = self.frame;
         let h = (theme.header_height * height as f32).round() as u32;
         let pad = self.px(24.);
@@ -633,6 +631,18 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             }
             right = layout.pill.x() - self.px(20.);
         }
+        Ok(right)
+    }
+    fn header(
+        &mut self,
+        screen: &Screen,
+        cursor: usize,
+        data: &dyn DataSource,
+        theme: &Theme,
+    ) -> Result<(), String> {
+        let right = self.status_header(theme)?;
+        let h = (theme.header_height * self.frame.height as f32).round() as u32;
+        let pad = self.px(24.);
         if let Screen::Games { system } = screen {
             let title = system_title(system, data, &self.catalog);
             let pos = format!(

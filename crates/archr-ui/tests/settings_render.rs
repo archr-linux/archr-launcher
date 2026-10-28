@@ -32,13 +32,54 @@ fn all_locales_and_pages_render_and_selected_on_toggle_has_contrast() {
                 state.open(page);
             }
             state.loading = false;
+            if page == Page::Info {
+                state.info.device = "R36S".into();
+                state.info.kernel = "6.6.63-archr".into();
+                state.info.version = "2.1.1".into();
+                state.info.uptime = "2:03".into();
+                state.info.cards = [
+                    "settings.processor",
+                    "settings.graphics",
+                    "settings.memory",
+                    "settings.storage",
+                    "settings.network",
+                    "settings.battery",
+                ]
+                .into_iter()
+                .map(|title| archr_ui::settings::InfoCard {
+                    title,
+                    lines: vec!["640 × 480".into(), "settings.after_reboot|panfrost".into()],
+                    percent: Some(70),
+                })
+                .collect();
+            }
+            if page == Page::Sound {
+                state.values.insert(Id::Idle, "5".into());
+            }
+
             if page == Page::System {
                 state.cursor = 3;
                 state.values.insert(Id::Turbo, "1".into());
             }
-            ui.settings = Some(state);
-            ui.draw(&App::new(9), &FakeData::default(), &theme, None)
+            ui.draw_with_settings(
+                &App::new(9),
+                &FakeData::default(),
+                &theme,
+                None,
+                Some(&state),
+            )
+            .unwrap();
+            if matches!(page, Page::Root | Page::Sound) {
+                state.error = Some((None, "diagnostic без потери отклика ".repeat(2048)));
+                ui.draw_with_settings(
+                    &App::new(9),
+                    &FakeData::default(),
+                    &theme,
+                    None,
+                    Some(&state),
+                )
                 .unwrap();
+            }
             if page == Page::System {
                 let pixels = ui
                     .canvas
@@ -46,12 +87,12 @@ fn all_locales_and_pages_render_and_selected_on_toggle_has_contrast() {
                     .unwrap();
                 let pixel = |x: usize, y: usize| &pixels[(y * 640 + x) * 4..(y * 640 + x) * 4 + 3];
                 assert_eq!(
-                    pixel(575, 268),
+                    pixel(570, 289),
                     &[255, 255, 255],
                     "white selected switch track"
                 );
                 assert_eq!(
-                    pixel(591, 268),
+                    pixel(590, 289),
                     &[30, 136, 255],
                     "accent selected switch knob"
                 );
