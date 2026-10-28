@@ -1,7 +1,6 @@
 //! Screen transitions and controller input, independent of rendering and SDL.
 
 use archr_index::{cache::SystemEntry, Game};
-#[path = "state_hub.rs"]
 mod hub;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

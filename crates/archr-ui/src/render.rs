@@ -11,7 +11,6 @@ use crate::{
     text::{color, Align, Face, Style, TextCache},
     theme::{Rect01, Rgba, Theme},
 };
-#[path = "hub.rs"]
 mod hub;
 use sdl2::{
     image::{InitFlag, Sdl2ImageContext},
