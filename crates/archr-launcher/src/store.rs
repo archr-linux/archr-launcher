@@ -22,6 +22,8 @@ pub struct Store {
     #[serde(skip)]
     members: HashSet<String>,
     recent: Vec<String>,
+    /// System ids in user order; empty means the default order.
+    order: Vec<String>,
     imported_systems: BTreeSet<String>,
     imported_times: HashMap<String, u64>,
 }
@@ -146,6 +148,32 @@ impl Store {
         self.imported_times
             .retain(|key, _| self.recent.contains(key));
         true
+    }
+
+    pub fn order(&self) -> &[String] {
+        &self.order
+    }
+
+    /// Saves `visible` as the order. Saved ids that are hidden right now (an
+    /// empty system) but still `exist` keep their place relative to their
+    /// neighbours; ids that no longer exist are dropped.
+    pub fn set_order(&mut self, mut visible: Vec<String>, exist: impl Fn(&str) -> bool) {
+        let saved = std::mem::take(&mut self.order);
+        for (i, id) in saved.iter().enumerate() {
+            if visible.contains(id) || !exist(id) {
+                continue;
+            }
+            let after = saved[..i]
+                .iter()
+                .rev()
+                .find_map(|earlier| visible.iter().position(|row| row == earlier));
+            visible.insert(after.map_or(0, |at| at + 1), id.clone());
+        }
+        self.order = visible;
+    }
+
+    pub fn clear_order(&mut self) {
+        self.order.clear();
     }
 
     pub fn is_favorite(&self, key: &str) -> bool {

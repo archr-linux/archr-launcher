@@ -368,9 +368,14 @@ fn generated_label(
     let (face, size) = (Face::Semibold, 128.);
     let width = rect.width().saturating_sub(frame.px(24.) as u32);
     let natural = measure(&text, face, size)?.max(1);
-    let size = (size * (width as f32 / natural as f32).min(1.))
+    let mut size = (size * (width as f32 / natural as f32).min(1.))
         .floor()
         .max(12.);
+    // Glyph hinting is not linear in size, so confirm the estimate; a label
+    // that overflows would be ellipsized by the text cache.
+    while size > 12. && measure(&text, face, size)? > width {
+        size -= 1.;
+    }
     Ok(PanelLabel {
         text,
         style: (face, size, theme.surface_elevated),
@@ -647,6 +652,26 @@ mod tests {
     fn alias_tables_have_sorted_unique_keys() {
         for table in [IMAGE_ALIASES, SHORT_NAMES] {
             assert!(table.windows(2).all(|w| w[0].0 < w[1].0));
+        }
+    }
+
+    #[test]
+    fn watermark_shrinks_until_its_measured_width_fits() {
+        let theme = Theme::builtin();
+        let frame = Frame::new(640, 480);
+        let rect = Rect::new(374, 50, 250, 374);
+        // Rounded per-glyph advances make width non-linear in size.
+        let advance =
+            |text: &str, size: f32| text.chars().count() as u32 * (size * 0.703).ceil() as u32;
+        for name in ["n64", "gba", "psx", "snes", "megadrive"] {
+            let label = generated_label(frame, rect, name, &theme, |text, _, size| {
+                Ok(advance(text, size))
+            })
+            .unwrap();
+            assert!(
+                advance(&label.text, label.style.1) <= label.rect.width(),
+                "{name}"
+            );
         }
     }
 

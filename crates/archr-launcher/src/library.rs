@@ -3,7 +3,7 @@ use crate::{
     handoff::{launch_command_with, write_next},
     paths::Paths,
     persistence::StoreWriter,
-    state::{DataSource, Outcome},
+    state::{App, DataSource, Outcome},
     store::{game_key, Store},
     worker::{self, Update, Work, Worker},
 };
@@ -42,6 +42,11 @@ impl Library {
     pub fn initial_traced(paths: Paths, trace: StartupTrace) -> Self {
         let cached = cache::load_overview(&paths.cache);
         startup_phase!(trace, "overview cache read");
+        // Tiny file, read in the startup worker alongside video setup: the first
+        // frame already shows the user's order, and the Store is complete before
+        // any input can change it.
+        let store = Store::load(&paths.store);
+        startup_phase!(trace, "store read");
         let counts_known = cached.is_some();
         let (definitions, banner) = if counts_known {
             (Vec::new(), None)
@@ -56,6 +61,12 @@ impl Library {
                 }
             }
         };
+        let banner = banner.or_else(|| {
+            store
+                .load_error
+                .is_some()
+                .then(|| Message::new("error.store_load"))
+        });
         let overview = cached.unwrap_or_else(|| Overview {
             systems: definitions
                 .iter()
@@ -83,7 +94,7 @@ impl Library {
             members: HashMap::new(),
             config: None,
             overrides: HashMap::new(),
-            store: Store::default(),
+            store,
             store_writer: None,
             worker: None,
         }
@@ -160,12 +171,10 @@ impl Library {
                 Update::Boot {
                     systems,
                     config,
-                    store,
                     banner,
                 } => {
                     self.definitions = systems;
                     self.config = config;
-                    self.store = *store;
                     if self.store.migrate(&self.definitions) {
                         self.queue_store();
                     }
@@ -281,6 +290,19 @@ impl Library {
                 write_next(&self.paths.run, &command).map_err(|error| error.to_string())?;
                 return Ok(true);
             }
+            Outcome::SetOrder(order) => {
+                // The default arrangement is stored as no custom order.
+                if order.is_empty() || order == App::default_rows(self) {
+                    self.store.clear_order();
+                } else {
+                    let overview = &self.overview;
+                    let exist = |id: &str| {
+                        id.starts_with('@') || overview.systems.iter().any(|s| s.name == id)
+                    };
+                    self.store.set_order(order, exist);
+                }
+                self.queue_store();
+            }
             Outcome::Action(_) | Outcome::ToggleWifi => return Err("error.operation".to_owned()),
         }
         Ok(false)
@@ -366,6 +388,9 @@ impl DataSource for Library {
     fn manufacturer(&self, system: &str) -> Option<(&str, &str)> {
         let def = self.definition(system)?;
         Some((&def.manufacturer, &def.release))
+    }
+    fn system_order(&self) -> &[String] {
+        self.store.order()
     }
     fn favorite_count(&self, system: &str) -> usize {
         self.store
