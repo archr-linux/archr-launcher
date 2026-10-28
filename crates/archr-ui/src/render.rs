@@ -877,8 +877,8 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                     x += lift;
                     let mid = y + rh as i32 / 2;
                     // Lucide chevrons only fill the middle of their box, so the
-                    // boxes overlap to leave a hairline between the two marks.
-                    for (glyph, top) in [(Glyph::ChevronUp, 12.), (Glyph::ChevronDown, 6.)] {
+                    // boxes overlap, leaving a few pixels between the two marks.
+                    for (glyph, top) in [(Glyph::ChevronUp, 13.), (Glyph::ChevronDown, 5.)] {
                         let rect = self.frame.square(
                             right - self.px(CHEVRON - 4.),
                             mid - self.px(top),
