@@ -350,3 +350,14 @@ fn system_order_is_saved_off_thread_reloaded_and_default_order_clears_it() {
     reopened.finish().unwrap();
     assert!(Store::load(&paths.store).order().is_empty());
 }
+
+#[test]
+fn saved_order_is_known_before_the_worker_starts() {
+    let (_dir, paths) = fixture();
+    let mut store = Store::load(&paths.store);
+    store.set_order(["nes", "@favorites"].map(String::from).into(), |_| true);
+    store.save(&paths.store).unwrap();
+    let library = Library::initial(paths);
+    assert!(!library.ready);
+    assert_eq!(library.system_order(), ["nes", "@favorites"]);
+}

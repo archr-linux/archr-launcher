@@ -205,10 +205,22 @@ fn system_order_roundtrips_and_clears() {
     let dir = tempdir().unwrap();
     let mut store = Store::load(dir.path());
     assert!(store.order().is_empty());
-    store.set_order(["snes", "@recent"].map(String::from).into());
+    store.set_order(["snes", "@recent"].map(String::from).into(), |_| true);
     store.save(dir.path()).unwrap();
     assert_eq!(Store::load(dir.path()).order(), ["snes", "@recent"]);
-    store.set_order(Vec::new());
+    store.clear_order();
     store.save(dir.path()).unwrap();
     assert!(Store::load(dir.path()).order().is_empty());
+}
+
+#[test]
+fn saving_a_visible_order_keeps_hidden_ids_after_their_predecessor_and_drops_missing_ones() {
+    let mut store = Store::default();
+    let ids = |list: &[&str]| list.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    store.set_order(ids(&["a", "hid", "b", "gone", "c", "hid2"]), |_| true);
+    // "hid" and "hid2" are empty now, "gone" was uninstalled.
+    store.set_order(ids(&["c", "a", "b"]), |id| id != "gone");
+    assert_eq!(store.order(), ["c", "hid2", "a", "hid", "b"]);
+    store.set_order(ids(&["b", "c", "a"]), |id| id != "gone");
+    assert_eq!(store.order(), ["b", "c", "hid2", "a", "hid"]);
 }

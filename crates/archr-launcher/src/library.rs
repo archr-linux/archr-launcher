@@ -31,6 +31,8 @@ pub struct Library {
     config: Option<SystemCfg>,
     overrides: HashMap<(String, String), (String, String)>,
     store: Store,
+    /// Saved system order read before the first frame; the Store replaces it at Boot.
+    early_order: Vec<String>,
     store_writer: Option<StoreWriter>,
     worker: Option<Worker>,
 }
@@ -42,6 +44,10 @@ impl Library {
     pub fn initial_traced(paths: Paths, trace: StartupTrace) -> Self {
         let cached = cache::load_overview(&paths.cache);
         startup_phase!(trace, "overview cache read");
+        // Tiny file, read in the startup worker alongside EGL setup: the first
+        // frame already shows the user's order instead of reordering afterwards.
+        let early_order = Store::load(&paths.store).order().to_vec();
+        startup_phase!(trace, "system order read");
         let counts_known = cached.is_some();
         let (definitions, banner) = if counts_known {
             (Vec::new(), None)
@@ -84,6 +90,7 @@ impl Library {
             config: None,
             overrides: HashMap::new(),
             store: Store::default(),
+            early_order,
             store_writer: None,
             worker: None,
         }
@@ -282,10 +289,16 @@ impl Library {
                 return Ok(true);
             }
             Outcome::SetOrder(order) => {
-                // An order equal to the default is stored as no custom order.
-                let custom = order != App::default_rows(self);
-                self.store
-                    .set_order(if custom { order } else { Vec::new() });
+                // The default arrangement is stored as no custom order.
+                if order == App::default_rows(self) {
+                    self.store.clear_order();
+                } else {
+                    let overview = &self.overview;
+                    let exist = |id: &str| {
+                        id.starts_with('@') || overview.systems.iter().any(|s| s.name == id)
+                    };
+                    self.store.set_order(order, exist);
+                }
                 self.queue_store();
             }
             Outcome::Action(_) | Outcome::ToggleWifi => return Err("error.operation".to_owned()),
@@ -375,7 +388,11 @@ impl DataSource for Library {
         Some((&def.manufacturer, &def.release))
     }
     fn system_order(&self) -> &[String] {
-        self.store.order()
+        if self.ready {
+            self.store.order()
+        } else {
+            &self.early_order
+        }
     }
     fn favorite_count(&self, system: &str) -> usize {
         self.store
