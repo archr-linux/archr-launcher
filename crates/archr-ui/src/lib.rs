@@ -3,6 +3,7 @@
 #[cfg(test)]
 static SDL_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+pub mod appearance;
 pub mod i18n;
 pub mod theme;
 
