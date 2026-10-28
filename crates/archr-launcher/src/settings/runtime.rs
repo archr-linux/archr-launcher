@@ -73,12 +73,12 @@ impl Runtime {
         let now = Instant::now();
         // Completion, not dispatch, starts the interval, even for a slow probe.
         if dirty {
-            self.next_info = now + Duration::from_secs(4);
+            self.next_info = now + Duration::from_secs(2);
         }
         if !self.closing
             && !self.busy()
             && self.active
-            && self.state.page() == Page::Info
+            && matches!(self.state.page(), Page::Info | Page::InfoDetail(_))
             && now >= self.next_info
         {
             self.send(Work::Info);
@@ -92,12 +92,16 @@ mod tests {
     use super::*;
     use std::{fs, os::unix::fs::PermissionsExt};
     #[test]
-    fn slow_refresh_is_disposable_and_next_interval_starts_after_completion() {
+    fn refresh_is_disposable_uses_two_second_interval_and_never_runs_ip() {
         let dir = tempfile::tempdir().unwrap();
         let bin = dir.path().join("usr/bin");
         fs::create_dir_all(&bin).unwrap();
         let ip = bin.join("ip");
-        fs::write(&ip, "#!/bin/sh\n/bin/sleep 4.2\n").unwrap();
+        fs::write(
+            &ip,
+            "#!/bin/sh\n/usr/bin/touch \"$ARCHR_LAUNCHER_ROOT/ip-was-run\"\n/bin/sleep 4.2\n",
+        )
+        .unwrap();
         fs::set_permissions(&ip, fs::Permissions::from_mode(0o755)).unwrap();
         let mut runtime = Runtime::new(Paths::new(Some(dir.path().into())));
         runtime.active = true;
@@ -112,7 +116,8 @@ mod tests {
             assert!(Instant::now() < deadline);
             thread_yield();
         }
-        assert!(runtime.next_info > Instant::now() + Duration::from_secs(3));
+        assert!(runtime.next_info > Instant::now() + Duration::from_secs(1));
+        assert!(!dir.path().join("ip-was-run").exists());
         runtime.close();
         runtime.next_info = Instant::now() - Duration::from_secs(1);
         runtime.poll();

@@ -1,6 +1,81 @@
 //! Shared, bounded settings layout. The common text cache only sees fitted lines.
 use super::*;
-use crate::settings::{Id, InfoCard, Kind, Page, Settings, CATEGORIES};
+use crate::settings::{Id, Kind, Page, Settings, CATEGORIES};
+#[path = "render/information.rs"]
+mod information;
+const VIEW_TOP: f32 = 50.;
+const VIEW_BOTTOM: f32 = 434.;
+const ROW_GAP: f32 = 3.;
+const SECTION_HEIGHT: f32 = 21.;
+#[derive(Clone, Copy)]
+struct Placement {
+    top: f32,
+    height: f32,
+    section: Option<&'static str>,
+}
+impl Placement {
+    fn selected_top(self) -> f32 {
+        self.top
+            - if self.section.is_some() {
+                SECTION_HEIGHT
+            } else {
+                0.
+            }
+    }
+    fn bottom(self) -> f32 {
+        self.top + self.height
+    }
+}
+fn placements(rows: &[crate::settings::Row]) -> Vec<Placement> {
+    let mut top = VIEW_TOP;
+    rows.iter()
+        .map(|row| {
+            let height = if row.subtitle.is_some() { 46. } else { 40. };
+            let place = Placement {
+                top,
+                height,
+                section: None,
+            };
+            top += height + ROW_GAP;
+            place
+        })
+        .collect()
+}
+pub(super) struct Scroll {
+    page: Option<Page>,
+    pub(super) tween: Tween,
+}
+impl Default for Scroll {
+    fn default() -> Self {
+        Self {
+            page: None,
+            tween: Tween::new(0., Duration::from_millis(90)),
+        }
+    }
+}
+impl Scroll {
+    fn offset(
+        &mut self,
+        page: Page,
+        selected_top: f32,
+        selected_bottom: f32,
+        content_bottom: f32,
+        now: Instant,
+    ) -> f32 {
+        let changed = self.page != Some(page);
+        let previous = if changed { 0. } else { self.tween.target };
+        let target = previous
+            .min(selected_top - VIEW_TOP)
+            .max(selected_bottom - VIEW_BOTTOM)
+            .clamp(0., (content_bottom - VIEW_BOTTOM).max(0.));
+        self.tween.retarget(target, now);
+        if changed {
+            self.tween.snap();
+            self.page = Some(page);
+        }
+        self.tween.value(now)
+    }
+}
 type Bounds = (f32, f32, f32, f32);
 struct View<'a, 'ttf, 'tex> {
     ui: &'a mut Ui<'ttf, 'tex>,
@@ -13,6 +88,11 @@ impl Ui<'_, '_> {
         }
     }
     pub(super) fn settings_page(&mut self, state: &Settings, theme: &Theme) -> Result<(), String> {
+        if state.page().rows().is_empty() {
+            self.settings_scroll.page = None;
+            self.settings_scroll.tween.retarget(0., self.frame.now);
+            self.settings_scroll.tween.snap();
+        }
         View { ui: self, theme }.draw(state)
     }
 }
@@ -33,24 +113,37 @@ impl View<'_, '_, '_> {
             (!selected).then_some(self.theme.border),
         )
     }
+    fn row_panel(&mut self, bounds: Bounds, selected: bool) -> Result<(), String> {
+        if !selected {
+            return Ok(());
+        }
+        // Clip the mesh's antialias fringe to the placement's exact height.
+        let previous = self.ui.canvas.clip_rect();
+        self.ui
+            .canvas
+            .set_clip_rect(previous.intersect_rect(self.rect(bounds)));
+        let result = self.panel(bounds, true);
+        self.ui.canvas.set_clip_rect(previous);
+        result
+    }
     fn ink(&self, selected: bool) -> Rgba {
         selection(selected, self.theme.text, self.theme.highlight_text)
     }
     fn tr(&self, text: &str) -> String {
-        if let Some((key, value)) = text
-            .split_once('|')
-            .filter(|(k, _)| k.starts_with("settings."))
-        {
-            self.ui.catalog.format(key, &[("value", value)])
-        } else if text.starts_with("settings.") {
-            self.ui.catalog.text(text)
-        } else {
-            text.into()
-        }
+        crate::settings::information::value(&self.ui.catalog, text)
     }
     /// Wrap at measured character boundaries, preserve explicit newlines, never
     /// send an oversized line to the ellipsizing game-text API. Minimum: 12 px.
     fn lines(&mut self, text: &str, size: f32, width: u32) -> Result<Vec<String>, String> {
+        self.lines_face(text, size, width, Face::Regular)
+    }
+    fn lines_face(
+        &mut self,
+        text: &str,
+        size: f32,
+        width: u32,
+        face: Face,
+    ) -> Result<Vec<String>, String> {
         let mut lines = vec![String::new()];
         for ch in text.chars() {
             let line = lines.last_mut().expect("one line");
@@ -58,12 +151,7 @@ impl View<'_, '_, '_> {
                 lines.push(String::new());
                 continue;
             }
-            if !line.is_empty()
-                && self
-                    .ui
-                    .measure(&format!("{line}{ch}"), Face::Regular, size)?
-                    > width
-            {
+            if !line.is_empty() && self.ui.measure(&format!("{line}{ch}"), face, size)? > width {
                 if let Some(at) = line.rfind(' ') {
                     let rest = line.split_off(at + 1);
                     line.truncate(at);
@@ -83,10 +171,19 @@ impl View<'_, '_, '_> {
         text: &str,
         style: (f32, Rgba, Align),
     ) -> Result<(), String> {
+        self.text_face(bounds, text, style, Face::Regular)
+    }
+    fn text_face(
+        &mut self,
+        bounds: Bounds,
+        text: &str,
+        style: (f32, Rgba, Align),
+        face: Face,
+    ) -> Result<(), String> {
         let rect = self.rect(bounds);
         let (mut size, ink, align) = style;
         let (lines, size) = loop {
-            let lines = self.lines(text, size, rect.width())?;
+            let lines = self.lines_face(text, size, rect.width(), face)?;
             let limit = (bounds.3 / (size + 3.)).floor().max(1.) as usize;
             if lines.len() <= limit {
                 break (lines, size);
@@ -105,7 +202,7 @@ impl View<'_, '_, '_> {
         for (n, line) in lines.iter().enumerate() {
             self.ui.label_aligned(
                 line,
-                (Face::Regular, size, ink),
+                (face, size, ink),
                 self.rect((bounds.0, top + n as f32 * step, bounds.2, step)),
                 align,
             )?;
@@ -120,7 +217,15 @@ impl View<'_, '_, '_> {
     }
     fn draw(&mut self, state: &Settings) -> Result<(), String> {
         let right = self.ui.status_header(self.theme)? as f32 / self.ui.frame.scale;
-        let title = if state.page() == Page::Root {
+        let title = if let Page::InfoDetail(index) = state.page() {
+            format!(
+                "{} › {}",
+                self.tr("settings.info"),
+                self.tr(crate::settings::information::ITEMS[index.min(5)].0)
+            )
+        } else if state.page() == Page::Info {
+            self.tr("settings.info")
+        } else if state.page() == Page::Root {
             self.tr("settings.title")
         } else {
             format!(
@@ -129,10 +234,51 @@ impl View<'_, '_, '_> {
                 self.tr(state.page().title())
             )
         };
-        self.label((24., 0., right - 24., 48.), &title, 15.)?;
+        if let Page::InfoDetail(index) = state.page() {
+            let base = self.tr("settings.info");
+            let item = self.tr(crate::settings::information::ITEMS[index.min(5)].0);
+            let mut size = 15.;
+            while size > 12. && self.ui.measure(&title, Face::Semibold, size)? as f32 > right - 24.
+            {
+                size -= 1.;
+            }
+            let base_width = self.ui.measure(&base, Face::Semibold, size)? as f32;
+            let arrow_width = self.ui.measure(" › ", Face::Semibold, size)? as f32;
+            self.text_face(
+                (24., 0., base_width, 44.),
+                &base,
+                (size, self.theme.text, Align::Left),
+                Face::Semibold,
+            )?;
+            self.text_face(
+                (24. + base_width, 0., arrow_width, 44.),
+                " › ",
+                (size, self.theme.muted, Align::Left),
+                Face::Semibold,
+            )?;
+            self.text_face(
+                (
+                    24. + base_width + arrow_width,
+                    0.,
+                    right - 24. - base_width - arrow_width,
+                    44.,
+                ),
+                &item,
+                (size, self.theme.text, Align::Left),
+                Face::Semibold,
+            )?;
+        } else {
+            self.text_face(
+                (24., 0., right - 24., 44.),
+                &title,
+                (15., self.theme.text, Align::Left),
+                Face::Semibold,
+            )?;
+        }
         match state.page() {
             Page::Root => self.root(state)?,
             Page::Info => self.info(state)?,
+            Page::InfoDetail(index) => self.info_detail(state, index)?,
             Page::Soon(_) => {
                 self.panel((24., 90., 592., 100.), false)?;
                 self.text(
@@ -141,71 +287,10 @@ impl View<'_, '_, '_> {
                     (20., self.theme.text, Align::Center),
                 )?;
             }
-            page => {
-                let step = if page == Page::Region { 80. } else { 64. };
-                for (n, row) in page.rows().iter().enumerate() {
-                    let y = 68. + n as f32 * step;
-                    let selected = n == state.cursor;
-                    let ink = self.ink(selected);
-                    let label = self.tr(row.label);
-                    let expand = row.subtitle.is_none()
-                        && row.kind == Kind::Value
-                        && self.ui.measure(
-                            &state.display_value(row.id, &self.ui.catalog),
-                            Face::Regular,
-                            14.,
-                        )? > 228;
-                    let label_width = if expand {
-                        self.ui.measure(&label, Face::Regular, 15.)?.clamp(120, 278) as f32
-                    } else {
-                        278.
-                    };
-                    let control_x = 38. + label_width + 16.;
-                    let control = (control_x, y, 600. - control_x, step - 6.);
-                    self.panel((24., y, 592., step - 6.), selected)?;
-                    self.text(
-                        (
-                            38.,
-                            y,
-                            label_width,
-                            if row.subtitle.is_some() {
-                                28.
-                            } else {
-                                step - 6.
-                            },
-                        ),
-                        &label,
-                        (15., ink, Align::Left),
-                    )?;
-                    if let Some(key) = row.subtitle {
-                        self.text(
-                            (38., y + 28., 278., 30.),
-                            &self.tr(key),
-                            (
-                                12.,
-                                selection(
-                                    selected,
-                                    self.theme.muted,
-                                    self.theme.accent_text_secondary,
-                                ),
-                                Align::Left,
-                            ),
-                        )?;
-                    }
-                    if state.pending == Some(row.id) {
-                        self.text(
-                            control,
-                            &self.tr("settings.applying"),
-                            (14., ink, Align::Right),
-                        )?;
-                    } else {
-                        self.control(row.id, row.kind, state, selected, control)?;
-                    }
-                }
-            }
+            page => self.rows(state, page.rows())?,
         }
         if state.error.as_ref().is_some_and(|(id, _)| {
-            state.page() != Page::Info
+            !matches!(state.page(), Page::Info | Page::InfoDetail(_))
                 && (id.is_none()
                     || state.page() == Page::Root
                     || state.page().rows().iter().any(|r| Some(r.id) == *id))
@@ -223,15 +308,32 @@ impl View<'_, '_, '_> {
                 12.,
             )?;
         }
-        self.ui
-            .divider(0, self.ui.px(440.), self.ui.frame.width, self.theme.border)?;
+        let footer = if matches!(state.page(), Page::Info | Page::InfoDetail(_)) {
+            432.
+        } else {
+            440.
+        };
+        self.ui.divider(
+            0,
+            self.ui.px(footer),
+            self.ui.frame.width,
+            self.theme.border,
+        )?;
         self.ui.hints(
             state.hints(),
             self.theme,
             self.ui.frame.width,
-            self.ui.px(440.),
-            self.ui.px(40.) as u32,
+            self.ui.px(footer),
+            self.ui.px(480. - footer) as u32,
         )?;
+        if matches!(state.page(), Page::Info | Page::InfoDetail(_)) {
+            let key = if state.page() == Page::Info {
+                "settings.updated_now"
+            } else {
+                "settings.refresh_interval"
+            };
+            self.note((24., footer, 170., 48.), &self.tr(key), 12.)?;
+        }
         if state.loading {
             self.note((24., 440., 160., 40.), &self.tr("loading"), 12.)?;
         }
@@ -252,6 +354,109 @@ impl View<'_, '_, '_> {
             )?;
         }
         Ok(())
+    }
+    fn rows(&mut self, state: &Settings, rows: &[crate::settings::Row]) -> Result<(), String> {
+        self.rows_at(state, rows, &placements(rows))
+    }
+    /// Sections and variable-height rows share one geometry with scrolling.
+    /// The pages branch can pass its existing placements through this adapter.
+    fn rows_at(
+        &mut self,
+        state: &Settings,
+        rows: &[crate::settings::Row],
+        positions: &[Placement],
+    ) -> Result<(), String> {
+        let selected = positions.get(state.cursor).copied().unwrap_or(Placement {
+            top: VIEW_TOP,
+            height: 0.,
+            section: None,
+        });
+        let bottom = positions.last().map_or(VIEW_TOP, |p| p.bottom());
+        let offset = self.ui.settings_scroll.offset(
+            state.page(),
+            selected.selected_top(),
+            selected.bottom(),
+            bottom,
+            self.ui.frame.now,
+        );
+        self.ui
+            .canvas
+            .set_clip_rect(self.rect((16., VIEW_TOP, 608., VIEW_BOTTOM - VIEW_TOP)));
+        let result = (|| {
+            for (n, (row, position)) in rows.iter().zip(positions).enumerate() {
+                let y = position.top - offset;
+                if position.bottom() - offset < VIEW_TOP
+                    || position.selected_top() - offset >= VIEW_BOTTOM
+                {
+                    continue;
+                }
+                if let Some(section) = position.section {
+                    self.note(
+                        (24., y - SECTION_HEIGHT, 592., SECTION_HEIGHT),
+                        &self.tr(section),
+                        12.,
+                    )?;
+                }
+                let selected = n == state.cursor;
+                let ink = self.ink(selected);
+                let face = selection(selected, Face::Regular, Face::Semibold);
+                let label = self.tr(row.label);
+                let expand = row.subtitle.is_none()
+                    && row.kind == Kind::Value
+                    && self.ui.measure(
+                        &state.display_value(row.id, &self.ui.catalog),
+                        face,
+                        14.,
+                    )? > 228;
+                let label_width = if expand {
+                    self.ui.measure(&label, face, 15.)?.clamp(120, 278) as f32
+                } else {
+                    278.
+                };
+                let control_x = 30. + label_width + 16.;
+                let control = (control_x, y, 610. - control_x, position.height);
+                self.row_panel((16., y, 608., position.height), selected)?;
+                self.text_face(
+                    (
+                        30.,
+                        y,
+                        label_width,
+                        if row.subtitle.is_some() {
+                            25.
+                        } else {
+                            position.height
+                        },
+                    ),
+                    &label,
+                    (15., ink, Align::Left),
+                    face,
+                )?;
+                if let Some(key) = row.subtitle {
+                    self.text(
+                        (30., y + 25., 278., 21.),
+                        &self.tr(key),
+                        (
+                            12.,
+                            selection(selected, self.theme.muted, self.theme.accent_text_secondary),
+                            Align::Left,
+                        ),
+                    )?;
+                }
+                if state.pending == Some(row.id) {
+                    self.text_face(
+                        control,
+                        &self.tr("settings.applying"),
+                        (14., ink, Align::Right),
+                        face,
+                    )?;
+                } else {
+                    self.control(row.id, row.kind, state, selected, control)?;
+                }
+            }
+            Ok(())
+        })();
+        self.ui.canvas.set_clip_rect(None);
+        result
     }
     fn capsule(&mut self, bounds: Bounds, ink: Rgba) -> Result<(), String> {
         let rect = self.rect(bounds);
@@ -321,7 +526,12 @@ impl View<'_, '_, '_> {
                         ink,
                     )?;
                 }
-                self.text((x + 20., y, w - 40., h), &v, (14., ink, Align::Right))?;
+                self.text_face(
+                    (x + 20., y, w - 40., h),
+                    &v,
+                    (14., ink, Align::Right),
+                    selection(selected, Face::Regular, Face::Semibold),
+                )?;
             }
         }
         Ok(())
@@ -329,13 +539,13 @@ impl View<'_, '_, '_> {
     fn root(&mut self, state: &Settings) -> Result<(), String> {
         for (n, (page, _, glyph)) in CATEGORIES.iter().enumerate() {
             let key = page.title();
-            let y = 66. + n as f32 * 40.;
+            let y = 50. + n as f32 * 39.;
             let selected = n == state.cursor;
             let ink = self.ink(selected);
-            self.panel((24., y, 346., 38.), selected)?;
+            self.row_panel((16., y, 358., 36.), selected)?;
             self.ui
-                .icon(*glyph, self.rect((38., y + 10., 18., 18.)), ink)?;
-            self.text((68., y, 282., 38.), &self.tr(key), (15., ink, Align::Left))?;
+                .icon(*glyph, self.rect((28., y + 9., 18., 18.)), ink)?;
+            self.text((58., y, 300., 36.), &self.tr(key), (15., ink, Align::Left))?;
         }
         let (page, detail, _) = CATEGORIES[state.cursor.min(CATEGORIES.len() - 1)];
         let key = page.title();
@@ -348,87 +558,8 @@ impl View<'_, '_, '_> {
             (12., self.theme.dim_text, Align::Left),
         )
     }
-    fn card_height(pair: &[(&InfoCard, Vec<String>)]) -> f32 {
-        let count = pair.iter().map(|(_, lines)| lines.len()).max().unwrap_or(1);
-        36. + count as f32 * 17.
-            + if pair.iter().any(|(card, _)| card.percent.is_some()) {
-                12.
-            } else {
-                0.
-            }
-    }
-    fn info(&mut self, state: &Settings) -> Result<(), String> {
-        let info = &state.info;
-        self.label((24., 50., 94., 38.), "ArchR", 24.)?;
-        self.text(
-            (128., 50., 488., 38.),
-            &info.version,
-            (18., self.theme.highlight_bg, Align::Left),
-        )?;
-        self.note(
-            (24., 88., 592., 30.),
-            &self.ui.catalog.format(
-                "settings.device_line",
-                &[("device", &info.device), ("kernel", &info.kernel)],
-            ),
-            13.,
-        )?;
-        self.note(
-            (24., 118., 592., 20.),
-            &self
-                .ui
-                .catalog
-                .format("settings.uptime", &[("value", &info.uptime)]),
-            12.,
-        )?;
-        let mut content = Vec::new();
-        for card in &info.cards {
-            let mut lines = Vec::new();
-            for line in card.lines.iter().filter(|s| !s.is_empty()) {
-                lines.extend(self.lines(&self.tr(line), 12., self.ui.px(260.) as u32)?);
-            }
-            if lines.is_empty() {
-                lines.push(self.tr("settings.unavailable"));
-            }
-            content.push((card, lines));
-        }
-        // Try the complete content first; only unavailable cards replace an
-        // external value when the combined layout cannot clear the footer.
-        while content
-            .chunks(2)
-            .map(|pair| Self::card_height(pair) + 8.)
-            .sum::<f32>()
-            > 440. - 144.
-        {
-            let Some((card, lines)) = content
-                .iter_mut()
-                .filter(|(_, lines)| lines.len() > 1)
-                .max_by_key(|(_, lines)| lines.len())
-            else {
-                break;
-            };
-            log::warn!(
-                "Settings information unavailable in this layout: {}",
-                card.lines.join("\n")
-            );
-            *lines = vec![self.tr("settings.unavailable")];
-        }
-        let mut y = 144.;
-        for pair in content.chunks(2) {
-            let h = Self::card_height(pair);
-            for (n, (card, lines)) in pair.iter().enumerate() {
-                let x = 24. + n as f32 * 304.;
-                self.panel((x, y, 288., h), false)?;
-                self.label((x + 14., y + 6., 260., 22.), &self.tr(card.title), 14.)?;
-                for (i, line) in lines.iter().enumerate() {
-                    self.note((x + 14., y + 31. + i as f32 * 17., 260., 17.), line, 12.)?;
-                }
-                if let Some(v) = card.percent {
-                    self.bar((x + 14., y + h - 12., 260., 5.), v, self.theme.highlight_bg)?;
-                }
-            }
-            y += h + 8.;
-        }
-        Ok(())
-    }
 }
+
+#[cfg(test)]
+#[path = "../../tests/support/settings_scroll.rs"]
+mod scroll_tests;

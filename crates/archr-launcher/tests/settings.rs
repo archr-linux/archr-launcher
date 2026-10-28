@@ -206,22 +206,41 @@ fn information_distinguishes_active_driver_and_detects_hardware_and_metrics() {
     fs::create_dir_all(driver.parent().unwrap()).unwrap();
     symlink("/drivers/panfrost", &driver).unwrap();
     let info = backend.load().unwrap().info;
-    assert_eq!(info.uptime, "2:03");
+    assert!(info.cards[0]
+        .detail
+        .rows
+        .iter()
+        .any(|(key, value)| *key == "settings.uptime_label"
+            && value == "settings.duration_hours|hours=2|minutes=3"));
     assert_eq!(info.cards.len(), 6);
-    assert!(info.cards[0].lines.contains(&"Example x86 CPU".into()));
-    assert!(info.cards[0].lines.contains(&"performance".into()));
-    assert!(info.cards[0].lines.iter().any(|l| l.contains("43 °C")));
+    assert_eq!(info.cards[0].detail.heading, "Example x86 CPU");
+    assert!(info.cards[0]
+        .detail
+        .rows
+        .iter()
+        .any(|(_, v)| v == "performance"));
+    assert!(info.cards[0].lines.iter().any(|l| l.contains("43.0 °C")));
     assert!(info.cards[1]
-        .lines
-        .contains(&"settings.active|panfrost".into()));
+        .detail
+        .rows
+        .iter()
+        .any(|(_, v)| v == "panfrost"));
     assert!(info.cards[1]
-        .lines
-        .contains(&"settings.after_reboot|libmali".into()));
-    assert!(info.cards[1].lines.contains(&"640 × 480".into()));
+        .detail
+        .rows
+        .iter()
+        .any(|(_, v)| v == "libmali"));
+    assert!(info.cards[1]
+        .detail
+        .rows
+        .iter()
+        .any(|(_, v)| v == "640 × 480"));
     fs::remove_file(driver).unwrap();
     assert!(backend.load().unwrap().info.cards[1]
-        .lines
-        .contains(&"settings.active|?".into()));
+        .detail
+        .rows
+        .iter()
+        .any(|(k, v)| *k == "settings.active_driver" && v.is_empty()));
     assert!(!info
         .cards
         .iter()
@@ -246,4 +265,133 @@ fn brightness_publishes_once_after_success_and_keeps_config_on_sysfs_failure() {
         .unwrap_err()
         .contains("brightness"));
     assert_eq!(backend.load().unwrap().value(Id::Brightness), "75");
+}
+
+#[test]
+fn information_collects_detail_rows_and_core_deltas_without_commands() {
+    let (_guard, dir, backend) = fixture();
+    for (path, value) in [
+        ("proc/cpuinfo", "processor : 0\nHardware : Rockchip RK3326\n"),
+        ("proc/stat", "cpu 10 0 10 80 0 0 0 0\ncpu0 10 0 10 80 0 0 0 0\n"),
+        ("proc/meminfo", "MemTotal: 1000000 kB\nMemAvailable: 750000 kB\nCached: 50000 kB\nSwapTotal: 100000 kB\nSwapFree: 90000 kB\n"),
+        ("proc/uptime", "3540.0 0.0"),
+        ("proc/net/route", "Iface Destination Gateway Flags\nwlan0 00000000 0103A8C0 0003\n"),
+        ("etc/resolv.conf", "nameserver 1.1.1.1\n"),
+        ("proc/sys/kernel/hostname", "archr-test"),
+        ("sys/devices/system/cpu/cpufreq/policy0/scaling_cur_freq", "1008000"),
+        ("sys/devices/system/cpu/cpufreq/policy0/scaling_min_freq", "408000"),
+        ("sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq", "1512000"),
+    ] {
+        let p = dir.path().join(path);
+        fs::create_dir_all(p.parent().unwrap()).unwrap();
+        fs::write(p, value).unwrap();
+    }
+    let first = backend.load().unwrap().info;
+    assert_eq!(first.cards[0].detail.rows[0].1, "@1008 MHz");
+    fs::write(
+        dir.path().join("proc/stat"),
+        "cpu 20 0 20 100 0 0 0 0\ncpu0 20 0 20 100 0 0 0 0\n",
+    )
+    .unwrap();
+    let second = backend.load().unwrap().info;
+    assert_eq!(second.cards[0].detail.meters[0].percent, Some(50));
+    assert_eq!(second.cards[2].percent, Some(25));
+    assert!(second.cards[4]
+        .detail
+        .rows
+        .iter()
+        .any(|(_, v)| v == "1.1.1.1"));
+    assert!(second.cards[4]
+        .detail
+        .rows
+        .iter()
+        .any(|(_, v)| v == "192.168.3.1"));
+    assert!(second.cards[0].lines[0].contains("Rockchip RK3326"));
+}
+
+#[test]
+fn cpu_hotplug_preserves_core_identity_and_reappearing_core_has_no_delta() {
+    let (_guard, dir, backend) = fixture();
+    let path = dir.path().join("proc/stat");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(
+        &path,
+        "cpu0 10 0 10 80
+cpu2 90 0 10 100
+",
+    )
+    .unwrap();
+    backend.load().unwrap();
+    fs::write(
+        &path,
+        "cpu2 140 0 10 150
+",
+    )
+    .unwrap();
+    let info = backend.load().unwrap().info;
+    assert_eq!(info.cards[0].detail.meters[0].label, "CPU2");
+    assert_eq!(info.cards[0].detail.meters[0].percent, Some(50));
+    fs::write(
+        &path,
+        "cpu0 30 0 10 100
+cpu2 190 0 10 200
+",
+    )
+    .unwrap();
+    let info = backend.load().unwrap().info;
+    assert_eq!(info.cards[0].detail.meters[0].percent, None);
+    assert_eq!(info.cards[0].detail.meters[1].percent, Some(50));
+}
+#[test]
+fn arm64_identity_uses_compatible_and_cpu_part_without_hardware_field() {
+    let (_guard, dir, backend) = fixture();
+    for (path, value) in [
+        (
+            "proc/cpuinfo",
+            "processor : 0
+CPU part : 0xd03
+",
+        ),
+        (
+            "sys/firmware/devicetree/base/compatible",
+            "board,example\0allwinner,sun50i-h616\0",
+        ),
+    ] {
+        let path = dir.path().join(path);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, value).unwrap();
+    }
+    let info = backend.load().unwrap().info;
+    assert!(info.cards[0].detail.heading.contains("SUN50I-H616"));
+    assert!(info.cards[0].detail.subtitle.contains("Cortex-A53"));
+    assert!(info.cards[0]
+        .detail
+        .subtitle
+        .ends_with(&format!("|bits={}", usize::BITS)));
+}
+
+#[test]
+fn battery_formats_integer_current_and_capacity_without_a_restart_timer() {
+    let (_guard, dir, backend) = fixture();
+    for (name, value) in [
+        ("capacity", "83"),
+        ("status", "Discharging"),
+        ("voltage_now", "4100000"),
+        ("current_now", "650000"),
+        ("charge_full_design", "3200000"),
+    ] {
+        let path = dir.path().join("sys/class/power_supply/battery").join(name);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, value).unwrap();
+    }
+    let info = backend.load().unwrap().info;
+    let rows = &info.cards[5].detail.rows;
+    for (key, expected) in [
+        ("settings.voltage", "@4.10 V"),
+        ("settings.current", "@650 mA"),
+        ("settings.design_capacity", "@3200 mAh"),
+    ] {
+        assert!(rows.iter().any(|(k, v)| *k == key && v == expected));
+    }
+    assert!(!rows.iter().any(|(k, _)| *k == "settings.on_battery"));
 }
