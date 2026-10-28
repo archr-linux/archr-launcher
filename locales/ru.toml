@@ -152,7 +152,7 @@
 "settings.player" = "Игрок"
 "settings.player_detail" = "Номер устройства в игре"
 "settings.channel" = "Канал"
-"settings.channel_detail" = "Одинаковый на всех устройствах"
+"settings.channel_detail" = "Одинаковый у всех"
 "settings.usb_mode" = "Режим USB (gadget)"
 "settings.usb_detail" = "При подключении к ПК"
 "settings.netplay_enabled" = "Включить Netplay"
@@ -203,3 +203,4 @@
 "settings.games_index" = "ИНДЕКС ИГР"
 "settings.keyboard_section" = "КЛАВИАТУРА"
 "settings.refresh" = "Обновить"
+"settings.define" = "Задать…"

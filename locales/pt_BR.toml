@@ -150,7 +150,7 @@
 "settings.adhoc" = "Jogo local (Local Play)"
 "settings.adhoc_detail" = "Wi-Fi direto entre aparelhos"
 "settings.player" = "Jogador"
-"settings.player_detail" = "Número deste aparelho na partida"
+"settings.player_detail" = "Número deste aparelho"
 "settings.channel" = "Canal"
 "settings.channel_detail" = "Igual em todos os aparelhos"
 "settings.usb_mode" = "Função USB (gadget)"
@@ -203,3 +203,4 @@
 "settings.games_index" = "ÍNDICE DE JOGOS"
 "settings.keyboard_section" = "TECLADO"
 "settings.refresh" = "Atualizar"
+"settings.define" = "Definir…"

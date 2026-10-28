@@ -28,7 +28,8 @@ macro_rules! glyphs {
 glyphs! {
     Recent => "history", Games => "gamepad-2", Tools => "wrench",
     Gear => "settings", Download => "download", Wifi => "wifi",
-    WifiOff => "wifi-off", Moon => "moon", Restart => "rotate-cw",
+    WifiOff => "wifi-off", WifiHigh => "wifi-high", WifiLow => "wifi-low",
+    Lock => "lock", Check => "check", Moon => "moon", Restart => "rotate-cw",
     Power => "power", Clock => "clock", Star => "star",
     Battery => "battery", BatteryLow => "battery-low",
     BatteryMedium => "battery-medium", BatteryFull => "battery-full",
@@ -199,12 +200,12 @@ mod tests {
     }
 
     #[test]
-    fn bundled_dot_audit_changes_only_the_five_affected_icons() {
+    fn bundled_dot_audit_changes_only_the_known_affected_icons() {
         for &glyph in Glyph::ALL {
             let svg = glyph.embedded();
             let normalized = normalize_dots(svg);
             let added = match glyph {
-                Glyph::Wifi | Glyph::WifiOff => 1,
+                Glyph::Wifi | Glyph::WifiOff | Glyph::WifiHigh | Glyph::WifiLow => 1,
                 Glyph::Controls | Glyph::Games | Glyph::Storage => 2,
                 _ => 0,
             };

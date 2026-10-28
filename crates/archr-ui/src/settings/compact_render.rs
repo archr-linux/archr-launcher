@@ -23,7 +23,7 @@ impl View<'_, '_, '_> {
             let active = index == state.cursor;
             let disabled = state.page() == Page::Scraper || row.id == Id::IndexNow;
             let h = placement.height;
-            self.panel((16., y, 410., h), active && !disabled)?;
+            self.row_panel((16., y, 410., h), active && !disabled)?;
             let ink = if disabled {
                 self.theme.muted
             } else {

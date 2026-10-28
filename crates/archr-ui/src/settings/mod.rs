@@ -131,10 +131,10 @@ impl Id {
             Self::NetplayPort => ("global.netplay.port", "55435"),
             Self::Relay => ("global.netplay.relay", "none"),
             Self::CustomServer => ("global.netplay.customserver", ""),
-            Self::AutoLobby => ("netplay.automatically_create_lobby", "0"),
-            Self::OnlyRelay => ("netplay.show_only_relay_server_games", "0"),
-            Self::MissingGames => ("netplay.show_missing_games", "0"),
-            Self::CheckIndexes => ("netplay.check_indexes_at_start", "0"),
+            Self::AutoLobby => ("netplay.auto_lobby", "0"),
+            Self::OnlyRelay => ("netplay.relay_only", "0"),
+            Self::MissingGames => ("netplay.show_missing", "0"),
+            Self::CheckIndexes => ("netplay.index_at_start", "0"),
             Self::ScraperSource
             | Self::ScraperAccount
             | Self::ScraperSystems
@@ -402,6 +402,7 @@ impl Settings {
             (Id::UsbMode, "network") => "settings.usb_network",
             (Id::UsbMode, "file_transfer") => "settings.usb_files",
             (Id::Relay, "none") => "settings.off",
+            (Id::Nickname | Id::NetplayHost | Id::CustomServer, "") => "settings.define",
             (_, "") => "settings.unavailable",
             _ => return value.into(),
         };
@@ -436,10 +437,18 @@ impl Settings {
                 (Key('Y'), "settings.forget"),
                 (Key('B'), "hint.back"),
             ],
+            Page::Keyboard if self.keyboard_target == Some(Id::WifiSwitch) => &[
+                (Key('A'), "hint.choose"),
+                (Key('X'), "settings.delete"),
+                (Key('Y'), "settings.shift"),
+                (HintButton::Start, "settings.connect"),
+                (Key('B'), "hint.back"),
+            ],
             Page::Keyboard => &[
                 (Key('A'), "hint.choose"),
                 (Key('X'), "settings.delete"),
                 (Key('Y'), "settings.shift"),
+                (HintButton::Start, "hint.confirm"),
                 (Key('B'), "hint.back"),
             ],
             Page::Root => &[
@@ -620,6 +629,58 @@ mod tests {
 #[cfg(test)]
 mod page_tests {
     use super::*;
+    #[test]
+    fn lobby_keys_match_the_independent_netplay_consumer() {
+        assert_eq!(Id::AutoLobby.key(), "netplay.auto_lobby");
+        assert_eq!(Id::OnlyRelay.key(), "netplay.relay_only");
+        assert_eq!(Id::MissingGames.key(), "netplay.show_missing");
+        assert_eq!(Id::CheckIndexes.key(), "netplay.index_at_start");
+    }
+
+    #[test]
+    fn empty_netplay_text_fields_prompt_to_define_instead_of_unavailable() {
+        let state = Settings::default();
+        let catalog = crate::i18n::I18n::default();
+        for id in [Id::Nickname, Id::NetplayHost, Id::CustomServer] {
+            assert_eq!(
+                state.display_value(id, &catalog),
+                catalog.text("settings.define")
+            );
+        }
+    }
+
+    #[test]
+    fn netplay_text_fields_open_localized_keyboard_and_host_starts_numeric() {
+        let mut state = Settings::default();
+        state.open(Page::Netplay);
+        state.loading = false;
+        state.cursor = 1;
+        assert_eq!(state.handle(Button::A), Effect::None);
+        assert_eq!(state.keyboard.as_ref().unwrap().title, "settings.nickname");
+        assert!(!state.keyboard.as_ref().unwrap().numeric);
+        state.handle(Button::B);
+        state.cursor = 2;
+        assert_eq!(state.handle(Button::A), Effect::None);
+        assert_eq!(state.keyboard.as_ref().unwrap().title, "settings.host");
+        assert!(state.keyboard.as_ref().unwrap().numeric);
+    }
+
+    #[test]
+    fn keyboard_footer_has_a_start_connect_badge() {
+        let mut state = Settings::default();
+        state.open_keyboard(Id::WifiSwitch, "AP".into(), true, String::new());
+        assert!(state
+            .hints()
+            .contains(&(HintButton::Start, "settings.connect")));
+        state.open_keyboard(
+            Id::NetplayHost,
+            "settings.host".into(),
+            false,
+            String::new(),
+        );
+        assert!(state.hints().contains(&(HintButton::Start, "hint.confirm")));
+    }
+
     #[test]
     fn compact_rows_keep_non_selectable_sections_and_real_heights() {
         let mut state = Settings::default();

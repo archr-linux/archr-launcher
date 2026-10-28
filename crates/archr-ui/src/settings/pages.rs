@@ -65,7 +65,7 @@ pub const SCRAPER: &[Row] = &[
 use super::{network::Keyboard, Effect, Page, Settings};
 use crate::state::Button;
 impl Settings {
-    pub(super) fn text_input(id: Id) -> bool {
+    pub(crate) fn text_input(id: Id) -> bool {
         matches!(
             id,
             Id::Nickname | Id::NetplayHost | Id::NetplayPort | Id::CustomServer
@@ -194,7 +194,16 @@ impl Settings {
             | Id::ScraperMissing
             | Id::ScraperStart => {}
             id if Self::text_input(id) => {
-                self.open_keyboard(id, id.key().into(), false, self.value(id).to_owned());
+                let title = match id {
+                    Id::Nickname => "settings.nickname",
+                    Id::NetplayHost => "settings.host",
+                    Id::NetplayPort => "settings.port",
+                    Id::CustomServer => "settings.custom_server",
+                    _ => unreachable!("text input ID"),
+                };
+                self.open_keyboard(id, title.into(), false, self.value(id).to_owned());
+                self.keyboard.as_mut().expect("opened keyboard").numeric =
+                    matches!(id, Id::NetplayHost | Id::NetplayPort);
             }
             _ => return None,
         }

@@ -42,6 +42,17 @@ impl View<'_, '_, '_> {
             (!selected).then_some(self.theme.border),
         )
     }
+    fn row_panel(&mut self, bounds: Bounds, selected: bool) -> Result<(), String> {
+        if selected {
+            self.ui.rounded(
+                self.rect(bounds),
+                self.ui.px(10.) as f32,
+                self.theme.highlight_bg,
+                None,
+            )?;
+        }
+        Ok(())
+    }
     fn ink(&self, selected: bool) -> Rgba {
         selection(selected, self.theme.text, self.theme.highlight_text)
     }
@@ -336,19 +347,28 @@ impl View<'_, '_, '_> {
             }
             _ => {
                 let v = state.display_value(id, &self.ui.catalog);
-                if kind == Kind::Value {
-                    self.ui.icon(
-                        Glyph::ChevronLeft,
-                        self.rect((x, y + (h - 14.) / 2., 14., 14.)),
-                        ink,
-                    )?;
+                if Settings::text_input(id) {
                     self.ui.icon(
                         Glyph::ChevronRight,
                         self.rect((x + w - 14., y + (h - 14.) / 2., 14., 14.)),
                         ink,
                     )?;
+                    self.text((x, y, w - 20., h), &v, (14., ink, Align::Right))?;
+                } else {
+                    if kind == Kind::Value {
+                        self.ui.icon(
+                            Glyph::ChevronLeft,
+                            self.rect((x, y + (h - 14.) / 2., 14., 14.)),
+                            ink,
+                        )?;
+                        self.ui.icon(
+                            Glyph::ChevronRight,
+                            self.rect((x + w - 14., y + (h - 14.) / 2., 14., 14.)),
+                            ink,
+                        )?;
+                    }
+                    self.text((x + 20., y, w - 40., h), &v, (14., ink, Align::Right))?;
                 }
-                self.text((x + 20., y, w - 40., h), &v, (14., ink, Align::Right))?;
             }
         }
         Ok(())

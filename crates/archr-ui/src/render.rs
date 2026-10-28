@@ -1131,9 +1131,11 @@ impl<'font, 'texture> Ui<'font, 'texture> {
     ) -> Result<i32, String> {
         let mut right = width as i32 - self.px(24.);
         for &(button, key) in hints.iter().rev() {
+            let start = matches!(button.into(), HintButton::Start);
             let buttons = match button.into() {
                 HintButton::Key(key) => [Some(key), None],
                 HintButton::Pair(left, right) => [Some(left), Some(right)],
+                HintButton::Start => [None, None],
             };
             let paired = buttons[1].is_some();
             let label = self.catalog.text(key);
@@ -1144,7 +1146,28 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 u32::MAX,
                 Align::Left,
             )? - self.px(6.)
-                - self.px(if paired { 50. } else { 20. });
+                - self.px(if start {
+                    45.
+                } else if paired {
+                    50.
+                } else {
+                    20.
+                });
+            if start {
+                let badge = Rect::new(
+                    right,
+                    y + (h as i32 - self.px(20.)) / 2,
+                    self.px(45.) as u32,
+                    self.px(20.) as u32,
+                );
+                self.rounded(badge, self.px(5.) as f32, theme.badge, None)?;
+                self.label_aligned(
+                    "START",
+                    (Face::Regular, 10., theme.text),
+                    badge,
+                    Align::Center,
+                )?;
+            }
             if paired {
                 self.label_aligned(
                     "/",
@@ -1552,6 +1575,10 @@ pub fn prepare_first_frame<'font>(
         Glyph::ChevronsUpDown,
         Glyph::Shift,
         Glyph::Backspace,
+        Glyph::WifiHigh,
+        Glyph::WifiLow,
+        Glyph::Lock,
+        Glyph::Check,
     ]);
     Ok(prepared)
 }

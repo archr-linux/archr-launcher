@@ -1,6 +1,16 @@
 //! Dedicated Wi-Fi list and on-screen text-entry views.
 use super::*;
-use crate::settings::{Kind, Settings};
+use crate::settings::{network::Network, Kind, Settings};
+
+fn network_icons(network: &Network) -> (Glyph, bool, bool) {
+    let strength = network.signal.parse::<u8>().unwrap_or(0);
+    let signal = match strength {
+        0..=35 => Glyph::WifiLow,
+        36..=74 => Glyph::Wifi,
+        _ => Glyph::WifiHigh,
+    };
+    (signal, network.security != "open", network.connected)
+}
 
 impl View<'_, '_, '_> {
     pub(super) fn wifi(&mut self, state: &Settings) -> Result<(), String> {
@@ -14,7 +24,7 @@ impl View<'_, '_, '_> {
             let y = 56. + pos as f32 * 46.;
             let selected = state.cursor == n;
             let ink = self.ink(selected);
-            self.panel((18., y, 405., 43.), selected)?;
+            self.row_panel((18., y, 405., 43.), selected)?;
             if n == 0 {
                 self.label((32., y, 236., 43.), &self.tr("settings.wifi"), 15.)?;
                 self.control(
@@ -25,13 +35,17 @@ impl View<'_, '_, '_> {
                     (310., y, 98., 43.),
                 )?;
             } else if let Some(network) = state.networks.get(n - 1) {
-                let icon = if network.connected {
-                    Glyph::Wifi
-                } else {
-                    Glyph::WifiOff
-                };
+                let (signal, secured, connected) = network_icons(network);
                 self.ui
-                    .icon(icon, self.rect((30., y + 12., 18., 18.)), ink)?;
+                    .icon(signal, self.rect((30., y + 12., 18., 18.)), ink)?;
+                if secured {
+                    self.ui
+                        .icon(Glyph::Lock, self.rect((321., y + 6., 12., 12.)), ink)?;
+                }
+                if connected {
+                    self.ui
+                        .icon(Glyph::Check, self.rect((321., y + 26., 12., 12.)), ink)?;
+                }
                 let subtitle = if network.connected {
                     self.tr("settings.connected")
                 } else if network.known {
@@ -40,12 +54,12 @@ impl View<'_, '_, '_> {
                     network.security.to_uppercase()
                 };
                 self.text(
-                    (56., y + 1., 275., 23.),
+                    (56., y + 1., 256., 23.),
                     &network.ssid,
                     (14., ink, Align::Left),
                 )?;
                 self.text(
-                    (56., y + 23., 272., 16.),
+                    (56., y + 23., 256., 16.),
                     &subtitle,
                     (12., ink, Align::Left),
                 )?;
@@ -82,7 +96,6 @@ impl View<'_, '_, '_> {
             |_| format!("{} · {}", self.tr("settings.connected"), state.access_ip),
         );
         self.note((452., 134., 159., 123.), &detail, 13.)?;
-        self.note((452., 275., 159., 40.), &self.tr("settings.scan_hint"), 12.)?;
         Ok(())
     }
     pub(super) fn keyboard(&mut self, state: &Settings) -> Result<(), String> {
@@ -149,15 +162,39 @@ impl View<'_, '_, '_> {
             )?;
         }
         self.panel((444., 330., 172., 48.), true)?;
+        let submit = if state.keyboard_target == Some(Id::WifiSwitch) {
+            "settings.connect"
+        } else {
+            "hint.confirm"
+        };
         self.text(
             (450., 332., 160., 43.),
-            &self.tr("settings.connect"),
+            &self.ui.catalog.text(submit),
             (15., self.theme.highlight_text, Align::Center),
         )?;
-        self.note(
-            (24., 394., 592., 29.),
-            &self.tr("settings.keyboard_help"),
-            12.,
-        )
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn network_icons_report_strength_encryption_and_connection_separately() {
+        let mut net = Network {
+            ssid: "Test".into(),
+            security: "wpa2".into(),
+            signal: "20".into(),
+            connected: false,
+            known: false,
+        };
+        assert_eq!(network_icons(&net), (Glyph::WifiLow, true, false));
+        net.signal = "60".into();
+        assert_eq!(network_icons(&net), (Glyph::Wifi, true, false));
+        net.signal = "90".into();
+        net.connected = true;
+        assert_eq!(network_icons(&net), (Glyph::WifiHigh, true, true));
+        net.security = "open".into();
+        assert_eq!(network_icons(&net), (Glyph::WifiHigh, false, true));
     }
 }
