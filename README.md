@@ -21,10 +21,10 @@ para validar navegação, imagens e o contrato do supervisor, sem iniciar emulad
 Teclado: Enter abre, Backspace volta, X favorita, Y abre o menu, PgUp/PgDn
 ou esquerda/direita mudam de página/núcleo, cima/baixo selecionam. Escape fecha
 somente em modo janela. Direções mantidas repetem após 300 ms e depois a cada
-80 ms. Uma entrada de `es_input.cfg` com GUID ou nome correspondente tem
-prioridade, inclusive para pads reconhecidos como SDL GameController: nesses
-pads só os eventos raw são usados, sem duplicar os eventos GameController.
-Sem entrada ES, usa SDL GameController ou o fallback de botões/eixo/hat.
+80 ms. Os mapeamentos vêm só do banco SDL GameController
+(`SDL_GAMECONTROLLERCONFIG_FILE`, exportado pela sessão); o `es_input.cfg` não
+é lido. Pads reconhecidos usam apenas os eventos GameController; os demais, o
+fallback de botões/eixo/hat do joystick.
 
 `ARCHR_LAUNCHER_ROOT` prefixa os caminhos absolutos, inclusive os caminhos de
 ROMs do catálogo de sistemas, ROMs/mídias absolutos do gamelist (antes dos testes

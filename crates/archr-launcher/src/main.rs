@@ -172,7 +172,6 @@ fn run(
         (theme.cover.h * height as f32).round().max(1.) as u32,
     );
     let mut controllers = Controllers::new_traced(&ui.sdl, trace)?;
-    controllers.load_mappings(paths.at("/storage/.config/emulationstation/es_input.cfg"));
     let mut events = ui.sdl.event_pump()?;
     let mut repeat = Repeat::default();
     let mut dirty = false;
@@ -192,7 +191,6 @@ fn run(
             }
             continue;
         }
-        controllers.poll_mappings();
         dirty |= ui.tick() || ui.animating();
         let selected_system = if app.screen == Screen::Systems {
             App::system_rows(&library).get(app.cursor).cloned()

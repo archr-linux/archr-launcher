@@ -17,8 +17,6 @@ pub mod controllers;
 
 pub mod render;
 
-pub mod joystick_mapping;
-
 mod badges;
 mod icons;
 pub mod motion;
