@@ -89,6 +89,23 @@ fn selection<T>(selected: bool, normal: T, highlighted: T) -> T {
     }
 }
 
+/// List offset of row `i` when `cursor` is the selected row: rows below it
+/// make room for the taller pill, and rows after the collections for the divider.
+fn slot(
+    i: usize,
+    cursor: usize,
+    collections: usize,
+    (pitch, divider, extra): (f32, f32, f32),
+) -> f32 {
+    i as f32 * pitch
+        + if collections > 0 && i >= collections {
+            divider
+        } else {
+            0.
+        }
+        + if i > cursor { extra } else { 0. }
+}
+
 /// The longest form that fits, at 13px, then the short form shrinking to 10px.
 /// Status text is never ellipsized; the smallest short form is the last resort.
 fn fit_status(
@@ -130,7 +147,7 @@ struct ListMotion {
     pill: Tween,
     /// Cursor of the previous frame while a row is lifted, and the neighbour
     /// it displaced, which glides into its new place.
-    held: Option<usize>,
+    held: Option<(usize, usize)>,
     swap_row: usize,
     swap: Tween,
 }
@@ -706,8 +723,8 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         } else {
             0.
         };
-        let y_of =
-            |i: usize| i as f32 * (row + gap) + if i >= collections { separator } else { 0. };
+        let metrics = (row + gap, self.px(15.) as f32, extra);
+        let y_of = |i: usize| slot(i, cursor, collections, metrics);
         let target = y_of(cursor);
         let available = (bottom - top).max(1) as f32;
         let total = len as f32 * (row + gap) + separator + extra;
@@ -729,21 +746,22 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             self.list.scroll.retarget(scroll, now);
             self.list.pill.retarget(target, now);
         }
-        if let Some(prev) = self
+        if let Some((prev, was)) = self
             .list
             .held
-            .filter(|&p| lifted && p.abs_diff(cursor) == 1)
+            .filter(|&(p, _)| lifted && p.abs_diff(cursor) == 1)
         {
-            // The displaced row was drawn at the lifted row's new index.
-            let place = |i: usize, selected: usize| y_of(i) + if i > selected { extra } else { 0. };
+            // The displaced row now sits at the lifted row's old index; it
+            // starts from where the previous layout actually drew it.
+            let before = slot(cursor, prev, was, metrics);
             self.list.swap_row = prev;
             self.list
                 .swap
-                .retarget(place(cursor, prev) - place(prev, cursor), now);
+                .retarget(before - slot(prev, cursor, collections, metrics), now);
             self.list.swap.snap();
             self.list.swap.retarget(0., now);
         }
-        self.list.held = lifted.then_some(cursor);
+        self.list.held = lifted.then_some((cursor, collections));
         let offset = self.list.scroll.value(now);
         self.canvas.set_clip_rect(Rect::new(
             margin,
@@ -794,8 +812,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             } else {
                 0.
             };
-            let y = top
-                + (y_of(i) + if i > cursor { extra } else { 0. } + glide - offset).round() as i32;
+            let y = top + (y_of(i) + glide - offset).round() as i32;
             let rh = if i == cursor { selected } else { row }.max(1.) as u32;
             if y + rh as i32 <= top || y >= bottom {
                 continue;
@@ -1556,6 +1573,24 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn displaced_row_starts_from_its_previous_position_across_the_separator() {
+        let metrics = (40., 15., 6.);
+        // Rows: 2 collections, then systems; the first system (index 2) is lifted
+        // above Recentes (index 1), leaving a single leading collection.
+        let drawn_before = slot(1, 2, 2, metrics);
+        let target_after = slot(2, 1, 1, metrics);
+        assert_eq!(drawn_before, 40.);
+        let start = drawn_before - target_after;
+        assert_eq!(
+            target_after + start,
+            drawn_before,
+            "no jump on the first frame"
+        );
+        // Within one section the offset is the row pitch plus the pill growth.
+        assert_eq!(slot(4, 3, 2, metrics) - slot(3, 4, 2, metrics), 40. + 6.);
     }
 
     #[test]
