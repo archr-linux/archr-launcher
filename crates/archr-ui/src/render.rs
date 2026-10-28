@@ -1741,7 +1741,11 @@ mod tests {
             dir_mtime: 0,
             source_fingerprint: 0,
         };
-        let data = Data(vec![entry("nes", 3), entry("tools", 7)]);
+        let data = Data(vec![
+            entry("@moonlight", 1),
+            entry("nes", 3),
+            entry("tools", 7),
+        ]);
         let catalog = I18n::load(Path::new("/nonexistent"), Some("en"), None);
         assert_eq!(library_summary(&data, &catalog), "1 system · 3 games");
     }

@@ -430,7 +430,16 @@ fn systems_without_emulators_launch_their_catalog_command() {
     fs::create_dir_all(catalog.parent().unwrap()).unwrap();
     fs::write(&catalog, "<systemList><system><name>tools</name><fullname>Tools</fullname><path>/storage/.config/modules</path><extension>.sh</extension><command>/usr/bin/foot %ROM%</command></system><system><name>music</name><fullname>Music</fullname><path>/storage/roms/music</path><extension>.rom</extension></system></systemList>").unwrap();
     let paths = Paths::new(Some(dir.path().to_owned()));
+    let mut old = Store::default();
+    old.push_recent("tools/Old.sh");
+    old.push_recent("music/Song.rom");
+    old.save(&paths.store).unwrap();
     let mut library = ready(&paths, Some("tools"));
+    assert_eq!(
+        library.collection_len("@recent"),
+        1,
+        "old tool recents dropped"
+    );
     let launch = |system: &str| Outcome::Launch {
         system: system.into(),
         game: 0,

@@ -451,8 +451,7 @@ impl DataSource for Library {
         self.store.order()
     }
     fn is_tools(&self, system: &str) -> bool {
-        self.definition(system)
-            .is_some_and(|def| def.emulators.is_empty() && !def.command.is_empty())
+        self.definition(system).is_some_and(crate::store::is_tools)
     }
     fn favorite_count(&self, system: &str) -> usize {
         self.store
