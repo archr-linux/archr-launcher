@@ -358,9 +358,34 @@ impl<'font, 'texture> Ui<'font, 'texture> {
     ) -> Result<(), String> {
         let h = (theme.header_height * height as f32).round() as u32;
         let pad = self.px(24.);
-        let status = self.status.as_ref().map(|s| (s.clock.clone(), s.battery));
+        let status = self
+            .status
+            .as_ref()
+            .map(|s| (s.clock.clone(), s.battery, s.wifi));
         let mut right = width as i32 - pad;
-        if let Some((clock, battery)) = status {
+        if let Some((clock, battery, wifi)) = status {
+            if wifi {
+                self.canvas.set_draw_color(color(theme.muted));
+                let x = right - self.px(9.);
+                let y = h as i32 / 2;
+                for radius in [4., 8.] {
+                    let r = self.px(radius);
+                    let points = [
+                        sdl2::rect::Point::new(x - r, y - r / 2),
+                        sdl2::rect::Point::new(x - r / 2, y - r),
+                        sdl2::rect::Point::new(x + r / 2, y - r),
+                        sdl2::rect::Point::new(x + r, y - r / 2),
+                    ];
+                    self.canvas.draw_lines(points.as_slice())?;
+                }
+                self.canvas.fill_rect(Rect::new(
+                    x - self.px(1.),
+                    y,
+                    self.px(2.) as u32,
+                    self.px(2.) as u32,
+                ))?;
+                right -= self.px(30.);
+            }
             if let Some(b) = battery {
                 let text = format!("{}%", b.percent);
                 let w = self.measure(&text, Face::Mono, 13.)?;
