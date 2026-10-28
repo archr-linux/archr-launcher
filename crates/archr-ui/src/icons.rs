@@ -37,6 +37,7 @@ glyphs! {
     Globe => "globe", Palette => "palette", Trophy => "trophy", Storage => "hard-drive",
     ChevronLeft => "chevron-left", ChevronRight => "chevron-right",
     ArrowUpDown => "arrow-up-down", ChevronsUpDown => "chevrons-up-down",
+    Shift => "arrow-big-up", Backspace => "delete",
 }
 
 #[link(name = "SDL2_image")]

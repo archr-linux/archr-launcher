@@ -1,5 +1,6 @@
 //! Serial settings worker. No process, config lock or sysfs access on SDL's thread.
 mod info;
+mod pages;
 mod runtime;
 use crate::paths::Paths;
 use archr_config::SystemCfg;
@@ -57,6 +58,14 @@ impl Backend {
     /// Fixtures have a private executable namespace: missing scripts cannot fall
     /// through to host programs. Capture to files to avoid pipe backpressure.
     fn command(&self, name: &str, args: &[&str]) -> Result<String, String> {
+        self.command_with_timeout(name, args, Duration::from_secs(20))
+    }
+    fn command_with_timeout(
+        &self,
+        name: &str,
+        args: &[&str],
+        timeout: Duration,
+    ) -> Result<String, String> {
         let mut stdout = tempfile::tempfile().map_err(|e| e.to_string())?;
         let mut stderr = tempfile::tempfile().map_err(|e| e.to_string())?;
         let mut command = Command::new(self.paths.at(&format!("/usr/bin/{name}")));
@@ -72,7 +81,7 @@ impl Backend {
                 .env("PATH", self.paths.at("/usr/bin"));
         }
         let mut child = command.spawn().map_err(|e| format!("{name}: {e}"))?;
-        let deadline = Instant::now() + Duration::from_secs(20);
+        let deadline = Instant::now() + timeout;
         let status = loop {
             match child.try_wait().map_err(|e| e.to_string())? {
                 Some(status) => break status,
@@ -112,6 +121,7 @@ impl Backend {
                 }
             }
         }
+        self.load_pages(&cfg, &mut state);
         if let Ok(output) = self.command("pactl", &["get-sink-volume", "@DEFAULT_SINK@"]) {
             if let Some(volume) = output
                 .split_whitespace()
@@ -198,6 +208,9 @@ impl Backend {
         Ok(state)
     }
     pub fn apply(&self, id: Id, value: &str) -> Result<String, String> {
+        if let Some(result) = self.apply_page(id, value) {
+            return result;
+        }
         let valid = match id {
             Id::Volume | Id::Brightness => value
                 .parse::<u8>()
@@ -225,6 +238,7 @@ impl Backend {
                 !value.is_empty() && !value.contains(['\n', '\r', '\0']) && value.len() <= 1024
             }
             Id::Update => false,
+            _ => false,
         };
         if !valid {
             return Err("Invalid setting value".into());
@@ -312,11 +326,19 @@ pub(super) enum Work {
     Load,
     Set(Id, String),
     Info,
+    Scan,
+    Connect(String, String),
+    Forget(String),
+    Variants(String),
 }
 enum Reply {
     Loaded(Result<Box<Settings>, String>),
     Set(Id, Result<String, String>),
     Info(Information),
+    Scan(Result<Vec<archr_ui::settings::network::Network>, String>),
+    Connect(Result<(), String>),
+    Forget(Result<(), String>),
+    Variants(Vec<String>),
 }
 pub struct Worker {
     tx: mpsc::Sender<Work>,
@@ -336,6 +358,14 @@ impl Worker {
                         Work::Load => Reply::Loaded(backend.load().map(Box::new)),
                         Work::Set(id, value) => Reply::Set(id, backend.apply(id, &value)),
                         Work::Info => Reply::Info(backend.refresh_info()),
+                        Work::Scan => Reply::Scan(backend.scan()),
+                        Work::Connect(ssid, password) => {
+                            Reply::Connect(backend.connect(&ssid, &password))
+                        }
+                        Work::Forget(ssid) => Reply::Forget(backend.forget(&ssid)),
+                        Work::Variants(layout) => {
+                            Reply::Variants(backend.keyboard_variants(&layout))
+                        }
                     };
                     if results.send(reply).is_err() {
                         break;
@@ -364,6 +394,7 @@ impl Worker {
                 Reply::Loaded(Ok(mut loaded)) => {
                     std::mem::swap(&mut state.values, &mut loaded.values);
                     state.options = loaded.options;
+                    state.access_ip = loaded.access_ip;
                     state.info = loaded.info;
                     state.error = loaded.error;
                     state.loading = false;
@@ -380,9 +411,50 @@ impl Worker {
                     if id == Id::Language {
                         language = result.as_ref().ok().cloned();
                     }
+                    let wifi_enabled = id == Id::WifiSwitch && result.as_deref() == Ok("1");
+                    let wifi_disabled = id == Id::WifiSwitch && result.as_deref() == Ok("0");
+                    let new_layout = (id == Id::KeyboardLayout)
+                        .then(|| result.as_ref().ok().cloned())
+                        .flatten();
                     state.complete(id, result);
+                    if let Some(layout) = new_layout {
+                        state.values.insert(Id::KeyboardVariant, String::new());
+                        let _ = self.tx.send(Work::Variants(layout));
+                        self.pending += 1;
+                    }
+                    if wifi_disabled {
+                        state.networks.clear();
+                    }
+                    if wifi_enabled {
+                        let _ = self.tx.send(Work::Scan);
+                        self.pending += 1;
+                    }
                 }
                 Reply::Info(info) => state.info = info,
+                Reply::Variants(mut options) => {
+                    options.push(String::new());
+                    options.sort();
+                    options.dedup();
+                    state.options.insert(Id::KeyboardVariant, options);
+                }
+                Reply::Scan(result) => match result {
+                    Ok(networks) => {
+                        state.networks = networks;
+                        if state.page() == Page::Wifi {
+                            state.cursor = state.cursor.min(state.networks.len() + 3);
+                        }
+                        state.error = None;
+                    }
+                    Err(error) => state.error = Some((None, error)),
+                },
+                Reply::Connect(result) | Reply::Forget(result) => match result {
+                    Ok(()) => {
+                        state.error = None;
+                        let _ = self.tx.send(Work::Scan);
+                        self.pending += 1;
+                    }
+                    Err(error) => state.error = Some((None, error)),
+                },
             }
         }
         (changed, language)

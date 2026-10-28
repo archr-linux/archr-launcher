@@ -1546,8 +1546,13 @@ pub fn prepare_first_frame<'font>(
         )?;
     }
     prepared.prepare_icons(theme_dir, system_icons_dir, first_icons);
-    // Entering move mode must not read files on the render thread.
-    prepared.preload_icons(&[Glyph::ArrowUpDown, Glyph::ChevronsUpDown]);
+    // Deferred settings and move overlays must not read icons on the render thread.
+    prepared.preload_icons(&[
+        Glyph::ArrowUpDown,
+        Glyph::ChevronsUpDown,
+        Glyph::Shift,
+        Glyph::Backspace,
+    ]);
     Ok(prepared)
 }
 

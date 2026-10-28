@@ -207,6 +207,9 @@ fn run(
         {
             ui.invalidate_settings_clock();
         }
+        if settings_dirty && settings.state.pending.is_none() && settings.state.error.is_none() {
+            ui.set_settings_clock_format(settings.state.value(archr_ui::settings::Id::ClockFormat));
+        }
         dirty |= settings_dirty;
         if let Some(language) = language {
             ui.catalog = I18n::load(

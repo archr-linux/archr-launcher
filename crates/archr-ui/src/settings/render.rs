@@ -2,11 +2,20 @@
 use super::*;
 use crate::settings::{Id, InfoCard, Kind, Page, Settings, CATEGORIES};
 type Bounds = (f32, f32, f32, f32);
+#[path = "compact_render.rs"]
+mod compact_render;
+#[path = "network_render.rs"]
+mod network_render;
 struct View<'a, 'ttf, 'tex> {
     ui: &'a mut Ui<'ttf, 'tex>,
     theme: &'a Theme,
 }
 impl Ui<'_, '_> {
+    pub fn set_settings_clock_format(&mut self, format: &str) {
+        if let Some(status) = &mut self.status {
+            status.set_clock_format(format);
+        }
+    }
     pub fn invalidate_settings_clock(&mut self) {
         if let Some(status) = &mut self.status {
             status.invalidate_clock();
@@ -133,6 +142,9 @@ impl View<'_, '_, '_> {
         match state.page() {
             Page::Root => self.root(state)?,
             Page::Info => self.info(state)?,
+            Page::Wifi => self.wifi(state)?,
+            Page::Services | Page::Netplay | Page::Region | Page::Scraper => self.compact(state)?,
+            Page::Keyboard => self.keyboard(state)?,
             Page::Soon(_) => {
                 self.panel((24., 90., 592., 100.), false)?;
                 self.text(
@@ -142,9 +154,15 @@ impl View<'_, '_, '_> {
                 )?;
             }
             page => {
-                let step = if page == Page::Region { 80. } else { 64. };
-                for (n, row) in page.rows().iter().enumerate() {
-                    let y = 68. + n as f32 * step;
+                let step = if page == Page::Region { 72. } else { 64. };
+                let rows = state.visible_rows();
+                let limit = (366. / step) as usize;
+                let start = state
+                    .cursor
+                    .saturating_sub(limit - 1)
+                    .min(rows.len().saturating_sub(limit));
+                for (n, row) in rows.iter().enumerate().skip(start).take(limit) {
+                    let y = 68. + (n - start) as f32 * step;
                     let selected = n == state.cursor;
                     let ink = self.ink(selected);
                     let label = self.tr(row.label);
@@ -178,9 +196,18 @@ impl View<'_, '_, '_> {
                         (15., ink, Align::Left),
                     )?;
                     if let Some(key) = row.subtitle {
+                        let subtitle = match row.id {
+                            Id::Ssh if !state.access_ip.is_empty() => {
+                                format!("{} · root@{}", self.tr(key), state.access_ip)
+                            }
+                            Id::Http if !state.access_ip.is_empty() => {
+                                format!("http://{}", state.access_ip)
+                            }
+                            _ => self.tr(key),
+                        };
                         self.text(
                             (38., y + 28., 278., 30.),
-                            &self.tr(key),
+                            &subtitle,
                             (
                                 12.,
                                 selection(
@@ -208,7 +235,7 @@ impl View<'_, '_, '_> {
             state.page() != Page::Info
                 && (id.is_none()
                     || state.page() == Page::Root
-                    || state.page().rows().iter().any(|r| Some(r.id) == *id))
+                    || state.visible_rows().iter().any(|r| Some(r.id) == *id))
         }) {
             let bounds = if state.page() == Page::Root {
                 (386., 318., 230., 110.)

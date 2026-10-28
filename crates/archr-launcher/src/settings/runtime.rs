@@ -56,11 +56,21 @@ impl Runtime {
         self.closing = true;
     }
     pub fn handle(&mut self, button: Button) -> Outcome {
+        let before = self.state.page();
         match self.state.handle(button) {
             Effect::Close => self.active = false,
             Effect::Set(id, value) => self.send(Work::Set(id, value)),
+            Effect::Scan => self.send(Work::Scan),
+            Effect::Connect(ssid, password) => self.send(Work::Connect(ssid, password)),
+            Effect::Forget(ssid) => self.send(Work::Forget(ssid)),
             Effect::Reboot => return Outcome::Action(SessionAction::Reboot),
             Effect::None => {}
+        }
+        if before != Page::Wifi
+            && self.state.page() == Page::Wifi
+            && self.state.value(archr_ui::settings::Id::WifiSwitch) == "1"
+        {
+            self.send(Work::Scan);
         }
         Outcome::None
     }
