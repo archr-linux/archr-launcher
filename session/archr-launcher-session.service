@@ -15,7 +15,9 @@ ExecStart=/usr/bin/archr-launcher-session
 WorkingDirectory=/storage
 Restart=always
 RestartSec=1
-KillMode=control-group
+# TERM reaches only the supervisor; it preserves runemu.sh during cleanup.
+# After TimeoutStopSec, systemd still KILLs the entire cgroup as a final guard.
+KillMode=mixed
 KillSignal=SIGTERM
 TimeoutStopSec=6
 

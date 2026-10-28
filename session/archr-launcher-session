@@ -78,6 +78,7 @@ session_log() {
 
 child_pid=
 child_group=0
+child_is_game=0
 launching=0
 stop_requested=0
 
@@ -99,11 +100,53 @@ signal_child() {
     kill "-$1" "$child_pid" 2>/dev/null || :
 }
 
+game_descendants() {
+    # Snapshot PPID links once, before any signal can reparent emulator children.
+    # comm can contain spaces and ')': fields start after the LAST closing ')'.
+    for proc_stat in /proc/[0-9]*/stat; do
+        { IFS= read -r proc_line <"$proc_stat"; } 2>/dev/null || continue
+        proc_fields=${proc_line##*) }
+        proc_fields=${proc_fields#* }
+        proc_parent=${proc_fields%% *}
+        case "$proc_parent" in ''|*[!0-9]*) continue ;; esac
+        proc_pid=${proc_stat#/proc/}
+        proc_pid=${proc_pid%/stat}
+        proc_name=${proc_line#*(}
+        proc_name=${proc_name%)*}
+        proc_wrapper=0
+        [ "$proc_name" != runemu.sh ] || proc_wrapper=1
+        printf '%s %s %s\n' "$proc_pid" "$proc_parent" "$proc_wrapper"
+    done | awk -v root="$child_pid" '
+        { parent[$1] = $2; wrapper[$1] = $3 }
+        END {
+            for (pid in parent) {
+                cursor = pid
+                below_wrapper = 0
+                for (depth = 0; depth < NR && (cursor in parent); depth++) {
+                    if (cursor == root) {
+                        if (below_wrapper) print pid
+                        break
+                    }
+                    cursor = parent[cursor]
+                    if (wrapper[cursor]) below_wrapper = 1
+                }
+            }
+        }'
+}
+
 stop_session() {
     trap '' TERM INT HUP
     session_log 'Stopping session; allowing up to 4 s for child cleanup'
     rm -f "$run_dir/next" "$kill_file"
-    signal_child TERM
+    if [ "$child_is_game" -eq 1 ]; then
+        # runemu.sh has no TERM trap. Keep it AND its leading sh -c alive so
+        # the emulator's exit returns through runemu's normal quit()/cleanup.
+        # Signal the snapshot only once: later children may be cleanup helpers.
+        descendants=$(game_descendants)
+        [ -z "$descendants" ] || kill -TERM $descendants 2>/dev/null || :
+    else
+        signal_child TERM
+    fi
     # Wait for the entire game group, not just sh -c: its wrapper may still be
     # cleaning up after that shell exits. The service cgroup is the final guard.
     remaining=40
@@ -112,8 +155,12 @@ stop_session() {
         remaining=$((remaining - 1))
     done
     if child_alive; then
-        session_log 'Child cleanup timed out; killing remaining processes'
-        signal_child KILL
+        session_log 'Child cleanup timed out; terminating remaining processes'
+        signal_child TERM
+        "$stop_sleep" 0.2
+        if child_alive; then
+            signal_child KILL
+        fi
     fi
     [ -z "$child_pid" ] || wait "$child_pid" 2>/dev/null
     exit 0
@@ -154,6 +201,7 @@ while :; do
     rm -f "$run_dir/next" || exit 1
     launching=1
     child_group=0
+    child_is_game=0
     "$launcher" &
     child_pid=$!
     launching=0
@@ -185,6 +233,7 @@ while :; do
             session_log 'Starting game'
             launching=1
             child_group=0
+            child_is_game=1
             # ArchR's target BusyBox enables setsid; keep a PID-only fallback
             # for minimal hosts. Never place the supervisor in this group.
             if command -v setsid >/dev/null 2>&1; then
@@ -201,6 +250,7 @@ while :; do
             game_status=$?
             child_pid=
             child_group=0
+            child_is_game=0
             session_log "Game exited with $game_status"
             printf '%s\n' "$game_status" >"$run_dir/last-exit.tmp" &&
                 mv -f "$run_dir/last-exit.tmp" "$run_dir/last-exit" || exit 1

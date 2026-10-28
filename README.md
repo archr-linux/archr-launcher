@@ -247,10 +247,14 @@ escapes e removido antes da execução; `last-exit` recebe o código decimal via
 arquivo temporário + rename.
 
 Jogos rodam em um grupo separado com `setsid` (habilitado no BusyBox do ArchR).
-TERM, INT e HUP fazem o supervisor sinalizar o grupo e aguardar até cerca de 4 s
-para limpeza dos wrappers, antes de encerrar processos remanescentes. Sem
-`setsid`, acompanha somente o PID filho; a unidade mantém o fallback do cgroup
-(`KillMode=control-group`, `KillSignal=SIGTERM`, `TimeoutStopSec=6`).
+Em TERM, INT ou HUP, o supervisor percorre os PPIDs em `/proc/*/stat` e sinaliza
+primeiro somente os descendentes de `runemu.sh`. O wrapper e seu `sh -c` ficam
+vivos para executar a limpeza normal após a saída do emulador, sem exigir trap
+no wrapper. Aguarda até cerca de 4 s pelo grupo; se ainda houver processos,
+envia TERM ao grupo e, após 200 ms, KILL. Sem `setsid`, acompanha o PID filho.
+A unidade usa `KillMode=mixed` para que o primeiro SIGTERM atinja somente o
+supervisor, não mate prematuramente o wrapper; `TimeoutStopSec=6` mantém o
+SIGKILL de todo o cgroup como fallback final.
 
 O log fica
 em `/var/log/archr-launcher-session.log`, truncado ao atingir 256 KiB. Somente

@@ -30,6 +30,7 @@ export ARCHR_SESSION_SLEEP="$root/bin/sleep"
 export ARCHR_SESSION_STOP_SLEEP=/bin/sleep
 export ARCHR_SESSION_PROFILE="$root/profile"
 export ARCHR_SESSION_SHELL=${SESSION_TEST_SHELL:-sh}
+export ARCHR_TEST_EMULATOR="$root/bin/fake) emulator"
 cat >"$ARCHR_SESSION_PROFILE" <<'EOF'
 # Deliberately Bash-only, like ArchR's real /etc/profile.d/001-functions.
 function get_setting() { printf '%s\n' pt_BR; }
@@ -73,18 +74,14 @@ set -eu
 # Do not target the wrapper: it must survive to restore services/governors.
 [ ! -e "$ARCHR_SESSION_KILL_FILE" ]
 if [ "${1-}" = LONG ]; then
-  child=
-  trap 'trap "" TERM INT HUP
-    kill -TERM "$child" 2>/dev/null || :
-    wait "$child" 2>/dev/null || :
-    /bin/sleep 0.15
-    : >"$CASE_DIR/cleanup"
-    exit 0' TERM INT HUP
-  /bin/sleep 30 &
+  # Like the real runemu.sh: NO TERM trap. Cleanup is normal control flow
+  # after its emulator exits, including a nonzero/signaled emulator status.
+  printf '%s\n' "$$" >"$CASE_DIR/game-pids"
+  "$ARCHR_TEST_EMULATOR" &
   child=$!
-  printf '%s\n' "$$" "$child" >"$CASE_DIR/game-pids"
-  : >"$CASE_DIR/game-ready"
-  wait "$child"
+  wait "$child" || :
+  /bin/sleep 0.15
+  : >"$CASE_DIR/cleanup"
   exit 0
 fi
 if [ "${1-}" = LOGCHECK ]; then
@@ -97,6 +94,15 @@ printf '%s\n' 'fake-emulator' >"$ARCHR_SESSION_KILL_FILE"
 # Model runemu's quit(), which restores the old ES target.
 printf '%s\n' emulationstation >"$ARCHR_SESSION_KILL_FILE"
 exit 37
+EOF
+cat >"$ARCHR_TEST_EMULATOR" <<'EOF'
+#!/bin/sh
+# This process name contains ')' and a space to exercise /proc/stat parsing.
+/bin/sleep 30 &
+child=$!
+printf '%s\n' "$$" "$child" >>"$CASE_DIR/game-pids"
+: >"$CASE_DIR/game-ready"
+wait "$child"
 EOF
 cat >"$root/bin/systemctl" <<'EOF'
 #!/bin/sh
@@ -256,35 +262,43 @@ END'
   printf '%s\n' 'PASS ready compositor starts without delay'
 fi
 
-# Terminating the supervisor must allow wrapper cleanup, not orphan the game.
-export CASE_DIR="$root/service-stop"
-mkdir -p "$CASE_DIR"
-export ARCHR_SESSION_RUN_DIR="$CASE_DIR/run"
-export ARCHR_SESSION_LOG="$CASE_DIR/session.log"
-export ARCHR_SESSION_KILL_FILE="$CASE_DIR/kill-data"
-ARCHR_SESSION_SWAY_ATTEMPTS=0
-export ARCHR_SESSION_SWAY_ATTEMPTS
-printf '%s\n' 'game runemu.sh LONG' END >"$CASE_DIR/plan"
-timeout 12 "${SESSION_TEST_SHELL:-sh}" "$session" >"$CASE_DIR/output" 2>&1 &
-test_runner=$!
-i=0
-while [ ! -f "$CASE_DIR/game-ready" ] && [ "$i" -lt 200 ]; do
-  /bin/sleep 0.01
-  i=$((i + 1))
-done
-[ -f "$CASE_DIR/game-ready" ]
-kill -TERM "$(cat "$CASE_DIR/supervisor-pid")"
-status=0
-wait "$test_runner" || status=$?
-test_runner=
-[ -f "$CASE_DIR/cleanup" ] || { echo 'FAIL: service stop skipped game cleanup' >&2; exit 1; }
-[ "$status" -eq 0 ]
-while IFS= read -r pid; do
-  if kill -0 "$pid" 2>/dev/null; then
-    echo "FAIL: fake game process $pid survived service stop" >&2
+# Exercise both exec-optimized sh -c and an outer shell that must stay alive.
+run_stop_case() {
+  export CASE_DIR="$root/$1"
+  mkdir -p "$CASE_DIR"
+  export ARCHR_SESSION_RUN_DIR="$CASE_DIR/run"
+  export ARCHR_SESSION_LOG="$CASE_DIR/session.log"
+  export ARCHR_SESSION_KILL_FILE="$CASE_DIR/kill-data"
+  ARCHR_SESSION_SWAY_ATTEMPTS=0
+  export ARCHR_SESSION_SWAY_ATTEMPTS
+  printf '%s\n' "$2" END >"$CASE_DIR/plan"
+  timeout 12 "${SESSION_TEST_SHELL:-sh}" "$session" >"$CASE_DIR/output" 2>&1 &
+  test_runner=$!
+  i=0
+  while [ ! -f "$CASE_DIR/game-ready" ] && [ "$i" -lt 200 ]; do
+    /bin/sleep 0.01
+    i=$((i + 1))
+  done
+  [ -f "$CASE_DIR/game-ready" ]
+  kill -TERM "$(cat "$CASE_DIR/supervisor-pid")"
+  status=0
+  wait "$test_runner" || status=$?
+  test_runner=
+  [ -f "$CASE_DIR/cleanup" ] || { echo 'FAIL: service stop skipped game cleanup' >&2; exit 1; }
+  [ "$status" -eq 0 ]
+  while IFS= read -r pid; do
+    if kill -0 "$pid" 2>/dev/null; then
+      echo "FAIL: fake game process $pid survived service stop" >&2
+      exit 1
+    fi
+  done <"$CASE_DIR/game-pids"
+  if grep -q 'cleanup timed out' "$ARCHR_SESSION_LOG"; then
+    echo 'FAIL: normal wrapper cleanup needed forced group termination' >&2
     exit 1
   fi
-done <"$CASE_DIR/game-pids"
-printf '%s\n' 'PASS service stop waits for game cleanup and leaves no processes'
+  printf '%s\n' "PASS $1 preserves untrapped wrapper cleanup and leaves no processes"
+}
+run_stop_case service-stop 'game runemu.sh LONG'
+run_stop_case service-stop-shell 'game runemu.sh LONG; :'
 
 echo 'All session tests passed.'
