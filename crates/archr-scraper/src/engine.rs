@@ -4,7 +4,6 @@ use crate::{
     hash::digest,
     http::{trusted, Curl, Http, NetError},
     systems::system_id,
-    validate,
 };
 use archr_index::{clean_name, scan_system, Game, SystemDef};
 use archr_io::atomic_publish;
@@ -31,7 +30,7 @@ const JOURNAL: &str = "scraper-journal.txt";
 const MAX_THREADS: usize = 4;
 const HASH_LIMIT: u64 = 256 << 20;
 const IMAGE_LIMIT: u64 = 8 << 20;
-const VIDEO_LIMIT: u64 = 48 << 20;
+const MAX_SIDE: u32 = 8192;
 const NETWORK_GIVE_UP: u32 = 6;
 
 /// Developer login, injected by the build environment in ES's own format
@@ -54,7 +53,6 @@ pub enum Media {
     Box2d,
     Screenshot,
     Wheel,
-    Video,
 }
 
 #[derive(Clone, Debug)]
@@ -319,9 +317,17 @@ impl Engine {
                 if cancel.load(Relaxed) {
                     return ended(Stop::Cancelled, progress);
                 }
-                let key = format!("{}\t{signature}", journal_key(system, &game));
+                let key = format!(
+                    "{}\t{}\t{signature}",
+                    system.path.display(),
+                    game.path.display()
+                );
                 let needed = needed(options, system, &game);
-                if needed.is_empty() || finished.contains(&key) {
+                // A journaled game counts as done only while its assets exist.
+                let done = finished.contains(&format!("{key}\tmiss"))
+                    || (finished.contains(&format!("{key}\tfound"))
+                        && options.media.iter().all(|&k| present(system, &game, k)));
+                if needed.is_empty() || done {
                     progress.skipped += 1;
                 } else {
                     items.push(Item {
@@ -376,6 +382,11 @@ impl Engine {
             (None, true) => Stop::Cancelled,
             (None, false) => Stop::Completed,
         };
+        // The journal only carries an interrupted job over to the next run.
+        if reason == Stop::Completed {
+            drop(shared.journal.lock().unwrap().take());
+            let _ = fs::remove_file(self.cache.join(JOURNAL));
+        }
         ended(reason, shared.snapshot())
     }
 
@@ -430,8 +441,7 @@ impl Engine {
         self.download(run, regions, item, &hit)
     }
 
-    /// Non-cover assets are written as they arrive; the cover (last) only if
-    /// everything else worked, so a present cover means the game is complete.
+    /// Fetches each needed asset; any failed one makes the game retryable.
     fn download(
         &self,
         run: &Run,
@@ -442,19 +452,10 @@ impl Engine {
         let stem = item.game.path.file_stem().unwrap_or_default();
         let (mut saved, mut failed) = (0, 0);
         for &kind in &item.needed {
-            let (types, dir, limit): (&[&str], _, _) = match kind {
-                Media::Box2d => (&["box-2D"], "images", IMAGE_LIMIT),
-                Media::Screenshot => (&["ss"], "screenshots", IMAGE_LIMIT),
-                Media::Wheel => (&["wheel", "wheel-hd"], "wheel", IMAGE_LIMIT),
-                Media::Video => (&["video-normalized", "video"], "videos", VIDEO_LIMIT),
-            };
-            let Some(url) = pick(hit.medias(), types, regions) else {
+            let Some(url) = pick(hit.medias(), kind.types(), regions) else {
                 continue;
             };
-            if kind == Media::Box2d && failed > 0 {
-                break;
-            }
-            let body = match self.call(&url, limit, run) {
+            let body = match self.call(&url, IMAGE_LIMIT, run) {
                 Ok(body) => body,
                 Err(Call::Stop(stop)) => return Err(stop),
                 Err(_) => {
@@ -462,17 +463,13 @@ impl Engine {
                     continue;
                 }
             };
-            let ext = match kind {
-                Media::Video => validate::video(&body).then_some("mp4"),
-                _ => validate::image(&body),
-            };
-            let Some(ext) = ext else {
+            let Some(ext) = image_ext(&body) else {
                 failed += 1;
                 continue;
             };
             let mut file = stem.to_os_string();
             file.push(format!(".{ext}"));
-            let dest = item.system.path.join("media").join(dir).join(file);
+            let dest = item.system.path.join("media").join(kind.dir()).join(file);
             match atomic_publish(&dest, false, |f| f.write_all(&body)) {
                 Ok(()) => saved += 1,
                 Err(_) => failed += 1,
@@ -559,7 +556,12 @@ impl Shared {
             Outcome::Failed => return p.failed += 1,
         }
         if let Some(file) = self.journal.lock().unwrap().as_mut() {
-            let _ = writeln!(file, "{}", item.key);
+            let found = if matches!(outcome, Outcome::Scraped) {
+                "found"
+            } else {
+                "miss"
+            };
+            let _ = writeln!(file, "{}\t{found}", item.key);
         }
     }
 }
@@ -613,11 +615,6 @@ impl<'a> Run<'a> {
     }
 }
 
-fn journal_key(system: &SystemDef, game: &Game) -> String {
-    let relative = game.path.strip_prefix(&system.path).unwrap_or(&game.path);
-    format!("{}/{}", system.name, relative.display())
-}
-
 /// What a finished game depends on: the asset set and the art region.
 fn signature(options: &Options, regions: &[&str]) -> String {
     let mut kinds: Vec<String> = options.media.iter().map(|m| format!("{m:?}")).collect();
@@ -625,41 +622,74 @@ fn signature(options: &Options, regions: &[&str]) -> String {
     format!("{}@{}", kinds.join("+"), regions[0])
 }
 
-const fn folder(kind: Media) -> &'static str {
-    match kind {
-        Media::Box2d => "images",
-        Media::Screenshot => "screenshots",
-        Media::Wheel => "wheel",
-        Media::Video => "videos",
+impl Media {
+    /// Folder under `<system>/media/`.
+    const fn dir(self) -> &'static str {
+        match self {
+            Media::Box2d => "images",
+            Media::Screenshot => "screenshots",
+            Media::Wheel => "wheel",
+        }
+    }
+    /// ScreenScraper media types, best first.
+    const fn types(self) -> &'static [&'static str] {
+        match self {
+            Media::Box2d => &["box-2D"],
+            Media::Screenshot => &["ss"],
+            Media::Wheel => &["wheel", "wheel-hd"],
+        }
     }
 }
 
-/// Requested assets still missing for `game` (all of them unless `only_missing`),
-/// with the cover last.
-fn needed(options: &Options, system: &SystemDef, game: &Game) -> Vec<Media> {
+fn present(system: &SystemDef, game: &Game, kind: Media) -> bool {
     let stem = game.path.file_stem().unwrap_or_default();
-    let present = |kind: Media| match kind {
-        Media::Box2d => game.image.is_some(),
-        _ => ["png", "jpg", "mp4"].iter().any(|ext| {
+    kind == Media::Box2d && game.image.is_some()
+        || ["png", "jpg"].iter().any(|ext| {
             let mut file = stem.to_os_string();
             file.push(format!(".{ext}"));
             system
                 .path
                 .join("media")
-                .join(folder(kind))
+                .join(kind.dir())
                 .join(file)
                 .is_file()
-        }),
-    };
+        })
+}
+
+/// Requested assets still missing for `game` (all of them unless `only_missing`).
+fn needed(options: &Options, system: &SystemDef, game: &Game) -> Vec<Media> {
     let mut kinds: Vec<Media> = options
         .media
         .iter()
         .copied()
-        .filter(|&kind| !(options.only_missing && present(kind)))
+        .filter(|&kind| !(options.only_missing && present(system, game, kind)))
         .collect();
-    kinds.sort_by_key(|&kind| kind == Media::Box2d);
     kinds.dedup();
     kinds
+}
+
+/// Extension when `bytes` is a complete PNG/JPEG that decodes within the size
+/// limits. The service answers errors as text with status 200.
+fn image_ext(bytes: &[u8]) -> Option<&'static str> {
+    use image::{ImageFormat, ImageReader, Limits};
+    let decode = || {
+        let mut reader = ImageReader::new(std::io::Cursor::new(bytes))
+            .with_guessed_format()
+            .ok()?;
+        let ext = match reader.format()? {
+            ImageFormat::Png => "png",
+            ImageFormat::Jpeg => "jpg",
+            _ => return None,
+        };
+        let mut limits = Limits::default();
+        limits.max_image_width = Some(MAX_SIDE);
+        limits.max_image_height = Some(MAX_SIDE);
+        limits.max_alloc = Some(64 << 20);
+        reader.limits(limits);
+        reader.decode().ok().map(|_| ext)
+    };
+    // A decoder bug must not take the worker (and the final event) down.
+    std::panic::catch_unwind(decode).ok().flatten()
 }
 
 /// Hashes only real files within the size cap; cue/m3u sheets and folders go by name.

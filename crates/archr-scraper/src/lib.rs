@@ -16,7 +16,6 @@ mod engine;
 mod hash;
 mod http;
 mod systems;
-mod validate;
 
 pub use creds::Credentials;
 pub use engine::{

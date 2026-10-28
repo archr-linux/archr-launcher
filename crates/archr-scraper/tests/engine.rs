@@ -11,25 +11,25 @@ use std::{
     time::{Duration, Instant},
 };
 
+fn encode(width: u32, height: u32, format: image::ImageFormat) -> Vec<u8> {
+    let mut out = std::io::Cursor::new(Vec::new());
+    image::RgbImage::new(width, height)
+        .write_to(&mut out, format)
+        .unwrap();
+    out.into_inner()
+}
+
 fn png(width: u32, height: u32) -> Vec<u8> {
-    let mut out = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
-    out.extend(width.to_be_bytes());
-    out.extend(height.to_be_bytes());
-    out.extend(b"\x08\x02\0\0\0\0\0\0\0\0\0\0\0IEND\xAEB`\x82");
-    out
+    encode(width, height, image::ImageFormat::Png)
 }
 
-fn jpeg(width: u16, height: u16) -> Vec<u8> {
-    let mut out = vec![0xFF, 0xD8, 0xFF, 0xC0, 0, 17, 8];
-    out.extend(height.to_be_bytes());
-    out.extend(width.to_be_bytes());
-    out.extend([3, 1, 0x22, 0, 2, 0x11, 1, 3, 0x11, 1, 0xFF, 0xD9]);
-    out
+fn jpeg(width: u32, height: u32) -> Vec<u8> {
+    encode(width, height, image::ImageFormat::Jpeg)
 }
 
-fn mp4() -> Vec<u8> {
-    b"\0\0\0\x10ftypisom\0\0\0\0\0\0\0\x08moov".to_vec()
-}
+/// Tests that swap PATH for a stand-in `curl` must not overlap.
+static PATH_LOCK: Mutex<()> = Mutex::new(());
+
 const DEV: &str = "devid=tester&devpassword=hunter2";
 
 type Handler = dyn Fn(&str) -> Option<(u16, Vec<u8>)> + Send + Sync;
@@ -269,30 +269,20 @@ fn bad_login_and_unreachable_network_end_the_run() {
 }
 
 #[test]
-fn video_is_opt_in_and_error_pages_are_not_saved_as_art() {
+fn error_pages_served_as_art_are_failures_not_saved() {
     let dir = tempfile::tempdir().unwrap();
     let sys = system(dir.path(), &["A.sfc"]);
     let http = mock(|url| {
-        if url.contains("jeuInfos.php") {
-            let xml = "<Data><jeu id=\"1\"><medias>\
-<media type=\"box-2D\" region=\"us\">https://www.screenscraper.fr/m/box</media>\
-<media type=\"video\" region=\"\">https://www.screenscraper.fr/m/video</media></medias></jeu></Data>";
-            Some((200, xml.as_bytes().to_vec()))
-        } else if url.contains("/m/box") {
+        if url.contains("/box-") {
             Some((200, b"CRCOK: error text".to_vec()))
-        } else if url.contains("/m/video") {
-            Some((200, mp4()))
         } else {
             happy(url)
         }
     });
-    let mut opts = Options::new("en");
-    opts.media = vec![Media::Box2d, Media::Video];
-    let (_, report) = finish(&engine(http, dir.path()).start(vec![sys.clone()], opts));
-    // The corrupt cover is a retryable failure, never saved.
+    let (_, report) =
+        finish(&engine(http, dir.path()).start(vec![sys.clone()], Options::new("en")));
     assert_eq!((report.progress.scraped, report.progress.failed), (0, 1));
-    assert!(!sys.path.join("media/images/A.png").exists());
-    assert!(sys.path.join("media/videos/A.mp4").is_file());
+    assert!(!sys.path.join("media/images").exists());
 }
 
 #[test]
@@ -370,6 +360,7 @@ out=$(sed -n 's/^output = \"\\(.*\\)\"$/\\1/p' {d}/stdin)\nprintf hello > \"$out
 
 #[test]
 fn curl_is_hardened_and_config_injection_is_refused() {
+    let _path = PATH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let dir = tempfile::tempdir().unwrap();
     let never = AtomicBool::new(false);
     let url = "https://www.screenscraper.fr/api2/x?devid=a&devpassword=b";
@@ -412,7 +403,7 @@ fn curl_is_hardened_and_config_injection_is_refused() {
 }
 
 #[test]
-fn partial_download_holds_back_the_cover_and_is_retried() {
+fn failed_asset_is_retried_without_refetching_what_exists() {
     let dir = tempfile::tempdir().unwrap();
     let cache = dir.path().join("cache");
     let sys = system(dir.path(), &["A.sfc"]);
@@ -432,7 +423,8 @@ fn partial_download_holds_back_the_cover_and_is_retried() {
     opts.media = vec![Media::Box2d, Media::Screenshot];
     let (_, first) = finish(&engine(broken, &cache).start(vec![sys.clone()], opts.clone()));
     assert_eq!((first.progress.scraped, first.progress.failed), (0, 1));
-    assert!(!sys.path.join("media/images/A.png").exists());
+    assert!(sys.path.join("media/images/A.png").is_file());
+    assert!(!sys.path.join("media/screenshots/A.png").exists());
 
     let fixed = mock(move |url| {
         if url.contains("jeuInfos.php") {
@@ -447,21 +439,50 @@ fn partial_download_holds_back_the_cover_and_is_retried() {
     assert!(sys.path.join("media/screenshots/A.png").is_file());
 }
 
+fn png_without_pixels() -> Vec<u8> {
+    let mut out = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
+    out.extend(1u32.to_be_bytes());
+    out.extend(1u32.to_be_bytes());
+    out.extend(b"\x08\x02\0\0\0\0\0\0\0\0\0\0\0IEND\xAEB`\x82");
+    out
+}
+
 #[test]
-fn truncated_or_oversized_images_are_failures_not_art() {
-    for (body, saved) in [
-        (b"\x89PNG".to_vec(), false),
-        (png(64, 48)[..30].to_vec(), false),
-        (png(100_000, 100_000), false),
-        (jpeg(9000, 4), false),
-        (jpeg(64, 48)[..20].to_vec(), false),
-        (jpeg(64, 48), true),
-        (png(64, 48), true),
+fn only_complete_decodable_images_are_saved() {
+    let whole_png = png(64, 48);
+    let whole_jpeg = jpeg(64, 48);
+    for (name, body, saved) in [
+        ("header only", b"\x89PNG".to_vec(), false),
+        (
+            "truncated png",
+            whole_png[..whole_png.len() / 2].to_vec(),
+            false,
+        ),
+        ("png without pixels", png_without_pixels(), false),
+        ("png too wide", png(9000, 1), false),
+        ("jpeg too wide", jpeg(9000, 1), false),
+        (
+            "truncated jpeg",
+            whole_jpeg[..whole_jpeg.len() / 2].to_vec(),
+            false,
+        ),
+        (
+            "jpeg zero-length frame",
+            vec![0xff, 0xd8, 0xff, 0xc0, 0, 0, 0xff, 0xd9],
+            false,
+        ),
+        (
+            "jpeg without scan",
+            vec![0xff, 0xd8, 0xff, 0xc0, 0, 7, 8, 0, 1, 0, 1, 0xff, 0xd9],
+            false,
+        ),
+        ("jpeg", whole_jpeg.clone(), true),
+        ("png", whole_png.clone(), true),
     ] {
         let dir = tempfile::tempdir().unwrap();
         let sys = system(dir.path(), &["A.sfc"]);
         let http = mock(move |url| {
-            if url.ends_with("/m/7/box-eu") || url.contains("/box-br") {
+            if url.contains("/box-") {
                 Some((200, body.clone()))
             } else {
                 happy(url)
@@ -469,35 +490,116 @@ fn truncated_or_oversized_images_are_failures_not_art() {
         });
         let (_, report) =
             finish(&engine(http, dir.path()).start(vec![sys.clone()], Options::new("en")));
+        assert_eq!(report.stop, Stop::Completed, "{name}");
         let kept =
             fs::read_dir(sys.path.join("media/images")).is_ok_and(|mut d| d.next().is_some());
-        assert_eq!((kept, report.progress.failed == 0), (saved, saved));
+        assert_eq!(
+            (kept, report.progress.failed == 0),
+            (saved, saved),
+            "{name}"
+        );
     }
 }
 
+/// Stops the first run at its second game with a quota error.
+fn interrupted(root: &Path, cache: &Path, names: &[&str]) -> SystemDef {
+    let sys = system(root, names);
+    let calls = Arc::new(Mutex::new(0));
+    let http = mock(move |url| {
+        if url.contains("jeuInfos.php") {
+            let mut n = calls.lock().unwrap();
+            *n += 1;
+            if *n == 2 {
+                return Some((430, vec![]));
+            }
+        }
+        happy(url)
+    });
+    let (_, report) = finish(&engine(http, cache).start(vec![sys.clone()], Options::new("en")));
+    assert_eq!((report.stop, report.progress.scraped), (Stop::Quota, 1));
+    sys
+}
+
 #[test]
-fn journal_is_keyed_by_the_requested_assets() {
+fn completed_runs_clear_the_journal_so_deleted_art_is_fetched_again() {
     let dir = tempfile::tempdir().unwrap();
     let cache = dir.path().join("cache");
     let sys = system(dir.path(), &["A.sfc"]);
     let (_, first) =
         finish(&engine(mock(happy), &cache).start(vec![sys.clone()], Options::new("en")));
     assert_eq!(first.progress.scraped, 1);
-    // Same game, video added later: not skipped by the old journal entry.
-    let http = mock(|url| {
-        if url.contains("jeuInfos.php") {
-            Some((200, b"<Data><jeu id=\"1\"><medias><media type=\"video\">https://www.screenscraper.fr/m/v</media></medias></jeu></Data>".to_vec()))
-        } else if url.ends_with("/m/v") {
-            Some((200, mp4()))
-        } else {
-            happy(url)
-        }
-    });
-    let mut opts = Options::new("en");
-    opts.media = vec![Media::Box2d, Media::Video];
-    let (_, second) = finish(&engine(http, &cache).start(vec![sys.clone()], opts));
+    assert!(!cache.join("scraper-journal.txt").exists());
+    fs::remove_file(sys.path.join("media/images/A.png")).unwrap();
+    let (_, second) =
+        finish(&engine(mock(happy), &cache).start(vec![sys.clone()], Options::new("en")));
     assert_eq!((second.progress.total, second.progress.scraped), (1, 1));
-    assert!(sys.path.join("media/videos/A.mp4").is_file());
+    assert!(sys.path.join("media/images/A.png").is_file());
+}
+
+#[test]
+fn interrupted_journal_is_per_library_and_never_hides_missing_assets() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = dir.path().join("cache");
+    let card1 = interrupted(&dir.path().join("card1"), &cache, &["A.sfc", "B.sfc"]);
+    // A different library with the same relative ROM path is not "done".
+    let card2 = system(&dir.path().join("card2"), &["A.sfc"]);
+    let (_, other) = finish(&engine(mock(happy), &cache).start(vec![card2], Options::new("en")));
+    assert_eq!(other.progress.scraped, 1);
+    // Same interrupted library, asset deleted meanwhile: fetched again.
+    // (Opts differ from only_missing so the cover alone is not the reason.)
+    fs::remove_file(card1.path.join("media/images/A.png")).unwrap();
+    let (_, resumed) = finish(&engine(mock(happy), &cache).start(vec![card1], Options::new("en")));
+    assert_eq!(resumed.progress.scraped, 2);
+}
+
+#[test]
+fn resume_skips_games_whose_assets_still_exist() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = dir.path().join("cache");
+    let card = interrupted(dir.path(), &cache, &["A.sfc", "B.sfc"]);
+    let opts = Options {
+        only_missing: false,
+        ..Options::new("en")
+    };
+    let (_, resumed) = finish(&engine(mock(happy), &cache).start(vec![card], opts));
+    assert_eq!((resumed.progress.skipped, resumed.progress.scraped), (1, 1));
+}
+
+#[test]
+fn asset_set_change_is_not_hidden_by_an_old_journal_entry() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = dir.path().join("cache");
+    let card = interrupted(dir.path(), &cache, &["A.sfc", "B.sfc"]);
+    let mut opts = Options::new("en");
+    opts.media = vec![Media::Box2d, Media::Screenshot];
+    let (_, run) = finish(&engine(mock(happy), &cache).start(vec![card], opts));
+    // A already has its cover but lacks the screenshot; B is still pending.
+    assert_eq!(run.progress.total, 2);
+}
+
+#[test]
+fn long_redirect_metadata_cannot_stall_curl() {
+    let _path = PATH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let script = dir.path().join("curl");
+    fs::write(
+        &script,
+        "#!/bin/sh\ncat > /dev/null\nprintf '302 https://www.screenscraper.fr/'\nhead -c 70000 /dev/zero | tr '\\0' x\n",
+    )
+    .unwrap();
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+    std::env::set_var("PATH", format!("{}:/usr/bin:/bin", dir.path().display()));
+    let curl = Curl {
+        tmp: dir.path().join("tmp"),
+        user_agent: "t".into(),
+    };
+    let never = AtomicBool::new(false);
+    let started = Instant::now();
+    assert!(curl
+        .get("https://www.screenscraper.fr/x", 1024, &never)
+        .is_err());
+    assert!(started.elapsed() < Duration::from_secs(5));
 }
 
 #[test]

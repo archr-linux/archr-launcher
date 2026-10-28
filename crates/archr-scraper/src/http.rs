@@ -1,7 +1,7 @@
 //! HTTP seam: the engine only sees `Http`, so tests never touch the network.
 use archr_io::read_bounded;
 use std::{
-    io::{Read, Write},
+    io::{Seek, Write},
     path::PathBuf,
     process::{Child, Command, Stdio},
     sync::atomic::{AtomicBool, Ordering::Relaxed},
@@ -94,6 +94,9 @@ impl Curl {
             quoted(url)?,
             quoted(&out.path().to_string_lossy())?,
         );
+        // Redirect metadata goes to a file, not a pipe: a server-chosen Location
+        // can be arbitrarily long and must never be able to stall curl.
+        let mut meta = tempfile::tempfile_in(&self.tmp).map_err(fail)?;
         let timeout = if limit > 16 << 20 { 240 } else { 30 };
         let mut command = Command::new("curl");
         command
@@ -115,7 +118,7 @@ impl Curl {
             .args(["--max-filesize", &limit.to_string(), "-K", "-"])
             .env_clear()
             .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
+            .stdout(Stdio::from(meta.try_clone().map_err(fail)?))
             .stderr(Stdio::null());
         for key in ["PATH", "SSL_CERT_FILE", "SSL_CERT_DIR"] {
             if let Some(value) = std::env::var_os(key) {
@@ -140,15 +143,8 @@ impl Curl {
             Some(28) => return Err(NetError::Timeout),
             _ => return Err(NetError::Failed),
         }
-        let mut line = String::new();
-        child
-            .0
-            .stdout
-            .take()
-            .ok_or(NetError::Failed)?
-            .take(4096)
-            .read_to_string(&mut line)
-            .map_err(fail)?;
+        meta.rewind().map_err(fail)?;
+        let line = String::from_utf8(read_bounded(&meta, 2048).map_err(fail)?).map_err(fail)?;
         let (status, location) = line.split_once(' ').unwrap_or((&line, ""));
         let body = read_bounded(out.as_file(), limit).map_err(fail)?;
         Ok((

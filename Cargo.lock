@@ -59,6 +59,7 @@ dependencies = [
  "archr-index",
  "archr-io",
  "crc32fast",
+ "image",
  "log",
  "md-5",
  "quick-xml",
