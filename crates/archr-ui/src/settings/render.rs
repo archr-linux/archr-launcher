@@ -791,7 +791,7 @@ impl View<'_, '_, '_> {
         self.label((402., 82., 198., 64.), &self.tr(key), 18.)?;
         self.note((402., 146., 198., 112.), &self.tr(detail), 15.)?;
         self.text(
-            (402., 272., 198., 28.),
+            (402., 268., 198., 36.),
             &self.tr("settings.instant"),
             (12., self.theme.dim_text, Align::Left),
         )
