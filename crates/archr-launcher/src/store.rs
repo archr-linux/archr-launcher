@@ -92,6 +92,7 @@ impl Store {
                 systems
                     .iter()
                     .find(|sys| sys.name == name)
+                    .filter(|_| Path::new(path).is_absolute())
                     .and_then(|sys| game_key(sys, Path::new(path)))
             });
             if let Some(relative) = relative {

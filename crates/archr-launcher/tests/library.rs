@@ -151,28 +151,6 @@ fn launch_requires_final_store_flush_before_publishing_next() {
 }
 
 #[test]
-fn new_favorites_and_recents_use_relative_identity() {
-    let (_dir, paths) = fixture();
-    Store::default().save(&paths.store).unwrap();
-    let mut library = ready(&paths, Some("nes"));
-    for outcome in [
-        Outcome::ToggleFavorite {
-            system: "nes".into(),
-            game: 0,
-        },
-        Outcome::Launch {
-            system: "nes".into(),
-            game: 0,
-        },
-    ] {
-        library.handle(outcome, "").unwrap();
-    }
-    let store = Store::load(&paths.store);
-    assert_eq!(store.favorites(), ["nes/A.nes"]);
-    assert_eq!(store.recent(), ["nes/A.nes"]);
-}
-
-#[test]
 fn legacy_absolute_favorites_and_recents_migrate_once() {
     let (_dir, paths) = fixture();
     let mut store = Store::load(&paths.store);
@@ -198,61 +176,66 @@ fn legacy_absolute_favorites_and_recents_migrate_once() {
 }
 
 #[test]
-fn relative_keys_keep_subfolders_and_symlink_names() {
+fn new_favorites_and_recents_use_relative_identity() {
     use std::os::unix::fs::symlink;
-    for legacy in [false, true] {
-        let (_dir, paths) = fixture();
-        let roms = paths.at("/storage/roms/nes");
-        fs::remove_file(roms.join("A.nes")).unwrap();
-        for folder in ["one", "two"] {
-            fs::create_dir(roms.join(folder)).unwrap();
-            fs::write(roms.join(folder).join("A.nes"), []).unwrap();
-        }
-        symlink("one/A.nes", roms.join("Link.nes")).unwrap();
-        fs::write(roms.join("gamelist.xml"), "<gameList><game><path>one/A.nes</path><name>1</name></game><game><path>two/A.nes</path><name>2</name></game><game><path>Link.nes</path><name>3</name></game></gameList>").unwrap();
-        let mut store = Store::default();
-        if legacy {
-            for path in ["one/A.nes", "two/A.nes", "Link.nes"] {
-                store.toggle_favorite(&format!("nes/{}", roms.join(path).display()));
-                store.push_recent(&format!("nes/{}", roms.join(path).display()));
+    for keys in [
+        &["nes/A.nes"][..],
+        &["nes/one/A.nes", "nes/two/A.nes"],
+        &["nes/one/A.nes", "nes/Link.nes"],
+    ] {
+        for legacy in [false, true] {
+            let (_dir, paths) = fixture();
+            let roms = paths.at("/storage/roms/nes");
+            fs::remove_file(roms.join("A.nes")).unwrap();
+            let mut xml = String::from("<gameList>");
+            let mut store = Store::default();
+            for (index, key) in keys.iter().enumerate() {
+                let relative = key.strip_prefix("nes/").unwrap();
+                let path = roms.join(relative);
+                fs::create_dir_all(path.parent().unwrap()).unwrap();
+                if relative == "Link.nes" {
+                    symlink("one/A.nes", &path).unwrap();
+                } else {
+                    fs::write(&path, []).unwrap();
+                }
+                if legacy {
+                    let old = format!("nes/{}", path.display());
+                    store.toggle_favorite(&old);
+                    store.push_recent(&old);
+                }
+                xml.push_str(&format!(
+                    "<game><path>{relative}</path><name>{index}</name></game>"
+                ));
             }
-            // Mixed generations collapse without changing first-seen history order.
-            store.toggle_favorite("nes/one/A.nes");
-        }
-        store.save(&paths.store).unwrap();
-        let mut library = ready(&paths, Some("nes"));
-        if !legacy {
-            for game in 0..3 {
-                library
-                    .handle(
+            fs::write(roms.join("gamelist.xml"), format!("{xml}</gameList>")).unwrap();
+            if legacy {
+                // Mixed generations collapse without changing first-seen history order.
+                store.toggle_favorite(keys[0]);
+            }
+            store.save(&paths.store).unwrap();
+            let mut library = ready(&paths, Some("nes"));
+            if !legacy {
+                for game in 0..keys.len() {
+                    for outcome in [
                         Outcome::ToggleFavorite {
                             system: "nes".into(),
                             game,
                         },
-                        "",
-                    )
-                    .unwrap();
-                library
-                    .handle(
                         Outcome::Launch {
                             system: "nes".into(),
                             game,
                         },
-                        "",
-                    )
-                    .unwrap();
+                    ] {
+                        library.handle(outcome, "").unwrap();
+                    }
+                }
             }
+            library.finish().unwrap();
+            let store = Store::load(&paths.store);
+            assert_eq!(store.favorites(), keys);
+            let recent: Vec<_> = keys.iter().rev().copied().collect();
+            assert_eq!(store.recent(), recent);
         }
-        library.finish().unwrap();
-        let store = Store::load(&paths.store);
-        assert_eq!(
-            store.favorites(),
-            ["nes/one/A.nes", "nes/two/A.nes", "nes/Link.nes"]
-        );
-        assert_eq!(
-            store.recent(),
-            ["nes/Link.nes", "nes/two/A.nes", "nes/one/A.nes"]
-        );
     }
 }
 
