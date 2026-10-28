@@ -21,78 +21,19 @@ use sdl2::{
 use std::{
     collections::{HashMap, VecDeque},
     path::{Path, PathBuf},
-    sync::OnceLock,
 };
 
-// TEMPORARY on-device A/B for text crispness; remove once a variant is chosen.
-// ARCHR_LAUNCHER_TEXT=hinting=normal|light|mono|none|lightsub,gamma=<f>,
-// weight=medium|semibold,autohint=1,ft=35 (comma list, read once).
-#[derive(Default, Debug, PartialEq)]
-struct Tuning {
-    hinting: Option<i32>,
-    gamma: Option<f32>,
-    weight: Option<Weight>,
-    autohint: bool,
-    ft35: bool,
-}
-#[derive(Clone, Copy, Debug, PartialEq)]
-enum Weight {
-    Medium,
-    Semibold,
-}
-fn parse_tuning(source: &str) -> Tuning {
-    let mut tuning = Tuning::default();
-    for (key, value) in source
-        .split(',')
-        .filter_map(|item| item.trim().split_once('='))
-    {
-        match (key, value) {
-            ("hinting", v) => {
-                tuning.hinting = ["normal", "light", "mono", "none", "lightsub"]
-                    .iter()
-                    .position(|n| *n == v)
-                    .map(|i| i as i32)
-            }
-            ("gamma", v) => tuning.gamma = v.parse().ok().filter(|g: &f32| *g > 0.),
-            ("weight", "medium") => tuning.weight = Some(Weight::Medium),
-            ("weight", "semibold") => tuning.weight = Some(Weight::Semibold),
-            ("autohint", "1") => tuning.autohint = true,
-            ("ft", "35") => tuning.ft35 = true,
-            _ => log::warn!("ARCHR_LAUNCHER_TEXT: ignored {key}={value}"),
-        }
-    }
-    tuning
-}
-fn tuning() -> &'static Tuning {
-    static TUNING: OnceLock<Tuning> = OnceLock::new();
-    TUNING.get_or_init(|| parse_tuning(&std::env::var("ARCHR_LAUNCHER_TEXT").unwrap_or_default()))
-}
-/// Must run before `TTF_Init`: FreeType reads its properties at library init.
-pub fn apply_text_env() {
-    if tuning().ft35 && std::env::var_os("FREETYPE_PROPERTIES").is_none() {
-        std::env::set_var("FREETYPE_PROPERTIES", "truetype:interpreter-version=35");
-    }
-}
-/// Body face candidates: a sibling `*-Medium.ttf` or the SemiBold list.
-fn face_paths(paths: &[Vec<PathBuf>; 4], face: Face) -> Vec<PathBuf> {
-    match (face, tuning().weight) {
-        (Face::Regular, Some(Weight::Semibold)) => paths[Face::Semibold as usize].clone(),
-        (Face::Regular, Some(Weight::Medium)) => paths[0]
-            .iter()
-            .filter_map(|p| medium_sibling(p))
-            .chain(paths[0].iter().cloned())
-            .collect(),
-        _ => paths[face as usize].clone(),
-    }
-}
-fn medium_sibling(path: &Path) -> Option<PathBuf> {
-    let name = path.file_name()?.to_str()?;
-    name.contains("Regular")
-        .then(|| path.with_file_name(name.replace("Regular", "Medium")))
-}
-/// Hide `fpgm`/`prep` and zero `maxp.maxSizeOfInstructions` in memory: FreeType
-/// then treats the face as unhinted and uses its autohinter, which (unlike the
-/// shipped y-only ttfautohint bytecode) also aligns vertical stems to pixels.
+/// Text crispness on 1:1 low-DPI panels (R36S, 640x480).
+///
+/// The bundled Inter and JetBrains Mono carry ttfautohint bytecode that, under
+/// FreeType's v40 interpreter, only hints the y axis: vertical stems keep their
+/// fractional x and always land as one solid plus one grey column. Every face
+/// is therefore loaded with `fpgm`/`prep` renamed and
+/// `maxp.maxSizeOfInstructions` zeroed in memory, so FreeType treats it as
+/// unhinted and uses its own autohinter. With `TTF_HINTING_MONO` that hinter
+/// snaps stems in both axes; SDL_ttf still renders blended, anti-aliased
+/// coverage. Files on disk are untouched. Approved on device against Normal,
+/// Light, None, the v35 interpreter, gamma boosts and Inter Medium.
 fn force_autohint(bytes: &mut [u8]) {
     let be16 = |b: &[u8], at: usize| b.get(at..at + 2).map(|v| u16::from_be_bytes([v[0], v[1]]));
     let Some(tables) = be16(bytes, 4) else { return };
@@ -113,29 +54,6 @@ fn force_autohint(bytes: &mut [u8]) {
             _ => {}
         }
     }
-}
-/// Light-on-dark coverage boost: alpha' = alpha^(1/gamma), on any 32-bit format.
-fn tune_alpha(surface: &mut Surface<'_>) {
-    let Some(gamma) = tuning().gamma else { return };
-    let Ok(masks) = surface.pixel_format_enum().into_masks() else {
-        return;
-    };
-    if masks.bpp != 32 || masks.amask == 0 {
-        return;
-    }
-    let shift = masks.amask.trailing_zeros();
-    let lut: [u32; 256] =
-        std::array::from_fn(|a| ((a as f32 / 255.).powf(1. / gamma) * 255.).round() as u32);
-    let (width, pitch) = (surface.width() as usize, surface.pitch() as usize);
-    surface.with_lock_mut(|bytes| {
-        for row in bytes.chunks_mut(pitch) {
-            for px in row[..width * 4].chunks_exact_mut(4) {
-                let p = u32::from_ne_bytes([px[0], px[1], px[2], px[3]]);
-                let a = lut[((p & masks.amask) >> shift) as usize];
-                px.copy_from_slice(&((p & !masks.amask) | (a << shift)).to_ne_bytes());
-            }
-        }
-    });
 }
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
@@ -220,8 +138,8 @@ impl<'font> Fonts<'font> {
     fn font(&mut self, face: Face, size: u16) -> Result<&Font<'font, 'static>, String> {
         let key = face;
         if !self.resolved.contains_key(&key) {
-            for path in face_paths(&self.paths, face) {
-                let path = path.canonicalize().unwrap_or(path);
+            for path in &self.paths[face as usize] {
+                let path = path.canonicalize().unwrap_or_else(|_| path.clone());
                 if let Some(index) = self.fonts.iter().position(|loaded| loaded.path == path) {
                     self.resolved.insert(key, index);
                     break;
@@ -230,9 +148,7 @@ impl<'font> Fonts<'font> {
                     .map_err(|e| e.to_string())
                     .and_then(|bytes| {
                         let mut bytes = bytes.into_boxed_slice();
-                        if tuning().autohint {
-                            force_autohint(&mut bytes);
-                        }
+                        force_autohint(&mut bytes);
                         if bytes.len() > i32::MAX as usize {
                             return Err("Font exceeds SDL RWops size limit".into());
                         }
@@ -252,10 +168,13 @@ impl<'font> Fonts<'font> {
                     font.is_ok()
                 );
                 let Ok((font, bytes)) = font else { continue };
-                if let Some(hinting) = tuning().hinting {
-                    // SAFETY: freshly loaded, exclusively owned handle.
-                    unsafe { sdl2::sys::ttf::TTF_SetFontHinting(font.raw(), hinting) };
-                }
+                // See force_autohint. SAFETY: freshly loaded, exclusively owned handle.
+                unsafe {
+                    sdl2::sys::ttf::TTF_SetFontHinting(
+                        font.raw(),
+                        sdl2::sys::ttf::TTF_HINTING_MONO as i32,
+                    )
+                };
                 // Static Inter SemiBold reports legacy style Regular; inspect
                 // the family as well and never synthesize a shipped weight twice.
                 let weight = format!(
@@ -372,13 +291,12 @@ impl<'font> PreparedText<'font> {
         if text.is_empty() {
             return Ok(());
         }
-        let mut surface = self
+        let surface = self
             .fonts
             .font(style.face, style.size)?
             .render(&text)
             .blended(color(style.color))
             .map_err(|e| e.to_string())?;
-        tune_alpha(&mut surface);
         self.first_rasterization
             .phase_once("first text rasterization");
         self.entries
@@ -561,12 +479,11 @@ impl<'font, 'texture> TextCache<'font, 'texture> {
                 style.face,
                 style.size
             );
-            let mut surface = self
+            let surface = self
                 .font(style.face, style.size)?
                 .render(&text)
                 .blended(color(style.color))
                 .map_err(|e| e.to_string())?;
-            tune_alpha(&mut surface);
             self.first_rasterization
                 .phase_once("first text rasterization");
             let texture = self
@@ -649,40 +566,57 @@ mod tests {
             .join(format!("{name}.ttf"))
     }
 
+    /// Reference face loaded the way production loads it (see force_autohint).
     fn load_font<'a>(ttf: &'a Sdl2TtfContext, name: &str, size: u16) -> Font<'a, 'static> {
-        ttf.load_font(bundled_font(name), size).unwrap()
+        let mut bytes = std::fs::read(bundled_font(name)).unwrap();
+        force_autohint(&mut bytes);
+        let bytes: &'static [u8] = Box::leak(bytes.into_boxed_slice());
+        let mut font = ttf
+            .load_font_from_rwops(RWops::from_bytes(bytes).unwrap(), size)
+            .unwrap();
+        font.set_hinting(sdl2::ttf::Hinting::Mono);
+        font
     }
 
     #[test]
-    fn text_tuning_parses_known_keys_only() {
-        assert_eq!(parse_tuning(""), Tuning::default());
-        let t = parse_tuning("autohint=1, hinting=mono,gamma=1.4,weight=medium,ft=35,snap=1");
-        assert_eq!(
-            t,
-            Tuning {
-                hinting: Some(2),
-                gamma: Some(1.4),
-                weight: Some(Weight::Medium),
-                autohint: true,
-                ft35: true,
-            }
-        );
-        assert_eq!(parse_tuning("gamma=0,hinting=bogus"), Tuning::default());
-    }
-    #[test]
-    fn forced_autohint_hides_bytecode_in_memory() {
-        let mut bytes = std::fs::read(bundled_font("Inter-Regular")).unwrap();
-        force_autohint(&mut bytes);
-        let ttf = sdl2::ttf::init().unwrap();
+    fn every_face_uses_the_autohinter_with_mono_hinting() {
         let _sdl = crate::SDL_TEST_LOCK.lock().unwrap();
-        let font = ttf
-            .load_font_from_rwops(RWops::from_bytes(&bytes).unwrap(), 17)
-            .unwrap();
-        assert!(font.size_of("Amiga").unwrap().0 > 0);
-        let tags: Vec<_> = (0..u16::from_be_bytes([bytes[4], bytes[5]]) as usize)
-            .map(|i| &bytes[12 + 16 * i..16 + 16 * i])
-            .collect();
-        assert!(!tags.iter().any(|t| *t == b"fpgm" || *t == b"prep"));
+        let ttf = sdl2::ttf::init().unwrap();
+        let names = [
+            "Inter-Regular",
+            "Inter-SemiBold",
+            "JetBrainsMono-Regular",
+            "JetBrainsMono-Medium",
+        ];
+        let mut fonts = Fonts::new(&ttf, names.map(|name| vec![bundled_font(name)]));
+        let coverage = |font: &Font<'_, '_>| {
+            let surface = font
+                .render("Nintendo 15:23")
+                .blended(Color::WHITE)
+                .unwrap()
+                .convert_format(sdl2::pixels::PixelFormatEnum::RGBA32)
+                .unwrap();
+            surface.with_lock(|bytes| bytes.iter().skip(3).step_by(4).copied().collect::<Vec<_>>())
+        };
+        for (face, name) in [Face::Regular, Face::Semibold, Face::Mono, Face::MonoMedium]
+            .into_iter()
+            .zip(names)
+        {
+            let font = fonts.font(face, 17).unwrap();
+            assert_eq!(font.get_hinting(), sdl2::ttf::Hinting::Mono, "{name}");
+            let mut stock = ttf.load_font(bundled_font(name), 17).unwrap();
+            stock.set_hinting(sdl2::ttf::Hinting::Mono);
+            assert_ne!(
+                coverage(font),
+                coverage(&stock),
+                "{name} still runs its bytecode"
+            );
+            let bytes = &fonts.fonts[fonts.resolved[&face]]._bytes;
+            let tags = (0..usize::from(u16::from_be_bytes([bytes[4], bytes[5]])))
+                .map(|i| &bytes[12 + 16 * i..16 + 16 * i])
+                .collect::<Vec<_>>();
+            assert!(!tags.iter().any(|t| *t == b"fpgm" || *t == b"prep"));
+        }
     }
     #[test]
     fn ellipsis_is_font_measured_and_unicode_safe() {

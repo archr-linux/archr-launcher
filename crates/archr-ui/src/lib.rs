@@ -26,4 +26,3 @@ mod primitives;
 pub mod startup;
 pub mod status;
 mod text;
-pub use text::apply_text_env;
