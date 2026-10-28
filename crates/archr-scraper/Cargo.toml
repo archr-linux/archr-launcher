@@ -1,0 +1,18 @@
+[package]
+name = "archr-scraper"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+archr-io = { path = "../archr-io" }
+archr-index = { path = "../archr-index" }
+crc32fast = "1"
+log = "0.4"
+quick-xml = "0.37"
+serde = { version = "1", features = ["derive"] }
+tempfile = "3"
+toml = "0.8"
+
+[dev-dependencies]
+tempfile = "3"

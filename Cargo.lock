@@ -53,6 +53,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "archr-scraper"
+version = "0.1.0"
+dependencies = [
+ "archr-index",
+ "archr-io",
+ "crc32fast",
+ "log",
+ "quick-xml",
+ "serde",
+ "tempfile",
+ "toml",
+]
+
+[[package]]
 name = "archr-ui"
 version = "0.1.0"
 dependencies = [
