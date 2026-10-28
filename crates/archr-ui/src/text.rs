@@ -4,6 +4,7 @@
 // Keep phase-1 Latin/Cyrillic startup free of CJK font I/O and memory costs.
 use crate::{
     badges::{self, BadgeKey, SUPERSAMPLE},
+    raster_cache::RasterCache,
     startup::StartupTrace,
     startup_phase,
     theme::Rgba,
@@ -45,13 +46,24 @@ struct Entry<'a> {
     style: Style,
     texture: Texture<'a>,
 }
+struct FontFace<'font> {
+    path: PathBuf,
+    font: Font<'font, 'static>,
+    size: u16,
+    style: FontStyle,
+    synthesize_bold: bool,
+}
+
 pub(crate) struct TextCache<'font, 'texture> {
     startup: StartupTrace,
     first_rasterization: StartupTrace,
     ttf: &'font Sdl2TtfContext,
     creator: &'texture TextureCreator<WindowContext>,
     paths: [Vec<PathBuf>; 4],
-    fonts: HashMap<Face, (Font<'font, 'static>, u16)>,
+    fonts: Vec<FontFace<'font>>,
+    resolved: HashMap<(Face, u16), usize>,
+    pub share_fonts: bool,
+    pub raster_cache: Option<RasterCache>,
     entries: VecDeque<Entry<'texture>>,
     badges: VecDeque<(BadgeKey, Texture<'texture>)>,
 }
@@ -67,7 +79,10 @@ impl<'font, 'texture> TextCache<'font, 'texture> {
             ttf,
             creator,
             paths,
-            fonts: HashMap::new(),
+            fonts: Vec::new(),
+            resolved: HashMap::new(),
+            share_fonts: true,
+            raster_cache: None,
             entries: VecDeque::new(),
             badges: VecDeque::with_capacity(16),
         }
@@ -77,64 +92,95 @@ impl<'font, 'texture> TextCache<'font, 'texture> {
         self.first_rasterization = trace;
     }
     fn font(&mut self, face: Face, size: u16) -> Result<&Font<'font, 'static>, String> {
-        if !self.fonts.contains_key(&face) {
-            let paths = &self.paths[face as usize];
-            let mut font = paths
-                .iter()
-                .find_map(|path| {
-                    let font = self.ttf.load_font(path, size);
-                    startup_phase!(
-                        self.startup,
-                        "font file open [path={}; face={face:?}; size={size}px; ok={}]",
-                        path.display(),
-                        font.is_ok()
-                    );
-                    font.ok()
-                })
-                .ok_or("error.font")?;
-            // Inspect the loaded face, not its filename: legacy themes may
-            // rename a regular TTF, or fall back when a preferred face is absent.
-            // Inter's static SemiBold has a legacy style of "Regular", but its
-            // family name identifies the real weight. Never embolden it twice.
-            if matches!(face, Face::Semibold | Face::MonoMedium) {
+        let key = (face, if self.share_fonts { 0 } else { size });
+        if !self.resolved.contains_key(&key) {
+            for path in &self.paths[face as usize] {
+                let path = path.canonicalize().unwrap_or_else(|_| path.clone());
+                if let Some(index) = self.fonts.iter().position(|loaded| {
+                    loaded.path == path && (self.share_fonts || loaded.size == size)
+                }) {
+                    self.resolved.insert(key, index);
+                    break;
+                }
+                let font = self.ttf.load_font(&path, size);
+                startup_phase!(
+                    self.startup,
+                    "font file open [path={}; face={face:?}; size={size}px; ok={}]",
+                    path.display(),
+                    font.is_ok()
+                );
+                let Ok(font) = font else { continue };
+                // Static Inter SemiBold reports legacy style Regular; inspect
+                // the family as well and never synthesize a shipped weight twice.
                 let weight = format!(
                     "{} {}",
                     font.face_family_name().unwrap_or_default(),
                     font.face_style_name().unwrap_or_default()
                 )
                 .to_ascii_lowercase();
-                if !font.get_style().contains(FontStyle::BOLD)
+                let style = font.get_style();
+                let synthesize_bold = !style.contains(FontStyle::BOLD)
                     && !["bold", "demi", "medium"]
                         .iter()
-                        .any(|name| weight.contains(name))
-                {
-                    font.set_style(FontStyle::BOLD);
-                }
+                        .any(|n| weight.contains(n));
+                self.resolved.insert(key, self.fonts.len());
+                self.fonts.push(FontFace {
+                    path,
+                    font,
+                    size,
+                    style,
+                    synthesize_bold,
+                });
+                break;
             }
-            self.fonts.insert(face, (font, size));
         }
-        let (font, current_size) = self.fonts.get_mut(&face).expect("loaded face");
-        if *current_size != size {
-            // SAFETY: TextCache exclusively owns this live font and all access
-            // stays on the SDL thread. SDL_ttf retains ownership of the handle.
-            if unsafe { sdl2::sys::ttf::TTF_SetFontSize(font.raw(), i32::from(size)) } != 0 {
+        let index = *self.resolved.get(&key).ok_or("error.font")?;
+        let loaded = &mut self.fonts[index];
+        if loaded.size != size {
+            // SAFETY: exclusively owned live handle, accessed only on the SDL thread.
+            if unsafe { sdl2::sys::ttf::TTF_SetFontSize(loaded.font.raw(), i32::from(size)) } != 0 {
                 return Err(sdl2::get_error());
             }
-            *current_size = size;
+            loaded.size = size;
         }
-        Ok(font)
+        let style = if loaded.synthesize_bold && matches!(face, Face::Semibold | Face::MonoMedium) {
+            loaded.style | FontStyle::BOLD
+        } else {
+            loaded.style
+        };
+        if loaded.font.get_style() != style {
+            loaded.font.set_style(style);
+        }
+        Ok(&loaded.font)
     }
     fn badge(&mut self, key: BadgeKey) -> Result<&Texture<'texture>, String> {
         if let Some(index) = self.badges.iter().position(|(k, _)| *k == key) {
             let hit = self.badges.remove(index).expect("located badge");
             self.badges.push_back(hit);
         } else {
-            let surface = badges::render(
-                self.font(Face::Semibold, key.size * SUPERSAMPLE as u16)?,
-                key,
-            )?;
-            self.first_rasterization
-                .phase_once("first text rasterization");
+            let cache = self.raster_cache.clone();
+            let mut generate = || {
+                let surface = badges::render(
+                    self.font(Face::Semibold, key.size * SUPERSAMPLE as u16)?,
+                    key,
+                )?;
+                self.first_rasterization
+                    .phase_once("first text rasterization");
+                Ok(surface)
+            };
+            let (surface, hit) = if let Some(cache) = cache {
+                use std::hash::{Hash, Hasher};
+                let mut hash = std::collections::hash_map::DefaultHasher::new();
+                key.hash(&mut hash);
+                cache.surface(
+                    &format!("badge-{}-{:016x}", key.letter, hash.finish()),
+                    key.diameter * SUPERSAMPLE,
+                    key.diameter * SUPERSAMPLE,
+                    generate,
+                )?
+            } else {
+                (generate()?, false)
+            };
             let mut texture = self
                 .creator
                 .create_texture_from_surface(surface)
@@ -145,7 +191,12 @@ impl<'font, 'texture> TextCache<'font, 'texture> {
                 self.badges.pop_front();
             }
             self.badges.push_back((key, texture));
-            startup_phase!(self.startup, "badge {}", key.letter);
+            startup_phase!(
+                self.startup,
+                "badge {} [{}]",
+                key.letter,
+                if hit { "PNG hit" } else { "rasterized" }
+            );
         }
         Ok(&self.badges.back().expect("cached badge").1)
     }
@@ -386,6 +437,7 @@ mod tests {
             );
         }
         cache.fonts.clear();
+        cache.resolved.clear();
         cache.paths = std::array::from_fn(|_| vec![]);
         // With font loading deliberately unavailable, a fitted-texture hit
         // must still render. Any measure/ellipsis call would fail here.
@@ -475,7 +527,23 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let body = root.path().join("body.ttf");
         std::fs::copy(bundled_font("Inter-Regular"), &body).unwrap();
+        cache.paths[0].push(body.clone());
         cache.paths[1].push(body);
+        let regular_handle = cache.font(Face::Regular, 13).unwrap().raw();
+        let semibold_handle = cache.font(Face::Semibold, 44).unwrap().raw();
+        assert_eq!(
+            regular_handle, semibold_handle,
+            "one handle per physical file"
+        );
+        assert_eq!(
+            cache.font(Face::Regular, 13).unwrap().get_style(),
+            FontStyle::NORMAL
+        );
+        let reference = load_font(&ttf, "Inter-Regular", 13);
+        assert_eq!(
+            cache.measure("Alias sizes", Face::Regular, 13).unwrap(),
+            reference.size_of("Alias sizes").unwrap().0
+        );
         assert!(
             cache
                 .font(Face::Semibold, 44)

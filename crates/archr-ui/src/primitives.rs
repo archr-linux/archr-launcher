@@ -1,5 +1,7 @@
-//! Cached SDL 2.0.18 meshes and one startup-generated 9-slice shadow.
-use crate::{startup::StartupTrace, startup_phase, text::color, theme::Rgba};
+//! Cached SDL 2.0.18 meshes and a lazily loaded/generated 9-slice shadow.
+use crate::{
+    raster_cache::RasterCache, startup::StartupTrace, startup_phase, text::color, theme::Rgba,
+};
 use sdl2::{
     pixels::{Color, PixelFormatEnum},
     rect::{FPoint, Rect},
@@ -321,22 +323,35 @@ impl Geometry {
 }
 pub(crate) struct Shadow<'a>(Texture<'a>);
 impl<'a> Shadow<'a> {
-    pub fn new(creator: &'a TextureCreator<WindowContext>) -> Result<Self, String> {
-        let mut bytes = vec![0_u8; 64 * 64 * 4];
-        for y in 0..64 {
-            for x in 0..64 {
-                let qx = (x as f32 - 31.5).abs() - 4.;
-                let qy = (y as f32 - 31.5).abs() - 4.;
-                let distance = qx.max(0.).hypot(qy.max(0.)) + qx.max(qy).min(0.) - 12.;
-                let alpha = (115. * (-0.5 * (distance.max(0.) / 6.).powi(2)).exp()).round() as u8;
-                bytes[(y * 64 + x) * 4 + 3] = alpha;
-            }
-        }
+    pub fn new(
+        creator: &'a TextureCreator<WindowContext>,
+        cache: Option<&RasterCache>,
+    ) -> Result<Self, String> {
+        let generate = || {
+            let mut surface = sdl2::surface::Surface::new(64, 64, PixelFormatEnum::RGBA32)?;
+            let pitch = surface.pitch() as usize;
+            surface.with_lock_mut(|bytes| {
+                for y in 0..64 {
+                    for x in 0..64 {
+                        let qx = (x as f32 - 31.5).abs() - 4.;
+                        let qy = (y as f32 - 31.5).abs() - 4.;
+                        let distance = qx.max(0.).hypot(qy.max(0.)) + qx.max(qy).min(0.) - 12.;
+                        let alpha =
+                            (115. * (-0.5 * (distance.max(0.) / 6.).powi(2)).exp()).round() as u8;
+                        bytes[y * pitch + x * 4..y * pitch + x * 4 + 4]
+                            .copy_from_slice(&[0, 0, 0, alpha]);
+                    }
+                }
+            });
+            Ok(surface)
+        };
+        let surface = if let Some(cache) = cache {
+            cache.surface("shadow", 64, 64, generate)?.0
+        } else {
+            generate()?
+        };
         let mut texture = creator
-            .create_texture_static(PixelFormatEnum::RGBA32, 64, 64)
-            .map_err(|e| e.to_string())?;
-        texture
-            .update(None, &bytes, 64 * 4)
+            .create_texture_from_surface(surface)
             .map_err(|e| e.to_string())?;
         texture.set_blend_mode(BlendMode::Blend);
         texture.set_scale_mode(ScaleMode::Linear);

@@ -1,10 +1,10 @@
-//! Startup-composited 4× button badges, centered by the glyph's actual ink.
+//! First-use 4× button badges, centered by the glyph's actual ink.
 use crate::{text::color, theme::Rgba};
 use sdl2::{pixels::PixelFormatEnum, rect::Rect, surface::Surface, ttf::Font};
 
 pub(crate) const SUPERSAMPLE: u32 = 4;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Hash, PartialEq, Eq)]
 pub(crate) struct BadgeKey {
     pub letter: char,
     pub diameter: u32,

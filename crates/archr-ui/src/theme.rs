@@ -8,7 +8,7 @@ use std::{
 const MAX_THEME_BYTES: u64 = 64 * 1024;
 
 /// Renderer-independent color, with straight (unpremultiplied) alpha.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub struct Rgba {
     pub r: u8,
     pub g: u8,

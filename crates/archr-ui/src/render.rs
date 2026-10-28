@@ -3,7 +3,8 @@ use crate::{
     i18n::I18n,
     motion::Tween,
     primitives::{Geometry, Icon, Shadow},
-    startup::StartupTrace,
+    raster_cache::RasterCache,
+    startup::{Experiments, StartupTrace},
     startup_phase,
     state::{App, DataSource, QuickItem, Screen},
     status::Status,
@@ -144,11 +145,14 @@ fn status_layout(
 
 pub struct Ui<'font, 'texture> {
     startup: StartupTrace,
+    experiments: Experiments,
     pub sdl: sdl2::Sdl,
     pub canvas: Canvas<Window>,
-    _image: Sdl2ImageContext,
+    _image: Option<Sdl2ImageContext>,
     text: Option<TextCache<'font, 'texture>>,
     shadow: Option<Shadow<'texture>>,
+    creator: Option<&'texture TextureCreator<WindowContext>>,
+    raster_cache: Option<RasterCache>,
     geometry: Geometry,
     status: Option<Status>,
     list: ListMotion,
@@ -175,11 +179,32 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         windowed: bool,
         trace: StartupTrace,
     ) -> Result<Self, String> {
+        let experiments = Experiments::from_env()?;
+        if trace.began().is_some() {
+            eprintln!("archr-launcher: experiments: [{}]", experiments.names());
+        }
         let sdl = sdl2::init()?;
         let video = sdl.video()?;
         startup_phase!(trace, "SDL_Init video");
+        let gl_window = video.current_video_driver() != "dummy";
+        if gl_window && experiments.enabled("gles2") {
+            // Normal priority preserves an explicit SDL_RENDER_DRIVER override.
+            sdl2::hint::set("SDL_RENDER_DRIVER", "opengles2");
+        }
+        if gl_window && (experiments.enabled("gles2") || experiments.enabled("nowinrecreate")) {
+            let gl = video.gl_attr();
+            gl.set_context_profile(sdl2::video::GLProfile::GLES);
+            gl.set_context_version(2, 0);
+            gl.set_depth_size(0);
+            gl.set_stencil_size(0);
+            gl.set_multisample_buffers(0);
+            gl.set_multisample_samples(0);
+        }
         let mut builder = video.window("archr-launcher", width, height);
         builder.position_centered();
+        if gl_window && experiments.enabled("nowinrecreate") {
+            builder.opengl();
+        }
         if !windowed {
             builder.fullscreen_desktop();
         }
@@ -195,15 +220,24 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         .map_err(|e| e.to_string())?;
         startup_phase!(trace, "renderer / GL context creation");
         canvas.set_blend_mode(BlendMode::Blend);
-        let image = sdl2::image::init(InitFlag::PNG | InitFlag::JPG)?;
-        startup_phase!(trace, "SDL_image init");
+        let image = if experiments.enabled("lazyassets") {
+            // Covers and screenshots use the Rust image codec, not SDL_image.
+            None
+        } else {
+            let image = sdl2::image::init(InitFlag::PNG | InitFlag::JPG)?;
+            startup_phase!(trace, "SDL_image init");
+            Some(image)
+        };
         Ok(Self {
             startup: trace,
+            experiments,
             sdl,
             canvas,
             _image: image,
             text: None,
             shadow: None,
+            creator: None,
+            raster_cache: None,
             geometry: {
                 let mut geometry = Geometry::new();
                 geometry.startup = trace;
@@ -282,23 +316,49 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 paths[3].insert(0, font.clone());
             }
         }
+        self.creator = Some(creator);
+        self.raster_cache =
+            if self.experiments.enabled("badgecache") || self.experiments.enabled("shadowcache") {
+                let dir = root
+                    .unwrap_or_else(|| Path::new("/"))
+                    .join("storage/.cache/archr-launcher");
+                Some(RasterCache::new(
+                    dir,
+                    RasterCache::theme_key(theme, self.frame.scale, &paths[1]),
+                ))
+            } else {
+                None
+            };
         let mut text = TextCache::new(ttf, creator, paths);
+        text.share_fonts = self.experiments.enabled("fontshare");
+        text.raster_cache = self
+            .raster_cache
+            .clone()
+            .filter(|_| self.experiments.enabled("badgecache"));
         text.trace_startup(self.startup);
-        text.measure(
-            &self.catalog.text("systems.title"),
-            Face::Semibold,
-            self.px(12.) as u16,
-        )
-        .map_err(|e| localized_error(&self.catalog, e))?;
-        text.prepare_badges(
-            self.px(20.) as u32,
-            self.px(11.).clamp(8, 128) as u16,
-            theme.badge,
-            theme.text,
-        )?;
+        self.shadow = None;
+        if !self.experiments.enabled("lazyassets") {
+            text.measure(
+                &self.catalog.text("systems.title"),
+                Face::Semibold,
+                self.px(12.) as u16,
+            )
+            .map_err(|e| localized_error(&self.catalog, e))?;
+            text.prepare_badges(
+                self.px(20.) as u32,
+                self.px(11.).clamp(8, 128) as u16,
+                theme.badge,
+                theme.text,
+            )?;
+            self.shadow = Some(Shadow::new(
+                creator,
+                self.raster_cache
+                    .as_ref()
+                    .filter(|_| self.experiments.enabled("shadowcache")),
+            )?);
+            startup_phase!(self.startup, "shadow texture");
+        }
         self.text = Some(text);
-        self.shadow = Some(Shadow::new(creator)?);
-        startup_phase!(self.startup, "shadow texture");
         self.status = Some(Status::new(root, Instant::now()));
         startup_phase!(self.startup, "status initialization");
         Ok(())
@@ -380,6 +440,17 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             .rounded(&mut self.canvas, rect, radius, fill, border)
     }
     fn panel(&mut self, rect: Rect, radius: f32, fill: Rgba, border: Rgba) -> Result<(), String> {
+        if self.shadow.is_none() {
+            if let Some(creator) = self.creator {
+                self.shadow = Some(Shadow::new(
+                    creator,
+                    self.raster_cache
+                        .as_ref()
+                        .filter(|_| self.experiments.enabled("shadowcache")),
+                )?);
+                startup_phase!(self.startup, "shadow texture");
+            }
+        }
         if let Some(shadow) = &self.shadow {
             shadow.draw(&mut self.canvas, rect, self.frame.scale)?;
         }
@@ -424,7 +495,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             || self.list.pill.active(now)
             || self.menu_pill.active(now)
             || self.cover_fade.active(now);
-        // The explicit SNAPSHOT debug mode is the only draw-time disk access.
+        // Explicit debug readback. Raster PNG I/O is limited to first asset use.
         if let Some(path) = self.screenshot.take() {
             let rgba = self
                 .canvas

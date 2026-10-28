@@ -1,8 +1,9 @@
 # archr-launcher
 
 Launcher SDL2 para ArchR Linux. Requer Rust 1.88+, SDL2, SDL2_ttf 2.20+ e
-SDL2_image 2.8+. O renderer usa aceleração e vsync; somente o driver SDL
-`dummy`, usado explicitamente em testes sem GPU, usa software.
+SDL2_image 2.8+. O renderer padrão é GLES2 com aceleração e vsync; o driver SDL
+`dummy`, usado explicitamente em testes sem GPU, usa software. Um override
+`SDL_RENDER_DRIVER` continua disponível para diagnóstico.
 
 ## Executar no PC
 
@@ -37,6 +38,43 @@ A configuração de sistemas vem de
 `/usr/config/emulationstation/es_systems.cfg` se a primeira não existir.
 O tema vem de `launcher.theme` em
 `/storage/.config/system/configs/system.cfg` (padrão `default`).
+
+## Experimentos de abertura (temporários)
+
+`ARCHR_LAUNCHER_EXP` é lida uma vez ao criar a UI. Ausente = todas as melhorias
+ligadas; vazia ou `none` = todas desligadas; uma lista liga **somente** os nomes
+informados. Nomes desconhecidos são erro. Remover estes controles após as medições.
+
+| Nome | Ligado | Desligado |
+| --- | --- | --- |
+| `nowinrecreate` | Janela OPENGL com perfil ES 2.0 desde a criação | Janela SDL sem flag OPENGL |
+| `gles2` | Hint `opengles2`, ES 2.0 sem depth/stencil/MSAA | Seleção padrão SDL |
+| `fontshare` | Um handle TTF por arquivo físico; troca tamanho/estilo | Um handle por arquivo e tamanho |
+| `badgecache` | PNG dos badges por tema/escala | Rasterização dos badges |
+| `shadowcache` | PNG da sombra nine-slice por tema/escala | Rasterização da sombra |
+| `lazyassets` | Apenas assets visíveis; sem SDL_image | Prepara A/B/X/Y e sombra, mede título e inicializa SDL_image |
+
+```sh
+# Todos ligados, com checkpoints cumulativos e uma linha com o conjunto ativo:
+ARCHR_LAUNCHER_TRACE=1 archr-launcher
+# Só janela correta + GLES2; os demais experimentos ficam desligados:
+ARCHR_LAUNCHER_TRACE=1 ARCHR_LAUNCHER_EXP=nowinrecreate,gles2 archr-launcher
+# Controle sem melhorias:
+ARCHR_LAUNCHER_TRACE=1 ARCHR_LAUNCHER_EXP=none archr-launcher
+```
+
+Um `SDL_RENDER_DRIVER` explícito continua tendo precedência sobre o hint.
+`dummy` não recebe flags/atributos GL. `nowinrecreate` configura também o perfil
+ES; a garantia de não passar pelo `SDL_RecreateWindow` do GLES2 depende de usar
+esse renderer (use `gles2` junto, ou force `SDL_RENDER_DRIVER=opengles2` nos dois
+lados do A/B). O custo do contexto pode migrar do checkpoint renderer para janela;
+compare sempre o tempo **até first present**, não só uma fase isolada.
+
+Meça 30 aberturas por variante em release, mesmo display/renderer e caches quentes.
+A/B de sombra deve omitir `lazyassets` ou medir a abertura do primeiro painel:
+sem painel visível, o trabalho da sombra já não ocorre antes do primeiro present.
+`fontshare` desligado mede a estratégia por tamanho; o HEAD 1aec48c já trocava
+os tamanhos por face lógica, mas ainda não compartilhava aliases do mesmo arquivo.
 
 ## Navegação automatizada
 
@@ -106,10 +144,18 @@ os comentários do tema. O menu mantém o posicionamento óptico da maquete e
 reforça a opacidade do scrim em 20% (0,60 → aproximadamente 0,72), sem alterar
 os avisos.
 
-Os badges A/B/X/Y são compostos uma vez na configuração, com círculo e letra
+Os badges A/B/X/Y são compostos no primeiro uso, com círculo e letra
 em 4× (80×80 → 20×20), Inter SemiBold real, centro pela caixa de tinta e
-filtragem linear. O cache inclui letra, tamanhos e cores; os quadros seguintes
-só copiam a textura. Temas sem peso próprio usam bold sintetizado também em 4×.
+filtragem linear. Os PNGs dos badges e da sombra nine-slice ficam em
+`/storage/.cache/archr-launcher/raster-<hash-tema-escala>-<asset>.png`, também
+sob `ARCHR_LAUNCHER_ROOT`. A chave inclui versão do raster, tema, escala,
+metadados das fontes candidatas e, nos badges, letra, tamanhos e cores.
+Ausência, PNG inválido ou dimensões erradas regeneram o asset; falha de escrita
+mantém a UI funcionando sem persistência. PNGs usam o codec Rust, sem SDL_image.
+A carga/gravação ocorre só no primeiro uso; quadros seguintes só copiam a textura.
+No primeiro quadro normal, apenas A/Y são necessários; sombra/B/X esperam sua tela.
+Temas personalizados usam o mesmo cache e invalidam pela própria configuração.
+Temas sem peso próprio usam bold sintetizado também em 4×.
 
 A bateria usa `ROOT/sys/class/power_supply/battery/{capacity,status}`, quando
 há prefixo; sem capacidade válida, o indicador fica oculto. Um worker começa

@@ -19,6 +19,7 @@ pub mod joystick_mapping;
 mod badges;
 pub mod motion;
 mod primitives;
+mod raster_cache;
 pub mod startup;
 pub mod status;
 mod text;
