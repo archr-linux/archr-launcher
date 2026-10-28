@@ -4,6 +4,7 @@
 // Keep phase-1 Latin/Cyrillic startup free of CJK font I/O and memory costs.
 use crate::{
     badges::{self, BadgeKey, SUPERSAMPLE},
+    icons::{self, Glyph},
     raster_cache::RasterCache,
     startup::StartupTrace,
     startup_phase,
@@ -66,6 +67,7 @@ pub(crate) struct TextCache<'font, 'texture> {
     pub raster_cache: Option<RasterCache>,
     entries: VecDeque<Entry<'texture>>,
     badges: VecDeque<(BadgeKey, Texture<'texture>)>,
+    icons: HashMap<(Glyph, u32), Texture<'texture>>,
 }
 impl<'font, 'texture> TextCache<'font, 'texture> {
     pub fn new(
@@ -85,6 +87,7 @@ impl<'font, 'texture> TextCache<'font, 'texture> {
             raster_cache: None,
             entries: VecDeque::new(),
             badges: VecDeque::with_capacity(16),
+            icons: HashMap::new(),
         }
     }
     pub fn trace_startup(&mut self, trace: StartupTrace) {
@@ -238,6 +241,30 @@ impl<'font, 'texture> TextCache<'font, 'texture> {
             None,
             panel,
         )
+    }
+    /// Icons are cached white per glyph and size, then tinted to `ink`.
+    pub fn draw_icon(
+        &mut self,
+        canvas: &mut Canvas<Window>,
+        glyph: Glyph,
+        panel: Rect,
+        ink: Rgba,
+    ) -> Result<(), String> {
+        let key = (glyph, panel.width());
+        if !self.icons.contains_key(&key) {
+            let surface = icons::render(glyph, panel.width())?;
+            let mut texture = self
+                .creator
+                .create_texture_from_surface(surface)
+                .map_err(|e| e.to_string())?;
+            texture.set_blend_mode(BlendMode::Blend);
+            texture.set_scale_mode(ScaleMode::Linear);
+            self.icons.insert(key, texture);
+        }
+        let texture = self.icons.get_mut(&key).expect("cached icon");
+        texture.set_color_mod(ink.r, ink.g, ink.b);
+        texture.set_alpha_mod(ink.a);
+        canvas.copy(texture, None, panel)
     }
     pub fn measure(&mut self, text: &str, face: Face, size: u16) -> Result<u32, String> {
         self.font(face, size)?

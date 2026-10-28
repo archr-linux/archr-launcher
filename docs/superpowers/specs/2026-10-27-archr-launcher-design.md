@@ -107,7 +107,7 @@ Leitura e gravação pela crate `archr-config`, com a mesma trava dos scripts (`
 
 ### Botões
 
-Mesmo padrão do ES: A abre, B volta, X favorita, Y abre o menu rápido, L/R pulam página. Start e Select ficam reservados para coleções e para a camada de controle futura. O controle é lido pelo SDL2 com o mapeamento do `es_input.cfg`, para funcionar desde o primeiro boot.
+Mesmo padrão do ES: A abre, B volta, X favorita, Y abre o menu rápido, L/R pulam página. Start abre o hub Start (e o fecha); Select fica reservado para a camada de controle futura. O controle é lido pelo SDL2 com o mapeamento do `es_input.cfg`, para funcionar desde o primeiro boot.
 
 ### Música
 

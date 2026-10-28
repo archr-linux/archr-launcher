@@ -51,16 +51,10 @@
 "time.months" = { one = "há {count} mês", other = "há {count} meses" }
 "time.years" = { one = "há {count} ano", other = "há {count} anos" }
 "start.title" = "Menu Start"
-"start.recent" = "Recentes"
 "start.games" = "Jogos"
 "start.tools" = "Ferramentas"
 "start.settings" = "Configurações"
 "start.update" = "Atualização"
-"start.wifi" = "Wi-Fi"
-"start.suspend" = "Suspender"
-"start.reboot" = "Reiniciar"
-"start.shutdown" = "Desligar"
-"start.on" = "ligado"
-"start.off" = "desligado"
-"start.wifi_state" = "Wi-Fi · {state}"
+"start.wifi_on" = "Wi-Fi · ligado"
+"start.wifi_off" = "Wi-Fi · desligado"
 "start.soon_label" = "{name} · Em breve"

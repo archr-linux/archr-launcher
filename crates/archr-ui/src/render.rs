@@ -1,6 +1,7 @@
 //! Grafite presentation at 640×480, scaled by height, with event-driven idle.
 use crate::{
     i18n::I18n,
+    icons::Glyph,
     motion::Tween,
     primitives::{Geometry, Icon, Shadow},
     raster_cache::RasterCache,
@@ -463,6 +464,13 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         }
         self.rounded(rect, radius, fill, Some(border))
     }
+    fn icon(&mut self, glyph: Glyph, panel: Rect, ink: Rgba) -> Result<(), String> {
+        let text = self
+            .text
+            .as_mut()
+            .ok_or_else(|| self.catalog.text("error.font_init"))?;
+        text.draw_icon(&mut self.canvas, glyph, panel, ink)
+    }
     fn divider(&mut self, x: i32, y: i32, w: u32, c: Rgba) -> Result<(), String> {
         self.canvas.set_draw_color(color(c));
         self.canvas.fill_rect(Rect::new(x, y, w, 1))
@@ -559,26 +567,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 Some(theme.border),
             )?;
             if let Some(icon) = layout.wifi {
-                self.canvas.set_draw_color(color(theme.highlight_bg));
-                let x = icon.center().x();
-                // The arcs and dot occupy ten pixels, centered within the 16px box.
-                let y = icon.center().y() + self.px(3.);
-                for radius in [4., 8.] {
-                    let r = self.px(radius);
-                    let points = [
-                        sdl2::rect::Point::new(x - r, y - r / 2),
-                        sdl2::rect::Point::new(x - r / 2, y - r),
-                        sdl2::rect::Point::new(x + r / 2, y - r),
-                        sdl2::rect::Point::new(x + r, y - r / 2),
-                    ];
-                    self.canvas.draw_lines(points.as_slice())?;
-                }
-                self.canvas.fill_rect(Rect::new(
-                    x - self.px(1.),
-                    y,
-                    self.px(2.) as u32,
-                    self.px(2.) as u32,
-                ))?;
+                self.icon(Glyph::Wifi, icon, theme.highlight_bg)?;
             }
             self.label(&clock, (Face::Mono, 13., theme.muted), layout.clock)?;
             if let (Some(b), Some(icon), Some(panel), Some(text)) =
