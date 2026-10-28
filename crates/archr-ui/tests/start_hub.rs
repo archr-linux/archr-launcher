@@ -3,6 +3,7 @@ use archr_ui::state::{App, Button, DataSource, Outcome, Screen, SessionAction};
 
 struct Data {
     systems: Vec<SystemEntry>,
+    recent: usize,
 }
 impl DataSource for Data {
     fn systems(&self) -> &[SystemEntry] {
@@ -10,6 +11,13 @@ impl DataSource for Data {
     }
     fn games(&self, _: &str) -> &[Game] {
         &[]
+    }
+    fn collection_len(&self, name: &str) -> usize {
+        if name == "@recent" {
+            self.recent
+        } else {
+            0
+        }
     }
     fn origin(&self, _: &str, _: usize) -> Option<(String, usize)> {
         None
@@ -23,11 +31,12 @@ impl DataSource for Data {
 }
 fn data(tools: bool) -> Data {
     Data {
+        recent: 1,
         systems: if tools {
             vec![SystemEntry {
                 name: "tools".into(),
                 fullname: "Tools".into(),
-                game_count: 0,
+                game_count: 3,
                 dir_mtime: 0,
                 source_fingerprint: 0,
             }]
@@ -50,7 +59,7 @@ fn start_and_b_close_hub_without_losing_system_cursor() {
     assert_eq!(app.screen, Screen::Systems);
 }
 #[test]
-fn tiles_open_recent_games_and_only_configured_tools() {
+fn tiles_open_recent_games_and_tools() {
     let mut app = App::new(8);
     app.handle(Button::Start, &data(false));
     app.handle(Button::A, &data(false));
@@ -66,11 +75,9 @@ fn tiles_open_recent_games_and_only_configured_tools() {
     app.handle(Button::R, &data(false));
     app.handle(Button::A, &data(false));
     assert_eq!(app.screen, Screen::Systems);
-    app.handle(Button::Start, &data(false));
-    app.handle(Button::R, &data(false));
-    app.handle(Button::R, &data(false));
-    app.handle(Button::A, &data(false));
-    assert!(matches!(app.screen, Screen::StartHub { .. }));
+    app.handle(Button::Start, &data(true));
+    app.handle(Button::R, &data(true));
+    app.handle(Button::R, &data(true));
     app.handle(Button::A, &data(true));
     assert_eq!(
         app.screen,
@@ -87,14 +94,7 @@ fn shortcuts_remember_columns_and_toggle_from_snapshot() {
     app.handle(Button::Down, &data);
     app.handle(Button::R, &data);
     app.handle(Button::R, &data);
-    assert_eq!(
-        app.handle_with_wifi(Button::A, &data, false),
-        Outcome::ToggleWifi(true)
-    );
-    assert_eq!(
-        app.handle_with_wifi(Button::A, &data, true),
-        Outcome::ToggleWifi(false)
-    );
+    assert_eq!(app.handle(Button::A, &data), Outcome::ToggleWifi);
     app.handle(Button::Up, &data);
     assert!(matches!(
         app.screen,
@@ -114,4 +114,28 @@ fn shortcuts_remember_columns_and_toggle_from_snapshot() {
     app.handle(Button::L, &data);
     app.handle(Button::L, &data);
     assert_eq!(app.handle(Button::A, &data), Outcome::None);
+}
+#[test]
+fn focus_never_lands_on_a_disabled_tile() {
+    let none = Data {
+        recent: 0,
+        ..data(false)
+    };
+    let mut app = App::new(8);
+    app.handle(Button::Start, &none);
+    let tile = |app: &App| match app.screen {
+        Screen::StartHub { tile, .. } => tile,
+        _ => unreachable!(),
+    };
+    assert_eq!(tile(&app), 1, "opens on the first offered tile");
+    for button in [Button::R, Button::R, Button::L, Button::L] {
+        app.handle(button, &none);
+        assert_eq!(tile(&app), 1);
+    }
+    let all = data(true);
+    app.handle(Button::R, &all);
+    assert_eq!(tile(&app), 2);
+    app.handle(Button::L, &all);
+    app.handle(Button::L, &all);
+    assert_eq!(tile(&app), 0);
 }

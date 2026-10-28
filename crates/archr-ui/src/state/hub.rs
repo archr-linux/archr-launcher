@@ -2,12 +2,18 @@
 use super::{App, Button, DataSource, Outcome, Screen, SessionAction};
 
 impl App {
-    pub(super) fn handle_hub(
-        &mut self,
-        button: Button,
-        data: &dyn DataSource,
-        wifi: bool,
-    ) -> Outcome {
+    /// Recent and Tools are offered only when they would list something.
+    pub(crate) fn hub_tile_enabled(&self, data: &dyn DataSource, tile: usize) -> bool {
+        match tile {
+            0 => data.collection_len("@recent") > 0,
+            2 => data
+                .systems()
+                .iter()
+                .any(|s| s.name == "tools" && s.game_count > 0),
+            _ => true,
+        }
+    }
+    pub(super) fn handle_hub(&mut self, button: Button, data: &dyn DataSource) -> Outcome {
         let Screen::StartHub {
             mut row,
             mut tile,
@@ -20,39 +26,41 @@ impl App {
             Button::Start | Button::B => self.screen = Screen::Systems,
             Button::Up => row = 0,
             Button::Down => row = 1,
-            Button::L => {
+            Button::L | Button::R => {
+                let forward = button == Button::R;
                 if row == 0 {
-                    tile = tile.saturating_sub(1);
+                    // Focus skips tiles that are not offered.
+                    let mut reachable = (0..3).filter(|&t| {
+                        (t > tile) == forward && t != tile && self.hub_tile_enabled(data, t)
+                    });
+                    tile = if forward {
+                        reachable.next()
+                    } else {
+                        reachable.next_back()
+                    }
+                    .unwrap_or(tile);
+                } else if forward {
+                    shortcut = (shortcut + 1).min(5);
                 } else {
                     shortcut = shortcut.saturating_sub(1);
                 }
             }
-            Button::R => {
-                if row == 0 {
-                    tile = (tile + 1).min(2);
-                } else {
-                    shortcut = (shortcut + 1).min(5);
-                }
-            }
             Button::A if row == 0 => {
-                let system = match tile {
-                    0 => "@recent",
-                    1 => {
-                        self.screen = Screen::Systems;
-                        return Outcome::None;
-                    }
-                    2 if data.systems().iter().any(|s| s.name == "tools") => "tools",
-                    _ => return Outcome::None,
-                };
                 self.screen = Screen::Systems;
-                self.enter(Screen::Games {
-                    system: system.to_owned(),
-                });
+                match tile {
+                    0 => self.enter(Screen::Games {
+                        system: "@recent".to_owned(),
+                    }),
+                    2 => self.enter(Screen::Games {
+                        system: "tools".to_owned(),
+                    }),
+                    _ => {}
+                }
                 return Outcome::None;
             }
             Button::A => {
                 return match shortcut {
-                    2 => Outcome::ToggleWifi(!wifi),
+                    2 => Outcome::ToggleWifi,
                     3 => Outcome::Action(SessionAction::Suspend),
                     4 => Outcome::Action(SessionAction::Reboot),
                     5 => Outcome::Action(SessionAction::Shutdown),

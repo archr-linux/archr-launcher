@@ -44,7 +44,7 @@ pub enum SessionAction {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Outcome {
     None,
-    ToggleWifi(bool),
+    ToggleWifi,
     Launch {
         system: String,
         game: usize,
@@ -155,19 +155,16 @@ impl App {
     /// Returns effects for the caller to apply. Core selection is tracked locally
     /// while the quick menu is open, independently of persistence timing.
     pub fn handle(&mut self, b: Button, data: &dyn DataSource) -> Outcome {
-        self.handle_with_wifi(b, data, false)
-    }
-    pub fn handle_with_wifi(&mut self, b: Button, data: &dyn DataSource, wifi: bool) -> Outcome {
         if matches!(self.screen, Screen::Systems) && b == Button::Start {
             self.screen = Screen::StartHub {
                 row: 0,
-                tile: 0,
+                tile: usize::from(!self.hub_tile_enabled(data, 0)),
                 shortcut: 0,
             };
             return Outcome::None;
         }
         if matches!(self.screen, Screen::StartHub { .. }) {
-            return self.handle_hub(b, data, wifi);
+            return self.handle_hub(b, data);
         }
         let len = match &self.screen {
             Screen::StartHub { .. } => unreachable!(),
