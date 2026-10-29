@@ -30,7 +30,20 @@ impl Ui<'_, '_> {
         else {
             return Ok(());
         };
-
+        // The title, the shortcut's name and the hints lie over the
+        // background: they take the theme's outline. Tiles have their own.
+        self.look.outlining = true;
+        let drawn = self.hub_page(app, data, theme, (row, tile, shortcut));
+        self.look.outlining = false;
+        drawn
+    }
+    fn hub_page(
+        &mut self,
+        app: &App,
+        data: &dyn DataSource,
+        theme: &Theme,
+        (row, tile, shortcut): (usize, usize, usize),
+    ) -> Result<(), String> {
         let (width, height) = self.canvas.output_size()?;
         // Unlike `Ui::px`, offsets may be negative, so no lower clamp.
         let scale = self.frame.scale;
@@ -131,6 +144,7 @@ impl Ui<'_, '_> {
             };
             let step = (f32::from(self.frame.font_size(size)) * 1.2).round() as i32;
             let top = y + px(114.) - step * lines.len() as i32 / 2;
+            self.look.outlining = false;
             for (n, line) in lines.iter().enumerate() {
                 self.label_aligned(
                     line,
@@ -139,6 +153,7 @@ impl Ui<'_, '_> {
                     Align::Center,
                 )?;
             }
+            self.look.outlining = true;
         }
 
         let side = px(46.);
