@@ -26,8 +26,8 @@ pub struct Runtime {
     job: Option<(archr_scraper::Job, Vec<String>)>,
     /// Systems whose art or games changed, for the library to reload.
     scraped: Option<Vec<String>>,
-    /// A Games page write finished: launch choices may differ now.
-    games_saved: bool,
+    /// A write the library reads at launch finished (Games page, netplay nickname).
+    launch_saved: bool,
     closing: bool,
     check: Option<Check>,
     /// A system update runs: nothing closes or powers off meanwhile.
@@ -50,7 +50,7 @@ impl Runtime {
             scan_age: 0,
             job: None,
             scraped: None,
-            games_saved: false,
+            launch_saved: false,
             closing: false,
             check: None,
             install: None,
@@ -91,9 +91,9 @@ impl Runtime {
     pub fn focus(&mut self, system: &str) {
         self.state.focus_system(system);
     }
-    /// The library re-reads system.cfg after a Games page write.
-    pub fn take_games_saved(&mut self) -> bool {
-        std::mem::take(&mut self.games_saved)
+    /// The library re-reads system.cfg after a write that changes launches.
+    pub fn take_launch_saved(&mut self) -> bool {
+        std::mem::take(&mut self.launch_saved)
     }
     pub fn busy(&self) -> bool {
         self.worker.as_ref().is_some_and(Worker::busy)
@@ -294,12 +294,15 @@ impl Runtime {
         self.scraped.take()
     }
     pub fn poll(&mut self) -> (bool, Option<String>) {
-        let writing = self.state.pending.filter(|id| Games::ROWS.contains(id));
+        let writing = self
+            .state
+            .pending
+            .filter(|id| Games::ROWS.contains(id) || *id == Id::Nickname);
         let (mut dirty, language) = match self.worker.as_mut() {
             Some(worker) => worker.poll(&mut self.state, &mut self.job),
             None => (false, None),
         };
-        self.games_saved |= writing.is_some() && self.state.pending.is_none();
+        self.launch_saved |= writing.is_some() && self.state.pending.is_none();
         dirty |= self.poll_scrape();
         dirty |= self.poll_updates();
         // Nothing known yet about an open import page: look.
@@ -551,8 +554,20 @@ mod tests {
             fs::read_to_string(&paths.config).unwrap(),
             "snes.core=bsnes\n"
         );
-        assert!(runtime.take_games_saved());
-        assert!(!runtime.take_games_saved());
+        assert!(runtime.take_launch_saved());
+        assert!(!runtime.take_launch_saved());
+        // The netplay nickname is read at join time from the library's config too.
+        runtime.state.pending = Some(Id::Nickname);
+        runtime.apply(Effect::Set(Id::Nickname, "Ana".into()));
+        while runtime.state.pending.is_some() {
+            runtime.poll();
+            assert!(Instant::now() < deadline);
+            thread_yield();
+        }
+        assert!(fs::read_to_string(&paths.config)
+            .unwrap()
+            .contains("global.netplay.nickname=Ana"));
+        assert!(runtime.take_launch_saved());
     }
     #[test]
     fn the_installed_tab_answers_from_the_store_lane_without_the_network() {

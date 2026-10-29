@@ -326,7 +326,7 @@ fn run(
             seen_errors = settings.state.error_seq;
             audio.play(Sound::Error);
         }
-        if settings.take_games_saved() {
+        if settings.take_launch_saved() {
             library.reload_config();
         }
         if let Some(look) = settings.state.applied.take() {
