@@ -71,6 +71,8 @@ impl Runtime {
             self.state.fail(self.state.pending, error);
             self.state.pending = None;
             self.state.storage.working = None;
+            self.state.raimport.working = false;
+            self.state.raimport.scanning = false;
             self.state.loading = false;
         }
     }
@@ -102,6 +104,7 @@ impl Runtime {
             || self.state.storage.working.is_some()
             || self.state.cheevos.verifying
             || self.state.store.working.is_some()
+            || self.state.raimport.working
             || !self.state.slides.is_empty()
             || self.install.is_some()
     }
@@ -250,6 +253,7 @@ impl Runtime {
                     install.cancel();
                 }
             }
+            Effect::RaImport { backup } => self.send(Work::RaImport(backup)),
             Effect::Module(request) => return Outcome::Module(request),
             Effect::Reboot => return Outcome::Action(SessionAction::Reboot),
             Effect::None => {}
@@ -298,6 +302,16 @@ impl Runtime {
         self.games_saved |= writing.is_some() && self.state.pending.is_none();
         dirty |= self.poll_scrape();
         dirty |= self.poll_updates();
+        // Nothing known yet about an open import page: look.
+        if self.active
+            && !self.closing
+            && self.state.page() == Page::RaImport
+            && self.state.raimport.wants_scan()
+        {
+            self.state.raimport.scanning = true;
+            self.send(Work::RaScan);
+            dirty = true;
+        }
         let now = Instant::now();
         let wifi = self.active
             && self.state.page() == Page::Wifi

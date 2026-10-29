@@ -21,6 +21,7 @@ pub(crate) mod pages;
 use bluetooth::{Action, Device};
 pub use pages::MEDIA;
 pub mod modules;
+pub mod raimport;
 pub mod storage;
 pub mod store;
 pub mod updates;
@@ -64,6 +65,9 @@ pub enum Page {
     Module(u8, u8),
     ModuleStore,
     ModuleOffer,
+    /// System › Import from RetroArch, and its list of what applies.
+    RaImport,
+    RaImportList,
     Soon(&'static str),
 }
 impl Page {
@@ -96,6 +100,8 @@ impl Page {
             Self::UpdatePackages => "updates.packages",
             Self::Modules | Self::ModuleInfo | Self::Module(..) => "settings.modules",
             Self::ModuleStore | Self::ModuleOffer => "modules.store",
+            Self::RaImport => "raimport.title",
+            Self::RaImportList => "raimport.list_title",
             Self::Soon(key) => key,
         }
     }
@@ -107,7 +113,8 @@ impl Page {
             Self::MangohudItems => &["settings.games", "settings.mangohud_page"],
             Self::AccentColor | Self::Store => &["settings.appearance"],
             Self::StoreTheme => &["settings.appearance", "settings.theme_store"],
-            Self::Modules | Self::ModuleStore => &["settings.system"],
+            Self::Modules | Self::ModuleStore | Self::RaImport => &["settings.system"],
+            Self::RaImportList => &["settings.system", "raimport.title"],
             Self::ModuleInfo | Self::Module(..) => &["settings.system", "settings.modules"],
             Self::ModuleOffer => &["settings.system", "modules.store"],
             Self::LauncherControls | Self::Hotkeys => &["settings.controls"],
@@ -137,6 +144,7 @@ impl Page {
             Self::LauncherControls => controls::LAUNCHER,
             Self::Hotkeys => hotkeys::HOTKEYS_PAGE,
             Self::Updates => updates::UPDATES,
+            Self::RaImport => raimport::ROWS,
             _ => &[],
         }
     }
@@ -269,6 +277,15 @@ pub enum Id {
     ModuleStoreLink,
     /// One row of the open module page.
     ModuleRow(u8),
+    /// System link to Import from RetroArch, and that page's rows.
+    RaImportLink,
+    RaConfig,
+    RaOverrides,
+    RaShaders,
+    RaPreview,
+    /// Back up before importing: this page only, never saved.
+    RaBackup,
+    RaRun,
 }
 impl Id {
     fn metadata(self) -> (&'static str, &'static str) {
@@ -401,6 +418,13 @@ impl Id {
             Self::LauncherLink | Self::Bind(_) | Self::ButtonsRestore | Self::HotkeysLink => {
                 ("", "")
             }
+            Self::RaBackup => ("", "1"),
+            Self::RaImportLink
+            | Self::RaConfig
+            | Self::RaOverrides
+            | Self::RaShaders
+            | Self::RaPreview
+            | Self::RaRun => ("", ""),
         }
     }
     pub fn key(self) -> &'static str {
@@ -588,6 +612,7 @@ const SYSTEM: &[Row] = &[
     row(Id::Turbo, "settings.turbo", Kind::Toggle),
     row(Id::Update, "settings.update", Kind::Action),
     row(Id::ModulesLink, "settings.modules", Kind::Action),
+    row(Id::RaImportLink, "raimport.title", Kind::Action),
 ];
 const REGION: &[Row] = &[
     row(Id::Language, "settings.language", Kind::Value),
@@ -655,6 +680,10 @@ pub enum Effect {
     Storage(storage::Action),
     Store(store::Action),
     Module(crate::modules::Request),
+    /// Import what roms/retroarch-import/ holds, after a backup if asked.
+    RaImport {
+        backup: bool,
+    },
 }
 /// Passwords never reach a log through `{:?}`.
 impl std::fmt::Debug for Effect {
@@ -686,6 +715,7 @@ impl std::fmt::Debug for Effect {
                 write!(f, "Module(Set({module:?}, {key:?}, <hidden>))")
             }
             Self::Module(request) => write!(f, "Module({request:?})"),
+            Self::RaImport { backup } => write!(f, "RaImport {{ backup: {backup} }}"),
         }
     }
 }
@@ -772,6 +802,7 @@ pub struct Settings {
     /// The remembered custom colour while the editor shows another one.
     custom_kept: Custom,
     pub updates: updates::Updates,
+    pub raimport: raimport::RaImport,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -822,6 +853,7 @@ impl Default for Settings {
             capture: None,
             custom_kept: Custom::default(),
             updates: updates::Updates::default(),
+            raimport: raimport::RaImport::default(),
         }
     }
 }
@@ -904,6 +936,9 @@ impl Settings {
             (Id::ScraperStart, _) if self.scrape.running => "settings.cancel_scraping",
             (Id::ScraperStart, _) => return String::new(),
             (Id::GameSystem, _) => return self.games.fullname().to_owned(),
+            (Id::RaConfig | Id::RaOverrides | Id::RaShaders, _) => {
+                return raimport::joined(catalog, &self.raimport_refs(id))
+            }
             (Id::Ratio | Id::Filter | Id::StateSlot, "") => "settings.retroarch_default",
             (Id::Ratio, "core") => "settings.ratio_auto",
             (Id::Ratio, "squarepixel") => "settings.ratio_square",
@@ -924,7 +959,10 @@ impl Settings {
                 | Id::HotkeysLink
                 | Id::ThemeStore
                 | Id::ModulesLink
-                | Id::ModuleStoreLink,
+                | Id::ModuleStoreLink
+                | Id::RaImportLink
+                | Id::RaPreview
+                | Id::RaRun,
                 _,
             ) => return "›".into(),
             (Id::SecondCard, _) => "settings.eject_link",
@@ -1129,6 +1167,7 @@ impl Settings {
         }
         match self.page() {
             Page::Updates | Page::UpdatePackages => self.updates_hints(),
+            Page::RaImport | Page::RaImportList => self.raimport_hints(),
             Page::Root => &[
                 (Key('A'), "hint.open"),
                 (Key('B'), "hint.back"),

@@ -375,6 +375,10 @@ const CONFIG_KEYS: &[&str] = &[
     "modules.toml",
     "reviewed.json",
     "system.hostname",
+    // RetroArch file names read by the importer.
+    "retroarch.cfg",
+    "_libretro.so",
+    "_libretro.info",
     // Theme store hosts and file names.
     "api.github.com",
     "codeload.github.com",

@@ -201,6 +201,7 @@ impl Settings {
             Page::Hotkeys => self.hotkeys_input(button),
             Page::Store | Page::StoreTheme => self.store_input(button),
             Page::Updates | Page::UpdatePackages => self.updates_input(button),
+            Page::RaImport | Page::RaImportList => self.raimport_input(button),
             Page::Modules
             | Page::ModuleInfo
             | Page::Module(..)
@@ -349,6 +350,11 @@ impl Settings {
             Id::Accent => self.open_custom(),
             Id::ThemeStore => return Some(self.open_store()),
             Id::ModulesLink => self.open(Page::Modules),
+            // Every visit looks at the folder again.
+            Id::RaImportLink => {
+                self.raimport.found = None;
+                self.open(Page::RaImport);
+            }
             Id::NetplayLink => self.open(Page::Netplay),
             Id::ScraperLink => self.open(Page::Scraper),
             Id::MangohudLink => self.open(Page::Mangohud),

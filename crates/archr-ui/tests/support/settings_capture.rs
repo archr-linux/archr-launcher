@@ -216,6 +216,44 @@ fn pages() -> Vec<(&'static str, Settings)> {
     let mut standalone = games.clone();
     standalone.complete(Id::Emulator, Ok("snes9x-sa".into()));
     standalone.cursor = 3;
+    let mut raimport = ready();
+    raimport.open(Page::System);
+    raimport.open(Page::RaImport);
+    let pairs = |items: &[(&str, &str)]| -> Vec<(String, String)> {
+        items
+            .iter()
+            .map(|(a, b)| ((*a).to_owned(), (*b).to_owned()))
+            .collect()
+    };
+    raimport.raimport.found = Some(crate::settings::raimport::Found {
+        settings: 14,
+        skipped: 9,
+        cores: vec!["mGBA".into(), "Snes9x".into(), "FCEUmm".into()],
+        overrides: 3,
+        presets: 2,
+        remaps: 1,
+        apply: pairs(&[
+            ("video_scale_integer", "true"),
+            ("video_scale_integer_overscale", "true"),
+            ("aspect_ratio_index", "23"),
+            ("custom_viewport_y", "12"),
+            ("input_menu_toggle_btn", "2"),
+            ("config/mGBA/mGBA.cfg", "raimport.file_settings|count=3"),
+            ("shaders/presets/mGBA/Game.slangp", "raimport.file_preset"),
+        ]),
+        ignored: pairs(&[
+            ("video_driver", "raimport.why_blocked"),
+            ("libretro_directory", "raimport.why_blocked"),
+            ("audio_out_rate", "raimport.why_unknown"),
+            ("config/Mupen64Plus-Next", "raimport.why_core"),
+            ("shaders/crt-royale.slangp", "raimport.why_shader"),
+        ]),
+    });
+    raimport.cursor = 5;
+    let mut raimport_list = raimport.clone();
+    raimport_list.cursor = 3;
+    raimport_list.handle(Button::A);
+    assert_eq!(raimport_list.page(), Page::RaImportList);
     let mut sound = ready();
     sound.open(Page::Sound);
     let sink = "Built-in Audio Internal Speaker".to_owned();
@@ -377,6 +415,8 @@ fn pages() -> Vec<(&'static str, Settings)> {
         ("controls-hotkeys-modifier", hotkey_modifier),
         ("controls-hotkeys-press", hotkey_press),
         ("controls-hotkeys-conflict", hotkey_conflict),
+        ("raimport", raimport),
+        ("raimport-list", raimport_list),
     ]
 }
 #[test]
