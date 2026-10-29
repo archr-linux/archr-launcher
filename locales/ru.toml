@@ -602,7 +602,7 @@
 
 # Game details
 "menu.details" = "Подробнее"
-"details.rescrape" = "Загрузить заново"
+"details.rescrape" = "Обновить"
 "details.rescraping" = "Загрузка…"
 "details.scroll" = "Прокрутка"
 "details.options" = "Опции"

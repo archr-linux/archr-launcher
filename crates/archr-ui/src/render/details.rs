@@ -293,8 +293,18 @@ impl Ui<'_, '_> {
             )?;
             let filled = (u32::from(rating) + 10) / 20;
             let star = self.px(11.);
-            for n in 0..5 {
-                let x = info.right() - sw as i32 - self.px(6.) - (5 - n) * (star + self.px(2.));
+            // Stars that do not fit beside the label and score go below them,
+            // or stay out when the table has no room left.
+            let stars = 5 * (star + self.px(2.)) + self.px(6.);
+            let below = lw as i32 + self.px(12.) + stars + sw as i32 > info.width() as i32;
+            let shown = !below || y + line * 2 + pad * 2 <= info.bottom();
+            let (end, top) = if below {
+                (info.right() + self.px(6.), y + pad + line)
+            } else {
+                (info.right() - sw as i32, y + pad)
+            };
+            for n in (0..5).filter(|_| shown) {
+                let x = end - self.px(6.) - (5 - n) * (star + self.px(2.));
                 let ink = if (n as u32) < filled {
                     theme.warning
                 } else {
@@ -302,11 +312,11 @@ impl Ui<'_, '_> {
                 };
                 self.icon(
                     Glyph::Star,
-                    Rect::new(x, y + pad + (line - star) / 2, star as u32, star as u32),
+                    Rect::new(x, top + (line - star) / 2, star as u32, star as u32),
                     ink,
                 )?;
             }
-            y += line + pad * 2;
+            y += line * (1 + i32::from(below && shown)) + pad * 2;
             self.divider(info.x(), y - 1, info.width(), theme.border)?;
         }
 
@@ -434,7 +444,7 @@ impl Ui<'_, '_> {
         let icon = |n: usize| n == 1;
         let mut size = 14.;
         let floor = self.frame.min_size().max(10. / self.frame.font.max(1.));
-        let gap = self.px(8.);
+        let mut gap = self.px(8.);
         let (mut widths, mut pad) = loop {
             let pad = self.px(size + 1.);
             let mut widths = Vec::new();
@@ -453,12 +463,18 @@ impl Ui<'_, '_> {
         // button holds its longest word, and the room left is shared.
         let total: i32 = widths.iter().sum::<i32>() + gap * 2;
         if total > area.width() as i32 {
-            pad = self.px(6.);
+            (pad, gap) = (self.px(4.), self.px(4.));
             let mut least = Vec::new();
             for (n, label) in labels.iter().enumerate() {
+                // In the face it is drawn with: semibold only when focused.
+                let face = if n == app.details_focus {
+                    Face::Semibold
+                } else {
+                    Face::Regular
+                };
                 let mut word = 0;
                 for w in label.split_whitespace() {
-                    word = word.max(self.measure(w, Face::Semibold, size)? as i32);
+                    word = word.max(self.measure(w, face, size)? as i32);
                 }
                 least.push(word + pad * 2 + if icon(n) { self.px(size + 6.) } else { 0 });
             }
