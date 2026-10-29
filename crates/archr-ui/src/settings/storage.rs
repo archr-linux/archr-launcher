@@ -1,4 +1,4 @@
-//! Storage page: games card, mount options, backup, root password and reset.
+//! Storage page: both cards, mount options, backup, root password and reset.
 //! Every action that changes data asks first; the host runs it off SDL's thread.
 use super::{described, Effect, Id, Kind, Row, Settings};
 use crate::{
@@ -11,6 +11,8 @@ pub const STORAGE: &[Row] = &[
     described(Id::StorageCard, "settings.card_internal", "")
         .kind(Kind::Action)
         .under("settings.games_card"),
+    // Shown only while a second card is mounted.
+    described(Id::SecondCard, "settings.card_microsd", "").kind(Kind::Action),
     described(
         Id::Automount,
         "settings.automount",
@@ -47,11 +49,9 @@ pub const STORAGE: &[Row] = &[
     .kind(Kind::Action),
 ];
 
-/// The card that holds the games, as the host found it.
+/// A card as the host found it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Card {
-    /// A second card mounted at /storage/games-external; only it can be ejected.
-    pub external: bool,
     /// Catalog reference for the row title ("microSD (ROMS)").
     pub name: String,
     /// Catalog reference: filesystem and usage.
@@ -60,12 +60,15 @@ pub struct Card {
 }
 #[derive(Clone, Debug, Default)]
 pub struct Storage {
+    /// The system card (/storage).
     pub card: Option<Card>,
+    /// The second card (/storage/games-external); only it can be ejected.
+    pub second: Option<Card>,
     /// Subtitle reference naming the newest backup's time, if one exists.
     pub backup: Option<String>,
     /// root.password as setrootpass saved it; shown so it can be used.
     pub password: String,
-    /// The games card's filesystem can hold an overlay (ext4, btrfs).
+    /// The second card's filesystem can hold an overlay (ext4, btrfs).
     pub merge_supported: bool,
     pub confirm: Option<Confirm>,
     /// Locale key of the running action; input waits for the host's reply.
@@ -239,7 +242,7 @@ impl Settings {
     /// A on a storage row: every action asks before it runs.
     pub(super) fn storage_activate(&mut self, id: Id) -> Option<Effect> {
         self.storage.confirm = Some(match id {
-            Id::StorageCard => Confirm::Eject,
+            Id::SecondCard if self.storage.second.is_some() => Confirm::Eject,
             Id::Backup => Confirm::Backup,
             Id::RestoreBackup => Confirm::Restore,
             Id::FactoryReset => Confirm::Reset,
@@ -280,10 +283,8 @@ mod tests {
             ..Default::default()
         };
         state.open(Page::Storage);
-        state.storage.card = Some(Card {
-            external: true,
-            ..Default::default()
-        });
+        state.storage.card = Some(Card::default());
+        state.storage.second = Some(Card::default());
         state.storage.backup = Some("settings.backup_today|time=14:42".into());
         state
     }
@@ -374,14 +375,16 @@ mod tests {
         assert!(root_password_valid("Archr-2026#ok"));
     }
     #[test]
-    fn eject_only_for_an_external_card_and_restore_only_with_a_backup() {
+    fn eject_only_for_the_second_card_and_restore_only_with_a_backup() {
         let mut state = storage();
-        at(&mut state, Id::StorageCard);
+        at(&mut state, Id::SecondCard);
         state.handle(Button::A);
         assert_eq!(state.storage.confirm, Some(Confirm::Eject));
         assert_eq!(state.handle(Button::A), Effect::Storage(Action::Eject));
         state.storage_done(Err("settings.eject_busy".into()));
-        state.storage.card.as_mut().unwrap().external = false;
+        // Ejected: its row goes away.
+        state.storage.second = None;
+        assert!(!state.visible_rows().iter().any(|r| r.id == Id::SecondCard));
         state.storage.backup = None;
         for id in [Id::StorageCard, Id::RestoreBackup] {
             at(&mut state, id);

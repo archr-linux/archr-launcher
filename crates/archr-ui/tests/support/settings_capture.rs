@@ -140,16 +140,20 @@ fn pages() -> Vec<(&'static str, Settings)> {
     storage.open(Page::Storage);
     storage.values.insert(Id::Automount, "1".into());
     storage.storage.card = Some(Card {
-        external: true,
-        name: "settings.card_external|label=ROMS".into(),
-        detail: "settings.card_detail|fs=ext4|used=@41.2 GB|total=@119.0 GB".into(),
+        name: "settings.card_internal".into(),
+        detail: "settings.card_detail|fs=ext4|used=@4.1 GB|total=@25.3 GB".into(),
+        percent: 16,
+    });
+    storage.storage.second = Some(Card {
+        name: "settings.card_external|label=EASYROMS".into(),
+        detail: "settings.card_detail|fs=exfat|used=@41.2 GB|total=@119.0 GB".into(),
         percent: 35,
     });
     storage.storage.backup = Some("settings.backup_today|time=14:42".into());
     storage.storage.merge_supported = true;
-    storage.cursor = 3;
+    storage.cursor = 1;
     let mut storage_end = storage.clone();
-    storage_end.cursor = 6;
+    storage_end.cursor = 7;
     storage_end.storage.password = "Pl4yR00m".into();
     let mut storage_wifi = storage.clone();
     storage_wifi.storage.confirm = Some(Confirm::BackupWifi);
@@ -160,18 +164,13 @@ fn pages() -> Vec<(&'static str, Settings)> {
     let mut storage_working = storage.clone();
     storage_working.storage.working = Some("settings.backing_up");
     let mut storage_password = storage.clone();
-    storage_password.cursor = 5;
+    storage_password.cursor = 6;
     storage_password.handle(Button::A);
     for button in [Button::A; 6] {
         storage_password.handle(button);
     }
     let mut storage_internal = storage.clone();
-    storage_internal.storage.card = Some(Card {
-        external: false,
-        name: "settings.card_internal".into(),
-        detail: "settings.card_detail|fs=ext4|used=@4.1 GB|total=@25.3 GB".into(),
-        percent: 16,
-    });
+    storage_internal.storage.second = None;
     storage_internal.storage.backup = None;
     storage_internal.storage.merge_supported = false;
     storage_internal.cursor = 0;

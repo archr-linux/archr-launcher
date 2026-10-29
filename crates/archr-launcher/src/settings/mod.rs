@@ -370,10 +370,9 @@ pub(super) enum Work {
     Appearance(Vec<(Id, String)>),
     Storage(archr_ui::settings::storage::Action),
 }
-/// A storage action's outcome, the systems to reload after an eject, and the
-/// page's refreshed facts.
+/// A storage action's outcome and the page's refreshed facts.
 type StorageReply = (
-    Result<(&'static str, Option<Vec<String>>), String>,
+    Result<&'static str, String>,
     Box<archr_ui::settings::storage::Storage>,
 );
 enum Reply {
@@ -585,7 +584,6 @@ impl Worker {
         &mut self,
         state: &mut Settings,
         job: &mut Option<(archr_scraper::Job, Vec<String>)>,
-        reload: &mut Option<Vec<String>>,
     ) -> (bool, Option<String>) {
         let mut changed = false;
         let mut language = None;
@@ -795,14 +793,8 @@ impl Worker {
                     refresh_storage(state, *facts);
                     match result {
                         // factoryreset reboots: its notice stays until then.
-                        Ok(("settings.resetting", _)) => {}
-                        Ok((key, systems)) => {
-                            if let Some(systems) = systems {
-                                reload.get_or_insert_with(Vec::new).extend(systems);
-                            }
-                            state.storage_done(Ok(key));
-                        }
-                        Err(error) => state.storage_done(Err(error)),
+                        Ok("settings.resetting") => {}
+                        result => state.storage_done(result),
                     }
                 }
                 Reply::Scrape(result) => {
