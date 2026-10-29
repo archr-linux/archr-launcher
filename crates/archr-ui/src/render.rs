@@ -869,7 +869,10 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 });
             self.begin_page(games, picture, theme)?;
             self.backdrop_pictures(theme)?;
-            self.decor(theme, &layout.decor, true)?;
+            // The Start menu is a fixed composition: no decorations over it.
+            let hub = matches!(app.screen, Screen::StartHub { .. });
+            let decor = if hub { &[][..] } else { &layout.decor[..] };
+            self.decor(theme, decor, true)?;
             if let Screen::Achievements { system, game } = backdrop {
                 let name = data
                     .games(system)
@@ -919,7 +922,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                     }
                 }
             }
-            self.decor(theme, &layout.decor, false)?;
+            self.decor(theme, decor, false)?;
             self.end_page(theme)?;
             if matches!(app.screen, Screen::QuickMenu { .. }) {
                 self.menu(app, data, theme)?;
