@@ -60,6 +60,8 @@ pub enum SessionAction {
 pub enum Outcome {
     None,
     Settings,
+    /// Opens Settings, System, Updates.
+    Updates,
     /// Opens the Netplay lobby.
     OpenNetplay,
     /// Starts a lobby room as a netplay client.
@@ -199,6 +201,8 @@ pub struct App {
     pub sheet: crate::cheevos::Sheet,
     /// Achievements per page, reported by the renderer (theme layout).
     pub sheet_page: usize,
+    /// Packages a system update would bring, when the START menu tells.
+    pub updates: usize,
     history: Vec<(Screen, usize)>,
     moving: Option<order::Moving>,
     selected_core: Option<(String, String)>,
@@ -220,6 +224,7 @@ impl App {
             cheevos: false,
             sheet: crate::cheevos::Sheet::default(),
             sheet_page: 1,
+            updates: 0,
             history: Vec::new(),
             moving: None,
             selected_core: None,

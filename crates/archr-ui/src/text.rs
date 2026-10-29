@@ -432,13 +432,15 @@ impl<'font, 'texture> TextCache<'font, 'texture> {
             panel,
         )
     }
-    /// Icons are cached white per glyph and size, then tinted to `ink`.
+    /// Icons are cached white per glyph and size, then tinted to `ink` and
+    /// turned `angle` degrees clockwise around their center.
     pub fn draw_icon(
         &mut self,
         canvas: &mut Canvas<Window>,
         glyph: Glyph,
         panel: Rect,
         ink: Rgba,
+        angle: f64,
     ) -> Result<(), String> {
         let key = (glyph, panel.width());
         if !self.icons.contains_key(&key) {
@@ -461,7 +463,10 @@ impl<'font, 'texture> TextCache<'font, 'texture> {
         let texture = self.icons.get_mut(&key).expect("cached icon");
         texture.set_color_mod(ink.r, ink.g, ink.b);
         texture.set_alpha_mod(ink.a);
-        canvas.copy(texture, None, panel)
+        if angle == 0. {
+            return canvas.copy(texture, None, panel);
+        }
+        canvas.copy_ex(texture, None, panel, angle, None, false, false)
     }
     pub fn measure(&mut self, text: &str, face: Face, size: u16) -> Result<u32, String> {
         self.fonts.measure(text, face, size)
@@ -753,7 +758,9 @@ mod tests {
         };
         for (glyph, size) in [(Glyph::Wifi, 16), (Glyph::Wifi, 24), (Glyph::Games, 48)] {
             let panel = Rect::new(0, 0, size, size);
-            cache.draw_icon(&mut canvas, glyph, panel, white).unwrap();
+            cache
+                .draw_icon(&mut canvas, glyph, panel, white, 0.)
+                .unwrap();
             let original = cache.icons[&(glyph, size)].raw();
             cache
                 .draw_icon(
@@ -765,6 +772,7 @@ mod tests {
                         a: 128,
                         ..white
                     },
+                    0.,
                 )
                 .unwrap();
             let texture = &cache.icons[&(glyph, size)];

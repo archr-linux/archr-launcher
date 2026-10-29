@@ -45,7 +45,7 @@ Sem `name`, a Aparência mostra o nome da pasta. Idiomas: `en`, `pt_BR`, `es`,
 | `border`, `badge` | bordas e botões do rodapé |
 | `text`, `text_secondary`, `muted`, `dim` | texto, do mais forte ao mais apagado |
 | `accent`, `accent_text`, `accent_text_secondary` | destaque e o texto sobre ele |
-| `success`, `warning` | estados positivos e de atenção |
+| `success`, `warning`, `danger` | estados positivos, de atenção e de falha |
 | `scrim` | véu atrás de avisos e menus |
 
 ### Aparência por cima do tema

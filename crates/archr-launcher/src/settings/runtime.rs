@@ -1,5 +1,8 @@
 //! Event-loop adapter. Disposable probes never hold the close gate.
-use super::{Work, Worker};
+use super::{
+    updates::{Check, Install},
+    Work, Worker,
+};
 use crate::{
     paths::Paths,
     state::{Button, Outcome, SessionAction},
@@ -26,6 +29,13 @@ pub struct Runtime {
     /// A Games page write finished: launch choices may differ now.
     games_saved: bool,
     closing: bool,
+    check: Option<Check>,
+    /// A system update runs: nothing closes or powers off meanwhile.
+    install: Option<Install>,
+    /// `install` follows a run found going, not one started here.
+    attaching: bool,
+    /// That run was found: the host opens its progress screen.
+    reattached: bool,
 }
 impl Runtime {
     pub fn new(paths: Paths) -> Self {
@@ -42,6 +52,10 @@ impl Runtime {
             scraped: None,
             games_saved: false,
             closing: false,
+            check: None,
+            install: None,
+            attaching: false,
+            reattached: false,
         }
     }
     fn send(&mut self, work: Work) {
@@ -89,6 +103,73 @@ impl Runtime {
             || self.state.cheevos.verifying
             || self.state.store.working.is_some()
             || !self.state.slides.is_empty()
+            || self.install.is_some()
+    }
+    /// archr-update check in the background (also the one at startup).
+    pub fn check_updates(&mut self) {
+        if self.check.is_none() && self.install.is_none() {
+            self.state.updates.checking = true;
+            self.check = Some(Check::start(self.paths.clone()));
+        }
+    }
+    /// Follows an update already running (started before this launcher, or
+    /// from a shell); `take_reattached` tells when one was found.
+    pub fn watch_update(&mut self) {
+        if self.install.is_none() {
+            self.install = Some(Install::attach(&self.paths));
+            self.attaching = true;
+        }
+    }
+    pub fn take_reattached(&mut self) -> bool {
+        std::mem::take(&mut self.reattached)
+    }
+    /// The START menu's update shortcut.
+    pub fn open_updates(&mut self) {
+        self.open();
+        self.state.open_updates();
+    }
+    fn poll_updates(&mut self) -> bool {
+        let mut changed = false;
+        if let Some(result) = self.check.as_ref().and_then(Check::poll) {
+            self.check = None;
+            // "busy": a run is going (perhaps from a shell): follow it.
+            if result.as_ref().err().is_some_and(|reason| reason == "busy") {
+                self.watch_update();
+            }
+            super::updates::checked(&mut self.state.updates, result);
+            changed = true;
+        }
+        if let Some(install) = &self.install {
+            let (dirty, ended) = install.poll(&mut self.state.updates);
+            changed |= dirty;
+            if self.attaching && self.state.updates.run.is_some() {
+                self.attaching = false;
+                self.reattached = true;
+            }
+            if ended {
+                self.install = None;
+                self.attaching = false;
+                // A cancelled download goes back to the page with a note.
+                if matches!(
+                    &self.state.updates.run,
+                    Some(archr_ui::settings::updates::Run::Failed { reason, .. }) if reason == "cancelled"
+                ) {
+                    self.state.updates.run = None;
+                    self.state.fail(None, "updates.cancelled".into());
+                }
+            }
+        }
+        // Nothing known yet about an open Updates page: look.
+        if self.active
+            && !self.closing
+            && self.state.page() == Page::Updates
+            && self.state.pending.is_none()
+            && self.state.updates.wants_check()
+        {
+            self.check_updates();
+            changed = true;
+        }
+        changed
     }
     pub fn close(&mut self) {
         self.closing = true;
@@ -157,6 +238,17 @@ impl Runtime {
             }
             Effect::Storage(action) => self.send(Work::Storage(action)),
             Effect::Store(action) => self.send(Work::Store(action)),
+            Effect::CheckUpdates => self.check_updates(),
+            Effect::Update if self.install.is_none() && self.check.is_none() => {
+                self.install = Some(Install::start(&self.paths));
+            }
+            // A check still running: the page shows it; press again after.
+            Effect::Update => self.state.updates.run = None,
+            Effect::CancelUpdate => {
+                if let Some(install) = &self.install {
+                    install.cancel();
+                }
+            }
             Effect::Reboot => return Outcome::Action(SessionAction::Reboot),
             Effect::None => {}
         }
@@ -203,6 +295,7 @@ impl Runtime {
         };
         self.games_saved |= writing.is_some() && self.state.pending.is_none();
         dirty |= self.poll_scrape();
+        dirty |= self.poll_updates();
         let now = Instant::now();
         let wifi = self.active
             && self.state.page() == Page::Wifi

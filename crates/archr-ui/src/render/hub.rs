@@ -151,12 +151,39 @@ impl Ui<'_, '_> {
                 Rect::new(x + px(11.), px(289.), px(24.) as u32, px(24.) as u32),
                 ink,
             )?;
+            // A system update is waiting: a dot on the update shortcut.
+            if index == 1 && app.updates > 0 {
+                let dot = px(12.);
+                let ring = px(2.);
+                let (dx, dy) = (x + side - dot + px(1.), px(277.));
+                self.rounded(
+                    Rect::new(
+                        dx - ring,
+                        dy - ring,
+                        (dot + ring * 2) as u32,
+                        (dot + ring * 2) as u32,
+                    ),
+                    (dot / 2 + ring) as f32,
+                    theme.background,
+                    None,
+                )?;
+                self.rounded(
+                    Rect::new(dx, dy, dot as u32, dot as u32),
+                    (dot / 2) as f32,
+                    theme.highlight_bg,
+                    None,
+                )?;
+            }
         }
         if row == 1 {
             let key = SHORTCUTS[shortcut].0;
-            let label = if shortcut == 1 {
-                self.catalog
-                    .format("start.soon_label", &[("name", &self.catalog.text(key))])
+            let label = if shortcut == 1 && app.updates > 0 {
+                let count = app.updates.to_string();
+                self.catalog.plural(
+                    "start.update_ready",
+                    app.updates as f64,
+                    &[("count", &count)],
+                )
             } else if shortcut == 2 {
                 self.catalog.text(if wifi_on {
                     "start.wifi_on"

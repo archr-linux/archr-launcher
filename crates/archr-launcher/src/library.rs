@@ -273,6 +273,7 @@ impl Library {
         match outcome {
             Outcome::None
             | Outcome::Settings
+            | Outcome::Updates
             | Outcome::OpenNetplay
             | Outcome::Moonlight
             | Outcome::Rescrape { .. }

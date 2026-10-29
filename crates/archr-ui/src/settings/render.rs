@@ -24,6 +24,8 @@ mod mangohud;
 mod network;
 #[path = "render/store.rs"]
 mod store;
+#[path = "render/updates.rs"]
+mod updates;
 const VIEW_TOP: f32 = 50.;
 const VIEW_BOTTOM: f32 = 428.;
 const FOOTER: f32 = 432.;
@@ -62,7 +64,11 @@ impl Placement {
 }
 /// Mockup row heights: dense Netplay and Services lists, 40/46 elsewhere.
 fn placements(page: Page, rows: &[Row]) -> Vec<Placement> {
-    let mut top = VIEW_TOP;
+    let mut top = if page == Page::Updates {
+        updates::ROWS_TOP
+    } else {
+        VIEW_TOP
+    };
     rows.iter()
         .map(|row| {
             if row.section.is_some() {
@@ -77,6 +83,8 @@ fn placements(page: Page, rows: &[Row]) -> Vec<Placement> {
                 Page::LauncherControls if row.id == Id::ButtonsRestore => 36.,
                 Page::LauncherControls | Page::Hotkeys if row.subtitle.is_none() => 38.,
                 Page::Hotkeys => 44.,
+                Page::Updates if row.id == Id::UpdateInstall => 44.,
+                Page::Updates => 40.,
                 _ if row.subtitle.is_some() => 46.,
                 _ => 40.,
             };
@@ -205,7 +213,7 @@ impl Ui<'_, '_> {
     }
     pub(super) fn settings_page(&mut self, state: &Settings, theme: &Theme) -> Result<(), String> {
         self.store_wanted.clear();
-        if state.page().rows().is_empty() {
+        if state.page().rows().is_empty() && state.page() != Page::UpdatePackages {
             self.settings_scroll.page = None;
             self.settings_scroll.tween.retarget(0., self.frame.now);
             self.settings_scroll.tween.snap();
@@ -430,6 +438,11 @@ impl View<'_, '_, '_> {
                 trail.push(self.tr(state.parent_page().title()));
                 self.keyboard_name(state)
             }
+            Page::Updates if state.updates.run.is_some() => {
+                let (parents, current) = self.updates_trail(state).expect("a run");
+                trail = parents;
+                current
+            }
             _ => {
                 trail.push(self.tr("settings.title"));
                 trail.extend(page.parent().iter().map(|key| self.tr(key)));
@@ -534,6 +547,8 @@ impl View<'_, '_, '_> {
             Page::Wifi => self.wifi(state)?,
             Page::Bluetooth => self.bluetooth(state)?,
             Page::Keyboard => self.keyboard(state)?,
+            Page::Updates => self.updates_page(state, &rows)?,
+            Page::UpdatePackages => self.update_packages(state)?,
             Page::Scraper => {
                 self.rows_at(state, &rows, &placements(Page::Scraper, &rows), 384.)?;
                 self.scraper_panel(state)?;
@@ -609,7 +624,7 @@ impl View<'_, '_, '_> {
             )?;
             let (x, y, w, h) = bounds;
             // Known failures arrive as locale keys; anything else stays generic.
-            let message = if ["settings.", "cheevos.", "store."]
+            let message = if ["settings.", "cheevos.", "store.", "updates."]
                 .iter()
                 .any(|prefix| error.starts_with(prefix))
             {
@@ -643,6 +658,8 @@ impl View<'_, '_, '_> {
             Some(self.ui.catalog.text("loading"))
         } else if matches!(state.page(), Page::Store | Page::StoreTheme) {
             self.store_status(state, left - 36.)
+        } else if matches!(state.page(), Page::Updates | Page::UpdatePackages) {
+            self.updates_status(state)
         } else if state.page() == Page::Hotkeys {
             Some(self.tr("controls.hotkeys_note"))
         } else if state.capturing() && state.page() == Page::LauncherControls {
