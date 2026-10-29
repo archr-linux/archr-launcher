@@ -8,9 +8,13 @@ impl View<'_, '_, '_> {
             top: VIEW_TOP,
             height: 40.,
             section: None,
+            searching: None,
         }];
         // Divider under the switch: 4 px margins around a 1 px rule.
         let mut top = VIEW_TOP + 40. + ROW_GAP + 9.;
+        // The connected network stays on top; the search heading follows it.
+        let others = state.networks.iter().filter(|w| !w.connected).count();
+        let heading = state.networks.len() - others + 1;
         for n in 1..state.wifi_rows() {
             let connected = state.networks.get(n - 1).is_some_and(|w| w.connected);
             let height = match state.networks.get(n - 1) {
@@ -18,10 +22,19 @@ impl View<'_, '_, '_> {
                 Some(_) => 38.,
                 None => 40.,
             };
+            let skeleton = if others == 0 {
+                2. * (SKELETON + ROW_GAP)
+            } else {
+                0.
+            };
+            let searching = (state.searching() && n == heading).then_some(skeleton);
+            let section = searching.map(|_| "settings.scan_wifi");
+            top += section.map_or(0., |_| SECTION_HEIGHT + searching.unwrap_or(0.));
             positions.push(Placement {
                 top,
                 height,
-                section: None,
+                section,
+                searching,
             });
             top += height + ROW_GAP;
         }

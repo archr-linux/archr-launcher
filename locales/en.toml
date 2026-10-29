@@ -273,7 +273,7 @@
 # Live system information
 "settings.details" = "Details"
 "settings.previous_next" = "Previous · next"
-"settings.refreshing" = "Updating…"
+"settings.refreshing" = "Searching…"
 "settings.updated_now" = "Updated just now"
 "settings.refresh_interval" = "Refreshes every 2 s"
 "settings.cpu_summary" = { one = "{model} · {count} core", other = "{model} · {count} cores" }
@@ -391,7 +391,8 @@
 "settings.bt_paired" = "Paired"
 "settings.bt_available" = "Available"
 "settings.bt_pair" = "Pair"
-"settings.bt_searching" = "Searching…"
+"settings.scan_wifi" = "SEARCHING FOR NETWORKS"
+"settings.scan_bt" = "SEARCHING FOR DEVICES"
 "settings.bt_hint" = "Put the device in pairing mode"
 "settings.bt_controller" = "Controller"
 "settings.bt_audio" = "Audio"

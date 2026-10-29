@@ -30,6 +30,11 @@ fn pages() -> Vec<(&'static str, Settings)> {
     ];
     wifi.scanned = now.checked_sub(Duration::from_secs(5));
     wifi.cursor = 1;
+    let mut wifi_searching = wifi.clone();
+    wifi_searching.scanning = true;
+    let mut wifi_empty = wifi_searching.clone();
+    wifi_empty.networks.truncate(1);
+    wifi_empty.cursor = 0;
     let mut password = wifi.clone();
     password.networks[0].connected = false;
     password.handle(Button::A);
@@ -54,6 +59,8 @@ fn pages() -> Vec<(&'static str, Settings)> {
     bluetooth.open(Page::Bluetooth);
     bluetooth.bt_scanned = now.checked_sub(Duration::from_secs(5));
     bluetooth.cursor = 1;
+    let mut bt_searching = bluetooth.clone();
+    bt_searching.bt_scanning = true;
     let mut bt_forget = bluetooth.clone();
     bt_forget.cursor = 2;
     bt_forget.confirm_forget = Some("00:1A:2B:3C:4D:5E".into());
@@ -299,6 +306,12 @@ fn pages() -> Vec<(&'static str, Settings)> {
         ("storage-end", storage_end),
         ("sound-sliding", sound),
         ("wifi", wifi),
+        ("wifi-searching-a", wifi_searching.clone()),
+        ("wifi-searching-b", wifi_searching),
+        ("wifi-empty-a", wifi_empty.clone()),
+        ("wifi-empty-b", wifi_empty),
+        ("bluetooth-searching-a", bt_searching.clone()),
+        ("bluetooth-searching-b", bt_searching),
         ("password", password),
         ("forget", forget),
         ("connecting", connecting),
@@ -388,6 +401,9 @@ fn capture_network_and_games_pages() {
             } else {
                 theme.clone()
             };
+            // The search dots are drawn at two points of their loop.
+            ui.frame.now =
+                ui.born + Duration::from_millis(if name.ends_with("-b") { 840 } else { 480 });
             // Twice: dialogs fade in, so the second frame shows them settled.
             for _ in 0..2 {
                 ui.canvas.set_draw_color(color(look.background));
