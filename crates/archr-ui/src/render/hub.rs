@@ -110,29 +110,37 @@ impl Ui<'_, '_> {
         let wifi_on = self.wifi_enabled();
         for (index, &(_, glyph)) in SHORTCUTS.iter().enumerate() {
             let focus = row == 1 && shortcut == index;
+            let enabled = index >= 2;
             let active = index == 2 && wifi_on;
             let x = start + index as i32 * (side + gap);
             let rect = Rect::new(x, px(278.), side as u32, side as u32);
             self.rounded(
                 rect,
                 side as f32 / 2.,
-                if focus {
+                if focus && enabled {
                     theme.highlight_bg
                 } else {
                     theme.surface
                 },
-                Some(if active && !focus {
+                Some(if focus && !enabled {
+                    Rgba {
+                        a: 150,
+                        ..theme.highlight_bg
+                    }
+                } else if active && !focus {
                     theme.highlight_bg
                 } else {
                     theme.border
                 }),
             )?;
-            let ink = if focus {
+            let ink = if focus && enabled {
                 theme.highlight_text
             } else if active {
                 theme.highlight_bg
-            } else {
+            } else if enabled {
                 theme.text_secondary
+            } else {
+                theme.dim_text
             };
             self.icon(
                 if index == 2 && !wifi_on {
@@ -162,11 +170,7 @@ impl Ui<'_, '_> {
                 self.rounded(
                     Rect::new(dx, dy, dot as u32, dot as u32),
                     (dot / 2) as f32,
-                    if focus {
-                        theme.highlight_text
-                    } else {
-                        theme.highlight_bg
-                    },
+                    theme.highlight_bg,
                     None,
                 )?;
             }
