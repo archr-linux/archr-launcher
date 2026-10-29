@@ -405,7 +405,12 @@ mod tests {
         }
         runtime.state.open(Page::Games);
         assert_eq!(runtime.state.games.name(), "snes");
-        runtime.state.cursor = 1;
+        runtime.state.cursor = runtime
+            .state
+            .visible_rows()
+            .iter()
+            .position(|row| row.id == Id::Core)
+            .unwrap();
         runtime.handle(Button::R);
         while runtime.state.pending.is_some() {
             runtime.poll();
