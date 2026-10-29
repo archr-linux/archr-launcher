@@ -186,6 +186,7 @@ pub enum Id {
     Animations,
     Restore,
     StorageCard,
+    SecondCard,
     Automount,
     MergedStorage,
     Backup,
@@ -333,6 +334,7 @@ impl Id {
             | Self::ScraperStart
             | Self::MediaKind(_)
             | Self::StorageCard
+            | Self::SecondCard
             | Self::Backup
             | Self::RestoreBackup
             | Self::RootPassword
@@ -817,9 +819,7 @@ impl Settings {
                 | Id::ThemeStore,
                 _,
             ) => return "›".into(),
-            (Id::StorageCard, _) if self.storage.card.as_ref().is_some_and(|c| c.external) => {
-                "settings.eject_link"
-            }
+            (Id::SecondCard, _) => "settings.eject_link",
             (Id::StorageCard, _) => return String::new(),
             (Id::RootPassword, _) => "settings.change_link",
             (Id::KeyboardVariant | Id::MangohudGame, "") => "menu.default",
@@ -872,6 +872,7 @@ impl Settings {
             ),
             Id::ScraperAccount => self.scrape.user.clone(),
             Id::StorageCard => self.storage.card.as_ref()?.detail.clone(),
+            Id::SecondCard => self.storage.second.as_ref()?.detail.clone(),
             Id::Mangohud if !self.mangohud_supported => "settings.mangohud_unsupported".into(),
             Id::MergedStorage if !self.storage.merge_supported => {
                 "settings.merged_unsupported".into()
@@ -891,10 +892,13 @@ impl Settings {
     }
     /// Row title text, or a catalog reference.
     pub fn label(&self, row: &Row) -> String {
-        match (row.id, &self.storage.card) {
-            (Id::StorageCard, Some(card)) => card.name.clone(),
-            _ => row.label.into(),
-        }
+        let card = match row.id {
+            Id::StorageCard => &self.storage.card,
+            Id::SecondCard => &self.storage.second,
+            _ => &None,
+        };
+        card.as_ref()
+            .map_or_else(|| row.label.into(), |card| card.name.clone())
     }
     pub fn visible_rows(&self) -> Vec<&'static Row> {
         self.page()
@@ -912,6 +916,7 @@ impl Settings {
                     false
                 }
                 Id::CustomServer => self.value(Id::Relay) == "custom",
+                Id::SecondCard => self.storage.second.is_some(),
                 id if Games::ROWS.contains(&id) => self.games.shows(id, self),
                 id @ (Id::CheevosAccount | Id::CheevosLogout) => self.cheevos_visible(id),
                 _ => true,
@@ -926,7 +931,7 @@ impl Settings {
                 .options
                 .get(&id)
                 .is_none_or(|choices| choices.len() <= 1),
-            Id::StorageCard => !self.storage.card.as_ref().is_some_and(|c| c.external),
+            Id::StorageCard => true,
             _ => false,
         }
     }

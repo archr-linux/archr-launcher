@@ -1,5 +1,5 @@
 //! Storage page effects. The system scripts own every change: backuptool,
-//! setrootpass, factoryreset and automount; the launcher only unmounts to eject.
+//! setrootpass, factoryreset and automount (which also ejects the card).
 use super::info::{bytes, filesystem_usage, percent};
 use super::*;
 use archr_ui::settings::storage::{root_password_valid, Action, Card, Storage};
@@ -8,9 +8,6 @@ use std::time::UNIX_EPOCH;
 /// backuptool zips settings and saves; factoryreset deletes all of /storage.
 const LONG: Duration = Duration::from_secs(15 * 60);
 const EXTERNAL: &str = "/storage/games-external";
-const ROMS: &str = "/storage/roms";
-/// Where automount binds internal ROMs while unified storage overlays them.
-const INTERNAL_BIND: &str = "/storage/.games-internal-bind/roms";
 const BACKUPS: &str = "/storage/roms/backup";
 
 /// The newest backup's time as a catalog reference: "today, 14:42" or a date.
@@ -58,26 +55,30 @@ impl Backend {
                     .replace('|', "")
             })
     }
-    /// The card holding the games: a mounted second card, else /storage.
-    fn card(&self) -> Option<Card> {
-        let mounts = self.mounts();
-        let external = mounts.iter().any(|(_, mount, _)| mount == EXTERNAL);
-        let path = if external { EXTERNAL } else { "/storage" };
+    /// The card mounted at `path` (the system card at /storage, the second
+    /// card at games-external), with its usage.
+    fn card(&self, mounts: &[(String, String, String)], path: &str) -> Option<Card> {
         let (device, _, fs) = mounts.iter().rev().find(|(_, mount, _)| mount == path)?;
         let (used, total) = filesystem_usage(&self.paths.at(path))?;
-        let name = match (external, self.label(device)) {
+        let name = match (path == EXTERNAL, self.label(device)) {
             (true, Some(label)) => format!("settings.card_external|label={label}"),
             (true, None) => "settings.card_microsd".into(),
             (false, _) => "settings.card_internal".into(),
         };
-        Some(Card {
-            external,
-            name,
-            detail: format!(
+        // automount found errors on the second card: say so instead of usage.
+        let errors = format!("{}.errors", crate::worker::SECOND_CARD);
+        let detail = if path == EXTERNAL && self.paths.at(&errors).exists() {
+            "settings.card_errors".into()
+        } else {
+            format!(
                 "settings.card_detail|fs={fs}|used={}|total={}",
                 bytes(used),
                 bytes(total)
-            ),
+            )
+        };
+        Some(Card {
+            name,
+            detail,
             percent: percent(used, total).unwrap_or(0),
         })
     }
@@ -105,8 +106,10 @@ impl Backend {
     pub(super) fn storage(&self) -> Storage {
         let cfg = self.cfg().ok();
         let setting = |key| cfg.as_ref().and_then(|c| c.get_setting(key, None, None));
+        let mounts = self.mounts();
         Storage {
-            card: self.card(),
+            card: self.card(&mounts, "/storage"),
+            second: self.card(&mounts, EXTERNAL),
             backup: self.latest_backup(setting(Id::ClockFormat.key()).as_deref() == Some("12")),
             password: setting("root.password").unwrap_or_else(|| "archr".into()),
             // automount's own verdict on the card it last inspected.
@@ -123,11 +126,8 @@ impl Backend {
         state.storage = self.storage();
     }
     /// Runs one confirmed action: a message key (or reboot question) on
-    /// success and, after an eject, every system to reload.
-    pub(super) fn run_storage(
-        &self,
-        action: &Action,
-    ) -> Result<(&'static str, Option<Vec<String>>), String> {
+    /// success. The library follows an ejected card by itself.
+    pub(super) fn run_storage(&self, action: &Action) -> Result<&'static str, String> {
         let flag = |wifi: bool| if wifi { &["--with-wifi"][..] } else { &[][..] };
         let script = |args: &[&str], failure: &'static str| {
             self.command_with_timeout("backuptool", args, LONG)
@@ -137,31 +137,29 @@ impl Backend {
                 })
         };
         match action {
-            Action::Eject => self
-                .eject()
-                .map(|systems| ("settings.eject_done", Some(systems))),
+            Action::Eject => self.eject().map(|()| "settings.eject_done"),
             Action::Backup { wifi } => {
                 script(
                     &[&["backup"], flag(*wifi)].concat(),
                     "settings.backup_failed",
                 )?;
-                Ok(("settings.backup_done", None))
+                Ok("settings.backup_done")
             }
             Action::Restore { wifi } => {
                 script(
                     &[&["restore"], flag(*wifi)].concat(),
                     "settings.restore_failed",
                 )?;
-                Ok(("settings.restore_reboot_question", None))
+                Ok("settings.restore_reboot_question")
             }
             Action::RootPassword(password) => {
                 self.root_password(password)?;
-                Ok(("settings.password_done", None))
+                Ok("settings.password_done")
             }
             // The script reboots when it is done.
             Action::FactoryReset => self
                 .command_with_timeout("factoryreset", &["ALL"], LONG)
-                .map(|_| ("settings.resetting", None))
+                .map(|_| "settings.resetting")
                 .map_err(|error| {
                     log::warn!("{error}");
                     "settings.reset_failed".into()
@@ -199,35 +197,18 @@ impl Backend {
             ))
         }
     }
-    /// Unmounts what automount stacked on the card, top first. A card that
-    /// stays busy halfway is remounted by automount, so ROMs never vanish.
-    fn eject(&self) -> Result<Vec<String>, String> {
-        let mounted = |path: &str| self.mounts().iter().any(|(_, mount, _)| mount == path);
-        if !mounted(EXTERNAL) {
+    /// automount syncs and unmounts the second card (and unified storage's
+    /// overlay); a busy card stays mounted and listed.
+    fn eject(&self) -> Result<(), String> {
+        if !self.mounts().iter().any(|(_, mount, _)| mount == EXTERNAL) {
             return Err("settings.eject_none".into());
         }
-        let busy = |error: String| {
-            log::warn!("Eject: {error}");
-            "settings.eject_busy".to_owned()
-        };
-        self.command("sync", &[]).map_err(busy)?;
-        if mounted(ROMS) {
-            self.command("umount", &[ROMS]).map_err(busy)?;
-        }
-        if mounted(INTERNAL_BIND) {
-            let _ = self.command("umount", &[INTERNAL_BIND]);
-        }
-        if let Err(error) = self.command("umount", &[EXTERNAL]) {
-            if let Err(again) = self.command_with_timeout("automount", &[], LONG) {
-                log::warn!("Eject: remount failed: {again}");
-            }
-            return Err(busy(error));
-        }
-        Ok(crate::worker::definitions(&self.paths)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|system| system.name)
-            .collect())
+        self.command_with_timeout("automount", &["eject"], LONG)
+            .map(drop)
+            .map_err(|error| {
+                log::warn!("Eject: {error}");
+                "settings.eject_busy".to_owned()
+            })
     }
 }
 
@@ -263,51 +244,55 @@ mod tests {
     fn calls(root: &tempfile::TempDir) -> String {
         fs::read_to_string(root.path().join("calls")).unwrap_or_default()
     }
-    const CARD: &str = "/dev/mmcblk0p3 /storage ext4 rw 0 0\n\
-        /dev/mmcblk1p1 /storage/games-external ext4 rw 0 0\n\
-        /dev/mmcblk1p1 /storage/roms ext4 rw 0 0\n";
+    const CARD: &str = "/dev/mmcblk1p3 /storage ext4 rw 0 0\n\
+        /dev/mmcblk0p1 /storage/games-external exfat rw 0 0\n";
     #[test]
-    fn eject_unmounts_roms_then_the_card_and_reloads_every_system() {
+    fn eject_asks_automount_and_a_busy_card_stays() {
         let (root, paths) = fixture("", CARD);
-        script(&root, &paths, "sync", "");
-        script(&root, &paths, "umount", "");
-        let backend = Backend::new(paths);
+        script(&root, &paths, "automount", "");
+        let backend = Backend::new(paths.clone());
         assert_eq!(
-            backend.run_storage(&Action::Eject).map(|r| r.0),
+            backend.run_storage(&Action::Eject),
             Ok("settings.eject_done")
         );
-        assert_eq!(
-            calls(&root),
-            "sync \numount /storage/roms\numount /storage/games-external\n"
-        );
-    }
-    #[test]
-    fn a_card_still_busy_halfway_is_remounted_by_automount() {
-        let (root, paths) = fixture("", CARD);
-        script(&root, &paths, "sync", "");
-        script(&root, &paths, "automount", "");
-        script(
-            &root,
-            &paths,
-            "umount",
-            "[ \"$1\" = /storage/games-external ] && exit 32\nexit 0",
-        );
-        let backend = Backend::new(paths.clone());
+        assert_eq!(calls(&root), "automount eject\n");
+        script(&root, &paths, "automount", "exit 1");
         assert_eq!(
             backend.run_storage(&Action::Eject),
             Err("settings.eject_busy".into())
         );
-        assert!(calls(&root).ends_with("umount /storage/games-external\nautomount \n"));
         // Without a second card there is nothing to eject.
         fs::write(
             paths.at("/proc/mounts"),
-            "/dev/mmcblk0p3 /storage ext4 rw 0 0\n",
+            "/dev/mmcblk1p3 /storage ext4 rw 0 0\n",
         )
         .unwrap();
         assert_eq!(
             backend.run_storage(&Action::Eject),
             Err("settings.eject_none".into())
         );
+        assert_eq!(backend.storage().second, None);
+    }
+    #[test]
+    fn a_card_with_errors_shows_the_warning() {
+        let (_root, paths) = fixture("", CARD);
+        let backend = Backend::new(paths.clone());
+        assert!(backend
+            .storage()
+            .second
+            .unwrap()
+            .detail
+            .starts_with("settings.card_detail|"));
+        let errors = paths.at("/run/archr/roms2.errors");
+        fs::create_dir_all(errors.parent().unwrap()).unwrap();
+        fs::write(&errors, "").unwrap();
+        let storage = backend.storage();
+        assert_eq!(storage.second.unwrap().detail, "settings.card_errors");
+        assert!(storage
+            .card
+            .unwrap()
+            .detail
+            .starts_with("settings.card_detail|"));
     }
     #[test]
     fn backup_passes_with_wifi_only_when_chosen() {
@@ -320,7 +305,7 @@ mod tests {
         backend.run_storage(&Action::Backup { wifi: true }).unwrap();
         assert_eq!(
             backend.run_storage(&Action::Restore { wifi: false }),
-            Ok(("settings.restore_reboot_question", None))
+            Ok("settings.restore_reboot_question")
         );
         assert_eq!(
             calls(&root),
@@ -353,7 +338,7 @@ mod tests {
         script(&root, &paths, "setrootpass", &save);
         assert_eq!(
             backend.run_storage(&Action::RootPassword(SECRET.into())),
-            Ok(("settings.password_done", None))
+            Ok("settings.password_done")
         );
         assert_eq!(backend.storage().password, SECRET);
         assert_eq!(
@@ -362,10 +347,10 @@ mod tests {
         );
     }
     #[test]
-    fn card_reports_the_external_label_usage_and_newest_backup() {
+    fn both_cards_report_their_name_usage_and_the_newest_backup() {
         let (_root, paths) = fixture("", CARD);
         fs::create_dir_all(paths.at("/dev/disk/by-label")).unwrap();
-        std::os::unix::fs::symlink("../../mmcblk1p1", paths.at("/dev/disk/by-label/ROMS\\x20A"))
+        std::os::unix::fs::symlink("../../mmcblk0p1", paths.at("/dev/disk/by-label/ROMS\\x20A"))
             .unwrap();
         fs::create_dir_all(paths.at(BACKUPS)).unwrap();
         fs::write(
@@ -378,11 +363,15 @@ mod tests {
         fs::write(paths.at(&format!("{BACKUPS}/ArchR_BACKUP.zip")), "").unwrap();
         let storage = backend.storage();
         let card = storage.card.unwrap();
-        assert!(card.external);
-        assert_eq!(card.name, "settings.card_external|label=ROMS A");
+        assert_eq!(card.name, "settings.card_internal");
         assert!(card
             .detail
             .starts_with("settings.card_detail|fs=ext4|used=@"));
+        let second = storage.second.unwrap();
+        assert_eq!(second.name, "settings.card_external|label=ROMS A");
+        assert!(second
+            .detail
+            .starts_with("settings.card_detail|fs=exfat|used=@"));
         assert!(storage
             .backup
             .is_some_and(|b| b.starts_with("settings.backup_today|time=")));

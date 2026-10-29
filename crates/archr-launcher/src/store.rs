@@ -207,7 +207,9 @@ pub(crate) fn is_tools(system: &SystemDef) -> bool {
         && !system.command.contains("runemu.sh")
         && !system.command.contains("%EMULATOR%")
 }
+/// `system/relative-path`, relative to the card the ROM is on: a ROM on both
+/// cards is one game (the first card's), as the index lists it.
 pub fn game_key(system: &SystemDef, path: &Path) -> Option<String> {
-    let relative = path.strip_prefix(&system.path).ok()?.to_str()?;
+    let relative = path.strip_prefix(system.root_of(path)).ok()?.to_str()?;
     Some(format!("{}/{relative}", system.name))
 }

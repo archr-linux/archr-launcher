@@ -198,7 +198,7 @@ impl Runtime {
     pub fn poll(&mut self) -> (bool, Option<String>) {
         let writing = self.state.pending.filter(|id| Games::ROWS.contains(id));
         let (mut dirty, language) = match self.worker.as_mut() {
-            Some(worker) => worker.poll(&mut self.state, &mut self.job, &mut self.scraped),
+            Some(worker) => worker.poll(&mut self.state, &mut self.job),
             None => (false, None),
         };
         self.games_saved |= writing.is_some() && self.state.pending.is_none();

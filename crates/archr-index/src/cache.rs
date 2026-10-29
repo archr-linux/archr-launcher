@@ -37,7 +37,7 @@ pub struct SystemEntry {
     pub game_count: u32,
     /// Latest source modification time in nanoseconds, from stat calls only.
     pub dir_mtime: u64,
-    /// Also covers the system path and extensions, without changing dir_mtime.
+    /// Also covers the system paths and extensions, without changing dir_mtime.
     pub source_fingerprint: u64,
 }
 
@@ -192,41 +192,51 @@ fn system_filename(name: &str) -> PathBuf {
     PathBuf::from(filename)
 }
 
-/// A fixed number of stat calls, never directory listings. Missing optional
-/// paths are ignored; other metadata errors disable cache reuse rather than
-/// turning an unreadable fingerprint into an apparently valid one.
+/// A fixed number of stat calls per root, never directory listings. Missing
+/// optional paths are ignored; other metadata errors disable cache reuse rather
+/// than turning an unreadable fingerprint into an apparently valid one. Each
+/// root (first card, second card) is hashed with its path, so cards that come
+/// and go never reuse each other's lists. No root at all: no fingerprint.
 fn fingerprint(sys: &SystemDef) -> Option<(u64, u64)> {
-    if !fs::metadata(&sys.path).ok()?.is_dir() {
-        return None;
-    }
     let mut hash = DefaultHasher::new();
-    sys.path.hash(&mut hash);
     sys.extensions.hash(&mut hash);
     let mut newest = 0;
-    for relative in [
-        "",
-        "gamelist.xml",
-        "media/images",
-        "media/covers",
-        "media/boxart",
-        "media/thumbnails",
-        "media/videos",
-        "media/screenshots",
-        "media/wheel",
-        "images",
-        "videos",
-    ] {
-        let stamp = match fs::metadata(sys.path.join(relative)) {
-            Ok(metadata) => {
-                let modified = metadata.modified().ok()?.duration_since(UNIX_EPOCH).ok()?;
-                let nanos = u64::try_from(modified.as_nanos()).ok()?;
-                newest = newest.max(nanos);
-                Some((nanos, metadata.is_file().then_some(metadata.len())))
+    let mut found = false;
+    for root in sys.roots() {
+        root.hash(&mut hash);
+        match fs::metadata(root) {
+            Ok(metadata) if metadata.is_dir() => found = true,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                false.hash(&mut hash);
+                continue;
             }
-            Err(error) if error.kind() == io::ErrorKind::NotFound && !relative.is_empty() => None,
-            Err(_) => return None,
-        };
-        stamp.hash(&mut hash);
+            _ => return None,
+        }
+        for relative in [
+            "",
+            "gamelist.xml",
+            "media/images",
+            "media/covers",
+            "media/boxart",
+            "media/thumbnails",
+            "media/videos",
+            "media/screenshots",
+            "media/wheel",
+            "images",
+            "videos",
+        ] {
+            let stamp = match fs::metadata(root.join(relative)) {
+                Ok(metadata) => {
+                    let modified = metadata.modified().ok()?.duration_since(UNIX_EPOCH).ok()?;
+                    let nanos = u64::try_from(modified.as_nanos()).ok()?;
+                    newest = newest.max(nanos);
+                    Some((nanos, metadata.is_file().then_some(metadata.len())))
+                }
+                Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+                Err(_) => return None,
+            };
+            stamp.hash(&mut hash);
+        }
     }
-    Some((newest, hash.finish()))
+    found.then(|| (newest, hash.finish()))
 }

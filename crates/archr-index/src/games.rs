@@ -86,17 +86,33 @@ pub fn scan_system(sys: &SystemDef) -> Vec<Game> {
 }
 
 /// Resolve metadata paths before touching the filesystem (e.g. a PC ROOT).
-/// The system directory itself must already be resolved by the caller.
+/// The system directories themselves must already be resolved by the caller.
+/// Every root is read with its own gamelist and media; a ROM at the same
+/// relative path on both cards is listed once, from the first card.
 pub fn scan_system_with_mapper(sys: &SystemDef, mapper: &dyn Fn(&Path) -> PathBuf) -> Vec<Game> {
-    let Ok(root) = sys.path.canonicalize() else {
+    let mut seen = HashSet::new();
+    let mut games = Vec::new();
+    for root in sys.roots() {
+        games.extend(scan_root(sys, root, mapper).into_iter().filter(|game| {
+            game.path
+                .strip_prefix(root)
+                .is_ok_and(|relative| seen.insert(relative.to_owned()))
+        }));
+    }
+    games.sort_by_cached_key(|game| (game.name.to_lowercase(), game.path.clone()));
+    games
+}
+
+fn scan_root(sys: &SystemDef, dir: &Path, mapper: &dyn Fn(&Path) -> PathBuf) -> Vec<Game> {
+    let Ok(root) = dir.canonicalize() else {
         return Vec::new();
     };
     let mut paths = Vec::new();
     let mut ancestors = HashSet::from([root]);
-    scan_directory(&sys.path, sys, 0, false, &mut ancestors, &mut paths);
-    let metadata = load_gamelist(&sys.path, mapper).unwrap_or_default();
-    let mut media = MediaLookup::new(&sys.path);
-    let mut games: Vec<_> = paths
+    scan_directory(dir, sys, 0, false, &mut ancestors, &mut paths);
+    let metadata = load_gamelist(dir, mapper).unwrap_or_default();
+    let mut media = MediaLookup::new(dir);
+    paths
         .into_iter()
         .map(|path| {
             let stem = path.file_stem().unwrap_or_else(|| path.as_os_str());
@@ -140,9 +156,7 @@ pub fn scan_system_with_mapper(sys: &SystemDef, mapper: &dyn Fn(&Path) -> PathBu
                 },
             }
         })
-        .collect();
-    games.sort_by_cached_key(|game| (game.name.to_lowercase(), game.path.clone()));
-    games
+        .collect()
 }
 
 fn scan_directory(

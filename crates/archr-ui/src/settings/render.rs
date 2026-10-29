@@ -87,7 +87,7 @@ fn placements(page: Page, rows: &[Row]) -> Vec<Placement> {
                 searching: None,
             };
             top += height + ROW_GAP;
-            if row.id == Id::StorageCard {
+            if matches!(row.id, Id::StorageCard | Id::SecondCard) {
                 top += CARD_METER;
             }
             if row.id == Id::HotkeyModifier {
@@ -551,11 +551,14 @@ impl View<'_, '_, '_> {
                     RIGHT,
                     |view, n, y, position, selected| {
                         view.row(state, &rows[n], (y, position.height), RIGHT, selected)?;
-                        match (rows[n].id, &state.storage.card) {
-                            (Id::StorageCard, Some(card)) => {
-                                view.card_meter(card.percent, y + position.height)
-                            }
-                            _ => Ok(()),
+                        let card = match rows[n].id {
+                            Id::StorageCard => state.storage.card.as_ref(),
+                            Id::SecondCard => state.storage.second.as_ref(),
+                            _ => None,
+                        };
+                        match card {
+                            Some(card) => view.card_meter(card.percent, y + position.height),
+                            None => Ok(()),
                         }
                     },
                 )?

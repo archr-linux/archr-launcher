@@ -14,6 +14,9 @@ pub struct SystemDef {
     pub manufacturer: String,
     pub release: String,
     pub path: PathBuf,
+    /// The same system's folder on the second card, while one is published.
+    /// Each folder keeps its own gamelist and media.
+    pub external: Option<PathBuf>,
     pub extensions: Vec<String>,
     /// Launch template for systems without emulators (e.g. `tools`).
     pub command: String,
@@ -33,6 +36,16 @@ pub struct Core {
 }
 
 impl SystemDef {
+    /// Folders holding this system's ROMs, the first card's first.
+    pub fn roots(&self) -> impl Iterator<Item = &Path> {
+        std::iter::once(self.path.as_path()).chain(self.external.as_deref())
+    }
+    /// The folder a ROM was found in: its gamelist and media live there.
+    pub fn root_of(&self, rom: &Path) -> &Path {
+        self.roots()
+            .find(|root| rom.starts_with(root))
+            .unwrap_or(&self.path)
+    }
     /// Select the first explicitly default core, or the first available pair.
     /// Systems without any cores have no default pair.
     pub fn default_emulator_core(&self) -> Option<(&str, &str)> {
