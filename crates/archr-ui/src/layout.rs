@@ -118,6 +118,9 @@ pub struct Decor {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Layout {
     pub header: Header,
+    /// Systems screen title: the spaced brand ("ARCHR") or the screen's
+    /// name ("Systems", per language).
+    pub brand: bool,
     pub status: bool,
     pub divider: bool,
     pub summary: bool,
@@ -228,6 +231,7 @@ impl View {
         };
         let base = |list| Layout {
             header: Header::Full,
+            brand: true,
             status: true,
             divider: true,
             summary: true,
@@ -330,8 +334,8 @@ impl Layout {
             t,
             at,
             &[
-                "header", "status", "divider", "summary", "list", "panel", "art", "backdrop",
-                "info", "meta", "dots", "decor",
+                "header", "title", "status", "divider", "summary", "list", "panel", "art",
+                "backdrop", "info", "meta", "dots", "decor",
             ],
         );
         let r = Reader { table: t, at };
@@ -340,6 +344,7 @@ impl Layout {
             self.header,
             &[("full", Header::Full), ("compact", Header::Compact)],
         );
+        self.brand = r.pick("title", self.brand, &[("brand", true), ("screen", false)]);
         self.status = r.flag("status", self.status);
         self.divider = r.flag("divider", self.divider);
         self.summary = r.flag("summary", self.summary);
@@ -742,6 +747,12 @@ mod tests {
         let mut cleared = v.clone();
         cleared.overlay(&toml::from_str("[systems]\ndecor = []").unwrap(), "t");
         assert!(cleared.systems.decor.is_empty());
+    }
+    #[test]
+    fn the_systems_title_is_the_brand_unless_the_view_names_the_screen() {
+        assert!(view("").systems.brand);
+        assert!(!view("[systems]\ntitle = 'screen'").systems.brand);
+        assert!(view("[systems]\ntitle = 'odd'").systems.brand);
     }
     #[test]
     fn tiles_are_horizontal() {

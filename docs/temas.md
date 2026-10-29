@@ -230,6 +230,7 @@ Elementos de cada tela (`[view.<id>.systems]` ou `[view.<id>.games]`):
 | chave | o que é | campos |
 |---|---|---|
 | `header` | cabeçalho | `"full"` (nome e contador) ou `"compact"` (uma linha discreta: "SNES · 4 de 213") |
+| `title` | título do cabeçalho de sistemas | `"brand"` (ARCHR espaçado, o padrão) ou `"screen"` ("Sistemas", no idioma) |
 | `status` | pílula de relógio/bateria | `true`/`false` |
 | `divider` | linha acima do rodapé | `true`/`false` |
 | `summary` | resumo da biblioteca no rodapé (sistemas) | `true`/`false` |

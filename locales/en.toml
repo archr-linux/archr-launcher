@@ -1,6 +1,7 @@
 # Flat catalog: quote dotted keys. Named placeholders are replaced once.
 # Plurals use CLDR cardinal categories; other is required.
 "systems.title" = "ARCHR"
+"systems.heading" = "Systems"
 "collections.favorites" = "Favorites"
 "collections.recent" = "Recent"
 "hint.open" = "Open"

@@ -1046,6 +1046,14 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 (Face::Mono, 13., theme.muted),
                 Rect::new(pad + title_w as i32 + self.px(10.), 0, pw, h),
             )?;
+        } else if !layout.brand {
+            let title = self.catalog.text("systems.heading");
+            let width = (right - pad - self.px(10.)).max(1) as u32;
+            self.label(
+                &title,
+                (Face::Semibold, 15., theme.text),
+                Rect::new(pad, 0, width, h),
+            )?;
         } else {
             let mut x = pad;
             for glyph in self.catalog.text("systems.title").chars() {
