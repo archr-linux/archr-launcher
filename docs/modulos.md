@@ -141,6 +141,11 @@ Os valores são do launcher (um dono por chave): ele grava
 O módulo lê esse arquivo (`ARCHR_MODULE_SETTINGS`), nunca escreve nele; toggles e
 checks viram booleanos, sliders viram números, o resto texto.
 
+Linhas `keyboard` com `secret = true` ficam fora desse arquivo: vão para
+`module-settings/<id>.secret.json` (`ARCHR_MODULE_SECRETS`), modo 0600, do
+usuário do próprio módulo. O valor também chega no `initialize` e no
+`settings.changed`, pelo stdin; nunca em argumento de processo nem no log.
+
 ### 2.2 Permissões
 
 | permissão | efeito | texto ao usuário |
@@ -155,6 +160,10 @@ Chaves aceitas em `config_read`: `system.language`, `system.timezone`,
 `global.retroachievements`, `audio.volume`, `display.brightness`. Senhas,
 tokens e chaves de Wi-Fi **nunca**.
 
+Mesmo com `roms`, `/storage/roms/backup` (backups do `backuptool`, com o
+`system.cfg` e suas senhas) e `/storage/roms/backups` (chaves de pareamento
+Bluetooth) ficam inacessíveis (`InaccessiblePaths`).
+
 Reservadas para a fase 2 (pedir hoje bloqueia o módulo): `write`,
 `config_write`, `hooks`, `system`, `launch`.
 
@@ -166,11 +175,20 @@ o módulo não roda.
 
 ## 3. Execução
 
-Cada processo roda com `systemd-run --pipe` como usuário `archr-mod`:
-`NoNewPrivileges`, sem capabilities, `ProtectSystem=strict`,
+Cada processo roda com `systemd-run --pipe` como o **usuário do próprio
+módulo**: um uid (igual ao gid) por id, de 60600 a 61099, dado na primeira vez
+que o launcher vê o módulo e guardado em `modules.toml` (`[uids]`); remover o
+módulo com os dados libera o uid. O launcher escreve o registro do usuário
+(`archr-mod-<uid>`) em `/run/userdb`, que o nss-systemd lê, porque o systemd 255
+recusa `User=` numérico sem usuário conhecido. Assim um módulo não lê o
+`/proc`, o ambiente, os arquivos nem os sinais de outro: `ProtectProc=invisible`
+esconde processos de outros uids, e `PrivateUsers=yes` mostra todo uid que não
+seja root ou o dele como `nobody` (`PrivatePIDs=` só existe a partir do
+systemd 257). Também: `NoNewPrivileges`, sem capabilities, `ProtectSystem=strict`,
 `TemporaryFileSystem=/storage:ro` (toda a partição do usuário escondida),
-de volta só a pasta do módulo (só leitura), `module-data/<id>` (gravável, é o
-`HOME`) e o arquivo de ajustes (só leitura); `MemoryMax`, `TasksMax=16`,
+de volta só a pasta do módulo (de root, só leitura), `module-data/<id>`
+(gravável, é o `HOME`; 0700, do uid do módulo) e os arquivos de ajustes e de
+segredos (só leitura); `MemoryMax`, `TasksMax=16`,
 `CPUWeight=20`, `Nice=10`. Para ver a saída de erro no aparelho:
 `journalctl -u 'archr-mod-<id>*'`.
 
@@ -209,7 +227,8 @@ Toda mensagem tem `"jsonrpc": "2.0"`.
 ### Ambiente
 
 `HOME` e `ARCHR_MODULE_DATA` (pasta gravável), `ARCHR_MODULE_DIR` (código, só
-leitura), `ARCHR_MODULE_SETTINGS` (JSON dos ajustes), `ARCHR_MODULE_ID`,
+leitura), `ARCHR_MODULE_SETTINGS` (JSON dos ajustes), `ARCHR_MODULE_SECRETS`
+(JSON das linhas `secret`; ausente sem elas), `ARCHR_MODULE_ID`,
 `ARCHR_API_VERSION`, `ARCHR_LAUNCHER_VERSION`, `ARCHR_LANG`, `ARCHR_DEVICE`.
 
 ### Launcher → módulo, pedidos (têm `id`, exigem resposta)
