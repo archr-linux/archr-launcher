@@ -110,37 +110,29 @@ impl Ui<'_, '_> {
         let wifi_on = self.wifi_enabled();
         for (index, &(_, glyph)) in SHORTCUTS.iter().enumerate() {
             let focus = row == 1 && shortcut == index;
-            let enabled = index >= 2;
             let active = index == 2 && wifi_on;
             let x = start + index as i32 * (side + gap);
             let rect = Rect::new(x, px(278.), side as u32, side as u32);
             self.rounded(
                 rect,
                 side as f32 / 2.,
-                if focus && enabled {
+                if focus {
                     theme.highlight_bg
                 } else {
                     theme.surface
                 },
-                Some(if focus && !enabled {
-                    Rgba {
-                        a: 150,
-                        ..theme.highlight_bg
-                    }
-                } else if active && !focus {
+                Some(if active && !focus {
                     theme.highlight_bg
                 } else {
                     theme.border
                 }),
             )?;
-            let ink = if focus && enabled {
+            let ink = if focus {
                 theme.highlight_text
             } else if active {
                 theme.highlight_bg
-            } else if enabled {
-                theme.text_secondary
             } else {
-                theme.dim_text
+                theme.text_secondary
             };
             self.icon(
                 if index == 2 && !wifi_on {
@@ -151,12 +143,43 @@ impl Ui<'_, '_> {
                 Rect::new(x + px(11.), px(289.), px(24.) as u32, px(24.) as u32),
                 ink,
             )?;
+            // A system update is waiting: a dot on the update shortcut.
+            if index == 1 && app.updates > 0 {
+                let dot = px(12.);
+                let ring = px(2.);
+                let (dx, dy) = (x + side - dot + px(1.), px(277.));
+                self.rounded(
+                    Rect::new(
+                        dx - ring,
+                        dy - ring,
+                        (dot + ring * 2) as u32,
+                        (dot + ring * 2) as u32,
+                    ),
+                    (dot / 2 + ring) as f32,
+                    theme.background,
+                    None,
+                )?;
+                self.rounded(
+                    Rect::new(dx, dy, dot as u32, dot as u32),
+                    (dot / 2) as f32,
+                    if focus {
+                        theme.highlight_text
+                    } else {
+                        theme.highlight_bg
+                    },
+                    None,
+                )?;
+            }
         }
         if row == 1 {
             let key = SHORTCUTS[shortcut].0;
-            let label = if shortcut == 1 {
-                self.catalog
-                    .format("start.soon_label", &[("name", &self.catalog.text(key))])
+            let label = if shortcut == 1 && app.updates > 0 {
+                let count = app.updates.to_string();
+                self.catalog.plural(
+                    "start.update_ready",
+                    app.updates as f64,
+                    &[("count", &count)],
+                )
             } else if shortcut == 2 {
                 self.catalog.text(if wifi_on {
                     "start.wifi_on"

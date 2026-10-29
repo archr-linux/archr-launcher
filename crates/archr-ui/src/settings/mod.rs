@@ -21,6 +21,7 @@ pub(crate) mod pages;
 use bluetooth::{Action, Device};
 pub use pages::MEDIA;
 pub mod storage;
+pub mod updates;
 pub use information::{InfoCard, InfoDetail, InfoMeter, Information};
 use network::Network;
 
@@ -49,6 +50,8 @@ pub enum Page {
     Controls,
     LauncherControls,
     Hotkeys,
+    Updates,
+    UpdatePackages,
     Soon(&'static str),
 }
 impl Page {
@@ -76,6 +79,8 @@ impl Page {
             Self::Controls => "settings.controls",
             Self::LauncherControls => "controls.launcher",
             Self::Hotkeys => "controls.hotkeys",
+            Self::Updates => "updates.title",
+            Self::UpdatePackages => "updates.packages",
             Self::Soon(key) => key,
         }
     }
@@ -88,6 +93,8 @@ impl Page {
             Self::AccentColor => &["settings.appearance"],
             Self::LauncherControls | Self::Hotkeys => &["settings.controls"],
             Self::ScraperMedia => &["settings.games", "settings.scraper_short"],
+            Self::Updates => &["settings.system"],
+            Self::UpdatePackages => &["settings.system", "updates.title"],
             _ => &[],
         }
     }
@@ -110,6 +117,7 @@ impl Page {
             Self::Controls => controls::CONTROLS,
             Self::LauncherControls => controls::LAUNCHER,
             Self::Hotkeys => hotkeys::HOTKEYS_PAGE,
+            Self::Updates => updates::UPDATES,
             _ => &[],
         }
     }
@@ -222,6 +230,12 @@ pub enum Id {
     Hotkey(u8),
     /// Whether that hotkey works now.
     HotkeyOn(u8),
+    UpdateInstall,
+    UpdateCheck,
+    /// `updates.branch`, read by archr-update.
+    UpdateChannel,
+    UpdateBoot,
+    UpdateNotify,
 }
 impl Id {
     fn metadata(self) -> (&'static str, &'static str) {
@@ -313,6 +327,11 @@ impl Id {
                 (hotkey.key, hotkey.default)
             }
             Self::HotkeyOn(n) => (hotkeys::HOTKEYS[usize::from(n)].enabled, "1"),
+            Self::UpdateChannel => ("updates.branch", "stable"),
+            // The launcher's own: check in the background after starting, and
+            // mark the START menu when something is pending.
+            Self::UpdateBoot => ("updates.check_on_boot", "1"),
+            Self::UpdateNotify => ("updates.notify_start", "1"),
             Self::Update
             | Self::Restore
             | Self::Hidden
@@ -332,7 +351,9 @@ impl Id {
             | Self::MangohudLink
             | Self::CheevosAccount
             | Self::CheevosPassword
-            | Self::CheevosLogout => ("", ""),
+            | Self::CheevosLogout
+            | Self::UpdateInstall
+            | Self::UpdateCheck => ("", ""),
             Self::LauncherLink | Self::Bind(_) | Self::ButtonsRestore | Self::HotkeysLink => {
                 ("", "")
             }
@@ -375,7 +396,10 @@ impl Id {
             | Self::CheevosVerbose
             | Self::CheevosEncore
             | Self::CheevosRichPresence
-            | Self::CheevosScreenshot => &["0", "1"],
+            | Self::CheevosScreenshot
+            | Self::UpdateBoot
+            | Self::UpdateNotify => &["0", "1"],
+            Self::UpdateChannel => &["stable", "next", "dev"],
             Self::MangohudGame => &["", "1", "0"],
             Self::MangohudLayout => &mangohud::LAYOUTS,
             Self::MangohudPosition => &mangohud::POSITIONS,
@@ -564,6 +588,11 @@ pub enum Effect {
     CheevosLogout,
     Scrape,
     CancelScrape,
+    CheckUpdates,
+    /// Download and install the pending updates.
+    Update,
+    /// Stop the download (the install cannot stop).
+    CancelUpdate,
     /// Preview another theme: load it off the draw thread.
     Theme(String),
     /// Leaving Appearance with changes: persist the choices and apply them.
@@ -587,6 +616,9 @@ impl std::fmt::Debug for Effect {
             Self::CheevosLogout => write!(f, "CheevosLogout"),
             Self::Scrape => write!(f, "Scrape"),
             Self::CancelScrape => write!(f, "CancelScrape"),
+            Self::CheckUpdates => write!(f, "CheckUpdates"),
+            Self::Update => write!(f, "Update"),
+            Self::CancelUpdate => write!(f, "CancelUpdate"),
             Self::Theme(name) => write!(f, "Theme({name:?})"),
             Self::Appearance => write!(f, "Appearance"),
             Self::Storage(action) => write!(f, "Storage({action:?})"),
@@ -673,6 +705,7 @@ pub struct Settings {
     pub capture: Option<Capture>,
     /// The remembered custom colour while the editor shows another one.
     custom_kept: Custom,
+    pub updates: updates::Updates,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -720,6 +753,7 @@ impl Default for Settings {
             mangohud_saved: Default::default(),
             capture: None,
             custom_kept: Custom::default(),
+            updates: updates::Updates::default(),
         }
     }
 }
@@ -730,6 +764,21 @@ impl Settings {
             return label.clone();
         }
         let key = match (id, value) {
+            (Id::Update, version) => {
+                let count = self.updates.count();
+                return match &self.updates.report {
+                    Some(_) if count > 0 => information::value(
+                        catalog,
+                        &format!("updates.row_pending|version={version}|count={count}"),
+                    ),
+                    Some(_) => catalog.format("updates.row_current", &[("version", version)]),
+                    None => version.into(),
+                };
+            }
+            (Id::UpdateInstall | Id::UpdateCheck, _) => return "›".into(),
+            (Id::UpdateChannel, "next") => "updates.next",
+            (Id::UpdateChannel, "dev") => "updates.dev",
+            (Id::UpdateChannel, _) => "updates.stable",
             (Id::Language, "en_US") => "settings.lang_en",
             (Id::Language, "pt_BR") => "settings.lang_pt",
             (Id::Language, "es_ES") => "settings.lang_es",
@@ -859,6 +908,7 @@ impl Settings {
             ),
             Id::ScraperAccount => self.scrape.user.clone(),
             Id::StorageCard => self.storage.card.as_ref()?.detail.clone(),
+            Id::UpdateInstall => self.updates.install_note()?.into(),
             Id::Mangohud if !self.mangohud_supported => "settings.mangohud_unsupported".into(),
             Id::MergedStorage if !self.storage.merge_supported => {
                 "settings.merged_unsupported".into()
@@ -921,6 +971,8 @@ impl Settings {
     pub fn disabled(&self, id: Id) -> bool {
         match id {
             Id::IndexNow => true,
+            Id::UpdateInstall => self.updates.count() == 0 || self.updates.checking,
+            Id::UpdateCheck => self.updates.checking,
             Id::RestoreBackup => self.storage.backup.is_none(),
             Id::ButtonsRestore => self.default_bindings(),
             Id::MergedStorage => !self.storage.merge_supported,
@@ -973,6 +1025,7 @@ impl Settings {
             return &[(Key('A'), "settings.forget"), (Key('B'), "hint.cancel")];
         }
         match self.page() {
+            Page::Updates | Page::UpdatePackages => self.updates_hints(),
             Page::Root => &[
                 (Key('A'), "hint.open"),
                 (Key('B'), "hint.back"),
@@ -1171,6 +1224,11 @@ impl Settings {
                     Id::Automount | Id::MergedStorage => Some("settings.storage_reboot_question"),
                     _ => None,
                 };
+                // Another channel offers other packages.
+                if id == Id::UpdateChannel {
+                    self.updates.report = None;
+                    self.updates.failed = None;
+                }
             }
             Err(error) => {
                 if id == Id::MangohudItems {

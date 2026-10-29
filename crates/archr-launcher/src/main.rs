@@ -36,6 +36,8 @@ use std::{
 
 /// Wayland app_id matched by the compositor rules (sway focus/seat, OSD).
 const APP_ID: &str = "archr-launcher";
+/// "Check at startup" waits this long, so it never slows the first screens.
+const UPDATE_CHECK_DELAY: Duration = Duration::from_secs(20);
 
 fn main() {
     let began = Instant::now();
@@ -212,6 +214,18 @@ fn run(
     let mut seen_errors = 0;
     let (width, height) = ui.canvas.output_size()?;
     let mut settings = archr_launcher::settings::Runtime::new(paths.clone());
+    let saved = |id: Id| {
+        startup_config
+            .as_ref()
+            .and_then(|cfg| cfg.get_setting(id.key(), None, None))
+            .unwrap_or_else(|| id.default_value().into())
+    };
+    settings
+        .state
+        .values
+        .insert(Id::UpdateNotify, saved(Id::UpdateNotify));
+    let mut update_check =
+        (saved(Id::UpdateBoot) == "1").then(|| Instant::now() + UPDATE_CHECK_DELAY);
     settings.state.base_theme = base;
     settings.state.base_dir = ui.theme_dir.clone();
     let mut rooms = netplay::Runtime::new(paths.clone());
@@ -332,6 +346,20 @@ fn run(
             dirty = true;
         }
         dirty |= moonlight.poll();
+        if update_check.is_some_and(|at| Instant::now() >= at) {
+            update_check = None;
+            // Unless the Updates page already looked meanwhile.
+            if settings.state.updates.checked.is_none() {
+                settings.check_updates();
+            }
+        }
+        let updates = if settings.state.value(Id::UpdateNotify) == "1" {
+            settings.state.updates.count()
+        } else {
+            0
+        };
+        dirty |= app.updates != updates;
+        app.updates = updates;
         if let Some(language) = language {
             ui.catalog = I18n::load(
                 &paths.at("/usr/share/archr-launcher/locales"),
@@ -584,6 +612,9 @@ fn run(
                     settings.focus(&system);
                 }
                 settings.open();
+                Outcome::None
+            } else if requested == Outcome::Updates {
+                settings.open_updates();
                 Outcome::None
             } else if requested == Outcome::Moonlight {
                 moonlight.open();

@@ -10,6 +10,7 @@ mod pages;
 pub(crate) use pages::{scrape_outcome, start_scrape};
 mod runtime;
 mod storage;
+mod updates;
 use crate::paths::Paths;
 use archr_config::SystemCfg;
 use archr_ui::settings::{Id, Information, Page, Settings};

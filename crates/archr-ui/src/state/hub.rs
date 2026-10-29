@@ -61,6 +61,7 @@ impl App {
             Button::A => {
                 return match shortcut {
                     0 => Outcome::Settings,
+                    1 => Outcome::Updates,
                     2 => Outcome::ToggleWifi,
                     3 => Outcome::Action(SessionAction::Suspend),
                     4 => Outcome::Action(SessionAction::Reboot),

@@ -197,6 +197,7 @@ impl Settings {
             Page::MangohudItems => Some(self.mangohud_items_input(button)),
             Page::LauncherControls => self.launcher_controls_input(button),
             Page::Hotkeys => self.hotkeys_input(button),
+            Page::Updates | Page::UpdatePackages => self.updates_input(button),
             _ => None,
         }
     }
@@ -341,6 +342,12 @@ impl Settings {
             Id::LauncherLink => self.open(Page::LauncherControls),
             Id::HotkeysLink => self.open(Page::Hotkeys),
             Id::MangohudItems => self.open(Page::MangohudItems),
+            Id::Update => self.open(Page::Updates),
+            Id::UpdateInstall => return Some(self.start_update()),
+            Id::UpdateCheck => {
+                self.updates.checking = true;
+                return Some(Effect::CheckUpdates);
+            }
             Id::ScraperMedia => self.open(Page::ScraperMedia),
             Id::MediaKind(n) => {
                 let token = MEDIA[usize::from(n)].0;

@@ -616,11 +616,20 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         self.rounded(rect, radius, fill, Some(border))
     }
     fn icon(&mut self, glyph: Glyph, panel: Rect, ink: Rgba) -> Result<(), String> {
+        self.icon_turned(glyph, panel, ink, 0.)
+    }
+    fn icon_turned(
+        &mut self,
+        glyph: Glyph,
+        panel: Rect,
+        ink: Rgba,
+        angle: f64,
+    ) -> Result<(), String> {
         let text = self
             .text
             .as_mut()
             .ok_or_else(|| self.catalog.text("error.font_init"))?;
-        text.draw_icon(&mut self.canvas, glyph, panel, ink)
+        text.draw_icon(&mut self.canvas, glyph, panel, ink, angle)
     }
     fn divider(&mut self, x: i32, y: i32, w: u32, c: Rgba) -> Result<(), String> {
         self.canvas.set_draw_color(color(c));
@@ -670,7 +679,8 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 || self.settings_banner.busy(now)
                 || self.switches.values().any(|(_, knob)| knob.active(now))
                 // The search dots loop for as long as a search runs.
-                || (settings.searching() && self.motion != Motion::Off);
+                || ((settings.searching() || settings.updates.working())
+                    && self.motion != Motion::Off);
         } else {
             let (backdrop, cursor) = app.backdrop();
             let view = self.view(theme);

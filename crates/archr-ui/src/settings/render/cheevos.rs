@@ -96,7 +96,11 @@ impl View<'_, '_, '_> {
         Ok(())
     }
     /// Muted 12 px text from the top of the space, as tall as its lines.
-    fn paragraph(&mut self, (x, y, w): (f32, f32, f32), text: &str) -> Result<(), String> {
+    pub(super) fn paragraph(
+        &mut self,
+        (x, y, w): (f32, f32, f32),
+        text: &str,
+    ) -> Result<(), String> {
         let width = self.rect((x, y, w, 1.)).width();
         let lines = self.lines(text, 12., width)?.len() as f32;
         self.note((x, y, w, lines * 15.), text, 12.)

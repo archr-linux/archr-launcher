@@ -923,3 +923,167 @@ fn capture_achievements() {
         frame(&mut ui, &app, "jogo-sem-formato");
     }
 }
+
+/// Updates (Atualizacoes*): the page, its run screens and the START mark.
+fn updates_pages() -> Vec<(&'static str, Settings)> {
+    use crate::settings::updates::{Package, Progress, Reboot, Report, Run, Stage};
+    let package = |name: &str, old: &str, new: &str, size: u64| Package {
+        name: name.into(),
+        old: old.into(),
+        new: new.into(),
+        size,
+    };
+    let mut page = ready();
+    page.info.version = "2.1.1".into();
+    page.open_updates();
+    page.updates.checked = Instant::now().checked_sub(Duration::from_secs(125));
+    page.updates.report = Some(Report {
+        version: "2.1.1".into(),
+        channel: "stable".into(),
+        packages: vec![
+            package("archr-launcher", "1.4.2", "1.5.0", 2_202_009),
+            package("linux-rk3326", "6.18.55-2", "6.18.57-1", 32_925_696),
+            package("retroarch", "1.21.0-3", "1.22.0-1", 13_421_772),
+            package("mesa", "26.2.1", "26.2.2", 1_992_294),
+        ],
+        download: 50_541_772,
+        reboot: Some(Reboot::Kernel),
+        new_version: "2.1.2".into(),
+        news: "Launcher 1.5: loja de temas e sons. Kernel com carregamento mais rápido. RetroArch 1.22."
+            .into(),
+    });
+    let mut current = page.clone();
+    current.updates.report = Some(Report {
+        version: "2.1.1".into(),
+        ..Default::default()
+    });
+    current.cursor = 3;
+    let mut checking = page.clone();
+    checking.updates.report = None;
+    checking.updates.checking = true;
+    let mut offline = checking.clone();
+    offline.updates.checking = false;
+    offline.updates.failed = Some("network".into());
+    let mut many = page.clone();
+    if let Some(report) = &mut many.updates.report {
+        for n in 0..14 {
+            report.packages.push(package(
+                &format!("lib-extra-{n}"),
+                "1.0-1",
+                "1.1-1",
+                400_000,
+            ));
+        }
+    }
+    let mut packages = many.clone();
+    packages.open(Page::UpdatePackages);
+    packages.cursor = 2;
+    let mut progress = page.clone();
+    progress.updates.run = Some(Run::Working(Progress {
+        stage: Stage::Download,
+        package: "retroarch-1.22.0-1".into(),
+        bytes: 33_449_574,
+        total: 50_541_772,
+        speed: 1_887_436,
+        percent: 66,
+        ..Default::default()
+    }));
+    let mut installing = page.clone();
+    installing.updates.run = Some(Run::Working(Progress {
+        stage: Stage::Install,
+        package: "linux-rk3326".into(),
+        current: 2,
+        count: 4,
+        percent: 50,
+        bytes: 50_541_772,
+        total: 50_541_772,
+        ..Default::default()
+    }));
+    let mut done = page.clone();
+    done.updates.run = Some(Run::Done {
+        reboot: Some(Reboot::Kernel),
+        from: "2.1.1".into(),
+        to: "2.1.2".into(),
+        count: 4,
+    });
+    let mut failed = page.clone();
+    failed.updates.run = Some(Run::Failed {
+        reason: "download".into(),
+        line: "error: failed retrieving file 'retroarch-1.22.0-1-aarch64.pkg.tar.zst'".into(),
+        changed: false,
+    });
+    vec![
+        ("atualizacoes", page),
+        ("atualizacoes-em-dia", current),
+        ("atualizacoes-verificando", checking),
+        ("atualizacoes-sem-rede", offline),
+        ("atualizacoes-muitos", many),
+        ("atualizacoes-pacotes", packages),
+        ("atualizacoes-progresso", progress),
+        ("atualizacoes-instalando", installing),
+        ("atualizacoes-concluida", done),
+        ("atualizacoes-erro", failed),
+    ]
+}
+#[test]
+#[ignore = "manual capture, ARCHR_UPDATES_CAPTURE_DIR required"]
+fn capture_updates() {
+    std::env::set_var("SDL_VIDEODRIVER", "offscreen");
+    let output = std::path::PathBuf::from(
+        std::env::var_os("ARCHR_UPDATES_CAPTURE_DIR").expect("capture directory"),
+    );
+    let ttf;
+    let creator;
+    let mut ui = Ui::new(640, 480, true).unwrap();
+    ttf = sdl2::ttf::init().unwrap();
+    creator = ui.canvas.texture_creator();
+    let theme = Theme::load(
+        &std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../themes/default"),
+    );
+    ui.configure(&ttf, &creator, &theme, None).unwrap();
+    let save = |ui: &mut Ui, name: String| {
+        let pixels = ui
+            .canvas
+            .read_pixels(None, sdl2::pixels::PixelFormatEnum::RGBA32)
+            .unwrap();
+        image::save_buffer(
+            output.join(name),
+            &pixels,
+            640,
+            480,
+            image::ColorType::Rgba8,
+        )
+        .unwrap();
+    };
+    let shelf = Shelf::new();
+    for language in ["pt_BR", "ru", "en", "es"] {
+        ui.catalog = I18n::load(std::path::Path::new("/nonexistent"), Some(language), None);
+        for (name, state) in updates_pages() {
+            ui.switches.clear();
+            ui.frame.now = ui.born + Duration::from_millis(480);
+            for _ in 0..2 {
+                ui.canvas.set_draw_color(color(theme.background));
+                ui.canvas.clear();
+                ui.settings_page(&state, &theme).unwrap();
+                ui.snap_animations();
+            }
+            save(&mut ui, format!("{name}-{language}.png"));
+        }
+        // The START menu with an update waiting, on the update shortcut and off it.
+        let mut app = crate::state::App::new(1);
+        app.updates = 4;
+        for (name, shortcut) in [("start-atualizacao", 1), ("start-marca", 0)] {
+            app.screen = crate::state::Screen::StartHub {
+                row: 1,
+                tile: 1,
+                shortcut,
+            };
+            for _ in 0..2 {
+                ui.snap_animations();
+                ui.draw_with_settings(&app, &shelf, &theme, crate::render::Art::default(), None)
+                    .unwrap();
+            }
+            save(&mut ui, format!("{name}-{language}.png"));
+        }
+    }
+}

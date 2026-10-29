@@ -171,6 +171,7 @@ impl Backend {
             Page::Scraper,
             Page::Appearance,
             Page::Achievements,
+            Page::Updates,
         ] {
             for row in page.rows() {
                 if !row.id.key().is_empty() {
@@ -278,6 +279,9 @@ impl Backend {
                 | Id::ScraperMissing
                 | Id::Automount
                 | Id::MergedStorage
+                | Id::UpdateChannel
+                | Id::UpdateBoot
+                | Id::UpdateNotify
         ) {
             return None;
         }
