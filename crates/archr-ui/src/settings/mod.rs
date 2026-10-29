@@ -6,6 +6,7 @@ use crate::{
 use std::collections::BTreeMap;
 use std::time::Instant;
 pub mod bluetooth;
+pub mod cheevos;
 mod custom;
 pub(crate) mod games;
 pub(crate) mod information;
@@ -41,6 +42,7 @@ pub enum Page {
     Storage,
     Mangohud,
     MangohudItems,
+    Achievements,
     Soon(&'static str),
 }
 impl Page {
@@ -64,6 +66,7 @@ impl Page {
             Self::Storage => "settings.storage",
             Self::Mangohud => "settings.mangohud_page",
             Self::MangohudItems => "settings.mangohud_items",
+            Self::Achievements => "settings.achievements",
             Self::Soon(key) => key,
         }
     }
@@ -93,6 +96,7 @@ impl Page {
             Self::Appearance => pages::APPEARANCE,
             Self::Storage => storage::STORAGE,
             Self::Mangohud => mangohud::MANGOHUD,
+            Self::Achievements => cheevos::CHEEVOS,
             _ => &[],
         }
     }
@@ -179,6 +183,17 @@ pub enum Id {
     MangohudSize,
     MangohudAlpha,
     MangohudFps,
+    Cheevos,
+    CheevosAccount,
+    /// Keyboard target only: the password typed for a sign-in.
+    CheevosPassword,
+    CheevosHardcore,
+    CheevosVerbose,
+    CheevosEncore,
+    CheevosRichPresence,
+    CheevosScreenshot,
+    CheevosSound,
+    CheevosLogout,
 }
 impl Id {
     fn metadata(self) -> (&'static str, &'static str) {
@@ -252,6 +267,15 @@ impl Id {
             Self::MangohudSize => ("archr.mangohud.font_size", "24"),
             Self::MangohudAlpha => ("archr.mangohud.alpha", "50"),
             Self::MangohudFps => ("archr.mangohud.fps_limit", "0"),
+            // setsettings.sh hands these to RetroArch at every launch.
+            Self::Cheevos => ("global.retroachievements", "0"),
+            Self::CheevosHardcore => ("global.retroachievements.hardcore", "0"),
+            Self::CheevosVerbose => ("global.retroachievements.verbose", "0"),
+            Self::CheevosEncore => ("global.retroachievements.encore", "0"),
+            Self::CheevosRichPresence => ("global.retroachievements.richpresence", "0"),
+            Self::CheevosScreenshot => ("global.retroachievements.screenshot", "0"),
+            // An unlock sound's name, or "none".
+            Self::CheevosSound => ("global.retroachievements.sound", "none"),
             Self::Update
             | Self::Restore
             | Self::Hidden
@@ -268,7 +292,10 @@ impl Id {
             | Self::RestoreBackup
             | Self::RootPassword
             | Self::FactoryReset
-            | Self::MangohudLink => ("", ""),
+            | Self::MangohudLink
+            | Self::CheevosAccount
+            | Self::CheevosPassword
+            | Self::CheevosLogout => ("", ""),
         }
     }
     pub fn key(self) -> &'static str {
@@ -301,7 +328,13 @@ impl Id {
             | Self::Automount
             | Self::MergedStorage
             | Self::Mangohud
-            | Self::MangohudShow => &["0", "1"],
+            | Self::MangohudShow
+            | Self::Cheevos
+            | Self::CheevosHardcore
+            | Self::CheevosVerbose
+            | Self::CheevosEncore
+            | Self::CheevosRichPresence
+            | Self::CheevosScreenshot => &["0", "1"],
             Self::MangohudGame => &["", "1", "0"],
             Self::MangohudLayout => &mangohud::LAYOUTS,
             Self::MangohudPosition => &mangohud::POSITIONS,
@@ -471,7 +504,7 @@ pub(crate) const CATEGORIES: &[(Page, &str, Glyph)] = &[
         Glyph::Palette,
     ),
     (
-        Page::Soon("settings.achievements"),
+        Page::Achievements,
         "settings.achievements_detail",
         Glyph::Trophy,
     ),
@@ -489,6 +522,9 @@ pub enum Effect {
     Forget(String),
     Bluetooth(Action, String),
     Login(String, String),
+    /// RetroAchievements sign-in: user and password.
+    CheevosLogin(String, String),
+    CheevosLogout,
     Scrape,
     CancelScrape,
     /// Preview another theme: load it off the draw thread.
@@ -510,6 +546,8 @@ impl std::fmt::Debug for Effect {
             Self::Forget(ssid) => write!(f, "Forget({ssid:?})"),
             Self::Bluetooth(action, addr) => write!(f, "Bluetooth({action:?}, {addr:?})"),
             Self::Login(user, _) => write!(f, "Login({user:?}, <hidden>)"),
+            Self::CheevosLogin(user, _) => write!(f, "CheevosLogin({user:?}, <hidden>)"),
+            Self::CheevosLogout => write!(f, "CheevosLogout"),
             Self::Scrape => write!(f, "Scrape"),
             Self::CancelScrape => write!(f, "CancelScrape"),
             Self::Theme(name) => write!(f, "Theme({name:?})"),
@@ -576,6 +614,7 @@ pub struct Settings {
     /// The single USB port hosts a device, so gadget mode is refused.
     pub usb_busy: bool,
     pub scrape: Scrape,
+    pub cheevos: cheevos::Cheevos,
     pub games: Games,
     pub storage: storage::Storage,
     /// Sliders in flight: last confirmed value and the newest unsent one.
@@ -629,6 +668,7 @@ impl Default for Settings {
             access_ip: String::new(),
             usb_busy: false,
             scrape: Scrape::default(),
+            cheevos: cheevos::Cheevos::default(),
             games: Games::default(),
             storage: storage::Storage::default(),
             slides: BTreeMap::new(),
@@ -695,7 +735,9 @@ impl Settings {
             },
             (Id::Restore | Id::Accent, _) => return String::new(),
             (Id::IndexNow, _) => "settings.soon",
-            (Id::ScraperAccount, _) => "settings.sign_in",
+            (Id::ScraperAccount | Id::CheevosAccount, _) => "settings.sign_in",
+            (Id::CheevosSound, "none") => "settings.cheevos_no_sound",
+            (Id::CheevosLogout, _) => return String::new(),
             (Id::ScraperStart, _) if self.scrape.running => "settings.cancel_scraping",
             (Id::ScraperStart, _) => return String::new(),
             (Id::GameSystem, _) => return self.games.fullname().to_owned(),
@@ -763,6 +805,7 @@ impl Settings {
             Id::Http if !ip.is_empty() => format!("settings.http_at|ip={ip}"),
             Id::UsbMode if self.usb_busy => "settings.usb_in_use".into(),
             Id::ScraperAccount if self.scrape.verifying => "settings.verifying".into(),
+            Id::CheevosAccount if self.cheevos.verifying => "settings.verifying".into(),
             Id::ScraperAccount if self.scrape.user.is_empty() => "settings.not_signed_in".into(),
             Id::ScraperAccount if self.scrape.threads > 0 => format!(
                 "settings.account_threads|user={}|count={}",
@@ -811,6 +854,7 @@ impl Settings {
                 }
                 Id::CustomServer => self.value(Id::Relay) == "custom",
                 id if Games::ROWS.contains(&id) => self.games.shows(id, self),
+                id @ (Id::CheevosAccount | Id::CheevosLogout) => self.cheevos_visible(id),
                 _ => true,
             })
             .collect()
@@ -819,7 +863,7 @@ impl Settings {
     /// (one audio sink: the jack switches speaker and headphones itself).
     pub fn fixed(&self, id: Id) -> bool {
         match id {
-            Id::Audio | Id::Emulator | Id::Core => self
+            Id::Audio | Id::Emulator | Id::Core | Id::CheevosSound => self
                 .options
                 .get(&id)
                 .is_none_or(|choices| choices.len() <= 1),
@@ -842,6 +886,15 @@ impl Settings {
             | Id::MangohudSize
             | Id::MangohudAlpha
             | Id::MangohudFps => !self.mangohud_supported,
+            Id::Cheevos
+            | Id::CheevosAccount
+            | Id::CheevosHardcore
+            | Id::CheevosVerbose
+            | Id::CheevosEncore
+            | Id::CheevosRichPresence
+            | Id::CheevosScreenshot
+            | Id::CheevosSound
+            | Id::CheevosLogout => self.cheevos.verifying,
             Id::ScraperSource
             | Id::ScraperAccount
             | Id::ScraperSystems
@@ -909,8 +962,17 @@ impl Settings {
                     .as_ref()
                     .is_some_and(|k| k.mode == crate::keyboard::Mode::Secret) =>
             {
-                // Network and account passwords connect; the root password is confirmed.
-                if self.keyboard_target == Some(Id::RootPassword) {
+                // Network and account passwords connect; the root password is
+                // confirmed; the RetroAchievements password signs in.
+                if self.keyboard_target == Some(Id::CheevosPassword) {
+                    &[
+                        (Key('A'), "settings.type"),
+                        (Key('Y'), "settings.delete"),
+                        (Key('X'), "settings.show"),
+                        (HintButton::Start, "settings.sign_in_short"),
+                        (Key('B'), "hint.back"),
+                    ]
+                } else if self.keyboard_target == Some(Id::RootPassword) {
                     &[
                         (Key('A'), "settings.type"),
                         (Key('Y'), "settings.delete"),

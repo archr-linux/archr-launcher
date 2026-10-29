@@ -12,6 +12,7 @@ archr-ui = { path = "../archr-ui" }
 sdl2 = { version = "0.38", features = ["ttf", "image", "mixer"] }
 archr-index = { path = "../archr-index" }
 archr-scraper = { path = "../archr-scraper" }
+archr-cheevos = { path = "../archr-cheevos" }
 log = "0.4"
 serde_json = "1"
 crc32fast = "1"

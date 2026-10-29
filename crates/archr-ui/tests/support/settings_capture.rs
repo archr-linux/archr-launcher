@@ -670,3 +670,97 @@ fn capture_views() {
         }
     }
 }
+
+/// Achievements page states (Config-ra) and its sign-in keyboard.
+fn cheevos_pages() -> Vec<(&'static str, Settings)> {
+    let mut base = ready();
+    base.values.insert(Id::Cheevos, "1".into());
+    base.options.insert(
+        Id::CheevosSound,
+        vec!["none".into(), "unlock".into(), "zelda".into()],
+    );
+    base.open(Page::Achievements);
+    let signed_out = base.clone();
+    let mut off = base.clone();
+    off.values.insert(Id::Cheevos, "0".into());
+    let mut signed_in = base.clone();
+    signed_in.cheevos.user = "douglas".into();
+    signed_in.cheevos.profile = Some(crate::settings::cheevos::Profile {
+        points: 1240,
+        softcore: 87,
+        since: "2021".into(),
+        last_game: "Super Mario World".into(),
+    });
+    for id in [Id::CheevosHardcore, Id::CheevosVerbose] {
+        signed_in.values.insert(id, "1".into());
+    }
+    let mut scrolled = signed_in.clone();
+    scrolled.cursor = scrolled.visible_rows().len() - 1;
+    let mut user = base.clone();
+    user.cursor = 1;
+    user.handle(Button::A);
+    user.keyboard = Some(crate::keyboard::Keyboard::new(
+        crate::keyboard::Mode::Text,
+        "douglas".into(),
+    ));
+    let mut password = user.clone();
+    password.handle(Button::Start);
+    for button in [Button::A; 6] {
+        password.handle(button);
+    }
+    let mut verifying = base.clone();
+    verifying.cheevos.verifying = true;
+    verifying.cursor = 1;
+    vec![
+        ("conquistas-deslogado", signed_out),
+        ("conquistas-desligado", off),
+        ("conquistas-logado", signed_in),
+        ("conquistas-logado-fim", scrolled),
+        ("conquistas-teclado-usuario", user),
+        ("conquistas-teclado-senha", password),
+        ("conquistas-verificando", verifying),
+    ]
+}
+#[test]
+#[ignore = "manual capture, ARCHR_CHEEVOS_CAPTURE_DIR required"]
+fn capture_achievements() {
+    std::env::set_var("SDL_VIDEODRIVER", "offscreen");
+    let output = std::path::PathBuf::from(
+        std::env::var_os("ARCHR_CHEEVOS_CAPTURE_DIR").expect("capture directory"),
+    );
+    let ttf;
+    let creator;
+    let mut ui = Ui::new(640, 480, true).unwrap();
+    ttf = sdl2::ttf::init().unwrap();
+    creator = ui.canvas.texture_creator();
+    let themes = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../themes");
+    let theme = Theme::load(&themes.join("default"));
+    ui.theme_dir = Some(themes.join("default"));
+    ui.configure(&ttf, &creator, &theme, None).unwrap();
+    let save = |ui: &mut Ui, name: String| {
+        let pixels = ui
+            .canvas
+            .read_pixels(None, sdl2::pixels::PixelFormatEnum::RGBA32)
+            .unwrap();
+        image::save_buffer(
+            output.join(name),
+            &pixels,
+            640,
+            480,
+            image::ColorType::Rgba8,
+        )
+        .unwrap();
+    };
+    for language in ["pt_BR", "ru", "es", "en"] {
+        ui.catalog = I18n::load(std::path::Path::new("/nonexistent"), Some(language), None);
+        for (name, state) in cheevos_pages() {
+            // Each state is a fresh page, not a switch flipped on the last one.
+            ui.switches.clear();
+            ui.snap_animations();
+            ui.canvas.set_draw_color(color(theme.background));
+            ui.canvas.clear();
+            ui.settings_page(&state, &theme).unwrap();
+            save(&mut ui, format!("{name}-{language}.png"));
+        }
+    }
+}

@@ -54,6 +54,7 @@ dependencies = [
 name = "archr-launcher"
 version = "0.1.0"
 dependencies = [
+ "archr-cheevos",
  "archr-config",
  "archr-index",
  "archr-io",

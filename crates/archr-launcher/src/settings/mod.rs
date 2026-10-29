@@ -1,5 +1,6 @@
 //! Serial settings worker. No process, config lock or sysfs access on SDL's thread.
 mod bluetooth;
+mod cheevos;
 mod games;
 mod info;
 mod mangohud;
@@ -122,6 +123,7 @@ impl Backend {
         self.load_pages(&cfg, &mut state);
         self.load_storage(&cfg, &mut state);
         self.load_mangohud(&cfg, &mut state);
+        self.load_cheevos(&cfg, &mut state);
         if let Ok(output) = self.command("pactl", &["get-sink-volume", "@DEFAULT_SINK@"]) {
             if let Some(volume) = output
                 .split_whitespace()
@@ -224,6 +226,7 @@ impl Backend {
         if let Some(result) = self
             .apply_page(id, value)
             .or_else(|| self.apply_mangohud(id, value))
+            .or_else(|| self.apply_cheevos(id, value))
         {
             return result;
         }
@@ -355,6 +358,10 @@ pub(super) enum Work {
     Forget(String),
     Variants(String),
     Login(String, String),
+    CheevosLogin(String, String),
+    CheevosLogout,
+    /// The account card's points; its own lane, like the radio scans.
+    CheevosProfile,
     Scrape,
     Theme(String),
     Appearance(Vec<(Id, String)>),
@@ -380,6 +387,9 @@ enum Reply {
     Forget(Result<(), String>),
     Variants(Vec<(String, String)>),
     Login(Result<(String, usize), String>),
+    CheevosLogin(Result<(String, archr_ui::settings::cheevos::Profile), String>),
+    CheevosLogout(Result<(), String>),
+    CheevosProfile(Option<archr_ui::settings::cheevos::Profile>),
     Scrape(Result<(archr_scraper::Job, Vec<String>), String>),
     Theme(Box<(archr_ui::Theme, Option<std::path::PathBuf>)>),
     Appearance(Result<(), String>),
@@ -392,6 +402,7 @@ pub struct Worker {
     tx: mpsc::Sender<Work>,
     scans: mpsc::Sender<u64>,
     bt_scans: mpsc::Sender<()>,
+    profiles: mpsc::Sender<()>,
     rx: mpsc::Receiver<Reply>,
     pending: usize,
     scanning: bool,
@@ -408,9 +419,27 @@ impl Worker {
         let (results, rx) = mpsc::channel();
         let (scans, scan_requests) = mpsc::channel();
         let (bt_scans, bt_requests) = mpsc::channel();
+        let (profiles, profile_requests) = mpsc::channel::<()>();
         let scan_results = results.clone();
         let bt_results = results.clone();
+        let profile_results = results.clone();
         let (scan_paths, bt_paths) = (paths.clone(), paths.clone());
+        let profile_paths = paths.clone();
+        thread::Builder::new()
+            .name("launcher-cheevos".into())
+            .spawn(move || {
+                let backend = Backend::new(profile_paths);
+                while profile_requests.recv().is_ok() {
+                    let profile = backend.cheevos_profile();
+                    if profile_results
+                        .send(Reply::CheevosProfile(profile))
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            })
+            .map_err(|e| e.to_string())?;
         // Discovery listens for ~10 s: its own lane, like the Wi-Fi scan.
         thread::Builder::new()
             .name("launcher-bluetooth".into())
@@ -461,6 +490,11 @@ impl Worker {
                         Work::Login(user, password) => {
                             Reply::Login(backend.login(&user, &password))
                         }
+                        Work::CheevosLogin(user, password) => {
+                            Reply::CheevosLogin(backend.cheevos_login(&user, &password))
+                        }
+                        Work::CheevosLogout => Reply::CheevosLogout(backend.cheevos_logout()),
+                        Work::CheevosProfile => unreachable!("the profile has its own lane"),
                         Work::Scrape => Reply::Scrape(backend.scrape()),
                         Work::Theme(name) => Reply::Theme(Box::new(crate::appearance::load_theme(
                             &backend.paths,
@@ -487,6 +521,7 @@ impl Worker {
             tx,
             scans,
             bt_scans,
+            profiles,
             rx,
             pending: 0,
             scanning: false,
@@ -532,6 +567,9 @@ impl Worker {
         if matches!(work, Work::BtScan) {
             return self.bt_scan();
         }
+        if matches!(work, Work::CheevosProfile) {
+            return self.profiles.send(()).map_err(|e| e.to_string());
+        }
         if matches!(work, Work::Set(Id::WifiSwitch, _)) {
             self.generation += 1;
         }
@@ -564,7 +602,7 @@ impl Worker {
                 if stale {
                     continue;
                 }
-            } else {
+            } else if !matches!(reply, Reply::CheevosProfile(_)) {
                 self.pending = self.pending.saturating_sub(1);
             }
             match reply {
@@ -584,6 +622,9 @@ impl Worker {
                     refresh_storage(state, loaded.storage);
                     if !state.scrape.verifying {
                         state.scrape.user = loaded.scrape.user;
+                    }
+                    if !state.cheevos.verifying {
+                        state.cheevos.user = loaded.cheevos.user;
                     }
                     state.loading = false;
                 }
@@ -716,6 +757,35 @@ impl Worker {
                             state.error = None;
                         }
                         Err(error) => state.fail(None, error),
+                    }
+                }
+                Reply::CheevosLogin(result) => {
+                    state.cheevos.verifying = false;
+                    match result {
+                        Ok((user, profile)) => {
+                            state.cheevos.user = user;
+                            state.cheevos.draft.clear();
+                            state.cheevos.profile = Some(profile);
+                            state.values.insert(Id::Cheevos, "1".into());
+                            state.error = None;
+                        }
+                        Err(error) => state.fail(None, error),
+                    }
+                }
+                Reply::CheevosLogout(result) => {
+                    state.cheevos.verifying = false;
+                    match result {
+                        Ok(()) => {
+                            state.cheevos.user.clear();
+                            state.cheevos.profile = None;
+                            state.cursor = state.cursor.min(state.visible_rows().len() - 1);
+                        }
+                        Err(error) => state.fail(None, error),
+                    }
+                }
+                Reply::CheevosProfile(profile) => {
+                    if profile.is_some() && !state.cheevos.user.is_empty() {
+                        state.cheevos.profile = profile;
                     }
                 }
                 Reply::Storage((result, facts)) => {

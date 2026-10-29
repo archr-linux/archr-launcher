@@ -170,6 +170,7 @@ impl Backend {
             Page::Netplay,
             Page::Scraper,
             Page::Appearance,
+            Page::Achievements,
         ] {
             for row in page.rows() {
                 if !row.id.key().is_empty() {

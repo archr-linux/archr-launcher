@@ -10,6 +10,8 @@ use crate::settings::{
 };
 #[path = "render/appearance.rs"]
 mod appearance;
+#[path = "render/cheevos.rs"]
+mod cheevos;
 #[path = "render/custom.rs"]
 mod custom;
 #[path = "render/information.rs"]
@@ -438,6 +440,11 @@ impl View<'_, '_, '_> {
                 self.rows_at(state, &rows, &placements(Page::Scraper, &rows), 384.)?;
                 self.scraper_panel(state)?;
             }
+            Page::Achievements => {
+                let right = cheevos::ROWS_RIGHT;
+                self.rows_at(state, &rows, &placements(Page::Achievements, &rows), right)?;
+                self.cheevos_panel(state)?;
+            }
             Page::Storage => {
                 let positions = placements(Page::Storage, &rows);
                 self.list(
@@ -487,7 +494,7 @@ impl View<'_, '_, '_> {
             )?;
             let (x, y, w, h) = bounds;
             // Known failures arrive as locale keys; anything else stays generic.
-            let message = if error.starts_with("settings.") {
+            let message = if error.starts_with("settings.") || error.starts_with("cheevos.") {
                 self.tr(&error)
             } else {
                 log::debug!("Settings error on {id:?}: {error}");
@@ -522,6 +529,8 @@ impl View<'_, '_, '_> {
             } else {
                 "settings.refresh_interval"
             }))
+        } else if state.page() == Page::Achievements && state.value(Id::Cheevos) != "1" {
+            Some(self.tr("settings.cheevos_off_note"))
         } else if let Some((busy, at)) = state.refreshing() {
             if busy {
                 Some(self.tr("settings.refreshing"))
@@ -725,7 +734,8 @@ impl View<'_, '_, '_> {
         right: f32,
         selected: bool,
     ) -> Result<(), String> {
-        let ink = if state.disabled(row.id) {
+        // Signing out is a quiet action (Config-ra).
+        let ink = if state.disabled(row.id) || (row.id == Id::CheevosLogout && !selected) {
             selection(selected, self.theme.muted, self.theme.accent_text_secondary)
         } else {
             self.ink(selected)
