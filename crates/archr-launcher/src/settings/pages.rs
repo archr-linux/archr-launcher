@@ -239,6 +239,10 @@ impl Backend {
         };
         let engine = Engine::production(self.paths.cache.clone(), Some(creds.clone()))
             .ok_or("settings.scraper_unavailable")?;
+        self.save_login(&engine, creds)
+    }
+    /// Any refusal or failure leaves the saved login as it was.
+    fn save_login(&self, engine: &Engine, creds: Credentials) -> Result<(String, usize), String> {
         let info = engine
             .verify()
             .map_err(|stop| scrape_outcome(stop).to_owned())?;
@@ -684,5 +688,49 @@ mod tests {
         assert_eq!(theme.highlight_bg.r, 255);
         // A theme that vanished falls back to the builtin one.
         assert_eq!(crate::appearance::load_theme(&paths, "gone").1, None);
+    }
+    #[test]
+    fn the_scraper_login_survives_a_reboot_and_failed_checks() {
+        use archr_scraper::{Http, NetError, Response};
+        struct Answer(Option<u16>);
+        impl Http for Answer {
+            fn get(&self, _: &str, _: u64, _: &AtomicBool) -> Result<Response, NetError> {
+                let status = self.0.ok_or(NetError::Timeout)?;
+                Ok(Response {
+                    status,
+                    body: Vec::new(),
+                })
+            }
+        }
+        let (root, paths) = fixture("");
+        let saved = Credentials {
+            user: "ana".into(),
+            password: "pw".into(),
+        };
+        saved.save(&paths.store).unwrap();
+        let file = fs::read(paths.store.join("scraper.toml")).unwrap();
+        for status in [None, Some(430), Some(403), Some(503)] {
+            // A new backend over the same files, as after a reboot.
+            let backend = Backend::new(Paths::new(Some(root.path().into())));
+            let mut state = Settings::default();
+            backend.load_pages(&SystemCfg::load(&paths.config).unwrap(), &mut state);
+            assert_eq!(state.scrape.user, "ana");
+            let typed = Credentials {
+                user: "ana".into(),
+                password: "new".into(),
+            };
+            let mut engine = Engine::new(
+                std::sync::Arc::new(Answer(status)),
+                "devid=x&devpassword=y",
+                paths.cache.clone(),
+                Some(typed.clone()),
+            );
+            engine.timing = archr_scraper::Timing {
+                spacing: Duration::ZERO,
+                retry: Duration::ZERO,
+            };
+            assert!(backend.save_login(&engine, typed).is_err());
+            assert_eq!(fs::read(paths.store.join("scraper.toml")).unwrap(), file);
+        }
     }
 }
