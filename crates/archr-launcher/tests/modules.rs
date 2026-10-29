@@ -2,15 +2,17 @@
 //! sandbox by the `Direct` executor: protocol, time limits, repeated
 //! failures, permissions and the stop before a game.
 use archr_launcher::modules::{
-    process::Direct,
+    process::{self, Direct, Executor, Plan},
     registry::{Dirs, Record, State},
     Config, Event, Modules, Notice,
 };
 use archr_ui::modules::{Request, Status, View};
 use std::{
     fs,
+    os::unix::fs::{MetadataExt, PermissionsExt},
     path::Path,
-    sync::Arc,
+    process::Command,
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
@@ -51,13 +53,21 @@ fn allow(base: &Path, ids: &[(&str, &[&str])]) {
 }
 fn start(base: &Path) -> Modules {
     let direct = Arc::new(Direct::default());
+    start_with(base, direct.clone(), Some(direct), None)
+}
+fn start_with(
+    base: &Path,
+    executor: Arc<dyn Executor>,
+    direct: Option<Arc<Direct>>,
+    userdb: Option<std::path::PathBuf>,
+) -> Modules {
     Modules::start(Config {
         dirs: Dirs::new(base),
         run: base.join("run"),
         system_cfg: base.join("system.cfg"),
-        executor: direct.clone(),
-        direct: Some(direct),
-        owner: None,
+        executor,
+        direct,
+        userdb,
         language: "en".into(),
         device: "test".into(),
         delay: Duration::ZERO,
@@ -201,6 +211,144 @@ fn a_daemon_speaks_the_protocol_and_only_gets_what_it_was_granted() {
         "the cursor rested once: {seen}"
     );
     assert!(seen.contains(r#""system":"nes""#));
+}
+
+/// Runs modules plainly and records the sandbox each one would get.
+#[derive(Default)]
+struct Sandboxes(Mutex<Vec<(String, Vec<String>)>>);
+impl Executor for Sandboxes {
+    fn command(&self, plan: &Plan) -> Command {
+        let args = process::sandbox(plan);
+        self.0.lock().unwrap().push((plan.id.clone(), args));
+        Direct::default().command(plan)
+    }
+    fn kill(&self, _: Option<&str>) {}
+}
+impl Sandboxes {
+    fn args(&self, id: &str) -> String {
+        let runs = self.0.lock().unwrap();
+        runs.iter()
+            .rev()
+            .find(|(m, _)| m == id)
+            .unwrap()
+            .1
+            .join(" ")
+    }
+    fn user(&self, id: &str) -> u32 {
+        let args = self.args(id);
+        let user = args.split(" -p ").find_map(|a| a.strip_prefix("User="));
+        user.unwrap().parse().unwrap()
+    }
+}
+/// Whether `uid` (with gid = uid, no other groups) may list or read `path`.
+fn readable(path: &Path, uid: u32) -> bool {
+    let meta = fs::metadata(path).unwrap();
+    let mode = meta.permissions().mode();
+    uid == 0
+        || if meta.uid() == uid {
+            mode & 0o400 != 0
+        } else if meta.gid() == uid {
+            mode & 0o040 != 0
+        } else {
+            mode & 0o004 != 0
+        }
+}
+
+#[test]
+fn each_module_runs_as_its_own_user_and_keeps_its_secrets_apart() {
+    let root = tempfile::tempdir().unwrap();
+    let base = root.path();
+    let page = "[[start.tiles]]\nid = \"t\"\nlabel = \"@name\"\naction = \"ask\"\n\
+        [[settings.pages]]\nid = \"main\"\n\
+        [[settings.pages.rows]]\ntype = \"keyboard\"\nkey = \"token\"\nsecret = true\n\
+        [[settings.pages.rows]]\ntype = \"toggle\"\nkey = \"watts\"\ndefault = true\n";
+    for id in ["alpha", "beta"] {
+        module(base, id, "daemon", page, DAEMON);
+    }
+    allow(base, &[("alpha", &[]), ("beta", &[])]);
+    // As root (a CI container) the files are really handed to each uid.
+    // SAFETY: geteuid has no preconditions.
+    let root_user = unsafe { libc::geteuid() } == 0;
+    let both = |v: &View, _: &[Notice]| {
+        ["alpha", "beta"]
+            .iter()
+            .all(|id| value(v, id, "tile:t").is_some())
+    };
+    let sandboxes = Arc::new(Sandboxes::default());
+    let userdb = root_user.then(|| base.join("userdb"));
+    let mut probe = Probe {
+        modules: start_with(base, sandboxes.clone(), None, userdb.clone()),
+        view: Arc::default(),
+        notices: Vec::new(),
+    };
+    probe.wait(both);
+    let (alpha, beta) = (sandboxes.user("alpha"), sandboxes.user("beta"));
+    assert_ne!(alpha, beta);
+    for (id, uid) in [("alpha", alpha), ("beta", beta)] {
+        let args = sandboxes.args(id);
+        assert!(args.contains(&format!("-p Group={uid}")), "{args}");
+        assert!(args.contains("-p PrivateUsers=yes"), "{args}");
+        let data = base.join("module-data").join(id);
+        assert_eq!(
+            fs::metadata(&data).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        if root_user {
+            assert_eq!(fs::metadata(&data).unwrap().uid(), uid);
+        }
+    }
+    // Neither module's uid can read the other's folder.
+    assert!(!readable(&base.join("module-data/alpha"), beta));
+    assert!(!readable(&base.join("module-data/beta"), alpha));
+
+    probe.request(Request::Set {
+        module: "alpha".into(),
+        key: "token".into(),
+        value: "s3cr3t-value".into(),
+    });
+    probe.wait(|v, _| v.modules[0].settings["token"] == "s3cr3t-value");
+    let secrets = base.join("module-settings/alpha.secret.json");
+    assert_eq!(
+        fs::read_to_string(&secrets).unwrap(),
+        r#"{"token":"s3cr3t-value"}"#
+    );
+    assert_eq!(
+        fs::metadata(&secrets).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    assert!(!readable(&secrets, beta));
+    if root_user {
+        assert_eq!(fs::metadata(&secrets).unwrap().uid(), alpha);
+        assert!(userdb.unwrap().join(format!("{alpha}.user")).is_file());
+    }
+    let settings = fs::read_to_string(base.join("module-settings/alpha.json")).unwrap();
+    assert_eq!(
+        settings, r#"{"watts":true}"#,
+        "no secret among the settings"
+    );
+    // The value reaches the module on its stdin, never in an argument.
+    until(&base.join("module-data/alpha/seen.log"), "s3cr3t-value");
+    assert!(sandboxes
+        .0
+        .lock()
+        .unwrap()
+        .iter()
+        .all(|(_, args)| !args.join(" ").contains("s3cr3t")));
+    assert!(sandboxes
+        .args("alpha")
+        .contains(&format!("BindReadOnlyPaths=-{}", secrets.display())));
+
+    // A restart keeps every uid.
+    drop(probe);
+    let again = Arc::new(Sandboxes::default());
+    let mut probe = Probe {
+        modules: start_with(base, again.clone(), None, None),
+        view: Arc::default(),
+        notices: Vec::new(),
+    };
+    let view = probe.wait(both);
+    assert_eq!((again.user("alpha"), again.user("beta")), (alpha, beta));
+    assert_eq!(view.modules[0].settings["token"], "s3cr3t-value");
 }
 
 /// The file's text once it holds `wanted`.
