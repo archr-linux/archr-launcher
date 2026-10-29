@@ -311,7 +311,10 @@ details_actions = { x = 0.45625, y = 0.8125, w = 0.50625, h = 0.070833333 }
 `start_widgets` (`{ x, y, w, h }`, mesmas regras) é a faixa dos widgets 2×1
 dos módulos (até 2, lado a lado, divididos por igual). Quando há widget, os
 blocos sobem e encolhem para caber acima da faixa e os atalhos vão para logo
-abaixo dela; sem widget, o Menu Start fica como sempre. O padrão (maquete
+abaixo dela; sem widget, o Menu Start fica como sempre. A faixa é
+limitada: começa depois de 178 px (os blocos precisam de 72 px), tem pelo
+menos 40 px de altura e termina a tempo de os atalhos e o nome deles caberem
+acima do rodapé; fora disso, o launcher a encosta no limite. O padrão (maquete
 Start-widget):
 
 ```toml

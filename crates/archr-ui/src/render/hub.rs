@@ -15,6 +15,56 @@ const SHORTCUTS: [(&str, Glyph); 6] = [
     ("menu.shutdown", Glyph::Power),
 ];
 
+/// Where the Start menu puts things, on the 640×480 reference. The theme's
+/// `start_widgets` band is not trusted: it is kept under room for the tiles
+/// and over room for the shortcuts and their label above the footer.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Layout {
+    tile_top: f32,
+    tile_h: f32,
+    tile_w: f32,
+    gap: f32,
+    /// Top of the shortcuts row; its label sits 55 px lower.
+    row_y: f32,
+    /// x, y, w, h of the widgets band.
+    band: (f32, f32, f32, f32),
+}
+impl Layout {
+    /// The footer starts here; the shortcut row and its label need 77 px.
+    const FOOTER: f32 = 432.;
+    const TILE_TOP: f32 = 90.;
+    const TILE_MIN: f32 = 72.;
+    const BAND_MIN: f32 = 40.;
+    fn new(band: crate::theme::Rect01, widgets: bool) -> Self {
+        let lowest_row = Self::FOOTER - 77.;
+        let x = (band.x * 640.).clamp(0., 639.);
+        let w = (band.w * 640.).clamp(1., 640. - x);
+        let top_min = Self::TILE_TOP + Self::TILE_MIN + 16.;
+        let bottom_max = lowest_row - 18.;
+        let y = (band.y * 480.).clamp(top_min, bottom_max - Self::BAND_MIN);
+        let h = (band.h * 480.).clamp(Self::BAND_MIN, bottom_max - y);
+        if !widgets {
+            return Self {
+                tile_top: 104.,
+                tile_h: 148.,
+                tile_w: 148.,
+                gap: 22.,
+                row_y: 278.,
+                band: (x, y, w, h),
+            };
+        }
+        let tile_h = (y - 16. - Self::TILE_TOP).clamp(Self::TILE_MIN, 148.);
+        Self {
+            tile_top: Self::TILE_TOP,
+            tile_h,
+            tile_w: (tile_h + 24.).min(148.),
+            gap: 18.,
+            row_y: y + h + 18.,
+            band: (x, y, w, h),
+        }
+    }
+}
+
 impl Ui<'_, '_> {
     pub(super) fn hub(
         &mut self,
@@ -65,20 +115,14 @@ impl Ui<'_, '_> {
         // With module widgets the tiles shrink above their band
         // (`start_widgets`) and the shortcuts go under it.
         let widgets = app.modules.widgets();
-        let band = theme.start_widgets;
-        let (tile_top, tile_h, tile_w, gap, row_y) = if widgets.is_empty() {
-            (104., 148., 148., 22., 278.)
-        } else {
-            let top = 90.;
-            let h = (band.y * 480. - 16. - top).clamp(72., 148.);
-            (
-                top,
-                h,
-                (h + 24.).min(148.),
-                18.,
-                (band.y + band.h) * 480. + 18.,
-            )
-        };
+        let layout = Layout::new(theme.start_widgets, !widgets.is_empty());
+        let (tile_top, tile_h, tile_w, gap, row_y) = (
+            layout.tile_top,
+            layout.tile_h,
+            layout.tile_w,
+            layout.gap,
+            layout.row_y,
+        );
         let f = tile_h / 148.;
         let step_x = tile_w + gap;
         let modules = app.modules.tiles();
@@ -414,10 +458,9 @@ impl Ui<'_, '_> {
         let px = |n: f32| (n * scale).round() as i32;
         let (width, _) = self.canvas.output_size()?;
         let offset = width as i32 / 2 - px(320.);
-        let band = theme.start_widgets;
-        let (bx, by, bw, bh) = (band.x * 640., band.y * 480., band.w * 640., band.h * 480.);
+        let (bx, by, bw, bh) = Layout::new(theme.start_widgets, true).band;
         let gap = 16.;
-        let each = (bw - gap * (widgets.len() as f32 - 1.)) / widgets.len() as f32;
+        let each = ((bw - gap * (widgets.len() as f32 - 1.)) / widgets.len() as f32).max(1.);
         let focused = app.hub_widget.min(widgets.len() - 1);
         // Text on the widget, not the background: no outline.
         let outlining = std::mem::replace(&mut self.look.outlining, false);
@@ -560,5 +603,53 @@ impl Ui<'_, '_> {
             }
         }
         Ok((Face::Fallback, floor))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Layout;
+    use crate::theme::Rect01;
+
+    #[test]
+    fn any_widget_band_keeps_tiles_and_shortcuts_on_screen() {
+        let bands = [
+            (0.153125, 0.454_166_7, 0.69375, 0.216_666_7),
+            (0., 0., 1., 1.),
+            (0., 0.95, 1., 0.05),
+            (0.999, 0.2, 0.001, 0.0),
+            (0.5, 0.5, 0.0, 0.0),
+            (0., 0., 0., 0.),
+        ];
+        for (x, y, w, h) in bands {
+            let layout = Layout::new(Rect01 { x, y, w, h }, true);
+            let (bx, by, bw, bh) = layout.band;
+            assert!(bx >= 0. && bw >= 1. && bx + bw <= 640., "{layout:?}");
+            assert!(bh >= Layout::BAND_MIN, "{layout:?}");
+            assert!(
+                layout.tile_top + layout.tile_h + 16. <= by,
+                "tiles over the band: {layout:?}"
+            );
+            assert!(
+                layout.row_y >= by + bh,
+                "shortcuts over the band: {layout:?}"
+            );
+            assert!(
+                layout.row_y + 77. <= Layout::FOOTER,
+                "shortcuts off the screen: {layout:?}"
+            );
+        }
+        // The default theme's band is used as it is.
+        let default = Layout::new(
+            Rect01 {
+                x: 0.153125,
+                y: 0.454_166_7,
+                w: 0.69375,
+                h: 0.216_666_7,
+            },
+            true,
+        );
+        assert_eq!(default.tile_h.round(), 112.);
+        assert_eq!(default.row_y.round(), 340.);
     }
 }
