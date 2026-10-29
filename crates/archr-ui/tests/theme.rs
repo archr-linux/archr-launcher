@@ -589,7 +589,16 @@ fn style_keys_inherit_and_reject_bad_values_one_by_one() {
 #[test]
 fn pictures_frames_and_text_keys_parse_inherit_and_drop_bad_entries() {
     let builtin = Theme::builtin();
-    assert_eq!((builtin.font_scale, builtin.font_grid), (1.0, 0.0));
+    assert_eq!(
+        (builtin.font_scale, builtin.font_grid, builtin.font_min),
+        (1.0, 0.0, 8.0)
+    );
+    assert_eq!(load("font_min = 12").font_min, 12.0);
+    assert_eq!(
+        load("font_min = 40").font_min,
+        8.0,
+        "out of range keeps the default"
+    );
     assert!(builtin.font_smoothing && builtin.text_outline.is_none());
     assert!(builtin.frames.is_empty() && builtin.background_image.is_none());
     let dir = TempDir::new().unwrap();

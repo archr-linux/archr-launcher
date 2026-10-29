@@ -56,6 +56,7 @@ easing = "smooth"
 # are described in docs/temas.md.
 font_scale = 1.0
 font_grid = 0
+font_min = 8 # smallest text, in px; what does not fit wraps
 font_smoothing = true
 # Game details (Jogo-detalhes): left column 24px+250px, right column 292px+324px.
 details_shot = { x = 0.0375, y = 0.104166667, w = 0.390625, h = 0.3125 } # 150px tall

@@ -82,6 +82,7 @@ que não existe cai nas do sistema (DejaVu/Liberation).
 font_scale = 1.4        # 0,5 a 2: multiplica todo tamanho de texto (com o do usuário)
 font_grid = 8           # 0 a 32 px: tamanhos ficam no múltiplo mais próximo (0 = livre)
 font_smoothing = false  # sem suavização: letras de borda dura, para fontes pixel
+font_min = 12           # 6 a 32 px: nenhum texto fica menor; o que não cabe quebra linha
 ```
 
 `font_grid` serve a fontes desenhadas numa grade (Press Start 2P fica nítida

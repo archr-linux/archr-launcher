@@ -49,6 +49,8 @@ struct Frame {
     /// The theme's own multiplier and the grid sizes snap to (0: none).
     font: f32,
     grid: f32,
+    /// Smallest text, in reference pixels.
+    min: f32,
     now: Instant,
     unix: u64,
 }
@@ -61,6 +63,7 @@ impl Frame {
             text: 1.,
             font: 1.,
             grid: 0.,
+            min: 8.,
             now: Instant::now(),
             unix: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -95,7 +98,11 @@ impl Frame {
         } else {
             size
         };
-        self.px(size).clamp(8, 128) as u16
+        self.px(size.max(self.min)).clamp(8, 128) as u16
+    }
+    /// The smallest size worth asking for, before the text multipliers.
+    fn min_size(self) -> f32 {
+        self.min.max(8. / self.scale) / (self.text * self.font)
     }
 }
 fn localized_error(catalog: &I18n, error: String) -> String {
@@ -201,21 +208,23 @@ fn fit_status(
     Ok(last)
 }
 
-/// Keep system rows single-line; parenthetical detail remains in the artwork panel.
+/// Keep system rows single-line; parenthetical detail remains in the artwork
+/// panel. Also tells whether the name fits at the size found.
 fn fit_system_name(
     name: &str,
     width: u32,
     (mut size, minimum): (f32, f32),
     mut measure: impl FnMut(&str, f32) -> Result<u32, String>,
-) -> Result<(&str, f32), String> {
+) -> Result<(&str, f32, bool), String> {
     if measure(name, size)? <= width {
-        return Ok((name, size));
+        return Ok((name, size, true));
     }
     let name = without_detail(name);
     while size > minimum && measure(name, size)? > width {
         size = (size - 1.).max(minimum);
     }
-    Ok((name, size))
+    let fits = measure(name, size)? <= width;
+    Ok((name, size, fits))
 }
 
 struct ListMotion {
@@ -788,7 +797,8 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             .style(theme.corners, self.px(theme.border_width).max(1) as u32);
         crate::motion::set_steps(theme.steps);
         (self.shadow_style, self.pixel_art, self.blink) = (theme.shadow, theme.pixel_art, None);
-        (self.frame.font, self.frame.grid) = (theme.font_scale, theme.font_grid);
+        (self.frame.font, self.frame.grid, self.frame.min) =
+            (theme.font_scale, theme.font_grid, theme.font_min);
         if let Some(text) = &mut self.text {
             text.set_smoothing(theme.font_smoothing);
         }
@@ -1275,15 +1285,27 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 x += w as i32 + self.px(6.);
             }
             let width = (right - x).max(1) as u32;
-            let (name, size) = if is_games {
-                (name.as_str(), size)
+            let (name, size, fits) = if is_games {
+                (name.as_str(), size, true)
             } else {
-                let minimum = f32::from(self.frame.font_size(0.)) / self.frame.scale;
+                let minimum = self.frame.min_size();
                 fit_system_name(&name, width, (size, minimum), |name, size| {
                     self.measure(name, face, size)
                 })?
             };
-            self.label(name, (face, size, c), Rect::new(x, y, width, rh))?;
+            // A system name too long even at the theme's smallest size wraps,
+            // when the row holds two lines.
+            let two = rh as f32 >= 2. * f32::from(self.frame.font_size(size));
+            let lines = if two && !fits {
+                system_art::wrap(name, width, |text| self.measure(text, face, size))?
+            } else {
+                vec![name.to_owned()]
+            };
+            let step = rh as i32 / lines.len() as i32;
+            for (n, line) in lines.iter().enumerate() {
+                let at = Rect::new(x, y + step * n as i32, width, step.max(1) as u32);
+                self.label(line, (face, size, c), at)?;
+            }
         }
         if len == 0 {
             self.label(
@@ -2052,10 +2074,21 @@ pub fn prepare_first_frame<'font>(
         let (face, size, color) = row_style(theme, list, i, collections, 0);
         let width = (right - x).max(1) as u32;
         let minimum = f32::from(frame.font_size(0.)) / frame.scale;
-        let (title, size) = fit_system_name(&title, width, (size, minimum), |text, size| {
+        let (title, size, fits) = fit_system_name(&title, width, (size, minimum), |text, size| {
             prepared.measure(text, face, frame.font_size(size))
         })?;
-        label(&mut prepared, title, (face, size, color), Some(width))?;
+        // As the list draws it: wrapped when too long and the row holds two lines.
+        let rh = (if i == 0 { list.selected } else { list.row } * frame.height as f32).round();
+        let lines = if !fits && rh >= 2. * f32::from(frame.font_size(size)) {
+            system_art::wrap(title, width, |text| {
+                prepared.measure(text, face, frame.font_size(size))
+            })?
+        } else {
+            vec![title.to_owned()]
+        };
+        for line in &lines {
+            label(&mut prepared, line, (face, size, color), Some(width))?;
+        }
     }
     if systems.is_empty() {
         label(
@@ -2294,7 +2327,9 @@ mod tests {
                 ),
                 ("Name (region) revision", 140, "Name (region) revision"),
             ] {
-                let (name, size) = fit_system_name(text, width, (initial, 8.), measure).unwrap();
+                let (name, size, fits) =
+                    fit_system_name(text, width, (initial, 8.), measure).unwrap();
+                assert!(fits);
                 assert_eq!(name, want, "selected={selected}, width={width}");
                 assert!(measure(name, size).unwrap() <= width);
                 assert!((8. ..=initial).contains(&size));
@@ -2306,9 +2341,11 @@ mod tests {
                 }
             }
             let minimum_width = measure("MO/TO family", 8.).unwrap();
-            let (name, size) =
+            let (name, size, fits) =
                 fit_system_name(full, minimum_width, (initial, 8.), measure).unwrap();
-            assert_eq!((name, size), ("MO/TO family", 8.));
+            assert_eq!((name, size, fits), ("MO/TO family", 8., true));
+            let (_, _, fits) = fit_system_name(full, 10, (initial, 8.), measure).unwrap();
+            assert!(!fits, "too long even at the minimum: the row wraps it");
         }
     }
 

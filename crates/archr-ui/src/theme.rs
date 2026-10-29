@@ -148,6 +148,9 @@ pub struct Theme {
     /// pixels) rings the text drawn straight over the background.
     pub font_scale: f32,
     pub font_grid: f32,
+    /// No text is drawn smaller than this, in reference pixels: what does
+    /// not fit at it wraps instead.
+    pub font_min: f32,
     pub font_smoothing: bool,
     pub text_outline: Option<Outline>,
     /// Pictures of the browsing screens: the background and the frames.
@@ -282,6 +285,7 @@ impl Theme {
             steps: token!(steps = "easing", easing),
             font_scale: token!(font_scale, font_scale),
             font_grid: token!(font_grid, font_grid),
+            font_min: token!(font_min, font_min),
             font_smoothing: token!(font_smoothing, some),
             text_outline: match table.get("text_outline") {
                 Some(value) => text_outline(value),
@@ -389,6 +393,7 @@ pub const KNOWN_KEYS: &[&str] = &[
     "easing",
     "font_scale",
     "font_grid",
+    "font_min",
     "font_smoothing",
     "text_outline",
     "background_image",
@@ -524,6 +529,9 @@ fn some<T>(value: T) -> Option<T> {
 }
 fn font_scale(value: f32) -> Option<f32> {
     (0.5..=2.0).contains(&value).then_some(value)
+}
+fn font_min(value: f32) -> Option<f32> {
+    (6.0..=32.0).contains(&value).then_some(value)
 }
 fn font_grid(value: f32) -> Option<f32> {
     (0.0..=32.0).contains(&value).then_some(value)
