@@ -273,7 +273,7 @@
 # Live system information
 "settings.details" = "Detalles"
 "settings.previous_next" = "Anterior · siguiente"
-"settings.refreshing" = "Actualizando…"
+"settings.refreshing" = "Buscando…"
 "settings.updated_now" = "Actualizado ahora"
 "settings.refresh_interval" = "Actualiza cada 2 s"
 "settings.cpu_summary" = { one = "{model} · {count} núcleo", other = "{model} · {count} núcleos" }
@@ -391,7 +391,8 @@
 "settings.bt_paired" = "Emparejados"
 "settings.bt_available" = "Disponibles"
 "settings.bt_pair" = "Emparejar"
-"settings.bt_searching" = "Buscando…"
+"settings.scan_wifi" = "BUSCANDO REDES"
+"settings.scan_bt" = "BUSCANDO DISPOSITIVOS"
 "settings.bt_hint" = "Pon el dispositivo en modo de emparejamiento"
 "settings.bt_controller" = "Mando"
 "settings.bt_audio" = "Audio"

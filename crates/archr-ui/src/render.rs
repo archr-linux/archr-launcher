@@ -318,6 +318,8 @@ pub struct Ui<'font, 'texture> {
     /// The active view and the theme it was resolved from.
     view: Option<(Theme, View)>,
     animating: bool,
+    /// Origin of looping animations such as the search dots.
+    born: Instant,
     /// Look-and-feel choices: text-size multiplier and how much things move.
     pub text_scale: f32,
     /// The letter on the control of the A, B, X and Y actions, for hints.
@@ -420,6 +422,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             achievements_page: 1,
             view: None,
             animating: false,
+            born: Instant::now(),
             text_scale: 1.,
             face_letters: ['A', 'B', 'X', 'Y'],
             motion: Motion::On,
@@ -665,7 +668,9 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             self.settings_page(settings, theme)?;
             self.animating = self.settings_scroll.tween.active(now)
                 || self.settings_banner.busy(now)
-                || self.switches.values().any(|(_, knob)| knob.active(now));
+                || self.switches.values().any(|(_, knob)| knob.active(now))
+                // The search dots loop for as long as a search runs.
+                || (settings.searching() && self.motion != Motion::Off);
         } else {
             let (backdrop, cursor) = app.backdrop();
             let view = self.view(theme);

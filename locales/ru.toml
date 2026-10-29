@@ -273,7 +273,7 @@
 # Live system information
 "settings.details" = "Подробнее"
 "settings.previous_next" = "Пред. · след."
-"settings.refreshing" = "Обновление…"
+"settings.refreshing" = "Поиск…"
 "settings.updated_now" = "Обновлено сейчас"
 "settings.refresh_interval" = "Обновление каждые 2 с"
 "settings.cpu_summary" = { one = "{model} · {count} ядро", few = "{model} · {count} ядра", many = "{model} · {count} ядер", other = "{model} · {count} ядра" }
@@ -391,7 +391,8 @@
 "settings.bt_paired" = "Сопряжённые"
 "settings.bt_available" = "Доступные"
 "settings.bt_pair" = "Связать"
-"settings.bt_searching" = "Поиск…"
+"settings.scan_wifi" = "ПОИСК СЕТЕЙ"
+"settings.scan_bt" = "ПОИСК УСТРОЙСТВ"
 "settings.bt_hint" = "Переведите устройство в режим сопряжения"
 "settings.bt_controller" = "Геймпад"
 "settings.bt_audio" = "Аудио"

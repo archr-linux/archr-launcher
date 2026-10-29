@@ -9,11 +9,12 @@ impl View<'_, '_, '_> {
             top: VIEW_TOP,
             height: 40.,
             section: None,
+            searching: None,
         }];
         // Divider under the switch: 4 px margins around a 1 px rule.
         let mut top = VIEW_TOP + 40. + ROW_GAP + 9.;
         let devices = if on { state.bt.as_slice() } else { &[] };
-        // Paired devices come first; the "searching" row closes the list.
+        // Paired devices come first; the pairing hint row closes the list.
         let rows = devices.len() + usize::from(on);
         for n in 0..rows {
             let paired = |i: usize| devices.get(i).is_some_and(|d| d.paired);
@@ -31,6 +32,7 @@ impl View<'_, '_, '_> {
                 top,
                 height: 40.,
                 section,
+                searching: None,
             });
             top += 40. + ROW_GAP;
         }
@@ -46,12 +48,13 @@ impl View<'_, '_, '_> {
                     (y, place.height),
                     selected,
                 ),
-                Some(i) => view.bt_row(devices.get(i), (y, place.height), selected),
+                Some(i) => view.bt_row(state, devices.get(i), (y, place.height), selected),
             },
         )
     }
     fn bt_row(
         &mut self,
+        state: &Settings,
         device: Option<&crate::settings::bluetooth::Device>,
         (y, h): (f32, f32),
         selected: bool,
@@ -60,12 +63,9 @@ impl View<'_, '_, '_> {
         let face = selection(selected, Face::Regular, Face::Semibold);
         let muted = selection(selected, self.theme.muted, self.theme.accent_text_secondary);
         let Some(device) = device else {
-            self.text_face(
-                (28., y + 3., 520., h - 18.),
-                &self.tr("settings.bt_searching"),
-                (15., ink, Align::Left),
-                face,
-            )?;
+            if state.searching() {
+                self.searching("settings.scan_bt", y + 3., 0.)?;
+            }
             return self.text(
                 (28., y + h - 19., 560., 18.),
                 &self.tr("settings.bt_hint"),

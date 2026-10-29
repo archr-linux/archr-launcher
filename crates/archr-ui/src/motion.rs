@@ -55,6 +55,27 @@ impl Motion {
             Self::Off => Duration::ZERO,
         }
     }
+    /// Search dot `n` (opacity, lift in pixels) `secs` into the animation.
+    /// Reduced motion only fades; off holds the dots still.
+    pub fn search_dot(self, secs: f32, n: usize) -> (f32, f32) {
+        if self == Self::Off {
+            return (0.6, 0.);
+        }
+        let p = cycle(secs, 1.2, 0.15 * n as f32);
+        let peak = if p < 0.4 {
+            p / 0.4
+        } else {
+            ((0.8 - p) / 0.4).max(0.)
+        };
+        (0.25 + 0.75 * peak, self.distance(3.) * peak)
+    }
+    /// Opacity of placeholder row `n` while a search has found nothing yet.
+    pub fn search_skeleton(self, secs: f32, n: usize) -> f32 {
+        if self == Self::Off {
+            return 0.5;
+        }
+        0.35 + 0.35 * (1. - (2. * cycle(secs, 1.4, 0.15 * n as f32) - 1.).abs())
+    }
     /// Pixels something travels: none unless motion is on.
     pub fn distance(self, full: f32) -> f32 {
         if self == Self::On {
@@ -63,6 +84,11 @@ impl Motion {
             0.
         }
     }
+}
+
+/// Position in a looping animation of `period` seconds, started `delay` late.
+fn cycle(secs: f32, period: f32, delay: f32) -> f32 {
+    ((secs - delay) / period).rem_euclid(1.)
 }
 
 pub struct Tween {
@@ -160,5 +186,33 @@ mod tests {
         glide.snap();
         assert_eq!(glide.value(now), 10.);
         assert!(!glide.active(now));
+    }
+    #[test]
+    fn search_dots_pulse_in_sequence_and_respect_the_motion_choice() {
+        let (first, lift) = Motion::On.search_dot(0.48, 0);
+        assert!(
+            (first - 1.).abs() < 1e-3 && (lift - 3.).abs() < 1e-3,
+            "peak"
+        );
+        assert!(
+            Motion::On.search_dot(0.48, 1).0 < first,
+            "the next one lags"
+        );
+        assert_eq!(Motion::On.search_dot(0., 0), Motion::On.search_dot(1.2, 0));
+        let (fading, flat) = Motion::Reduced.search_dot(0.48, 0);
+        assert_eq!((fading, flat), (first, 0.), "reduced only changes opacity");
+        assert_eq!(
+            Motion::Off.search_dot(0., 0),
+            Motion::Off.search_dot(0.48, 2)
+        );
+        assert_eq!(
+            Motion::Off.search_skeleton(0., 0),
+            Motion::Off.search_skeleton(0.7, 1)
+        );
+        let (low, high) = (
+            Motion::On.search_skeleton(0., 0),
+            Motion::On.search_skeleton(0.7, 0),
+        );
+        assert!(low < high && high <= 0.7 + 1e-3, "rows breathe");
     }
 }

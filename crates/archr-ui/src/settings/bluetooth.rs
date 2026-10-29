@@ -120,6 +120,15 @@ impl Settings {
             _ => None,
         }
     }
+    /// A search is running on the Wi-Fi or Bluetooth page, radio on.
+    pub fn searching(&self) -> bool {
+        let radio = match self.page() {
+            Page::Wifi => Id::WifiSwitch,
+            Page::Bluetooth => Id::BtSwitch,
+            _ => return false,
+        };
+        self.value(radio) == "1" && self.refreshing().is_some_and(|(busy, _)| busy)
+    }
     /// The device under the cursor on the Bluetooth page.
     pub fn bt_device(&self) -> Option<&Device> {
         (self.page() == Page::Bluetooth)
@@ -245,5 +254,22 @@ mod tests {
         assert_eq!(state.handle(Button::Y), Effect::None);
         state.handle(Button::Down);
         assert_eq!(state.cursor, 0);
+    }
+    #[test]
+    fn the_search_shows_only_while_it_runs_on_its_own_page() {
+        let mut state = on();
+        assert!(!state.searching(), "idle");
+        state.bt_scanning = true;
+        assert!(state.searching(), "scanning with the radio on");
+        state.values.insert(Id::BtSwitch, "0".into());
+        assert!(!state.searching(), "radio off");
+        state.values.insert(Id::BtSwitch, "1".into());
+        state.bt_scanning = false;
+        assert!(!state.searching(), "finished: the indicator is gone");
+        state.scanning = true;
+        assert!(!state.searching(), "a Wi-Fi scan is not shown on this page");
+        state.open(Page::Wifi);
+        state.values.insert(Id::WifiSwitch, "1".into());
+        assert!(state.searching(), "Wi-Fi scan on the Wi-Fi page");
     }
 }

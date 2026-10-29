@@ -27,6 +27,8 @@ const VIEW_BOTTOM: f32 = 428.;
 const FOOTER: f32 = 432.;
 const ROW_GAP: f32 = 3.;
 const SECTION_HEIGHT: f32 = 21.;
+/// A placeholder row standing in for a network the search has not found yet.
+const SKELETON: f32 = 34.;
 /// Usage bar and percentage under the games card row (Config-armazenamento).
 const CARD_METER: f32 = 34.;
 /// The rule under the hotkey modifier row (Atalhos-jogos): 3 + 1 + 3 px.
@@ -38,15 +40,19 @@ struct Placement {
     top: f32,
     height: f32,
     section: Option<&'static str>,
+    /// The section is a running search: height of the placeholder rows under it.
+    searching: Option<f32>,
 }
 impl Placement {
     fn selected_top(self) -> f32 {
-        self.top
-            - if self.section.is_some() {
-                SECTION_HEIGHT
-            } else {
-                0.
-            }
+        self.top - self.lead()
+    }
+    /// Space above the row taken by its section heading and placeholders.
+    fn lead(self) -> f32 {
+        match (self.section, self.searching) {
+            (None, _) => 0.,
+            (Some(_), skeleton) => SECTION_HEIGHT + skeleton.unwrap_or(0.),
+        }
     }
     fn bottom(self) -> f32 {
         self.top + self.height
@@ -76,6 +82,7 @@ fn placements(page: Page, rows: &[Row]) -> Vec<Placement> {
                 top,
                 height,
                 section: row.section,
+                searching: None,
             };
             top += height + ROW_GAP;
             if row.id == Id::StorageCard {
@@ -227,6 +234,43 @@ impl View<'_, '_, '_> {
             self.theme.accent_text_secondary,
         );
         self.ui.rounded(rect, corner, back, Some(edge))
+    }
+    /// "Searching" heading with pulsing dots at `top`, then `skeleton` pixels
+    /// of placeholder rows. Looping state comes from the clock, never stored.
+    fn searching(&mut self, key: &str, top: f32, skeleton: f32) -> Result<(), String> {
+        let secs = self
+            .ui
+            .frame
+            .now
+            .saturating_duration_since(self.ui.born)
+            .as_secs_f32();
+        let motion = self.ui.motion;
+        let faded = |c: Rgba, alpha: f32| Rgba {
+            a: (f32::from(c.a) * (alpha * 16.).round() / 16.) as u8,
+            ..c
+        };
+        let mid = top + SECTION_HEIGHT / 2. + 1.;
+        for n in 0..3 {
+            let (alpha, lift) = motion.search_dot(secs, n);
+            let dot = self.rect((28. + 10. * n as f32, mid - 3. - lift, 6., 6.));
+            let fill = faded(self.theme.highlight_bg, alpha);
+            self.ui.rounded(dot, self.ui.px(3.) as f32, fill, None)?;
+        }
+        self.text(
+            (64., top, 540., SECTION_HEIGHT),
+            &self.tr(key),
+            (12., self.theme.text_secondary, Align::Left),
+        )?;
+        let rows = if skeleton > 0. { 2 } else { 0 };
+        for (n, width) in [120., 90.].into_iter().take(rows).enumerate() {
+            let y = top + SECTION_HEIGHT + n as f32 * (SKELETON + ROW_GAP) + 11.;
+            let fill = faded(self.theme.border, motion.search_skeleton(secs, n));
+            for (x, w) in [(28., width), (594., 18.)] {
+                let bar = self.rect((x, y, w, 12.));
+                self.ui.rounded(bar, self.ui.px(6.) as f32, fill, None)?;
+            }
+        }
+        Ok(())
     }
     fn rect(&self, (x, y, w, h): Bounds) -> Rect {
         Rect::new(
@@ -726,6 +770,7 @@ impl View<'_, '_, '_> {
             top: VIEW_TOP,
             height: 0.,
             section: None,
+            searching: None,
         });
         let bottom = positions.last().map_or(VIEW_TOP, |p| p.bottom());
         let offset = self.ui.settings_scroll.offset(
@@ -749,7 +794,9 @@ impl View<'_, '_, '_> {
                 {
                     continue;
                 }
-                if let Some(section) = position.section {
+                if let (Some(section), Some(skeleton)) = (position.section, position.searching) {
+                    self.searching(section, y - position.lead(), skeleton)?;
+                } else if let Some(section) = position.section {
                     let heading = if section == MEDIA_SECTION {
                         let count = state.media_tokens().len();
                         self.tr(&format!("{section}|count={count}|total={}", MEDIA.len()))

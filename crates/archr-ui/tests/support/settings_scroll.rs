@@ -13,6 +13,7 @@ fn variable_heights_keep_selection_and_section_visible_and_snap_on_page_change()
         top: 180.,
         height: 46.,
         section: Some("settings.system"),
+        searching: None,
     };
     scroll.tween.retarget(180., now);
     scroll.tween.snap();
