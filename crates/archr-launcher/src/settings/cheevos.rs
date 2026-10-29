@@ -429,7 +429,7 @@ mod tests {
                     .fetch_profile(&client(failure))
                     .map(|(p, refused)| (p.since, refused)),
             );
-            // Offline after a reboot: the card's facts come from disk.
+            // A new key typed during the failure is not saved over the old one.
             let _ = backend.save_key(&client(failure), "other");
         }
         assert_eq!(
