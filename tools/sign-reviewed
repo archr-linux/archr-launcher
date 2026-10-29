@@ -1,0 +1,33 @@
+#!/bin/sh
+# Signs the module store's reviewed list (docs/modulos.md, "Selo").
+#
+#   tools/sign-reviewed reviewed.json [private-key.pem]
+#
+# Writes reviewed.json.sig next to it: the Ed25519 signature of the whole
+# file, 64 bytes as 128 hex digits on one line. The key defaults to
+# ~/.archr/archr-modules-ed25519.pem (mode 600, never committed or
+# uploaded). The signature is checked against keys/archr-modules-ed25519.pub
+# before it is kept. Publish both files as assets of a new release of
+# archr-linux/archr-modules; raise "serial" in reviewed.json every time.
+set -eu
+list="${1:?usage: tools/sign-reviewed reviewed.json [private-key.pem]}"
+key="${2:-${HOME}/.archr/archr-modules-ed25519.pem}"
+public="$(dirname "$0")/../keys/archr-modules-ed25519.pub"
+[ -f "${list}" ] || { echo "sign-reviewed: ${list} not found" >&2; exit 1; }
+[ -f "${key}" ] || { echo "sign-reviewed: private key ${key} not found" >&2; exit 1; }
+case "$(stat -c %a "${key}")" in
+  600 | 400) ;;
+  *) echo "sign-reviewed: ${key} must be mode 600" >&2; exit 1 ;;
+esac
+# The list must be JSON with a numeric serial: the launcher refuses one
+# older than the last it saw.
+jq -e '(.serial | type == "number") and (.modules | type == "array")' "${list}" >/dev/null ||
+  { echo "sign-reviewed: ${list} needs a numeric \"serial\" and a \"modules\" list" >&2; exit 1; }
+tmp=$(mktemp -d)
+trap 'rm -rf "${tmp}"' EXIT
+openssl pkeyutl -sign -rawin -inkey "${key}" -in "${list}" -out "${tmp}/sig"
+openssl pkeyutl -verify -rawin -pubin -inkey "${public}" -in "${list}" -sigfile "${tmp}/sig" >/dev/null ||
+  { echo "sign-reviewed: the key does not match keys/archr-modules-ed25519.pub" >&2; exit 1; }
+od -An -v -tx1 "${tmp}/sig" | tr -d ' \n' >"${list}.sig"
+echo >>"${list}.sig"
+echo "signed: ${list}.sig"

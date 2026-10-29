@@ -22,6 +22,10 @@ tempfile = "3"
 flate2 = "1"
 tar = { version = "0.4", default-features = false }
 sha2 = "0.10"
+# Verifies the reviewed list (docs/modulos.md, "Selo"): RustCrypto/dalek,
+# audited; verification only, no key generation or randomness.
+ed25519-dalek = { version = "2", default-features = false }
 
 [dev-dependencies]
+ed25519-dalek = { version = "2", default-features = false }
 image = { version = "0.25", default-features = false, features = ["png"] }

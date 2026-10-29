@@ -1031,3 +1031,5 @@
 "modules.auto_updated" = "{name} foi atualizado para {version}"
 "modules.days_ago" = { one = "há {count} dia", other = "há {count} dias" }
 "modules.update_asks" = { one = "Esta atualização pede {count} permissão nova. Sem ela, a versão {version} continua instalada e funcionando.", other = "Esta atualização pede {count} permissões novas. Sem elas, a versão {version} continua instalada e funcionando." }
+"modules.review_unsigned" = "A lista de revisados não tem a assinatura do ArchR: nenhum módulo tem selo nem se atualiza sozinho"
+"modules.review_old" = "A lista de revisados é mais antiga que a última vista: nenhum módulo tem selo nem se atualiza sozinho"

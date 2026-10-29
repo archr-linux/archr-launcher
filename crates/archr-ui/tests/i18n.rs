@@ -374,6 +374,7 @@ const CONFIG_KEYS: &[&str] = &[
     "module.toml",
     "modules.toml",
     "reviewed.json",
+    "reviewed.json.sig",
     "system.hostname",
     // RetroArch file names read by the importer.
     "retroarch.cfg",

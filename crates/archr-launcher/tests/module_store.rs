@@ -119,19 +119,40 @@ fn publish(fake: &Fake, manifest: &str, tarball: &[u8], digest: &str, reviewed: 
         &format!("{DOWNLOAD}/bateria-1.0.0.tar.gz"),
         tarball.to_vec(),
     );
+    let list = format!(
+        r#"{{"serial":3,"modules":[{{"repo":"kaio-dev/archr-bateria","digest":"sha256:{reviewed}"}}]}}"#
+    );
+    review(fake, list.as_bytes(), &sign(list.as_bytes()));
+}
+/// The test key's private half; `shop` trusts its public half.
+const TEST_KEY: [u8; 32] = [7; 32];
+fn sign(body: &[u8]) -> String {
+    use ed25519_dalek::Signer;
+    let key = ed25519_dalek::SigningKey::from_bytes(&TEST_KEY);
+    key.sign(body)
+        .to_bytes()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+/// archr-linux/archr-modules' latest release: the list and its signature.
+fn review(fake: &Fake, list: &[u8], signature: &str) {
     fake.answer(
         &format!("{API}/archr-linux/archr-modules/releases/latest"),
-        r#"{"tag_name":"v3","assets":[{"name":"reviewed.json","size":100}]}"#,
+        r#"{"tag_name":"v3","assets":[{"name":"reviewed.json","size":100},
+            {"name":"reviewed.json.sig","size":129}]}"#,
     );
+    let download = "https://github.com/archr-linux/archr-modules/releases/download/v3";
+    fake.answer(&format!("{download}/reviewed.json"), list.to_vec());
     fake.answer(
-        "https://github.com/archr-linux/archr-modules/releases/download/v3/reviewed.json",
-        format!(
-            r#"{{"modules":[{{"repo":"kaio-dev/archr-bateria","digest":"sha256:{reviewed}"}}]}}"#
-        ),
+        &format!("{download}/reviewed.json.sig"),
+        format!("{signature}\n"),
     );
 }
 fn shop(root: &Path, fake: &Fake) -> Shop {
+    let public = ed25519_dalek::SigningKey::from_bytes(&TEST_KEY).verifying_key();
     Shop::new(Box::new(fake.clone()), root.join("cache"), Dirs::new(root))
+        .with_review_key(public.to_bytes())
 }
 fn card() -> Card {
     Card {
@@ -633,4 +654,67 @@ fn the_host_leaves_switched_off_and_rolled_back_modules_alone() {
         assert!(version_on_disk(root.path()).contains("1.0.0"));
         assert_eq!(State::load(&path).modules["bateria"].enabled, !off);
     }
+}
+
+#[test]
+fn only_a_list_signed_by_the_archr_key_and_not_older_gives_badges() {
+    use archr_launcher::modules::store::{signed, REVIEW_KEY};
+    // The list tools/sign-reviewed signed with the real key.
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let list = fs::read(fixtures.join("reviewed.json")).unwrap();
+    let signature = fs::read(fixtures.join("reviewed.json.sig")).unwrap();
+    assert!(signed(&list, &signature, &REVIEW_KEY));
+    let mut changed = list.clone();
+    changed[2] ^= 1;
+    assert!(!signed(&changed, &signature, &REVIEW_KEY));
+    assert!(!signed(&list, b"", &REVIEW_KEY));
+    assert!(!signed(&list, &signature[..100], &REVIEW_KEY));
+    // Through the store: a list signed by another key, or none, reviews
+    // nothing and says why.
+    let tarball = Tarball::module(MANIFEST).bytes();
+    let digest = sha(&tarball);
+    let body = format!(
+        r#"{{"serial":3,"modules":[{{"repo":"kaio-dev/archr-bateria","digest":"sha256:{digest}"}}]}}"#
+    );
+    let stranger = {
+        use ed25519_dalek::Signer;
+        let key = ed25519_dalek::SigningKey::from_bytes(&[9; 32]);
+        let bytes = key.sign(body.as_bytes()).to_bytes();
+        bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()
+    };
+    for (signature, problem) in [
+        (sign(body.as_bytes()), None),
+        (stranger, Some("modules.review_unsigned")),
+        (String::new(), Some("modules.review_unsigned")),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let fake = Fake::default();
+        publish(&fake, MANIFEST, &tarball, &digest, &digest);
+        review(&fake, body.as_bytes(), &signature);
+        let store = shop(root.path(), &fake);
+        let StoreReply::Listed {
+            cards,
+            problem: said,
+            ..
+        } = store.list(Tab::All, false)
+        else {
+            panic!("not a list");
+        };
+        assert_eq!(said, problem);
+        let bateria = cards.iter().find(|c| c.repo == "archr-bateria").unwrap();
+        assert_eq!(bateria.reviewed, problem.is_none());
+        assert_eq!(store.offer(&card()).unwrap().reviewed, problem.is_none());
+    }
+    // An older list than one already seen: refused, nothing reviewed.
+    let root = tempfile::tempdir().unwrap();
+    let fake = Fake::default();
+    publish(&fake, MANIFEST, &tarball, &digest, &digest);
+    assert!(shop(root.path(), &fake).offer(&card()).unwrap().reviewed);
+    fs::remove_dir_all(root.path().join("cache")).unwrap();
+    let old = body.replace("\"serial\":3", "\"serial\":2");
+    review(&fake, old.as_bytes(), &sign(old.as_bytes()));
+    let StoreReply::Listed { problem, .. } = shop(root.path(), &fake).list(Tab::All, false) else {
+        panic!("not a list");
+    };
+    assert_eq!(problem, Some("modules.review_old"));
 }

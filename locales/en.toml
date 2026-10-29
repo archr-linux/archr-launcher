@@ -1031,3 +1031,5 @@
 "modules.auto_updated" = "{name} was updated to {version}"
 "modules.days_ago" = { one = "{count} day ago", other = "{count} days ago" }
 "modules.update_asks" = { one = "This update asks for {count} new permission. Without it, version {version} stays installed and working.", other = "This update asks for {count} new permissions. Without them, version {version} stays installed and working." }
+"modules.review_unsigned" = "The reviewed list is not signed by ArchR: no module shows the badge or updates on its own"
+"modules.review_old" = "The reviewed list is older than the last one seen: no module shows the badge or updates on its own"
