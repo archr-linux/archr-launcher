@@ -949,3 +949,31 @@ fn game_launch_needs_the_permission_and_a_fresh_user_action() {
         [("snes".to_owned(), "snes/zelda.sfc".to_owned())]
     );
 }
+
+#[test]
+fn late_launch_answers_are_allowed_and_count_only_as_a_habit() {
+    let root = tempfile::tempdir().unwrap();
+    let base = root.path();
+    let both = ["hooks:launch", "system:cpu-profile"];
+    let dir = api_2(
+        base,
+        "lento",
+        "hooks = [\"launch\"]\nsystem = [\"cpu-profile\"]",
+        &both,
+    );
+    fs::write(dir.join("before.json"), r#"{"decision":"allow"}"#).unwrap();
+    fs::write(dir.join("delay"), "1").unwrap();
+    let mut probe = Probe::new(base);
+    let log = base.join("module-data/lento/seen.log");
+    // Two late launches in a row: allowed, no strike, it comes back.
+    for _ in 0..2 {
+        ready(base, &["lento"]);
+        assert_eq!(probe.modules.hand_off("n64", "n64/m.z64", "M"), None);
+        let _ = fs::remove_file(&log);
+        probe.modules.resume();
+    }
+    ready(base, &["lento"]);
+    let view = probe.wait(|_, _| true);
+    assert!(view.modules[0].active(), "{:?}", probe.notices);
+    assert!(probe.notices.is_empty(), "{:?}", probe.notices);
+}

@@ -39,6 +39,8 @@ const PUBLISH: Duration = Duration::from_millis(250);
 const NOTIFY: Duration = Duration::from_secs(10);
 /// All `launch.before` answers must arrive within this, together.
 pub const BEFORE: Duration = Duration::from_millis(300);
+/// Late `launch.before` answers in a row before it counts as a failure.
+const LATE: u32 = 3;
 /// `game.launch` is honoured this long after the user chose one of the
 /// module's actions, once.
 const GESTURE: Duration = Duration::from_secs(5);
@@ -266,6 +268,8 @@ struct Host {
     notified: BTreeMap<String, Instant>,
     /// When each module's `config.set`s were saved, the last hour's.
     written: BTreeMap<String, Vec<Instant>>,
+    /// `launch.before` answers each module was late for in a row.
+    late: BTreeMap<String, u32>,
     /// When the user last chose an action of each module (`game.launch`).
     gestures: BTreeMap<String, Instant>,
     /// A launch waiting for `launch.before`: where the answer goes and the
@@ -311,6 +315,7 @@ impl Host {
             notified: BTreeMap::new(),
             written: BTreeMap::new(),
             gestures: BTreeMap::new(),
+            late: BTreeMap::new(),
             before: None,
             config,
             inbox,
@@ -1101,7 +1106,10 @@ impl Host {
                 self.touch();
             }
             Waiting::Shutdown => {}
-            Waiting::Before => self.decision(id, &message["result"]),
+            Waiting::Before => {
+                self.late.remove(id);
+                self.decision(id, &message["result"]);
+            }
         }
     }
     fn notification(&mut self, id: &str, method: &str, params: &Json) {
@@ -1449,7 +1457,13 @@ impl Host {
                 !self.daemons.contains_key(id)
                     && !self.restarts.contains_key(id)
                     && self.active(id).is_some_and(|(_, m)| m.mode == Mode::Daemon)
-                    && self.failures.get(id).is_none_or(Vec::is_empty)
+                    // A recent failure waits out the longest back-off; an
+                    // old one never keeps it down (e.g. after a game).
+                    && self
+                        .failures
+                        .get(id)
+                        .and_then(|f| f.last())
+                        .is_none_or(|at| at.elapsed() >= Duration::from_secs(BACKOFF[2]))
             });
             if let Some(id) = next {
                 self.spawn_daemon(&id);
@@ -1487,7 +1501,19 @@ impl Host {
                     self.touch();
                     self.punish(&id, "timed out");
                 }
-                Some(Waiting::Before) => self.punish(&id, "was late for launch.before"),
+                // Late is "allow": the game never waits. Only a habit of it
+                // counts against the module.
+                Some(Waiting::Before) => {
+                    let count = self.late.entry(id.clone()).or_default();
+                    *count += 1;
+                    log::warn!(
+                        "Module {id} was late for launch.before ({count} in a row): allowed"
+                    );
+                    if *count >= LATE {
+                        self.late.remove(&id);
+                        self.punish(&id, "was late for launch.before 3 times in a row");
+                    }
+                }
                 _ => {}
             }
         }
