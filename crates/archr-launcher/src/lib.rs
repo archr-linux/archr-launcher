@@ -1,6 +1,7 @@
 pub mod appearance;
 pub mod audio;
 pub mod cheevos;
+pub mod github;
 pub mod handoff;
 pub mod state;
 pub mod store;
