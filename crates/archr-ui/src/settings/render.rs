@@ -2,6 +2,8 @@
 use super::*;
 #[path = "render/bluetooth.rs"]
 mod bluetooth;
+use crate::appearance::mix;
+use crate::motion::SWITCH;
 use crate::settings::{
     games::SYSTEM_SECTION,
     pages::{MEDIA, MEDIA_SECTION},
@@ -83,7 +85,7 @@ impl Default for Scroll {
     fn default() -> Self {
         Self {
             page: None,
-            tween: Tween::new(0., Duration::from_millis(90)),
+            tween: Tween::new(0., crate::motion::SELECT),
         }
     }
 }
@@ -112,7 +114,7 @@ impl Scroll {
 }
 /// How long a message stays up, and the fade that removes it.
 const BANNER_TIME: Duration = Duration::from_secs(4);
-const BANNER_FADE: Duration = Duration::from_millis(150);
+const BANNER_FADE: Duration = crate::motion::NOTICE;
 /// The visible message: fades out on a timer or when the state drops it, and
 /// a different message shows at once and restarts the timer.
 pub(super) struct Banner {
@@ -139,8 +141,10 @@ impl Banner {
                 self.shown = Some(error.clone());
                 self.seq = seq;
                 self.since = now;
-                self.fade.retarget(1., now);
+                // Rises into place from transparent.
+                self.fade.retarget(0., now);
                 self.fade.snap();
+                self.fade.retarget(1., now);
             }
             Some(_) if now.saturating_duration_since(self.since) >= BANNER_TIME => {
                 self.fade.retarget(0., now)
@@ -467,13 +471,15 @@ impl View<'_, '_, '_> {
                 a: (f32::from(c.a) * alpha) as u8,
                 ..c
             };
-            let bounds = if state.page() == Page::Root {
+            let (x, y, w, h) = if state.page() == Page::Root {
                 (386., 318., 230., 110.)
             } else if state.page() == Page::Keyboard {
                 (24., 296., 592., 40.)
             } else {
                 (24., 384., 592., 40.)
             };
+            let rise = self.ui.motion().distance(24.) * (1. - alpha);
+            let bounds = (x, y + rise, w, h);
             self.ui.rounded(
                 self.rect(bounds),
                 self.ui.px(10.) as f32,
@@ -578,24 +584,38 @@ impl View<'_, '_, '_> {
                 })
             };
         if let Some((question, detail, hints)) = dialog {
-            self.ui.scrim(self.theme, 1.)?;
-            if let (Some(detail), Some(hints)) = (&detail, hints) {
-                return self.question(&question, detail, hints);
-            }
-            self.panel((80., 158., 480., 164.), false)?;
-            self.label((104., 174., 432., 80.), &question, 18.)?;
-            if let Some(detail) = detail {
-                self.note((104., 262., 432., 40.), &detail, 14.)?;
-            }
-            if let Some(hints) = hints {
-                self.ui.hints(
-                    hints,
-                    self.theme,
-                    self.ui.px(550.) as u32,
-                    self.ui.px(264.),
-                    self.ui.px(34.) as u32,
-                )?;
-            }
+            let theme = self.theme;
+            return self
+                .ui
+                .pop_in(crate::render::Pop::Dialog, &question, (theme, 1.), |ui| {
+                    View { ui, theme }.dialog(&question, detail.as_deref(), hints)
+                });
+        }
+        Ok(())
+    }
+    /// A question with its explanation and answers, or a wait message.
+    fn dialog(
+        &mut self,
+        question: &str,
+        detail: Option<&str>,
+        hints: Option<&[(crate::HintButton, &str)]>,
+    ) -> Result<(), String> {
+        if let (Some(detail), Some(hints)) = (detail, hints) {
+            return self.question(question, detail, hints);
+        }
+        self.panel((80., 158., 480., 164.), false)?;
+        self.label((104., 174., 432., 80.), question, 18.)?;
+        if let Some(detail) = detail {
+            self.note((104., 262., 432., 40.), detail, 14.)?;
+        }
+        if let Some(hints) = hints {
+            self.ui.hints(
+                hints,
+                self.theme,
+                self.ui.px(550.) as u32,
+                self.ui.px(264.),
+                self.ui.px(34.) as u32,
+            )?;
         }
         Ok(())
     }
@@ -922,19 +942,26 @@ impl View<'_, '_, '_> {
             }
             Kind::Toggle => {
                 let on = state.value(id) == "1";
-                let track = selection(
-                    on,
+                let (now, motion) = (self.ui.frame.now, self.ui.motion());
+                let (seen, knob) = self.ui.switches.entry(id).or_insert_with(|| {
+                    (
+                        on,
+                        Tween::new(f32::from(u8::from(on)), motion.travel(SWITCH)),
+                    )
+                });
+                if *seen != on {
+                    *seen = on;
+                    knob.retarget(f32::from(u8::from(on)), now);
+                }
+                let at = knob.value(now);
+                let track = mix(
                     self.theme.badge,
                     selection(selected, self.theme.highlight_bg, self.theme.highlight_text),
+                    at,
                 );
                 self.capsule((x + w - 38., y + h / 2. - 10., 38., 20.), track)?;
                 self.capsule(
-                    (
-                        x + w - 36. + if on { 18. } else { 0. },
-                        y + h / 2. - 8.,
-                        16.,
-                        16.,
-                    ),
+                    (x + w - 36. + 18. * at, y + h / 2. - 8., 16., 16.),
                     selection(selected && on, self.theme.text, self.theme.highlight_bg),
                 )?;
             }
@@ -1026,12 +1053,15 @@ mod banner_tests {
     fn message_fades_after_four_seconds_and_a_new_one_restarts_the_timer() {
         let (mut banner, t0) = (Banner::default(), Instant::now());
         let first = error("settings.failed");
-        assert_eq!(banner.alpha(first.as_ref(), 0, t0), 1.);
+        // It rises into view.
+        assert_eq!(banner.alpha(first.as_ref(), 0, t0), 0.);
+        assert_eq!(banner.alpha(first.as_ref(), 0, t0 + BANNER_FADE), 1.);
         let late = t0 + Duration::from_millis(3900);
         assert_eq!(banner.alpha(first.as_ref(), 0, late), 1.);
-        // A different message replaces it at full opacity and restarts the clock.
+        // A different message replaces it, rising again, and restarts the clock.
         let second = error("settings.wifi_timeout");
-        assert_eq!(banner.alpha(second.as_ref(), 1, late), 1.);
+        assert_eq!(banner.alpha(second.as_ref(), 1, late), 0.);
+        assert_eq!(banner.alpha(second.as_ref(), 1, late + BANNER_FADE), 1.);
         let later = late + Duration::from_millis(3900);
         assert_eq!(banner.alpha(second.as_ref(), 1, later), 1.);
         // Past the timer the message fades, then stays gone while the state keeps it.
@@ -1048,7 +1078,8 @@ mod banner_tests {
         let message = error("settings.failed");
         banner.alpha(message.as_ref(), 1, t0);
         let late = t0 + Duration::from_millis(3900);
-        assert_eq!(banner.alpha(message.as_ref(), 2, late), 1.);
+        banner.alpha(message.as_ref(), 2, late);
+        assert_eq!(banner.alpha(message.as_ref(), 2, late + BANNER_FADE), 1.);
         let later = late + Duration::from_millis(3900);
         assert_eq!(banner.alpha(message.as_ref(), 2, later), 1.);
     }

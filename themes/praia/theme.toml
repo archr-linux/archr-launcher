@@ -1,0 +1,31 @@
+# Example theme: yellow and navy, the list on the right and the art on the
+# left. Everything not written here comes from the default theme
+# (docs/temas.md). It ships no fonts, so the system ones are used.
+name = { en = "Beach (example)", pt_BR = "Praia (exemplo)", es = "Playa (ejemplo)", ru = "Пляж (пример)" }
+
+background = "#0A2540"
+surface = "#0F3057"
+surface_elevated = "#143A68"
+border = "#1E4A7F"
+badge = "#1E4A7F"
+text = "#FFF8E1"
+text_secondary = "#E8DDB5"
+muted = "#A9B8CC"
+dim = "#6F86A3"
+accent = "#FFC93C"
+accent_text = "#0A2540"
+accent_text_secondary = "#5A4710"
+
+# Positions are screen fractions: x and w of the width (640), y and h of the
+# height (480). Only x and w change here; the rest is inherited.
+[view.lista.systems]
+list = { x = 0.4375, w = 0.5375 }
+panel = { x = 0.025, w = 0.390625 }
+art = { x = 0.05625, w = 0.328125 }
+info = { x = 0.05, w = 0.340625 }
+
+[view.lista.games]
+list = { x = 0.4, w = 0.575 }
+panel = { x = 0.025, w = 0.328125 }
+art = { x = 0.025, w = 0.328125 }
+meta = { x = 0.025, w = 0.328125 }

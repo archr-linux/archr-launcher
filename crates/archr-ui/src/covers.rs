@@ -246,13 +246,16 @@ impl<'a> CoverCache<'a> {
         self.stale.extend(self.pending.drain());
     }
     pub fn get(&mut self, path: &PathBuf) -> Option<&Texture<'a>> {
+        self.get_mut(path).map(|texture| &*texture)
+    }
+    pub fn get_mut(&mut self, path: &PathBuf) -> Option<&mut Texture<'a>> {
         let index = self
             .textures
             .iter()
             .position(|(cached, _)| cached == path)?;
         let entry = self.textures.remove(index)?;
         self.textures.push_back(entry);
-        self.textures.back()?.1.as_ref()
+        self.textures.back_mut()?.1.as_mut()
     }
 }
 

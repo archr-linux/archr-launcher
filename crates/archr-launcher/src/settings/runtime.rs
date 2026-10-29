@@ -121,11 +121,12 @@ impl Runtime {
                 let look = self.state.appearance();
                 self.send(Work::Appearance(vec![
                     (Id::Theme, look.theme),
+                    (Id::View, look.view),
                     (Id::Accent, look.accent),
                     (Id::Background, look.background),
                     (Id::Font, look.font),
                     (Id::TextSize, look.text_size),
-                    (Id::Animations, u8::from(look.animations).to_string()),
+                    (Id::Animations, look.animations.code().into()),
                 ]))
             }
             Effect::Storage(action) => self.send(Work::Storage(action)),

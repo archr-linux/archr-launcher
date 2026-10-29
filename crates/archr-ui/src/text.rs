@@ -96,8 +96,8 @@ pub(crate) struct Style {
     pub size: u16,
     pub color: Rgba,
 }
-#[derive(Clone, Copy)]
-pub(crate) enum Align {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Align {
     Left,
     Center,
     Right,

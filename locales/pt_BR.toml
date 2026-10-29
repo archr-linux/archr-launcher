@@ -54,6 +54,7 @@
 "time.yesterday" = "ontem"
 "systems.count" = { one = "{count} sistema", other = "{count} sistemas" }
 "games.count" = { one = "{count} jogo", other = "{count} jogos" }
+"games.position" = "{system} · {n} de {total}"
 "tools.count" = { one = "{count} ferramenta", other = "{count} ferramentas" }
 "favorites.count" = { one = "{count} favorito", other = "{count} favoritos" }
 "panel.stats" = "{games} · {favorites}"
@@ -419,6 +420,7 @@
 "settings.slot_fixed" = "Fixo"
 "settings.games_system" = "Sistema"
 "settings.theme" = "Tema"
+"settings.view" = "Visualização"
 "settings.accent" = "Cor de destaque"
 "settings.background" = "Fundo"
 "settings.font" = "Fonte"
@@ -427,7 +429,7 @@
 "settings.restore" = "Restaurar padrão"
 "appearance.preview" = "Pré-visualização"
 "appearance.preview_note" = "As mudanças aparecem aqui na hora e só são gravadas ao sair."
-"appearance.theme_default" = "Grafite"
+"appearance.bg_theme" = "Do tema"
 "appearance.bg_black" = "Preto"
 "appearance.bg_slate" = "Azul-noite"
 "appearance.font_inter" = "Inter"
@@ -437,6 +439,7 @@
 "appearance.text_normal" = "Normal"
 "appearance.text_large" = "Grande"
 "appearance.anim_on" = "Ligadas"
+"appearance.anim_reduced" = "Reduzidas"
 "appearance.anim_off" = "Desligadas"
 "appearance.custom" = "Cor personalizada"
 "appearance.custom_note" = "Fica depois das seis cores prontas"

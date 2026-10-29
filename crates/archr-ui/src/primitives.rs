@@ -94,24 +94,20 @@ impl Mesh {
         self.vertices.clear();
         self.indices.clear();
     }
-    fn fan(&mut self, points: &[Point], c: Color, rect: Rect, textured: bool) {
+    fn fan(&mut self, points: &[Point], c: Color, rect: Rect, crop: Option<[f32; 4]>) {
         let base = self.vertices.len() as u16;
+        let uv = |p: Point| {
+            crop.map_or((0., 0.), |[u, v, w, h]| {
+                (
+                    u + w * (p.0 - rect.x() as f32) / rect.width() as f32,
+                    v + h * (p.1 - rect.y() as f32) / rect.height() as f32,
+                )
+            })
+        };
         let center = center(rect);
-        self.vertices.push(vertex(center, c, (0.5, 0.5)));
-        self.vertices.extend(points.iter().map(|&p| {
-            vertex(
-                p,
-                c,
-                if textured {
-                    (
-                        (p.0 - rect.x() as f32) / rect.width() as f32,
-                        (p.1 - rect.y() as f32) / rect.height() as f32,
-                    )
-                } else {
-                    (0., 0.)
-                },
-            )
-        }));
+        self.vertices.push(vertex(center, c, uv(center)));
+        self.vertices
+            .extend(points.iter().map(|&p| vertex(p, c, uv(p))));
         for i in 0..points.len() {
             self.indices.extend([
                 base,
@@ -134,14 +130,14 @@ impl Mesh {
             let b = ((i + 1) % POINTS * 2) as u16;
             self.indices.extend([a, a + 1, b, b, a + 1, b + 1]);
         }
-        self.fan(&points, color(edge), rect, false);
+        self.fan(&points, color(edge), rect, None);
         if border.is_some() && rect.width() > 2 && rect.height() > 2 {
             let inner = border_rect(rect, true);
             self.fan(
                 &outline(inner, (radius - 1.).max(0.)),
                 color(fill),
                 inner,
-                false,
+                None,
             );
         }
     }
@@ -209,7 +205,7 @@ impl Mesh {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Key {
     Rounded(Rect, u32, Rgba, Option<Rgba>),
-    Cover(Rect, u32),
+    Cover(Rect, u32, [u32; 4]),
     Dashed(Rect, u32, Rgba),
 }
 /// Per-renderer bounded LRU for panels and cover meshes. Evicted meshes
@@ -239,9 +235,12 @@ impl Geometry {
                 Key::Rounded(rect, r, fill, border) => {
                     mesh.rounded(rect, f32::from_bits(r), fill, border)
                 }
-                Key::Cover(rect, r) => {
-                    mesh.fan(&outline(rect, f32::from_bits(r)), Color::WHITE, rect, true)
-                }
+                Key::Cover(rect, r, crop) => mesh.fan(
+                    &outline(rect, f32::from_bits(r)),
+                    Color::WHITE,
+                    rect,
+                    Some(crop.map(f32::from_bits)),
+                ),
                 Key::Dashed(rect, r, c) => mesh.dashed(rect, f32::from_bits(r), c),
             }
             self.meshes.push_back((key, mesh));
@@ -276,14 +275,51 @@ impl Geometry {
         rect: Rect,
         radius: f32,
         alpha: u8,
+        crop: [f32; 4],
     ) -> Result<(), String> {
-        let mesh = self.mesh(Key::Cover(rect, radius.to_bits()));
+        let mesh = self.mesh(Key::Cover(rect, radius.to_bits(), crop.map(f32::to_bits)));
         for vertex in &mut mesh.vertices {
             vertex.color.a = alpha;
         }
         mesh.draw(canvas, Some(texture))
     }
 }
+/// `rect` shaded from `left` to `right`.
+pub(crate) fn gradient(
+    canvas: &mut Canvas<Window>,
+    rect: Rect,
+    left: Rgba,
+    right: Rgba,
+) -> Result<(), String> {
+    let (x0, y0, x1, y1) = (
+        rect.x() as f32,
+        rect.y() as f32,
+        rect.right() as f32,
+        rect.bottom() as f32,
+    );
+    let (l, r) = (color(left), color(right));
+    let corners = [
+        vertex((x0, y0), l, (0., 0.)),
+        vertex((x1, y0), r, (0., 0.)),
+        vertex((x1, y1), r, (0., 0.)),
+        vertex((x0, y1), l, (0., 0.)),
+    ];
+    canvas.render_geometry(&corners, None, [0u16, 1, 2, 0, 2, 3].as_slice())
+}
+/// Texture fraction (u, v, w, h) that fills a `width`×`height` box without
+/// distortion: everything (`contain` is the caller's job) or a centered crop.
+pub(crate) fn crop(texture: (u32, u32), (width, height): (u32, u32)) -> [f32; 4] {
+    let source = texture.0 as f32 / texture.1.max(1) as f32;
+    let target = width as f32 / height.max(1) as f32;
+    if source > target {
+        let w = target / source;
+        [(1. - w) / 2., 0., w, 1.]
+    } else {
+        let h = source / target;
+        [0., (1. - h) / 2., 1., h]
+    }
+}
+pub(crate) const WHOLE: [f32; 4] = [0., 0., 1., 1.];
 pub(crate) struct Shadow<'a>(Texture<'a>);
 impl<'a> Shadow<'a> {
     pub fn new(creator: &'a TextureCreator<WindowContext>) -> Result<Self, String> {

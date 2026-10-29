@@ -54,6 +54,7 @@
 "time.yesterday" = "yesterday"
 "systems.count" = { one = "{count} system", other = "{count} systems" }
 "games.count" = { one = "{count} game", other = "{count} games" }
+"games.position" = "{system} · {n} of {total}"
 "tools.count" = { one = "{count} tool", other = "{count} tools" }
 "favorites.count" = { one = "{count} favorite", other = "{count} favorites" }
 "panel.stats" = "{games} · {favorites}"
@@ -419,6 +420,7 @@
 "settings.slot_fixed" = "Fixed"
 "settings.games_system" = "System"
 "settings.theme" = "Theme"
+"settings.view" = "View"
 "settings.accent" = "Accent color"
 "settings.background" = "Background"
 "settings.font" = "Font"
@@ -427,7 +429,7 @@
 "settings.restore" = "Restore defaults"
 "appearance.preview" = "Preview"
 "appearance.preview_note" = "Changes show here at once and are saved when you leave."
-"appearance.theme_default" = "Graphite"
+"appearance.bg_theme" = "From the theme"
 "appearance.bg_black" = "Black"
 "appearance.bg_slate" = "Midnight blue"
 "appearance.font_inter" = "Inter"
@@ -437,6 +439,7 @@
 "appearance.text_normal" = "Normal"
 "appearance.text_large" = "Large"
 "appearance.anim_on" = "On"
+"appearance.anim_reduced" = "Reduced"
 "appearance.anim_off" = "Off"
 "appearance.custom" = "Custom color"
 "appearance.custom_note" = "Placed after the six ready-made colors"

@@ -146,8 +146,14 @@ impl Ui<'_, '_> {
                 shot.height().saturating_sub(2).max(1),
             );
             let dst = fit(texture, inner, false);
-            self.geometry
-                .cover(&mut self.canvas, texture, dst, (radius - 1.).max(0.), 255)?;
+            self.geometry.cover(
+                &mut self.canvas,
+                texture,
+                dst,
+                (radius - 1.).max(0.),
+                255,
+                WHOLE,
+            )?;
         } else {
             self.label_aligned(
                 &system_title(system, data, &self.catalog),

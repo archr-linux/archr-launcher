@@ -383,6 +383,7 @@ const CONFIG_KEYS: &[&str] = &[
     "launcher.sounds_volume",
     "launcher.text_size",
     "launcher.theme",
+    "launcher.view",
     "moonlight.cfg",
     "moonlight.height",
     "moonlight.hosts",

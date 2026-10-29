@@ -1,6 +1,6 @@
 //! Appearance page (Aparencia): the rows, accent swatches and a live preview.
 use super::*;
-use crate::appearance::{mix, parse_hex, rgb, Appearance, ACCENT_RGB};
+use crate::appearance::{mix, rgb, Appearance, ACCENTS, ACCENT_RGB};
 
 /// Rows stop short of the preview column.
 const LIST_RIGHT: f32 = 372.;
@@ -39,24 +39,30 @@ impl View<'_, '_, '_> {
         self.ui.frame.text = scale;
         preview
     }
-    /// The accent choices as dots, the custom colour last as a colour wheel;
-    /// a ring marks the one in effect.
+    /// The accent choices as dots: the theme's own first, the custom colour
+    /// last as a colour wheel; a ring marks the one in effect.
     pub(super) fn swatches(
         &mut self,
         state: &Settings,
         selected: bool,
         (x, y, w, h): Bounds,
     ) -> Result<(), String> {
-        let look = state.appearance();
-        let active = look.apply(&state.base_theme).highlight_bg;
-        let custom = parse_hex(&look.accent).is_some();
+        let choices = state.accent_choices();
+        let chosen = state.accent_index();
         let ink = self.ink(selected);
         let behind = selection(selected, self.theme.background, self.theme.highlight_bg);
-        let dots = ACCENT_RGB.len() + 1;
+        let dots = choices.len();
         let mut left = x + w - (dots as f32 * 26. - 8.);
-        for n in 0..dots {
-            let color = ACCENT_RGB.get(n).map(|hex| rgb(*hex));
-            let (cy, ring) = (y + h / 2., color.map_or(custom, |c| !custom && c == active));
+        for (n, choice) in choices.iter().enumerate() {
+            let color = if choice.is_empty() {
+                Some(state.base_theme.highlight_bg)
+            } else {
+                ACCENTS
+                    .iter()
+                    .position(|name| name == choice)
+                    .map(|i| rgb(ACCENT_RGB[i]))
+            };
+            let (cy, ring) = (y + h / 2., n == chosen);
             if ring {
                 for (size, fill) in [(26., ink), (22., behind)] {
                     let bounds = (left + 9. - size / 2., cy - size / 2., size, size);

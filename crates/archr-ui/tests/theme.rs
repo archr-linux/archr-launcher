@@ -7,10 +7,26 @@ fn write_theme(dir: &Path, source: &str) {
     fs::write(dir.join("theme.toml"), source).unwrap();
 }
 
+/// Loads `source`; a theme without a name is named after its (random) folder,
+/// so the name is compared by `names_come_from_the_theme_or_its_folder`.
 fn load(source: &str) -> Theme {
     let dir = TempDir::new().unwrap();
     write_theme(dir.path(), source);
-    Theme::load(dir.path())
+    let mut theme = Theme::load(dir.path());
+    theme.name = Theme::builtin().name;
+    theme
+}
+
+#[test]
+fn names_come_from_the_theme_or_its_folder() {
+    let root = TempDir::new().unwrap();
+    let (plain, named) = (root.path().join("sol"), root.path().join("noite"));
+    write_theme(&plain, "margin = 0.2");
+    write_theme(&named, "name = { en = 'Night', pt_BR = 'Noite' }");
+    assert_eq!(Theme::load(&plain).name.get("pt_BR"), Some("sol"));
+    assert_eq!(Theme::load(&named).name.get("pt_BR"), Some("Noite"));
+    assert_eq!(Theme::load(&named).name.get("ru"), Some("Night"));
+    assert_eq!(Theme::builtin().name.get("ru"), Some("Grafite"));
 }
 
 #[test]
@@ -482,4 +498,52 @@ fn grafite_tokens_inherit_independently_and_legacy_accent_still_works() {
             a: 255
         }
     );
+}
+
+#[test]
+fn views_inherit_from_the_builtin_and_themes_add_their_own() {
+    let builtin = Theme::builtin();
+    let ids: Vec<_> = builtin.views().into_iter().map(|(id, _)| id).collect();
+    assert_eq!(ids, ["lista", "vitrine"]);
+    assert_eq!(
+        builtin.view("lista"),
+        archr_ui::layout::View::lista(&builtin)
+    );
+    // An unknown view draws the classic layout.
+    assert_eq!(builtin.view("gone").id, "lista");
+    let theme = load("view = 3\nmargin = 0.05\n");
+    assert_eq!(
+        theme.views().len(),
+        2,
+        "a malformed view key keeps the inherited views"
+    );
+    let theme = load(
+        "[view.lado]\nname = 'Lado'\n[view.lado.games.list]\nx = 0.6\nw = 0.38\n\
+         [view.vitrine.games]\nheader = 'full'\n[view.ruim]\nsystems = 4",
+    );
+    let views = theme.views();
+    assert_eq!(
+        views.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(),
+        ["lista", "vitrine", "lado", "ruim"]
+    );
+    assert_eq!(views[2].1.get("ru"), Some("Lado"));
+    assert_eq!(
+        views[1].1.get("pt_BR"),
+        Some("Vitrine"),
+        "names inherit with the view"
+    );
+    let lado = theme.view("lado");
+    assert_eq!(
+        (lado.games.list.rect.x, lado.games.list.rect.w),
+        (0.6, 0.38)
+    );
+    assert_eq!(lado.systems, theme.view("lista").systems);
+    let vitrine = theme.view("vitrine");
+    assert_eq!(vitrine.games.header, archr_ui::layout::Header::Full);
+    assert_eq!(
+        vitrine.games.list.mark,
+        archr_ui::layout::Mark::Bar,
+        "the rest is inherited"
+    );
+    assert_eq!(theme.view("ruim").systems, theme.view("lista").systems);
 }

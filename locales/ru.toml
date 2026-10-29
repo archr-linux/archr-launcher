@@ -54,6 +54,7 @@
 "time.yesterday" = "вчера"
 "systems.count" = { one = "{count} система", few = "{count} системы", many = "{count} систем", other = "{count} системы" }
 "games.count" = { one = "{count} игра", few = "{count} игры", many = "{count} игр", other = "{count} игры" }
+"games.position" = "{system} · {n} из {total}"
 "tools.count" = { one = "{count} инструмент", few = "{count} инструмента", many = "{count} инструментов", other = "{count} инструмента" }
 "favorites.count" = { one = "{count} в избранном", few = "{count} в избранном", many = "{count} в избранном", other = "{count} в избранном" }
 "panel.stats" = "{games} · {favorites}"
@@ -419,6 +420,7 @@
 "settings.slot_fixed" = "Фиксированный"
 "settings.games_system" = "Система"
 "settings.theme" = "Тема"
+"settings.view" = "Вид"
 "settings.accent" = "Цвет акцента"
 "settings.background" = "Фон"
 "settings.font" = "Шрифт"
@@ -427,7 +429,7 @@
 "settings.restore" = "Сбросить настройки"
 "appearance.preview" = "Предпросмотр"
 "appearance.preview_note" = "Изменения видны здесь сразу и сохраняются при выходе."
-"appearance.theme_default" = "Графит"
+"appearance.bg_theme" = "Из темы"
 "appearance.bg_black" = "Чёрный"
 "appearance.bg_slate" = "Полуночный синий"
 "appearance.font_inter" = "Inter"
@@ -437,6 +439,7 @@
 "appearance.text_normal" = "Обычный"
 "appearance.text_large" = "Крупный"
 "appearance.anim_on" = "Включены"
+"appearance.anim_reduced" = "Уменьшены"
 "appearance.anim_off" = "Выключены"
 "appearance.custom" = "Свой цвет"
 "appearance.custom_note" = "Идёт после шести готовых цветов"

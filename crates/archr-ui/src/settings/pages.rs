@@ -47,6 +47,7 @@ pub const GAMES: &[Row] = &[
 ];
 pub const APPEARANCE: &[Row] = &[
     row(Id::Theme, "settings.theme", Kind::Value),
+    row(Id::View, "settings.view", Kind::Value),
     row(Id::Accent, "settings.accent", Kind::Value),
     row(Id::Background, "settings.background", Kind::Value),
     row(Id::Font, "settings.font", Kind::Value),
@@ -310,7 +311,8 @@ impl Settings {
             background: text(Id::Background),
             font: text(Id::Font),
             text_size: text(Id::TextSize),
-            animations: self.value(Id::Animations) == "1",
+            animations: crate::motion::Motion::parse(self.value(Id::Animations)),
+            view: text(Id::View),
         }
     }
     /// B saves the draft only when something changed.
@@ -327,7 +329,7 @@ impl Settings {
     /// A on rows that open something instead of changing a value.
     pub(super) fn activate(&mut self, id: Id) -> Option<Effect> {
         match id {
-            Id::Accent if self.open_custom() => {}
+            Id::Accent => self.open_custom(),
             Id::NetplayLink => self.open(Page::Netplay),
             Id::ScraperLink => self.open(Page::Scraper),
             Id::MangohudLink => self.open(Page::Mangohud),
@@ -360,10 +362,10 @@ impl Settings {
                 let user = self.scrape.user.clone();
                 self.open_keyboard(Id::ScraperAccount, Mode::Text, user);
             }
+            // Everything back to what the chosen theme says.
             Id::Restore => {
-                let theme = self.value(Id::Theme) != Id::Theme.default_value();
                 for id in [
-                    Id::Theme,
+                    Id::View,
                     Id::Accent,
                     Id::Background,
                     Id::Font,
@@ -372,11 +374,6 @@ impl Settings {
                 ] {
                     self.values.insert(id, id.default_value().into());
                 }
-                return Some(if theme {
-                    Effect::Theme(Id::Theme.default_value().into())
-                } else {
-                    Effect::None
-                });
             }
             Id::ScraperStart if self.scrape.running => return Some(Effect::CancelScrape),
             // Pending from the first press: a second A never starts a second job.

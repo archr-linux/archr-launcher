@@ -22,7 +22,9 @@ pub struct Appearance {
     pub background: String,
     pub font: String,
     pub text_size: String,
-    pub animations: bool,
+    pub animations: crate::motion::Motion,
+    /// Id of one of the theme's views.
+    pub view: String,
 }
 
 pub(crate) fn rgb(hex: u32) -> Rgba {
@@ -123,6 +125,9 @@ impl Appearance {
     /// `theme` with the chosen accent, background and font laid over it.
     pub fn apply(&self, theme: &Theme) -> Theme {
         let mut theme = theme.clone();
+        if !self.view.is_empty() {
+            theme.active_view.clone_from(&self.view);
+        }
         let preset = ACCENTS.iter().position(|a| *a == self.accent);
         // Anything else that is not a valid `#RRGGBB` keeps the theme's accent.
         if let Some(hex) = preset

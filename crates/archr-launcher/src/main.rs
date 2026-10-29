@@ -170,7 +170,8 @@ fn run(
     ui.catalog = catalog;
     ui.theme_dir = theme_path;
     ui.text_scale = look.text_scale();
-    ui.animations = look.animations;
+    ui.set_motion(look.animations);
+    ui.start_opening();
     ui.configure_prepared(&creator, prepared, paths.root.as_deref())?;
     let mut app = App::new(ui.page_size(&theme));
     app.netplay = netplay_on;
@@ -197,11 +198,12 @@ fn run(
     let mut rooms = netplay::Runtime::new(paths.clone());
     let mut was_browsing = true;
     let mut moonlight = archr_launcher::moonlight::Runtime::new(paths.clone(), (width, height));
+    let mut cover_box = cover_size(&theme, (width, height));
     let mut covers = CoverCache::new(
         &creator,
         paths.cache.join("thumbs"),
-        (theme.cover.w * width as f32).round().max(1.) as u32,
-        (theme.cover.h * height as f32).round().max(1.) as u32,
+        cover_box.0,
+        cover_box.1,
     );
     // Details art: the screen shot box and the logo title, at their own sizes.
     let sized = |rect: archr_ui::theme::Rect01| {
@@ -276,9 +278,19 @@ fn run(
             ui.theme_dir = settings.state.base_dir.clone();
             audio.set_sounds(theme_sounds(ui.theme_dir.as_deref()));
             ui.text_scale = look.text_scale();
-            ui.animations = look.animations;
+            ui.set_motion(look.animations);
             if reload {
                 ui.configure(&ttf, &creator, &theme, paths.root.as_deref())?;
+            }
+            // Another view may show covers at another size.
+            if cover_size(&theme, (width, height)) != cover_box {
+                cover_box = cover_size(&theme, (width, height));
+                covers = CoverCache::new(
+                    &creator,
+                    paths.cache.join("thumbs"),
+                    cover_box.0,
+                    cover_box.1,
+                );
             }
             dirty = true;
         }
@@ -634,6 +646,16 @@ fn details_art(app: &App, data: &dyn DataSource) -> (Option<PathBuf>, Option<Pat
     data.games(system).get(*game).map_or((None, None), |game| {
         (game.details.screenshot.clone(), game.details.logo.clone())
     })
+}
+
+/// Pixel size of the games screen's cover in the active view.
+fn cover_size(theme: &archr_ui::Theme, (width, height): (u32, u32)) -> (u32, u32) {
+    let view = theme.view(&theme.active_view);
+    let rect = view.games.art.map_or(theme.cover, |art| art.rect);
+    (
+        (rect.w * width as f32).round().max(1.) as u32,
+        (rect.h * height as f32).round().max(1.) as u32,
+    )
 }
 fn cover_paths(app: &App, data: &dyn DataSource) -> (Option<PathBuf>, Vec<PathBuf>) {
     let (screen, cursor) = app.backdrop();

@@ -1,3 +1,4 @@
+use crate::layout::{Names, View, LISTA};
 use archr_io::{read_utf8, Symlinks::Follow};
 use serde::{de::DeserializeOwned, Deserialize};
 use std::{
@@ -17,7 +18,7 @@ pub struct Rgba {
 }
 
 /// Rectangle in screen fractions: x/w relative to width, y/h to height.
-#[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Deserialize)]
 pub struct Rect01 {
     pub x: f32,
     pub y: f32,
@@ -77,6 +78,13 @@ pub struct Theme {
     pub details_subtitle: Rect01,
     pub details_text: Rect01,
     pub details_actions: Rect01,
+    /// Shown in Appearance; the folder name when the theme gives none.
+    pub name: Names,
+    /// Id of the view the screens are drawn with (an Appearance choice).
+    pub active_view: String,
+    /// `[view.<id>]` tables in the order they apply: the builtin's, then the
+    /// theme's own. "lista" always comes first.
+    views: Vec<(String, Vec<toml::Table>)>,
 }
 
 impl Theme {
@@ -110,7 +118,12 @@ impl Theme {
                 return theme;
             }
         };
-        Self::from_table(&table, Some(dir), Some(&theme))
+        let mut theme = Self::from_table(&table, Some(dir), Some(&theme));
+        if theme.name.get("en").is_none() {
+            let folder = dir.file_name().unwrap_or_default().to_string_lossy();
+            theme.name = Names::plain(&folder);
+        }
+        theme
     }
     fn from_table(table: &toml::Table, dir: Option<&Path>, defaults: Option<&Self>) -> Self {
         // One field list serves both the embedded theme and user overrides.
@@ -162,8 +175,107 @@ impl Theme {
             font_semibold: font("font_semibold"),
             font_mono: font("font_mono"),
             font_mono_medium: font("font_mono_medium"),
+            name: Names::parse(table.get("name"), "name"),
+            active_view: LISTA.into(),
+            views: view_tables(table, defaults),
         }
     }
+    /// The layout `id` describes, or the classic one when the theme has no such view.
+    pub fn view(&self, id: &str) -> View {
+        let (id, tables) = self
+            .views
+            .iter()
+            .find(|(view, _)| view == id)
+            .unwrap_or(&self.views[0]);
+        let mut view = View::lista(self);
+        view.id = id.clone();
+        for table in tables {
+            view.overlay(table, &format!("view.{id}"));
+        }
+        view
+    }
+    /// Ids of the views this theme offers, with their names.
+    pub fn views(&self) -> Vec<(String, Names)> {
+        self.views
+            .iter()
+            .map(|(id, tables)| {
+                let name = tables.iter().rev().find_map(|t| t.get("name"));
+                (id.clone(), Names::parse(name, &format!("view.{id}")))
+            })
+            .collect()
+    }
+}
+
+const KNOWN_KEYS: &[&str] = &[
+    "background",
+    "text",
+    "highlight_bg",
+    "accent",
+    "highlight_text",
+    "accent_text",
+    "dim_text",
+    "dim",
+    "surface",
+    "surface_elevated",
+    "border",
+    "badge",
+    "text_secondary",
+    "muted",
+    "accent_text_secondary",
+    "scrim",
+    "success",
+    "warning",
+    "radius_item",
+    "radius_card",
+    "header_height",
+    "footer_height",
+    "row_height",
+    "game_row_height",
+    "selected_height",
+    "game_selected_height",
+    "font_size",
+    "margin",
+    "list_width",
+    "cover",
+    "system_screen",
+    "font",
+    "font_semibold",
+    "font_mono",
+    "font_mono_medium",
+    "name",
+    "view",
+];
+
+/// The inherited views, with this theme's tables laid over them.
+fn view_tables(table: &toml::Table, defaults: Option<&Theme>) -> Vec<(String, Vec<toml::Table>)> {
+    for key in table.keys().filter(|k| !KNOWN_KEYS.contains(&k.as_str())) {
+        log::warn!("Unknown theme key {key}; ignored");
+    }
+    let mut views =
+        defaults.map_or_else(|| vec![(LISTA.to_owned(), Vec::new())], |d| d.views.clone());
+    let declared = match table.get("view") {
+        None => return views,
+        Some(toml::Value::Table(declared)) => declared,
+        Some(_) => {
+            log::warn!("Theme key view must hold [view.<id>] tables; ignored");
+            return views;
+        }
+    };
+    for (id, value) in declared {
+        let Some(own) = value.as_table() else {
+            log::warn!("Theme view.{id} must be a table; ignored");
+            continue;
+        };
+        let index = views.iter().position(|(v, _)| v == id).unwrap_or_else(|| {
+            views.push((id.clone(), Vec::new()));
+            views.len() - 1
+        });
+        // A theme that repeats the builtin's own table adds nothing.
+        if views[index].1.last() != Some(own) {
+            views[index].1.push(own.clone());
+        }
+    }
+    views
 }
 
 /// User themes take precedence as a whole; fields inherit from the builtin,

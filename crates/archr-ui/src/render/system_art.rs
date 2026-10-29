@@ -1,9 +1,11 @@
 //! Systems screen artwork panel: console image or a generated typographic card.
-use super::{system_title, Frame, Ui};
+use super::{pixels, selection, system_count, system_title, Frame, Ui};
 use crate::icons::Glyph;
 use crate::{
+    appearance::mix,
     covers::CoverCache,
     i18n::I18n,
+    layout::{Info, Layout, List},
     state::DataSource,
     text::{Align, Face},
     theme::{Rgba, Theme},
@@ -11,9 +13,8 @@ use crate::{
 use sdl2::{rect::Rect, render::TextureCreator, video::WindowContext};
 use std::path::{Path, PathBuf};
 
-pub(super) const PANEL_WIDTH: f32 = 250.;
-pub(super) const PANEL_GAP: f32 = 14.;
-pub(super) const IMAGE_BOX: (f32, f32) = (210., 160.);
+/// Decoded console pictures are this size, whatever box shows them.
+const IMAGE_BOX: (f32, f32) = (210., 160.);
 const EXTENSIONS: [&str; 3] = ["png", "jpg", "webp"];
 
 /// Systems that share the picture of another; the rest use their own name.
@@ -160,9 +161,20 @@ impl<'a> SystemArt<'a> {
         let dirs: Vec<_> = self.dirs.iter().map(PathBuf::as_path).collect();
         self.wanted = names
             .iter()
-            .filter(|name| !name.starts_with('@') || **name == crate::moonlight::SYSTEM)
+            .filter(|name| has_picture(name))
             .map(|name| candidates(&dirs, name.trim_start_matches('@')))
             .collect();
+    }
+    /// The cache key of `name`'s picture, if it can have one.
+    fn key(&self, name: &str) -> Option<PathBuf> {
+        let dirs: Vec<_> = self.dirs.iter().map(PathBuf::as_path).collect();
+        has_picture(name)
+            .then(|| {
+                candidates(&dirs, name.trim_start_matches('@'))
+                    .into_iter()
+                    .next()
+            })
+            .flatten()
     }
 
     /// Retries a request the loader was too busy to take, then uploads results.
@@ -172,20 +184,20 @@ impl<'a> SystemArt<'a> {
     }
 }
 
-/// Panel between the top bar and the footer, on the right edge.
-pub(super) fn panel_rect(frame: Frame, theme: &Theme) -> Rect {
-    let top = (theme.header_height * frame.height as f32).round() as i32 + frame.px(6.);
-    let bottom = frame.height as i32
-        - (theme.footer_height * frame.height as f32).round() as i32
-        - frame.px(8.);
-    let margin = (theme.margin * frame.height as f32).round() as i32;
-    let width = frame.px(PANEL_WIDTH) as u32;
-    Rect::new(
-        frame.width as i32 - margin - width as i32,
-        top,
-        width,
-        (bottom - top).max(1) as u32,
-    )
+fn has_picture(name: &str) -> bool {
+    !name.starts_with('@') || name == crate::moonlight::SYSTEM
+}
+/// Entries `cursor` and its neighbours, the selection first.
+fn nearby(rows: &[String], cursor: usize, reach: usize) -> Vec<&str> {
+    let mut near = vec![cursor];
+    for step in 1..=reach {
+        near.extend(cursor.checked_sub(step));
+        near.push(cursor + step);
+    }
+    near.into_iter()
+        .filter_map(|i| rows.get(i))
+        .map(String::as_str)
+        .collect()
 }
 
 impl Ui<'_, '_> {
@@ -217,76 +229,251 @@ impl Ui<'_, '_> {
         cursor: usize,
         data: &dyn DataSource,
         theme: &Theme,
+        layout: &Layout,
     ) -> Result<(), String> {
         let Some(name) = rows.get(cursor) else {
             return Ok(());
         };
-        let rect = panel_rect(self.frame, theme);
-        let radius = self.px(14.) as f32;
-        self.panel(rect, radius, theme.surface, theme.border)?;
-        self.canvas.set_clip_rect(rect);
-        let collection = name.starts_with('@') && name != crate::moonlight::SYSTEM;
-        let near: Vec<&str> = [Some(cursor), cursor.checked_sub(1), cursor.checked_add(1)]
-            .into_iter()
-            .flatten()
-            .filter_map(|i| rows.get(i))
-            .map(String::as_str)
-            .collect();
-        let mut path = None;
-        if let Some(art) = &mut self.art {
-            art.want(&near);
-            if !collection {
-                path = art.wanted.first().and_then(|paths| paths.first()).cloned();
+        let height = self.frame.height as f32;
+        let panel = layout.panel.map(|p| (self.area(p.rect), p.radius * height));
+        if let Some((rect, radius)) = panel {
+            self.panel(rect, radius, theme.surface, theme.border)?;
+            self.canvas.set_clip_rect(rect);
+        }
+        // Tiles draw their own pictures.
+        if let Some(art) = layout
+            .art
+            .filter(|_| layout.list.mark != crate::layout::Mark::Tile)
+        {
+            let rect = self.area(art.rect);
+            let path = self.art.as_mut().and_then(|a| {
+                a.want(&nearby(rows, cursor, 1));
+                a.key(name)
+            });
+            if !self.console_image(rect, path.as_ref(), 255) {
+                self.generated_card(panel.map_or(rect, |p| p.0), name, theme)?;
             }
+            self.old_art()?;
         }
-        if !self.console_image(rect, path.as_ref()) {
-            self.generated_card(rect, name, theme)?;
+        if let Some((rect, _)) = panel {
+            let pad = self.px(16.);
+            self.rounded(
+                Rect::new(
+                    rect.x() + pad,
+                    rect.y() + pad,
+                    self.px(28.) as u32,
+                    self.px(4.) as u32,
+                ),
+                self.px(2.) as f32,
+                theme.highlight_bg,
+                None,
+            )?;
         }
-        let pad = self.px(16.);
-        self.rounded(
-            Rect::new(
-                rect.x() + pad,
-                rect.y() + pad,
-                self.px(28.) as u32,
-                self.px(4.) as u32,
-            ),
-            self.px(2.) as f32,
-            theme.highlight_bg,
-            None,
-        )?;
-        self.panel_text(rect, name, data, theme)?;
+        if let Some(info) = layout.info {
+            self.panel_text(&info, name, data, theme)?;
+        }
+        self.canvas.set_clip_rect(None);
+        if let Some(dots) = layout.dots {
+            self.dots(self.area(dots), rows.len(), cursor, theme)?;
+        }
+        Ok(())
+    }
+
+    /// Systems as a row of tiles, the selected one large in the middle.
+    pub(super) fn tiles(
+        &mut self,
+        rows: &[String],
+        cursor: usize,
+        lifted: bool,
+        theme: &Theme,
+        list: &List,
+    ) -> Result<(), String> {
+        let Frame { height, now, .. } = self.frame;
+        let area = self.area(list.rect);
+        if self.list.key != "@tiles" {
+            self.list.key = "@tiles".into();
+            self.list.pill.retarget(cursor as f32, now);
+            self.list.pill.snap();
+        } else {
+            self.list.pill.retarget(cursor as f32, now);
+        }
+        if rows.is_empty() {
+            let text = self.catalog.text(if self.loading {
+                "loading"
+            } else {
+                "empty.systems"
+            });
+            return self.label_aligned(
+                &text,
+                (Face::Regular, 16., theme.muted),
+                area,
+                Align::Center,
+            );
+        }
+        if let Some(art) = &mut self.art {
+            art.want(&nearby(rows, cursor, 2));
+        }
+        let at = self.list.pill.value(now);
+        let [small, big, gap] = [list.row, list.selected, list.gap].map(|v| v * height as f32);
+        let reach = big / 2. + gap + small / 2.;
+        let (cx, cy) = (area.center().x() as f32, area.center().y() as f32);
+        let span = (area.width() as f32 / (small + gap)).ceil() as usize / 2 + 2;
+        let first = (at.floor() as usize).saturating_sub(span);
+        let mut tiles: Vec<(usize, f32, f32)> = (first
+            ..rows.len().min(at.ceil() as usize + span + 1))
+            .map(|i| {
+                let d = i as f32 - at;
+                let (offset, side) = if d.abs() < 1. {
+                    (d * reach, big + (small - big) * d.abs())
+                } else {
+                    (d.signum() * (reach + (d.abs() - 1.) * (small + gap)), small)
+                };
+                (i, cx + offset, side)
+            })
+            .collect();
+        // Nearest last, so the selection's shadow lies over its neighbours.
+        tiles.sort_by_key(|tile| std::cmp::Reverse(tile.0.abs_diff(cursor)));
+        self.canvas.set_clip_rect(area);
+        for (i, x, side) in tiles {
+            let focus = ((side - small) / (big - small).max(1.)).clamp(0., 1.);
+            let rect = Rect::new(
+                (x - side / 2.).round() as i32,
+                (cy - side / 2.).round() as i32,
+                side.round().max(1.) as u32,
+                side.round().max(1.) as u32,
+            );
+            let radius = list.radius * height as f32 * side / big;
+            let fill = mix(theme.surface, theme.surface_elevated, focus);
+            if i == cursor && lifted {
+                self.rounded(
+                    rect,
+                    radius,
+                    Rgba {
+                        a: 40,
+                        ..theme.highlight_bg
+                    },
+                    None,
+                )?;
+                self.geometry
+                    .dashed(&mut self.canvas, rect, radius, theme.highlight_bg)?;
+            } else if i == cursor {
+                self.panel(rect, radius, theme.highlight_bg, theme.highlight_bg)?;
+                let border = self.px(2.);
+                let inner = Rect::new(
+                    rect.x() + border,
+                    rect.y() + border,
+                    rect.width().saturating_sub(2 * border as u32).max(1),
+                    rect.height().saturating_sub(2 * border as u32).max(1),
+                );
+                self.rounded(inner, (radius - border as f32).max(0.), fill, None)?;
+            } else {
+                self.rounded(rect, radius, fill, None)?;
+            }
+            // Neighbours sit back at 70%.
+            let alpha = (255. * (0.7 + 0.3 * focus)).round() as u8;
+            self.tile_face(rect, &rows[i], theme, alpha, focus)?;
+        }
         self.canvas.set_clip_rect(None);
         Ok(())
     }
 
-    /// Draws the loaded image with a soft shadow; false while absent or loading.
-    fn console_image(&mut self, rect: Rect, path: Option<&PathBuf>) -> bool {
+    /// The picture inside a tile, or the system's short name.
+    fn tile_face(
+        &mut self,
+        rect: Rect,
+        name: &str,
+        theme: &Theme,
+        alpha: u8,
+        focus: f32,
+    ) -> Result<(), String> {
+        let pad = (rect.width() as f32 * 0.14).round() as i32;
+        let inner = Rect::new(
+            rect.x() + pad,
+            rect.y() + pad,
+            rect.width().saturating_sub(2 * pad as u32).max(1),
+            rect.height().saturating_sub(2 * pad as u32).max(1),
+        );
+        let path = self.art.as_ref().and_then(|a| a.key(name));
+        if self.console_image(inner, path.as_ref(), alpha) {
+            return Ok(());
+        }
+        let ink = Rgba {
+            a: alpha,
+            ..mix(theme.dim_text, theme.text_secondary, focus)
+        };
+        if name.starts_with('@') && name != crate::moonlight::SYSTEM {
+            let side = (inner.width().min(inner.height()) as f32 * 0.5) as u32;
+            let glyph = selection(name == "@favorites", Glyph::Clock, Glyph::Star);
+            let icon = Rect::new(
+                inner.center().x() - side as i32 / 2,
+                inner.center().y() - side as i32 / 2,
+                side,
+                side,
+            );
+            return self.icon(glyph, icon, ink);
+        }
+        let text = short_name(name);
+        let mut size = rect.height() as f32 / self.frame.scale * 0.16;
+        while size > 10. && self.measure(&text, Face::Semibold, size)? > inner.width() {
+            size -= 1.;
+        }
+        self.label_aligned(&text, (Face::Semibold, size, ink), inner, Align::Center)
+    }
+
+    /// Where the selection sits among the systems: a short window of dots.
+    fn dots(&mut self, rect: Rect, len: usize, cursor: usize, theme: &Theme) -> Result<(), String> {
+        const MOST: usize = 5;
+        let shown = len.min(MOST);
+        if shown < 2 {
+            return Ok(());
+        }
+        let start = cursor.saturating_sub(MOST / 2).min(len - shown);
+        let (dot, wide, gap) = (self.px(6.), self.px(18.), self.px(6.));
+        let total = dot * (shown as i32 - 1) + wide + gap * (shown as i32 - 1);
+        let mut x = rect.center().x() - total / 2;
+        let y = rect.center().y() - dot / 2;
+        for n in start..start + shown {
+            let w = if n == cursor { wide } else { dot };
+            let ink = selection(n == cursor, theme.border, theme.highlight_bg);
+            self.rounded(
+                Rect::new(x, y, w as u32, dot as u32),
+                dot as f32 / 2.,
+                ink,
+                None,
+            )?;
+            x += w + gap;
+        }
+        Ok(())
+    }
+
+    /// Draws the loaded image contained in `area`, with a soft shadow; false
+    /// while absent or loading.
+    fn console_image(&mut self, area: Rect, path: Option<&PathBuf>, alpha: u8) -> bool {
         let (Some(art), Some(path)) = (&mut self.art, path) else {
             return false;
         };
-        let Some(texture) = art.covers.get(path) else {
+        let Some(texture) = art.covers.get_mut(path) else {
             return false;
         };
-        let (box_w, box_h) = (self.frame.px(IMAGE_BOX.0), self.frame.px(IMAGE_BOX.1));
+        let (box_w, box_h) = (area.width() as i32, area.height() as i32);
         let size = texture.query();
         let scale = (box_w as f32 / size.width as f32).min(box_h as f32 / size.height as f32);
         let w = (size.width as f32 * scale).round().max(1.) as u32;
         let h = (size.height as f32 * scale).round().max(1.) as u32;
-        let left = rect.x() + (rect.width() as i32 - box_w) / 2;
         let dst = Rect::new(
-            left + (box_w - w as i32) / 2,
-            rect.y() + self.frame.px(46.) + (box_h - h as i32) / 2,
+            area.x() + (box_w - w as i32) / 2,
+            area.y() + (box_h - h as i32) / 2,
             w,
             h,
         );
         // Three stacked ellipses approximate a blurred contact shadow.
-        let black = |a| Rgba {
+        let black = |a: u8| Rgba {
             r: 0,
             g: 0,
             b: 0,
-            a,
+            a: (u16::from(a) * u16::from(alpha) / 255) as u8,
         };
-        for (span, thick, alpha) in [(0.9, 14., 26), (0.72, 10., 30), (0.5, 6., 36)] {
+        for (span, thick, shade) in [(0.9, 14., 26), (0.72, 10., 30), (0.5, 6., 36)] {
             let sw = (w as f32 * span) as u32;
             let sh = self.frame.px(thick) as u32;
             let shadow = Rect::new(
@@ -298,8 +485,9 @@ impl Ui<'_, '_> {
             // Errors only skip the decoration.
             let _ =
                 self.geometry
-                    .rounded(&mut self.canvas, shadow, sh as f32 / 2., black(alpha), None);
+                    .rounded(&mut self.canvas, shadow, sh as f32 / 2., black(shade), None);
         }
+        texture.set_alpha_mod(alpha);
         self.canvas.copy(texture, None, dst).is_ok()
     }
 
@@ -327,7 +515,7 @@ impl Ui<'_, '_> {
 
     fn panel_text(
         &mut self,
-        rect: Rect,
+        info: &Info,
         name: &str,
         data: &dyn DataSource,
         theme: &Theme,
@@ -339,7 +527,7 @@ impl Ui<'_, '_> {
             .ok_or_else(|| self.catalog.text("error.font_init"))?;
         let labels = panel_labels(
             frame,
-            rect,
+            info,
             name,
             data,
             &self.catalog,
@@ -347,7 +535,7 @@ impl Ui<'_, '_> {
             |text, face, size| text_cache.measure(text, face, frame.font_size(size)),
         )?;
         for label in labels {
-            self.label(&label.text, label.style, label.rect)?;
+            self.label_aligned(&label.text, label.style, label.rect, info.align)?;
         }
         Ok(())
     }
@@ -390,101 +578,138 @@ fn generated_label(
     })
 }
 
+/// Manufacturer and year as the definitions give them, without icon glyphs
+/// or the "System" placeholder.
+fn maker(data: &dyn DataSource, name: &str) -> Vec<String> {
+    let Some((maker, year)) = data.manufacturer(name) else {
+        return Vec::new();
+    };
+    let mut parts: Vec<String> = Vec::new();
+    for (index, part) in [maker, year].into_iter().enumerate() {
+        // ES definitions embed private-use icon glyphs and put the
+        // category "System" where real manufacturer/year data is absent.
+        let part = part
+            .chars()
+            .filter(|c| {
+                !matches!(*c,
+                '\u{e000}'..='\u{f8ff}' | '\u{f0000}'..='\u{ffffd}' | '\u{100000}'..='\u{10fffd}')
+            })
+            .collect::<String>()
+            .trim()
+            .to_owned();
+        if !part.is_empty()
+            && !part.eq_ignore_ascii_case("system")
+            && !(index == 1 && part == "0000")
+            && !parts.iter().any(|p| p.eq_ignore_ascii_case(&part))
+        {
+            parts.push(part);
+        }
+    }
+    parts
+}
+
+/// Text, style, line height and the space above it.
+type Block = (String, (Face, f32, Rgba), f32, f32);
+/// The system's name and details in `info`'s box, wrapped, never cut.
 fn panel_labels(
     frame: Frame,
-    rect: Rect,
+    info: &Info,
     name: &str,
     data: &dyn DataSource,
     catalog: &I18n,
     theme: &Theme,
     mut measure: impl FnMut(&str, Face, f32) -> Result<u32, String>,
 ) -> Result<Vec<PanelLabel>, String> {
+    let rect = pixels(info.rect, frame.width, frame.height);
+    let (title, meta) = (info.title * 480., info.meta * 480.);
+    let games = system_count(name, data);
+    let count = |key, n: usize| catalog.plural(key, n as f64, &[("count", &n.to_string())]);
+    let maker = maker(data, name);
+    let title_text = system_title(name, data, catalog);
+    let title_block = (
+        title_text,
+        (Face::Semibold, title, theme.text),
+        title * 27. / 22.,
+    );
+    let muted = |face| (face, meta, theme.muted);
+    // Top to bottom: text, style, line height, space above.
+    let blocks: Vec<Block> = if info.inline {
+        let mut details = vec![if name == crate::moonlight::SYSTEM {
+            catalog.text("moonlight.description")
+        } else if data.is_tools(name) {
+            count("tools.count", games)
+        } else {
+            count("games.count", games)
+        }];
+        details.extend(maker);
+        vec![
+            (title_block.0, title_block.1, title * 1.25, 0.),
+            (
+                details.join(" · "),
+                muted(Face::Regular),
+                meta * 1.45,
+                meta * 0.4,
+            ),
+        ]
+    } else {
+        let stats = if name == crate::moonlight::SYSTEM {
+            catalog.text("moonlight.description")
+        } else if name.starts_with('@') {
+            count("games.count", games)
+        } else if data.is_tools(name) {
+            count("tools.count", games)
+        } else {
+            catalog.format(
+                "panel.stats",
+                &[
+                    ("games", &count("games.count", games)),
+                    (
+                        "favorites",
+                        &count("favorites.count", data.favorite_count(name)),
+                    ),
+                ],
+            )
+        };
+        let maker = maker.join(" · ").to_uppercase();
+        let mut blocks = Vec::new();
+        if !maker.is_empty() {
+            blocks.push((maker, muted(Face::Regular), meta * 1.5, 0.));
+        }
+        blocks.push((title_block.0, title_block.1, title_block.2, 0.));
+        blocks.push((stats, muted(Face::Mono), meta * 16. / 12., meta / 3.));
+        blocks
+    };
+    let width = rect.width();
+    let mut laid = Vec::new();
+    for (text, style, step, above) in blocks {
+        let lines = wrap(&text, width, |s| measure(s, style.0, style.1))?;
+        laid.push((lines, style, frame.px(step), frame.px(above)));
+    }
     let mut labels = Vec::new();
-    let mut stacked = |text: &str,
-                       style: (Face, f32, Rgba),
-                       (x, mut bottom, width): (i32, i32, u32),
-                       step: f32|
-     -> Result<i32, String> {
-        let lines = wrap(text, width, |s| measure(s, style.0, style.1))?;
-        let step = frame.px(step);
-        for line in lines.into_iter().rev() {
-            bottom -= step;
+    let mut place = |lines: Vec<String>, style, step: i32, y: i32| {
+        for (n, line) in lines.into_iter().enumerate() {
             labels.push(PanelLabel {
                 text: line,
                 style,
-                rect: Rect::new(x, bottom, width, step as u32),
+                rect: Rect::new(rect.x(), y + n as i32 * step, width, step as u32),
             });
         }
-        Ok(bottom)
     };
-    let x = rect.x() + frame.px(16.);
-    let width = rect.width().saturating_sub(frame.px(32.) as u32).max(1);
-    let mut bottom = rect.bottom() - frame.px(14.);
-    let games = if name.starts_with('@') {
-        data.collection_len(name)
+    if info.bottom {
+        let mut bottom = rect.bottom();
+        for (lines, style, step, above) in laid.into_iter().rev() {
+            bottom -= step * lines.len() as i32;
+            place(lines, style, step, bottom);
+            bottom -= above;
+        }
     } else {
-        data.systems()
-            .iter()
-            .find(|s| s.name == name)
-            .map_or(0, |s| s.game_count as usize)
-    };
-    let count = |key, n: usize| catalog.plural(key, n as f64, &[("count", &n.to_string())]);
-    let stats = if name == crate::moonlight::SYSTEM {
-        catalog.text("moonlight.description")
-    } else if name.starts_with('@') {
-        count("games.count", games)
-    } else if data.is_tools(name) {
-        count("tools.count", games)
-    } else {
-        catalog.format(
-            "panel.stats",
-            &[
-                ("games", &count("games.count", games)),
-                (
-                    "favorites",
-                    &count("favorites.count", data.favorite_count(name)),
-                ),
-            ],
-        )
-    };
-    bottom = stacked(
-        &stats,
-        (Face::Mono, 12., theme.muted),
-        (x, bottom, width),
-        16.,
-    )? - frame.px(4.);
-    let title = system_title(name, data, catalog);
-    bottom = stacked(
-        &title,
-        (Face::Semibold, 22., theme.text),
-        (x, bottom, width),
-        27.,
-    )?;
-    let maker = data
-        .manufacturer(name)
-        .map(|(maker, year)| {
-            let mut parts = Vec::new();
-            for (index, part) in [maker, year].into_iter().enumerate() {
-                // ES definitions embed private-use icon glyphs and put the
-                // category "System" where real manufacturer/year data is absent.
-                let part = part.chars().filter(|c| !matches!(*c,
-                    '\u{e000}'..='\u{f8ff}' | '\u{f0000}'..='\u{ffffd}' | '\u{100000}'..='\u{10fffd}'
-                )).collect::<String>().trim().to_uppercase();
-                if !part.is_empty() && part != "SYSTEM"
-                    && !(index == 1 && part == "0000") && !parts.contains(&part) {
-                    parts.push(part);
-                }
-            }
-            parts.join(" · ")
-        })
-        .filter(|maker| !maker.is_empty());
-    if let Some(maker) = maker {
-        stacked(
-            &maker,
-            (Face::Regular, 12., theme.muted),
-            (x, bottom, width),
-            18.,
-        )?;
+        let mut top = rect.y();
+        for (lines, style, step, above) in laid {
+            top += above;
+            let height = step * lines.len() as i32;
+            place(lines, style, step, top);
+            top += height;
+        }
     }
     Ok(labels)
 }
@@ -530,9 +755,10 @@ mod tests {
             ("Nintendo", "Nintendo", "NINTENDO"),
             ("System", "1983", "1983"),
         ] {
+            let info = crate::layout::View::lista(&theme).systems.info.unwrap();
             let labels = panel_labels(
                 frame,
-                panel_rect(frame, &theme),
+                &info,
                 "music",
                 &Metadata(maker, year),
                 &I18n::default(),
