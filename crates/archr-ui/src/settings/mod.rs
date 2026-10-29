@@ -323,7 +323,7 @@ impl Id {
             Self::Gpu => &["libmali", "panfrost"],
             Self::HotkeyModifier => &hotkeys::MODIFIERS,
             Self::Language => &["en_US", "pt_BR", "es_ES", "ru_RU"],
-            Self::Idle | Self::IdleGame => &["0", "1", "3", "5", "10", "15", "30"],
+            Self::Idle | Self::IdleGame => &["0", "1", "2", "5", "10", "15", "30"],
             Self::Governor => &["ondemand", "performance", "schedutil", "powersave"],
             Self::Sounds
             | Self::Turbo

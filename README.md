@@ -230,9 +230,12 @@ aguarda apenas mutações, nunca sondagens descartáveis. O driver de GPU ativo
 é obtido pelo binding; a preferência divergente é marcada para após reiniciar.
 
 As opções de suspensão por inatividade gravam `idle.timeout` e
-`idle.timeout.game`, em minutos: 0, 1, 3, 5, 10, 15 ou 30; ambas começam em
-0 (“Nunca”). O launcher apenas grava essas duas chaves: o detector de
-inatividade é responsabilidade do sistema, inclusive durante jogos.
+`idle.timeout.game`, em minutos: 0, 1, 2, 5, 10, 15 ou 30; ambas começam em
+0 (“Nunca”). O detector é o `input_sense`, que lê as chaves ao iniciar: o
+launcher grava e reinicia a unidade `input` (se estiver ativa), como fazem os
+quirks. Os atalhos nos jogos (Controles › Atalhos nos jogos) seguem o mesmo
+caminho com as chaves `key.hotkey.a` e `hotkey.*` em nomes evdev; os botões
+do próprio launcher ficam em `launcher.buttons`.
 O idioma recarrega o catálogo do launcher após a gravação; os locales das
 ferramentas e emuladores continuam dependendo da preparação feita pelo serviço.
 

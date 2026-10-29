@@ -83,8 +83,8 @@ fn inactivity_keys_store_minutes_and_default_to_never() {
     ] {
         assert_eq!(id.key(), key);
         assert_eq!(state.value(id), "0");
-        assert_eq!(state.options[&id], ["0", "1", "3", "5", "10", "15", "30"]);
-        for value in ["0", "1", "3", "5", "10", "15", "30"] {
+        assert_eq!(state.options[&id], ["0", "1", "2", "5", "10", "15", "30"]);
+        for value in ["0", "1", "2", "5", "10", "15", "30"] {
             assert_eq!(backend.apply(id, value).unwrap(), value);
             assert_eq!(backend.load().unwrap().value(id), value);
         }
