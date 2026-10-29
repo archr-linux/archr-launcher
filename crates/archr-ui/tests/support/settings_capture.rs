@@ -212,7 +212,7 @@ fn pages() -> Vec<(&'static str, Settings)> {
     let mut appearance = ready();
     appearance.values.insert(Id::Accent, "#FF6B4A".into());
     appearance.open(Page::Appearance);
-    appearance.cursor = 2;
+    appearance.cursor = 3;
     let mut custom = appearance.clone();
     custom.handle(Button::A);
     assert_eq!(custom.page(), Page::AccentColor);
@@ -227,7 +227,7 @@ fn pages() -> Vec<(&'static str, Settings)> {
     let mut applied_light = ready();
     applied_light.values.insert(Id::Accent, "#FFE14D".into());
     applied_light.open(Page::Appearance);
-    applied_light.cursor = 1;
+    applied_light.cursor = 2;
     let mut applied_light_custom = applied_light.clone();
     applied_light_custom.handle(Button::A);
     applied_light_custom.cursor = 1;
@@ -727,7 +727,7 @@ fn capture_views() {
             look.theme_names.insert(folder.into(), theme.name.clone());
             look.open(Page::Appearance);
             // On the View row, so the accent dots show unhighlighted.
-            look.cursor = 1;
+            look.cursor = 2;
             ui.canvas.set_draw_color(color(theme.background));
             ui.canvas.clear();
             ui.settings_page(&look, &look.appearance().apply(&theme))
