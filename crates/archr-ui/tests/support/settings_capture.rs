@@ -1725,6 +1725,7 @@ fn module_view() -> crate::modules::View {
         .insert(key("backup-nuvem", "row:envio"), "12 de 31".into());
     view.progress.insert(key("backup-nuvem", "row:envio"), 39);
     let item = |title: &str, subtitle: &str, value: &str| crate::modules::Item {
+        id: title.into(),
         title: title.into(),
         subtitle: subtitle.into(),
         value: value.into(),

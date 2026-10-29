@@ -1265,14 +1265,24 @@ impl Host {
                         items
                             .iter()
                             .take(archr_ui::modules::ITEMS)
-                            .map(|item| archr_ui::modules::Item {
-                                title: text(item, "title"),
-                                subtitle: text(item, "subtitle"),
-                                value: text(item, "value"),
-                                action: item["action"]
-                                    .as_str()
-                                    .filter(|a| a.len() <= 40)
-                                    .map(str::to_owned),
+                            .map(|item| {
+                                let short = |field: &str| {
+                                    item[field]
+                                        .as_str()
+                                        .filter(|t| {
+                                            (1..=40).contains(&t.len())
+                                                && !t.chars().any(char::is_control)
+                                        })
+                                        .map(str::to_owned)
+                                };
+                                let id = short("id").unwrap_or_default();
+                                archr_ui::modules::Item {
+                                    title: text(item, "title"),
+                                    subtitle: text(item, "subtitle"),
+                                    value: text(item, "value"),
+                                    action: short("action").filter(|_| !id.is_empty()),
+                                    id,
+                                }
                             })
                             .collect()
                     });

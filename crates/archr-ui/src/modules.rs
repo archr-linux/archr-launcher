@@ -207,10 +207,13 @@ pub struct View {
 /// One row of a `list` row, as the module sent it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Item {
+    /// The module's own name for the row, sent back as `context.item`: the
+    /// list may change between the draw and the press, an id does not.
+    pub id: String,
     pub title: String,
     pub subtitle: String,
     pub value: String,
-    /// A sends this action with the item's index as `context.item`.
+    /// What A sends; only rows with an id have one.
     pub action: Option<String>,
 }
 
@@ -301,8 +304,8 @@ pub struct Call {
     pub system: String,
     pub game_key: String,
     pub rom: String,
-    /// The index of the chosen row of a `list` row.
-    pub item: Option<usize>,
+    /// The id of the chosen row of a `list` row.
+    pub item: Option<String>,
 }
 
 /// The store tabs (Loja-modulos).

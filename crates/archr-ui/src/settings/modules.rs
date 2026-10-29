@@ -485,14 +485,15 @@ impl Settings {
         };
         let id = self.module_rows().get(self.cursor)?.id;
         let module = self.modules.view.modules.get(usize::from(m))?.id.clone();
-        if let Id::ModuleItem(_, i) = id {
-            let action = self.module_item(id)?.action.clone();
+        if let Id::ModuleItem(..) = id {
+            let item = self.module_item(id)?;
+            let (action, item) = (item.action.clone(), item.id.clone());
             return Some(match action {
                 Some(action) if button == Button::A => Effect::Module(Request::Invoke {
                     module,
                     action,
                     call: Some(crate::modules::Call {
-                        item: Some(usize::from(i)),
+                        item: Some(item),
                         ..Default::default()
                     }),
                 }),
@@ -930,6 +931,7 @@ mod tests {
             default: String::new(),
         });
         let item = |title: &str, action: Option<&str>| crate::modules::Item {
+            id: title.to_lowercase(),
             title: title.into(),
             subtitle: "SNES".into(),
             value: "há 2 h".into(),
@@ -960,7 +962,7 @@ mod tests {
                 module: "bateria".into(),
                 action: "abrir".into(),
                 call: Some(crate::modules::Call {
-                    item: Some(0),
+                    item: Some("mario".into()),
                     ..Default::default()
                 })
             })

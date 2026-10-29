@@ -151,7 +151,7 @@ default = true
 | `text` | só leitura; valor vem de `ui.update` para `row:<id>` | `id`, `value` inicial |
 | `keyboard` | abre o teclado do launcher | `key`, `max` (≤ 64), `secret` |
 | `progress` | título, texto à direita e barra; tudo de `ui.update` para `row:<id>` (`value`, `progress` 0–100) | `id` |
-| `list` | linhas que o módulo manda: `ui.update` para `row:<id>` com `items: [{title, subtitle?, value?, action?}]` (até 20); A numa linha com `action` envia `action.invoke` com `context: {item: <índice>}` | `id` |
+| `list` | linhas que o módulo manda: `ui.update` para `row:<id>` com `items: [{id, title, subtitle?, value?, action?}]` (até 20); A numa linha com `id` e `action` envia `action.invoke` com `context: {item: "<id>"}` (o id, não a posição: a lista pode mudar entre o desenho e o botão) | `id` |
 
 Os valores são do launcher (um dono por chave): ele grava
 `/storage/.config/archr-launcher/module-settings/<id>.json` de forma atômica.
