@@ -455,6 +455,7 @@
 "settings.card_microsd" = "Вторая карта"
 "settings.card_external" = "Вторая карта ({label})"
 "settings.card_detail" = "{fs} · {used} из {total}"
+"settings.card_errors" = "На карте есть ошибки. Исправьте её на компьютере."
 "settings.percent_used" = "Занято {count}%"
 "settings.eject_link" = "Извлечь ›"
 "settings.options" = "Параметры"

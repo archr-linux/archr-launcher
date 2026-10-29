@@ -65,13 +65,20 @@ impl Backend {
             (true, None) => "settings.card_microsd".into(),
             (false, _) => "settings.card_internal".into(),
         };
-        Some(Card {
-            name,
-            detail: format!(
+        // automount found errors on the second card: say so instead of usage.
+        let errors = format!("{}.errors", crate::worker::SECOND_CARD);
+        let detail = if path == EXTERNAL && self.paths.at(&errors).exists() {
+            "settings.card_errors".into()
+        } else {
+            format!(
                 "settings.card_detail|fs={fs}|used={}|total={}",
                 bytes(used),
                 bytes(total)
-            ),
+            )
+        };
+        Some(Card {
+            name,
+            detail,
             percent: percent(used, total).unwrap_or(0),
         })
     }
@@ -265,6 +272,27 @@ mod tests {
             Err("settings.eject_none".into())
         );
         assert_eq!(backend.storage().second, None);
+    }
+    #[test]
+    fn a_card_with_errors_shows_the_warning() {
+        let (_root, paths) = fixture("", CARD);
+        let backend = Backend::new(paths.clone());
+        assert!(backend
+            .storage()
+            .second
+            .unwrap()
+            .detail
+            .starts_with("settings.card_detail|"));
+        let errors = paths.at("/run/archr/roms2.errors");
+        fs::create_dir_all(errors.parent().unwrap()).unwrap();
+        fs::write(&errors, "").unwrap();
+        let storage = backend.storage();
+        assert_eq!(storage.second.unwrap().detail, "settings.card_errors");
+        assert!(storage
+            .card
+            .unwrap()
+            .detail
+            .starts_with("settings.card_detail|"));
     }
     #[test]
     fn backup_passes_with_wifi_only_when_chosen() {

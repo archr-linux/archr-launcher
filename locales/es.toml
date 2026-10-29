@@ -455,6 +455,7 @@
 "settings.card_microsd" = "Segunda tarjeta"
 "settings.card_external" = "Segunda tarjeta ({label})"
 "settings.card_detail" = "{fs} · {used} de {total}"
+"settings.card_errors" = "La tarjeta tiene errores. Repárala en una computadora."
 "settings.percent_used" = "{count}% en uso"
 "settings.eject_link" = "Expulsar ›"
 "settings.options" = "Opciones"

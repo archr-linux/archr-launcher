@@ -169,6 +169,8 @@ fn pages() -> Vec<(&'static str, Settings)> {
     for button in [Button::A; 6] {
         storage_password.handle(button);
     }
+    let mut storage_errors = storage.clone();
+    storage_errors.storage.second.as_mut().unwrap().detail = "settings.card_errors".into();
     let mut storage_internal = storage.clone();
     storage_internal.storage.second = None;
     storage_internal.storage.backup = None;
@@ -331,6 +333,7 @@ fn pages() -> Vec<(&'static str, Settings)> {
         ("scraper-all-media", scraper_all),
         ("storage", storage),
         ("storage-internal", storage_internal),
+        ("storage-errors", storage_errors),
         ("storage-backup", storage_backup),
         ("storage-backup-wifi", storage_wifi),
         ("storage-reset-final", storage_reset),
