@@ -14,6 +14,7 @@ fn variable_heights_keep_selection_and_section_visible_and_snap_on_page_change()
         height: 46.,
         section: Some("settings.system"),
         searching: None,
+        trail: 0.,
     };
     scroll.tween.retarget(180., now);
     scroll.tween.snap();
@@ -34,6 +35,20 @@ fn variable_heights_keep_selection_and_section_visible_and_snap_on_page_change()
         "page changes snap to the selected row, not zero"
     );
     assert_eq!(scroll.offset(Page::Sound, 50., 90., 90., now), 0.);
+}
+#[test]
+fn a_note_under_the_selected_row_scrolls_into_view_with_it() {
+    let row = Placement {
+        top: 360.,
+        height: 38.,
+        section: None,
+        searching: None,
+        trail: 90.,
+    };
+    let mut scroll = Scroll::default();
+    let now = Instant::now();
+    scroll.offset(Page::Services, row.selected_top(), row.end(), 700., now);
+    assert_eq!(scroll.tween.target, row.end() - VIEW_BOTTOM);
 }
 #[test]
 fn compact_placements_use_real_heights_and_three_pixel_gaps() {

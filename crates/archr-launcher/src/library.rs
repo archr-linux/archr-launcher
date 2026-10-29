@@ -205,12 +205,21 @@ impl Library {
                     }
                     self.ready = true;
                 }
+                // Lists already shown are read again; the old ones stay
+                // on screen until each new one arrives.
+                Update::Systems(systems) => {
+                    self.definitions = systems;
+                    let names: Vec<_> = self.definitions.iter().map(|s| s.name.clone()).collect();
+                    self.reload(&names);
+                }
                 Update::Overview(overview) => {
                     self.overview = overview;
                     crate::moonlight::collection(&mut self.overview, self.moonlight_available);
                     self.counts_known = true;
                 }
                 Update::Games(system, mut games) => {
+                    // A rescan may hold other games (a card came or left).
+                    self.members.retain(|_, origin| origin.0 != system);
                     if let Some(definition) = self.definitions.iter().find(|sys| sys.name == system)
                     {
                         if self.store.import_games(definition, &games) {
@@ -223,8 +232,12 @@ impl Library {
                             }
                         }
                     }
-                    self.games.insert(system, games);
+                    let replaced = self.games.insert(system, games).is_some();
                     for name in ["@favorites", "@recent"] {
+                        // A rescan moves indices: rebuild instead of reusing payloads.
+                        if replaced && self.origins.get_mut(name).map(Vec::clear).is_some() {
+                            self.games.remove(name);
+                        }
                         self.refresh_collection(name);
                     }
                 }
@@ -260,10 +273,12 @@ impl Library {
         match outcome {
             Outcome::None
             | Outcome::Settings
+            | Outcome::Updates
             | Outcome::OpenNetplay
             | Outcome::Moonlight
             | Outcome::Rescrape { .. }
-            | Outcome::Achievements { .. } => {}
+            | Outcome::Achievements { .. }
+            | Outcome::Module(_) => {}
             Outcome::ToggleFavorite { system, game } => {
                 let key = self.game_key(&system, game).ok_or("error.game_missing")?;
                 self.store.toggle_favorite(&key);
@@ -407,7 +422,7 @@ impl Library {
     fn definition(&self, name: &str) -> Option<&SystemDef> {
         self.definitions.iter().find(|system| system.name == name)
     }
-    fn game_key(&self, system: &str, index: usize) -> Option<String> {
+    pub fn game_key(&self, system: &str, index: usize) -> Option<String> {
         game_key(
             self.definition(system)?,
             &self.games(system).get(index)?.path,
@@ -488,6 +503,10 @@ impl DataSource for Library {
                     .map(|core| (emulator.name.clone(), core.name.clone()))
             })
             .collect()
+    }
+    fn game_key(&self, system: &str, game: usize) -> Option<String> {
+        let (system, game) = self.origin(system, game)?;
+        Library::game_key(self, &system, game)
     }
     fn current_core(&self, system: &str, game: usize) -> Option<(String, String)> {
         let game = self.games(system).get(game)?;

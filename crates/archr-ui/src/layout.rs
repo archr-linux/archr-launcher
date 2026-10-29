@@ -147,7 +147,7 @@ impl Names {
     pub fn plain(name: &str) -> Self {
         Self(vec![(String::new(), name.into())])
     }
-    pub(crate) fn parse(value: Option<&Value>, at: &str) -> Self {
+    pub fn parse(value: Option<&Value>, at: &str) -> Self {
         match value {
             None => Self::default(),
             Some(Value::String(name)) => Self::plain(name),

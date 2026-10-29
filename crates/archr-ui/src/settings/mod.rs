@@ -20,8 +20,11 @@ pub mod network;
 pub(crate) mod pages;
 use bluetooth::{Action, Device};
 pub use pages::MEDIA;
+pub mod modules;
+pub mod raimport;
 pub mod storage;
 pub mod store;
+pub mod updates;
 pub use information::{InfoCard, InfoDetail, InfoMeter, Information};
 use network::Network;
 
@@ -52,6 +55,19 @@ pub enum Page {
     Hotkeys,
     Store,
     StoreTheme,
+    Updates,
+    UpdatePackages,
+    /// System › Modules (Modulos).
+    Modules,
+    /// The open module's details and permissions.
+    ModuleInfo,
+    /// A module's own page: module and page index.
+    Module(u8, u8),
+    ModuleStore,
+    ModuleOffer,
+    /// System › Import from RetroArch, and its list of what applies.
+    RaImport,
+    RaImportList,
     Soon(&'static str),
 }
 impl Page {
@@ -80,6 +96,12 @@ impl Page {
             Self::LauncherControls => "controls.launcher",
             Self::Hotkeys => "controls.hotkeys",
             Self::Store | Self::StoreTheme => "settings.theme_store",
+            Self::Updates => "updates.title",
+            Self::UpdatePackages => "updates.packages",
+            Self::Modules | Self::ModuleInfo | Self::Module(..) => "settings.modules",
+            Self::ModuleStore | Self::ModuleOffer => "modules.store",
+            Self::RaImport => "raimport.title",
+            Self::RaImportList => "raimport.list_title",
             Self::Soon(key) => key,
         }
     }
@@ -91,8 +113,14 @@ impl Page {
             Self::MangohudItems => &["settings.games", "settings.mangohud_page"],
             Self::AccentColor | Self::Store => &["settings.appearance"],
             Self::StoreTheme => &["settings.appearance", "settings.theme_store"],
+            Self::Modules | Self::ModuleStore | Self::RaImport => &["settings.system"],
+            Self::RaImportList => &["settings.system", "raimport.title"],
+            Self::ModuleInfo | Self::Module(..) => &["settings.system", "settings.modules"],
+            Self::ModuleOffer => &["settings.system", "modules.store"],
             Self::LauncherControls | Self::Hotkeys => &["settings.controls"],
             Self::ScraperMedia => &["settings.games", "settings.scraper_short"],
+            Self::Updates => &["settings.system"],
+            Self::UpdatePackages => &["settings.system", "updates.title"],
             _ => &[],
         }
     }
@@ -115,6 +143,8 @@ impl Page {
             Self::Controls => controls::CONTROLS,
             Self::LauncherControls => controls::LAUNCHER,
             Self::Hotkeys => hotkeys::HOTKEYS_PAGE,
+            Self::Updates => updates::UPDATES,
+            Self::RaImport => raimport::ROWS,
             _ => &[],
         }
     }
@@ -148,6 +178,12 @@ pub enum Id {
     Player,
     Channel,
     UsbMode,
+    /// RNDIS instead of NCM for Windows 10 (`usbgadget compat`).
+    UsbCompat,
+    /// The address on the USB cable, shown, not edited.
+    UsbAddress,
+    /// Cable, lease and Wi-Fi hold, shown, not edited.
+    UsbState,
     Emulator,
     Core,
     Ratio,
@@ -185,7 +221,9 @@ pub enum Id {
     TextSize,
     Animations,
     Restore,
+    UnifiedCard,
     StorageCard,
+    SecondCard,
     Automount,
     MergedStorage,
     Backup,
@@ -207,6 +245,9 @@ pub enum Id {
     CheevosAccount,
     /// Keyboard target only: the password typed for a sign-in.
     CheevosPassword,
+    /// The user's own web API key (keyboard target too), and its removal.
+    CheevosWebKey,
+    CheevosWebKeyRemove,
     CheevosHardcore,
     CheevosVerbose,
     CheevosEncore,
@@ -229,6 +270,30 @@ pub enum Id {
     Hotkey(u8),
     /// Whether that hotkey works now.
     HotkeyOn(u8),
+    UpdateInstall,
+    UpdateCheck,
+    /// `updates.branch`, read by archr-update.
+    UpdateChannel,
+    UpdateBoot,
+    UpdateNotify,
+    /// System link to the modules list.
+    ModulesLink,
+    /// One module's switch on the modules list.
+    ModuleEntry(u8),
+    ModuleStoreLink,
+    /// One row of the open module page.
+    ModuleRow(u8),
+    /// System link to Import from RetroArch, and that page's rows.
+    RaImportLink,
+    RaConfig,
+    RaOverrides,
+    RaShaders,
+    RaPreview,
+    /// Back up before importing: this page only, never saved.
+    RaBackup,
+    RaRun,
+    /// Hotkeys page: write RetroArch's hotkeys again from the built-in pad.
+    RaHotkeys,
 }
 impl Id {
     fn metadata(self) -> (&'static str, &'static str) {
@@ -260,14 +325,17 @@ impl Id {
             Self::Player => ("wifi.adhoc.id", "1"),
             Self::Channel => ("wifi.adhoc.channel", "6"),
             Self::UsbMode => ("", "disabled"), // usbgadget owns its state file
+            Self::UsbCompat => ("", "0"),
+            Self::UsbAddress | Self::UsbState => ("", ""),
             // Per-system suffixes: the Games page writes `<system>.<suffix>`,
             // the keys runemu.sh passes on and setsettings.sh reads.
             Self::Emulator => ("emulator", ""),
             Self::Core => ("core", ""),
-            Self::Ratio => ("ratio", "core"),
-            Self::Filter => ("smooth", "0"),
+            // "" leaves the option to RetroArch: no key, nothing imposed.
+            Self::Ratio => ("ratio", ""),
+            Self::Filter => ("smooth", ""),
             Self::Autosave => ("autosave", "0"),
-            Self::StateSlot => ("incrementalsavestates", "0"),
+            Self::StateSlot => ("incrementalsavestates", ""),
             Self::NetplayEnabled => ("global.netplay", "0"),
             Self::Nickname => ("global.netplay.nickname", ""),
             Self::NetplayHost => ("global.netplay.host", ""),
@@ -290,6 +358,7 @@ impl Id {
             Self::Animations => ("launcher.animations", "on"),
             // Read by the automount script at boot.
             Self::Automount => ("system.automount", "1"),
+            // automount owns it ("automount unify"), applied at once.
             Self::MergedStorage => ("system.merged.storage", "0"),
             // mangohud_set owns enabled and state, and builds MangoHud.conf
             // from the others. The Games page writes `<system>.<suffix>`.
@@ -320,6 +389,11 @@ impl Id {
                 (hotkey.key, hotkey.default)
             }
             Self::HotkeyOn(n) => (hotkeys::HOTKEYS[usize::from(n)].enabled, "1"),
+            Self::UpdateChannel => ("updates.branch", "stable"),
+            // The launcher's own: check in the background after starting, and
+            // mark the START menu when something is pending.
+            Self::UpdateBoot => ("updates.check_on_boot", "1"),
+            Self::UpdateNotify => ("updates.notify_start", "1"),
             Self::Update
             | Self::Restore
             | Self::ThemeStore
@@ -332,7 +406,9 @@ impl Id {
             | Self::ScraperPassword
             | Self::ScraperStart
             | Self::MediaKind(_)
+            | Self::UnifiedCard
             | Self::StorageCard
+            | Self::SecondCard
             | Self::Backup
             | Self::RestoreBackup
             | Self::RootPassword
@@ -340,10 +416,26 @@ impl Id {
             | Self::MangohudLink
             | Self::CheevosAccount
             | Self::CheevosPassword
-            | Self::CheevosLogout => ("", ""),
+            | Self::CheevosWebKey
+            | Self::CheevosWebKeyRemove
+            | Self::CheevosLogout
+            | Self::UpdateInstall
+            | Self::UpdateCheck
+            | Self::ModulesLink
+            | Self::ModuleEntry(_)
+            | Self::ModuleStoreLink
+            | Self::ModuleRow(_) => ("", ""),
             Self::LauncherLink | Self::Bind(_) | Self::ButtonsRestore | Self::HotkeysLink => {
                 ("", "")
             }
+            Self::RaBackup => ("", "1"),
+            Self::RaImportLink
+            | Self::RaConfig
+            | Self::RaOverrides
+            | Self::RaShaders
+            | Self::RaPreview
+            | Self::RaRun
+            | Self::RaHotkeys => ("", ""),
         }
     }
     pub fn key(self) -> &'static str {
@@ -367,13 +459,12 @@ impl Id {
             | Self::Samba
             | Self::Http
             | Self::Adhoc
+            | Self::UsbCompat
             | Self::NetplayEnabled
             | Self::OnlyRelay
             | Self::MissingGames
             | Self::ScraperMissing
-            | Self::Filter
             | Self::Autosave
-            | Self::StateSlot
             | Self::Automount
             | Self::MergedStorage
             | Self::Mangohud
@@ -383,19 +474,32 @@ impl Id {
             | Self::CheevosVerbose
             | Self::CheevosEncore
             | Self::CheevosRichPresence
-            | Self::CheevosScreenshot => &["0", "1"],
+            | Self::CheevosScreenshot
+            | Self::UpdateBoot
+            | Self::UpdateNotify => &["0", "1"],
+            Self::UpdateChannel => &["stable", "next", "dev"],
             Self::MangohudGame => &["", "1", "0"],
+            Self::Filter | Self::StateSlot => &["", "0", "1"],
             Self::MangohudLayout => &mangohud::LAYOUTS,
             Self::MangohudPosition => &mangohud::POSITIONS,
             Self::MangohudSize => &["18", "24", "30"],
             Self::MangohudAlpha => &["0", "25", "50", "75", "100"],
             Self::MangohudFps => &["0", "30", "60"],
             // setsettings.sh CORE_RATIOS names; "core" lets the core decide.
-            Self::Ratio => &["core", "4/3", "3/2", "16/9", "8/7", "squarepixel", "full"],
+            Self::Ratio => &[
+                "",
+                "core",
+                "4/3",
+                "3/2",
+                "16/9",
+                "8/7",
+                "squarepixel",
+                "full",
+            ],
             Self::ClockFormat => &["24", "12"],
             Self::Player => &["1", "2", "3", "4"],
             Self::Channel => &["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"],
-            Self::UsbMode => &["disabled", "network", "file_transfer"],
+            Self::UsbMode => &["disabled", "network", "internet", "file_transfer"],
             Self::Relay => &["none", "nyc", "madrid", "montreal", "saopaulo", "custom"],
             Self::ScraperSource => &["screenscraper"],
             Self::Accent => &appearance::ACCENTS,
@@ -519,6 +623,8 @@ const SYSTEM: &[Row] = &[
     row(Id::Governor, "settings.governor", Kind::Value),
     row(Id::Turbo, "settings.turbo", Kind::Toggle),
     row(Id::Update, "settings.update", Kind::Action),
+    row(Id::ModulesLink, "settings.modules", Kind::Action),
+    row(Id::RaImportLink, "raimport.title", Kind::Action),
 ];
 const REGION: &[Row] = &[
     row(Id::Language, "settings.language", Kind::Value),
@@ -570,14 +676,29 @@ pub enum Effect {
     /// RetroAchievements sign-in: user and password.
     CheevosLogin(String, String),
     CheevosLogout,
+    /// Check and save the web API key; empty removes it.
+    CheevosKey(String),
     Scrape,
     CancelScrape,
+    CheckUpdates,
+    /// Download and install the pending updates.
+    Update,
+    /// Stop the download (the install cannot stop).
+    CancelUpdate,
     /// Preview another theme: load it off the draw thread.
     Theme(String),
     /// Leaving Appearance with changes: persist the choices and apply them.
     Appearance,
     Storage(storage::Action),
     Store(store::Action),
+    Module(crate::modules::Request),
+    /// Import what roms/retroarch-import/ holds, after a backup if asked.
+    /// `seen` is what the list showed: the host refuses when the folder
+    /// holds something else by now.
+    RaImport {
+        backup: bool,
+        seen: Box<raimport::Found>,
+    },
 }
 /// Passwords never reach a log through `{:?}`.
 impl std::fmt::Debug for Effect {
@@ -594,12 +715,22 @@ impl std::fmt::Debug for Effect {
             Self::Login(user, _) => write!(f, "Login({user:?}, <hidden>)"),
             Self::CheevosLogin(user, _) => write!(f, "CheevosLogin({user:?}, <hidden>)"),
             Self::CheevosLogout => write!(f, "CheevosLogout"),
+            Self::CheevosKey(_) => write!(f, "CheevosKey(<hidden>)"),
             Self::Scrape => write!(f, "Scrape"),
             Self::CancelScrape => write!(f, "CancelScrape"),
+            Self::CheckUpdates => write!(f, "CheckUpdates"),
+            Self::Update => write!(f, "Update"),
+            Self::CancelUpdate => write!(f, "CancelUpdate"),
             Self::Theme(name) => write!(f, "Theme({name:?})"),
             Self::Appearance => write!(f, "Appearance"),
             Self::Storage(action) => write!(f, "Storage({action:?})"),
             Self::Store(action) => write!(f, "Store({action:?})"),
+            // A keyboard row's value may be secret.
+            Self::Module(crate::modules::Request::Set { module, key, .. }) => {
+                write!(f, "Module(Set({module:?}, {key:?}, <hidden>))")
+            }
+            Self::Module(request) => write!(f, "Module({request:?})"),
+            Self::RaImport { backup, .. } => write!(f, "RaImport {{ backup: {backup} }}"),
         }
     }
 }
@@ -660,11 +791,13 @@ pub struct Settings {
     pub access_ip: String,
     /// The single USB port hosts a device, so gadget mode is refused.
     pub usb_busy: bool,
+    pub usb: network::Usb,
     pub scrape: Scrape,
     pub cheevos: cheevos::Cheevos,
     pub games: Games,
     pub storage: storage::Storage,
     pub store: store::Store,
+    pub modules: modules::Modules,
     /// Sliders in flight: last confirmed value and the newest unsent one.
     pub slides: BTreeMap<Id, (String, Option<String>)>,
     /// Appearance page: the choices when it opened, the theme being previewed
@@ -684,6 +817,8 @@ pub struct Settings {
     pub capture: Option<Capture>,
     /// The remembered custom colour while the editor shows another one.
     custom_kept: Custom,
+    pub updates: updates::Updates,
+    pub raimport: raimport::RaImport,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -717,11 +852,13 @@ impl Default for Settings {
             wifi_hidden: false,
             access_ip: String::new(),
             usb_busy: false,
+            usb: network::Usb::default(),
             scrape: Scrape::default(),
             cheevos: cheevos::Cheevos::default(),
             games: Games::default(),
             storage: storage::Storage::default(),
             store: store::Store::default(),
+            modules: modules::Modules::default(),
             slides: BTreeMap::new(),
             appearance_saved: Appearance::default(),
             base_theme: Theme::builtin(),
@@ -732,6 +869,8 @@ impl Default for Settings {
             mangohud_saved: Default::default(),
             capture: None,
             custom_kept: Custom::default(),
+            updates: updates::Updates::default(),
+            raimport: raimport::RaImport::default(),
         }
     }
 }
@@ -742,6 +881,21 @@ impl Settings {
             return label.clone();
         }
         let key = match (id, value) {
+            (Id::Update, version) => {
+                let count = self.updates.count();
+                return match &self.updates.report {
+                    Some(_) if count > 0 => information::value(
+                        catalog,
+                        &format!("updates.row_pending|version={version}|count={count}"),
+                    ),
+                    Some(_) => catalog.format("updates.row_current", &[("version", version)]),
+                    None => version.into(),
+                };
+            }
+            (Id::UpdateInstall | Id::UpdateCheck, _) => return "›".into(),
+            (Id::UpdateChannel, "next") => "updates.next",
+            (Id::UpdateChannel, "dev") => "updates.dev",
+            (Id::UpdateChannel, _) => "updates.stable",
             (Id::Language, "en_US") => "settings.lang_en",
             (Id::Language, "pt_BR") => "settings.lang_pt",
             (Id::Language, "es_ES") => "settings.lang_es",
@@ -785,7 +939,9 @@ impl Settings {
                 crate::motion::Motion::Reduced => "appearance.anim_reduced",
                 crate::motion::Motion::Off => "appearance.anim_off",
             },
-            (Id::Restore | Id::Accent | Id::ButtonsRestore, _) => return String::new(),
+            (Id::Restore | Id::Accent | Id::ButtonsRestore | Id::RaHotkeys, _) => {
+                return String::new()
+            }
             (Id::Bind(n), _) => return self.bindings()[usize::from(n)].name().into(),
             (Id::HotkeyModifier, key) => return hotkeys::key_name(key).into(),
             (Id::Hotkey(n), _) if self.value(Id::HotkeyOn(n)) == "0" => "settings.off",
@@ -793,10 +949,16 @@ impl Settings {
             (Id::IndexNow, _) => "settings.soon",
             (Id::ScraperAccount | Id::CheevosAccount, _) => "settings.sign_in",
             (Id::CheevosSound, "none") => "settings.cheevos_no_sound",
-            (Id::CheevosLogout, _) => return String::new(),
+            (Id::CheevosLogout | Id::CheevosWebKey | Id::CheevosWebKeyRemove, _) => {
+                return String::new()
+            }
             (Id::ScraperStart, _) if self.scrape.running => "settings.cancel_scraping",
             (Id::ScraperStart, _) => return String::new(),
             (Id::GameSystem, _) => return self.games.fullname().to_owned(),
+            (Id::RaConfig | Id::RaOverrides | Id::RaShaders, _) => {
+                return raimport::joined(catalog, &self.raimport_refs(id))
+            }
+            (Id::Ratio | Id::Filter | Id::StateSlot, "") => "settings.retroarch_default",
             (Id::Ratio, "core") => "settings.ratio_auto",
             (Id::Ratio, "squarepixel") => "settings.ratio_square",
             (Id::Ratio, "full") => "settings.ratio_full",
@@ -814,13 +976,18 @@ impl Settings {
                 | Id::MangohudLink
                 | Id::LauncherLink
                 | Id::HotkeysLink
-                | Id::ThemeStore,
+                | Id::ThemeStore
+                | Id::ModulesLink
+                | Id::ModuleStoreLink
+                | Id::RaImportLink
+                | Id::RaPreview
+                | Id::RaRun,
                 _,
             ) => return "›".into(),
-            (Id::StorageCard, _) if self.storage.card.as_ref().is_some_and(|c| c.external) => {
-                "settings.eject_link"
-            }
-            (Id::StorageCard, _) => return String::new(),
+            (Id::SecondCard, _) => "settings.eject_link",
+            (Id::ModuleEntry(_), _) => return String::new(),
+            (Id::ModuleRow(_), _) => return self.module_value(id, catalog).unwrap_or_default(),
+            (Id::StorageCard | Id::UnifiedCard, _) => return String::new(),
             (Id::RootPassword, _) => "settings.change_link",
             (Id::KeyboardVariant | Id::MangohudGame, "") => "menu.default",
             (Id::MangohudGame, "1") => "settings.on",
@@ -838,8 +1005,16 @@ impl Settings {
             (Id::ClockFormat, "24") => "settings.clock_24",
             (Id::ClockFormat, "12") => "settings.clock_12",
             (Id::UsbMode, "disabled") => "settings.off",
+            (Id::UsbMode, "network") if self.value(Id::UsbCompat) == "1" => {
+                "settings.usb_network_rndis"
+            }
             (Id::UsbMode, "network") => "settings.usb_network",
+            (Id::UsbMode, "internet") => "settings.usb_internet",
             (Id::UsbMode, "file_transfer") => "settings.usb_files",
+            (Id::UsbAddress, _) if self.usb.address.is_empty() => return "—".into(),
+            (Id::UsbAddress, _) => return self.usb.address.clone(),
+            (Id::UsbState, _) if self.usb.wifi_held => "settings.usb_wifi_off",
+            (Id::UsbState, _) => return String::new(),
             (Id::Relay, "none") => "settings.off",
             (Id::NetplayEnabled | Id::Adhoc, "0") => "settings.off",
             (Id::NetplayEnabled | Id::Adhoc, "1") => "settings.on",
@@ -863,19 +1038,43 @@ impl Settings {
             Id::Ssh if !ip.is_empty() => format!("settings.ssh_at|ip={ip}"),
             Id::Http if !ip.is_empty() => format!("settings.http_at|ip={ip}"),
             Id::UsbMode if self.usb_busy => "settings.usb_in_use".into(),
+            // A lease from the PC, or the console's own fixed address.
+            Id::UsbAddress
+                if self.value(Id::UsbMode) == "internet"
+                    && matches!(self.usb.link.as_str(), "online" | "local") =>
+            {
+                "settings.usb_address_dhcp".into()
+            }
+            Id::UsbAddress => "settings.usb_address_fixed".into(),
+            Id::UsbState => match self.usb.link.as_str() {
+                "dhcp" => "settings.usb_link_dhcp",
+                "online" => "settings.usb_link_online",
+                "local" => "settings.usb_link_local",
+                "fallback" => "settings.usb_link_fallback",
+                _ => "settings.usb_link_waiting",
+            }
+            .into(),
             Id::ScraperAccount if self.scrape.verifying => "settings.verifying".into(),
-            Id::CheevosAccount if self.cheevos.verifying => "settings.verifying".into(),
+            Id::CheevosAccount | Id::CheevosWebKey if self.cheevos.verifying => {
+                "settings.verifying".into()
+            }
+            Id::CheevosAccount if self.cheevos.expired => "settings.cheevos_expired".into(),
+            Id::CheevosWebKey if !self.cheevos.web_key => "settings.cheevos_web_key_missing".into(),
+            Id::CheevosWebKey if self.cheevos.key_refused => {
+                "settings.cheevos_web_key_refused".into()
+            }
+            Id::CheevosWebKey => "settings.cheevos_web_key_saved".into(),
             Id::ScraperAccount if self.scrape.user.is_empty() => "settings.not_signed_in".into(),
             Id::ScraperAccount if self.scrape.threads > 0 => format!(
                 "settings.account_threads|user={}|count={}",
                 self.scrape.user, self.scrape.threads
             ),
             Id::ScraperAccount => self.scrape.user.clone(),
+            Id::UnifiedCard => self.storage.unified.as_ref()?.detail.clone(),
             Id::StorageCard => self.storage.card.as_ref()?.detail.clone(),
+            Id::SecondCard => self.storage.second.as_ref()?.detail.clone(),
+            Id::UpdateInstall => self.updates.install_note()?.into(),
             Id::Mangohud if !self.mangohud_supported => "settings.mangohud_unsupported".into(),
-            Id::MergedStorage if !self.storage.merge_supported => {
-                "settings.merged_unsupported".into()
-            }
             Id::RestoreBackup => self
                 .storage
                 .backup
@@ -886,17 +1085,28 @@ impl Settings {
                 "settings.root_shown|password={}",
                 self.storage.password.replace('|', "")
             ),
+            Id::ModuleRow(_) => self.module_subtitle(row.id)?,
             _ => row.subtitle?.into(),
         })
     }
     /// Row title text, or a catalog reference.
     pub fn label(&self, row: &Row) -> String {
-        match (row.id, &self.storage.card) {
-            (Id::StorageCard, Some(card)) => card.name.clone(),
-            _ => row.label.into(),
-        }
+        let card = match row.id {
+            Id::UnifiedCard => &self.storage.unified,
+            Id::StorageCard => &self.storage.card,
+            Id::SecondCard => &self.storage.second,
+            Id::ModuleEntry(_) | Id::ModuleRow(_) => {
+                return self.module_label(row.id).unwrap_or_default()
+            }
+            _ => &None,
+        };
+        card.as_ref()
+            .map_or_else(|| row.label.into(), |card| card.name.clone())
     }
-    pub fn visible_rows(&self) -> Vec<&'static Row> {
+    pub fn visible_rows(&self) -> Vec<Row> {
+        if matches!(self.page(), Page::Modules | Page::Module(..)) {
+            return self.module_rows();
+        }
         self.page()
             .rows()
             .iter()
@@ -912,11 +1122,23 @@ impl Settings {
                     false
                 }
                 Id::CustomServer => self.value(Id::Relay) == "custom",
+                Id::UsbCompat | Id::UsbAddress | Id::UsbState => self.usb_network(),
+                Id::SecondCard => self.storage.second.is_some(),
+                Id::UnifiedCard => self.storage.unified.is_some(),
                 id if Games::ROWS.contains(&id) => self.games.shows(id, self),
-                id @ (Id::CheevosAccount | Id::CheevosLogout) => self.cheevos_visible(id),
+                id @ (Id::CheevosAccount
+                | Id::CheevosWebKey
+                | Id::CheevosWebKeyRemove
+                | Id::CheevosLogout) => self.cheevos_visible(id),
                 _ => true,
             })
+            .copied()
             .collect()
+    }
+    /// A network USB function is chosen: its compatibility, address and
+    /// state rows show.
+    pub fn usb_network(&self) -> bool {
+        matches!(self.value(Id::UsbMode), "network" | "internet")
     }
     /// Rows with at most one choice show their value and accept no input
     /// (one audio sink: the jack switches speaker and headphones itself).
@@ -926,7 +1148,8 @@ impl Settings {
                 .options
                 .get(&id)
                 .is_none_or(|choices| choices.len() <= 1),
-            Id::StorageCard => !self.storage.card.as_ref().is_some_and(|c| c.external),
+            Id::StorageCard | Id::UnifiedCard | Id::UsbAddress | Id::UsbState => true,
+            Id::ModuleRow(_) => self.module_fixed(id),
             _ => false,
         }
     }
@@ -934,9 +1157,10 @@ impl Settings {
     pub fn disabled(&self, id: Id) -> bool {
         match id {
             Id::IndexNow => true,
+            Id::UpdateInstall => self.updates.count() == 0 || self.updates.checking,
+            Id::UpdateCheck => self.updates.checking,
             Id::RestoreBackup => self.storage.backup.is_none(),
             Id::ButtonsRestore => self.default_bindings(),
-            Id::MergedStorage => !self.storage.merge_supported,
             Id::MangohudGame
             | Id::Mangohud
             | Id::MangohudShow
@@ -954,6 +1178,8 @@ impl Settings {
             | Id::CheevosRichPresence
             | Id::CheevosScreenshot
             | Id::CheevosSound
+            | Id::CheevosWebKey
+            | Id::CheevosWebKeyRemove
             | Id::CheevosLogout => self.cheevos.verifying,
             // Choices are kept for when the service is reachable; only what
             // talks to ScreenScraper needs the build's developer key.
@@ -985,7 +1211,12 @@ impl Settings {
         if self.confirm_forget.is_some() {
             return &[(Key('A'), "settings.forget"), (Key('B'), "hint.cancel")];
         }
+        if let Some(hints) = self.modules_hints() {
+            return hints;
+        }
         match self.page() {
+            Page::Updates | Page::UpdatePackages => self.updates_hints(),
+            Page::RaImport | Page::RaImportList => self.raimport_hints(),
             Page::Root => &[
                 (Key('A'), "hint.open"),
                 (Key('B'), "hint.back"),
@@ -1037,7 +1268,10 @@ impl Settings {
                         (HintButton::Start, "settings.sign_in_short"),
                         (Key('B'), "hint.back"),
                     ]
-                } else if self.keyboard_target == Some(Id::RootPassword) {
+                } else if matches!(
+                    self.keyboard_target,
+                    Some(Id::RootPassword | Id::CheevosWebKey)
+                ) {
                     &[
                         (Key('A'), "settings.type"),
                         (Key('Y'), "settings.delete"),
@@ -1180,11 +1414,19 @@ impl Settings {
                 self.values.insert(id, value);
                 self.sync_games();
                 self.error = None;
+                if id == Id::RaHotkeys {
+                    self.fail(None, "settings.ra_hotkeys_done".into());
+                }
                 self.reboot_prompt = match id {
                     Id::Gpu => Some("settings.reboot_question"),
-                    Id::Automount | Id::MergedStorage => Some("settings.storage_reboot_question"),
+                    Id::Automount => Some("settings.storage_reboot_question"),
                     _ => None,
                 };
+                // Another channel offers other packages.
+                if id == Id::UpdateChannel {
+                    self.updates.report = None;
+                    self.updates.failed = None;
+                }
             }
             Err(error) => {
                 if id == Id::MangohudItems {
@@ -1263,6 +1505,9 @@ impl Settings {
                 };
                 if self.disabled(row.id) || self.fixed(row.id) {
                     return Effect::None;
+                }
+                if let Some(effect) = self.storage_switch(row.id) {
+                    return effect;
                 }
                 if button == Button::A {
                     if let Some(effect) = self.activate(row.id) {
@@ -1676,5 +1921,56 @@ mod dismiss_tests {
         assert_eq!(state.subtitle(row).as_deref(), Some("settings.usb_detail"));
         state.usb_busy = true;
         assert_eq!(state.subtitle(row).as_deref(), Some("settings.usb_in_use"));
+    }
+    #[test]
+    fn usb_network_rows_follow_the_mode_and_the_status() {
+        let mut state = Settings::default();
+        state.open(Page::Services);
+        let usb_rows = |state: &Settings| {
+            state
+                .visible_rows()
+                .iter()
+                .filter(|r| matches!(r.id, Id::UsbCompat | Id::UsbAddress | Id::UsbState))
+                .count()
+        };
+        assert_eq!(usb_rows(&state), 0);
+        state.values.insert(Id::UsbMode, "internet".into());
+        assert_eq!(usb_rows(&state), 3);
+        assert!(state.fixed(Id::UsbAddress) && state.fixed(Id::UsbState));
+        let catalog = crate::i18n::I18n::load(std::path::Path::new("/none"), Some("pt_BR"), None);
+        assert_eq!(state.display_value(Id::UsbAddress, &catalog), "—");
+        assert_eq!(state.display_value(Id::UsbState, &catalog), "");
+        state.usb = network::Usb::parse("link=online\naddress=192.168.137.42\nwifi=held\n");
+        assert_eq!(
+            state.display_value(Id::UsbAddress, &catalog),
+            "192.168.137.42"
+        );
+        assert_eq!(
+            state.display_value(Id::UsbState, &catalog),
+            "Wi‑Fi desligado"
+        );
+        let subtitle = |state: &Settings, id| {
+            let row = pages::SERVICES.iter().find(|r| r.id == id).unwrap();
+            state.subtitle(row).unwrap()
+        };
+        assert_eq!(subtitle(&state, Id::UsbState), "settings.usb_link_online");
+        assert_eq!(
+            subtitle(&state, Id::UsbAddress),
+            "settings.usb_address_dhcp"
+        );
+        // No lease: the "network" mode's fixed address, said so.
+        state.usb.link = "fallback".into();
+        assert_eq!(subtitle(&state, Id::UsbState), "settings.usb_link_fallback");
+        assert_eq!(
+            subtitle(&state, Id::UsbAddress),
+            "settings.usb_address_fixed"
+        );
+        // The label names the function the gadget really uses.
+        state.values.insert(Id::UsbMode, "network".into());
+        assert_eq!(state.display_value(Id::UsbMode, &catalog), "Rede (NCM)");
+        state.values.insert(Id::UsbCompat, "1".into());
+        assert_eq!(state.display_value(Id::UsbMode, &catalog), "Rede (RNDIS)");
+        state.values.insert(Id::UsbMode, "file_transfer".into());
+        assert_eq!(usb_rows(&state), 0);
     }
 }

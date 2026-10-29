@@ -23,8 +23,11 @@ fn wifi_error(error: String) -> String {
 }
 /// usbgadget exits 3 when the single OTG port hosts a device (Wi-Fi dongle or
 /// gamepad) and when the gadget was never prepared; both leave the value as is.
+/// "compat" exits 4 when no network gadget could be built: the function is off.
 pub(super) fn usb_error(error: &str) -> String {
-    if !error.contains("exit status: 3") {
+    if error.contains("exit status: 4") {
+        "settings.usb_rebuild_failed".into()
+    } else if !error.contains("exit status: 3") {
         error.into()
     } else if error.contains("not configured") {
         "settings.usb_unprepared".into()
@@ -138,6 +141,12 @@ impl Backend {
             Err(error) => log::warn!("Wi-Fi reconnect not started: {error}"),
         }
     }
+    /// Cable, lease and address of the USB network; usbgadget owns them.
+    pub(super) fn usb(&self) -> archr_ui::settings::network::Usb {
+        archr_ui::settings::network::Usb::parse(
+            &self.command("usbgadget", &["status"]).unwrap_or_default(),
+        )
+    }
     /// The OTG port already serves a downstream device: the same sysfs state
     /// usbgadget checks before it refuses to leave host mode.
     fn usb_busy(&self) -> bool {
@@ -171,6 +180,7 @@ impl Backend {
             Page::Scraper,
             Page::Appearance,
             Page::Achievements,
+            Page::Updates,
         ] {
             for row in page.rows() {
                 if !row.id.key().is_empty() {
@@ -183,6 +193,9 @@ impl Backend {
         if let Ok(mode) = self.command("usbgadget", &[]) {
             state.values.insert(Id::UsbMode, mode);
         }
+        state.usb = self.usb();
+        let compat = if state.usb.compat { "1" } else { "0" };
+        state.values.insert(Id::UsbCompat, compat.into());
         state.usb_busy = self.usb_busy();
         state.access_ip = self.address();
         keyboard_choices(
@@ -238,6 +251,10 @@ impl Backend {
         };
         let engine = Engine::production(self.paths.cache.clone(), Some(creds.clone()))
             .ok_or("settings.scraper_unavailable")?;
+        self.save_login(&engine, creds)
+    }
+    /// Any refusal or failure leaves the saved login as it was.
+    fn save_login(&self, engine: &Engine, creds: Credentials) -> Result<(String, usize), String> {
         let info = engine
             .verify()
             .map_err(|stop| scrape_outcome(stop).to_owned())?;
@@ -262,6 +279,7 @@ impl Backend {
                 | Id::Player
                 | Id::Channel
                 | Id::UsbMode
+                | Id::UsbCompat
                 | Id::KeyboardLayout
                 | Id::KeyboardVariant
                 | Id::ClockFormat
@@ -278,6 +296,9 @@ impl Backend {
                 | Id::ScraperMissing
                 | Id::Automount
                 | Id::MergedStorage
+                | Id::UpdateChannel
+                | Id::UpdateBoot
+                | Id::UpdateNotify
         ) {
             return None;
         }
@@ -318,6 +339,11 @@ impl Backend {
                 }
                 Id::UsbMode => self
                     .command("usbgadget", &[value])
+                    .map(|_| value.into())
+                    .map_err(|e| usb_error(&e)),
+                // Rebuilding the gadget restarts an active network mode.
+                Id::UsbCompat => self
+                    .command("usbgadget", &["compat", value])
                     .map(|_| value.into())
                     .map_err(|e| usb_error(&e)),
                 Id::KeyboardLayout | Id::KeyboardVariant => {
@@ -381,6 +407,7 @@ impl Backend {
                         Err("Invalid option".into())
                     }
                 }
+                Id::MergedStorage => self.unify(value),
                 Id::ScraperSystems => {
                     if value.is_empty() || archr_scraper::system_id(value).is_some() {
                         self.save(id, value).map(|_| value.into())
@@ -679,5 +706,49 @@ mod tests {
         assert_eq!(theme.highlight_bg.r, 255);
         // A theme that vanished falls back to the builtin one.
         assert_eq!(crate::appearance::load_theme(&paths, "gone").1, None);
+    }
+    #[test]
+    fn the_scraper_login_survives_a_reboot_and_failed_checks() {
+        use archr_scraper::{Http, NetError, Response};
+        struct Answer(Option<u16>);
+        impl Http for Answer {
+            fn get(&self, _: &str, _: u64, _: &AtomicBool) -> Result<Response, NetError> {
+                let status = self.0.ok_or(NetError::Timeout)?;
+                Ok(Response {
+                    status,
+                    body: Vec::new(),
+                })
+            }
+        }
+        let (root, paths) = fixture("");
+        let saved = Credentials {
+            user: "ana".into(),
+            password: "pw".into(),
+        };
+        saved.save(&paths.store).unwrap();
+        let file = fs::read(paths.store.join("scraper.toml")).unwrap();
+        for status in [None, Some(430), Some(403), Some(503)] {
+            // A new backend over the same files, as after a reboot.
+            let backend = Backend::new(Paths::new(Some(root.path().into())));
+            let mut state = Settings::default();
+            backend.load_pages(&SystemCfg::load(&paths.config).unwrap(), &mut state);
+            assert_eq!(state.scrape.user, "ana");
+            let typed = Credentials {
+                user: "ana".into(),
+                password: "new".into(),
+            };
+            let mut engine = Engine::new(
+                std::sync::Arc::new(Answer(status)),
+                "devid=x&devpassword=y",
+                paths.cache.clone(),
+                Some(typed.clone()),
+            );
+            engine.timing = archr_scraper::Timing {
+                spacing: Duration::ZERO,
+                retry: Duration::ZERO,
+            };
+            assert!(backend.save_login(&engine, typed).is_err());
+            assert_eq!(fs::read(paths.store.join("scraper.toml")).unwrap(), file);
+        }
     }
 }

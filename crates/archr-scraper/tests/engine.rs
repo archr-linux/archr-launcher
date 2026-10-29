@@ -306,6 +306,15 @@ fn credentials_file_is_private_and_debug_hides_the_password() {
     assert!(!format!("{creds:?}").contains("pw1"));
     Credentials::clear(dir.path()).unwrap();
     assert_eq!(Credentials::load(dir.path()), None);
+    // A link planted in its place is ignored, not followed.
+    let elsewhere = tempfile::tempdir().unwrap();
+    creds.save(elsewhere.path()).unwrap();
+    std::os::unix::fs::symlink(
+        elsewhere.path().join("scraper.toml"),
+        dir.path().join("scraper.toml"),
+    )
+    .unwrap();
+    assert_eq!(Credentials::load(dir.path()), None);
 }
 
 #[test]
@@ -996,4 +1005,22 @@ fn bulk_runs_keep_user_edits_and_a_forced_single_game_run_replaces_them() {
         fs::read_to_string(cache.join("scraper-journal.txt")).unwrap(),
         "pending bulk run\n"
     );
+}
+
+#[test]
+fn a_game_on_the_second_card_gets_its_art_and_gamelist_there() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut sys = system(&dir.path().join("sd1"), &["Alpha.sfc"]);
+    let sd2 = system(&dir.path().join("sd2"), &["Beta.sfc"]).path;
+    sys.external = Some(sd2.clone());
+    let (_, report) = finish(
+        &engine(mock(happy), &dir.path().join("c")).start(vec![sys.clone()], Options::new("en")),
+    );
+    assert_eq!((report.stop, report.progress.scraped), (Stop::Completed, 2));
+    for (root, stem) in [(&sys.path, "Alpha"), (&sd2, "Beta")] {
+        assert!(root.join(format!("media/images/{stem}.png")).is_file());
+        let xml = fs::read_to_string(root.join("gamelist.xml")).unwrap();
+        assert!(xml.contains(&format!("<path>./{stem}.sfc</path>")), "{xml}");
+        assert_eq!(xml.matches("<game>").count(), 1, "{xml}");
+    }
 }

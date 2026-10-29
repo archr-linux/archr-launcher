@@ -36,6 +36,7 @@ pub mod status;
 mod text;
 
 pub mod keyboard;
+pub mod modules;
 pub mod moonlight;
 pub mod settings;
 

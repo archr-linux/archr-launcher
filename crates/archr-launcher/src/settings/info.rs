@@ -284,6 +284,15 @@ impl Backend {
             .unwrap_or_default()
     }
 
+    fn image_version(&self) -> String {
+        self.read("/etc/os-release")
+            .lines()
+            .find_map(|l| {
+                l.strip_prefix("VERSION_ID=")
+                    .map(|v| v.trim_matches('"').into())
+            })
+            .unwrap_or_else(|| self.read("/etc/version"))
+    }
     fn identity(&self) -> Identity {
         let cpu = self.read("/proc/cpuinfo");
         let field = |name: &str| {
@@ -320,14 +329,13 @@ impl Backend {
         .to_owned();
         let rk3326 = model.contains("RK3326");
         Identity {
+            // archr-update decides it (a newer recorded update, else the
+            // image); its own fallback, the image's, when it cannot run.
             version: self
-                .read("/etc/os-release")
-                .lines()
-                .find_map(|l| {
-                    l.strip_prefix("VERSION_ID=")
-                        .map(|v| v.trim_matches('"').into())
-                })
-                .unwrap_or_else(|| self.read("/etc/version")),
+                .command("archr-update", &["version"])
+                .ok()
+                .filter(|v| !v.is_empty())
+                .unwrap_or_else(|| self.image_version()),
             device: self
                 .read("/sys/firmware/devicetree/base/model")
                 .trim_end_matches('\0')
@@ -939,5 +947,22 @@ mod tests {
             assert!(!name.is_empty());
             assert!(!address.parse::<Ipv4Addr>().unwrap().is_loopback());
         }
+    }
+    #[test]
+    fn version_comes_from_archr_update_else_the_image() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let paths = crate::paths::Paths::new(Some(dir.path().into()));
+        std::fs::create_dir_all(dir.path().join("etc")).unwrap();
+        std::fs::write(dir.path().join("etc/os-release"), "VERSION_ID=\"2.1.1\"\n").unwrap();
+        let backend = super::super::Backend::new(paths.clone());
+        assert_eq!(backend.identity().version, "2.1.1");
+        let bin = dir.path().join("usr/bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let script = bin.join("archr-update");
+        std::fs::write(&script, "#!/bin/sh\n[ \"$1\" = version ] && echo 2.1.2\n").unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let backend = super::super::Backend::new(paths);
+        assert_eq!(backend.identity().version, "2.1.2");
     }
 }

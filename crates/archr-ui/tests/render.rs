@@ -133,11 +133,11 @@ fn grafite_layout_motion_glyphs_and_untrusted_text_render_offscreen() {
         rgba[2] <= 14,
         "quick-menu backdrop needs roughly 72% scrim opacity"
     );
-    let offset = (140 * 640 + 170) * 4;
+    let offset = (222 * 640 + 170) * 4;
     assert_eq!(
         &rgba[offset..offset + 3],
         &[30, 136, 255],
-        "quick-menu core row matches the approved y=134 layout"
+        "quick-menu core row is highlighted in the shorter game menu"
     );
     ui.set_motion(Motion::On);
     let scroll_data = Data {

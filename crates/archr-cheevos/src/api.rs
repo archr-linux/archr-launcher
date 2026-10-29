@@ -9,13 +9,11 @@ use std::{path::PathBuf, sync::atomic::AtomicBool};
 pub const HOSTS: &[&str] = &["retroachievements.org"];
 const DOREQUEST: &str = "https://retroachievements.org/dorequest.php";
 const BADGES: &str = "https://media.retroachievements.org/Badge/";
+const SUMMARY: &str = "https://retroachievements.org/API/API_GetUserSummary.php";
 const REPLY_LIMIT: u64 = 4 << 20;
 const BADGE_LIMIT: u64 = 256 << 10;
 /// Achievements kept per game; real sets stay far below.
 const MAX_ACHIEVEMENTS: usize = 1000;
-
-/// Optional developer web API login from the build environment, in ES's own
-/// format (`z=<user>&y=<key>`). Only the profile card's extras need it.
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error {
@@ -53,6 +51,14 @@ impl std::fmt::Debug for Account {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Account({}, <hidden>)", self.user)
     }
+}
+
+/// Profile extras only the web API has; it needs the user's own web API key.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Summary {
+    /// Year the account was created.
+    pub since: String,
+    pub last_game: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -232,5 +238,41 @@ impl Client {
             return Err(Error::Service);
         }
         Ok(reply.body)
+    }
+
+    /// Member-since year and last game through the web API, signed with the
+    /// user's own key (retroachievements.org › Settings › Keys). The key
+    /// rides in the query string, so the URL never leaves `Http`.
+    pub fn summary(&self, user: &str, key: &str, cancel: &AtomicBool) -> Result<Summary, Error> {
+        let (user, key) = (encode(user), encode(key));
+        let url = format!("{SUMMARY}?z={user}&y={key}&u={user}&g=1&a=0");
+        let reply = self
+            .http
+            .get(&url, REPLY_LIMIT, cancel)
+            .map_err(|_| Error::Network)?;
+        match reply.status {
+            200 => {}
+            401 | 403 => return Err(Error::Auth),
+            _ => return Err(Error::Service),
+        }
+        let value: Value = serde_json::from_slice(&reply.body).map_err(|_| Error::Service)?;
+        // Only a real summary proves the key works; `{}` or `{"error":…}` do not.
+        if text(&value["User"]).is_empty() {
+            return Err(Error::Service);
+        }
+        let since: String = text(&value["MemberSince"]).chars().take(4).collect();
+        let last = &value["RecentlyPlayed"][0]["Title"];
+        Ok(Summary {
+            since: if since.len() == 4 && since.bytes().all(|b| b.is_ascii_digit()) {
+                since
+            } else {
+                String::new()
+            },
+            last_game: text(if last.is_string() {
+                last
+            } else {
+                &value["LastGame"]["Title"]
+            }),
+        })
     }
 }

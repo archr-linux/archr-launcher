@@ -445,6 +445,41 @@ fn usbgadget_exit_three_maps_to_specific_messages() {
         .contains("exit status: 1"));
     script(&dir, "usbgadget", "exit 0");
     assert_eq!(backend.apply(Id::UsbMode, "network").unwrap(), "network");
+    // "internet" and the RNDIS switch go through the same guard and errors.
+    script(&dir, "usbgadget", "exit 3");
+    for (id, value) in [(Id::UsbMode, "internet"), (Id::UsbCompat, "1")] {
+        assert_eq!(backend.apply(id, value).unwrap_err(), "settings.usb_busy");
+    }
+    script(
+        &dir,
+        "usbgadget",
+        "echo \"$*\" >> \"$ARCHR_LAUNCHER_ROOT/calls\"",
+    );
+    assert_eq!(backend.apply(Id::UsbMode, "internet").unwrap(), "internet");
+    assert_eq!(backend.apply(Id::UsbCompat, "1").unwrap(), "1");
+    assert!(backend.apply(Id::UsbCompat, "2").is_err());
+    script(&dir, "usbgadget", "exit 4");
+    assert_eq!(
+        backend.apply(Id::UsbCompat, "0").unwrap_err(),
+        "settings.usb_rebuild_failed"
+    );
+    assert!(backend.apply(Id::UsbMode, "ecm").is_err());
+    let calls = fs::read_to_string(dir.path().join("calls")).unwrap();
+    assert_eq!(calls, "internet\ncompat 1\n");
+}
+#[test]
+fn load_reads_the_usb_network_from_usbgadget_status() {
+    let (dir, backend) = fixture();
+    script(
+        &dir,
+        "usbgadget",
+        "if [ \"$1\" = status ]; then printf 'mode=internet\\ncompat=1\\nlink=online\\naddress=192.168.137.42\\nwifi=held\\n'; else echo internet; fi",
+    );
+    let state = backend.load().unwrap();
+    assert_eq!(state.value(Id::UsbMode), "internet");
+    assert_eq!(state.value(Id::UsbCompat), "1");
+    assert_eq!(state.usb.address, "192.168.137.42");
+    assert!(state.usb.wifi_held && state.usb.link == "online");
 }
 #[test]
 fn load_flags_a_busy_usb_port_from_the_same_sysfs_state_usbgadget_checks() {
@@ -484,6 +519,12 @@ fn hotkeys_save_evdev_names_and_restart_a_running_input_service() {
             log.display()
         ),
     );
+    let retroarch = dir.path().join("retroarch.log");
+    script(
+        &dir,
+        "archr-retroarch-hotkeys",
+        &format!("echo \"$*\" >> '{}'", retroarch.display()),
+    );
     let config = || {
         fs::read_to_string(dir.path().join("storage/.config/system/configs/system.cfg")).unwrap()
     };
@@ -508,6 +549,16 @@ fn hotkeys_save_evdev_names_and_restart_a_running_input_service() {
     assert_eq!(
         fs::read_to_string(&log).unwrap().matches("restart").count(),
         5
+    );
+    // RetroArch's own hotkeys stay as the user left them...
+    assert!(!retroarch.exists());
+    // ...until asked to restore them.
+    assert_eq!(backend.apply(Id::RaHotkeys, "").unwrap(), "");
+    assert_eq!(fs::read_to_string(&retroarch).unwrap(), "--force\n");
+    script(&dir, "archr-retroarch-hotkeys", "exit 1");
+    assert_eq!(
+        backend.apply(Id::RaHotkeys, ""),
+        Err("settings.ra_hotkeys_failed".into())
     );
     let state = backend.load().unwrap();
     assert_eq!(state.hotkey_pads(0), ["FN", "R1", "START"]);

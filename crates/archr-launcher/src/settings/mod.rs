@@ -7,9 +7,11 @@ mod games;
 mod info;
 mod mangohud;
 mod pages;
+mod raimport;
 pub(crate) use pages::{scrape_outcome, start_scrape};
 mod runtime;
 mod storage;
+mod updates;
 use crate::paths::Paths;
 use archr_config::SystemCfg;
 use archr_ui::settings::{Id, Information, Page, Settings};
@@ -354,6 +356,8 @@ pub(super) enum Work {
     /// A Games page row of the named system.
     Game(String, Id, String),
     Info,
+    /// `usbgadget status`, polled while Services shows a network USB mode.
+    Usb,
     Scan,
     BtScan,
     Bt(archr_ui::settings::bluetooth::Action, String),
@@ -363,6 +367,7 @@ pub(super) enum Work {
     Login(String, String),
     CheevosLogin(String, String),
     CheevosLogout,
+    CheevosKey(String),
     /// The account card's points; its own lane, like the radio scans.
     CheevosProfile,
     Scrape,
@@ -370,17 +375,20 @@ pub(super) enum Work {
     Appearance(Vec<(Id, String)>),
     Storage(archr_ui::settings::storage::Action),
     Store(archr_ui::settings::store::Action),
+    /// Import from RetroArch: look at the folder, or import (backup first?).
+    RaScan,
+    RaImport(bool, Box<archr_ui::settings::raimport::Found>),
 }
-/// A storage action's outcome, the systems to reload after an eject, and the
-/// page's refreshed facts.
+/// A storage action's outcome and the page's refreshed facts.
 type StorageReply = (
-    Result<(&'static str, Option<Vec<String>>), String>,
+    Result<&'static str, String>,
     Box<archr_ui::settings::storage::Storage>,
 );
 enum Reply {
     Loaded(Result<Box<Settings>, String>),
     Set(Id, Result<String, String>),
     Info(Information),
+    Usb(archr_ui::settings::network::Usb),
     Scan(
         u64,
         Result<(Vec<archr_ui::settings::network::Network>, String), String>,
@@ -393,12 +401,17 @@ enum Reply {
     Login(Result<(String, usize), String>),
     CheevosLogin(Result<(String, archr_ui::settings::cheevos::Profile), String>),
     CheevosLogout(Result<(), String>),
-    CheevosProfile(Option<archr_ui::settings::cheevos::Profile>),
+    CheevosKey(Result<Option<archr_cheevos::Summary>, String>),
+    CheevosProfile(Result<(archr_ui::settings::cheevos::Profile, bool), archr_cheevos::Error>),
     Scrape(Result<(archr_scraper::Job, Vec<String>), String>),
     Theme(Box<(archr_ui::Theme, Option<std::path::PathBuf>)>),
     Appearance(Result<(), String>),
     Storage(StorageReply),
+    /// The Storage page's facts after unified storage was switched.
+    Facts(Box<archr_ui::settings::storage::Storage>),
     Store(archr_ui::settings::store::Reply),
+    RaScan(archr_ui::settings::raimport::Found),
+    RaImport(Result<String, String>),
 }
 /// A radio scan takes ~20 s on the R36S: it runs on its own lane so it never
 /// delays the Wi-Fi switch or any other action.
@@ -485,11 +498,20 @@ impl Worker {
                 while let Ok(work) = requests.recv() {
                     let reply = match work {
                         Work::Load => Reply::Loaded(backend.load().map(Box::new)),
-                        Work::Set(id, value) => Reply::Set(id, backend.apply(id, &value)),
+                        Work::Set(id, value) => {
+                            let reply = Reply::Set(id, backend.apply(id, &value));
+                            if id == Id::MergedStorage {
+                                let _ = results.send(reply);
+                                Reply::Facts(Box::new(backend.storage()))
+                            } else {
+                                reply
+                            }
+                        }
                         Work::Game(system, id, value) => {
                             Reply::Set(id, backend.apply_game(&system, id, &value))
                         }
                         Work::Info => Reply::Info(backend.refresh_info()),
+                        Work::Usb => Reply::Usb(backend.usb()),
                         Work::Scan | Work::BtScan => unreachable!("scans have their own lane"),
                         Work::Bt(action, addr) => Reply::Bt(backend.bt_act(action, &addr)),
                         Work::Connect(ssid, password) => {
@@ -506,6 +528,7 @@ impl Worker {
                             Reply::CheevosLogin(backend.cheevos_login(&user, &password))
                         }
                         Work::CheevosLogout => Reply::CheevosLogout(backend.cheevos_logout()),
+                        Work::CheevosKey(key) => Reply::CheevosKey(backend.cheevos_key(&key)),
                         Work::CheevosProfile | Work::Store(_) => {
                             unreachable!("the profile and the store have their own lanes")
                         }
@@ -523,6 +546,10 @@ impl Worker {
                                 log::warn!("Storage {action:?} failed: {error}");
                             }
                             Reply::Storage((result, Box::new(backend.storage())))
+                        }
+                        Work::RaScan => Reply::RaScan(backend.ra_scan()),
+                        Work::RaImport(backup, seen) => {
+                            Reply::RaImport(backend.ra_import(backup, &seen))
                         }
                     };
                     if results.send(reply).is_err() {
@@ -600,7 +627,6 @@ impl Worker {
         &mut self,
         state: &mut Settings,
         job: &mut Option<(archr_scraper::Job, Vec<String>)>,
-        reload: &mut Option<Vec<String>>,
     ) -> (bool, Option<String>) {
         let mut changed = false;
         let mut language = None;
@@ -620,17 +646,24 @@ impl Worker {
                 if stale {
                     continue;
                 }
-            } else if !matches!(reply, Reply::CheevosProfile(_) | Reply::Store(_)) {
+            } else if !matches!(
+                reply,
+                Reply::CheevosProfile(_) | Reply::Store(_) | Reply::Facts(_)
+            ) {
                 self.pending = self.pending.saturating_sub(1);
             }
             match reply {
                 Reply::Loaded(Ok(mut loaded)) => {
                     std::mem::swap(&mut state.values, &mut loaded.values);
+                    // Module switches and rows live in the values too.
+                    let modules = state.modules.view.clone();
+                    state.set_modules(modules);
                     state.options = loaded.options;
                     state.labels = loaded.labels;
                     state.theme_names = loaded.theme_names;
                     state.access_ip = loaded.access_ip;
                     state.usb_busy = loaded.usb_busy;
+                    state.usb = loaded.usb;
                     state.info = loaded.info;
                     state.error = loaded.error;
                     state.scrape.available = loaded.scrape.available;
@@ -643,6 +676,7 @@ impl Worker {
                     }
                     if !state.cheevos.verifying {
                         state.cheevos.user = loaded.cheevos.user;
+                        state.cheevos.web_key = loaded.cheevos.web_key;
                     }
                     state.loading = false;
                 }
@@ -660,6 +694,9 @@ impl Worker {
                     }
                     if id == Id::UsbMode {
                         state.usb_busy = matches!(&result, Err(e) if e == "settings.usb_busy");
+                    }
+                    if matches!(&result, Err(e) if e == "settings.usb_rebuild_failed") {
+                        state.values.insert(Id::UsbMode, "disabled".into());
                     }
                     if id == Id::Language {
                         language = result.as_ref().ok().cloned();
@@ -704,8 +741,14 @@ impl Worker {
                     }
                 }
                 Reply::Info(info) => state.info = info,
+                Reply::Usb(usb) => state.usb = usb,
                 Reply::Store(reply) => state.store_reply(reply),
                 Reply::Theme(loaded) => (state.base_theme, state.base_dir) = *loaded,
+                Reply::RaScan(found) => {
+                    state.raimport.scanning = false;
+                    state.raimport.found = Some(found);
+                }
+                Reply::RaImport(result) => state.raimport_done(result),
                 Reply::Appearance(result) => {
                     state.pending = None;
                     match result {
@@ -785,6 +828,7 @@ impl Worker {
                             state.cheevos.user = user;
                             state.cheevos.draft.clear();
                             state.cheevos.profile = Some(profile);
+                            state.cheevos.expired = false;
                             state.values.insert(Id::Cheevos, "1".into());
                             state.error = None;
                         }
@@ -795,30 +839,47 @@ impl Worker {
                     state.cheevos.verifying = false;
                     match result {
                         Ok(()) => {
-                            state.cheevos.user.clear();
-                            state.cheevos.profile = None;
+                            state.cheevos = archr_ui::settings::cheevos::Cheevos::default();
                             state.cursor = state.cursor.min(state.visible_rows().len() - 1);
                         }
                         Err(error) => state.fail(None, error),
                     }
                 }
-                Reply::CheevosProfile(profile) => {
-                    if profile.is_some() && !state.cheevos.user.is_empty() {
-                        state.cheevos.profile = profile;
+                Reply::CheevosKey(result) => {
+                    state.cheevos.verifying = false;
+                    match result {
+                        Ok(summary) => {
+                            state.cheevos.web_key = summary.is_some();
+                            state.cheevos.key_refused = false;
+                            let summary = summary.unwrap_or_default();
+                            if let Some(profile) = &mut state.cheevos.profile {
+                                (profile.since, profile.last_game) =
+                                    (summary.since, summary.last_game);
+                            }
+                            state.cursor = state.cursor.min(state.visible_rows().len() - 1);
+                        }
+                        Err(error) => state.fail(None, error),
                     }
                 }
+                // Offline or a service error changes nothing; a refused token
+                // keeps the account and asks for the password again.
+                Reply::CheevosProfile(result) if !state.cheevos.user.is_empty() => match result {
+                    Ok((profile, refused)) => {
+                        state.cheevos.profile = Some(profile);
+                        state.cheevos.key_refused = refused;
+                        state.cheevos.expired = false;
+                    }
+                    Err(archr_cheevos::Error::Auth) => state.cheevos.expired = true,
+                    Err(_) => {}
+                },
+                Reply::CheevosProfile(_) => {}
+                Reply::Facts(facts) => refresh_storage(state, *facts),
                 Reply::Storage((result, facts)) => {
                     refresh_storage(state, *facts);
                     match result {
                         // factoryreset reboots: its notice stays until then.
-                        Ok(("settings.resetting", _)) => {}
-                        Ok((key, systems)) => {
-                            if let Some(systems) = systems {
-                                reload.get_or_insert_with(Vec::new).extend(systems);
-                            }
-                            state.storage_done(Ok(key));
-                        }
-                        Err(error) => state.storage_done(Err(error)),
+                        Ok("settings.resetting") => {}
+                        result => state.storage_done(result),
                     }
                 }
                 Reply::Scrape(result) => {

@@ -1,6 +1,7 @@
 //! Screen transitions and controller input, independent of rendering and SDL.
 
 use crate::layout::{Axis, Layout, View};
+use crate::modules::{Call, Context};
 use archr_index::{cache::SystemEntry, Game};
 mod hub;
 mod order;
@@ -60,6 +61,8 @@ pub enum SessionAction {
 pub enum Outcome {
     None,
     Settings,
+    /// Opens Settings, System, Updates.
+    Updates,
     /// Opens the Netplay lobby.
     OpenNetplay,
     /// Starts a lobby room as a netplay client.
@@ -94,6 +97,8 @@ pub enum Outcome {
     Action(SessionAction),
     /// Replaces the saved system order; empty restores the default order.
     SetOrder(Vec<String>),
+    /// Something for the module host, or a module page to open.
+    Module(crate::modules::Request),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -108,6 +113,8 @@ pub enum QuickItem {
     Suspend,
     Reboot,
     Shutdown,
+    /// A module's item: an index into `View::quick` for this menu.
+    Module(u8),
 }
 
 pub trait DataSource {
@@ -139,6 +146,10 @@ pub trait DataSource {
     }
     fn cores(&self, system: &str) -> Vec<(String, String)>;
     fn current_core(&self, system: &str, game: usize) -> Option<(String, String)>;
+    /// `system/relative/path.rom`, the key favorites and modules use.
+    fn game_key(&self, _system: &str, _game: usize) -> Option<String> {
+        None
+    }
 }
 
 /// How a screen's list answers the shoulders and the d-pad, which send the
@@ -199,6 +210,10 @@ pub struct App {
     pub sheet: crate::cheevos::Sheet,
     /// Achievements per page, reported by the renderer (theme layout).
     pub sheet_page: usize,
+    /// Packages a system update would bring, when the START menu tells.
+    pub updates: usize,
+    /// Installed modules and their live values, from the host.
+    pub modules: std::sync::Arc<crate::modules::View>,
     history: Vec<(Screen, usize)>,
     moving: Option<order::Moving>,
     selected_core: Option<(String, String)>,
@@ -220,9 +235,11 @@ impl App {
             cheevos: false,
             sheet: crate::cheevos::Sheet::default(),
             sheet_page: 1,
+            updates: 0,
             history: Vec::new(),
             moving: None,
             selected_core: None,
+            modules: std::sync::Arc::default(),
         }
     }
 
@@ -242,26 +259,36 @@ impl App {
         (&self.screen, self.cursor)
     }
 
+    /// The game menu only holds what concerns the game; power actions live
+    /// in the system menu.
+    fn game_menu_items(
+        &self,
+        data: &dyn DataSource,
+        system: &str,
+        from_details: bool,
+    ) -> Vec<QuickItem> {
+        use QuickItem::*;
+        let mut items = Vec::new();
+        if data.cores(system).len() > 1 {
+            items.push(Core);
+        }
+        if !from_details {
+            items.push(Details);
+        }
+        if self.cheevos {
+            items.push(Achievements);
+        }
+        items.extend(self.module_items(Context::Game, system));
+        items
+    }
+
     pub fn quick_menu_items(&self, data: &dyn DataSource) -> Vec<QuickItem> {
         use QuickItem::*;
         let from_details = matches!(self.history.last(), Some((Screen::Details { .. }, _)));
         match &self.screen {
             Screen::QuickMenu {
                 game: Some((system, _)),
-            } => {
-                let mut items = Vec::new();
-                if data.cores(system).len() > 1 {
-                    items.push(Core);
-                }
-                if !from_details {
-                    items.push(Details);
-                }
-                if self.cheevos {
-                    items.push(Achievements);
-                }
-                items.extend([Suspend, Reboot, Shutdown]);
-                items
-            }
+            } => self.game_menu_items(data, system, from_details),
             Screen::QuickMenu { game: None } => {
                 let items: &[QuickItem] = match (self.netplay, data.system_order().is_empty()) {
                     (false, true) => &[Settings, Move, Suspend, Reboot, Shutdown],
@@ -277,10 +304,41 @@ impl App {
                         Shutdown,
                     ],
                 };
-                items.to_vec()
+                let mut items = items.to_vec();
+                let system = self.quick_system(data).unwrap_or_default();
+                let at = items.len() - 3;
+                items.splice(at..at, self.module_items(Context::System, &system));
+                items
             }
             _ => Vec::new(),
         }
+    }
+    fn module_items(&self, context: Context, system: &str) -> Vec<QuickItem> {
+        (0..self.modules.quick(context, system).len())
+            .map(|n| QuickItem::Module(n as u8))
+            .collect()
+    }
+    /// The system a systems-screen quick menu was opened on.
+    fn quick_system(&self, data: &dyn DataSource) -> Option<String> {
+        let (_, cursor) = self.history.last()?;
+        Self::system_rows(data).get(*cursor).cloned()
+    }
+    /// A module item of the open quick menu: its module id and declaration.
+    pub fn quick_module(
+        &self,
+        n: u8,
+        data: &dyn DataSource,
+    ) -> Option<(String, &crate::modules::Quick)> {
+        let (context, system) = match &self.screen {
+            Screen::QuickMenu {
+                game: Some((system, _)),
+            } => (Context::Game, system.clone()),
+            Screen::QuickMenu { game: None } => (Context::System, self.quick_system(data)?),
+            _ => return None,
+        };
+        let items = self.modules.quick(context, &system);
+        let (module, quick) = items.get(usize::from(n))?;
+        Some((self.modules.modules[*module].id.clone(), *quick))
     }
     pub fn selected_core(&self) -> (&str, &str) {
         self.selected_core
@@ -376,6 +434,9 @@ impl App {
                         Button::A => return Outcome::Launch { system, game },
                         Button::X => return Outcome::ToggleFavorite { system, game },
                         Button::Y => {
+                            if self.game_menu_items(data, &system, false).is_empty() {
+                                return Outcome::None;
+                            }
                             self.selected_core = data.current_core(&system, game);
                             self.enter(Screen::QuickMenu {
                                 game: Some((system, game)),
@@ -434,6 +495,33 @@ impl App {
                     (Button::A, Some(QuickItem::Shutdown)) => {
                         return Outcome::Action(SessionAction::Shutdown);
                     }
+                    (Button::A, Some(QuickItem::Module(n))) => {
+                        let Some((module, quick)) = self.quick_module(*n, data) else {
+                            return Outcome::None;
+                        };
+                        let action = quick.action.clone();
+                        let call = match &game {
+                            Some((system, index)) => Call {
+                                system: system.clone(),
+                                game_key: data.game_key(system, *index).unwrap_or_default(),
+                                rom: data
+                                    .games(system)
+                                    .get(*index)
+                                    .map(|g| g.path.display().to_string())
+                                    .unwrap_or_default(),
+                            },
+                            None => Call {
+                                system: self.quick_system(data).unwrap_or_default(),
+                                ..Call::default()
+                            },
+                        };
+                        self.back();
+                        return Outcome::Module(crate::modules::Request::Invoke {
+                            module,
+                            action,
+                            call: Some(call),
+                        });
+                    }
                     (Button::L | Button::R, Some(QuickItem::Core)) => {
                         if let Some((system, game)) = game {
                             return self.cycle_core(b, system, game, data);
@@ -482,6 +570,9 @@ impl App {
             Button::L => self.details_focus = self.details_focus.saturating_sub(1),
             Button::R => self.details_focus = (self.details_focus + 1).min(last),
             Button::Y => {
+                if self.game_menu_items(data, &system, true).is_empty() {
+                    return Outcome::None;
+                }
                 self.selected_core = data.current_core(&system, game);
                 self.enter(Screen::QuickMenu {
                     game: Some((system, game)),

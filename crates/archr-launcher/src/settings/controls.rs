@@ -1,5 +1,7 @@
 //! In-game hotkeys and inactivity: system.cfg keys input_sense reads once at
 //! start, so every save restarts its unit, as the device quirks do.
+//! RetroArch's own hotkeys are separate: only "Restore RetroArch hotkeys"
+//! rewrites them, so the ones set inside RetroArch stay.
 use super::Backend;
 use archr_config::SystemCfg;
 use archr_ui::{
@@ -44,6 +46,21 @@ impl Backend {
         Ok(())
     }
     pub(super) fn apply_controls(&self, id: Id, value: &str) -> Option<Result<String, String>> {
+        // The distribution's script, from the built-in pad's autoconfig.
+        if id == Id::RaHotkeys {
+            return Some(
+                self.command_with_timeout(
+                    "archr-retroarch-hotkeys",
+                    &["--force"],
+                    Duration::from_secs(10),
+                )
+                .map(|_| String::new())
+                .map_err(|error| {
+                    log::warn!("RetroArch hotkeys not written: {error}");
+                    "settings.ra_hotkeys_failed".to_owned()
+                }),
+            );
+        }
         let entries: Vec<(&str, String)> = match id {
             Id::HotkeyModifier if MODIFIERS.contains(&value) => vec![(id.key(), value.into())],
             Id::Hotkey(n) if valid_hotkey(usize::from(n), value) => {

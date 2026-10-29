@@ -477,19 +477,21 @@ esac
                             4 if matches!(app.screen, Screen::Games { .. }) => {
                                 Some(Keycode::Return)
                             }
-                            5 if deferred.is_some() => Some(Keycode::Y),
-                            // Core, Details, Suspend, Reboot (3), Shutdown (4).
-                            6 if app.cursor == 0 => Some(Keycode::Down),
-                            7 if app.cursor == 1 => Some(Keycode::Down),
-                            8 if app.cursor == 2 => Some(Keycode::Down),
-                            9 if target == 4 && app.cursor == 3 => Some(Keycode::Down),
-                            9 | 10 if app.cursor == target => {
+                            // Power actions live in the system menu, not the game's.
+                            5 if deferred.is_some() => Some(Keycode::Backspace),
+                            6 if matches!(app.screen, Screen::Systems) => Some(Keycode::Y),
+                            // Settings, Move, Suspend, Reboot (3), Shutdown (4).
+                            7 if app.cursor == 0 => Some(Keycode::Down),
+                            8 if app.cursor == 1 => Some(Keycode::Down),
+                            9 if app.cursor == 2 => Some(Keycode::Down),
+                            10 if target == 4 && app.cursor == 3 => Some(Keycode::Down),
+                            10 | 11 if app.cursor == target => {
                                 assert_eq!(library.pending_writes, 1);
                                 fs::remove_file(&paths.lock).unwrap();
-                                phase = 11;
+                                phase = 12;
                                 None
                             }
-                            11 if library.pending_writes == 0 => {
+                            12 if library.pending_writes == 0 => {
                                 assert!(!library.write_failed);
                                 assert!(
                                     matches!(deferred, Some(Outcome::Launch { system, game: 0 }) if system == "nes")
@@ -518,7 +520,7 @@ esac
                 );
                 result.unwrap();
             });
-            assert_eq!(phase, 12, "power input followed a real pending core write");
+            assert_eq!(phase, 13, "power input followed a real pending core write");
             assert_eq!(
                 fs::read_to_string(root.path().join("commands")).unwrap(),
                 command

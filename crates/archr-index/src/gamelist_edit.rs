@@ -100,7 +100,8 @@ pub fn update_gamelist(
     let text = doc.render();
     atomic_publish(&path, true, |file| {
         use io::Write;
-        file.set_permissions(fs::Permissions::from_mode(mode))?;
+        // FAT/exFAT cards have no modes: chmod fails there, harmlessly.
+        let _ = file.set_permissions(fs::Permissions::from_mode(mode));
         file.write_all(text.as_bytes())
     })
 }

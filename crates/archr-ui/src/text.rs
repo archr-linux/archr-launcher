@@ -345,6 +345,8 @@ pub(crate) struct TextCache<'font, 'texture> {
     entries: VecDeque<Entry<'texture>>,
     badges: VecDeque<(BadgeKey, Texture<'texture>)>,
     icons: HashMap<(Glyph, u32), Texture<'texture>>,
+    /// Modules' own icons, by source hash and size.
+    svgs: HashMap<(u64, u32), Texture<'texture>>,
     pub(crate) icon_loader: icons::IconLoader,
     /// Anti-aliased glyphs (true), or hard-edged ones for pixel fonts.
     smooth: bool,
@@ -362,6 +364,7 @@ impl<'font, 'texture> TextCache<'font, 'texture> {
             entries: VecDeque::new(),
             badges: VecDeque::with_capacity(16),
             icons: HashMap::new(),
+            svgs: HashMap::new(),
             icon_loader: prepared.icon_loader,
             smooth: true,
         };
@@ -444,13 +447,15 @@ impl<'font, 'texture> TextCache<'font, 'texture> {
             panel,
         )
     }
-    /// Icons are cached white per glyph and size, then tinted to `ink`.
+    /// Icons are cached white per glyph and size, then tinted to `ink` and
+    /// turned `angle` degrees clockwise around their center.
     pub fn draw_icon(
         &mut self,
         canvas: &mut Canvas<Window>,
         glyph: Glyph,
         panel: Rect,
         ink: Rgba,
+        angle: f64,
     ) -> Result<(), String> {
         let key = (glyph, panel.width());
         if !self.icons.contains_key(&key) {
@@ -471,6 +476,42 @@ impl<'font, 'texture> TextCache<'font, 'texture> {
             self.icons.insert(key, texture);
         }
         let texture = self.icons.get_mut(&key).expect("cached icon");
+        texture.set_color_mod(ink.r, ink.g, ink.b);
+        texture.set_alpha_mod(ink.a);
+        if angle == 0. {
+            return canvas.copy(texture, None, panel);
+        }
+        canvas.copy_ex(texture, None, panel, angle, None, false, false)
+    }
+    /// A module's Lucide SVG (checked by the host), cached and tinted like
+    /// the icons.
+    pub fn draw_svg(
+        &mut self,
+        canvas: &mut Canvas<Window>,
+        svg: &str,
+        panel: Rect,
+        ink: Rgba,
+    ) -> Result<(), String> {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        svg.hash(&mut hasher);
+        let key = (hasher.finish(), panel.width());
+        if !self.svgs.contains_key(&key) {
+            let Ok(surface) = icons::rasterize(svg, panel.width()) else {
+                return Ok(());
+            };
+            if self.svgs.len() >= 32 {
+                self.svgs.clear();
+            }
+            let mut texture = self
+                .creator
+                .create_texture_from_surface(surface)
+                .map_err(|e| e.to_string())?;
+            texture.set_blend_mode(BlendMode::Blend);
+            texture.set_scale_mode(ScaleMode::Linear);
+            self.svgs.insert(key, texture);
+        }
+        let texture = self.svgs.get_mut(&key).expect("cached icon");
         texture.set_color_mod(ink.r, ink.g, ink.b);
         texture.set_alpha_mod(ink.a);
         canvas.copy(texture, None, panel)
@@ -769,7 +810,9 @@ mod tests {
         };
         for (glyph, size) in [(Glyph::Wifi, 16), (Glyph::Wifi, 24), (Glyph::Games, 48)] {
             let panel = Rect::new(0, 0, size, size);
-            cache.draw_icon(&mut canvas, glyph, panel, white).unwrap();
+            cache
+                .draw_icon(&mut canvas, glyph, panel, white, 0.)
+                .unwrap();
             let original = cache.icons[&(glyph, size)].raw();
             cache
                 .draw_icon(
@@ -781,6 +824,7 @@ mod tests {
                         a: 128,
                         ..white
                     },
+                    0.,
                 )
                 .unwrap();
             let texture = &cache.icons[&(glyph, size)];

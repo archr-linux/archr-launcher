@@ -20,10 +20,16 @@ mod custom;
 mod information;
 #[path = "render/mangohud.rs"]
 mod mangohud;
+#[path = "render/modules.rs"]
+mod modules;
 #[path = "render/network.rs"]
 mod network;
+#[path = "render/raimport.rs"]
+mod raimport;
 #[path = "render/store.rs"]
 mod store;
+#[path = "render/updates.rs"]
+mod updates;
 const VIEW_TOP: f32 = 50.;
 const VIEW_BOTTOM: f32 = 428.;
 const FOOTER: f32 = 432.;
@@ -44,6 +50,8 @@ struct Placement {
     section: Option<&'static str>,
     /// The section is a running search: height of the placeholder rows under it.
     searching: Option<f32>,
+    /// Space below the row that belongs to it (a note), kept in view with it.
+    trail: f32,
 }
 impl Placement {
     fn selected_top(self) -> f32 {
@@ -59,13 +67,26 @@ impl Placement {
     fn bottom(self) -> f32 {
         self.top + self.height
     }
+    /// Bottom of the row and what trails it.
+    fn end(self) -> f32 {
+        self.bottom() + self.trail
+    }
 }
 /// Mockup row heights: dense Netplay and Services lists, 40/46 elsewhere.
 fn placements(page: Page, rows: &[Row]) -> Vec<Placement> {
-    let mut top = VIEW_TOP;
+    let mut top = if page == Page::Updates {
+        updates::ROWS_TOP
+    } else {
+        VIEW_TOP
+    };
+    let mut previous = None;
     rows.iter()
         .map(|row| {
-            if row.section.is_some() {
+            // Rows that share a section (one of them may be hidden) show
+            // its header once.
+            let section = row.section.filter(|_| row.section != previous);
+            previous = row.section.or(previous);
+            if section.is_some() {
                 top += SECTION_HEIGHT;
             }
             let height = match page {
@@ -77,17 +98,21 @@ fn placements(page: Page, rows: &[Row]) -> Vec<Placement> {
                 Page::LauncherControls if row.id == Id::ButtonsRestore => 36.,
                 Page::LauncherControls | Page::Hotkeys if row.subtitle.is_none() => 38.,
                 Page::Hotkeys => 44.,
+                Page::Updates if row.id == Id::UpdateInstall => 44.,
+                Page::RaImport => 38.,
+                Page::Updates => 40.,
                 _ if row.subtitle.is_some() => 46.,
                 _ => 40.,
             };
             let place = Placement {
                 top,
                 height,
-                section: row.section,
+                section,
                 searching: None,
+                trail: 0.,
             };
             top += height + ROW_GAP;
-            if row.id == Id::StorageCard {
+            if matches!(row.id, Id::UnifiedCard | Id::StorageCard | Id::SecondCard) {
                 top += CARD_METER;
             }
             if row.id == Id::HotkeyModifier {
@@ -188,6 +213,10 @@ impl Banner {
     }
 }
 type Bounds = (f32, f32, f32, f32);
+/// Rows that show a reading in monospace (Config-usb).
+fn reading(id: Id) -> bool {
+    matches!(id, Id::UsbAddress | Id::UsbState)
+}
 struct View<'a, 'ttf, 'tex> {
     ui: &'a mut Ui<'ttf, 'tex>,
     theme: &'a Theme,
@@ -206,7 +235,7 @@ impl Ui<'_, '_> {
     pub(super) fn settings_page(&mut self, state: &Settings, theme: &Theme) -> Result<(), String> {
         self.finish(theme, true);
         self.store_wanted.clear();
-        if state.page().rows().is_empty() {
+        if state.visible_rows().is_empty() && state.page() != Page::UpdatePackages {
             self.settings_scroll.page = None;
             self.settings_scroll.tween.retarget(0., self.frame.now);
             self.settings_scroll.tween.snap();
@@ -461,6 +490,37 @@ impl View<'_, '_, '_> {
                 trail.push(self.tr(state.parent_page().title()));
                 self.keyboard_name(state)
             }
+            Page::Updates if state.updates.run.is_some() => {
+                let (parents, current) = self.updates_trail(state).expect("a run");
+                trail = parents;
+                current
+            }
+            // Loja-modulo: "Sistema / Loja de módulos / <module>".
+            Page::ModuleOffer => {
+                trail.extend(page.parent().iter().map(|key| self.tr(key)));
+                let card = state.modules.offer.as_ref().map(|o| &o.card);
+                let card = card.or_else(|| state.modules.cards().get(state.cursor));
+                card.map_or_else(|| self.tr(page.title()), |c| c.title().to_owned())
+            }
+            // "Sistema / Módulos / <module>" and its pages.
+            Page::ModuleInfo | Page::Module(..) => {
+                trail.extend(page.parent().iter().map(|key| self.tr(key)));
+                let module = state.modules.module();
+                let title = match page {
+                    Page::Module(m, p) => state
+                        .modules
+                        .view
+                        .modules
+                        .get(usize::from(m))
+                        .and_then(|m| m.pages.get(usize::from(p)))
+                        .map(|p| p.title.clone())
+                        .filter(|t| !t.is_empty()),
+                    _ => None,
+                };
+                title
+                    .or_else(|| module.map(|m| m.name.clone()))
+                    .unwrap_or_else(|| self.tr(page.title()))
+            }
             _ => {
                 trail.push(self.tr("settings.title"));
                 trail.extend(page.parent().iter().map(|key| self.tr(key)));
@@ -543,7 +603,7 @@ impl View<'_, '_, '_> {
         } else {
             self.breadcrumbs(state, right)?;
         }
-        let rows: Vec<Row> = state.visible_rows().into_iter().copied().collect();
+        let rows: Vec<Row> = state.visible_rows();
         match state.page() {
             Page::Root => self.root(state)?,
             Page::Info => self.info(state)?,
@@ -559,12 +619,20 @@ impl View<'_, '_, '_> {
             Page::Appearance => self.appearance_page(state, &rows)?,
             Page::Store => self.store_grid(state)?,
             Page::StoreTheme => self.store_detail(state)?,
+            Page::Modules => self.modules_list(state, &rows)?,
+            Page::ModuleStore => self.module_store(state)?,
+            Page::ModuleInfo | Page::ModuleOffer => self.module_offer(state)?,
             Page::AccentColor => self.custom_page(state)?,
             Page::Mangohud => self.mangohud_page(state, &rows)?,
             Page::MangohudItems => self.mangohud_items(state)?,
             Page::Wifi => self.wifi(state)?,
+            Page::Services => self.services(state, &rows)?,
             Page::Bluetooth => self.bluetooth(state)?,
             Page::Keyboard => self.keyboard(state)?,
+            Page::Updates => self.updates_page(state, &rows)?,
+            Page::UpdatePackages => self.update_packages(state)?,
+            Page::RaImport => self.raimport_page(state, &rows)?,
+            Page::RaImportList => self.raimport_list(state)?,
             Page::Scraper => {
                 self.rows_at(state, &rows, &placements(Page::Scraper, &rows), 384.)?;
                 self.scraper_panel(state)?;
@@ -582,11 +650,15 @@ impl View<'_, '_, '_> {
                     RIGHT,
                     |view, n, y, position, selected| {
                         view.row(state, &rows[n], (y, position.height), RIGHT, selected)?;
-                        match (rows[n].id, &state.storage.card) {
-                            (Id::StorageCard, Some(card)) => {
-                                view.card_meter(card.percent, y + position.height)
-                            }
-                            _ => Ok(()),
+                        let card = match rows[n].id {
+                            Id::UnifiedCard => state.storage.unified.as_ref(),
+                            Id::StorageCard => state.storage.card.as_ref(),
+                            Id::SecondCard => state.storage.second.as_ref(),
+                            _ => None,
+                        };
+                        match card {
+                            Some(card) => view.card_meter(card.percent, y + position.height),
+                            None => Ok(()),
                         }
                     },
                 )?
@@ -637,9 +709,16 @@ impl View<'_, '_, '_> {
             )?;
             let (x, y, w, h) = bounds;
             // Known failures arrive as locale keys; anything else stays generic.
-            let message = if ["settings.", "cheevos.", "store."]
-                .iter()
-                .any(|prefix| error.starts_with(prefix))
+            let message = if [
+                "settings.",
+                "cheevos.",
+                "store.",
+                "updates.",
+                "modules.",
+                "raimport.",
+            ]
+            .iter()
+            .any(|prefix| error.starts_with(prefix))
             {
                 self.tr(&error)
             } else {
@@ -671,6 +750,12 @@ impl View<'_, '_, '_> {
             Some(self.ui.catalog.text("loading"))
         } else if matches!(state.page(), Page::Store | Page::StoreTheme) {
             self.store_status(state, left - 36.)
+        } else if matches!(state.page(), Page::Updates | Page::UpdatePackages) {
+            self.updates_status(state)
+        } else if state.raimport.working && state.page() == Page::RaImport {
+            Some(self.tr("raimport.importing"))
+        } else if let Some(note) = self.modules_status(state) {
+            Some(note)
         } else if state.page() == Page::Hotkeys {
             Some(self.tr("controls.hotkeys_note"))
         } else if state.capturing() && state.page() == Page::LauncherControls {
@@ -760,6 +845,41 @@ impl View<'_, '_, '_> {
                         Some(&[(Key('A'), "store.remove"), (Key('B'), "hint.cancel")]),
                     ),
                 })
+            } else if let Some((_, question)) = &state.modules.confirm {
+                Some((
+                    question.clone(),
+                    None,
+                    Some(&[(Key('A'), "hint.confirm"), (Key('B'), "hint.cancel")]),
+                ))
+            } else if let Some(module) = state
+                .modules
+                .module()
+                .filter(|_| state.modules.confirm_remove)
+            {
+                Some((
+                    self.ui
+                        .catalog
+                        .format("modules.remove_question", &[("name", &module.name)]),
+                    Some(self.tr("modules.remove_detail")),
+                    Some(&[
+                        (Key('A'), "modules.remove"),
+                        (Key('X'), "modules.remove_all"),
+                        (Key('B'), "hint.cancel"),
+                    ]),
+                ))
+            } else if let Some(offer) = state
+                .modules
+                .offer
+                .as_ref()
+                .filter(|_| state.modules.working)
+            {
+                Some((
+                    self.ui
+                        .catalog
+                        .format("store.installing", &[("name", offer.card.title())]),
+                    Some(self.tr("store.wait")),
+                    None,
+                ))
             } else if let Some(key) = state.storage.working {
                 Some((self.tr(key), Some(self.tr("settings.wait_storage")), None))
             } else {
@@ -851,12 +971,13 @@ impl View<'_, '_, '_> {
             height: 0.,
             section: None,
             searching: None,
+            trail: 0.,
         });
-        let bottom = positions.last().map_or(VIEW_TOP, |p| p.bottom());
+        let bottom = positions.last().map_or(VIEW_TOP, |p| p.end());
         let offset = self.ui.settings_scroll.offset(
             state.page(),
             selected.selected_top(),
-            selected.bottom(),
+            selected.end(),
             bottom,
             self.ui.frame.now,
         );
@@ -869,7 +990,7 @@ impl View<'_, '_, '_> {
         let result = (|| {
             for (n, position) in positions.iter().enumerate() {
                 let y = position.top - offset;
-                if position.bottom() - offset < VIEW_TOP
+                if position.end() - offset < VIEW_TOP
                     || position.selected_top() - offset >= VIEW_BOTTOM
                 {
                     continue;
@@ -877,7 +998,9 @@ impl View<'_, '_, '_> {
                 if let (Some(section), Some(skeleton)) = (position.section, position.searching) {
                     self.searching(section, y - position.lead(), skeleton)?;
                 } else if let Some(section) = position.section {
-                    let heading = if section == MEDIA_SECTION {
+                    let heading = if let Some(text) = self.module_section(state, section, n) {
+                        text
+                    } else if section == MEDIA_SECTION {
                         let count = state.media_tokens().len();
                         self.tr(&format!("{section}|count={count}|total={}", MEDIA.len()))
                     } else {
@@ -933,7 +1056,8 @@ impl View<'_, '_, '_> {
         } else {
             (right - 46.) * 0.48
         };
-        // Action rows only show a short link on the right: the label may use the rest.
+        // Action rows only show a short link on the right, and the USB rows a
+        // short reading: the label may use the rest.
         let link = match row.kind {
             Kind::Action => {
                 self.ui
@@ -941,11 +1065,29 @@ impl View<'_, '_, '_> {
                     as f32
                     / self.ui.frame.scale
             }
+            _ if reading(row.id) => {
+                self.ui.measure(
+                    &state.display_value(row.id, &self.ui.catalog),
+                    Face::Mono,
+                    14.,
+                )? as f32
+                    / self.ui.frame.scale
+            }
             _ => f32::MAX,
         };
         let full = full.max(right - 46. - link - 24.);
+        let mut warning = false;
         let subtitle = match row.id {
             Id::ScraperMedia => Some(self.media_summary(state, full)?),
+            Id::RaOverrides | Id::RaShaders => state
+                .raimport_detail(row.id)
+                .map(|refs: Vec<String>| crate::settings::raimport::joined(&self.ui.catalog, &refs))
+                .or_else(|| row.subtitle.map(|key| self.tr(key))),
+            Id::ModuleEntry(n) => state.modules.view.modules.get(usize::from(n)).map(|m| {
+                let (line, warn) = self.module_line(m);
+                warning = warn;
+                line
+            }),
             _ => state.subtitle(row).map(|text| self.tr(&text)),
         };
         let expand = subtitle.is_none()
@@ -986,7 +1128,12 @@ impl View<'_, '_, '_> {
                 &subtitle,
                 (
                     12.,
-                    selection(selected, self.theme.muted, self.theme.accent_text_secondary),
+                    match (warning, selected) {
+                        (true, false) => self.theme.warning,
+                        _ => {
+                            selection(selected, self.theme.muted, self.theme.accent_text_secondary)
+                        }
+                    },
                     Align::Left,
                 ),
             )?;
@@ -1111,11 +1258,14 @@ impl View<'_, '_, '_> {
             }
             Kind::Value if id == Id::Accent => self.swatches(state, selected, (x, y, w, h))?,
             Kind::Check => {
-                let Id::MediaKind(n) = id else {
-                    return Ok(());
+                let (on, used) = match id {
+                    Id::MediaKind(n) => {
+                        let (token, _, _, used) = MEDIA[usize::from(n)];
+                        (state.media_tokens().contains(&token), used)
+                    }
+                    Id::ModuleRow(_) => (state.value(id) == "1", None),
+                    _ => return Ok(()),
                 };
-                let (token, _, _, used) = MEDIA[usize::from(n)];
-                let on = state.media_tokens().contains(&token);
                 // The page's own surface shows through an empty box.
                 let back = selection(selected, self.theme.background, self.theme.highlight_bg);
                 self.checkbox((x + w - 18., y + (h - 18.) / 2.), on, selected, back)?;
@@ -1189,11 +1339,19 @@ impl View<'_, '_, '_> {
                     )?;
                 }
                 let inset = if chevrons { 20. } else { 0. };
+                let (ink, face) = if reading(id) {
+                    (
+                        selection(selected, self.theme.text_secondary, ink),
+                        Face::Mono,
+                    )
+                } else {
+                    (ink, selection(selected, Face::Regular, Face::Semibold))
+                };
                 self.text_face(
                     (x + inset, y, w - 2. * inset, h),
                     &v,
                     (14., ink, Align::Right),
-                    selection(selected, Face::Regular, Face::Semibold),
+                    face,
                 )?;
             }
         }

@@ -224,3 +224,25 @@ fn saving_a_visible_order_keeps_hidden_ids_after_their_predecessor_and_drops_mis
     store.set_order(ids(&["b", "c", "a"]), |id| id != "gone");
     assert_eq!(store.order(), ["b", "c", "hid2", "a", "hid"]);
 }
+
+#[test]
+fn keys_are_relative_to_the_card_holding_the_rom() {
+    use archr_launcher::store::game_key;
+    use std::path::Path;
+    let system = archr_index::SystemDef {
+        name: "snes".into(),
+        path: "/storage/roms/snes".into(),
+        external: Some("/storage/games-external/snes".into()),
+        ..Default::default()
+    };
+    let key = |path: &str| game_key(&system, Path::new(path));
+    assert_eq!(
+        key("/storage/roms/snes/A.sfc").as_deref(),
+        Some("snes/A.sfc")
+    );
+    assert_eq!(
+        key("/storage/games-external/snes/Sub/B.sfc").as_deref(),
+        Some("snes/Sub/B.sfc")
+    );
+    assert_eq!(key("/elsewhere/C.sfc"), None);
+}

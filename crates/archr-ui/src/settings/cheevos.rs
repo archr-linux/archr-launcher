@@ -1,6 +1,7 @@
 //! Achievements page (Config-ra): the RetroAchievements account and the
 //! options setsettings.sh hands to RetroArch. Only the user name and the
-//! token are ever stored; the password goes straight to the sign-in.
+//! token are ever stored; the password goes straight to the sign-in. The
+//! optional web API key never comes back to this state, only whether it is set.
 use super::{described, row, Effect, Id, Kind, Row, Settings};
 use crate::keyboard::Mode;
 
@@ -12,6 +13,12 @@ pub const CHEEVOS: &[Row] = &[
         "settings.cheevos_account_detail",
     )
     .kind(Kind::Action),
+    row(Id::CheevosWebKey, "settings.cheevos_web_key", Kind::Action),
+    row(
+        Id::CheevosWebKeyRemove,
+        "settings.cheevos_web_key_remove",
+        Kind::Action,
+    ),
     described(
         Id::CheevosHardcore,
         "settings.cheevos_hardcore",
@@ -45,6 +52,10 @@ pub const CHEEVOS: &[Row] = &[
 pub struct Profile {
     pub points: u64,
     pub softcore: u64,
+    /// Year the account was created and the last game played; empty
+    /// without the user's web API key.
+    pub since: String,
+    pub last_game: String,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -56,14 +67,21 @@ pub struct Cheevos {
     /// A sign-in or sign-out is running; the page waits for it.
     pub verifying: bool,
     pub profile: Option<Profile>,
+    /// The service refused the saved token: the user name stays, only the
+    /// password is asked again. Nothing on disk changes until it is typed.
+    pub expired: bool,
+    /// A web API key is saved, and whether the service refused it.
+    pub web_key: bool,
+    pub key_refused: bool,
 }
 
 impl Settings {
     pub(super) fn cheevos_visible(&self, id: Id) -> bool {
         let signed_in = !self.cheevos.user.is_empty();
         match id {
-            Id::CheevosAccount => !signed_in,
-            Id::CheevosLogout => signed_in,
+            Id::CheevosAccount => !signed_in || self.cheevos.expired,
+            Id::CheevosWebKey | Id::CheevosLogout => signed_in,
+            Id::CheevosWebKeyRemove => signed_in && self.cheevos.web_key,
             _ => true,
         }
     }
@@ -72,6 +90,11 @@ impl Settings {
             return Some(Effect::None);
         }
         match id {
+            Id::CheevosAccount if self.cheevos.expired => {
+                self.cheevos.draft = self.cheevos.user.clone();
+                self.open_keyboard(Id::CheevosPassword, Mode::Secret, String::new());
+                Some(Effect::None)
+            }
             Id::CheevosAccount => {
                 let user = std::mem::take(&mut self.cheevos.draft);
                 self.open_keyboard(Id::CheevosAccount, Mode::Text, user);
@@ -81,10 +104,20 @@ impl Settings {
                 self.cheevos.verifying = true;
                 Some(Effect::CheevosLogout)
             }
+            // Never prefilled: the saved key is not shown, only replaced.
+            Id::CheevosWebKey => {
+                self.open_keyboard(Id::CheevosWebKey, Mode::Secret, String::new());
+                Some(Effect::None)
+            }
+            Id::CheevosWebKeyRemove => {
+                self.cheevos.verifying = true;
+                Some(Effect::CheevosKey(String::new()))
+            }
             _ => None,
         }
     }
-    /// A typed user name asks for the password; the password signs in.
+    /// A typed user name asks for the password; the password signs in; a
+    /// typed web API key is checked with the service, then saved.
     pub(super) fn cheevos_typed(&mut self, id: Id, value: String) -> Effect {
         if id == Id::CheevosAccount {
             self.cheevos.draft = value.trim().to_owned();
@@ -92,6 +125,9 @@ impl Settings {
             return Effect::None;
         }
         self.cheevos.verifying = true;
+        if id == Id::CheevosWebKey {
+            return Effect::CheevosKey(value.trim().to_owned());
+        }
         Effect::CheevosLogin(self.cheevos.draft.clone(), value)
     }
 }
@@ -132,7 +168,7 @@ mod tests {
         // Nothing else starts while the service answers.
         assert_eq!(state.handle(Button::A), Effect::None);
         assert_eq!(
-            state.subtitle(state.visible_rows()[1]).as_deref(),
+            state.subtitle(&state.visible_rows()[1]).as_deref(),
             Some("settings.verifying")
         );
     }
@@ -144,8 +180,8 @@ mod tests {
         state.cursor = ids(&state).len() - 1;
         assert_eq!(state.handle(Button::A), Effect::CheevosLogout);
         assert!(state.cheevos.verifying);
-        state.cursor = 1;
-        assert_eq!(state.visible_rows()[1].id, Id::CheevosHardcore);
+        state.cursor = 2;
+        assert_eq!(state.visible_rows()[2].id, Id::CheevosHardcore);
         assert_eq!(
             state.handle(Button::R),
             Effect::None,
@@ -155,6 +191,60 @@ mod tests {
         assert_eq!(
             state.handle(Button::R),
             Effect::Set(Id::CheevosHardcore, "1".into())
+        );
+    }
+    #[test]
+    fn the_web_key_is_typed_in_secret_never_shown_and_removable() {
+        let mut state = page();
+        state.cheevos.user = "douglas".into();
+        assert_eq!(ids(&state)[1], Id::CheevosWebKey);
+        assert!(!ids(&state).contains(&Id::CheevosWebKeyRemove));
+        let row = state.visible_rows()[1];
+        assert_eq!(
+            state.subtitle(&row).as_deref(),
+            Some("settings.cheevos_web_key_missing")
+        );
+        state.cursor = 1;
+        state.handle(Button::A);
+        let keyboard = state.keyboard.as_ref().unwrap();
+        assert_eq!((keyboard.mode, keyboard.text()), (Mode::Secret, ""));
+        state.handle(Button::A);
+        let effect = state.handle(Button::Start);
+        assert_eq!(effect, Effect::CheevosKey("q".into()));
+        assert_eq!(format!("{effect:?}"), "CheevosKey(<hidden>)");
+        assert!(state.cheevos.verifying);
+        state.cheevos.verifying = false;
+        state.cheevos.web_key = true;
+        assert_eq!(
+            state.subtitle(&row).as_deref(),
+            Some("settings.cheevos_web_key_saved")
+        );
+        state.cheevos.key_refused = true;
+        assert_eq!(
+            state.subtitle(&row).as_deref(),
+            Some("settings.cheevos_web_key_refused")
+        );
+        assert_eq!(ids(&state)[2], Id::CheevosWebKeyRemove);
+        state.cursor = 2;
+        assert_eq!(state.handle(Button::A), Effect::CheevosKey(String::new()));
+    }
+    #[test]
+    fn an_expired_session_keeps_the_user_and_asks_only_the_password() {
+        let mut state = page();
+        state.cheevos.user = "douglas".into();
+        state.cheevos.expired = true;
+        assert_eq!(ids(&state)[1], Id::CheevosAccount);
+        assert_eq!(
+            state.subtitle(&state.visible_rows()[1]).as_deref(),
+            Some("settings.cheevos_expired")
+        );
+        state.cursor = 1;
+        state.handle(Button::A);
+        assert_eq!(state.keyboard_target, Some(Id::CheevosPassword));
+        state.handle(Button::A);
+        assert_eq!(
+            state.handle(Button::Start),
+            Effect::CheevosLogin("douglas".into(), "q".into())
         );
     }
     #[test]

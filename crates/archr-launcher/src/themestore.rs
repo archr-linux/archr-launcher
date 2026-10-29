@@ -1,8 +1,9 @@
 //! Theme store engine: GitHub search, details, install and removal. Every
 //! call blocks; the settings worker runs them on the store lane. The contract
 //! for theme authors is in docs/temas.md ("Publicar na Loja de temas").
-use archr_io::{atomic_publish, read_bytes, read_utf8, Symlinks};
-use archr_scraper::{image_ext, Curl, Http};
+use crate::github::{day, name_ok, owner_ok, unpack, GitHub, Rules, API};
+use archr_io::{atomic_publish, read_utf8, Symlinks};
+use archr_scraper::Http;
 use archr_ui::{
     settings::store::{allowed, Action, Card, Detail, Reply, Tab, TOPIC},
     Theme,
@@ -11,11 +12,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
     collections::{BTreeMap, VecDeque},
-    fs,
-    io::{self, Read},
-    path::{Component, Path, PathBuf},
-    sync::atomic::AtomicBool,
-    time::{Duration, SystemTime},
+    fs, io,
+    path::{Path, PathBuf},
+    time::SystemTime,
 };
 
 /// Every hop must stay on these.
@@ -25,15 +24,9 @@ pub const HOSTS: &[&str] = &[
     "raw.githubusercontent.com",
     "objects.githubusercontent.com",
 ];
-const API: &str = "https://api.github.com";
 const RAW: &str = "https://raw.githubusercontent.com";
 const CODELOAD: &str = "https://codeload.github.com";
-/// Unauthenticated GitHub allows 10 searches a minute and 60 other calls an
-/// hour: answers are kept this long.
-const FRESH: Duration = Duration::from_secs(3600);
-const JSON_LIMIT: u64 = 4 << 20;
 const TOML_LIMIT: u64 = 64 << 10;
-const IMAGE_LIMIT: u64 = 2 << 20;
 pub const TARBALL_LIMIT: u64 = 25 << 20;
 pub const EXTRACTED_LIMIT: u64 = 60 << 20;
 const MAX_ENTRIES: usize = 5000;
@@ -63,35 +56,10 @@ impl Manifest {
     }
 }
 
-/// GitHub user or organisation.
-fn owner_ok(name: &str) -> bool {
-    (1..=39).contains(&name.len())
-        && !name.starts_with('-')
-        && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
-}
-/// Repository, release tag or branch: no slash, no leading dot or dash.
-fn name_ok(name: &str) -> bool {
-    (1..=100).contains(&name.len())
-        && !name.starts_with(['.', '-'])
-        && !name.contains("..")
-        && name
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
-}
 fn card_ok(card: &Card) -> bool {
     owner_ok(&card.owner) && name_ok(&card.repo) && name_ok(&card.branch)
 }
-/// `YYYY-MM-DD` from a GitHub timestamp.
-fn day(value: &Value) -> String {
-    let text = value.as_str().unwrap_or("");
-    let day = text.get(..10).unwrap_or("");
-    if day.bytes().all(|b| b.is_ascii_digit() || b == b'-') {
-        day.to_owned()
-    } else {
-        String::new()
-    }
-}
-fn now_day() -> String {
+pub(crate) fn now_day() -> String {
     let days = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs() / 86_400) as i64;
@@ -112,48 +80,16 @@ fn now_day() -> String {
 /// allowed kinds only. Links, devices and the like are skipped; a path leaving
 /// the archive refuses the whole theme. Nothing is ever executed.
 pub fn extract(tarball: &[u8], into: &Path) -> Result<(), &'static str> {
-    let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(tarball));
-    let mut total = 0u64;
-    let entries = archive.entries().map_err(|_| "store.invalid")?;
-    for (n, entry) in entries.enumerate() {
-        let mut entry = entry.map_err(|_| "store.invalid")?;
-        if n >= MAX_ENTRIES {
-            return Err("store.too_big");
-        }
-        let kind = entry.header().entry_type();
-        if kind.is_pax_global_extensions() || kind.is_pax_local_extensions() {
-            continue;
-        }
-        let path = entry.path().map_err(|_| "store.invalid")?.into_owned();
-        let mut parts = Vec::new();
-        for component in path.components() {
-            match component {
-                Component::Normal(part) => parts.push(part.to_str().ok_or("store.invalid")?),
-                Component::CurDir => {}
-                _ => return Err("store.invalid"),
-            }
-        }
-        // The top folder is GitHub's `<owner>-<repo>-<commit>`.
-        let relative = parts.get(1..).unwrap_or_default().join("/");
-        if !kind.is_file() || parts.len() > MAX_DEPTH + 1 || !allowed(&relative) {
-            continue;
-        }
-        total = total.saturating_add(entry.header().size().map_err(|_| "store.invalid")?);
-        if total > EXTRACTED_LIMIT {
-            return Err("store.too_big");
-        }
-        let target = into.join(&relative);
-        let fail = |_: io::Error| "store.failed";
-        fs::create_dir_all(archr_io::parent_dir(&target)).map_err(fail)?;
-        // create_new: never through a link or over an earlier entry.
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&target)
-            .map_err(fail)?;
-        io::copy(&mut (&mut entry).take(EXTRACTED_LIMIT), &mut file).map_err(fail)?;
-    }
-    Ok(())
+    let rules = Rules {
+        top: None,
+        keep: &allowed,
+        strict: false,
+        entries: MAX_ENTRIES,
+        bytes: EXTRACTED_LIMIT,
+        depth: MAX_DEPTH,
+        executable: None,
+    };
+    unpack(tarball, into, &rules)
 }
 
 /// Files under `dir` as theme-relative paths and sizes, links not followed.
@@ -183,89 +119,22 @@ fn files(dir: &Path) -> Vec<(String, u64)> {
 }
 
 pub struct Shop {
-    http: Box<dyn Http>,
-    /// Saved answers and pictures.
-    cache: PathBuf,
+    github: GitHub,
     /// User themes: /storage/.config/archr-launcher/themes.
     themes: PathBuf,
-    cancel: AtomicBool,
 }
 
 impl Shop {
     pub fn new(http: Box<dyn Http>, cache: PathBuf, themes: PathBuf) -> Self {
         Self {
-            http,
-            cache,
+            github: GitHub::new(http, cache),
             themes,
-            cancel: AtomicBool::new(false),
         }
     }
     /// The system `curl`, hardened as for the scraper, held to GitHub.
     pub fn production(cache: PathBuf, themes: PathBuf) -> Self {
-        let http = Curl {
-            tmp: cache.join("tmp"),
-            user_agent: format!("archr-launcher/{}", env!("CARGO_PKG_VERSION")),
-            hosts: HOSTS,
-        };
-        Self::new(Box::new(http), cache, themes)
+        Self::new(GitHub::curl(&cache, HOSTS), cache, themes)
     }
-    /// The body, `None` for 404; failures as locale keys.
-    fn get(&self, url: &str, limit: u64) -> Result<Option<Vec<u8>>, &'static str> {
-        match self.http.get(url, limit, &self.cancel) {
-            Ok(reply) if reply.status == 200 => Ok(Some(reply.body)),
-            Ok(reply) if reply.status == 404 => Ok(None),
-            Ok(reply) if matches!(reply.status, 403 | 429) && url.starts_with(API) => {
-                Err("store.rate_limited")
-            }
-            Ok(_) => Err("store.failed"),
-            Err(_) => Err("store.offline"),
-        }
-    }
-    /// An API answer kept in `name` for an hour (`refresh` asks again); a 404
-    /// is kept as an empty body. On failure the saved answer, however old.
-    fn saved(
-        &self,
-        url: &str,
-        name: &str,
-        refresh: bool,
-    ) -> (Option<(Vec<u8>, SystemTime)>, Option<&'static str>) {
-        let path = self.cache.join(name);
-        let saved = fs::metadata(&path)
-            .and_then(|meta| meta.modified())
-            .ok()
-            .and_then(|at| Some((read_bytes(&path, JSON_LIMIT, Symlinks::Reject).ok()?, at)));
-        let fresh = saved
-            .as_ref()
-            .is_some_and(|(_, at)| at.elapsed().is_ok_and(|age| age < FRESH));
-        if fresh && !refresh {
-            return (saved, None);
-        }
-        match self.get(url, JSON_LIMIT) {
-            Ok(body) => {
-                let body = body.unwrap_or_default();
-                let _ = fs::create_dir_all(archr_io::parent_dir(&path));
-                if let Err(error) =
-                    atomic_publish(&path, false, |file| io::Write::write_all(file, &body))
-                {
-                    log::warn!("Theme store cache: {error}");
-                }
-                (Some((body, SystemTime::now())), None)
-            }
-            Err(problem) => (saved, Some(problem)),
-        }
-    }
-    /// A picture saved at `path`, downloading it once; only real images stay.
-    fn picture(&self, url: &str, path: &Path) -> Option<PathBuf> {
-        if path.is_file() {
-            return Some(path.to_owned());
-        }
-        let body = self.get(url, IMAGE_LIMIT).ok()??;
-        image_ext(&body)?;
-        fs::create_dir_all(archr_io::parent_dir(path)).ok()?;
-        atomic_publish(path, false, |file| io::Write::write_all(file, &body)).ok()?;
-        Some(path.to_owned())
-    }
-
     /// One tab from GitHub's search, saved for an hour.
     pub fn list(&self, tab: Tab, refresh: bool) -> Reply {
         let sort = if tab == Tab::Popular {
@@ -273,33 +142,22 @@ impl Shop {
         } else {
             "updated"
         };
-        let url = format!(
-            "{API}/search/repositories?q=topic:{TOPIC}+archived:false&sort={sort}&order=desc&per_page=30"
-        );
-        let (saved, mut problem) = self.saved(&url, &format!("search-{sort}.json"), refresh);
-        let (body, fetched) = saved.map_or((Vec::new(), None), |(body, at)| (body, Some(at)));
-        let parsed: Option<Vec<Card>> = serde_json::from_slice::<Value>(&body).ok().map(|json| {
-            json["items"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .map(|item| Card {
-                    owner: item["owner"]["login"].as_str().unwrap_or("").into(),
-                    repo: item["name"].as_str().unwrap_or("").into(),
-                    stars: item["stargazers_count"].as_u64().unwrap_or(0),
-                    branch: item["default_branch"].as_str().unwrap_or("").into(),
-                    pushed: day(&item["pushed_at"]),
-                    ..Card::default()
-                })
-                .filter(card_ok)
-                .collect()
-        });
-        if parsed.is_none() && problem.is_none() {
-            problem = Some("store.failed");
-        }
+        let (repos, problem, fetched) = self.github.search(TOPIC, sort, refresh);
+        let cards = repos
+            .unwrap_or_default()
+            .into_iter()
+            .map(|r| Card {
+                owner: r.owner,
+                repo: r.repo,
+                stars: r.stars,
+                branch: r.branch,
+                pushed: r.pushed,
+                ..Card::default()
+            })
+            .collect();
         Reply::Listed {
             tab,
-            cards: parsed.unwrap_or_default(),
+            cards,
             problem,
             fetched,
         }
@@ -307,18 +165,21 @@ impl Shop {
     /// The card with its theme's name and cover, from the default branch,
     /// fetched again only after a new push.
     pub fn decorate(&self, card: &Card) -> Option<Card> {
-        let dir = self.cache.join("cards").join(card.folder());
+        let dir = self.github.cache.join("cards").join(card.folder());
         let stamp = dir.join("pushed");
         let current = read_utf8(&stamp, 64, Symlinks::Reject).is_ok_and(|s| s == card.pushed);
         let (toml, preview) = (dir.join("theme.toml"), dir.join("preview.png"));
         let raw = format!("{RAW}/{}/{}/{}", card.owner, card.repo, card.branch);
         if !current {
             // Fetched first: offline, the saved card stays.
-            let body = self.get(&format!("{raw}/theme.toml"), TOML_LIMIT).ok()??;
+            let body = self
+                .github
+                .get(&format!("{raw}/theme.toml"), TOML_LIMIT)
+                .ok()??;
             let _ = fs::remove_dir_all(&dir);
             fs::create_dir_all(&dir).ok()?;
             atomic_publish(&toml, false, |file| io::Write::write_all(file, &body)).ok()?;
-            self.picture(&format!("{raw}/preview.png"), &preview);
+            self.github.picture(&format!("{raw}/preview.png"), &preview);
             atomic_publish(&stamp, false, |file| {
                 io::Write::write_all(file, card.pushed.as_bytes())
             })
@@ -343,7 +204,7 @@ impl Shop {
     fn remote(&self, card: &Card) -> Result<Detail, &'static str> {
         let folder = card.folder();
         let repo = format!("{API}/repos/{}/{}", card.owner, card.repo);
-        let saved = |url: String, name: String| match self.saved(&url, &name, false) {
+        let saved = |url: String, name: String| match self.github.saved(&url, &name, false) {
             (Some((body, _)), _) => Ok(body),
             (None, problem) => Err(problem.unwrap_or("store.failed")),
         };
@@ -377,12 +238,13 @@ impl Shop {
             .collect();
         let raw = format!("{RAW}/{}/{}/{reference}", card.owner, card.repo);
         let source = self
+            .github
             .get(&format!("{raw}/theme.toml"), TOML_LIMIT)?
             .and_then(|body| String::from_utf8(body).ok())
             .ok_or("store.invalid")?;
         let mut detail = Detail::describe(card.clone(), &source, &files, env!("CARGO_PKG_VERSION"))
             .map_err(|_| "store.invalid")?;
-        let pictures = self.cache.join("pictures").join(&folder).join(sha);
+        let pictures = self.github.cache.join("pictures").join(&folder).join(sha);
         let names = ["preview.png".to_owned()]
             .into_iter()
             .chain((1..=SCREENSHOTS).map(|n| format!("screenshots/{n}.png")));
@@ -390,7 +252,7 @@ impl Shop {
             .filter(|name| files.iter().any(|(path, _)| path == name))
             .filter_map(|name| {
                 let path = pictures.join(name.replace('/', "-"));
-                self.picture(&format!("{raw}/{name}"), &path)
+                self.github.picture(&format!("{raw}/{name}"), &path)
             })
             .collect();
         detail.date = date;
@@ -470,10 +332,10 @@ impl Shop {
             "{CODELOAD}/{}/{}/tar.gz/{}",
             card.owner, card.repo, detail.reference
         );
-        let tarball = match self.http.get(&url, TARBALL_LIMIT, &self.cancel) {
-            Ok(reply) if reply.status == 200 => reply.body,
-            Ok(_) => return Err("store.failed"),
-            Err(_) => return Err("store.download_failed"),
+        let tarball = match self.github.get(&url, TARBALL_LIMIT) {
+            Ok(Some(body)) => body,
+            Err("store.offline") => return Err("store.download_failed"),
+            _ => return Err("store.failed"),
         };
         let fail = |_: io::Error| "store.failed";
         fs::create_dir_all(&self.themes).map_err(fail)?;

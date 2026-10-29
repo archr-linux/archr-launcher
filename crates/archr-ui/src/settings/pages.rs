@@ -21,8 +21,24 @@ pub const SERVICES: &[Row] = &[
         "settings.netplay",
         "settings.netplay_detail",
     )
-    .under("settings.game_usb"),
-    described(Id::UsbMode, "settings.usb_mode", "settings.usb_detail"),
+    .under("settings.online_play"),
+    described(Id::UsbMode, "settings.usb_mode", "settings.usb_detail").under("settings.usb"),
+    described(
+        Id::UsbCompat,
+        "settings.usb_compat",
+        "settings.usb_compat_detail",
+    )
+    .kind(Kind::Toggle),
+    described(
+        Id::UsbAddress,
+        "settings.usb_address",
+        "settings.usb_address_fixed",
+    ),
+    described(
+        Id::UsbState,
+        "settings.usb_state",
+        "settings.usb_link_waiting",
+    ),
     described(Id::Adhoc, "settings.adhoc", "settings.adhoc_detail").under("settings.local_play"),
     described(Id::Player, "settings.player", "settings.player_detail"),
     described(Id::Channel, "settings.channel", "settings.channel_detail"),
@@ -148,6 +164,7 @@ impl Settings {
         keyboard.max = match id {
             Id::Hidden => 32, // IEEE 802.11 SSID
             Id::CheevosAccount => 32,
+            Id::CheevosWebKey => 64,
             Id::WifiSwitch => 64, // WPA passphrase or hex key
             Id::Nickname => 32,   // RetroArch nickname
             Id::NetplayHost | Id::CustomServer => 253,
@@ -199,6 +216,13 @@ impl Settings {
             Page::LauncherControls => self.launcher_controls_input(button),
             Page::Hotkeys => self.hotkeys_input(button),
             Page::Store | Page::StoreTheme => self.store_input(button),
+            Page::Updates | Page::UpdatePackages => self.updates_input(button),
+            Page::RaImport | Page::RaImportList => self.raimport_input(button),
+            Page::Modules
+            | Page::ModuleInfo
+            | Page::Module(..)
+            | Page::ModuleStore
+            | Page::ModuleOffer => self.modules_input(button),
             _ => None,
         }
     }
@@ -256,7 +280,10 @@ impl Settings {
                 self.root_password_typed(value);
                 Effect::None
             }
-            Id::CheevosAccount | Id::CheevosPassword => self.cheevos_typed(target, value),
+            Id::CheevosAccount | Id::CheevosPassword | Id::CheevosWebKey => {
+                self.cheevos_typed(target, value)
+            }
+            Id::ModuleRow(_) => self.module_set(target, value),
             id => {
                 self.pending = Some(id);
                 Effect::Set(id, value)
@@ -338,12 +365,24 @@ impl Settings {
         match id {
             Id::Accent => self.open_custom(),
             Id::ThemeStore => return Some(self.open_store()),
+            Id::ModulesLink => self.open(Page::Modules),
+            // Every visit looks at the folder again.
+            Id::RaImportLink => {
+                self.raimport.found = None;
+                self.open(Page::RaImport);
+            }
             Id::NetplayLink => self.open(Page::Netplay),
             Id::ScraperLink => self.open(Page::Scraper),
             Id::MangohudLink => self.open(Page::Mangohud),
             Id::LauncherLink => self.open(Page::LauncherControls),
             Id::HotkeysLink => self.open(Page::Hotkeys),
             Id::MangohudItems => self.open(Page::MangohudItems),
+            Id::Update => self.open(Page::Updates),
+            Id::UpdateInstall => return Some(self.start_update()),
+            Id::UpdateCheck => {
+                self.updates.checking = true;
+                return Some(Effect::CheckUpdates);
+            }
             Id::ScraperMedia => self.open(Page::ScraperMedia),
             Id::MediaKind(n) => {
                 let token = MEDIA[usize::from(n)].0;
@@ -401,7 +440,10 @@ impl Settings {
                 };
                 self.open_keyboard(id, mode, self.value(id).to_owned());
             }
-            id @ (Id::CheevosAccount | Id::CheevosLogout) => return self.cheevos_activate(id),
+            id @ (Id::CheevosAccount
+            | Id::CheevosWebKey
+            | Id::CheevosWebKeyRemove
+            | Id::CheevosLogout) => return self.cheevos_activate(id),
             id => return self.storage_activate(id),
         }
         Some(Effect::None)

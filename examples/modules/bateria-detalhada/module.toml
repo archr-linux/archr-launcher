@@ -1,0 +1,60 @@
+id = "bateria-detalhada"
+version = "1.0.0"
+api_version = 1
+min_launcher = "0.1.0"
+# A table by language: the store shows it before the module is installed.
+name = { en = "Detailed battery", pt_BR = "Bateria detalhada", es = "Batería detallada", ru = "Подробно о батарее" }
+description = { en = "Charge, power and battery health in the Start menu.", pt_BR = "Carga, potência e saúde da bateria no menu Start.", es = "Carga, potencia y salud de la batería en el menú Start.", ru = "Заряд, мощность и состояние батареи в меню Start." }
+author = "ArchR <contato@archr.dev>"
+license = "MIT"
+homepage = "https://github.com/archr-linux/archr-launcher"
+icon = "battery-full"
+
+[run]
+runtime = "bash"
+entry = "main.sh"
+mode = "daemon"
+
+[limits]
+memory_mb = 16
+
+[[start.tiles]]
+id = "bateria"
+label = "@tile"
+icon = "battery-full"
+open = "main"
+
+[[settings.pages]]
+id = "main"
+title = "@title"
+
+[[settings.pages.rows]]
+type = "text"
+id = "agora"
+label = "@row.now"
+section = "@section.state"
+
+[[settings.pages.rows]]
+type = "text"
+id = "saude"
+label = "@row.health"
+
+[[settings.pages.rows]]
+type = "toggle"
+key = "watts"
+label = "@row.watts"
+section = "@section.options"
+default = true
+
+[[settings.pages.rows]]
+type = "value"
+key = "intervalo"
+label = "@row.interval"
+choices = ["5", "15", "30"]
+labels = ["@every.5", "@every.15", "@every.30"]
+default = "15"
+
+[[settings.pages.rows]]
+type = "action"
+action = "atualizar"
+label = "@row.refresh"

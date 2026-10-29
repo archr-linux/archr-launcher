@@ -62,11 +62,30 @@ impl Ui<'_, '_> {
             Align::Center,
         )?;
 
-        for (index, &(key, glyph)) in TILES.iter().enumerate() {
+        let modules = app.modules.tiles();
+        let count = TILES.len() + modules.len();
+        let labels: Vec<String> = (0..count)
+            .map(|i| match i.checked_sub(TILES.len()) {
+                Some(n) => modules[n].1.label.clone(),
+                None => self.catalog.text(TILES[i].0),
+            })
+            .collect();
+        let (label_face, label_size) =
+            self.tile_labels(&labels, (px(148.) - px(8.)).max(1) as u32)?;
+        // More tiles than the screen holds: the row slides to keep the focus in.
+        let span = count as f32 * 170. - 22.;
+        let first = if span <= 600. {
+            320. - span / 2. + 74.
+        } else {
+            (320. - tile as f32 * 170.).clamp(640. - 20. - 74. - (count - 1) as f32 * 170., 94.)
+        };
+        for index in 0..count {
+            let (key, glyph) = TILES.get(index).copied().unwrap_or(("", Glyph::Puzzle));
+            let module = index.checked_sub(TILES.len()).map(|n| modules[n]);
             let enabled = app.hub_tile_enabled(data, index);
             let focus = row == 0 && tile == index;
             let side = px(if focus { 154. } else { 148. });
-            let x = center + px((index as f32 - 1.) * 170.) - side / 2;
+            let x = px(first + index as f32 * 170.) - side / 2 + center - px(320.);
             let y = px(104.) - (side - px(148.)) / 2;
             let tile_rect = Rect::new(x, y, side as u32, side as u32);
             if focus {
@@ -106,50 +125,59 @@ impl Ui<'_, '_> {
                 theme.dim_text
             };
             let size = px(48.);
-            self.icon(
-                glyph,
-                Rect::new(x + (side - size) / 2, y + px(29.), size as u32, size as u32),
-                ink,
-            )?;
-            // Shrinks down to the theme's smallest text, then wraps; a
-            // label is never cut.
-            // A word too wide even then takes the launcher's own font,
-            // as in Settings; words are never split.
-            let label = self.catalog.text(key);
-            let room = (side - px(10.)).max(1) as u32;
-            let floor = self.frame.min_size();
-            let mut fitted = None;
-            for face in [Face::Semibold, Face::Fallback] {
-                let mut size = 16.;
-                let widest = |ui: &mut Self, size| -> Result<u32, String> {
-                    let mut widest = 0;
-                    for word in label.split_whitespace() {
-                        widest = widest.max(ui.measure(word, face, size)?);
-                    }
-                    Ok(widest)
-                };
-                while size > floor && self.measure(&label, face, size)? > room {
-                    size = (size - 1.).max(floor);
+            let icon = Rect::new(x + (side - size) / 2, y + px(29.), size as u32, size as u32);
+            let (label, value) = match module {
+                Some((n, entry)) => {
+                    let id = &app.modules.modules[n].id;
+                    self.module_icon((entry.icon.as_deref(), ""), icon, ink)?;
+                    let value = app.modules.value(id, &format!("tile:{}", entry.id));
+                    (entry.label.clone(), value.map(str::to_owned))
                 }
-                if widest(self, size)? <= room || face == Face::Fallback {
-                    fitted = Some((face, size));
-                    break;
+                None => {
+                    self.icon(glyph, icon, ink)?;
+                    (self.catalog.text(key), None)
                 }
+            };
+            // Tile text sits on the tile, not the background: no outline.
+            self.look.outlining = false;
+            if let Some(value) = value {
+                // The live value sits under a raised title.
+                self.label_aligned(
+                    &value,
+                    (Face::Regular, 13., ink),
+                    Rect::new(
+                        x + px(5.),
+                        y + px(118.),
+                        (side - px(10.)) as u32,
+                        px(20.) as u32,
+                    ),
+                    Align::Center,
+                )?;
             }
-            let (face, size) = fitted.unwrap_or((Face::Semibold, 16.));
-            let lines = if self.measure(&label, face, size)? > room {
-                self.wrap(&label, face, size, room)?
+            let raise = if module.is_some_and(|(n, e)| {
+                app.modules
+                    .value(&app.modules.modules[n].id, &format!("tile:{}", e.id))
+                    .is_some()
+            }) {
+                px(8.)
+            } else {
+                0
+            };
+            // Every tile label shares one size and face, the largest that
+            // fits them all; words are never split.
+            let room = (side - px(8.)).max(1) as u32;
+            let lines = if self.measure(&label, label_face, label_size)? > room {
+                self.wrap(&label, label_face, label_size, room)?
             } else {
                 vec![label]
             };
-            let step = (f32::from(self.frame.font_size(size)) * 1.2).round() as i32;
-            let top = y + px(114.) - step * lines.len() as i32 / 2;
-            self.look.outlining = false;
+            let step = (f32::from(self.frame.font_size(label_size)) * 1.2).round() as i32;
+            let top = y + px(114.) - raise - step * lines.len() as i32 / 2;
             for (n, line) in lines.iter().enumerate() {
                 self.label_aligned(
                     line,
-                    (face, size, ink),
-                    Rect::new(x + px(5.), top + step * n as i32, room, step.max(1) as u32),
+                    (label_face, label_size, ink),
+                    Rect::new(x + px(4.), top + step * n as i32, room, step.max(1) as u32),
                     Align::Center,
                 )?;
             }
@@ -158,13 +186,47 @@ impl Ui<'_, '_> {
 
         let side = px(46.);
         let gap = px(14.);
-        let start = center - (side * 6 + gap * 5) / 2;
+        // Module shortcuts sit between Wi-Fi and Suspend.
+        let extra = app.modules.shortcuts();
+        let count = SHORTCUTS.len() + extra.len();
+        let start = center - (side * count as i32 + gap * (count as i32 - 1)) / 2;
         let wifi_on = self.wifi_enabled();
-        for (index, &(_, glyph)) in SHORTCUTS.iter().enumerate() {
+        let builtin = |index: usize| match index.checked_sub(3) {
+            Some(n) if n < extra.len() => None,
+            Some(n) => Some(3 + n - extra.len()),
+            None => Some(index),
+        };
+        for index in 0..count {
             let focus = row == 1 && shortcut == index;
+            let Some(fixed) = builtin(index) else {
+                let (_, entry) = extra[index - 3];
+                let x = start + index as i32 * (side + gap);
+                let rect = Rect::new(x, px(278.), side as u32, side as u32);
+                let fill = if focus {
+                    theme.highlight_bg
+                } else {
+                    theme.surface
+                };
+                self.rounded(rect, side as f32 / 2., fill, Some(theme.border))?;
+                let ink = if focus {
+                    theme.highlight_text
+                } else {
+                    theme.text_secondary
+                };
+                let icon = Rect::new(x + px(11.), px(289.), px(24.) as u32, px(24.) as u32);
+                self.module_icon((entry.icon.as_deref(), ""), icon, ink)?;
+                continue;
+            };
+            let glyph = SHORTCUTS[fixed].1;
+            let index = fixed;
             let enabled = App::hub_shortcut_enabled(index);
             let active = index == 2 && wifi_on;
-            let x = start + index as i32 * (side + gap);
+            let at = if index >= 3 {
+                index + extra.len()
+            } else {
+                index
+            };
+            let x = start + at as i32 * (side + gap);
             let rect = Rect::new(x, px(278.), side as u32, side as u32);
             self.rounded(
                 rect,
@@ -205,13 +267,54 @@ impl Ui<'_, '_> {
                 Rect::new(x + px(11.), px(289.), px(24.) as u32, px(24.) as u32),
                 ink,
             )?;
+            // A system update is waiting: a dot on the update shortcut.
+            if index == 1 && app.updates > 0 {
+                let dot = px(12.);
+                let ring = px(2.);
+                let (dx, dy) = (x + side - dot + px(1.), px(277.));
+                self.rounded(
+                    Rect::new(
+                        dx - ring,
+                        dy - ring,
+                        (dot + ring * 2) as u32,
+                        (dot + ring * 2) as u32,
+                    ),
+                    (dot / 2 + ring) as f32,
+                    theme.background,
+                    None,
+                )?;
+                self.rounded(
+                    Rect::new(dx, dy, dot as u32, dot as u32),
+                    (dot / 2) as f32,
+                    theme.highlight_bg,
+                    None,
+                )?;
+            }
         }
         if row == 1 {
-            let key = SHORTCUTS[shortcut].0;
-            let label = if shortcut == 1 {
-                self.catalog
-                    .format("start.soon_label", &[("name", &self.catalog.text(key))])
-            } else if shortcut == 2 {
+            let fixed = builtin(shortcut);
+            let key = fixed.map_or("", |n| SHORTCUTS[n].0);
+            let label = if let Some((n, entry)) = shortcut
+                .checked_sub(3)
+                .and_then(|n| extra.get(n))
+                .filter(|_| fixed.is_none())
+            {
+                let value = app.modules.value(
+                    &app.modules.modules[*n].id,
+                    &format!("shortcut:{}", entry.id),
+                );
+                match value {
+                    Some(value) => format!("{} · {value}", entry.label),
+                    None => entry.label.clone(),
+                }
+            } else if fixed == Some(1) && app.updates > 0 {
+                let count = app.updates.to_string();
+                self.catalog.plural(
+                    "start.update_ready",
+                    app.updates as f64,
+                    &[("count", &count)],
+                )
+            } else if fixed == Some(2) {
                 self.catalog.text(if wifi_on {
                     "start.wifi_on"
                 } else {
@@ -242,5 +345,29 @@ impl Ui<'_, '_> {
             px(48.) as u32,
         )?;
         Ok(())
+    }
+    /// The face and size every tile label is drawn with: the theme's
+    /// semibold, else its regular, else the launcher's font, each from 16 px
+    /// down to the theme's smallest, as large as fits every word of every
+    /// label in `room`.
+    fn tile_labels(&mut self, labels: &[String], room: u32) -> Result<(Face, f32), String> {
+        let floor = self.frame.min_size();
+        for face in [Face::Semibold, Face::Regular, Face::Fallback] {
+            let mut size = 16f32;
+            loop {
+                let mut fits = true;
+                for word in labels.iter().flat_map(|l| l.split_whitespace()) {
+                    fits &= self.measure(word, face, size)? <= room;
+                }
+                if fits {
+                    return Ok((face, size));
+                }
+                if size <= floor {
+                    break;
+                }
+                size = (size - 1.).max(floor);
+            }
+        }
+        Ok((Face::Fallback, floor))
     }
 }

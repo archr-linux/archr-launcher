@@ -1,4 +1,4 @@
-//! Storage page: games card, mount options, backup, root password and reset.
+//! Storage page: both cards, mount options, backup, root password and reset.
 //! Every action that changes data asks first; the host runs it off SDL's thread.
 use super::{described, Effect, Id, Kind, Row, Settings};
 use crate::{
@@ -8,9 +8,15 @@ use crate::{
 };
 
 pub const STORAGE: &[Row] = &[
+    // Shown only while unified storage joins the two cards.
+    described(Id::UnifiedCard, "settings.merged", "")
+        .kind(Kind::Action)
+        .under("settings.games_card"),
     described(Id::StorageCard, "settings.card_internal", "")
         .kind(Kind::Action)
         .under("settings.games_card"),
+    // Shown only while a second card is mounted.
+    described(Id::SecondCard, "settings.card_microsd", "").kind(Kind::Action),
     described(
         Id::Automount,
         "settings.automount",
@@ -47,11 +53,9 @@ pub const STORAGE: &[Row] = &[
     .kind(Kind::Action),
 ];
 
-/// The card that holds the games, as the host found it.
+/// A card as the host found it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Card {
-    /// A second card mounted at /storage/games-external; only it can be ejected.
-    pub external: bool,
     /// Catalog reference for the row title ("microSD (ROMS)").
     pub name: String,
     /// Catalog reference: filesystem and usage.
@@ -60,13 +64,16 @@ pub struct Card {
 }
 #[derive(Clone, Debug, Default)]
 pub struct Storage {
+    /// The system card (/storage).
     pub card: Option<Card>,
+    /// The second card (/storage/games-external); only it can be ejected.
+    pub second: Option<Card>,
+    /// Both cards as one /storage/roms: their sizes and usage summed.
+    pub unified: Option<Card>,
     /// Subtitle reference naming the newest backup's time, if one exists.
     pub backup: Option<String>,
     /// root.password as setrootpass saved it; shown so it can be used.
     pub password: String,
-    /// The games card's filesystem can hold an overlay (ext4, btrfs).
-    pub merge_supported: bool,
     pub confirm: Option<Confirm>,
     /// Locale key of the running action; input waits for the host's reply.
     pub working: Option<&'static str>,
@@ -107,6 +114,8 @@ impl Action {
 #[derive(Clone, PartialEq, Eq)]
 pub enum Confirm {
     Eject,
+    /// Turning unified storage off.
+    Separate,
     Backup,
     BackupWifi,
     Restore,
@@ -119,6 +128,7 @@ impl std::fmt::Debug for Confirm {
         match self {
             Self::RootPassword(_) => write!(f, "RootPassword(<hidden>)"),
             Self::Eject => write!(f, "Eject"),
+            Self::Separate => write!(f, "Separate"),
             Self::Backup => write!(f, "Backup"),
             Self::BackupWifi => write!(f, "BackupWifi"),
             Self::Restore => write!(f, "Restore"),
@@ -138,6 +148,11 @@ impl Confirm {
                 "settings.eject_question",
                 "settings.eject_explain",
                 &[(Key('A'), "settings.eject"), CANCEL],
+            ),
+            Self::Separate => (
+                "settings.separate_question",
+                "settings.separate_explain",
+                &[(Key('A'), "settings.separate"), CANCEL],
             ),
             Self::Backup => (
                 "settings.backup_question",
@@ -185,6 +200,7 @@ impl Confirm {
         Some(match (self, button) {
             (_, Button::B) => Answer::Cancel,
             (Self::Eject, Button::A) => Answer::Run(Action::Eject),
+            (Self::Separate, Button::A) => Answer::Set(Id::MergedStorage, "0"),
             (Self::Backup, Button::A) => Answer::Run(Action::Backup { wifi: false }),
             (Self::Backup, Button::X) => Answer::Ask(Self::BackupWifi),
             (Self::BackupWifi, Button::A) => Answer::Run(Action::Backup { wifi: true }),
@@ -203,6 +219,7 @@ enum Answer {
     Cancel,
     Ask(Confirm),
     Run(Action),
+    Set(Id, &'static str),
 }
 /// Characters that survive setrootpass, get_setting's unquoted echo, Samba's
 /// `echo -e` and simple-http-server's `-a root:<password>` argument.
@@ -234,12 +251,23 @@ impl Settings {
                 self.storage.working = Some(action.progress());
                 Effect::Storage(action)
             }
+            Some(Answer::Set(id, value)) => {
+                self.pending = Some(id);
+                Effect::Set(id, value.into())
+            }
+        })
+    }
+    /// Turning unified storage off asks first; turning it on does not.
+    pub(super) fn storage_switch(&mut self, id: Id) -> Option<Effect> {
+        (id == Id::MergedStorage && self.value(id) == "1").then(|| {
+            self.storage.confirm = Some(Confirm::Separate);
+            Effect::None
         })
     }
     /// A on a storage row: every action asks before it runs.
     pub(super) fn storage_activate(&mut self, id: Id) -> Option<Effect> {
         self.storage.confirm = Some(match id {
-            Id::StorageCard => Confirm::Eject,
+            Id::SecondCard if self.storage.second.is_some() => Confirm::Eject,
             Id::Backup => Confirm::Backup,
             Id::RestoreBackup => Confirm::Restore,
             Id::FactoryReset => Confirm::Reset,
@@ -280,10 +308,8 @@ mod tests {
             ..Default::default()
         };
         state.open(Page::Storage);
-        state.storage.card = Some(Card {
-            external: true,
-            ..Default::default()
-        });
+        state.storage.card = Some(Card::default());
+        state.storage.second = Some(Card::default());
         state.storage.backup = Some("settings.backup_today|time=14:42".into());
         state
     }
@@ -374,14 +400,16 @@ mod tests {
         assert!(root_password_valid("Archr-2026#ok"));
     }
     #[test]
-    fn eject_only_for_an_external_card_and_restore_only_with_a_backup() {
+    fn eject_only_for_the_second_card_and_restore_only_with_a_backup() {
         let mut state = storage();
-        at(&mut state, Id::StorageCard);
+        at(&mut state, Id::SecondCard);
         state.handle(Button::A);
         assert_eq!(state.storage.confirm, Some(Confirm::Eject));
         assert_eq!(state.handle(Button::A), Effect::Storage(Action::Eject));
         state.storage_done(Err("settings.eject_busy".into()));
-        state.storage.card.as_mut().unwrap().external = false;
+        // Ejected: its row goes away.
+        state.storage.second = None;
+        assert!(!state.visible_rows().iter().any(|r| r.id == Id::SecondCard));
         state.storage.backup = None;
         for id in [Id::StorageCard, Id::RestoreBackup] {
             at(&mut state, id);
@@ -389,6 +417,35 @@ mod tests {
             assert!(state.storage.confirm.is_none());
             assert_eq!(state.hints().len(), 1);
         }
+    }
+    #[test]
+    fn unified_storage_asks_before_separating_and_applies_at_once() {
+        let mut state = storage();
+        at(&mut state, Id::MergedStorage);
+        assert_eq!(
+            state.handle(Button::A),
+            Effect::Set(Id::MergedStorage, "1".into())
+        );
+        state.complete(Id::MergedStorage, Ok("1".into()));
+        assert_eq!(state.reboot_prompt, None, "applied without a reboot");
+        // Off: a question first, for every button that flips it.
+        for button in [Button::A, Button::L, Button::R] {
+            assert_eq!(state.handle(button), Effect::None);
+            assert_eq!(state.storage.confirm, Some(Confirm::Separate));
+            assert_eq!(state.handle(Button::B), Effect::None);
+            assert_eq!(state.value(Id::MergedStorage), "1");
+        }
+        state.handle(Button::A);
+        assert_eq!(
+            state.handle(Button::A),
+            Effect::Set(Id::MergedStorage, "0".into())
+        );
+        assert_eq!(state.pending, Some(Id::MergedStorage));
+        // The union's row is there only while the cards are joined.
+        assert!(!state.visible_rows().iter().any(|r| r.id == Id::UnifiedCard));
+        state.storage.unified = Some(Card::default());
+        assert_eq!(state.visible_rows()[0].id, Id::UnifiedCard);
+        assert!(state.fixed(Id::UnifiedCard));
     }
     #[test]
     fn restore_and_mount_options_ask_to_reboot() {

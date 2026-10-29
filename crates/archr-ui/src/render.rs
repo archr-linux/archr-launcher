@@ -776,11 +776,39 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         self.rounded(rect, radius, fill, Some(border))
     }
     fn icon(&mut self, glyph: Glyph, panel: Rect, ink: Rgba) -> Result<(), String> {
+        self.icon_turned(glyph, panel, ink, 0.)
+    }
+    fn icon_turned(
+        &mut self,
+        glyph: Glyph,
+        panel: Rect,
+        ink: Rgba,
+        angle: f64,
+    ) -> Result<(), String> {
         let text = self
             .text
             .as_mut()
             .ok_or_else(|| self.catalog.text("error.font_init"))?;
-        text.draw_icon(&mut self.canvas, glyph, panel, ink)
+        text.draw_icon(&mut self.canvas, glyph, panel, ink, angle)
+    }
+    /// A module's icon: its own SVG, else a shipped glyph by Lucide name,
+    /// else the puzzle piece.
+    fn module_icon(
+        &mut self,
+        (svg, name): (Option<&str>, &str),
+        panel: Rect,
+        ink: Rgba,
+    ) -> Result<(), String> {
+        match svg {
+            Some(svg) => {
+                let text = self
+                    .text
+                    .as_mut()
+                    .ok_or_else(|| self.catalog.text("error.font_init"))?;
+                text.draw_svg(&mut self.canvas, svg, panel, ink)
+            }
+            None => self.icon(Glyph::named(name).unwrap_or(Glyph::Puzzle), panel, ink),
+        }
     }
     fn divider(&mut self, x: i32, y: i32, w: u32, c: Rgba) -> Result<(), String> {
         self.canvas.set_draw_color(color(c));
@@ -840,7 +868,8 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 || self.settings_banner.busy(now)
                 || self.switches.values().any(|(_, knob)| knob.active(now))
                 // The search dots loop for as long as a search runs.
-                || (settings.searching() && self.motion != Motion::Off);
+                || ((settings.searching() || settings.updates.working())
+                    && self.motion != Motion::Off);
         } else {
             let (backdrop, cursor) = app.backdrop();
             let view = self.view(theme);
@@ -1801,12 +1830,11 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         let Frame { height, now, .. } = self.frame;
         let items = app.quick_menu_items(data);
         let has_core = matches!(items.first(), Some(QuickItem::Core));
-        let (base_h, base_items) = if has_core || items.first() == Some(&QuickItem::Settings) {
-            (300., 4)
-        } else {
-            (256., 3)
-        };
-        let panel_h = base_h + 42. * items.len().saturating_sub(base_items) as f32;
+        let has_divider = items.contains(&QuickItem::Reboot);
+        let panel_h = 80.
+            + 42. * items.len() as f32
+            + if has_divider { 10. } else { 0. }
+            + if has_core { 2. } else { 0. };
         // Optical centering: the approved modal sits 20px above center.
         let panel = self.modal(theme, (340., 32., panel_h, -self.px(20.)))?;
         let (title, subtitle) = if let Screen::QuickMenu {
@@ -1843,7 +1871,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         let divider_index = items
             .iter()
             .position(|item| *item == QuickItem::Reboot)
-            .unwrap_or(1);
+            .unwrap_or(usize::MAX);
         let core_extra = if has_core { self.px(4.) } else { 0 };
         let separator = self.px(10.);
         let offset = |index: usize| {
@@ -1882,6 +1910,16 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             let selected = index == app.cursor;
             let c = selection(selected, theme.text, theme.highlight_text);
             let label = match item {
+                QuickItem::Module(n) => {
+                    let label = app.quick_module(*n, data).map(|(_, q)| q.label.clone());
+                    let face = selection(selected, Face::Regular, Face::Semibold);
+                    self.label(
+                        &label.unwrap_or_default(),
+                        (face, 15., c),
+                        Rect::new(x, y, content_w, item_height),
+                    )?;
+                    continue;
+                }
                 QuickItem::Details => "menu.details",
                 QuickItem::Achievements => "menu.achievements",
                 QuickItem::Settings => "settings.title",
