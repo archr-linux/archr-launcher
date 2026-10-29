@@ -93,12 +93,16 @@ impl Frame {
     }
     fn font_size(self, value: f32) -> u16 {
         let size = value * self.text * self.font;
-        let size = if self.grid > 0. {
-            (size / self.grid).round().max(1.) * self.grid
+        // On a grid, sizes snap to its nearest step; the smallest size asked
+        // for is the theme's minimum itself, never a step above it.
+        let size = if size <= self.min {
+            self.min
+        } else if self.grid > 0. {
+            ((size / self.grid).round().max(1.) * self.grid).max(self.min)
         } else {
             size
         };
-        self.px(size.max(self.min)).clamp(8, 128) as u16
+        self.px(size).clamp(8, 128) as u16
     }
     /// The smallest size worth asking for, before the text multipliers.
     fn min_size(self) -> f32 {
