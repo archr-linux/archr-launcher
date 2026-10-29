@@ -704,3 +704,21 @@ fn a_dead_refresh_ends_the_loading_state() {
     assert!(!lobby.loading && lobby.failed && lobby.rooms.is_empty());
     assert!(!runtime.poll(&mut lobby));
 }
+
+#[test]
+fn the_lobby_download_waits_out_a_curl_still_open_for_writing() {
+    // A test thread that forks while another one writes its curl stub leaves the
+    // stub open for writing until the child's exec: exec then fails with ETXTBSY.
+    let (dir, paths) = fixture(&[], &room_json("Game", "CBF43926"));
+    let writer = fs::File::options()
+        .append(true)
+        .open(dir.path().join("usr/bin/curl"))
+        .unwrap();
+    let release = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        drop(writer);
+    });
+    let (rooms, failed) = archr_launcher::netplay::refresh(&paths);
+    release.join().unwrap();
+    assert!(!failed && rooms.len() == 1);
+}

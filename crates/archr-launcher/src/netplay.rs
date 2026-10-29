@@ -12,8 +12,9 @@ use std::{
     io::{Read, Seek, SeekFrom},
     net::UdpSocket,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::Command,
     sync::{
+        atomic::AtomicBool,
         mpsc::{channel, Receiver},
         Arc, Mutex,
     },
@@ -430,7 +431,8 @@ fn discover(port: u16) -> Vec<Entry> {
 }
 
 fn download(paths: &Paths, url: &str) -> Result<String, String> {
-    let output = Command::new(paths.at("/usr/bin/curl"))
+    let mut command = Command::new(paths.at("/usr/bin/curl"));
+    command
         .args(["-fsS", "--connect-timeout", "5", "--max-time", "12"])
         .args([
             "--max-filesize",
@@ -439,10 +441,15 @@ fn download(paths: &Paths, url: &str) -> Result<String, String> {
             "=http,https",
             "--",
             url,
-        ])
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|error| format!("curl: {error}"))?;
+        ]);
+    // The shared runner retries a briefly busy executable and bounds time and output.
+    let output = crate::process::capture(
+        &mut command,
+        Duration::from_secs(15),
+        &AtomicBool::new(false),
+        4 << 20,
+    )
+    .map_err(|error| format!("curl: {error}"))?;
     if !output.status.success() {
         return Err(format!(
             "curl: {}",
