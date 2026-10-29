@@ -162,3 +162,18 @@ fn parent_directory_handles_bare_and_nested_paths() {
         assert_eq!(archr_io::parent_dir(Path::new(path)), Path::new(parent));
     }
 }
+
+#[test]
+fn private_files_are_0600_in_new_folders_and_removal_tolerates_missing() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("a/b/secret");
+    archr_io::publish_private(&path, b"k").unwrap();
+    assert_eq!(fs::read(&path).unwrap(), b"k");
+    assert_eq!(
+        fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    archr_io::remove_durable(&path).unwrap();
+    assert!(!path.exists());
+    archr_io::remove_durable(&path).unwrap();
+}

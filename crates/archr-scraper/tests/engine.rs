@@ -306,6 +306,15 @@ fn credentials_file_is_private_and_debug_hides_the_password() {
     assert!(!format!("{creds:?}").contains("pw1"));
     Credentials::clear(dir.path()).unwrap();
     assert_eq!(Credentials::load(dir.path()), None);
+    // A link planted in its place is ignored, not followed.
+    let elsewhere = tempfile::tempdir().unwrap();
+    creds.save(elsewhere.path()).unwrap();
+    std::os::unix::fs::symlink(
+        elsewhere.path().join("scraper.toml"),
+        dir.path().join("scraper.toml"),
+    )
+    .unwrap();
+    assert_eq!(Credentials::load(dir.path()), None);
 }
 
 #[test]

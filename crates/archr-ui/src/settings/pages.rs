@@ -148,6 +148,7 @@ impl Settings {
         keyboard.max = match id {
             Id::Hidden => 32, // IEEE 802.11 SSID
             Id::CheevosAccount => 32,
+            Id::CheevosWebKey => 64,
             Id::WifiSwitch => 64, // WPA passphrase or hex key
             Id::Nickname => 32,   // RetroArch nickname
             Id::NetplayHost | Id::CustomServer => 253,
@@ -262,7 +263,9 @@ impl Settings {
                 self.root_password_typed(value);
                 Effect::None
             }
-            Id::CheevosAccount | Id::CheevosPassword => self.cheevos_typed(target, value),
+            Id::CheevosAccount | Id::CheevosPassword | Id::CheevosWebKey => {
+                self.cheevos_typed(target, value)
+            }
             Id::ModuleRow(_) => self.module_set(target, value),
             id => {
                 self.pending = Some(id);
@@ -415,7 +418,10 @@ impl Settings {
                 };
                 self.open_keyboard(id, mode, self.value(id).to_owned());
             }
-            id @ (Id::CheevosAccount | Id::CheevosLogout) => return self.cheevos_activate(id),
+            id @ (Id::CheevosAccount
+            | Id::CheevosWebKey
+            | Id::CheevosWebKeyRemove
+            | Id::CheevosLogout) => return self.cheevos_activate(id),
             id => return self.storage_activate(id),
         }
         Some(Effect::None)

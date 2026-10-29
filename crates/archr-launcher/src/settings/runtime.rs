@@ -216,6 +216,7 @@ impl Runtime {
             Effect::Login(user, password) => self.send(Work::Login(user, password)),
             Effect::CheevosLogin(user, password) => self.send(Work::CheevosLogin(user, password)),
             Effect::CheevosLogout => self.send(Work::CheevosLogout),
+            Effect::CheevosKey(key) => self.send(Work::CheevosKey(key)),
             Effect::Scrape if self.job.is_some() => self.state.scrape.starting = false,
             Effect::Scrape => self.send(Work::Scrape),
             Effect::CancelScrape => {

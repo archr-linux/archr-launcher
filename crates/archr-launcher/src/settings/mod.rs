@@ -364,6 +364,7 @@ pub(super) enum Work {
     Login(String, String),
     CheevosLogin(String, String),
     CheevosLogout,
+    CheevosKey(String),
     /// The account card's points; its own lane, like the radio scans.
     CheevosProfile,
     Scrape,
@@ -393,7 +394,8 @@ enum Reply {
     Login(Result<(String, usize), String>),
     CheevosLogin(Result<(String, archr_ui::settings::cheevos::Profile), String>),
     CheevosLogout(Result<(), String>),
-    CheevosProfile(Option<archr_ui::settings::cheevos::Profile>),
+    CheevosKey(Result<Option<archr_cheevos::Summary>, String>),
+    CheevosProfile(Result<(archr_ui::settings::cheevos::Profile, bool), archr_cheevos::Error>),
     Scrape(Result<(archr_scraper::Job, Vec<String>), String>),
     Theme(Box<(archr_ui::Theme, Option<std::path::PathBuf>)>),
     Appearance(Result<(), String>),
@@ -516,6 +518,7 @@ impl Worker {
                             Reply::CheevosLogin(backend.cheevos_login(&user, &password))
                         }
                         Work::CheevosLogout => Reply::CheevosLogout(backend.cheevos_logout()),
+                        Work::CheevosKey(key) => Reply::CheevosKey(backend.cheevos_key(&key)),
                         Work::CheevosProfile | Work::Store(_) => {
                             unreachable!("the profile and the store have their own lanes")
                         }
@@ -658,6 +661,7 @@ impl Worker {
                     }
                     if !state.cheevos.verifying {
                         state.cheevos.user = loaded.cheevos.user;
+                        state.cheevos.web_key = loaded.cheevos.web_key;
                     }
                     state.loading = false;
                 }
@@ -800,6 +804,7 @@ impl Worker {
                             state.cheevos.user = user;
                             state.cheevos.draft.clear();
                             state.cheevos.profile = Some(profile);
+                            state.cheevos.expired = false;
                             state.values.insert(Id::Cheevos, "1".into());
                             state.error = None;
                         }
@@ -810,18 +815,40 @@ impl Worker {
                     state.cheevos.verifying = false;
                     match result {
                         Ok(()) => {
-                            state.cheevos.user.clear();
-                            state.cheevos.profile = None;
+                            state.cheevos = archr_ui::settings::cheevos::Cheevos::default();
                             state.cursor = state.cursor.min(state.visible_rows().len() - 1);
                         }
                         Err(error) => state.fail(None, error),
                     }
                 }
-                Reply::CheevosProfile(profile) => {
-                    if profile.is_some() && !state.cheevos.user.is_empty() {
-                        state.cheevos.profile = profile;
+                Reply::CheevosKey(result) => {
+                    state.cheevos.verifying = false;
+                    match result {
+                        Ok(summary) => {
+                            state.cheevos.web_key = summary.is_some();
+                            state.cheevos.key_refused = false;
+                            let summary = summary.unwrap_or_default();
+                            if let Some(profile) = &mut state.cheevos.profile {
+                                (profile.since, profile.last_game) =
+                                    (summary.since, summary.last_game);
+                            }
+                            state.cursor = state.cursor.min(state.visible_rows().len() - 1);
+                        }
+                        Err(error) => state.fail(None, error),
                     }
                 }
+                // Offline or a service error changes nothing; a refused token
+                // keeps the account and asks for the password again.
+                Reply::CheevosProfile(result) if !state.cheevos.user.is_empty() => match result {
+                    Ok((profile, refused)) => {
+                        state.cheevos.profile = Some(profile);
+                        state.cheevos.key_refused = refused;
+                        state.cheevos.expired = false;
+                    }
+                    Err(archr_cheevos::Error::Auth) => state.cheevos.expired = true,
+                    Err(_) => {}
+                },
+                Reply::CheevosProfile(_) => {}
                 Reply::Facts(facts) => refresh_storage(state, *facts),
                 Reply::Storage((result, facts)) => {
                     refresh_storage(state, *facts);
