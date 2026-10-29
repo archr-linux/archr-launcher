@@ -40,6 +40,11 @@ O catálogo de sistemas (XML no formato do `es_systems.cfg`, gerado pelo pacote
 caminhos antigos `/storage/.config/emulationstation/es_systems.cfg` e
 `/usr/config/emulationstation/es_systems.cfg`; usar um destes gera um aviso
 no log.
+Com um segundo cartão, o `automount` publica a pasta de ROMs dele no link
+`/run/archr/roms2`; cada sistema `/storage/roms/<sistema>` lê também
+`<cartão>/<sistema>`, com gamelist e mídia próprios (em duplicata vale o
+primeiro cartão). O worker do índice confere o link a cada 2 s, ocioso, e
+recarrega as listas quando o cartão entra ou sai.
 O tema vem de `launcher.theme` em
 `/storage/.config/system/configs/system.cfg` (padrão `default`).
 
