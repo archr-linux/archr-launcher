@@ -101,6 +101,7 @@ font_mono = "fonts/PixelifySans-SemiBold.ttf"
 font_mono_medium = "fonts/PixelifySans-SemiBold.ttf"
 font_scale = 1.6
 font_smoothing = false
+font_min = 14
 text_outline = { color = "#3F2214", width = 2, ink = "#FFFFFF" }
 
 corners = 0
@@ -201,6 +202,7 @@ tile = true
 name = { en = "List", pt_BR = "Lista", es = "Lista", ru = "Список" }
 
 [view.lista.systems]
+title = "screen"
 divider = false
 summary = false
 list = { x = 0.046875, y = 0.15, w = 0.53125, h = 0.675, row = 0.0625, selected = 0.0625, gap = 0.0125, font = 0.03125, selected_font = 0.03125, radius = 0, cursor = "▶" }
@@ -231,6 +233,7 @@ decor = [
 name = { en = "Showcase", pt_BR = "Vitrine", es = "Escaparate", ru = "Витрина" }
 
 [view.vitrine.systems]
+title = "screen"
 list = { y = 0.233333, h = 0.383333, row = 0.266667, selected = 0.35, gap = 0.033333, radius = 0 }
 info = { y = 0.666667, h = 0.15, title = 0.05, meta = 0.03125 }
 dots = { y = 0.85 }
@@ -292,6 +295,7 @@ font_mono = "fonts/PressStart2P-Regular.ttf"
 font_mono_medium = "fonts/PressStart2P-Regular.ttf"
 font_grid = 8
 font_smoothing = false
+font_min = 12
 
 corners = 0
 border_width = 2
@@ -299,12 +303,13 @@ shadow = "hard"
 art_scaling = "pixel"
 easing = "steps"
 
-details_shot = { x = 0.03125, y = 0.141667, w = 0.375, h = 0.283333 }
-details_info = { x = 0.046875, y = 0.533333, w = 0.35, h = 0.316667 }
-details_title = { x = 0.4625, y = 0.2, w = 0.490625, h = 0.066667 }
-details_subtitle = { x = 0.4625, y = 0.275, w = 0.490625, h = 0.05 }
-details_text = { x = 0.4625, y = 0.333333, w = 0.490625, h = 0.4 }
-details_actions = { x = 0.4625, y = 0.766667, w = 0.490625, h = 0.075 }
+# Details: left column 18-216 (picture, facts), right column 240-627.
+details_shot = { x = 0.03125, y = 0.141667, w = 0.290625, h = 0.283333 }
+details_info = { x = 0.04375, y = 0.533333, w = 0.275, h = 0.316667 }
+details_title = { x = 0.390625, y = 0.2, w = 0.570313, h = 0.066667 }
+details_subtitle = { x = 0.390625, y = 0.275, w = 0.570313, h = 0.05 }
+details_text = { x = 0.390625, y = 0.333333, w = 0.570313, h = 0.4 }
+details_actions = { x = 0.390625, y = 0.766667, w = 0.570313, h = 0.075 }
 
 background_image = "images/background.png"
 
@@ -346,6 +351,7 @@ scale = 2
 name = { en = "List", pt_BR = "Lista", es = "Lista", ru = "Список" }
 
 [view.lista.systems]
+title = "screen"
 divider = false
 summary = false
 list = { x = 0.03125, y = 0.2, w = 0.6, h = 0.65, row = 0.066667, selected = 0.066667, gap = 0.0, font = 0.033333, selected_font = 0.033333, radius = 0, cursor = "▶" }
@@ -364,6 +370,7 @@ meta = { x = 0.68125, y = 0.75, w = 0.275, h = 0.05, size = 0.033333 }
 name = { en = "Showcase", pt_BR = "Vitrine", es = "Escaparate", ru = "Витрина" }
 
 [view.vitrine.systems]
+title = "screen"
 list = { radius = 0 }
 info = { title = 0.033333, meta = 0.033333 }
 
