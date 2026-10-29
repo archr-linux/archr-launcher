@@ -1,92 +1,11 @@
 //! SDL event translation and deterministic held-direction repeat.
 use crate::{controllers::Controllers, state::Button};
-use sdl2::{controller::Button as Pad, event::Event, joystick::HatState, keyboard::Keycode};
+use sdl2::{controller::Button as Pad, event::Event, keyboard::Keycode};
 use std::time::{Duration, Instant};
 
+/// The launcher button of an event with the default controls.
 pub fn map_event(e: &Event) -> Option<Button> {
-    match *e {
-        Event::KeyDown {
-            keycode: Some(key),
-            repeat: false,
-            ..
-        }
-        | Event::KeyUp {
-            keycode: Some(key), ..
-        } => match key {
-            Keycode::Return => Some(Button::A),
-            Keycode::Backspace => Some(Button::B),
-            Keycode::X => Some(Button::X),
-            Keycode::Y => Some(Button::Y),
-            Keycode::PageUp | Keycode::Left => Some(Button::L),
-            Keycode::PageDown | Keycode::Right => Some(Button::R),
-            Keycode::Up => Some(Button::Up),
-            Keycode::Down => Some(Button::Down),
-            _ => None,
-        },
-        Event::ControllerButtonDown { button, .. } | Event::ControllerButtonUp { button, .. } => {
-            match button {
-                Pad::A => Some(Button::A),
-                Pad::B => Some(Button::B),
-                Pad::X => Some(Button::X),
-                Pad::Y => Some(Button::Y),
-                Pad::LeftShoulder | Pad::DPadLeft => Some(Button::L),
-                Pad::RightShoulder | Pad::DPadRight => Some(Button::R),
-                Pad::DPadUp => Some(Button::Up),
-                Pad::DPadDown => Some(Button::Down),
-                Pad::Start => Some(Button::Start),
-                Pad::Back => Some(Button::Select),
-                _ => None,
-            }
-        }
-        // Conventional SDL joystick fallback, only used for unmapped devices.
-        Event::JoyButtonDown { button_idx, .. } | Event::JoyButtonUp { button_idx, .. } => {
-            match button_idx {
-                0 => Some(Button::A),
-                1 => Some(Button::B),
-                2 => Some(Button::X),
-                3 => Some(Button::Y),
-                4 => Some(Button::L),
-                5 => Some(Button::R),
-                6 => Some(Button::Select),
-                7 => Some(Button::Start),
-                _ => None,
-            }
-        }
-        Event::JoyHatMotion { state, .. } => match state {
-            HatState::Up | HatState::LeftUp | HatState::RightUp => Some(Button::Up),
-            HatState::Down | HatState::LeftDown | HatState::RightDown => Some(Button::Down),
-            HatState::Left => Some(Button::L),
-            HatState::Right => Some(Button::R),
-            _ => None,
-        },
-        Event::JoyAxisMotion {
-            axis_idx: 0, value, ..
-        }
-        | Event::ControllerAxisMotion {
-            axis: sdl2::controller::Axis::LeftX,
-            value,
-            ..
-        } => axis_button(value, Button::L, Button::R),
-        Event::JoyAxisMotion {
-            axis_idx: 1, value, ..
-        }
-        | Event::ControllerAxisMotion {
-            axis: sdl2::controller::Axis::LeftY,
-            value,
-            ..
-        } => axis_button(value, Button::Up, Button::Down),
-        _ => None,
-    }
-}
-
-fn axis_button(value: i16, negative: Button, positive: Button) -> Option<Button> {
-    if value < 0 {
-        Some(negative)
-    } else if value > 0 {
-        Some(positive)
-    } else {
-        None
-    }
+    crate::pad::Remap::default().map(e)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -241,6 +160,7 @@ pub(crate) fn device_event(event: &Event) -> Option<(u32, bool)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sdl2::joystick::HatState;
 
     #[test]
     fn native_stick_navigates_and_repeats_like_dpad() {

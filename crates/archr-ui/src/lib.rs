@@ -14,6 +14,7 @@ pub use theme::{resolve_theme, theme_dir, Rect01, Rgba, SystemScreen, Theme};
 pub mod covers;
 
 pub mod input;
+pub mod pad;
 pub mod state;
 
 pub mod controllers;

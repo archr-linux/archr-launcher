@@ -6,7 +6,12 @@ use sdl2::{
     controller::GameController, joystick::Joystick, GameControllerSubsystem, JoystickSubsystem,
 };
 
-use crate::{startup::StartupTrace, startup_phase, state::Button};
+use crate::{
+    pad::{Pad, Remap},
+    startup::StartupTrace,
+    startup_phase,
+    state::Button,
+};
 
 struct Device {
     index: u32,
@@ -19,6 +24,7 @@ pub struct Controllers {
     joysticks: JoystickSubsystem,
     controllers: GameControllerSubsystem,
     devices: Vec<Device>,
+    remap: Remap,
 }
 impl Controllers {
     pub fn new(sdl: &sdl2::Sdl) -> Result<Self, String> {
@@ -33,21 +39,33 @@ impl Controllers {
             joysticks,
             controllers,
             devices: Vec::new(),
+            remap: Remap::default(),
         };
         this.refresh();
         Ok(this)
     }
+    /// The Controls page's choices; applied from the next event on.
+    pub fn set_remap(&mut self, remap: Remap) {
+        self.remap = remap;
+    }
+    /// Whether this event belongs to the stream used for its device: a
+    /// GameController delivers both streams; use only its mapped one.
+    fn routed(&self, event: &Event) -> bool {
+        let Some((which, raw)) = crate::input::device_event(event) else {
+            return true;
+        };
+        self.devices
+            .iter()
+            .find(|d| d.joystick.instance_id() == which)
+            .is_some_and(|device| raw == device.controller.is_none())
+    }
     /// None ignores a duplicate/unknown stream; Some(None) releases an input.
     pub(crate) fn read(&self, event: &Event) -> Option<Option<Button>> {
-        let Some((which, raw)) = crate::input::device_event(event) else {
-            return Some(crate::input::map_event(event));
-        };
-        let device = self
-            .devices
-            .iter()
-            .find(|d| d.joystick.instance_id() == which)?;
-        // A GameController delivers both streams; use only its mapped one.
-        (raw == device.controller.is_none()).then(|| crate::input::map_event(event))
+        self.routed(event).then(|| self.remap.map(event))
+    }
+    /// The control a fresh press comes from, for "press a button" prompts.
+    pub fn pressed(&self, event: &Event) -> Option<Pad> {
+        Pad::pressed(event).filter(|_| self.routed(event))
     }
 
     pub fn refresh(&mut self) {
