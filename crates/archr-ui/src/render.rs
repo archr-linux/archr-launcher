@@ -476,11 +476,6 @@ impl<'font, 'texture> Ui<'font, 'texture> {
     pub fn wifi_refresh_signal(&self) -> Option<impl FnOnce() + Send + 'static> {
         self.status.as_ref().and_then(|s| s.refresh_signal())
     }
-    pub fn page_size(&self, theme: &Theme) -> usize {
-        ((1. - theme.header_height - theme.footer_height - 0.04) / (theme.row_height + 2. / 480.))
-            .floor()
-            .max(1.) as usize
-    }
     /// Called before applying input: finish old targets, never queue gestures.
     pub fn snap_animations(&mut self) {
         self.list.scroll.snap();

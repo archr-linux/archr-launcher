@@ -391,7 +391,7 @@ fn capture_network_and_games_pages() {
             },
         );
         let home = Home(systems.to_vec());
-        let app = crate::state::App::new(ui.page_size(&theme));
+        let app = crate::state::App::new(10);
         for (name, accent) in [
             ("light", "#FFE14D"),
             ("dark", "#1B2A6B"),
@@ -586,7 +586,7 @@ fn capture_views() {
         ui.configure(&ttf, &creator, &theme, None).unwrap();
         for language in languages.split(',') {
             ui.catalog = I18n::load(std::path::Path::new("/nonexistent"), Some(language), None);
-            let mut app = crate::state::App::new(ui.page_size(&theme));
+            let mut app = crate::state::App::new(10);
             app.cursor = 1;
             // System art loads on the worker after the first frame.
             let deadline = Instant::now() + Duration::from_secs(3);

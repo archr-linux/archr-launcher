@@ -1,5 +1,6 @@
 //! Screen transitions and controller input, independent of rendering and SDL.
 
+use crate::layout::{Axis, Layout, View};
 use archr_index::{cache::SystemEntry, Game};
 mod hub;
 mod order;
@@ -129,10 +130,47 @@ pub trait DataSource {
     fn current_core(&self, system: &str, game: usize) -> Option<(String, String)>;
 }
 
+/// How a screen's list answers the shoulders and the d-pad, which send the
+/// same L/R: a vertical list jumps a page; a horizontal one (the carousel)
+/// steps one entry, so ← and → reach the neighbours. ↑/↓ step one entry in
+/// both.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Nav {
+    pub axis: Axis,
+    /// Entries the list shows at once.
+    pub page: usize,
+}
+impl Nav {
+    pub fn vertical(page: usize) -> Self {
+        Self {
+            axis: Axis::Vertical,
+            page,
+        }
+    }
+    /// From the screen's layout in the active view.
+    pub fn of(layout: &Layout) -> Self {
+        let list = &layout.list;
+        let page = (list.rect.h / (list.row + list.gap)).floor().max(1.) as usize;
+        Self {
+            axis: list.axis,
+            page,
+        }
+    }
+    /// How far L or R moves the cursor.
+    fn step(self) -> usize {
+        match self.axis {
+            Axis::Vertical => self.page,
+            Axis::Horizontal => 1,
+        }
+    }
+}
+
 pub struct App {
     pub screen: Screen,
     pub cursor: usize,
-    pub page_size: usize,
+    /// List navigation of the systems and the games screens.
+    pub systems_nav: Nav,
+    pub games_nav: Nav,
     /// `global.netplay` is on: the quick menu offers the lobby.
     pub netplay: bool,
     /// Details screen: focused button and description scroll, in lines.
@@ -154,7 +192,8 @@ impl App {
         Self {
             screen: Screen::Systems,
             cursor: 0,
-            page_size,
+            systems_nav: Nav::vertical(page_size),
+            games_nav: Nav::vertical(page_size),
             netplay: false,
             details_focus: 0,
             details_scroll: 0,
@@ -165,6 +204,12 @@ impl App {
             moving: None,
             selected_core: None,
         }
+    }
+
+    /// Follows the active view; called again whenever the theme or the view changes.
+    pub fn set_view(&mut self, view: &View) {
+        self.systems_nav = Nav::of(&view.systems);
+        self.games_nav = Nav::of(&view.games);
     }
 
     /// The undimmed screen beneath a modal, including collection identity.
@@ -247,10 +292,16 @@ impl App {
             Button::Up => self.cursor = self.cursor.saturating_sub(1),
             Button::Down => self.cursor = self.cursor.saturating_add(1).min(last),
             Button::L | Button::R if !matches!(self.screen, Screen::QuickMenu { .. }) => {
-                self.cursor = if b == Button::L {
-                    self.cursor.saturating_sub(self.page_size)
+                let step = if matches!(self.screen, Screen::Games { .. }) {
+                    self.games_nav
                 } else {
-                    self.cursor.saturating_add(self.page_size).min(last)
+                    self.systems_nav
+                }
+                .step();
+                self.cursor = if b == Button::L {
+                    self.cursor.saturating_sub(step)
+                } else {
+                    self.cursor.saturating_add(step).min(last)
                 };
             }
             _ => return self.handle_screen(b, data),

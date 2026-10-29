@@ -127,7 +127,11 @@ Valores de `list`:
 
 - `mark`: `"pill"` (faixa colorida), `"bar"` (barrinha ao lado do texto) ou
   `"tile"` (sistemas em blocos lado a lado, o escolhido grande no centro, com a
-  imagem do console; só na tela de sistemas).
+  imagem do console; só na tela de sistemas). Num carrossel de blocos, ← e →
+  (e os ombros, que o launcher lê como os mesmos botões) andam um sistema;
+  ↑ e ↓ também andam um, para nenhum botão saltar ao fim. Numa lista vertical,
+  ↑/↓ andam uma linha e ←/→ uma página, do tamanho que a lista mostra
+  (`h` dividido por `row + gap`).
 - `scroll`: `"edge"` (rola ao chegar na borda) ou `"center"` (mantém a escolha no meio).
 
 Todas as linhas não escolhidas usam uma cor só: `text_secondary` (coleções em

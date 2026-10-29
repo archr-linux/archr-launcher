@@ -173,7 +173,8 @@ fn run(
     ui.set_motion(look.animations);
     ui.start_opening();
     ui.configure_prepared(&creator, prepared, paths.root.as_deref())?;
-    let mut app = App::new(ui.page_size(&theme));
+    let mut app = App::new(1);
+    app.set_view(&theme.view(&theme.active_view));
     app.netplay = netplay_on;
     ui.banner = library.banner.take().map(|m| m.render(&ui.catalog));
     ui.draw(&app, &library, &theme, None)?;
@@ -275,6 +276,7 @@ fn run(
                 || next.font_semibold != theme.font_semibold
                 || settings.state.base_dir != ui.theme_dir;
             theme = next;
+            app.set_view(&theme.view(&theme.active_view));
             ui.theme_dir = settings.state.base_dir.clone();
             audio.set_sounds(theme_sounds(ui.theme_dir.as_deref()));
             ui.text_scale = look.text_scale();
