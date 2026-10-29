@@ -89,6 +89,8 @@ pub(crate) enum Face {
     Semibold,
     Mono,
     MonoMedium,
+    /// The launcher's own regular font, for text a theme font cannot fit.
+    Fallback,
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Style {
@@ -121,13 +123,13 @@ struct FontFace<'font> {
 struct Fonts<'font> {
     startup: StartupTrace,
     ttf: &'font Sdl2TtfContext,
-    paths: [Vec<PathBuf>; 4],
+    paths: [Vec<PathBuf>; 5],
     fonts: Vec<FontFace<'font>>,
     resolved: HashMap<Face, usize>,
     measurements: VecDeque<(String, Face, u16, u32)>,
 }
 impl<'font> Fonts<'font> {
-    fn new(ttf: &'font Sdl2TtfContext, paths: [Vec<PathBuf>; 4]) -> Self {
+    fn new(ttf: &'font Sdl2TtfContext, paths: [Vec<PathBuf>; 5]) -> Self {
         Self {
             startup: StartupTrace::default(),
             ttf,
@@ -263,7 +265,7 @@ unsafe impl Send for PreparedText<'_> {}
 impl<'font> PreparedText<'font> {
     pub(crate) fn new(
         ttf: &'font Sdl2TtfContext,
-        paths: [Vec<PathBuf>; 4],
+        paths: [Vec<PathBuf>; 5],
         trace: StartupTrace,
     ) -> Self {
         let mut fonts = Fonts::new(ttf, paths);
@@ -652,6 +654,7 @@ mod tests {
             "Inter-SemiBold",
             "JetBrainsMono-Regular",
             "JetBrainsMono-Medium",
+            "Inter-Regular",
         ];
         let mut fonts = Fonts::new(&ttf, names.map(|name| vec![bundled_font(name)]));
         let coverage = |font: &Font<'_, '_>| {
@@ -829,7 +832,7 @@ mod tests {
         let mut canvas = window.into_canvas().software().build().unwrap();
         let creator = canvas.texture_creator();
         let ttf = sdl2::ttf::init().unwrap();
-        let mut paths: [Vec<PathBuf>; 4] = std::array::from_fn(|_| vec![]);
+        let mut paths: [Vec<PathBuf>; 5] = std::array::from_fn(|_| vec![]);
         paths[0].push(bundled_font("Inter-Regular"));
         paths[1].push(bundled_font("Inter-SemiBold"));
         let mut cache = TextCache::from_prepared(

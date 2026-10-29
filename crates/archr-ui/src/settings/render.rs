@@ -328,6 +328,17 @@ impl View<'_, '_, '_> {
         width: u32,
         face: Face,
     ) -> Result<Vec<String>, String> {
+        Ok(self.lines_split(text, size, width, face)?.0)
+    }
+    /// The lines, and whether a word wider than `width` had to be split.
+    fn lines_split(
+        &mut self,
+        text: &str,
+        size: f32,
+        width: u32,
+        face: Face,
+    ) -> Result<(Vec<String>, bool), String> {
+        let mut split = false;
         let mut lines = vec![String::new()];
         for ch in text.chars() {
             let line = lines.last_mut().expect("one line");
@@ -341,13 +352,14 @@ impl View<'_, '_, '_> {
                     line.truncate(at);
                     lines.push(format!("{rest}{ch}"));
                 } else {
+                    split |= ch != ' ';
                     lines.push(ch.to_string());
                 }
             } else {
                 line.push(ch);
             }
         }
-        Ok(lines)
+        Ok((lines, split))
     }
     fn text(
         &mut self,
@@ -365,7 +377,7 @@ impl View<'_, '_, '_> {
         face: Face,
     ) -> Result<(), String> {
         let (_, ink, align) = style;
-        let (lines, size) = self.fit(bounds, text, style.0, face)?;
+        let (lines, size, face) = self.fit(bounds, text, style.0, face)?;
         let step = size + 3.;
         let top = bounds.1 + (bounds.3 - lines.len() as f32 * step) / 2.;
         for (n, line) in lines.iter().enumerate() {
@@ -378,30 +390,48 @@ impl View<'_, '_, '_> {
         }
         Ok(())
     }
-    /// Lines and size that fit the bounds, or the localized "unavailable".
+    /// Lines, size and face that fit the bounds, or the localized
+    /// "unavailable". Words are never split: the text shrinks down to the
+    /// theme's smallest size, then tries the launcher's own font.
     fn fit(
         &mut self,
         bounds: Bounds,
         text: &str,
         start: f32,
         face: Face,
-    ) -> Result<(Vec<String>, f32), String> {
+    ) -> Result<(Vec<String>, f32, Face), String> {
         let rect = self.rect(bounds);
-        let mut size = start;
+        let floor = self.ui.frame.min_size().max(12.);
+        let (mut size, mut face) = (start, face);
         Ok(loop {
-            let lines = self.lines_face(text, size, rect.width(), face)?;
+            let (lines, split) = self.lines_split(text, size, rect.width(), face)?;
             let limit = (bounds.3 / (size + 3.)).floor().max(1.) as usize;
-            if lines.len() <= limit {
-                break (lines, size);
+            let fallback = face == Face::Fallback;
+            if lines.len() <= limit && (!split || fallback && size <= floor) {
+                break (lines, size, face);
             }
-            if size <= 12. {
+            if size > floor {
+                size = (size - 1.).max(floor);
+            } else if split && !fallback {
+                (size, face) = (start, Face::Fallback);
+            } else {
                 log::warn!("Settings text unavailable in this layout: {text}");
+                // "Unavailable" as usual; where it would split a word, in the
+                // launcher's font at the smallest size; else the box stays empty.
+                let unavailable = self.tr("settings.unavailable");
+                let (lines, split) =
+                    self.lines_split(&unavailable, start, rect.width(), Face::Regular)?;
+                if !split {
+                    break (lines, start, Face::Regular);
+                }
+                let (lines, split) =
+                    self.lines_split(&unavailable, floor, rect.width(), Face::Fallback)?;
                 break (
-                    self.lines(&self.tr("settings.unavailable"), start, rect.width())?,
-                    start,
+                    if split { Vec::new() } else { lines },
+                    floor,
+                    Face::Fallback,
                 );
             }
-            size = (size - 1.).max(12.);
         })
     }
     fn label(&mut self, bounds: Bounds, text: &str, size: f32) -> Result<(), String> {
@@ -789,7 +819,7 @@ impl View<'_, '_, '_> {
     ) -> Result<(), String> {
         let height = |view: &mut Self, text: &str, size: f32, most: f32| {
             view.fit((104., 0., 432., most), text, size, Face::Regular)
-                .map(|(lines, size)| lines.len() as f32 * (size + 3.))
+                .map(|(lines, size, _)| lines.len() as f32 * (size + 3.))
         };
         let title = height(self, question, 18., 63.)?;
         let body = height(self, detail, 14., 136.)?;
@@ -1140,7 +1170,7 @@ impl View<'_, '_, '_> {
                 if chevrons {
                     // "‹ value ›" hugs the value, as in the mockups.
                     let face = selection(selected, Face::Regular, Face::Semibold);
-                    let (lines, size) = self.fit((x + 20., y, w - 40., h), &v, 14., face)?;
+                    let (lines, size, face) = self.fit((x + 20., y, w - 40., h), &v, 14., face)?;
                     let mut width = 0.;
                     for line in &lines {
                         width = f32::max(width, self.ui.measure(line, face, size)? as f32);
@@ -1258,5 +1288,64 @@ mod banner_tests {
         let end = now + BANNER_FADE + Duration::from_millis(10);
         assert_eq!(banner.alpha(None, 0, end), 0.);
         assert!(banner.shown.is_none());
+    }
+}
+#[cfg(test)]
+mod fit_tests {
+    use super::*;
+
+    #[test]
+    fn a_word_wider_than_its_box_shrinks_or_changes_font_but_never_splits() {
+        let _sdl = crate::SDL_TEST_LOCK.lock().unwrap();
+        std::env::set_var("SDL_VIDEODRIVER", "offscreen");
+        let themes = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../themes");
+        let default = themes.join("default");
+        // A wide theme face: the mono family as the regular one.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("fonts")).unwrap();
+        std::fs::copy(
+            default.join("fonts/JetBrainsMono-Regular.ttf"),
+            dir.path().join("fonts/Wide.ttf"),
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("theme.toml"),
+            "font = 'fonts/Wide.ttf'\nfont_min = 12",
+        )
+        .unwrap();
+        let theme = Theme::load_over(dir.path(), &Theme::load(&default));
+        let (ttf, creator);
+        let mut ui = Ui::new(640, 480, true).unwrap();
+        ttf = sdl2::ttf::init().unwrap();
+        creator = ui.canvas.texture_creator();
+        ui.default_theme_dir = Some(default);
+        ui.configure(&ttf, &creator, &theme, None).unwrap();
+        ui.frame.min = theme.font_min;
+        // Narrow letters: wide in the mono face, narrow in the launcher's font.
+        let word = "illimitable";
+        let wide = ui.measure(word, Face::Regular, 14.).unwrap() as f32;
+        let mut view = View {
+            ui: &mut ui,
+            theme: &theme,
+        };
+        // Fits a little smaller: one line, the whole word.
+        let (lines, size, face) = view
+            .fit((0., 0., wide - 4., 20.), word, 14., Face::Regular)
+            .unwrap();
+        assert_eq!((lines, face), (vec![word.to_owned()], Face::Regular));
+        assert!((12. ..14.).contains(&size));
+        // Too wide even at the smallest size: the launcher's own font takes it.
+        let floor = view.ui.measure(word, Face::Regular, 12.).unwrap() as f32;
+        let narrow = view.ui.measure(word, Face::Fallback, 12.).unwrap() as f32;
+        assert!(narrow < floor, "the fallback is narrower");
+        let (lines, _, face) = view
+            .fit(
+                (0., 0., (narrow + floor) / 2., 20.),
+                word,
+                14.,
+                Face::Regular,
+            )
+            .unwrap();
+        assert_eq!((lines, face), (vec![word.to_owned()], Face::Fallback));
     }
 }

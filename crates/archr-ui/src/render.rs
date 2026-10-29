@@ -486,7 +486,12 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         theme: &Theme,
         root: Option<&Path>,
     ) -> Result<(), String> {
-        let mut prepared = PreparedText::new(ttf, font_paths(theme, root), self.startup);
+        let default = self.default_theme_dir.clone().unwrap_or_else(|| {
+            root.unwrap_or(Path::new("/"))
+                .join(crate::theme::DEFAULT_THEME_DIR.trim_start_matches('/'))
+        });
+        let paths = font_paths(theme, root, &default);
+        let mut prepared = PreparedText::new(ttf, paths, self.startup);
         prepared.prepare_icons(
             self.theme_dir.as_deref(),
             &self.default_theme_dir.as_ref().map_or_else(
@@ -2010,7 +2015,9 @@ pub fn prepare_first_frame<'font>(
     trace: StartupTrace,
 ) -> Result<PreparedText<'font>, String> {
     let frame = Frame::new(width, height);
-    let mut prepared = PreparedText::new(ttf, font_paths(theme, root), trace);
+    // The default theme is the folder of its icons.
+    let default = system_icons_dir.parent().unwrap_or(system_icons_dir);
+    let mut prepared = PreparedText::new(ttf, font_paths(theme, root, default), trace);
     let style = |face, size, color| Style {
         face,
         size: frame.font_size(size),
@@ -2191,7 +2198,11 @@ impl PreparedText<'_> {
     }
 }
 
-fn font_paths(theme: &Theme, root: Option<&Path>) -> [Vec<PathBuf>; 4] {
+/// The default theme's regular font (themes/default/theme.toml), the face
+/// Settings fall back to when a theme font cannot fit a word.
+const DEFAULT_FONT: &str = "fonts/Inter-Regular.ttf";
+
+fn font_paths(theme: &Theme, root: Option<&Path>, default: &Path) -> [Vec<PathBuf>; 5] {
     let defaults = |mono: bool| {
         let names = if mono {
             [
@@ -2215,7 +2226,8 @@ fn font_paths(theme: &Theme, root: Option<&Path>) -> [Vec<PathBuf>; 4] {
         }
         paths
     };
-    let mut paths: [Vec<PathBuf>; 4] = std::array::from_fn(|i| defaults(i == 2 || i == 3));
+    let mut paths: [Vec<PathBuf>; 5] = std::array::from_fn(|i| defaults(i == 2 || i == 3));
+    paths[4].insert(0, default.join(DEFAULT_FONT));
     for (i, preferred) in [
         &theme.font,
         &theme.font_semibold,
