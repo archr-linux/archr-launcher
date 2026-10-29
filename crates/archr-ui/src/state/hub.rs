@@ -13,6 +13,21 @@ impl App {
             _ => true,
         }
     }
+    /// What A does on shortcut `index`; None for one not offered yet.
+    fn shortcut(index: usize) -> Outcome {
+        match index {
+            0 => Outcome::Settings,
+            2 => Outcome::ToggleWifi,
+            3 => Outcome::Action(SessionAction::Suspend),
+            4 => Outcome::Action(SessionAction::Reboot),
+            5 => Outcome::Action(SessionAction::Shutdown),
+            _ => Outcome::None,
+        }
+    }
+    /// Shortcuts that do something are drawn enabled, the rest dimmed.
+    pub(crate) fn hub_shortcut_enabled(index: usize) -> bool {
+        !matches!(Self::shortcut(index), Outcome::None)
+    }
     pub(super) fn handle_hub(&mut self, button: Button, data: &dyn DataSource) -> Outcome {
         let Screen::StartHub {
             mut row,
@@ -58,16 +73,7 @@ impl App {
                 }
                 return Outcome::None;
             }
-            Button::A => {
-                return match shortcut {
-                    0 => Outcome::Settings,
-                    2 => Outcome::ToggleWifi,
-                    3 => Outcome::Action(SessionAction::Suspend),
-                    4 => Outcome::Action(SessionAction::Reboot),
-                    5 => Outcome::Action(SessionAction::Shutdown),
-                    _ => Outcome::None,
-                }
-            }
+            Button::A => return Self::shortcut(shortcut),
             _ => {}
         }
         if matches!(self.screen, Screen::StartHub { .. }) {

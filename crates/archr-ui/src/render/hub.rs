@@ -110,7 +110,7 @@ impl Ui<'_, '_> {
         let wifi_on = self.wifi_enabled();
         for (index, &(_, glyph)) in SHORTCUTS.iter().enumerate() {
             let focus = row == 1 && shortcut == index;
-            let enabled = index >= 2;
+            let enabled = App::hub_shortcut_enabled(index);
             let active = index == 2 && wifi_on;
             let x = start + index as i32 * (side + gap);
             let rect = Rect::new(x, px(278.), side as u32, side as u32);
@@ -119,15 +119,14 @@ impl Ui<'_, '_> {
                 side as f32 / 2.,
                 if focus && enabled {
                     theme.highlight_bg
+                } else if focus {
+                    // Selected but not offered yet: still the most marked
+                    // button, a tint of the accent under a full accent ring.
+                    crate::appearance::mix(theme.surface, theme.highlight_bg, 0.35)
                 } else {
                     theme.surface
                 },
-                Some(if focus && !enabled {
-                    Rgba {
-                        a: 150,
-                        ..theme.highlight_bg
-                    }
-                } else if active && !focus {
+                Some(if focus || active {
                     theme.highlight_bg
                 } else {
                     theme.border
@@ -135,6 +134,8 @@ impl Ui<'_, '_> {
             )?;
             let ink = if focus && enabled {
                 theme.highlight_text
+            } else if focus {
+                theme.text
             } else if active {
                 theme.highlight_bg
             } else if enabled {
