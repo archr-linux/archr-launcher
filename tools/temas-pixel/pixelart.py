@@ -41,7 +41,7 @@ BEACH = {name: rgb(value) for name, value in {
     "coral_dk": "c2413a", "sun": "ffd35a", "sun_dk": "e59b2f", "palm": "6fc94a",
     "palm_md": "3f9d3a", "palm_dk": "23683a", "pink": "f7a8a0", "pink_dk": "d26c6c",
     "purple": "7a5cc4", "purple_dk": "4d3a8c", "white": "fbfbf6", "night": "1b2a3c",
-    "shadow": "00000040",
+    "shadow": "00000040", "parchment": "fff6e2", "ink": "22110a",
 }.items()}
 
 
@@ -317,10 +317,10 @@ def ragged(w, h, seed, p=BEACH, inset=True, grain=0.6):
     return outline(padded(shape), p["outline"])
 
 
-def well(img, x, y, w, h, seed, p=BEACH, grain=0.0):
+def well(img, x, y, w, h, seed, p=BEACH, grain=0.0, base="sand_lt"):
     """A recessed sand area: shaded top-left lip, lit bottom-right lip;
     smooth inside by default, so text on it stays clear."""
-    inner = sand(w, h, seed, p, grain, "sand_lt")
+    inner = sand(w, h, seed, p, grain, base)
     rect(inner, 0, 0, w, 1, p["sand_dk"])
     rect(inner, 0, 0, 1, h, p["sand_dk"])
     rect(inner, 0, 1, w, 1, p["sand_md"])
@@ -347,12 +347,12 @@ def button(w, h, p=BEACH, selected=False, seed=11):
             px(img, x, y, p["sea_hi"])
         framed = outline(padded(img), p["foam"])
         return outline(padded(framed), p["deep"])
-    body = sand(w, h, seed, p, 0.0, "sand_lt")
+    body = sand(w, h, seed, p, 0.0, "sand_hi")
     mask = canvas(w, h)
     chunky(mask, 0, 0, w, h, (255, 255, 255, 255), 2)
     img.paste(body, (0, 0), mask)
-    rect(img, 2, 0, w - 4, 1, p["sand_hi"])
-    rect(img, 1, 1, w - 2, 1, p["sand_hi"])
+    rect(img, 2, 0, w - 4, 1, p["parchment"])
+    rect(img, 1, 1, w - 2, 1, p["parchment"])
     rect(img, 2, h - 2, w - 4, 1, p["sand_md"])
     rect(img, 2, h - 1, w - 4, 1, p["sand_dk"])
     return outline(padded(img), p["outline"])
