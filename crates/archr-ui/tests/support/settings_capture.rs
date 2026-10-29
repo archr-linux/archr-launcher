@@ -89,7 +89,7 @@ fn pages() -> Vec<(&'static str, Settings)> {
     usb_internet.cursor = 4;
     let mut usb_fallback = usb_internet.clone();
     usb_fallback.usb =
-        crate::settings::network::Usb::parse("link=fallback\naddress=169.254.170.2\n");
+        crate::settings::network::Usb::parse("link=fallback\naddress=169.254.170.2\nwifi=held\n");
     usb_fallback.cursor = 7;
     let mut usb_rndis = services.clone();
     usb_rndis.values.insert(Id::UsbCompat, "1".into());
