@@ -206,17 +206,26 @@ impl Ui<'_, '_> {
             add("details.publisher", &details.publisher);
         }
         let mut y = info.y();
-        let line = self.px(15.);
+        // Lines follow the text size, which a theme may scale.
+        let line = (f32::from(self.frame.font_size(12.)) * 1.25)
+            .round()
+            .max(1.) as i32;
         let pad = self.px(3.);
         for (key, value) in facts {
             let label = self.catalog.text(key);
             let lw = self.measure(&label, Face::Regular, 12.)?;
-            let room = info.width().saturating_sub(lw + self.px(12.) as u32).max(1);
-            let (size, lines) = match self.shrink(&value, Face::Regular, 12., 10., room)? {
-                Some(size) => (size, vec![value]),
-                None => (10., self.wrap(&value, Face::Regular, 10., room)?),
-            };
-            let row = line * lines.len() as i32 + pad * 2;
+            let beside = info.width().saturating_sub(lw + self.px(12.) as u32).max(1);
+            // A value that does not fit beside its label goes whole to the
+            // lines below, across the table; words are never split.
+            let (size, lines, below, room) =
+                match self.shrink(&value, Face::Regular, 12., 10., beside)? {
+                    Some(size) => (size, vec![value], 0, beside),
+                    None => {
+                        let lines = self.wrap(&value, Face::Regular, 12., info.width())?;
+                        (12., lines, 1, info.width())
+                    }
+                };
+            let row = line * (lines.len() + below) as i32 + pad * 2;
             if y + row > info.bottom() {
                 break;
             }
@@ -231,7 +240,7 @@ impl Ui<'_, '_> {
                     (Face::Regular, size, theme.text),
                     Rect::new(
                         info.right() - room as i32,
-                        y + pad + line * n as i32,
+                        y + pad + line * (n + below) as i32,
                         room,
                         line as u32,
                     ),
