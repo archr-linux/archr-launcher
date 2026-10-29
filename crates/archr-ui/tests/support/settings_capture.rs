@@ -1090,7 +1090,10 @@ fn store_pages(dir: &std::path::Path) -> Vec<(&'static str, Settings)> {
         .into_iter()
         .chain(shots)
         .collect();
-    detail.store_reply(Reply::Detail(Ok(Box::new(facts))));
+    detail.store_reply(Reply::Detail(
+        "kaio-dev-neon-arcade".into(),
+        Ok(Box::new(facts)),
+    ));
     let mut loading = grid.clone();
     loading.handle(Button::A);
     let mut installing = detail.clone();

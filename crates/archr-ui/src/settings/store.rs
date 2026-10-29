@@ -197,7 +197,8 @@ pub enum Reply {
     },
     /// A card's name and cover arrived.
     Card(Card),
-    Detail(Result<Box<Detail>, &'static str>),
+    /// The details of the theme in that folder.
+    Detail(String, Result<Box<Detail>, &'static str>),
     /// Themes installed by the store, by folder with their content id.
     Installed(BTreeMap<String, String>, Vec<Card>),
     /// An install or removal ended; the key names the outcome.
@@ -216,6 +217,8 @@ pub struct Store {
     pub problem: Option<&'static str>,
     pub fetched: Option<SystemTime>,
     pub detail: Option<Detail>,
+    /// Folder of the theme whose details are open.
+    pub opened: String,
     /// The image shown large on the details page.
     pub image: usize,
     /// Locale key while an install or removal runs.
@@ -294,6 +297,7 @@ impl Settings {
                     return Effect::None;
                 };
                 self.store.detail = None;
+                self.store.opened = card.folder();
                 self.store.image = 0;
                 self.store.loading = true;
                 self.store.problem = None;
@@ -417,8 +421,9 @@ impl Settings {
                     }
                 }
             }
-            Reply::Detail(result) => {
-                if page != Page::StoreTheme || store.detail.is_some() {
+            Reply::Detail(folder, result) => {
+                // A late answer for a theme left behind is dropped.
+                if page != Page::StoreTheme || store.detail.is_some() || folder != store.opened {
                     return;
                 }
                 store.loading = false;
@@ -498,7 +503,15 @@ mod tests {
         let mut detail = Detail::describe(*card, "name = \"Neon\"\n", &[], "0.1.0").unwrap();
         detail.tree = "t1".into();
         detail.images = vec!["/a.png".into(), "/b.png".into()];
-        state.store_reply(Reply::Detail(Ok(Box::new(detail.clone()))));
+        state.store_reply(Reply::Detail(
+            "ana-papel".into(),
+            Ok(Box::new(Detail::default())),
+        ));
+        assert!(state.store.detail.is_none(), "another theme's late answer");
+        state.store_reply(Reply::Detail(
+            "kaio-neon".into(),
+            Ok(Box::new(detail.clone())),
+        ));
         detail
     }
 

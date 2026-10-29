@@ -547,7 +547,12 @@ impl Shop {
                 }
                 vec![self.installed(), listed]
             }
-            Action::Open(card) => vec![Reply::Detail(self.detail(&card).map(Box::new))],
+            Action::Open(card) => {
+                vec![Reply::Detail(
+                    card.folder(),
+                    self.detail(&card).map(Box::new),
+                )]
+            }
             Action::Install(detail) => {
                 let done = self.install(&detail).map(|()| "store.installed_ok");
                 if let Err(problem) = done {
