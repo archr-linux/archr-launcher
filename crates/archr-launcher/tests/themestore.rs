@@ -471,3 +471,121 @@ fn only_github_hosts_are_trusted() {
         assert!(!trusted_on(url, HOSTS), "{url}");
     }
 }
+
+/// A theme repository on disk, served the way GitHub serves it: the branch
+/// tree, raw files and `git archive` as the codeload tarball. Run with
+/// `ARCHR_STORE_PACKAGES=/path/repo1:/path/repo2 cargo test -p archr-launcher
+/// --test themestore -- --ignored a_theme_repository`.
+#[test]
+#[ignore = "checks theme repositories named in ARCHR_STORE_PACKAGES"]
+fn a_theme_repository_is_accepted_and_installs_whole() {
+    let packages = std::env::var("ARCHR_STORE_PACKAGES").expect("ARCHR_STORE_PACKAGES");
+    for repo in packages.split(':').map(Path::new) {
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .arg("-C")
+                .arg(repo)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "git {args:?} in {}", repo.display());
+            out.stdout
+        };
+        let name = repo.file_name().unwrap().to_str().unwrap().to_owned();
+        let listing = String::from_utf8(git(&["ls-tree", "-r", "-l", "HEAD"])).unwrap();
+        let files: Vec<(String, u64)> = listing
+            .lines()
+            .map(|line| {
+                let (meta, path) = line.split_once('\t').unwrap();
+                let size = meta.split_whitespace().nth(3).unwrap().parse().unwrap();
+                (path.to_owned(), size)
+            })
+            .collect();
+        let tree: Vec<_> = files
+            .iter()
+            .map(|(path, size)| serde_json::json!({"path": path, "type": "blob", "size": size}))
+            .collect();
+        let fake = Fake::default();
+        let api = format!("https://api.github.com/repos/ArchR/{name}");
+        let raw = format!("https://raw.githubusercontent.com/ArchR/{name}/main");
+        fake.answer(
+            &format!("{api}/git/trees/main?recursive=1"),
+            200,
+            serde_json::json!({"sha": "c0ffee", "truncated": false, "tree": tree}).to_string(),
+        );
+        for (path, _) in &files {
+            fake.answer(
+                &format!("{raw}/{path}"),
+                200,
+                fs::read(repo.join(path)).unwrap(),
+            );
+        }
+        let prefix = format!("--prefix=ArchR-{name}-c0ffee/");
+        fake.answer(
+            &format!("https://codeload.github.com/ArchR/{name}/tar.gz/main"),
+            200,
+            git(&["archive", "--format=tar.gz", &prefix, "HEAD"]),
+        );
+        // Every file is one the store installs, and the pictures fit its rules.
+        for (path, size) in &files {
+            let kept =
+                Detail::describe(Card::default(), "name = 'x'", &[(path.clone(), *size)], "0")
+                    .unwrap()
+                    .size;
+            assert_eq!(kept, *size, "{name}: the store drops {path}");
+            if path == "preview.png" || path.starts_with("screenshots/") {
+                let image = image::open(repo.join(path)).unwrap();
+                assert_eq!((image.width(), image.height()), (640, 480), "{name}/{path}");
+                assert!(*size <= 2 << 20, "{name}/{path} is over 2 MB");
+            }
+        }
+        assert!(
+            files.iter().any(|(path, _)| path == "preview.png"),
+            "{name}: no preview.png"
+        );
+        let root = tempfile::tempdir().unwrap();
+        let store = shop(root.path(), &fake);
+        let card = Card {
+            owner: "ArchR".into(),
+            repo: name.clone(),
+            branch: "main".into(),
+            pushed: "2026-10-29".into(),
+            ..Card::default()
+        };
+        let detail = store.detail(&card).unwrap();
+        assert!(!detail.too_new, "{name}: min_launcher above this launcher");
+        assert!(
+            !detail.description.get("en").unwrap_or("").is_empty(),
+            "{name}: no description"
+        );
+        assert!(
+            !detail.author.is_empty() && !detail.version.is_empty(),
+            "{name}: author/version"
+        );
+        let screenshots = files
+            .iter()
+            .filter(|(p, _)| p.starts_with("screenshots/"))
+            .count();
+        assert_eq!(
+            detail.images.len(),
+            1 + screenshots,
+            "{name}: pictures shown"
+        );
+        store.install(&detail).unwrap();
+        let installed = root.path().join(format!("themes/ArchR-{name}"));
+        for (path, _) in &files {
+            assert!(
+                installed.join(path).is_file(),
+                "{name}: {path} not installed"
+            );
+        }
+        let theme = archr_ui::Theme::load(&installed);
+        assert_eq!(theme.name.get("en"), detail.card.name.get("en"));
+        println!(
+            "{name}: {} files, {} bytes, includes {:?}",
+            files.len(),
+            detail.size,
+            detail.includes
+        );
+    }
+}

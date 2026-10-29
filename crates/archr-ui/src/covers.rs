@@ -14,6 +14,25 @@ use sdl2::{
     video::WindowContext,
 };
 
+/// Theme pictures larger than this on either side are refused (a 640×480
+/// screen needs nothing near it), and the cache holds at most this many bytes
+/// of them, dropping the oldest first.
+pub const THEME_SIDE: u32 = 2048;
+pub const THEME_BUDGET: u64 = 32 << 20;
+
+/// How many of the oldest entries (`bytes` each, oldest first) to drop so at
+/// most `capacity` stay within `budget` bytes; the newest always stays.
+fn overflow(bytes: &[u64], capacity: usize, budget: u64) -> usize {
+    let mut total: u64 = bytes.iter().sum();
+    let mut drop = bytes.len().saturating_sub(capacity);
+    total -= bytes[..drop].iter().sum::<u64>();
+    while total > budget && drop + 1 < bytes.len() {
+        total -= bytes[drop];
+        drop += 1;
+    }
+    drop
+}
+
 pub struct Thumbnail {
     pub width: u32,
     pub height: u32,
@@ -46,12 +65,44 @@ pub fn load_thumbnail(
     width: u32,
     height: u32,
 ) -> io::Result<Thumbnail> {
+    thumbnail(cache, source, (width.max(1), height.max(1)), false)
+}
+
+/// Pixel art keeps hard edges: it grows by whole multiples and shrinks
+/// without smoothing.
+fn thumbnail(
+    cache: &Path,
+    source: &Path,
+    (width, height): (u32, u32),
+    pixel: bool,
+) -> io::Result<Thumbnail> {
+    if (width, height) == (0, 0) {
+        // Theme images: drawn at their own size, never resized nor cached.
+        let image = decode(source, THEME_SIDE, THEME_SIDE)?.to_rgba8();
+        return Ok(Thumbnail {
+            width: image.width(),
+            height: image.height(),
+            rgba: image.into_raw(),
+        });
+    }
     let path = thumbnail_path(cache, source, width, height)?;
-    let cached = decode(&path, width.max(1), height.max(1)).ok();
+    let cached = decode(&path, width, height).ok();
     let image = match cached {
         Some(image) => image,
         None => {
-            let image = decode(source, 16384, 16384)?.thumbnail(width.max(1), height.max(1));
+            let image = decode(source, 16384, 16384)?;
+            let image = if pixel {
+                let (w, h) = (image.width().max(1), image.height().max(1));
+                let k = (width / w).min(height / h);
+                let (w, h) = if k >= 1 {
+                    (w * k, h * k)
+                } else {
+                    (width, height)
+                };
+                image.resize(w, h, image::imageops::FilterType::Nearest)
+            } else {
+                image.thumbnail(width, height)
+            };
             // Cache failure is nonfatal; the thumbnail is still usable.
             if let Err(error) = atomic_publish(&path, false, |file| {
                 image
@@ -127,6 +178,9 @@ pub struct CoverCache<'a> {
     /// Requests issued before `clear`; their results may predate the new art.
     stale: HashSet<PathBuf>,
     textures: VecDeque<(PathBuf, Option<Texture<'a>>)>,
+    pixel: bool,
+    capacity: usize,
+    budget: u64,
 }
 
 impl<'a> CoverCache<'a> {
@@ -135,6 +189,17 @@ impl<'a> CoverCache<'a> {
         dir: PathBuf,
         width: u32,
         height: u32,
+    ) -> Self {
+        Self::scaled(creator, dir, (width.max(1), height.max(1)), false)
+    }
+    /// With `pixel`, pictures are scaled without smoothing (pixel art); the
+    /// caller gives such a cache its own `dir`. A (0, 0) size keeps every
+    /// picture as it is (theme images), and the cache holds 64 of them.
+    pub fn scaled(
+        creator: &'a TextureCreator<WindowContext>,
+        dir: PathBuf,
+        (width, height): (u32, u32),
+        pixel: bool,
     ) -> Self {
         let (requests, jobs) = mpsc::sync_channel::<Vec<Vec<PathBuf>>>(1);
         let (done, ready) = mpsc::sync_channel(16);
@@ -148,7 +213,7 @@ impl<'a> CoverCache<'a> {
                     let result = candidates
                         .iter()
                         .find(|path| path.is_file())
-                        .map(|path| load_thumbnail(&dir, path, width, height))
+                        .map(|path| thumbnail(&dir, path, (width, height), pixel))
                         .transpose();
                     if done.send((key.clone(), result)).is_err() {
                         return;
@@ -163,6 +228,13 @@ impl<'a> CoverCache<'a> {
             pending: HashSet::new(),
             stale: HashSet::new(),
             textures: VecDeque::new(),
+            pixel,
+            capacity: if (width, height) == (0, 0) { 64 } else { 16 },
+            budget: if (width, height) == (0, 0) {
+                THEME_BUDGET
+            } else {
+                u64::MAX
+            },
         }
     }
 
@@ -218,7 +290,11 @@ impl<'a> CoverCache<'a> {
                             .update(None, &thumb.rgba, thumb.width as usize * 4)
                             .map_err(|error| error.to_string())?;
                         texture.set_blend_mode(sdl2::render::BlendMode::Blend);
-                        texture.set_scale_mode(sdl2::render::ScaleMode::Linear);
+                        texture.set_scale_mode(if self.pixel {
+                            sdl2::render::ScaleMode::Nearest
+                        } else {
+                            sdl2::render::ScaleMode::Linear
+                        });
                         Ok(texture)
                     })
                     .transpose()
@@ -231,9 +307,18 @@ impl<'a> CoverCache<'a> {
                 }
             };
             self.textures.push_back((path, texture));
-            while self.textures.len() > 16 {
-                self.textures.pop_front();
-            }
+            let bytes: Vec<u64> = self
+                .textures
+                .iter()
+                .map(|(_, t)| {
+                    t.as_ref().map_or(0, |t| {
+                        let q = t.query();
+                        u64::from(q.width) * u64::from(q.height) * 4
+                    })
+                })
+                .collect();
+            self.textures
+                .drain(..overflow(&bytes, self.capacity, self.budget));
             changed = true;
         }
         changed
@@ -252,6 +337,10 @@ impl<'a> CoverCache<'a> {
             .iter()
             .find(|(cached, _)| cached == path)
             .and_then(|(_, texture)| texture.as_ref())
+    }
+    /// Whether `path` was loaded (or found missing) and is still kept.
+    pub fn has(&self, path: &Path) -> bool {
+        self.textures.iter().any(|(cached, _)| cached == path)
     }
     pub fn get(&mut self, path: &PathBuf) -> Option<&Texture<'a>> {
         self.get_mut(path).map(|texture| &*texture)
@@ -310,5 +399,45 @@ mod tests {
         assert!(nested.join("legacy.size").is_file());
         cleanup_thumbnails(&cache);
         assert_eq!(fs::read_dir(cache).unwrap().count(), 4);
+    }
+    #[test]
+    fn pixel_art_grows_by_whole_multiples_without_smoothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("sprite").with_extension("png");
+        let mut art = image::RgbaImage::from_pixel(4, 3, image::Rgba([0, 0, 0, 255]));
+        art.put_pixel(0, 0, image::Rgba([255, 255, 255, 255]));
+        art.save(&source).unwrap();
+        let thumb = thumbnail(&dir.path().join("cache"), &source, (30, 30), true).unwrap();
+        assert_eq!(
+            (thumb.width, thumb.height),
+            (28, 21),
+            "seven times, the most that fits"
+        );
+        let pixel = |x: usize, y: usize| thumb.rgba[(y * 28 + x) * 4];
+        assert_eq!(
+            (pixel(6, 6), pixel(7, 6), pixel(6, 7)),
+            (255, 0, 0),
+            "hard edges"
+        );
+    }
+    #[test]
+    fn theme_pictures_stay_small_and_within_the_budget() {
+        let dir = tempfile::tempdir().unwrap();
+        let huge = dir.path().join("huge").with_extension("png");
+        image::RgbaImage::new(THEME_SIDE + 1, 2)
+            .save(&huge)
+            .unwrap();
+        assert!(
+            thumbnail(dir.path(), &huge, (0, 0), true).is_err(),
+            "refused"
+        );
+        let fine = dir.path().join("fine").with_extension("png");
+        image::RgbaImage::new(64, 32).save(&fine).unwrap();
+        let kept = thumbnail(dir.path(), &fine, (0, 0), true).unwrap();
+        assert_eq!((kept.width, kept.height), (64, 32), "drawn as it is");
+        assert_eq!(overflow(&[10, 10, 10], 64, 100), 0);
+        assert_eq!(overflow(&[10, 10, 10], 2, 100), 1, "capacity");
+        assert_eq!(overflow(&[40, 30, 30], 64, 50), 2, "the oldest go first");
+        assert_eq!(overflow(&[500], 64, 64), 0, "the newest always stays");
     }
 }

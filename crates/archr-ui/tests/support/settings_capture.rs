@@ -659,6 +659,11 @@ fn capture_views() {
         let mut parts = spec.split(':');
         let (folder, view) = (parts.next().unwrap(), parts.next().unwrap());
         let noart = parts.next() == Some("noart");
+        // A folder may also be a theme outside the repository (absolute path).
+        let label = std::path::Path::new(folder)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(folder);
         let default = themes.join("default");
         let mut theme = Theme::load_over(&themes.join(folder), &Theme::load(&default));
         theme.active_view = view.into();
@@ -685,14 +690,14 @@ fn capture_views() {
                 ui.draw(&app, &shelf, &theme, None).unwrap();
                 std::thread::sleep(Duration::from_millis(20));
             }
-            save(&mut ui, format!("{folder}-{view}-systems-{language}.png"));
+            save(&mut ui, format!("{label}-{view}-systems-{language}.png"));
             // Frames in the middle of each motion, to prove they exist.
             let midway = |ui: &mut Ui, app: &crate::state::App, art, wait: u64, name: &str| {
                 ui.draw(app, &shelf, &theme, art).unwrap();
                 std::thread::sleep(Duration::from_millis(wait));
                 ui.draw(app, &shelf, &theme, art).unwrap();
                 assert!(ui.animating(), "{name} is still moving");
-                save(ui, format!("{folder}-{view}-{name}-{language}.png"));
+                save(ui, format!("{label}-{view}-{name}-{language}.png"));
             };
             ui.start_opening();
             midway(&mut ui, &app, None, 110, "opening-mid");
@@ -706,7 +711,7 @@ fn capture_views() {
                     ui.snap_animations();
                     ui.draw(&app, &shelf, &theme, art).unwrap();
                 }
-                save(&mut ui, format!("{folder}-{view}-{name}-{language}.png"));
+                save(&mut ui, format!("{label}-{view}-{name}-{language}.png"));
             }
             ui.snap_animations();
             ui.draw(&app, &shelf, &theme, Some(&cover)).unwrap();
@@ -719,7 +724,7 @@ fn capture_views() {
             midway(&mut ui, &app, Some(&cover), 60, "dialog-mid");
             ui.snap_animations();
             ui.draw(&app, &shelf, &theme, Some(&cover)).unwrap();
-            save(&mut ui, format!("{folder}-{view}-dialog-{language}.png"));
+            save(&mut ui, format!("{label}-{view}-dialog-{language}.png"));
             // The details screen of the game under the cursor.
             let browsing = std::mem::replace(
                 &mut app.screen,
@@ -737,7 +742,7 @@ fn capture_views() {
                 ui.draw_with_settings(&app, &shelf, &theme, art, None)
                     .unwrap();
             }
-            save(&mut ui, format!("{folder}-{view}-details-{language}.png"));
+            save(&mut ui, format!("{label}-{view}-details-{language}.png"));
             app.screen = browsing;
             // Appearance with this theme installed and active.
             let mut look = ready();
@@ -752,10 +757,7 @@ fn capture_views() {
             ui.canvas.clear();
             ui.settings_page(&look, &look.appearance().apply(&theme))
                 .unwrap();
-            save(
-                &mut ui,
-                format!("{folder}-{view}-appearance-{language}.png"),
-            );
+            save(&mut ui, format!("{label}-{view}-appearance-{language}.png"));
         }
     }
 }

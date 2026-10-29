@@ -245,8 +245,7 @@ impl<'t> Ui<'_, 't> {
         let elapsed = now.saturating_duration_since(opened);
         let duration = self.motion.fade(OPENING).as_secs_f32().max(0.001);
         let ease = |delay: u32| {
-            let t = elapsed.saturating_sub(STAGGER * delay).as_secs_f32() / duration;
-            1. - (1. - t.clamp(0., 1.)).powi(3)
+            crate::motion::ease(elapsed.saturating_sub(STAGGER * delay).as_secs_f32() / duration)
         };
         // The screen rises as one piece; a mask lifts band by band from the top.
         let rise = (self.motion.distance(RISE) * scale * (1. - ease(0))).round() as i32;

@@ -1,5 +1,8 @@
 //! Interruptible, monotonic ease-out motion. Input never waits for a frame.
-use std::time::{Duration, Instant};
+use std::{
+    cell::Cell,
+    time::{Duration, Instant},
+};
 
 /// The selection gliding to the next entry, lists scrolling.
 pub const SELECT: Duration = Duration::from_millis(180);
@@ -86,6 +89,26 @@ impl Motion {
     }
 }
 
+thread_local! {
+    /// The theme's `easing = "steps"`: motion on this (the drawing) thread
+    /// moves in four jumps instead of easing out.
+    static STEPS: Cell<bool> = const { Cell::new(false) };
+}
+/// Motion moves in steps (true) or eases out (false) from now on.
+pub fn set_steps(steps: bool) {
+    STEPS.with(|cell| cell.set(steps));
+}
+/// How far along motion is at time fraction `t` (0 to 1): ease-out, or the
+/// theme's four even steps, the first one at once.
+pub fn ease(t: f32) -> f32 {
+    let t = t.clamp(0., 1.);
+    if STEPS.with(Cell::get) {
+        (t * 4.).ceil() / 4.
+    } else {
+        1. - (1. - t).powi(3)
+    }
+}
+
 /// Position in a looping animation of `period` seconds, started `delay` late.
 fn cycle(secs: f32, period: f32, delay: f32) -> f32 {
     ((secs - delay) / period).rem_euclid(1.)
@@ -116,9 +139,8 @@ impl Tween {
         let Some(began) = self.began.filter(|_| !self.duration.is_zero()) else {
             return self.target;
         };
-        let t = (now.saturating_duration_since(began).as_secs_f32() / self.duration.as_secs_f32())
-            .clamp(0.0, 1.0);
-        self.from + (self.target - self.from) * (1.0 - (1.0 - t).powi(3))
+        let t = now.saturating_duration_since(began).as_secs_f32() / self.duration.as_secs_f32();
+        self.from + (self.target - self.from) * ease(t)
     }
     pub fn retarget(&mut self, target: f32, now: Instant) {
         if target != self.target {
@@ -186,6 +208,19 @@ mod tests {
         glide.snap();
         assert_eq!(glide.value(now), 10.);
         assert!(!glide.active(now));
+    }
+    #[test]
+    fn steps_jump_in_four_even_steps_starting_at_once() {
+        let now = Instant::now();
+        let glide = Tween::starting(0., 8., SELECT, now);
+        set_steps(true);
+        let at = |n: u32| glide.value(now + SELECT * n / 8);
+        assert_eq!(
+            [at(0), at(1), at(2), at(3), at(4), at(8)],
+            [0., 2., 2., 4., 4., 8.]
+        );
+        set_steps(false);
+        assert!(at(4) > 4. && at(4) < 8., "back to ease-out");
     }
     #[test]
     fn search_dots_pulse_in_sequence_and_respect_the_motion_choice() {

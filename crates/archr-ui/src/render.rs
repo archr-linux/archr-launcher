@@ -11,7 +11,7 @@ use crate::{
     state::{App, DataSource, QuickItem, Screen},
     status::{Battery, Status},
     text::{color, Align, Face, Style, TextCache},
-    theme::{Rect01, Rgba, Theme},
+    theme::{Rect01, Rgba, ShadowStyle, Theme},
     HintButton,
 };
 pub use details::Art;
@@ -21,6 +21,7 @@ mod effects;
 pub(crate) use effects::Pop;
 mod hub;
 mod keyboard;
+mod look;
 mod moonlight;
 mod netplay;
 
@@ -45,6 +46,11 @@ struct Frame {
     scale: f32,
     /// User text-size multiplier, applied to every font size.
     text: f32,
+    /// The theme's own multiplier and the grid sizes snap to (0: none).
+    font: f32,
+    grid: f32,
+    /// Smallest text, in reference pixels.
+    min: f32,
     now: Instant,
     unix: u64,
 }
@@ -55,6 +61,9 @@ impl Frame {
             height,
             scale: height as f32 / 480.,
             text: 1.,
+            font: 1.,
+            grid: 0.,
+            min: 8.,
             now: Instant::now(),
             unix: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -83,7 +92,21 @@ impl Frame {
         Rect::new(x, y, self.px(side) as u32, self.px(side) as u32)
     }
     fn font_size(self, value: f32) -> u16 {
-        self.px(value * self.text).clamp(8, 128) as u16
+        let size = value * self.text * self.font;
+        // On a grid, sizes snap to its nearest step; the smallest size asked
+        // for is the theme's minimum itself, never a step above it.
+        let size = if size <= self.min {
+            self.min
+        } else if self.grid > 0. {
+            ((size / self.grid).round().max(1.) * self.grid).max(self.min)
+        } else {
+            size
+        };
+        self.px(size).clamp(8, 128) as u16
+    }
+    /// The smallest size worth asking for, before the text multipliers.
+    fn min_size(self) -> f32 {
+        self.min.max(8. / self.scale) / (self.text * self.font)
     }
 }
 fn localized_error(catalog: &I18n, error: String) -> String {
@@ -189,21 +212,23 @@ fn fit_status(
     Ok(last)
 }
 
-/// Keep system rows single-line; parenthetical detail remains in the artwork panel.
+/// Keep system rows single-line; parenthetical detail remains in the artwork
+/// panel. Also tells whether the name fits at the size found.
 fn fit_system_name(
     name: &str,
     width: u32,
     (mut size, minimum): (f32, f32),
     mut measure: impl FnMut(&str, f32) -> Result<u32, String>,
-) -> Result<(&str, f32), String> {
+) -> Result<(&str, f32, bool), String> {
     if measure(name, size)? <= width {
-        return Ok((name, size));
+        return Ok((name, size, true));
     }
     let name = without_detail(name);
     while size > minimum && measure(name, size)? > width {
         size = (size - 1.).max(minimum);
     }
-    Ok((name, size))
+    let fits = measure(name, size)? <= width;
+    Ok((name, size, fits))
 }
 
 struct ListMotion {
@@ -328,7 +353,13 @@ pub struct Ui<'font, 'texture> {
     /// The letter on the control of the A, B, X and Y actions, for hints.
     pub face_letters: [char; 4],
     motion: Motion,
+    /// The theme's shadow under panels and its console picture scaling.
+    shadow_style: ShadowStyle,
+    pixel_art: bool,
+    /// The list cursor's blink phase as last drawn; None when nothing blinks.
+    blink: Option<bool>,
     effects: effects::Effects<'texture>,
+    look: look::Look<'texture>,
     has_presented: bool,
     frame: Frame,
     pub catalog: I18n,
@@ -431,7 +462,11 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             text_scale: 1.,
             face_letters: ['A', 'B', 'X', 'Y'],
             motion: Motion::On,
+            shadow_style: ShadowStyle::Soft,
+            pixel_art: false,
+            blink: None,
             effects: effects::Effects::default(),
+            look: look::Look::default(),
             has_presented: false,
             frame: Frame::new(width, height),
             catalog: I18n::default(),
@@ -451,7 +486,12 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         theme: &Theme,
         root: Option<&Path>,
     ) -> Result<(), String> {
-        let mut prepared = PreparedText::new(ttf, font_paths(theme, root), self.startup);
+        let default = self.default_theme_dir.clone().unwrap_or_else(|| {
+            root.unwrap_or(Path::new("/"))
+                .join(crate::theme::DEFAULT_THEME_DIR.trim_start_matches('/'))
+        });
+        let paths = font_paths(theme, root, &default);
+        let mut prepared = PreparedText::new(ttf, paths, self.startup);
         prepared.prepare_icons(
             self.theme_dir.as_deref(),
             &self.default_theme_dir.as_ref().map_or_else(
@@ -539,7 +579,11 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         let art = self.art.as_mut().is_some_and(SystemArt::tick);
         let store = self.store_tick();
         let status = self.status.as_mut().is_some_and(|s| s.poll(Instant::now()));
-        created || art || store || status
+        let blink = self
+            .blink
+            .is_some_and(|on| on != self.blink_on(Instant::now()));
+        let look = self.look_tick();
+        created || art || store || status || blink || look
     }
     /// Loads what the theme store page asked for, sized for its largest box.
     fn store_tick(&mut self) -> bool {
@@ -565,6 +609,25 @@ impl<'font, 'texture> Ui<'font, 'texture> {
     fn px(&self, value: f32) -> i32 {
         self.frame.px(value)
     }
+    /// Corners, borders, shadows and motion: the theme's, or the default
+    /// in Settings, where the theme only colors, fonts and icons.
+    fn finish(&mut self, theme: &Theme, settings: bool) {
+        if settings {
+            self.geometry.style(1., self.px(1.) as u32);
+            self.shadow_style = ShadowStyle::Soft;
+        } else {
+            let border = self.px(theme.border_width).max(1) as u32;
+            self.geometry.style(theme.corners, border);
+            self.shadow_style = theme.shadow;
+        }
+        crate::motion::set_steps(!settings && theme.steps);
+    }
+    /// Whether a blinking cursor shows at `now`: half a second on, half off;
+    /// steady when animations are off.
+    fn blink_on(&self, now: Instant) -> bool {
+        self.motion == Motion::Off
+            || (now.saturating_duration_since(self.born).as_millis() / 500).is_multiple_of(2)
+    }
     /// The layout of `theme`'s active view, resolved once per theme change.
     fn view(&mut self, theme: &Theme) -> View {
         if self.view.as_ref().is_none_or(|(seen, _)| seen != theme) {
@@ -586,15 +649,49 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         panel: Rect,
         align: Align,
     ) -> Result<(), String> {
-        let style = Style {
+        let mut style = Style {
             face,
             size: self.frame.font_size(size),
             color,
         };
+        let outline = self.outline();
         let text_cache = self
             .text
             .as_mut()
             .ok_or_else(|| self.catalog.text("error.font_init"))?;
+        if let Some((ring, width)) = outline {
+            // The text again in the outline color, shifted all around it.
+            let edge = Style {
+                color: Rgba {
+                    a: color.a,
+                    ..ring.color
+                },
+                ..style
+            };
+            for step in 1..=width {
+                for (dx, dy) in [
+                    (-1, -1),
+                    (0, -1),
+                    (1, -1),
+                    (-1, 0),
+                    (1, 0),
+                    (-1, 1),
+                    (0, 1),
+                    (1, 1),
+                ] {
+                    let at = Rect::new(
+                        panel.x() + dx * step,
+                        panel.y() + dy * step,
+                        panel.width(),
+                        panel.height(),
+                    );
+                    text_cache
+                        .draw(&mut self.canvas, text, edge, at, align)
+                        .map_err(|e| localized_error(&self.catalog, e))?;
+                }
+            }
+            style.color = ring.ink.map_or(color, |ink| Rgba { a: color.a, ..ink });
+        }
         text_cache
             .draw(&mut self.canvas, text, style, panel, align)
             .map_err(|e| localized_error(&self.catalog, e))
@@ -631,14 +728,50 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             .rounded(&mut self.canvas, rect, radius, fill, border)
     }
     fn panel(&mut self, rect: Rect, radius: f32, fill: Rgba, border: Rgba) -> Result<(), String> {
+        self.panel_named("panel", rect, radius, (fill, border))
+    }
+    /// A raised box, or the theme's `name` frame over it.
+    fn panel_named(
+        &mut self,
+        name: &str,
+        rect: Rect,
+        radius: f32,
+        (fill, border): (Rgba, Rgba),
+    ) -> Result<(), String> {
+        if self.framed(name, rect)? {
+            return Ok(());
+        }
         if self.shadow.is_none() {
             if let Some(creator) = self.creator {
                 self.shadow = Some(Shadow::new(creator)?);
                 startup_phase!(self.startup, "shadow texture");
             }
         }
-        if let Some(shadow) = &self.shadow {
-            shadow.draw(&mut self.canvas, rect, self.frame.scale, radius)?;
+        match (self.shadow_style, &self.shadow) {
+            (ShadowStyle::Soft, Some(shadow)) => {
+                shadow.draw(&mut self.canvas, rect, self.frame.scale, radius)?
+            }
+            (ShadowStyle::Hard, _) => {
+                let offset = self.px(4.);
+                let block = Rect::new(
+                    rect.x() + offset,
+                    rect.y() + offset,
+                    rect.width(),
+                    rect.height(),
+                );
+                self.rounded(
+                    block,
+                    radius,
+                    Rgba {
+                        r: 0,
+                        g: 0,
+                        b: 0,
+                        a: 150,
+                    },
+                    None,
+                )?;
+            }
+            _ => {}
         }
         self.rounded(rect, radius, fill, Some(border))
     }
@@ -710,6 +843,15 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         self.canvas.set_draw_color(color(theme.background));
         self.canvas.clear();
         self.store_wanted.clear();
+        self.finish(theme, settings.is_some());
+        (self.pixel_art, self.blink) = (theme.pixel_art, None);
+        (self.frame.font, self.frame.grid, self.frame.min) =
+            (theme.font_scale, theme.font_grid, theme.font_min);
+        if let Some(text) = &mut self.text {
+            text.set_smoothing(theme.font_smoothing);
+        }
+        let browsing = self.lobby.is_none() && self.moonlight.is_none() && settings.is_none();
+        self.look(theme, browsing);
         if let Some(lobby) = self.lobby.take() {
             let drawn = self.lobby_page(&lobby, theme);
             self.lobby = Some(lobby);
@@ -755,6 +897,8 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                     key.map(|key| (key, self.area(picture.rect)))
                 });
             self.begin_page(games, picture, theme)?;
+            self.backdrop_pictures(theme)?;
+            self.decor(theme, &layout.decor, true)?;
             if let Screen::Achievements { system, game } = backdrop {
                 let name = data
                     .games(system)
@@ -798,6 +942,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                     }
                 }
             }
+            self.decor(theme, &layout.decor, false)?;
             self.end_page(theme)?;
             if matches!(app.screen, Screen::QuickMenu { .. }) {
                 self.menu(app, data, theme)?;
@@ -895,6 +1040,19 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         theme: &Theme,
         layout: &Layout,
     ) -> Result<(), String> {
+        self.look.outlining = true;
+        let drawn = self.header_text(screen, cursor, data, theme, layout);
+        self.look.outlining = false;
+        drawn
+    }
+    fn header_text(
+        &mut self,
+        screen: &Screen,
+        cursor: usize,
+        data: &dyn DataSource,
+        theme: &Theme,
+        layout: &Layout,
+    ) -> Result<(), String> {
         let pad = self.px(24.);
         let right = if layout.status {
             self.status_header(theme)?
@@ -936,6 +1094,14 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 &pos,
                 (Face::Mono, 13., theme.muted),
                 Rect::new(pad + title_w as i32 + self.px(10.), 0, pw, h),
+            )?;
+        } else if !layout.brand {
+            let title = self.catalog.text("systems.heading");
+            let width = (right - pad - self.px(10.)).max(1) as u32;
+            self.label(
+                &title,
+                (Face::Semibold, 15., theme.text),
+                Rect::new(pad, 0, width, h),
             )?;
         } else {
             let mut x = pad;
@@ -1026,7 +1192,21 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         }
         self.list.held = lifted.then_some((cursor, collections));
         let offset = self.list.scroll.value(now);
+        self.framed("list", area)?;
         self.canvas.set_clip_rect(area);
+        // Visit only potentially visible rows, even in a ten-thousand-game list.
+        let first = ((offset - separator - extra).max(0.) / (row + gap)).floor() as usize;
+        let last = ((offset + available) / (row + gap)).ceil() as usize + 1;
+        let (swap_row, swap) = (self.list.swap_row, self.list.swap.value(now));
+        let glide = |i: usize| if i == swap_row { swap } else { 0. };
+        if !lifted && self.has_frame("row") {
+            let own = self.has_frame("selected");
+            for i in (first..len.min(last)).filter(|&i| !(own && i == cursor)) {
+                let y = top + (y_of(i) + glide(i) - offset).round() as i32;
+                let rh = if i == cursor { selected } else { row }.max(1.) as u32;
+                self.framed("row", Rect::new(margin, y, list_width, rh))?;
+            }
+        }
         // A lifted row sits slightly right of the list, in an outline.
         let lift = if lifted { self.px(6.) } else { 0 };
         let radius = l.radius * height as f32;
@@ -1047,7 +1227,9 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 .dashed(&mut self.canvas, pill, radius, theme.highlight_bg)?;
         } else if len > 0 && pill {
             let pill = Rect::new(margin, mark_y, list_width, selected.max(1.) as u32);
-            self.rounded(pill, radius, theme.highlight_bg, None)?;
+            if !self.framed("selected", pill)? {
+                self.rounded(pill, radius, theme.highlight_bg, None)?;
+            }
         } else if len > 0 {
             let h = (selected * 0.55).round().max(1.) as u32;
             let bar = Rect::new(
@@ -1073,16 +1255,8 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         // On a pill the selection's ink is the accent's; beside a bar it stays plain.
         let on_pill = pill || lifted;
         let inset = if pill { self.px(14.) } else { 0 };
-        // Visit only potentially visible rows, even in a ten-thousand-game list.
-        let first = ((offset - separator - extra).max(0.) / (row + gap)).floor() as usize;
-        let last = ((offset + available) / (row + gap)).ceil() as usize + 1;
         for i in first..len.min(last) {
-            let glide = if i == self.list.swap_row {
-                self.list.swap.value(now)
-            } else {
-                0.
-            };
-            let y = top + (y_of(i) + glide - offset).round() as i32;
+            let y = top + (y_of(i) + glide(i) - offset).round() as i32;
             let rh = if i == cursor { selected } else { row }.max(1.) as u32;
             if y + rh as i32 <= top || y >= bottom {
                 continue;
@@ -1157,16 +1331,38 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 }
                 system_title(name, data, &self.catalog)
             };
+            if selected && !lifted && !l.cursor.is_empty() {
+                let w = self.measure(&l.cursor, face, size)?;
+                let on = self.blink_on(now);
+                self.blink = Some(on);
+                if on {
+                    let ink = selection(accent_ink, theme.highlight_bg, theme.highlight_text);
+                    self.label(&l.cursor, (face, size, ink), Rect::new(x, y, w, rh))?;
+                }
+                x += w as i32 + self.px(6.);
+            }
             let width = (right - x).max(1) as u32;
-            let (name, size) = if is_games {
-                (name.as_str(), size)
+            let (name, size, fits) = if is_games {
+                (name.as_str(), size, true)
             } else {
-                let minimum = f32::from(self.frame.font_size(0.)) / self.frame.scale;
+                let minimum = self.frame.min_size();
                 fit_system_name(&name, width, (size, minimum), |name, size| {
                     self.measure(name, face, size)
                 })?
             };
-            self.label(name, (face, size, c), Rect::new(x, y, width, rh))?;
+            // A system name too long even at the theme's smallest size wraps,
+            // when the row holds two lines.
+            let two = rh as f32 >= 2. * f32::from(self.frame.font_size(size));
+            let lines = if two && !fits {
+                system_art::wrap(name, width, |text| self.measure(text, face, size))?
+            } else {
+                vec![name.to_owned()]
+            };
+            let step = rh as i32 / lines.len() as i32;
+            for (n, line) in lines.iter().enumerate() {
+                let at = Rect::new(x, y + step * n as i32, width, step.max(1) as u32);
+                self.label(line, (face, size, c), at)?;
+            }
         }
         if len == 0 {
             self.label(
@@ -1235,11 +1431,11 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         let Frame { height, now, .. } = self.frame;
         if let Some(panel) = layout.panel {
             let rect = self.area(panel.rect);
-            self.panel(
+            self.panel_named(
+                "art",
                 rect,
                 panel.radius * height as f32,
-                theme.surface,
-                theme.border,
+                (theme.surface, theme.border),
             )?;
         }
         let game = data.games(system).get(cursor);
@@ -1324,20 +1520,42 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 .last_played
                 .map(|timestamp| self.catalog.relative_time(timestamp, self.frame.unix))
                 .unwrap_or_default();
-            let pw = self.measure(&played, Face::Regular, size)?;
-            let gap = if pw > 0 { self.px(8.) as u32 } else { 0 };
+            // One line, shrinking down to the theme's smallest text; else the
+            // facts on one line and "played" on the next. Nothing is cut.
+            let facts = parts.join(" · ");
+            let (mut size, floor) = (size, self.frame.min_size());
+            let (fw, pw, gap) = loop {
+                let fw = self.measure(&facts, Face::Regular, size)?;
+                let pw = self.measure(&played, Face::Regular, size)?;
+                let gap = if pw > 0 && fw > 0 {
+                    self.px(8.) as u32
+                } else {
+                    0
+                };
+                if fw + gap + pw <= rect.width() || size <= floor {
+                    break (fw, pw, gap);
+                }
+                size = (size - 1.).max(floor);
+            };
             let (y, h) = (rect.y(), rect.height());
-            self.label(
-                &parts.join(" · "),
-                (Face::Regular, size, theme.muted),
-                Rect::new(rect.x(), y, rect.width().saturating_sub(pw + gap).max(1), h),
-            )?;
-            self.label_aligned(
-                &played,
-                (Face::Regular, size, theme.muted),
-                Rect::new(rect.right() - pw as i32, y, pw.max(1), h),
-                Align::Right,
-            )?;
+            let ink = (Face::Regular, size, theme.muted);
+            if fw + gap + pw <= rect.width() {
+                self.label(&facts, ink, Rect::new(rect.x(), y, fw.max(1), h))?;
+                self.label_aligned(
+                    &played,
+                    ink,
+                    Rect::new(rect.right() - pw as i32, y, pw.max(1), h),
+                    Align::Right,
+                )?;
+            } else {
+                let line = (f32::from(self.frame.font_size(size)) * 1.25).round() as i32;
+                let mut lines = self.wrap(&facts, Face::Regular, size, rect.width())?;
+                lines.extend(self.wrap(&played, Face::Regular, size, rect.width())?);
+                for (n, text) in lines.iter().enumerate() {
+                    let at = Rect::new(rect.x(), y + line * n as i32, rect.width(), line as u32);
+                    self.label(text, ink, at)?;
+                }
+            }
         }
         Ok(())
     }
@@ -1348,9 +1566,23 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         theme: &Theme,
         layout: &Layout,
     ) -> Result<(), String> {
-        let Frame { width, height, .. } = self.frame;
+        let height = self.frame.height;
         let h = (theme.footer_height * height as f32).round().max(1.) as u32;
         let y = height as i32 - h as i32;
+        self.look.outlining = true;
+        let drawn = self.footer_hints(app, data, theme, layout, (y, h));
+        self.look.outlining = false;
+        drawn
+    }
+    fn footer_hints(
+        &mut self,
+        app: &App,
+        data: &dyn DataSource,
+        theme: &Theme,
+        layout: &Layout,
+        (y, h): (i32, u32),
+    ) -> Result<(), String> {
+        let width = self.frame.width;
         if layout.divider {
             self.divider(0, y, width, theme.border)?;
         }
@@ -1482,6 +1714,26 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                     y + (h as i32 - self.px(20.)) / 2,
                     20.,
                 );
+                if self.framed("badge", badge)? {
+                    if button == '↕' {
+                        let icon = self.frame.square(
+                            badge.x() + (badge.width() as i32 - self.px(14.)) / 2,
+                            badge.y() + (badge.height() as i32 - self.px(14.)) / 2,
+                            14.,
+                        );
+                        self.icon(Glyph::ArrowUpDown, icon, theme.text)?;
+                        continue;
+                    }
+                    let outlining = std::mem::replace(&mut self.look.outlining, false);
+                    self.label_aligned(
+                        &button.to_string(),
+                        (Face::Semibold, 12., theme.text),
+                        badge,
+                        Align::Center,
+                    )?;
+                    self.look.outlining = outlining;
+                    continue;
+                }
                 let size = self.px(11.).clamp(8, 128) as u16;
                 self.text
                     .as_mut()
@@ -1802,7 +2054,9 @@ pub fn prepare_first_frame<'font>(
     trace: StartupTrace,
 ) -> Result<PreparedText<'font>, String> {
     let frame = Frame::new(width, height);
-    let mut prepared = PreparedText::new(ttf, font_paths(theme, root), trace);
+    // The default theme is the folder of its icons.
+    let default = system_icons_dir.parent().unwrap_or(system_icons_dir);
+    let mut prepared = PreparedText::new(ttf, font_paths(theme, root, default), trace);
     let style = |face, size, color| Style {
         face,
         size: frame.font_size(size),
@@ -1911,10 +2165,21 @@ pub fn prepare_first_frame<'font>(
         let (face, size, color) = row_style(theme, list, i, collections, 0);
         let width = (right - x).max(1) as u32;
         let minimum = f32::from(frame.font_size(0.)) / frame.scale;
-        let (title, size) = fit_system_name(&title, width, (size, minimum), |text, size| {
+        let (title, size, fits) = fit_system_name(&title, width, (size, minimum), |text, size| {
             prepared.measure(text, face, frame.font_size(size))
         })?;
-        label(&mut prepared, title, (face, size, color), Some(width))?;
+        // As the list draws it: wrapped when too long and the row holds two lines.
+        let rh = (if i == 0 { list.selected } else { list.row } * frame.height as f32).round();
+        let lines = if !fits && rh >= 2. * f32::from(frame.font_size(size)) {
+            system_art::wrap(title, width, |text| {
+                prepared.measure(text, face, frame.font_size(size))
+            })?
+        } else {
+            vec![title.to_owned()]
+        };
+        for line in &lines {
+            label(&mut prepared, line, (face, size, color), Some(width))?;
+        }
     }
     if systems.is_empty() {
         label(
@@ -1972,7 +2237,11 @@ impl PreparedText<'_> {
     }
 }
 
-fn font_paths(theme: &Theme, root: Option<&Path>) -> [Vec<PathBuf>; 4] {
+/// The default theme's regular font (themes/default/theme.toml), the face
+/// Settings fall back to when a theme font cannot fit a word.
+const DEFAULT_FONT: &str = "fonts/Inter-Regular.ttf";
+
+fn font_paths(theme: &Theme, root: Option<&Path>, default: &Path) -> [Vec<PathBuf>; 5] {
     let defaults = |mono: bool| {
         let names = if mono {
             [
@@ -1996,7 +2265,8 @@ fn font_paths(theme: &Theme, root: Option<&Path>) -> [Vec<PathBuf>; 4] {
         }
         paths
     };
-    let mut paths: [Vec<PathBuf>; 4] = std::array::from_fn(|i| defaults(i == 2 || i == 3));
+    let mut paths: [Vec<PathBuf>; 5] = std::array::from_fn(|i| defaults(i == 2 || i == 3));
+    paths[4].insert(0, default.join(DEFAULT_FONT));
     for (i, preferred) in [
         &theme.font,
         &theme.font_semibold,
@@ -2153,7 +2423,9 @@ mod tests {
                 ),
                 ("Name (region) revision", 140, "Name (region) revision"),
             ] {
-                let (name, size) = fit_system_name(text, width, (initial, 8.), measure).unwrap();
+                let (name, size, fits) =
+                    fit_system_name(text, width, (initial, 8.), measure).unwrap();
+                assert!(fits);
                 assert_eq!(name, want, "selected={selected}, width={width}");
                 assert!(measure(name, size).unwrap() <= width);
                 assert!((8. ..=initial).contains(&size));
@@ -2165,9 +2437,11 @@ mod tests {
                 }
             }
             let minimum_width = measure("MO/TO family", 8.).unwrap();
-            let (name, size) =
+            let (name, size, fits) =
                 fit_system_name(full, minimum_width, (initial, 8.), measure).unwrap();
-            assert_eq!((name, size), ("MO/TO family", 8.));
+            assert_eq!((name, size, fits), ("MO/TO family", 8., true));
+            let (_, _, fits) = fit_system_name(full, 10, (initial, 8.), measure).unwrap();
+            assert!(!fits, "too long even at the minimum: the row wraps it");
         }
     }
 

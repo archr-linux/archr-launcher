@@ -29,6 +29,55 @@ pub struct Rect01 {
     pub h: f32,
 }
 
+/// A theme picture stretched over a box as a nine-slice frame: corners kept
+/// whole, edges and middle stretched or repeated (docs/temas.md, Molduras).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Frame9 {
+    pub image: PathBuf,
+    /// Image pixels kept whole at the left, top, right and bottom edges.
+    pub slice: [u32; 4],
+    /// Reference screen pixels (480 high) per image pixel.
+    pub scale: f32,
+    /// Reference pixels the frame reaches beyond its box: left, top, right, bottom.
+    pub pad: [f32; 4],
+    /// Edges and middle repeat instead of stretching.
+    pub tile: bool,
+}
+
+/// A ring around text drawn straight over the background, and the ink of
+/// that text (its own color when none).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Outline {
+    pub color: Rgba,
+    /// Reference pixels (480 high).
+    pub width: f32,
+    pub ink: Option<Rgba>,
+}
+
+/// Boxes a theme can dress with a frame.
+pub const FRAMES: &[&str] = &[
+    "header",
+    "footer",
+    "list",
+    "row",
+    "selected",
+    "panel",
+    "art",
+    "button",
+    "button_selected",
+    "badge",
+    "tile",
+    "tile_selected",
+];
+
+/// What a raised panel casts: a blurred shadow, a solid offset block, or nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ShadowStyle {
+    Soft,
+    Hard,
+    None,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SystemScreen {
     List,
@@ -86,6 +135,32 @@ pub struct Theme {
     /// Achievements screen: progress bar and counts, and the list.
     pub achievements_progress: Rect01,
     pub achievements_list: Rect01,
+    /// Style (docs/temas.md, Estilo): every corner radius times `corners`
+    /// (0 = square), panel borders `border_width` reference pixels thick,
+    /// the shadow under panels, console pictures scaled without smoothing
+    /// (`art_scaling = "pixel"`) and motion in steps (`easing = "steps"`).
+    pub corners: f32,
+    pub border_width: f32,
+    pub shadow: ShadowStyle,
+    pub pixel_art: bool,
+    pub steps: bool,
+    /// Text: every size times `font_scale`, then snapped to a multiple of
+    /// `font_grid` reference pixels (0: free); `font_smoothing = false`
+    /// draws glyphs without anti-aliasing. `text_outline` (color, reference
+    /// pixels) rings the text drawn straight over the background.
+    pub font_scale: f32,
+    pub font_grid: f32,
+    /// No text is drawn smaller than this, in reference pixels: what does
+    /// not fit at it wraps instead.
+    pub font_min: f32,
+    pub font_smoothing: bool,
+    pub text_outline: Option<Outline>,
+    /// Pictures of the browsing screens: the background and the frames.
+    pub background_image: Option<PathBuf>,
+    pub frames: Vec<(String, Frame9)>,
+    /// Decoration images named in the views, resolved inside the theme
+    /// folder when it loads; an image that escapes it is left out.
+    decor_files: Vec<(String, PathBuf)>,
     /// Shown in Appearance; the folder name when the theme gives none.
     pub name: Names,
     /// Id of the view the screens are drawn with (an Appearance choice).
@@ -147,12 +222,15 @@ impl Theme {
         // Only the embedded TOML must be complete and valid.
         macro_rules! token {
             ($name:ident, $parse:ident) => {
-                parsed(table, stringify!($name), $parse)
+                token!($name = stringify!($name), $parse)
+            };
+            ($name:ident = $key:expr, $parse:ident) => {
+                parsed(table, $key, $parse)
                     .or_else(|| defaults.map(|theme| theme.$name))
                     .expect(concat!("invalid builtin theme field: ", stringify!($name)))
             };
         }
-        let font = |name: &str| field::<String>(table, name).and_then(|f| resolve_font(dir?, &f));
+        let font = |name: &str| field::<String>(table, name).and_then(|f| resolve_file(dir?, &f));
         // Each family (regular with semibold, mono with medium) comes whole
         // from the theme when it names either face, else from the defaults.
         let family = |keys: [&'static str; 2], inherited: fn(&Self) -> [Option<PathBuf>; 2]| {
@@ -206,6 +284,28 @@ impl Theme {
             details_actions: token!(details_actions, rectangle),
             achievements_progress: token!(achievements_progress, rectangle),
             achievements_list: token!(achievements_list, rectangle),
+            corners: token!(corners, unit),
+            border_width: token!(border_width, border_width),
+            shadow: token!(shadow, shadow),
+            pixel_art: token!(pixel_art = "art_scaling", art_scaling),
+            steps: token!(steps = "easing", easing),
+            font_scale: token!(font_scale, font_scale),
+            font_grid: token!(font_grid, font_grid),
+            font_min: token!(font_min, font_min),
+            font_smoothing: token!(font_smoothing, some),
+            text_outline: match table.get("text_outline") {
+                Some(value) => text_outline(value),
+                None => defaults.and_then(|d| d.text_outline),
+            },
+            background_image: match field::<String>(table, "background_image") {
+                Some(path) => dir.and_then(|dir| resolve_file(dir, &path)),
+                None => defaults.and_then(|d| d.background_image.clone()),
+            },
+            decor_files: decor_files(table, dir, defaults),
+            frames: match table.get("frames") {
+                Some(value) => frames(value, dir),
+                None => defaults.map_or_else(Vec::new, |d| d.frames.clone()),
+            },
             font: font_regular,
             font_semibold,
             font_mono,
@@ -228,6 +328,17 @@ impl Theme {
             view.overlay(table, &format!("view.{id}"));
         }
         view
+    }
+    /// The file of the decoration image `image`, if it is inside the theme.
+    pub fn decor_file(&self, image: &str) -> Option<&Path> {
+        self.decor_files
+            .iter()
+            .find(|(name, _)| name == image)
+            .map(|(_, path)| path.as_path())
+    }
+    /// The frame the theme gives the box `name`, if any.
+    pub fn frame(&self, name: &str) -> Option<&Frame9> {
+        self.frames.iter().find(|(n, _)| n == name).map(|(_, f)| f)
     }
     /// Ids of the views this theme offers, with their names.
     pub fn views(&self) -> Vec<(String, Names)> {
@@ -290,6 +401,18 @@ pub const KNOWN_KEYS: &[&str] = &[
     "details_actions",
     "achievements_progress",
     "achievements_list",
+    "corners",
+    "border_width",
+    "shadow",
+    "art_scaling",
+    "easing",
+    "font_scale",
+    "font_grid",
+    "font_min",
+    "font_smoothing",
+    "text_outline",
+    "background_image",
+    "frames",
     // Store metadata (docs/temas.md, Publicar na Loja de temas).
     "description",
     "author",
@@ -403,6 +526,146 @@ fn color(value: String) -> Option<Rgba> {
 fn fraction(value: f32) -> Option<f32> {
     (value.is_finite() && value > 0.0 && value <= 1.0).then_some(value)
 }
+fn unit(value: f32) -> Option<f32> {
+    (0.0..=1.0).contains(&value).then_some(value)
+}
+fn border_width(value: f32) -> Option<f32> {
+    (1.0..=8.0).contains(&value).then_some(value)
+}
+/// `value` among `options`, ignoring case.
+fn choice<T: Copy>(value: &str, options: &[(&str, T)]) -> Option<T> {
+    options
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case(value))
+        .map(|(_, choice)| *choice)
+}
+fn some<T>(value: T) -> Option<T> {
+    Some(value)
+}
+fn font_scale(value: f32) -> Option<f32> {
+    (0.5..=2.0).contains(&value).then_some(value)
+}
+fn font_min(value: f32) -> Option<f32> {
+    (6.0..=32.0).contains(&value).then_some(value)
+}
+fn font_grid(value: f32) -> Option<f32> {
+    (0.0..=32.0).contains(&value).then_some(value)
+}
+fn text_outline(value: &toml::Value) -> Option<Outline> {
+    let parsed = value.as_table().and_then(|t| {
+        let ink = |key| t.get(key)?.as_str().and_then(|c| color(c.to_owned()));
+        let outline = Outline {
+            color: ink("color")?,
+            width: number(t.get("width")?)?,
+            ink: ink("ink"),
+        };
+        let ink_ok = t.get("ink").is_none() || outline.ink.is_some();
+        ((0.0..=4.0).contains(&outline.width) && ink_ok).then_some(outline)
+    });
+    if parsed.is_none() {
+        log::warn!("Theme text_outline must be {{ color, width = 0..4, ink }}; ignored");
+    }
+    parsed.filter(|outline| outline.width > 0.)
+}
+fn number(value: &toml::Value) -> Option<f32> {
+    value
+        .as_float()
+        .or_else(|| value.as_integer().map(|n| n as f64))
+        .map(|n| n as f32)
+        .filter(|n| n.is_finite())
+}
+/// One number for all four sides, or `[left, top, right, bottom]`.
+fn sides(value: Option<&toml::Value>, max: f32) -> Option<[f32; 4]> {
+    let all = match value {
+        None => return Some([0.; 4]),
+        Some(toml::Value::Array(list)) if list.len() == 4 => {
+            let mut sides = [0.; 4];
+            for (side, value) in sides.iter_mut().zip(list) {
+                *side = number(value)?;
+            }
+            sides
+        }
+        Some(value) => [number(value)?; 4],
+    };
+    all.iter().all(|n| (0.0..=max).contains(n)).then_some(all)
+}
+/// Every `decor` image of the theme's views, resolved like fonts and frames.
+fn decor_files(
+    table: &toml::Table,
+    dir: Option<&Path>,
+    defaults: Option<&Theme>,
+) -> Vec<(String, PathBuf)> {
+    let mut found = defaults.map_or_else(Vec::new, |d| d.decor_files.clone());
+    let Some(dir) = dir else { return found };
+    let views = table.get("view").and_then(toml::Value::as_table);
+    let images = views
+        .into_iter()
+        .flat_map(|views| views.values())
+        .filter_map(toml::Value::as_table)
+        .flat_map(|view| ["systems", "games"].map(|screen| view.get(screen)))
+        .flatten()
+        .filter_map(|screen| screen.get("decor")?.as_array())
+        .flatten()
+        .filter_map(|decor| decor.get("image")?.as_str());
+    for image in images {
+        if found.iter().any(|(name, _)| name == image) {
+            continue;
+        }
+        if let Some(path) = resolve_file(dir, image) {
+            found.push((image.to_owned(), path));
+        }
+    }
+    found
+}
+/// `[frames.<name>]`: image, slice, scale, pad and tile, for the known boxes.
+fn frames(value: &toml::Value, dir: Option<&Path>) -> Vec<(String, Frame9)> {
+    let Some(table) = value.as_table() else {
+        log::warn!("Theme frames must hold [frames.<name>] tables; ignored");
+        return Vec::new();
+    };
+    let mut found = Vec::new();
+    for (name, value) in table {
+        if !FRAMES.contains(&name.as_str()) {
+            log::warn!("Unknown theme frame {name}; ignored");
+            continue;
+        }
+        let frame = value.as_table().and_then(|t| {
+            let image = resolve_file(dir?, t.get("image")?.as_str()?)?;
+            let slice = sides(t.get("slice"), 256.)?.map(|n| n as u32);
+            let scale = t.get("scale").map_or(Some(1.), number)?;
+            let pad = sides(t.get("pad"), 64.)?;
+            let tile = t.get("tile").map_or(Some(false), toml::Value::as_bool)?;
+            (0.25..=8.0).contains(&scale).then_some(Frame9 {
+                image,
+                slice,
+                scale,
+                pad,
+                tile,
+            })
+        });
+        match frame {
+            Some(frame) => found.push((name.clone(), frame)),
+            None => log::warn!("Theme frames.{name} is invalid or its image is missing; ignored"),
+        }
+    }
+    found
+}
+fn shadow(value: String) -> Option<ShadowStyle> {
+    choice(
+        &value,
+        &[
+            ("soft", ShadowStyle::Soft),
+            ("hard", ShadowStyle::Hard),
+            ("none", ShadowStyle::None),
+        ],
+    )
+}
+fn art_scaling(value: String) -> Option<bool> {
+    choice(&value, &[("smooth", false), ("pixel", true)])
+}
+fn easing(value: String) -> Option<bool> {
+    choice(&value, &[("smooth", false), ("steps", true)])
+}
 fn rectangle(rect: Rect01) -> Option<Rect01> {
     ([rect.x, rect.y, rect.w, rect.h]
         .iter()
@@ -420,7 +683,8 @@ fn system_screen(value: String) -> Option<SystemScreen> {
         None
     }
 }
-fn resolve_font(dir: &Path, value: &str) -> Option<PathBuf> {
+/// A file inside the theme folder (fonts, pictures); None with a warning.
+pub(crate) fn resolve_file(dir: &Path, value: &str) -> Option<PathBuf> {
     let path = Path::new(value);
     if value.is_empty()
         || path.is_absolute()
@@ -428,7 +692,7 @@ fn resolve_font(dir: &Path, value: &str) -> Option<PathBuf> {
             .components()
             .any(|c| !matches!(c, Component::Normal(_) | Component::CurDir))
     {
-        log::warn!("Invalid theme font path {value:?}; using system default");
+        log::warn!("Invalid theme file path {value:?}; ignored");
         return None;
     }
     let canonical_dir = match dir.canonicalize() {
@@ -443,7 +707,7 @@ fn resolve_font(dir: &Path, value: &str) -> Option<PathBuf> {
             Some(resolved)
         }
         result => {
-            log::warn!("Theme font {value:?} is outside the theme directory or not an accessible file ({result:?}); using system default");
+            log::warn!("Theme file {value:?} is outside the theme directory or not an accessible file ({result:?}); ignored");
             None
         }
     }

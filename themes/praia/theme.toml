@@ -1,7 +1,7 @@
 # Example theme: yellow and navy, the list on the right and the art on the
 # left. Everything not written here comes from the default theme
 # (docs/temas.md), including its fonts, console pictures and sounds.
-name = { en = "Beach (example)", pt_BR = "Praia (exemplo)", es = "Playa (ejemplo)", ru = "Пляж (пример)" }
+name = { en = "Example", pt_BR = "Exemplo", es = "Ejemplo", ru = "Пример" }
 
 background = "#0A2540"
 surface = "#0F3057"

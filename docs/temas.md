@@ -22,7 +22,8 @@ Pasta que o tema não traz vem do tema padrão instalado
 (`/usr/share/archr-launcher/themes/default/`): sem `fonts/` e sem chaves de
 fonte, ele usa as fontes do padrão; sem a imagem de um console, a do padrão;
 sem um ícone, o do padrão; sem um som, o do padrão.
-Um exemplo completo e pequeno está em `themes/praia/`.
+Um exemplo completo e pequeno está em `themes/praia/` (aparece como "Exemplo";
+o tema Praia completo é publicado à parte, na Loja de temas).
 
 ## Nome
 
@@ -75,6 +76,19 @@ se faltar a outra); o que não cita nenhuma das duas herda as duas do tema
 padrão. O mesmo vale para `font_mono` e `font_mono_medium`. Uma fonte citada
 que não existe cai nas do sistema (DejaVu/Liberation).
 
+### Tamanho e nitidez do texto
+
+```toml
+font_scale = 1.4        # 0,5 a 2: multiplica todo tamanho de texto (com o do usuário)
+font_grid = 8           # 0 a 32 px: tamanhos ficam no múltiplo mais próximo (0 = livre)
+font_smoothing = false  # sem suavização: letras de borda dura, para fontes pixel
+font_min = 12           # 6 a 32 px: nenhum texto fica menor; o que não cabe quebra linha
+```
+
+`font_grid` serve a fontes desenhadas numa grade (Press Start 2P fica nítida
+em múltiplos de 8 px). Vale também nas Configurações, onde o tema só muda
+cores, fontes e ícones.
+
 ## Medidas gerais
 
 Frações da tela: alturas, raios e tamanhos de fonte são frações da **altura**
@@ -96,6 +110,103 @@ cover = { x = 0.640625, y = 0.1125, w = 0.328125, h = 0.583333333 }
 ```
 
 Essas medidas montam a visualização clássica, `lista`.
+
+## Estilo
+
+Cinco chaves no topo do `theme.toml` mudam o acabamento de todas as telas,
+inclusive as Configurações. Cada uma herda do padrão sozinha; valor inválido
+volta ao padrão com aviso no log.
+
+| chave | valores | padrão | efeito |
+|---|---|---|---|
+| `corners` | 0 a 1 | `1.0` | multiplica todo raio de canto; `0` deixa tudo reto |
+| `border_width` | 1 a 8 | `1` | espessura das bordas, em px de referência (480 px de altura) |
+| `shadow` | `"soft"`, `"hard"`, `"none"` | `"soft"` | sombra dos painéis: esfumada, bloco preto deslocado 4 px, ou nenhuma (`"soft"` também põe a sombra de contato sob a imagem do console) |
+| `art_scaling` | `"smooth"`, `"pixel"` | `"smooth"` | `"pixel"` amplia as imagens de console em múltiplos inteiros e sem suavizar (pixel art nítida); capas de jogos não mudam |
+| `easing` | `"smooth"`, `"steps"` | `"smooth"` | `"steps"` troca a desaceleração por quatro saltos iguais, o primeiro na hora (movimento "8 bits") |
+
+```toml
+corners = 0
+border_width = 3
+shadow = "hard"
+art_scaling = "pixel"
+easing = "steps"
+```
+
+## Imagens do tema
+
+Nas telas de sistemas, jogos e detalhes (nunca nas Configurações) o tema pode
+trocar caixas lisas por imagens. Tudo é opcional; o que não existe é desenhado
+como antes. As imagens ficam na pasta do tema (`.png`, `.jpg`) e carregam fora
+da thread de desenho: no primeiro quadro pode aparecer a caixa lisa.
+
+### Fundo
+
+```toml
+background_image = "images/fundo.png"   # cobre a tela inteira, cortado no centro
+```
+
+Com `art_scaling = "pixel"` a imagem é ampliada sem suavizar (desenhe-a em
+320×240 para pixels 2×2).
+
+### Molduras (9-slice)
+
+```toml
+[frames.row]
+image = "frames/linha.png"
+slice = [6, 5, 6, 7]   # px da imagem mantidos inteiros: esquerda, topo, direita, base (ou um número)
+scale = 2              # px de tela (referência 480) por px da imagem; 0,25 a 8
+pad = 0                # quanto a moldura passa da caixa, em px de referência (ou [e, t, d, b])
+tile = false           # true: bordas e meio se repetem em vez de esticar
+```
+
+Os cantos ficam inteiros, as bordas e o meio esticam (ou se repetem com
+`tile`). Caixas que aceitam moldura:
+
+| nome | onde |
+|---|---|
+| `header`, `footer` | faixa do cabeçalho e do rodapé (altura de `header_height`/`footer_height`) |
+| `list` | atrás da lista (`list`), use `pad` para a moldura sobrar |
+| `row`, `selected` | cada linha da lista e a linha escolhida (no lugar da faixa colorida) |
+| `panel` | painel do sistema, menus e, nos detalhes, a tabela e a coluna do título aos botões |
+| `art` | moldura da capa e da tela do jogo nos detalhes |
+| `button`, `button_selected` | botões dos detalhes |
+| `badge` | botões A/B/X/Y do rodapé (a letra vem na cor `text`) |
+| `tile`, `tile_selected` | blocos da visualização em blocos (`mark = "tile"`) |
+
+O texto sobre as molduras usa as cores de sempre: `text_secondary` nas
+linhas, `accent_text` na escolhida, `text` e `muted` nos painéis.
+
+### Contorno do texto
+
+```toml
+text_outline = { color = "#3F2214", width = 2, ink = "#FFFFFF" }
+```
+
+Vale para o texto desenhado direto sobre o fundo: cabeçalho, dicas do rodapé
+e o nome do sistema quando a visualização não tem painel (`panel = false`).
+`width` vai de 0 a 4 px de referência; `ink` (opcional) troca a cor desse
+texto, para letras claras com contorno escuro sobre um fundo de imagem.
+
+### Decorações
+
+Cada tela de cada visualização pode ter imagens soltas, paradas ou animadas:
+
+```toml
+[view.lista.systems]
+decor = [
+  { image = "decor/palmeira.png", x = 0.88, y = 0.02, scale = 2 },
+  { image = "decor/onda.png", x = 0.0, y = 0.82, scale = 2, layer = "back" },
+  { image = "decor/caranguejo.png", x = 0.02, y = 0.8, scale = 2, frames = 2, fps = 2 },
+]
+```
+
+`x`, `y`: canto superior esquerdo em frações da tela. `scale`: px de
+referência por px da imagem. `frames`: quadros lado a lado na imagem,
+trocados `fps` vezes por segundo (parados com Animações desligadas).
+`layer = "back"` desenha atrás da lista e dos painéis; o padrão é na frente.
+A lista substitui a herdada; `decor = []` limpa. A tela de detalhes usa as
+decorações da tela de jogos.
 
 ## Visualizações
 
@@ -119,16 +230,18 @@ Elementos de cada tela (`[view.<id>.systems]` ou `[view.<id>.games]`):
 | chave | o que é | campos |
 |---|---|---|
 | `header` | cabeçalho | `"full"` (nome e contador) ou `"compact"` (uma linha discreta: "SNES · 4 de 213") |
+| `title` | título do cabeçalho de sistemas | `"brand"` (ARCHR espaçado, o padrão) ou `"screen"` ("Sistemas", no idioma) |
 | `status` | pílula de relógio/bateria | `true`/`false` |
 | `divider` | linha acima do rodapé | `true`/`false` |
 | `summary` | resumo da biblioteca no rodapé (sistemas) | `true`/`false` |
-| `list` | a lista | `x y w h`, `row`, `selected` (altura da linha escolhida), `gap`, `font`, `selected_font`, `radius`, `mark`, `scroll` |
+| `list` | a lista | `x y w h`, `row`, `selected` (altura da linha escolhida), `gap`, `font`, `selected_font`, `radius`, `mark`, `scroll`, `cursor` |
 | `panel` | cartão em relevo (painel do sistema, moldura da capa) | `x y w h`, `radius` |
 | `art` | imagem do console ou capa do jogo | `x y w h`, `fit`, `radius` |
 | `backdrop` | a capa ao fundo da tela de jogos | `opacity`, `solid` (fração da largura em fundo puro), `edge` (opacidade do fundo na borda direita) |
 | `info` | nome do sistema e detalhes | `x y w h`, `title`, `meta` (tamanhos), `align` (`left`/`center`/`right`), `valign` (`top`/`bottom`), `details` (`stacked`: fabricante, nome, contagem; `inline`: nome e "213 jogos · Nintendo · 1990") |
 | `meta` | ano, jogadores e "jogado há" sob a capa | `x y w h`, `size` |
 | `dots` | pontos de posição entre sistemas | `x y w h` |
+| `decor` | imagens soltas (ver [Decorações](#decorações)) | lista de `{ image, x, y, scale, frames, fps, layer }` |
 
 Valores de `list`:
 
@@ -140,6 +253,10 @@ Valores de `list`:
   ↑/↓ andam uma linha e ←/→ uma página, do tamanho que a lista mostra
   (`h` dividido por `row + gap`).
 - `scroll`: `"edge"` (rola ao chegar na borda) ou `"center"` (mantém a escolha no meio).
+- `cursor`: texto curto (até 4 caracteres, na fonte da lista) desenhado antes
+  do item escolhido, piscando meio segundo aceso e meio apagado, por exemplo
+  `cursor = "▶"` (a fonte precisa ter o caractere). Com Animações desligadas
+  fica aceso. Vazio (o padrão) não desenha nada. Não vale para blocos (`tile`).
 
 Todas as linhas não escolhidas usam uma cor só: `text_secondary` (coleções em
 `muted`). Mover a escolha nunca muda a cor das outras linhas.
@@ -225,6 +342,7 @@ Aparência › Animações (`launcher.animations`): **Ligadas** (`on`), **Reduzi
 (`off`: tudo instantâneo). Os valores antigos `1` e `0` valem como Ligadas e
 Desligadas. Os tempos são fixos: seleção 180 ms, sistemas→jogos 220 ms, troca de
 capa 200 ms, menus 160 ms, avisos 200 ms, interruptores 150 ms, abertura 300 ms.
+O tema escolhe só a curva (`easing`, ver [Estilo](#estilo)).
 Qualquer botão encerra a animação em curso; a entrada nunca espera.
 
 ## Sons
@@ -410,6 +528,7 @@ ARCHR_CAPTURE_VIEWS=default:vitrine,praia:lista,praia:vitrine:noart \
 cargo test -p archr-ui --lib capture_views -- --ignored
 ```
 
-`:noart` captura como se não houvesse imagem de console nenhuma. O tema
-precisa estar em `themes/` do repositório para esse comando. No
+`:noart` captura como se não houvesse imagem de console nenhuma. A pasta é
+relativa a `themes/` do repositório, ou um caminho absoluto (um tema que vive
+no próprio repositório, como os da Loja). No
 aparelho, os avisos sobre chaves inválidas ficam no log do launcher.

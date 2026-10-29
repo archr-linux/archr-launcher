@@ -1,6 +1,7 @@
 # Flat catalog: quote dotted keys. Named placeholders are replaced once.
 # Plurals use CLDR cardinal categories; other is required.
 "systems.title" = "ARCHR"
+"systems.heading" = "Системы"
 "collections.favorites" = "Избранное"
 "collections.recent" = "Недавние"
 "hint.open" = "Открыть"
@@ -605,7 +606,7 @@
 
 # Game details
 "menu.details" = "Подробнее"
-"details.rescrape" = "Загрузить заново"
+"details.rescrape" = "Обновить"
 "details.rescraping" = "Загрузка…"
 "details.scroll" = "Прокрутка"
 "details.options" = "Опции"

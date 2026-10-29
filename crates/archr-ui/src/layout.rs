@@ -56,6 +56,8 @@ pub struct List {
     pub axis: Axis,
     pub mark: Mark,
     pub scroll: Scroll,
+    /// Text drawn before the selected entry, blinking; empty for none.
+    pub cursor: String,
 }
 /// A raised card (the systems panel, the frame behind a cover).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -98,9 +100,27 @@ pub struct Meta {
     pub rect: Rect01,
     pub size: f32,
 }
+/// A theme picture placed on a screen: still, or a strip of frames side by
+/// side that plays `fps` times a second.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Decor {
+    /// Path inside the theme folder.
+    pub image: String,
+    pub x: f32,
+    pub y: f32,
+    /// Reference pixels (480 high) per image pixel.
+    pub scale: f32,
+    pub frames: u32,
+    pub fps: f32,
+    /// Behind the list and panels instead of over them.
+    pub back: bool,
+}
 #[derive(Clone, Debug, PartialEq)]
 pub struct Layout {
     pub header: Header,
+    /// Systems screen title: the spaced brand ("ARCHR") or the screen's
+    /// name ("Systems", per language).
+    pub brand: bool,
     pub status: bool,
     pub divider: bool,
     pub summary: bool,
@@ -111,6 +131,7 @@ pub struct Layout {
     pub info: Option<Info>,
     pub meta: Option<Meta>,
     pub dots: Option<Rect01>,
+    pub decor: Vec<Decor>,
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct View {
@@ -200,6 +221,7 @@ impl View {
             axis: Axis::Vertical,
             mark: Mark::Pill,
             scroll: Scroll::Edge,
+            cursor: String::new(),
         };
         let column = |x, width| Rect01 {
             x,
@@ -209,6 +231,7 @@ impl View {
         };
         let base = |list| Layout {
             header: Header::Full,
+            brand: true,
             status: true,
             divider: true,
             summary: true,
@@ -219,6 +242,7 @@ impl View {
             info: None,
             meta: None,
             dots: None,
+            decor: Vec::new(),
         };
         let cover = t.cover;
         Self {
@@ -310,8 +334,8 @@ impl Layout {
             t,
             at,
             &[
-                "header", "status", "divider", "summary", "list", "panel", "art", "backdrop",
-                "info", "meta", "dots",
+                "header", "title", "status", "divider", "summary", "list", "panel", "art",
+                "backdrop", "info", "meta", "dots", "decor",
             ],
         );
         let r = Reader { table: t, at };
@@ -320,6 +344,7 @@ impl Layout {
             self.header,
             &[("full", Header::Full), ("compact", Header::Compact)],
         );
+        self.brand = r.pick("title", self.brand, &[("brand", true), ("screen", false)]);
         self.status = r.flag("status", self.status);
         self.divider = r.flag("divider", self.divider);
         self.summary = r.flag("summary", self.summary);
@@ -365,7 +390,51 @@ impl Layout {
             m.size = r.number("size", m.size, 0.01, 0.3);
         });
         element(t, at, "dots", &mut self.dots, |d, r| *d = r.rect(*d));
+        match t.get("decor") {
+            None => {}
+            Some(Value::Array(items)) => {
+                self.decor = items
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(n, item)| decor(item, &format!("{at}.decor[{n}]")))
+                    .collect();
+            }
+            Some(_) => log::warn!("Theme {at}.decor must be a list of tables; ignored"),
+        }
     }
+}
+
+/// One `decor` entry; None (with a warning) when its image path is unsafe.
+fn decor(item: &Value, at: &str) -> Option<Decor> {
+    let Some(t) = item.as_table() else {
+        log::warn!("Theme {at} must be a table; ignored");
+        return None;
+    };
+    known(
+        t,
+        at,
+        &["image", "x", "y", "scale", "frames", "fps", "layer"],
+    );
+    let image = t.get("image").and_then(Value::as_str).filter(|path| {
+        !path.is_empty()
+            && std::path::Path::new(path)
+                .components()
+                .all(|c| matches!(c, std::path::Component::Normal(_)))
+    });
+    let Some(image) = image else {
+        log::warn!("Theme {at}.image must be a path inside the theme; ignored");
+        return None;
+    };
+    let r = Reader { table: t, at };
+    Some(Decor {
+        image: image.to_owned(),
+        x: r.number("x", 0., 0., 1.),
+        y: r.number("y", 0., 0., 1.),
+        scale: r.number("scale", 1., 0.25, 8.),
+        frames: r.number("frames", 1., 1., 64.) as u32,
+        fps: r.number("fps", 0., 0., 30.),
+        back: r.pick("layer", false, &[("front", false), ("back", true)]),
+    })
 }
 
 impl List {
@@ -388,6 +457,7 @@ impl List {
                 "axis",
                 "mark",
                 "scroll",
+                "cursor",
             ],
         );
         self.rect = r.rect(self.rect);
@@ -419,6 +489,11 @@ impl List {
             self.scroll,
             &[("edge", Scroll::Edge), ("center", Scroll::Center)],
         );
+        match t.get("cursor") {
+            None => {}
+            Some(Value::String(cursor)) => self.cursor = cursor.chars().take(4).collect(),
+            Some(_) => log::warn!("Theme {at}.cursor must be text; ignored"),
+        }
         // A tile list is always a centered horizontal row.
         if self.mark == Mark::Tile {
             self.axis = Axis::Horizontal;
@@ -634,6 +709,50 @@ mod tests {
         assert_eq!(info.align, Align::Center);
         assert_eq!(info.title, base.systems.info.unwrap().title);
         assert_eq!(changed.systems.list, base.systems.list);
+    }
+    #[test]
+    fn the_cursor_is_short_text_and_off_by_default() {
+        assert_eq!(view("").games.list.cursor, "");
+        assert_eq!(
+            view("[games.list]\ncursor = '>>>>>>'").games.list.cursor,
+            ">>>>"
+        );
+        assert_eq!(view("[games.list]\ncursor = 1").games.list.cursor, "");
+    }
+    #[test]
+    fn decor_lists_replace_the_inherited_one_and_skip_bad_entries() {
+        let v = view(
+            "[systems]\ndecor = [{ image = 'decor/palm.png', x = 0.9, y = 0.1, scale = 2, frames = 4, fps = 6, layer = 'back' },\
+             { image = '../x.png' }, { x = 1 }, { image = 'shell.png', x = 7 }]",
+        );
+        let d = &v.systems.decor;
+        assert_eq!(d.len(), 2);
+        assert_eq!(
+            (
+                d[0].image.as_str(),
+                d[0].x,
+                d[0].scale,
+                d[0].frames,
+                d[0].fps,
+                d[0].back
+            ),
+            ("decor/palm.png", 0.9, 2., 4, 6., true)
+        );
+        assert_eq!(
+            (d[1].x, d[1].frames, d[1].back),
+            (1., 1, false),
+            "kept on screen"
+        );
+        assert!(v.games.decor.is_empty());
+        let mut cleared = v.clone();
+        cleared.overlay(&toml::from_str("[systems]\ndecor = []").unwrap(), "t");
+        assert!(cleared.systems.decor.is_empty());
+    }
+    #[test]
+    fn the_systems_title_is_the_brand_unless_the_view_names_the_screen() {
+        assert!(view("").systems.brand);
+        assert!(!view("[systems]\ntitle = 'screen'").systems.brand);
+        assert!(view("[systems]\ntitle = 'odd'").systems.brand);
     }
     #[test]
     fn tiles_are_horizontal() {

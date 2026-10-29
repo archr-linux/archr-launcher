@@ -563,3 +563,110 @@ fn every_key_the_default_theme_uses_is_known() {
         );
     }
 }
+
+#[test]
+fn style_keys_inherit_and_reject_bad_values_one_by_one() {
+    let builtin = Theme::builtin();
+    assert_eq!(
+        (builtin.corners, builtin.border_width, builtin.shadow),
+        (1.0, 1.0, archr_ui::ShadowStyle::Soft)
+    );
+    assert!(!builtin.pixel_art && !builtin.steps);
+    let pixel = load(
+        "corners = 0\nborder_width = 3\nshadow = 'HARD'\nart_scaling = 'pixel'\neasing = 'steps'",
+    );
+    assert_eq!(
+        (pixel.corners, pixel.border_width, pixel.shadow),
+        (0.0, 3.0, archr_ui::ShadowStyle::Hard)
+    );
+    assert!(pixel.pixel_art && pixel.steps);
+    let mut bad = load("corners = 1.5\nborder_width = 0\nshadow = 'blur'\nart_scaling = true\neasing = 'bounce'\nmargin = 0.05");
+    assert_eq!(bad.margin, 0.05, "valid neighbours still apply");
+    bad.margin = builtin.margin;
+    assert_eq!(bad, builtin);
+}
+
+#[test]
+fn pictures_frames_and_text_keys_parse_inherit_and_drop_bad_entries() {
+    let builtin = Theme::builtin();
+    assert_eq!(
+        (builtin.font_scale, builtin.font_grid, builtin.font_min),
+        (1.0, 0.0, 8.0)
+    );
+    assert_eq!(load("font_min = 12").font_min, 12.0);
+    assert_eq!(
+        load("font_min = 40").font_min,
+        8.0,
+        "out of range keeps the default"
+    );
+    assert!(builtin.font_smoothing && builtin.text_outline.is_none());
+    assert!(builtin.frames.is_empty() && builtin.background_image.is_none());
+    let dir = TempDir::new().unwrap();
+    fs::create_dir_all(dir.path().join("frames")).unwrap();
+    for file in ["frames/row.png", "sea.png"] {
+        fs::write(dir.path().join(file), b"png").unwrap();
+    }
+    write_theme(
+        dir.path(),
+        "font_scale = 1.5\nfont_grid = 8\nfont_smoothing = false\n\
+         text_outline = { color = '#3F2214', width = 2, ink = '#FFFFFF' }\n\
+         background_image = 'sea.png'\n\
+         [frames.row]\nimage = 'frames/row.png'\nslice = [4, 3, 4, 5]\nscale = 2\npad = 2\ntile = true\n\
+         [frames.selected]\nimage = 'frames/missing.png'\n\
+         [frames.panel]\nimage = '../sea.png'\n\
+         [frames.window]\nimage = 'sea.png'\n",
+    );
+    let theme = Theme::load(dir.path());
+    assert_eq!((theme.font_scale, theme.font_grid), (1.5, 8.0));
+    assert!(!theme.font_smoothing);
+    let outline = theme.text_outline.unwrap();
+    assert_eq!((outline.width, outline.ink.map(|c| c.r)), (2.0, Some(255)));
+    assert!(theme
+        .background_image
+        .as_ref()
+        .unwrap()
+        .ends_with("sea.png"));
+    assert_eq!(
+        theme.frames.len(),
+        1,
+        "missing, escaping and unknown frames are dropped"
+    );
+    let row = theme.frame("row").unwrap();
+    assert_eq!(
+        (row.slice, row.scale, row.pad, row.tile),
+        ([4, 3, 4, 5], 2.0, [2.0; 4], true)
+    );
+    let bad =
+        load("font_scale = 3\nfont_grid = -1\nfont_smoothing = 'no'\ntext_outline = { width = 2 }");
+    assert_eq!(bad, builtin);
+}
+
+#[cfg(unix)]
+#[test]
+fn decorations_resolve_inside_the_theme_and_links_out_of_it_are_refused() {
+    let root = TempDir::new().unwrap();
+    let dir = root.path().join("tema");
+    fs::create_dir_all(dir.join("decor")).unwrap();
+    fs::write(dir.join("decor/crab.png"), b"png").unwrap();
+    fs::write(root.path().join("secret.png"), b"png").unwrap();
+    std::os::unix::fs::symlink(root.path().join("secret.png"), dir.join("decor/out.png")).unwrap();
+    write_theme(
+        &dir,
+        "[view.lista.systems]\ndecor = [{ image = 'decor/crab.png' }, { image = 'decor/out.png' }, { image = 'decor/none.png' }]",
+    );
+    let theme = Theme::load(&dir);
+    assert!(theme
+        .decor_file("decor/crab.png")
+        .is_some_and(|p| p.ends_with("decor/crab.png")));
+    assert_eq!(
+        theme.decor_file("decor/out.png"),
+        None,
+        "the link leaves the theme"
+    );
+    assert_eq!(theme.decor_file("decor/none.png"), None);
+    assert_eq!(
+        theme.view("lista").systems.decor.len(),
+        3,
+        "drawn only when resolved"
+    );
+}

@@ -139,6 +139,7 @@ pub(super) fn wrap(
 pub(super) struct SystemArt<'a> {
     covers: CoverCache<'a>,
     dirs: Vec<PathBuf>,
+    pixel: bool,
     wanted: Vec<Vec<PathBuf>>,
 }
 
@@ -147,10 +148,14 @@ impl<'a> SystemArt<'a> {
         creator: &'a TextureCreator<WindowContext>,
         cache: PathBuf,
         dirs: Vec<PathBuf>,
-        (width, height): (u32, u32),
+        size: (u32, u32),
+        pixel: bool,
     ) -> Self {
+        // Pixel thumbnails live apart from the smooth ones of the same files.
+        let cache = if pixel { cache.join("pixel") } else { cache };
         Self {
-            covers: CoverCache::new(creator, cache, width, height),
+            covers: CoverCache::scaled(creator, cache, size, pixel),
+            pixel,
             dirs,
             wanted: Vec::new(),
         }
@@ -218,7 +223,12 @@ impl Ui<'_, '_> {
         .flatten()
         .collect();
         dirs.dedup();
-        if self.art.as_ref().is_some_and(|art| art.dirs == dirs) {
+        let pixel = self.pixel_art;
+        if self
+            .art
+            .as_ref()
+            .is_some_and(|art| art.dirs == dirs && art.pixel == pixel)
+        {
             return;
         }
         let size = (self.px(IMAGE_BOX.0) as u32, self.px(IMAGE_BOX.1) as u32);
@@ -227,6 +237,7 @@ impl Ui<'_, '_> {
             base.join("storage/.cache/archr-launcher/thumbs"),
             dirs,
             size,
+            pixel,
         ));
     }
 
@@ -262,7 +273,7 @@ impl Ui<'_, '_> {
             }
             self.old_art()?;
         }
-        if let Some((rect, _)) = panel {
+        if let Some((rect, _)) = panel.filter(|_| !self.has_frame("panel")) {
             let pad = self.px(16.);
             self.rounded(
                 Rect::new(
@@ -277,7 +288,11 @@ impl Ui<'_, '_> {
             )?;
         }
         if let Some(info) = layout.info {
-            self.panel_text(&info, name, data, theme)?;
+            // Text straight over the background takes the theme's outline.
+            self.look.outlining = layout.panel.is_none();
+            let drawn = self.panel_text(&info, name, data, theme);
+            self.look.outlining = false;
+            drawn?;
         }
         self.canvas.set_clip_rect(None);
         if let Some(dots) = layout.dots {
@@ -366,6 +381,7 @@ impl Ui<'_, '_> {
                 )?;
                 self.geometry
                     .dashed(&mut self.canvas, rect, radius, theme.highlight_bg)?;
+            } else if i == cursor && self.framed("tile_selected", rect)? {
             } else if i == cursor {
                 self.panel(rect, radius, theme.highlight_bg, theme.highlight_bg)?;
                 let border = self.px(2.);
@@ -376,7 +392,7 @@ impl Ui<'_, '_> {
                     rect.height().saturating_sub(2 * border as u32).max(1),
                 );
                 self.rounded(inner, (radius - border as f32).max(0.), fill, None)?;
-            } else {
+            } else if !self.framed("tile", rect)? {
                 self.rounded(rect, radius, fill, None)?;
             }
             // Neighbours sit back at 70%.
@@ -468,6 +484,12 @@ impl Ui<'_, '_> {
         let (box_w, box_h) = (area.width() as i32, area.height() as i32);
         let size = texture.query();
         let scale = (box_w as f32 / size.width as f32).min(box_h as f32 / size.height as f32);
+        // Pixel art grows by whole multiples only.
+        let scale = if self.pixel_art && scale >= 1. {
+            scale.floor()
+        } else {
+            scale
+        };
         let w = (size.width as f32 * scale).round().max(1.) as u32;
         let h = (size.height as f32 * scale).round().max(1.) as u32;
         let dst = Rect::new(
@@ -483,7 +505,11 @@ impl Ui<'_, '_> {
             b: 0,
             a: (u16::from(a) * u16::from(alpha) / 255) as u8,
         };
-        for (span, thick, shade) in [(0.9, 14., 26), (0.72, 10., 30), (0.5, 6., 36)] {
+        let soft = self.shadow_style == crate::theme::ShadowStyle::Soft;
+        for (span, thick, shade) in [(0.9, 14., 26), (0.72, 10., 30), (0.5, 6., 36)]
+            .into_iter()
+            .filter(|_| soft)
+        {
             let sw = (w as f32 * span) as u32;
             let sh = self.frame.px(thick) as u32;
             let shadow = Rect::new(
@@ -814,6 +840,7 @@ mod tests {
             root.path().join("cache"),
             vec![user.clone(), theme.clone()],
             (2, 2),
+            false,
         );
         art.want(&["sfc", "@favorites"]);
         // Files appear after want(): only the worker may resolve them.
