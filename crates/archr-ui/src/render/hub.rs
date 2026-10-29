@@ -30,6 +30,7 @@ impl Ui<'_, '_> {
         else {
             return Ok(());
         };
+
         let (width, height) = self.canvas.output_size()?;
         // Unlike `Ui::px`, offsets may be negative, so no lower clamp.
         let scale = self.frame.scale;
@@ -99,15 +100,32 @@ impl Ui<'_, '_> {
             )?;
             // Shrinks down to the theme's smallest text, then wraps; a
             // label is never cut.
+            // A word too wide even then takes the launcher's own font,
+            // as in Settings; words are never split.
             let label = self.catalog.text(key);
             let room = (side - px(10.)).max(1) as u32;
             let floor = self.frame.min_size();
-            let mut size = 16.;
-            while size > floor && self.measure(&label, Face::Semibold, size)? > room {
-                size = (size - 1.).max(floor);
+            let mut fitted = None;
+            for face in [Face::Semibold, Face::Fallback] {
+                let mut size = 16.;
+                let widest = |ui: &mut Self, size| -> Result<u32, String> {
+                    let mut widest = 0;
+                    for word in label.split_whitespace() {
+                        widest = widest.max(ui.measure(word, face, size)?);
+                    }
+                    Ok(widest)
+                };
+                while size > floor && self.measure(&label, face, size)? > room {
+                    size = (size - 1.).max(floor);
+                }
+                if widest(self, size)? <= room || face == Face::Fallback {
+                    fitted = Some((face, size));
+                    break;
+                }
             }
-            let lines = if self.measure(&label, Face::Semibold, size)? > room {
-                self.wrap(&label, Face::Semibold, size, room)?
+            let (face, size) = fitted.unwrap_or((Face::Semibold, 16.));
+            let lines = if self.measure(&label, face, size)? > room {
+                self.wrap(&label, face, size, room)?
             } else {
                 vec![label]
             };
@@ -116,7 +134,7 @@ impl Ui<'_, '_> {
             for (n, line) in lines.iter().enumerate() {
                 self.label_aligned(
                     line,
-                    (Face::Semibold, size, ink),
+                    (face, size, ink),
                     Rect::new(x + px(5.), top + step * n as i32, room, step.max(1) as u32),
                     Align::Center,
                 )?;
