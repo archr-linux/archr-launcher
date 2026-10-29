@@ -161,15 +161,18 @@ impl Backend {
         Ok((account.user.clone(), profile(&account, summary)))
     }
     /// Forgets the token, the web API key (and any password an older setup
-    /// saved). The user name stays for the next sign-in.
+    /// saved). The user name stays for the next sign-in. The key goes first:
+    /// a failure then leaves the account fully signed in, never half.
     pub(super) fn cheevos_logout(&self) -> Result<(), String> {
-        SystemCfg::set_many_and_save(
-            &self.paths.config,
-            &self.paths.lock,
-            &[(TOKEN, ""), (PASSWORD, "")],
-        )
-        .and_then(|()| remove_durable(&self.paths.store.join(WEB_KEY)))
-        .map_err(|e| e.to_string())
+        remove_durable(&self.paths.store.join(WEB_KEY))
+            .and_then(|()| {
+                SystemCfg::set_many_and_save(
+                    &self.paths.config,
+                    &self.paths.lock,
+                    &[(TOKEN, ""), (PASSWORD, "")],
+                )
+            })
+            .map_err(|e| e.to_string())
     }
     /// Checks a web API key with the service and saves it only once it is
     /// accepted (`Some`: the card's extras); an empty key removes it (`None`).
