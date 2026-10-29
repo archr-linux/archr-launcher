@@ -87,6 +87,7 @@ impl Runtime {
             || self.state.connecting.is_some()
             || self.state.storage.working.is_some()
             || self.state.cheevos.verifying
+            || self.state.store.working.is_some()
             || !self.state.slides.is_empty()
     }
     pub fn close(&mut self) {
@@ -155,7 +156,7 @@ impl Runtime {
                 ]))
             }
             Effect::Storage(action) => self.send(Work::Storage(action)),
-            Effect::Store(_) => {}
+            Effect::Store(action) => self.send(Work::Store(action)),
             Effect::Reboot => return Outcome::Action(SessionAction::Reboot),
             Effect::None => {}
         }
@@ -444,6 +445,42 @@ mod tests {
         );
         assert!(runtime.take_games_saved());
         assert!(!runtime.take_games_saved());
+    }
+    #[test]
+    fn the_installed_tab_answers_from_the_store_lane_without_the_network() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::new(Some(dir.path().into()));
+        let theme = paths.at("/storage/.config/archr-launcher/themes/kaio-dev-neon");
+        fs::create_dir_all(&theme).unwrap();
+        fs::write(theme.join("theme.toml"), "name = \"Neon\"\n").unwrap();
+        fs::write(
+            theme.join(".archr-store.toml"),
+            "owner = \"kaio-dev\"\nrepo = \"neon\"\nbranch = \"main\"\n\
+             reference = \"v1\"\ntree = \"t1\"\ndate = \"2026-10-12\"\nstars = 3\n",
+        )
+        .unwrap();
+        let mut runtime = Runtime::new(paths);
+        runtime.active = true;
+        runtime.state.loading = false;
+        runtime.state.open(Page::Appearance);
+        runtime.state.store.tab = archr_ui::settings::store::Tab::Installed;
+        runtime.state.cursor = 1;
+        runtime.handle(Button::A);
+        assert_eq!(runtime.state.page(), Page::Store);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while runtime.state.store.loading {
+            runtime.poll();
+            assert!(Instant::now() < deadline, "no answer");
+            thread_yield();
+        }
+        let cards = runtime.state.store.cards();
+        assert_eq!(cards.len(), 1);
+        assert_eq!(cards[0].title("en"), "Neon");
+        assert!(runtime.state.options[&Id::Theme].contains(&"kaio-dev-neon".to_owned()));
+        assert!(
+            !runtime.busy(),
+            "the store lane never holds the settings worker"
+        );
     }
     fn thread_yield() {
         std::thread::sleep(Duration::from_millis(5));
