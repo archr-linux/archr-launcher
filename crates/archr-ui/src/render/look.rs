@@ -61,12 +61,11 @@ impl<'t> Ui<'_, 't> {
                 .map(|(_, frame)| frame.image.clone())
                 .chain(theme.background_image.clone())
                 .collect();
-            if let Some(dir) = &key.0 {
-                for (id, _) in theme.views() {
-                    let view = theme.view(&id);
-                    for decor in view.systems.decor.iter().chain(&view.games.decor) {
-                        look.wanted.push(dir.join(&decor.image));
-                    }
+            for (id, _) in theme.views() {
+                let view = theme.view(&id);
+                for decor in view.systems.decor.iter().chain(&view.games.decor) {
+                    look.wanted
+                        .extend(theme.decor_file(&decor.image).map(Path::to_path_buf));
                 }
             }
             look.wanted.dedup();
@@ -148,10 +147,12 @@ impl<'t> Ui<'_, 't> {
         Ok(())
     }
     /// Decorations of one layer: `back` under the list and panels, else over.
-    pub(super) fn decor(&mut self, decor: &[Decor], back: bool) -> Result<(), String> {
-        let Some(dir) = self.theme_dir.clone() else {
-            return Ok(());
-        };
+    pub(super) fn decor(
+        &mut self,
+        theme: &Theme,
+        decor: &[Decor],
+        back: bool,
+    ) -> Result<(), String> {
         let Frame {
             width,
             height,
@@ -176,7 +177,10 @@ impl<'t> Ui<'_, 't> {
                 (d.x * width as f32).round() as i32,
                 (d.y * height as f32).round() as i32,
             );
-            if let Some((texture, canvas)) = self.picture(&dir.join(&d.image)) {
+            let Some(path) = theme.decor_file(&d.image) else {
+                continue;
+            };
+            if let Some((texture, canvas)) = self.picture(path) {
                 let size = texture.query();
                 let w = (size.width / frames).max(1);
                 canvas.copy(

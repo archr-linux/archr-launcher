@@ -853,7 +853,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 });
             self.begin_page(games, picture, theme)?;
             self.backdrop_pictures(theme)?;
-            self.decor(&layout.decor, true)?;
+            self.decor(theme, &layout.decor, true)?;
             if let Screen::Achievements { system, game } = backdrop {
                 let name = data
                     .games(system)
@@ -897,7 +897,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                     }
                 }
             }
-            self.decor(&layout.decor, false)?;
+            self.decor(theme, &layout.decor, false)?;
             self.end_page(theme)?;
             if matches!(app.screen, Screen::QuickMenu { .. }) {
                 self.menu(app, data, theme)?;

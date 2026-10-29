@@ -640,3 +640,33 @@ fn pictures_frames_and_text_keys_parse_inherit_and_drop_bad_entries() {
         load("font_scale = 3\nfont_grid = -1\nfont_smoothing = 'no'\ntext_outline = { width = 2 }");
     assert_eq!(bad, builtin);
 }
+
+#[cfg(unix)]
+#[test]
+fn decorations_resolve_inside_the_theme_and_links_out_of_it_are_refused() {
+    let root = TempDir::new().unwrap();
+    let dir = root.path().join("tema");
+    fs::create_dir_all(dir.join("decor")).unwrap();
+    fs::write(dir.join("decor/crab.png"), b"png").unwrap();
+    fs::write(root.path().join("secret.png"), b"png").unwrap();
+    std::os::unix::fs::symlink(root.path().join("secret.png"), dir.join("decor/out.png")).unwrap();
+    write_theme(
+        &dir,
+        "[view.lista.systems]\ndecor = [{ image = 'decor/crab.png' }, { image = 'decor/out.png' }, { image = 'decor/none.png' }]",
+    );
+    let theme = Theme::load(&dir);
+    assert!(theme
+        .decor_file("decor/crab.png")
+        .is_some_and(|p| p.ends_with("decor/crab.png")));
+    assert_eq!(
+        theme.decor_file("decor/out.png"),
+        None,
+        "the link leaves the theme"
+    );
+    assert_eq!(theme.decor_file("decor/none.png"), None);
+    assert_eq!(
+        theme.view("lista").systems.decor.len(),
+        3,
+        "drawn only when resolved"
+    );
+}

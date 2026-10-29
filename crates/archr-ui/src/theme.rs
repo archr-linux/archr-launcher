@@ -156,6 +156,9 @@ pub struct Theme {
     /// Pictures of the browsing screens: the background and the frames.
     pub background_image: Option<PathBuf>,
     pub frames: Vec<(String, Frame9)>,
+    /// Decoration images named in the views, resolved inside the theme
+    /// folder when it loads; an image that escapes it is left out.
+    decor_files: Vec<(String, PathBuf)>,
     /// Shown in Appearance; the folder name when the theme gives none.
     pub name: Names,
     /// Id of the view the screens are drawn with (an Appearance choice).
@@ -295,6 +298,7 @@ impl Theme {
                 Some(path) => dir.and_then(|dir| resolve_file(dir, &path)),
                 None => defaults.and_then(|d| d.background_image.clone()),
             },
+            decor_files: decor_files(table, dir, defaults),
             frames: match table.get("frames") {
                 Some(value) => frames(value, dir),
                 None => defaults.map_or_else(Vec::new, |d| d.frames.clone()),
@@ -321,6 +325,13 @@ impl Theme {
             view.overlay(table, &format!("view.{id}"));
         }
         view
+    }
+    /// The file of the decoration image `image`, if it is inside the theme.
+    pub fn decor_file(&self, image: &str) -> Option<&Path> {
+        self.decor_files
+            .iter()
+            .find(|(name, _)| name == image)
+            .map(|(_, path)| path.as_path())
     }
     /// The frame the theme gives the box `name`, if any.
     pub fn frame(&self, name: &str) -> Option<&Frame9> {
@@ -573,6 +584,34 @@ fn sides(value: Option<&toml::Value>, max: f32) -> Option<[f32; 4]> {
         Some(value) => [number(value)?; 4],
     };
     all.iter().all(|n| (0.0..=max).contains(n)).then_some(all)
+}
+/// Every `decor` image of the theme's views, resolved like fonts and frames.
+fn decor_files(
+    table: &toml::Table,
+    dir: Option<&Path>,
+    defaults: Option<&Theme>,
+) -> Vec<(String, PathBuf)> {
+    let mut found = defaults.map_or_else(Vec::new, |d| d.decor_files.clone());
+    let Some(dir) = dir else { return found };
+    let views = table.get("view").and_then(toml::Value::as_table);
+    let images = views
+        .into_iter()
+        .flat_map(|views| views.values())
+        .filter_map(toml::Value::as_table)
+        .flat_map(|view| ["systems", "games"].map(|screen| view.get(screen)))
+        .flatten()
+        .filter_map(|screen| screen.get("decor")?.as_array())
+        .flatten()
+        .filter_map(|decor| decor.get("image")?.as_str());
+    for image in images {
+        if found.iter().any(|(name, _)| name == image) {
+            continue;
+        }
+        if let Some(path) = resolve_file(dir, image) {
+            found.push((image.to_owned(), path));
+        }
+    }
+    found
 }
 /// `[frames.<name>]`: image, slice, scale, pad and tile, for the known boxes.
 fn frames(value: &toml::Value, dir: Option<&Path>) -> Vec<(String, Frame9)> {
