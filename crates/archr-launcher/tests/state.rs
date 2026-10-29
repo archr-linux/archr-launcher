@@ -382,13 +382,7 @@ fn quick_menu_collection_uses_real_game_and_restores_collection_cursor() {
     );
     assert_eq!(
         app.quick_menu_items(&data),
-        [
-            QuickItem::Core,
-            QuickItem::Details,
-            QuickItem::Suspend,
-            QuickItem::Reboot,
-            QuickItem::Shutdown
-        ]
+        [QuickItem::Core, QuickItem::Details]
     );
     app.handle(Button::B, &data);
     assert_eq!(
@@ -403,39 +397,36 @@ fn quick_menu_collection_uses_real_game_and_restores_collection_cursor() {
 }
 
 #[test]
-fn quick_menu_tools_and_ports_hide_core_but_keep_all_session_actions() {
+fn quick_menu_tools_and_ports_hide_core_and_power_lives_in_the_system_menu() {
     let mut data = FakeData::library();
     for system in ["tools", "ports"] {
         data.games.insert(system.into(), games(1));
     }
     data.cores
         .insert("ports".into(), vec![pair("portmaster", "portmaster")]);
-    for system in [None, Some("snes"), Some("tools"), Some("ports")] {
-        let mut app = system.map_or_else(|| App::new(5), |s| in_games(s, 0));
-        // Game menus also open the details; only snes has a core choice.
-        let core_rows = if system.is_none() {
-            2
-        } else {
-            1 + usize::from(system == Some("snes"))
-        };
+    for system in ["snes", "tools", "ports"] {
+        let mut app = in_games(system, 0);
         app.handle(Button::Y, &data);
-        assert_eq!(
-            app.quick_menu_items(&data).len(),
-            3 + core_rows,
-            "{system:?}"
-        );
-        for (index, action) in [
-            SessionAction::Suspend,
-            SessionAction::Reboot,
-            SessionAction::Shutdown,
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            app.cursor = index + core_rows;
-            assert_eq!(app.handle(Button::A, &data), Outcome::Action(action));
-            assert!(matches!(app.screen, Screen::QuickMenu { .. }));
-        }
+        // Game menus open the details; only snes has a core choice.
+        let items = app.quick_menu_items(&data);
+        assert_eq!(items.len(), 1 + usize::from(system == "snes"), "{system}");
+        assert!(!items.contains(&QuickItem::Suspend), "{system}");
+        assert!(!items.contains(&QuickItem::Reboot), "{system}");
+        assert!(!items.contains(&QuickItem::Shutdown), "{system}");
+    }
+    let mut app = App::new(5);
+    app.handle(Button::Y, &data);
+    for (index, action) in [
+        SessionAction::Suspend,
+        SessionAction::Reboot,
+        SessionAction::Shutdown,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        app.cursor = index + 2;
+        assert_eq!(app.handle(Button::A, &data), Outcome::Action(action));
+        assert!(matches!(app.screen, Screen::QuickMenu { .. }));
     }
 }
 
@@ -449,7 +440,7 @@ fn quick_menu_up_down_clamp() {
     for _ in 0..10 {
         app.handle(Button::Down, &data);
     }
-    assert_eq!(app.cursor, 4);
+    assert_eq!(app.cursor, 1);
 }
 
 fn open_details(data: &FakeData, system: &str, game: usize) -> App {
@@ -914,16 +905,7 @@ fn achievements_open_from_the_game_menu_only_when_signed_in_and_page_with_l_r() 
     app.cheevos = true;
     app.handle(Button::Y, &data);
     let items = app.quick_menu_items(&data);
-    assert_eq!(
-        items,
-        [
-            QuickItem::Details,
-            QuickItem::Achievements,
-            QuickItem::Suspend,
-            QuickItem::Reboot,
-            QuickItem::Shutdown
-        ]
-    );
+    assert_eq!(items, [QuickItem::Details, QuickItem::Achievements]);
     app.cursor = 1;
     assert_eq!(
         app.handle(Button::A, &data),

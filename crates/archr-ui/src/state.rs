@@ -259,27 +259,36 @@ impl App {
         (&self.screen, self.cursor)
     }
 
+    /// The game menu only holds what concerns the game; power actions live
+    /// in the system menu.
+    fn game_menu_items(
+        &self,
+        data: &dyn DataSource,
+        system: &str,
+        from_details: bool,
+    ) -> Vec<QuickItem> {
+        use QuickItem::*;
+        let mut items = Vec::new();
+        if data.cores(system).len() > 1 {
+            items.push(Core);
+        }
+        if !from_details {
+            items.push(Details);
+        }
+        if self.cheevos {
+            items.push(Achievements);
+        }
+        items.extend(self.module_items(Context::Game, system));
+        items
+    }
+
     pub fn quick_menu_items(&self, data: &dyn DataSource) -> Vec<QuickItem> {
         use QuickItem::*;
         let from_details = matches!(self.history.last(), Some((Screen::Details { .. }, _)));
         match &self.screen {
             Screen::QuickMenu {
                 game: Some((system, _)),
-            } => {
-                let mut items = Vec::new();
-                if data.cores(system).len() > 1 {
-                    items.push(Core);
-                }
-                if !from_details {
-                    items.push(Details);
-                }
-                if self.cheevos {
-                    items.push(Achievements);
-                }
-                items.extend(self.module_items(Context::Game, system));
-                items.extend([Suspend, Reboot, Shutdown]);
-                items
-            }
+            } => self.game_menu_items(data, system, from_details),
             Screen::QuickMenu { game: None } => {
                 let items: &[QuickItem] = match (self.netplay, data.system_order().is_empty()) {
                     (false, true) => &[Settings, Move, Suspend, Reboot, Shutdown],
@@ -425,6 +434,9 @@ impl App {
                         Button::A => return Outcome::Launch { system, game },
                         Button::X => return Outcome::ToggleFavorite { system, game },
                         Button::Y => {
+                            if self.game_menu_items(data, &system, false).is_empty() {
+                                return Outcome::None;
+                            }
                             self.selected_core = data.current_core(&system, game);
                             self.enter(Screen::QuickMenu {
                                 game: Some((system, game)),
@@ -558,6 +570,9 @@ impl App {
             Button::L => self.details_focus = self.details_focus.saturating_sub(1),
             Button::R => self.details_focus = (self.details_focus + 1).min(last),
             Button::Y => {
+                if self.game_menu_items(data, &system, true).is_empty() {
+                    return Outcome::None;
+                }
                 self.selected_core = data.current_core(&system, game);
                 self.enter(Screen::QuickMenu {
                     game: Some((system, game)),

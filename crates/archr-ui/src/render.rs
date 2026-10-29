@@ -1815,12 +1815,11 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         let Frame { height, now, .. } = self.frame;
         let items = app.quick_menu_items(data);
         let has_core = matches!(items.first(), Some(QuickItem::Core));
-        let (base_h, base_items) = if has_core || items.first() == Some(&QuickItem::Settings) {
-            (300., 4)
-        } else {
-            (256., 3)
-        };
-        let panel_h = base_h + 42. * items.len().saturating_sub(base_items) as f32;
+        let has_divider = items.contains(&QuickItem::Reboot);
+        let panel_h = 80.
+            + 42. * items.len() as f32
+            + if has_divider { 10. } else { 0. }
+            + if has_core { 2. } else { 0. };
         // Optical centering: the approved modal sits 20px above center.
         let panel = self.modal(theme, (340., 32., panel_h, -self.px(20.)))?;
         let (title, subtitle) = if let Screen::QuickMenu {
@@ -1857,7 +1856,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         let divider_index = items
             .iter()
             .position(|item| *item == QuickItem::Reboot)
-            .unwrap_or(1);
+            .unwrap_or(usize::MAX);
         let core_extra = if has_core { self.px(4.) } else { 0 };
         let separator = self.px(10.);
         let offset = |index: usize| {
