@@ -331,7 +331,7 @@ Custo: uma dependência Rust de Ed25519 (`ed25519-dalek`, sem C) e o dono gerar
 o par de chaves. Revogar uma revisão = publicar índice sem a entrada; o selo
 some na próxima consulta e a atualização automática para.
 
-## 5. Atualização automática [aguarda aprovação: UI nova]
+## 5. Atualização automática [feito; tela aprovada]
 
 - Interruptor global em Configurações › Sistema › Módulos: **"Atualizar
   sozinho os revisados"**, desligado por padrão. Maquete
@@ -349,8 +349,10 @@ some na próxima consulta e a atualização automática para.
 
 Ameaça: a conta do autor (não a do ArchR) publica versão maliciosa → não
 atualiza sozinha, porque o digest não está no índice. Conta do ArchR →
-mitigado pela assinatura offline (4.2). Por isso a atualização automática
-depende de 4.2 para sair do "aguarda".
+mitigado pela assinatura offline (4.2), que ainda aguarda a decisão do dono:
+até lá a atualização automática confia no índice publicado no GitHub, como o
+selo. O interruptor vem desligado. Implementado sem a condição "Configurações
+fechadas": a troca acontece na thread dos módulos, sem tocar na tela.
 
 ## 6. Fase 3 (proposta)
 
@@ -364,12 +366,13 @@ Ordem sugerida por valor/risco:
    consentimento lista os domínios. `net = true` continua existindo, sempre em
    âmbar, e perde o selo por padrão (revisor justifica). Fecha o envio de ROMs e
    capturas para qualquer lugar.
-2. **Widgets no Start.** `[[start.widgets]]` declarativo: bloco 2×1 com título,
+2. **Widgets no Start.** [feito, tela aprovada] `[[start.widgets]]` declarativo: bloco 2×1 com título,
    valor grande, linha secundária e barra opcional (0–100), atualizado por
    `ui.update` com `{value, detail, progress}`. Posição e tamanho vêm do
    `theme.toml` (o tema decide o layout, como os outros blocos); 1 por módulo,
    2 no total. Maquete `Start-widget.dc.html`.
-3. **Página rica.** Tipos de linha novos, ainda declarativos: `progress`
+3. **Página rica.** [feito: `progress` e `list`; `image` fica para depois]
+   Tipos de linha novos, ainda declarativos: `progress`
    (barra), `list` (até 20 itens com título/subtítulo e ação por item, para
    listas dinâmicas vindas do módulo por `ui.update` com `items`), `image`
    (PNG do próprio `module-data`, até 256×192, decodificado pelo launcher com
@@ -380,7 +383,7 @@ Ordem sugerida por valor/risco:
 6. **Orçamento**: o launcher mostra em Detalhes a memória e o tempo de CPU de
    cada daemon (do cgroup do unit), para o usuário achar o módulo pesado.
 
-## 7. Telas novas ou alteradas (maquetes, sem implementação)
+## 7. Telas novas ou alteradas (maquetes aprovadas e implementadas)
 
 Pasta: `/tmp/claude-1000/-media-disco-local-ArchR/4aaf2e6f-cc32-4024-87aa-c7ce177206ea/scratchpad/maquetes-modulos-fase2/`.
 
@@ -393,20 +396,20 @@ Pasta: `/tmp/claude-1000/-media-disco-local-ArchR/4aaf2e6f-cc32-4024-87aa-c7ce17
 | `Start-widget.dc.html` | widget 2×1 no Start | 3 |
 | `Pagina-rica.dc.html` | página com `progress` e `list` | 3 |
 
-O que muda sem tela nova (já feito): linhas de permissão novas na lista
-existente (mesmo componente). Hoje a coluna corta com "+N" quando não cabe; numa
-tela de consentimento o usuário precisa ver tudo, então a coluna passa a rolar
-(maquete `Loja-modulo-fase2.dc.html`) — aguarda aprovação junto com as telas.
+Todas aprovadas pelo dono e implementadas. Diferenças conscientes das
+maquetes: o rodapé da atualização diz "Manter a atual" (os rótulos do rodapé
+são chaves fixas, sem a versão); os detalhes ganham o botão "Abrir" antes de
+Remover quando o módulo tem páginas (senão elas só abririam por um bloco); o
+selo usa o ícone `shield-check` já do tema. A coluna de permissões rola com ↑↓
+em vez de cortar com "+N".
 
 ## 8. Pendências
 
-- Aprovação do dono: telas da seção 7; atualização automática; índice
-  assinado (chave e dependência); ações de `system` da fase 3; proposta de
-  mover os saves.
+- Decisão do dono: índice assinado (chave e dependência); ações de `system`
+  da fase 3; proposta de mover os saves.
 - Distribuição: merge de `feat/runemu-governor` (3.3).
 - Teste no aparelho: `write` com ACL (3.5); DNS de um módulo com `net` e
   `IPAddressDeny=localhost`; `/run/dbus` e `/run/systemd/userdb` escondidos
   sem efeito colateral.
-- A coluna de permissões da oferta corta com "+N" e precisa rolar (UI, com a
-  maquete). Até lá, as sensíveis (âmbar) vêm primeiro na lista [feito], então um
-  corte nunca esconde uma delas antes das outras.
+- [feito] A coluna de permissões rola com ↑↓ ("1–5 de 6" e barra), e as
+  sensíveis (âmbar) vêm primeiro.

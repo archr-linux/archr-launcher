@@ -11,7 +11,9 @@ use crate::{
 use std::sync::Arc;
 
 /// A module row's heading: its text comes from the module (`section_text`).
+/// Headings in a row alternate the two, so the list draws each one.
 pub const SECTION: &str = "@module-section";
+pub const SECTION_NEXT: &str = "@module-section-next";
 
 #[derive(Clone, Debug, Default)]
 pub struct Modules {
@@ -27,6 +29,15 @@ pub struct Modules {
     /// Locale key of the last store failure.
     pub problem: Option<&'static str>,
     pub offer: Option<Offer>,
+    /// The first permission shown on the permission page, and the last
+    /// first one the page can show (the renderer knows the heights).
+    pub asks_scroll: usize,
+    pub asks_last: std::cell::Cell<usize>,
+    /// The details page's buttons: Open (with pages), Remove, Remove with
+    /// data; the chosen one.
+    pub button: usize,
+    /// Remove with the data, after the confirmation.
+    pub remove_data: bool,
     /// The repository whose offer is awaited.
     pub wanted: String,
     /// An install runs.
@@ -38,6 +49,13 @@ impl Modules {
     }
     pub fn cards(&self) -> &[Card] {
         &self.cards[self.tab as usize]
+    }
+    /// The open page's module, by index.
+    fn page_module(&self, page: Page) -> Option<&Module> {
+        match page {
+            Page::Module(m, _) => self.view.modules.get(usize::from(m)),
+            _ => None,
+        }
     }
     /// The open page's rows, as the module declared them.
     fn page_rows(&self, page: Page) -> &[crate::modules::Row] {
@@ -85,7 +103,10 @@ impl Settings {
             }
         }
         if matches!(self.page(), Page::Modules) {
-            self.cursor = self.cursor.min(view.modules.len());
+            self.cursor = self.cursor.min(view.modules.len() + 1);
+        }
+        if matches!(self.page(), Page::Module(..)) {
+            self.cursor = self.cursor.min(self.module_rows().len().saturating_sub(1));
         }
     }
     /// Rows of the module pages, built from what the modules declared.
@@ -99,36 +120,100 @@ impl Settings {
                     })
                     .collect();
                 rows.push(Row {
+                    label: "modules.auto",
+                    subtitle: Some("modules.auto_detail"),
+                    ..empty_row(Id::ModulesAuto, Kind::Toggle)
+                });
+                rows.push(Row {
                     label: "modules.store",
                     ..empty_row(Id::ModuleStoreLink, Kind::Action)
                 });
                 rows
             }
-            page @ Page::Module(..) => self
-                .modules
-                .page_rows(page)
-                .iter()
-                .enumerate()
-                .map(|(n, row)| Row {
-                    subtitle: row.subtitle.as_ref().map(|_| ""),
-                    section: row.section.as_ref().map(|_| SECTION),
-                    ..empty_row(
-                        Id::ModuleRow(n as u8),
-                        match row.kind {
-                            RowKind::Toggle { .. } => Kind::Toggle,
-                            RowKind::Check { .. } => Kind::Check,
-                            RowKind::Action { .. } | RowKind::Keyboard { .. } => Kind::Action,
-                            RowKind::Value { .. } | RowKind::Text { .. } => Kind::Value,
+            page @ Page::Module(..) => {
+                let module = self.modules.page_module(page);
+                let mut rows = Vec::new();
+                let mut marker = SECTION_NEXT;
+                for (n, row) in self.modules.page_rows(page).iter().enumerate() {
+                    let section = row.section.as_ref().map(|_| {
+                        marker = if marker == SECTION {
+                            SECTION_NEXT
+                        } else {
+                            SECTION
+                        };
+                        marker
+                    });
+                    let kind = match row.kind {
+                        RowKind::Toggle { .. } => Kind::Toggle,
+                        RowKind::Check { .. } => Kind::Check,
+                        RowKind::Action { .. } | RowKind::Keyboard { .. } => Kind::Action,
+                        RowKind::Value { .. } | RowKind::Text { .. } | RowKind::Progress { .. } => {
+                            Kind::Value
+                        }
+                        RowKind::List { ref id } => {
+                            let items = module.map_or(&[][..], |m| {
+                                self.modules.view.items(&m.id, &format!("row:{id}"))
+                            });
+                            for (i, item) in items.iter().enumerate() {
+                                rows.push(Row {
+                                    subtitle: (!item.subtitle.is_empty()).then_some(""),
+                                    section: section.filter(|_| i == 0),
+                                    ..empty_row(Id::ModuleItem(n as u8, i as u8), Kind::Action)
+                                });
+                            }
+                            continue;
+                        }
+                    };
+                    rows.push(Row {
+                        // A bar takes the second line.
+                        subtitle: match row.kind {
+                            RowKind::Progress { .. } => Some(""),
+                            _ => row.subtitle.as_ref().map(|_| ""),
                         },
-                    )
-                })
-                .collect(),
+                        section,
+                        ..empty_row(Id::ModuleRow(n as u8), kind)
+                    });
+                }
+                rows
+            }
             _ => Vec::new(),
         }
     }
     fn module_row(&self, id: Id) -> Option<&crate::modules::Row> {
         match id {
-            Id::ModuleRow(n) => self.modules.page_rows(self.page()).get(usize::from(n)),
+            Id::ModuleRow(n) | Id::ModuleItem(n, _) => {
+                self.modules.page_rows(self.page()).get(usize::from(n))
+            }
+            _ => None,
+        }
+    }
+    /// The item of a `list` row.
+    pub fn module_item(&self, id: Id) -> Option<&crate::modules::Item> {
+        let Id::ModuleItem(n, i) = id else {
+            return None;
+        };
+        let module = self.modules.page_module(self.page())?;
+        let RowKind::List { id } = &self
+            .modules
+            .page_rows(self.page())
+            .get(usize::from(n))?
+            .kind
+        else {
+            return None;
+        };
+        self.modules
+            .view
+            .items(&module.id, &format!("row:{id}"))
+            .get(usize::from(i))
+    }
+    /// A `progress` row: its bar (0–100), if the module sent one.
+    pub fn module_progress(&self, id: Id) -> Option<u8> {
+        let module = self.modules.page_module(self.page())?;
+        match &self.module_row(id)?.kind {
+            RowKind::Progress { id: row } if matches!(id, Id::ModuleRow(_)) => self
+                .modules
+                .view
+                .progress(&module.id, &format!("row:{row}")),
             _ => None,
         }
     }
@@ -141,23 +226,28 @@ impl Settings {
                 .modules
                 .get(usize::from(n))
                 .map(|m| m.name.clone()),
+            Id::ModuleItem(..) => self.module_item(id).map(|i| i.title.clone()),
             Id::ModuleRow(_) => self.module_row(id).map(|r| r.label.clone()),
             _ => None,
         }
     }
     pub(super) fn module_subtitle(&self, id: Id) -> Option<String> {
+        if let Id::ModuleItem(..) = id {
+            return self.module_item(id).map(|i| i.subtitle.clone());
+        }
         self.module_row(id)?.subtitle.clone()
     }
-    /// The heading above row `n` of a module page.
-    pub fn section_text(&self, n: usize) -> String {
-        self.modules
-            .page_rows(self.page())
-            .get(n)
+    /// The heading above the module row with this id.
+    pub fn section_text(&self, id: Id) -> String {
+        self.module_row(id)
             .and_then(|r| r.section.clone())
             .unwrap_or_default()
     }
     /// The value text of a module row.
     pub(super) fn module_value(&self, id: Id, catalog: &crate::i18n::I18n) -> Option<String> {
+        if let Id::ModuleItem(..) = id {
+            return self.module_item(id).map(|i| i.value.clone());
+        }
         let row = self.module_row(id)?;
         let module = self.modules.view.modules.get(match self.page() {
             Page::Module(m, _) => usize::from(m),
@@ -173,7 +263,7 @@ impl Settings {
                 .and_then(|n| labels.get(n))
                 .cloned()
                 .unwrap_or_else(|| value.to_owned()),
-            RowKind::Text { id } => self
+            RowKind::Text { id } | RowKind::Progress { id } => self
                 .modules
                 .view
                 .value(&module.id, &format!("row:{id}"))
@@ -194,11 +284,14 @@ impl Settings {
             _ => String::new(),
         })
     }
-    /// Text rows only show; disabled modules cannot be switched.
+    /// Text and progress rows only show, and items without an action.
     pub(super) fn module_fixed(&self, id: Id) -> bool {
+        if let Id::ModuleItem(..) = id {
+            return self.module_item(id).is_none_or(|i| i.action.is_none());
+        }
         matches!(
             self.module_row(id).map(|r| &r.kind),
-            Some(RowKind::Text { .. })
+            Some(RowKind::Text { .. } | RowKind::Progress { .. })
         )
     }
     fn open_store_list(&mut self, tab: Tab, refresh: bool) -> Effect {
@@ -237,16 +330,29 @@ impl Settings {
         if self.modules.confirm_remove {
             self.modules.confirm_remove = false;
             let module = self.modules.module()?.id.clone();
+            let data = std::mem::take(&mut self.modules.remove_data);
             return Some(match button {
                 Button::A | Button::X => {
                     self.back();
                     Effect::Module(Request::Remove {
                         module,
-                        data: button == Button::X,
+                        data: data || button == Button::X,
                     })
                 }
                 _ => Effect::None,
             });
+        }
+        // The permission column scrolls on the permission and details pages.
+        if matches!(self.page(), Page::ModuleInfo | Page::ModuleOffer) {
+            let scroll = &mut self.modules.asks_scroll;
+            match button {
+                Button::Up => *scroll = scroll.saturating_sub(1),
+                Button::Down => *scroll = (*scroll + 1).min(self.modules.asks_last.get()),
+                _ => {}
+            }
+            if matches!(button, Button::Up | Button::Down) {
+                return Some(Effect::None);
+            }
         }
         match self.page() {
             Page::Modules => self.list_input(button),
@@ -266,7 +372,11 @@ impl Settings {
     }
     fn list_input(&mut self, button: Button) -> Option<Effect> {
         let count = self.modules.view.modules.len();
-        if self.cursor == count && button == Button::A {
+        // The automatic updates switch is an ordinary setting.
+        if self.cursor == count {
+            return None;
+        }
+        if self.cursor == count + 1 && button == Button::A {
             self.open(Page::ModuleStore);
             return Some(self.open_store_list(self.modules.tab, false));
         }
@@ -274,7 +384,7 @@ impl Settings {
         match button {
             Button::Y => {
                 self.modules.opened = self.cursor;
-                self.open(Page::ModuleInfo);
+                self.open_info();
             }
             Button::A | Button::L | Button::R => {
                 if matches!(module.status, Status::Invalid | Status::Incompatible) {
@@ -282,7 +392,7 @@ impl Settings {
                 } else if !module.granted {
                     // Its permissions come first (local folders, new grants).
                     self.modules.opened = self.cursor;
-                    self.open(Page::ModuleInfo);
+                    self.open_info();
                 } else {
                     let on = !module.active();
                     self.values.insert(
@@ -300,10 +410,53 @@ impl Settings {
         }
         Some(Effect::None)
     }
+    fn open_info(&mut self) {
+        self.modules.asks_scroll = 0;
+        self.modules.button = 0;
+        self.open(Page::ModuleInfo);
+    }
+    /// The buttons of Modulo-detalhes, as locale keys.
+    pub fn details_buttons(&self) -> &'static [&'static str] {
+        let pages = self
+            .modules
+            .module()
+            .is_some_and(|m| m.active() && !m.pages.is_empty());
+        if pages {
+            &["modules.open", "modules.remove", "modules.remove_all"]
+        } else {
+            &["modules.remove", "modules.remove_all"]
+        }
+    }
+    /// Details of a module the user allowed: the buttons.
+    fn details_input(&mut self, button: Button) -> Effect {
+        let buttons = self.details_buttons();
+        let at = self.modules.button.min(buttons.len() - 1);
+        match button {
+            Button::L => self.modules.button = at.saturating_sub(1),
+            Button::R => self.modules.button = (at + 1).min(buttons.len() - 1),
+            Button::X => self.modules.confirm_remove = true,
+            Button::B => return self.back(),
+            Button::A => match buttons[at] {
+                "modules.open" => {
+                    self.open(Page::Module(self.modules.opened as u8, 0));
+                    self.sync_modules();
+                }
+                key => {
+                    self.modules.remove_data = key == "modules.remove_all";
+                    self.modules.confirm_remove = true;
+                }
+            },
+            _ => {}
+        }
+        Effect::None
+    }
     fn info_input(&mut self, button: Button) -> Effect {
         let Some(module) = self.modules.module().cloned() else {
             return self.back();
         };
+        if module.granted && module.status == Status::Ready {
+            return self.details_input(button);
+        }
         match button {
             Button::A if !module.granted && module.status == Status::Ready => {
                 self.back();
@@ -330,9 +483,23 @@ impl Settings {
         let Page::Module(m, _) = self.page() else {
             return None;
         };
-        let id = Id::ModuleRow(self.cursor as u8);
-        let row = self.module_row(id)?.clone();
+        let id = self.module_rows().get(self.cursor)?.id;
         let module = self.modules.view.modules.get(usize::from(m))?.id.clone();
+        if let Id::ModuleItem(_, i) = id {
+            let action = self.module_item(id)?.action.clone();
+            return Some(match action {
+                Some(action) if button == Button::A => Effect::Module(Request::Invoke {
+                    module,
+                    action,
+                    call: Some(crate::modules::Call {
+                        item: Some(usize::from(i)),
+                        ..Default::default()
+                    }),
+                }),
+                _ => Effect::None,
+            });
+        }
+        let row = self.module_row(id)?.clone();
         let old = self.value(id).to_owned();
         let next = match &row.kind {
             RowKind::Toggle { .. } | RowKind::Check { .. }
@@ -403,6 +570,7 @@ impl Settings {
                     return Effect::None;
                 };
                 self.modules.offer = None;
+                self.modules.asks_scroll = 0;
                 self.modules.wanted = card.source();
                 self.modules.loading = true;
                 self.modules.problem = None;
@@ -432,14 +600,10 @@ impl Settings {
     /// The main button of the permission page, as a locale key.
     pub fn offer_action(&self) -> Option<&'static str> {
         if self.page() == Page::ModuleInfo {
+            // Details have their own buttons; only the consent page has one.
             let module = self.modules.module()?;
-            return if !module.granted && module.status == Status::Ready {
-                Some("modules.allow_enable")
-            } else if module.active() && !module.pages.is_empty() {
-                Some("modules.open")
-            } else {
-                None
-            };
+            return (!module.granted && module.status == Status::Ready)
+                .then_some("modules.allow_enable");
         }
         let offer = self.modules.offer.as_ref()?;
         Some(match &offer.installed {
@@ -456,6 +620,7 @@ impl Settings {
         if modules.working {
             return Some(&[]);
         }
+        let scroll = modules.asks_last.get() > 0;
         if modules.confirm.is_some() {
             return Some(&[(Key('A'), "hint.confirm"), (Key('B'), "hint.cancel")]);
         }
@@ -467,6 +632,9 @@ impl Settings {
             ]);
         }
         Some(match self.page() {
+            Page::Modules if self.cursor == modules.view.modules.len() => {
+                &[(Key('A'), "modules.toggle"), (Key('B'), "hint.back")]
+            }
             Page::Modules if self.cursor < modules.view.modules.len() => &[
                 (Key('A'), "modules.toggle"),
                 (Key('Y'), "modules.details"),
@@ -479,23 +647,39 @@ impl Settings {
                 (Key('Y'), "store.refresh"),
                 (Key('B'), "hint.back"),
             ],
-            Page::ModuleInfo => match self.offer_action() {
-                Some("modules.allow_enable") => &[
+            Page::ModuleInfo => match (self.offer_action(), scroll) {
+                (Some(_), true) => &[
+                    (Key('↕'), "modules.see_permissions"),
                     (Key('A'), "modules.allow"),
                     (Key('X'), "modules.remove"),
                     (Key('B'), "hint.back"),
                 ],
-                Some(_) => &[
-                    (Key('A'), "hint.open"),
+                (Some(_), false) => &[
+                    (Key('A'), "modules.allow"),
                     (Key('X'), "modules.remove"),
                     (Key('B'), "hint.back"),
                 ],
-                None => &[(Key('X'), "modules.remove"), (Key('B'), "hint.back")],
+                (None, true) => &[
+                    (Key('↕'), "modules.see_permissions"),
+                    (Key('A'), "modules.choose"),
+                    (Key('B'), "hint.back"),
+                ],
+                (None, false) => &[(Key('A'), "modules.choose"), (Key('B'), "hint.back")],
             },
-            Page::ModuleOffer => match self.offer_action() {
-                Some("modules.installed") | None => &[(Key('B'), "hint.back")],
-                Some("modules.update") => &[(Key('A'), "store.update"), (Key('B'), "hint.back")],
-                Some(_) => &[(Key('A'), "store.install"), (Key('B'), "hint.back")],
+            Page::ModuleOffer => match (self.offer_action(), scroll) {
+                (Some("modules.installed") | None, _) => &[(Key('B'), "hint.back")],
+                (Some("modules.update"), _) => {
+                    &[(Key('A'), "store.update"), (Key('B'), "hint.back")]
+                }
+                (Some("modules.allow_update"), _) => {
+                    &[(Key('A'), "store.update"), (Key('B'), "modules.keep")]
+                }
+                (Some(_), true) => &[
+                    (Key('↕'), "modules.see_permissions"),
+                    (Key('A'), "store.install"),
+                    (Key('B'), "hint.back"),
+                ],
+                (Some(_), false) => &[(Key('A'), "store.install"), (Key('B'), "hint.back")],
             },
             _ => return None,
         })
@@ -543,6 +727,7 @@ impl Settings {
                     Err(key) => modules.problem = Some(key),
                 }
             }
+            StoreReply::Updated(..) => {}
             StoreReply::Done(result) => {
                 modules.working = false;
                 let key = match result {
@@ -650,7 +835,12 @@ mod tests {
     fn the_list_switches_modules_and_asks_before_a_first_run() {
         let mut state = settings();
         let rows = state.visible_rows();
-        assert_eq!(rows.len(), 3, "two modules and the store");
+        assert_eq!(
+            rows.len(),
+            4,
+            "two modules, automatic updates and the store"
+        );
+        assert_eq!(rows[2].id, Id::ModulesAuto);
         assert_eq!(state.value(Id::ModuleEntry(0)), "1");
         assert_eq!(
             state.handle(Button::A),
@@ -674,6 +864,13 @@ mod tests {
         );
         state.handle(Button::Down);
         assert_eq!(state.cursor, 2);
+        // An ordinary launcher setting, off until the user turns it on.
+        assert_eq!(state.value(Id::ModulesAuto), "0");
+        assert_eq!(
+            state.handle(Button::A),
+            Effect::Set(Id::ModulesAuto, "1".into())
+        );
+        state.handle(Button::Down);
         let Effect::Module(Request::Store(StoreAction::List(Tab::Reviewed, false))) =
             state.handle(Button::A)
         else {
@@ -683,11 +880,99 @@ mod tests {
     }
 
     #[test]
+    fn details_scroll_the_permissions_and_remove_with_or_without_data() {
+        let mut state = settings();
+        state.handle(Button::Y);
+        assert_eq!(state.page(), Page::ModuleInfo);
+        assert_eq!(state.offer_action(), None, "details have their own buttons");
+        assert_eq!(
+            state.details_buttons(),
+            ["modules.open", "modules.remove", "modules.remove_all"]
+        );
+        // The renderer said three first cards are possible.
+        state.modules.asks_last.set(2);
+        for _ in 0..5 {
+            state.handle(Button::Down);
+        }
+        assert_eq!(
+            state.modules.asks_scroll, 2,
+            "never past the last full column"
+        );
+        state.handle(Button::Up);
+        assert_eq!(state.modules.asks_scroll, 1);
+        state.handle(Button::R);
+        state.handle(Button::R);
+        state.handle(Button::R);
+        assert_eq!(state.modules.button, 2);
+        assert_eq!(state.handle(Button::A), Effect::None);
+        assert!(state.modules.confirm_remove);
+        assert_eq!(
+            state.handle(Button::A),
+            Effect::Module(Request::Remove {
+                module: "bateria".into(),
+                data: true
+            })
+        );
+        let mut state = settings();
+        state.handle(Button::Y);
+        state.handle(Button::A);
+        assert_eq!(state.page(), Page::Module(0, 0), "Open goes to its page");
+    }
+
+    #[test]
+    fn list_rows_show_the_module_items_and_send_the_chosen_one() {
+        let mut view = (*view()).clone();
+        view.modules[0].pages[0].rows.push(ModuleRow {
+            label: String::new(),
+            subtitle: None,
+            section: Some("Jogos".into()),
+            kind: RowKind::List { id: "jogos".into() },
+            default: String::new(),
+        });
+        let item = |title: &str, action: Option<&str>| crate::modules::Item {
+            title: title.into(),
+            subtitle: "SNES".into(),
+            value: "há 2 h".into(),
+            action: action.map(Into::into),
+        };
+        view.items.insert(
+            ("bateria".into(), "row:jogos".into()),
+            vec![item("Mario", Some("abrir")), item("Zelda", None)],
+        );
+        let mut state = settings();
+        state.set_modules(Arc::new(view));
+        state.open_module_page("bateria", 0);
+        let rows = state.visible_rows();
+        assert_eq!(rows.len(), 6, "four rows, the list as its two items");
+        assert_eq!(rows[4].id, Id::ModuleItem(4, 0));
+        assert_eq!(state.label(&rows[4]), "Mario");
+        assert_eq!(state.section_text(rows[4].id), "Jogos");
+        let catalog = crate::i18n::I18n::default();
+        assert_eq!(state.display_value(rows[4].id, &catalog), "há 2 h");
+        assert!(
+            state.fixed(rows[5].id),
+            "an item without an action only shows"
+        );
+        state.cursor = 4;
+        assert_eq!(
+            state.handle(Button::A),
+            Effect::Module(Request::Invoke {
+                module: "bateria".into(),
+                action: "abrir".into(),
+                call: Some(crate::modules::Call {
+                    item: Some(0),
+                    ..Default::default()
+                })
+            })
+        );
+    }
+
+    #[test]
     fn module_pages_edit_declared_rows_only() {
         let mut state = settings();
         state.open_module_page("bateria", 0);
         assert_eq!(state.page(), Page::Module(0, 0));
-        assert_eq!(state.section_text(0), "Opções");
+        assert_eq!(state.section_text(Id::ModuleRow(0)), "Opções");
         assert_eq!(state.value(Id::ModuleRow(1)), "15");
         let catalog = crate::i18n::I18n::default();
         assert_eq!(state.display_value(Id::ModuleRow(1), &catalog), "15 s");

@@ -120,7 +120,7 @@ impl Backend {
         let ids = [Page::Sound, Page::System, Page::Region]
             .iter()
             .flat_map(|page| page.rows().iter().map(|row| row.id))
-            .chain([Id::Buttons]);
+            .chain([Id::Buttons, Id::ModulesAuto]);
         for id in ids {
             if let Some(value) = cfg.get_setting(id.key(), None, None) {
                 state.values.insert(id, id.normalize(&value));

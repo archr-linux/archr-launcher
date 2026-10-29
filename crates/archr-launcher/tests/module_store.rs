@@ -354,3 +354,81 @@ fn updates_show_only_new_permissions_and_keep_the_previous_version() {
     let offer = shop(root.path(), &fake).offer(&other).unwrap();
     assert_eq!(offer.blocked, Some("modules.other_source"));
 }
+
+/// kaio-dev/archr-bateria 1.0.0 installed from the store, as the host
+/// records it.
+fn installed_bateria(root: &Path) {
+    let fake = Fake::default();
+    let good = Tarball::module(MANIFEST).bytes();
+    publish(&fake, MANIFEST, &good, &sha(&good), "");
+    let store = shop(root, &fake);
+    let installed = store.install(&store.offer(&card()).unwrap()).unwrap();
+    let mut state = State::default();
+    state.modules.insert(
+        "bateria".into(),
+        Record {
+            source: installed.source,
+            version: installed.version,
+            digest: installed.digest,
+            granted: installed.granted,
+            consent: true,
+            enabled: true,
+            ..Record::default()
+        },
+    );
+    state.save(&root.join("modules.toml")).unwrap();
+    fs::remove_dir_all(root.join("cache")).unwrap();
+}
+/// Release 1.1.0 of `manifest`, reviewed when `reviewed`.
+fn release_1_1(manifest: &str, reviewed: bool) -> Fake {
+    let tarball = Tarball::module(manifest).bytes();
+    let fake = Fake::default();
+    let digest = sha(&tarball);
+    publish(
+        &fake,
+        manifest,
+        &tarball,
+        &digest,
+        if reviewed { &digest } else { "" },
+    );
+    let download = "https://github.com/kaio-dev/archr-bateria/releases/download/v1.1.0";
+    fake.answer(
+        &format!("{API}/kaio-dev/archr-bateria/releases/latest"),
+        format!(
+            r#"{{"tag_name":"v1.1.0","assets":[{{"name":"module.toml","size":1}},
+            {{"name":"bateria-1.1.0.tar.gz","size":{},"digest":"sha256:{digest}"}}]}}"#,
+            tarball.len(),
+        ),
+    );
+    fake.answer(&format!("{download}/module.toml"), manifest.to_owned());
+    fake.answer(&format!("{download}/bateria-1.1.0.tar.gz"), tarball);
+    fake
+}
+
+#[test]
+fn automatic_updates_take_only_reviewed_versions_that_ask_for_nothing_new() {
+    let newer = MANIFEST.replace("1.0.0", "1.1.0");
+    let asks = newer.replace(
+        "[[start.tiles]]",
+        "[permissions]\nnet = true\n[[start.tiles]]",
+    );
+    for (manifest, reviewed, updated) in [
+        (&newer, false, false),
+        (&asks, true, false),
+        (&newer, true, true),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        installed_bateria(root.path());
+        let done = shop(root.path(), &release_1_1(manifest, reviewed)).auto();
+        assert_eq!(!done.is_empty(), updated, "reviewed {reviewed}: {manifest}");
+        let on_disk = fs::read_to_string(root.path().join("modules/bateria/module.toml")).unwrap();
+        assert_eq!(on_disk.contains("1.1.0"), updated);
+        if updated {
+            assert_eq!(done[0].version, "1.1.0");
+            assert!(
+                root.path().join("modules/.previous-bateria").is_dir(),
+                "the old version waits for the new one's first good run"
+            );
+        }
+    }
+}

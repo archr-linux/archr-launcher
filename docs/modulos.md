@@ -103,6 +103,13 @@ O bloco mostra um valor ao vivo embaixo do título quando o módulo manda
 total), entre Wi-Fi e Suspender. O rótulo aparece embaixo da fileira quando o
 atalho tem o foco.
 
+**Widget no Start** (`[[start.widgets]]`, mesmos campos; 1 por módulo, 2 no
+total): um bloco 2×1 entre os blocos e os atalhos, com o ícone e o nome do
+módulo, o valor grande, um texto ao lado e uma barra. O módulo manda
+`ui.update` para `widget:<id>` com `value`, `detail` e `progress` (0–100). A
+posição e o tamanho vêm do tema (`start_widgets`, ver `docs/temas.md`); ↑↓
+chegam a ele, A abre a página ou envia a ação.
+
 **Item no menu Y** (1 por módulo, 3 no total), antes de Suspender:
 
 ```toml
@@ -143,6 +150,8 @@ default = true
 | `action` | A envia `action.invoke`; mostra "…" até a resposta | `action`, `confirm` (pergunta opcional) |
 | `text` | só leitura; valor vem de `ui.update` para `row:<id>` | `id`, `value` inicial |
 | `keyboard` | abre o teclado do launcher | `key`, `max` (≤ 64), `secret` |
+| `progress` | título, texto à direita e barra; tudo de `ui.update` para `row:<id>` (`value`, `progress` 0–100) | `id` |
+| `list` | linhas que o módulo manda: `ui.update` para `row:<id>` com `items: [{title, subtitle?, value?, action?}]` (até 20); A numa linha com `action` envia `action.invoke` com `context: {item: <índice>}` | `id` |
 
 Os valores são do launcher (um dono por chave): ele grava
 `/storage/.config/archr-launcher/module-settings/<id>.json` de forma atômica.
@@ -294,7 +303,7 @@ só para quem assinou em `[[hooks]]`:
 
 | método | tipo | params |
 |---|---|---|
-| `ui.update` | notificação | `{target: "tile:<id>" \| "shortcut:<id>" \| "row:<id>" \| "quick:<id>", value?: texto ou {key, args}, hidden?: bool}` |
+| `ui.update` | notificação | `{target: "tile:<id>" \| "shortcut:<id>" \| "widget:<id>" \| "row:<id>" \| "quick:<id>", value?: texto ou {key, args}, detail?: texto, progress?: 0–100, items?: [...], hidden?: bool}` |
 | `ui.notify` | notificação | `{text: texto ou {key,args}}` ou `{key, args}`; faixa de aviso, no máx. 1 a cada 10 s |
 | `log` | notificação | `{level: "info" \| "error", message}` |
 | `settings.set` | pedido | `{key, value}`, só chaves declaradas no manifesto → `{}` |
@@ -487,5 +496,14 @@ tar -czf bateria-detalhada-1.0.0.tar.gz bateria-detalhada/
 A Loja confere o SHA-256 que o GitHub publica para o asset, exige o
 `module.toml` idêntico e valida o pacote antes de colocá-lo em `modules/<id>`.
 Um `id` pertence a um repositório: outro repositório com o mesmo `id` é
-recusado. Atualizações nunca são automáticas; a versão anterior fica guardada
-até a nova funcionar.
+recusado. A versão anterior fica guardada até a nova funcionar.
+
+**Atualização automática** (Configurações › Sistema › Módulos › "Atualizar
+sozinho os revisados", `launcher.modules.autoupdate`, desligada por padrão):
+uma vez por dia, 2 min depois do início e nunca durante um jogo, o launcher
+instala sozinho a versão nova de um módulo da Loja só se o pacote dela estiver
+na lista revisada (pelo digest) e ela não pedir nenhuma permissão nova; senão
+fica "→ x.y.z disponível". Mesmas checagens da instalação à mão; aviso na
+faixa ("X foi atualizado para 1.2.0") e "atualizado sozinho" na lista por uma
+semana. Detalhes (Y na lista) mostram o digest do pacote, se ele confere com a
+lista revisada, o último uso e as falhas dos últimos 10 min.

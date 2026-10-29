@@ -132,6 +132,22 @@ impl Permissions {
             launch: self.launch && !has("launch"),
         }
     }
+    /// Only what `granted` already holds.
+    pub fn only(&self, granted: &[String]) -> Self {
+        let new = self.without(granted);
+        let old = |list: &[String], new: &[String]| -> Vec<String> {
+            list.iter().filter(|v| !new.contains(v)).cloned().collect()
+        };
+        Self {
+            net: self.net && !new.net,
+            read: old(&self.read, &new.read),
+            config_read: old(&self.config_read, &new.config_read),
+            config_write: old(&self.config_write, &new.config_write),
+            hooks: old(&self.hooks, &new.hooks),
+            system: old(&self.system, &new.system),
+            launch: self.launch && !new.launch,
+        }
+    }
     /// Anything API 1 did not have.
     fn api_2(&self) -> bool {
         self.launch
@@ -180,6 +196,7 @@ pub struct Manifest {
     pub shortcuts: Vec<Entry>,
     pub quick: Vec<Quick>,
     pub pages: Vec<Page>,
+    pub widgets: Vec<Entry>,
 }
 
 /// `id` rules: `[a-z0-9-]{3,40}`.
@@ -381,8 +398,9 @@ pub fn parse(source: &str) -> Result<(Manifest, Vec<String>), Vec<String>> {
         })
         .collect();
     let mut start = reader(&start, "start.", &mut warnings);
-    start.check(&["tiles", "shortcuts"]);
+    start.check(&["tiles", "shortcuts", "widgets"]);
     let (tiles, shortcuts) = (start.tables("tiles"), start.tables("shortcuts"));
+    let widgets = start.tables("widgets");
     let mut settings = reader(&settings, "settings.", &mut warnings);
     settings.check(&["pages"]);
     let pages: Vec<Page> = settings
@@ -402,6 +420,7 @@ pub fn parse(source: &str) -> Result<(Manifest, Vec<String>), Vec<String>> {
     };
     let tiles = entries(&tiles, "start.tiles.", &mut warnings);
     let shortcuts = entries(&shortcuts, "start.shortcuts.", &mut warnings);
+    let widgets = entries(&widgets, "start.widgets.", &mut warnings);
     let quick = quick
         .iter()
         .filter_map(|q| read_quick(q, &mut warnings))
@@ -436,6 +455,7 @@ pub fn parse(source: &str) -> Result<(Manifest, Vec<String>), Vec<String>> {
                     shortcuts,
                     quick,
                     pages,
+                    widgets,
                 },
                 warnings,
             ))
@@ -644,6 +664,18 @@ fn read_row(table: &Table, warnings: &mut Vec<String>) -> Option<Row> {
             },
             row.text("value").unwrap_or_default(),
         ),
+        "progress" => (
+            RowKind::Progress {
+                id: row.text("id")?,
+            },
+            String::new(),
+        ),
+        "list" => (
+            RowKind::List {
+                id: row.text("id")?,
+            },
+            String::new(),
+        ),
         "keyboard" => (
             RowKind::Keyboard {
                 key: key()?,
@@ -737,6 +769,7 @@ pub fn check(dir: &Path) -> Result<(Manifest, Vec<String>), Vec<String>> {
                 .tiles
                 .iter()
                 .chain(&manifest.shortcuts)
+                .chain(&manifest.widgets)
                 .filter_map(|e| e.icon.as_deref()),
         )
         .collect();
@@ -785,6 +818,10 @@ open = "main"
 [[start.tiles]]
 id = "lost"
 open = "nowhere"
+[[start.widgets]]
+id = "carga"
+label = "@name"
+open = "main"
 [[settings.pages]]
 id = "main"
 title = "@name"
@@ -801,6 +838,12 @@ key = "watts"
 default = true
 [[settings.pages.rows]]
 type = "radio"
+[[settings.pages.rows]]
+type = "progress"
+id = "envio"
+[[settings.pages.rows]]
+type = "list"
+id = "jogos"
 "#;
 
     #[test]
@@ -815,8 +858,11 @@ type = "radio"
         assert_eq!(manifest.hooks, ["focus.game"]);
         assert_eq!(manifest.tiles.len(), 1);
         assert_eq!(manifest.tiles[0].target, Target::Page(0));
+        assert_eq!(manifest.widgets[0].id, "carga");
         let rows = &manifest.pages[0].rows;
-        assert_eq!(rows.len(), 2);
+        assert_eq!(rows.len(), 4);
+        assert!(matches!(&rows[2].kind, RowKind::Progress { id } if id == "envio"));
+        assert!(matches!(&rows[3].kind, RowKind::List { id } if id == "jogos"));
         assert_eq!(rows[0].default, "50");
         assert!(matches!(&rows[0].kind, RowKind::Value { choices, .. } if choices.len() == 5));
         assert_eq!(rows[1].default, "1");
@@ -876,6 +922,8 @@ type = "radio"
         let granted = ["launch".to_owned(), "hooks:launch".to_owned()];
         let added = manifest.permissions.without(&granted).tokens();
         assert_eq!(added.len(), 2, "{added:?}");
+        let kept = manifest.permissions.only(&granted).tokens();
+        assert_eq!(kept, granted.into_iter().collect());
         let one = GOOD.replace("read = [\"roms\"]", asks);
         let errors = parse(&one).unwrap_err();
         assert!(

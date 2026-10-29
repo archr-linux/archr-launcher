@@ -12,6 +12,10 @@ pub const TILES: (usize, usize) = (4, 2);
 pub const SHORTCUTS: (usize, usize) = (2, 1);
 /// Items of one quick menu in all, and per module.
 pub const QUICK: (usize, usize) = (3, 1);
+/// Start widgets in all, and per module.
+pub const WIDGETS: (usize, usize) = (2, 1);
+/// Items of one `list` row.
+pub const ITEMS: usize = 20;
 
 /// What choosing a tile or shortcut does.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -76,6 +80,14 @@ pub enum RowKind {
         max: u8,
         secret: bool,
     },
+    /// A bar, 0–100, and a text on the right; both from `ui.update`.
+    Progress {
+        id: String,
+    },
+    /// Rows the module sends with `ui.update` (`items`), up to `ITEMS`.
+    List {
+        id: String,
+    },
 }
 impl RowKind {
     /// The setting this row edits.
@@ -85,7 +97,9 @@ impl RowKind {
             | Self::Value { key, .. }
             | Self::Check { key }
             | Self::Keyboard { key, .. } => Some(key),
-            Self::Action { .. } | Self::Text { .. } => None,
+            Self::Action { .. } | Self::Text { .. } | Self::Progress { .. } | Self::List { .. } => {
+                None
+            }
         }
     }
 }
@@ -154,8 +168,18 @@ pub struct Module {
     pub shortcuts: Vec<Entry>,
     pub quick: Vec<Quick>,
     pub pages: Vec<Page>,
+    /// Start widgets (2×1), drawn from `ui.update` to `widget:<id>`.
+    pub widgets: Vec<Entry>,
     /// Saved values of its settings rows.
     pub settings: BTreeMap<String, String>,
+    /// SHA-256 of the installed package (`sha256:<hex>`); empty if local.
+    pub digest: String,
+    /// When it last ran, and when the store last updated it on its own
+    /// (seconds since 1970).
+    pub used: u64,
+    pub auto_updated: u64,
+    /// Failures in the last ten minutes.
+    pub failures: usize,
 }
 impl Module {
     /// Running, or allowed to run.
@@ -173,6 +197,21 @@ pub struct View {
     pub hidden: BTreeSet<(String, String)>,
     /// Actions sent and not answered yet: module id and action.
     pub busy: BTreeSet<(String, String)>,
+    /// `ui.update` extras by module id and target: a secondary line
+    /// (`detail`), a bar (`progress`, 0–100) and list rows (`items`).
+    pub details: BTreeMap<(String, String), String>,
+    pub progress: BTreeMap<(String, String), u8>,
+    pub items: BTreeMap<(String, String), Vec<Item>>,
+}
+
+/// One row of a `list` row, as the module sent it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Item {
+    pub title: String,
+    pub subtitle: String,
+    pub value: String,
+    /// A sends this action with the item's index as `context.item`.
+    pub action: Option<String>,
 }
 
 impl View {
@@ -209,6 +248,26 @@ impl View {
     pub fn tiles(&self) -> Vec<(usize, &Entry)> {
         self.entries(TILES, |m| &m.tiles, |e| format!("tile:{}", e.id))
     }
+    /// Start widgets, under the per-module and total caps.
+    pub fn widgets(&self) -> Vec<(usize, &Entry)> {
+        self.entries(WIDGETS, |m| &m.widgets, |e| format!("widget:{}", e.id))
+    }
+    fn extra<'a, T>(
+        map: &'a BTreeMap<(String, String), T>,
+        module: &str,
+        target: &str,
+    ) -> Option<&'a T> {
+        map.get(&(module.to_owned(), target.to_owned()))
+    }
+    pub fn detail(&self, module: &str, target: &str) -> Option<&str> {
+        Self::extra(&self.details, module, target).map(String::as_str)
+    }
+    pub fn progress(&self, module: &str, target: &str) -> Option<u8> {
+        Self::extra(&self.progress, module, target).copied()
+    }
+    pub fn items(&self, module: &str, target: &str) -> &[Item] {
+        Self::extra(&self.items, module, target).map_or(&[], Vec::as_slice)
+    }
     pub fn shortcuts(&self) -> Vec<(usize, &Entry)> {
         self.entries(
             SHORTCUTS,
@@ -242,6 +301,8 @@ pub struct Call {
     pub system: String,
     pub game_key: String,
     pub rom: String,
+    /// The index of the chosen row of a `list` row.
+    pub item: Option<usize>,
 }
 
 /// The store tabs (Loja-modulos).
@@ -307,6 +368,8 @@ pub struct Offer {
     pub permissions: Vec<Permission>,
     /// For an update: only the permissions it adds, empty when none.
     pub added: Vec<Permission>,
+    /// For an update that adds some: what the user already allowed.
+    pub kept: Vec<Permission>,
     pub preview: Option<std::path::PathBuf>,
     /// The installed version, when there is one.
     pub installed: Option<String>,
@@ -320,6 +383,9 @@ pub struct Offer {
 pub enum StoreAction {
     /// Show a tab; `true` asks GitHub again.
     List(Tab, bool),
+    /// Update on their own the store modules whose new version is reviewed
+    /// and asks for nothing new.
+    Auto,
     Open(Box<Card>),
     Install(Box<Offer>),
 }
@@ -336,6 +402,8 @@ pub enum StoreReply {
     Offer(String, Result<Box<Offer>, &'static str>),
     /// An install ended; the key names the outcome.
     Done(Result<&'static str, &'static str>),
+    /// A module was updated on its own: its id and new version.
+    Updated(String, String),
 }
 
 /// What the screens ask the host to do.

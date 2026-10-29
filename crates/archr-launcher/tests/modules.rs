@@ -977,3 +977,43 @@ fn late_launch_answers_are_allowed_and_count_only_as_a_habit() {
     assert!(view.modules[0].active(), "{:?}", probe.notices);
     assert!(probe.notices.is_empty(), "{:?}", probe.notices);
 }
+
+#[test]
+fn widgets_bars_and_lists_reach_the_screens_and_items_answer_with_their_index() {
+    let root = tempfile::tempdir().unwrap();
+    let base = root.path();
+    let dir = api_2(base, "nuvem", "", &[]);
+    let updates = [
+        r#"{"jsonrpc":"2.0","method":"ui.update","params":{"target":"widget:carga","value":"87 %","detail":"1,9 W","progress":87.4}}"#,
+        r#"{"jsonrpc":"2.0","method":"ui.update","params":{"target":"row:envio","value":"12 de 31","progress":250}}"#,
+        r#"{"jsonrpc":"2.0","method":"ui.update","params":{"target":"row:jogos","items":[{"title":"Mario","subtitle":{"key":"@hello","args":{"who":"SNES"}},"value":"ontem","action":"abrir"},{"title":"Zelda"}]}}"#,
+    ];
+    fs::write(dir.join("go.jsonl"), updates.join("\n") + "\n").unwrap();
+    fs::write(dir.join("abrir.jsonl"), "").unwrap();
+    let mut probe = Probe::new(base);
+    ready(base, &["nuvem"]);
+    probe.invoke("nuvem", "go");
+    let view = probe.wait(|v, _| !v.items.is_empty());
+    assert_eq!(view.value("nuvem", "widget:carga"), Some("87 %"));
+    assert_eq!(view.detail("nuvem", "widget:carga"), Some("1,9 W"));
+    assert_eq!(view.progress("nuvem", "widget:carga"), Some(87));
+    assert_eq!(view.progress("nuvem", "row:envio"), Some(100), "clamped");
+    let items = view.items("nuvem", "row:jogos");
+    assert_eq!(items.len(), 2);
+    assert_eq!(items[0].subtitle, "Hello SNES");
+    assert_eq!(items[0].action.as_deref(), Some("abrir"));
+    assert_eq!(items[1].action, None);
+    probe.request(Request::Invoke {
+        module: "nuvem".into(),
+        action: "abrir".into(),
+        call: Some(archr_ui::modules::Call {
+            item: Some(1),
+            ..Default::default()
+        }),
+    });
+    let seen = until(
+        &base.join("module-data/nuvem/seen.log"),
+        "\"action\":\"abrir\"",
+    );
+    assert!(seen.contains(r#""context":{"item":1}"#), "{seen}");
+}

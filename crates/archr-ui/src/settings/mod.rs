@@ -281,8 +281,12 @@ pub enum Id {
     /// One module's switch on the modules list.
     ModuleEntry(u8),
     ModuleStoreLink,
+    /// `launcher.modules.autoupdate`: reviewed modules update on their own.
+    ModulesAuto,
     /// One row of the open module page.
     ModuleRow(u8),
+    /// Item `.1` of the `list` row `.0` of the open module page.
+    ModuleItem(u8, u8),
     /// System link to Import from RetroArch, and that page's rows.
     RaImportLink,
     RaConfig,
@@ -394,6 +398,7 @@ impl Id {
             // mark the START menu when something is pending.
             Self::UpdateBoot => ("updates.check_on_boot", "1"),
             Self::UpdateNotify => ("updates.notify_start", "1"),
+            Self::ModulesAuto => ("launcher.modules.autoupdate", "0"),
             Self::Update
             | Self::Restore
             | Self::ThemeStore
@@ -424,7 +429,8 @@ impl Id {
             | Self::ModulesLink
             | Self::ModuleEntry(_)
             | Self::ModuleStoreLink
-            | Self::ModuleRow(_) => ("", ""),
+            | Self::ModuleRow(_)
+            | Self::ModuleItem(..) => ("", ""),
             Self::LauncherLink | Self::Bind(_) | Self::ButtonsRestore | Self::HotkeysLink => {
                 ("", "")
             }
@@ -476,7 +482,8 @@ impl Id {
             | Self::CheevosRichPresence
             | Self::CheevosScreenshot
             | Self::UpdateBoot
-            | Self::UpdateNotify => &["0", "1"],
+            | Self::UpdateNotify
+            | Self::ModulesAuto => &["0", "1"],
             Self::UpdateChannel => &["stable", "next", "dev"],
             Self::MangohudGame => &["", "1", "0"],
             Self::Filter | Self::StateSlot => &["", "0", "1"],
@@ -986,7 +993,9 @@ impl Settings {
             ) => return "›".into(),
             (Id::SecondCard, _) => "settings.eject_link",
             (Id::ModuleEntry(_), _) => return String::new(),
-            (Id::ModuleRow(_), _) => return self.module_value(id, catalog).unwrap_or_default(),
+            (Id::ModuleRow(_) | Id::ModuleItem(..), _) => {
+                return self.module_value(id, catalog).unwrap_or_default()
+            }
             (Id::StorageCard | Id::UnifiedCard, _) => return String::new(),
             (Id::RootPassword, _) => "settings.change_link",
             (Id::KeyboardVariant | Id::MangohudGame, "") => "menu.default",
@@ -1085,7 +1094,7 @@ impl Settings {
                 "settings.root_shown|password={}",
                 self.storage.password.replace('|', "")
             ),
-            Id::ModuleRow(_) => self.module_subtitle(row.id)?,
+            Id::ModuleRow(_) | Id::ModuleItem(..) => self.module_subtitle(row.id)?,
             _ => row.subtitle?.into(),
         })
     }
@@ -1095,7 +1104,7 @@ impl Settings {
             Id::UnifiedCard => &self.storage.unified,
             Id::StorageCard => &self.storage.card,
             Id::SecondCard => &self.storage.second,
-            Id::ModuleEntry(_) | Id::ModuleRow(_) => {
+            Id::ModuleEntry(_) | Id::ModuleRow(_) | Id::ModuleItem(..) => {
                 return self.module_label(row.id).unwrap_or_default()
             }
             _ => &None,
@@ -1149,7 +1158,7 @@ impl Settings {
                 .get(&id)
                 .is_none_or(|choices| choices.len() <= 1),
             Id::StorageCard | Id::UnifiedCard | Id::UsbAddress | Id::UsbState => true,
-            Id::ModuleRow(_) => self.module_fixed(id),
+            Id::ModuleRow(_) | Id::ModuleItem(..) => self.module_fixed(id),
             _ => false,
         }
     }

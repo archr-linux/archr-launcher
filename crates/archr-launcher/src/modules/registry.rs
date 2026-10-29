@@ -68,6 +68,10 @@ pub struct Record {
     pub failed: bool,
     /// SHA-256 of the installed package, for the reviewed badge.
     pub digest: String,
+    /// When it last ran, and when the store last updated it on its own
+    /// (seconds since 1970; 0 = never).
+    pub used: u64,
+    pub auto_updated: u64,
 }
 /// Module uids, which are also their gids: above useradd's UID_MAX (60000)
 /// and systemd-homed's 60001–60513, below DynamicUser's 61184–65519.
@@ -80,6 +84,9 @@ pub struct State {
     /// Each module's own uid. Kept when the module is removed with its data
     /// kept, so the files still belong to it if it comes back.
     pub uids: BTreeMap<String, u32>,
+    /// When the store was last asked for automatic updates (seconds since
+    /// 1970).
+    pub checked: u64,
 }
 impl State {
     /// The module's uid: the one it has, else the first free one from a
@@ -295,6 +302,7 @@ pub fn permissions(manifest: &Manifest) -> Vec<Permission> {
     for (used, key) in [
         (!manifest.tiles.is_empty(), "modules.perm_tile"),
         (!manifest.shortcuts.is_empty(), "modules.perm_shortcut"),
+        (!manifest.widgets.is_empty(), "modules.perm_widget"),
         (!manifest.quick.is_empty(), "modules.perm_quick"),
         (!manifest.pages.is_empty(), "modules.perm_page"),
         (manifest.mode == Mode::Daemon, "modules.perm_daemon"),
@@ -481,6 +489,11 @@ pub fn module(
         },
         tiles: entries(&manifest.tiles),
         shortcuts: entries(&manifest.shortcuts),
+        widgets: entries(&manifest.widgets),
+        digest: record.digest.clone(),
+        used: record.used,
+        auto_updated: record.auto_updated,
+        failures: 0,
         quick: manifest
             .quick
             .iter()

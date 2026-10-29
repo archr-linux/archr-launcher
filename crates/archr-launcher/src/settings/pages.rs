@@ -299,6 +299,7 @@ impl Backend {
                 | Id::UpdateChannel
                 | Id::UpdateBoot
                 | Id::UpdateNotify
+                | Id::ModulesAuto
         ) {
             return None;
         }

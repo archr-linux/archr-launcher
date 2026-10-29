@@ -1572,6 +1572,12 @@ fn module_view() -> crate::modules::View {
             icon: svg("battery-full"),
             target: Target::Page(0),
         }],
+        widgets: vec![Entry {
+            id: "carga".into(),
+            label: "Bateria detalhada".into(),
+            icon: svg("battery-full"),
+            target: Target::Page(0),
+        }],
         pages: vec![ModPage {
             id: "main".into(),
             title: "Bateria detalhada".into(),
@@ -1623,17 +1629,39 @@ fn module_view() -> crate::modules::View {
         .into(),
         ..Module::default()
     };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
     let cpu = Module {
         id: "perfil-cpu".into(),
         name: "Perfil de CPU".into(),
-        version: "1.1.0".into(),
+        version: "2.0.0".into(),
+        license: "MIT".into(),
         icon: svg("cpu"),
         enabled: true,
         granted: true,
         source: "archr-linux/archr-perfil-cpu".into(),
         reviewed: true,
-        update: Some("1.2.0".into()),
-        permissions: vec![permission("modules.perm_quick", "", false)],
+        digest: format!("sha256:3f9a{}c21e", "0".repeat(56)),
+        used: now - 600,
+        auto_updated: now - 86400,
+        permissions: vec![
+            permission("modules.perm_config_write", "system.cpugovernor", true),
+            permission(
+                "modules.perm_hooks_launch",
+                "modules.perm_hooks_launch_detail",
+                false,
+            ),
+            permission(
+                "modules.perm_cpu_profile",
+                "modules.perm_cpu_profile_detail",
+                false,
+            ),
+            permission("modules.perm_launch", "modules.perm_launch_detail", false),
+            permission("modules.perm_quick", "", false),
+            permission("modules.perm_daemon", "", false),
+        ],
         quick: vec![Quick {
             id: "perfil".into(),
             label: "Perfil de CPU sugerido".into(),
@@ -1653,10 +1681,63 @@ fn module_view() -> crate::modules::View {
         source: "kaio-dev/archr-tempo".into(),
         ..Module::default()
     };
+    let backup = Module {
+        id: "backup-nuvem".into(),
+        name: "Backup na nuvem".into(),
+        version: "0.4.1".into(),
+        enabled: true,
+        granted: true,
+        source: "nuvem-dev/archr-backup".into(),
+        pages: vec![ModPage {
+            id: "main".into(),
+            title: "Backup na nuvem".into(),
+            rows: vec![
+                row(
+                    "Enviando saves",
+                    Some("Agora"),
+                    RowKind::Progress { id: "envio".into() },
+                    "",
+                ),
+                row(
+                    "",
+                    Some("Últimos jogos"),
+                    RowKind::List { id: "jogos".into() },
+                    "",
+                ),
+            ],
+        }],
+        ..Module::default()
+    };
     let mut view = crate::modules::View {
-        modules: vec![battery, cpu, playtime],
+        modules: vec![battery, cpu, playtime, backup],
         ..Default::default()
     };
+    let key = |m: &str, t: &str| (m.to_owned(), t.to_owned());
+    view.values
+        .insert(key("bateria-detalhada", "widget:carga"), "87 %".into());
+    view.details.insert(
+        key("bateria-detalhada", "widget:carga"),
+        "1,9 W · cerca de 3 h 40 min".into(),
+    );
+    view.progress
+        .insert(key("bateria-detalhada", "widget:carga"), 87);
+    view.values
+        .insert(key("backup-nuvem", "row:envio"), "12 de 31".into());
+    view.progress.insert(key("backup-nuvem", "row:envio"), 39);
+    let item = |title: &str, subtitle: &str, value: &str| crate::modules::Item {
+        title: title.into(),
+        subtitle: subtitle.into(),
+        value: value.into(),
+        action: Some("abrir".into()),
+    };
+    view.items.insert(
+        key("backup-nuvem", "row:jogos"),
+        vec![
+            item("Super Mario World", "SNES · enviado", "há 2 h"),
+            item("The Legend of Zelda", "NES · enviado", "ontem"),
+            item("Castlevania: SotN", "PS1 · aguardando rede", "ontem"),
+        ],
+    );
     for (target, value) in [
         ("tile:bateria", "87 % · 1,9 W"),
         ("row:agora", "87 % · 1,9 W"),
@@ -1681,8 +1762,18 @@ fn module_pages(dir: &std::path::Path) -> Vec<(&'static str, Settings)> {
     let mut page = list.clone();
     page.open_module_page("bateria-detalhada", 0);
     page.cursor = 2;
+    let mut rich = list.clone();
+    rich.open_module_page("backup-nuvem", 0);
+    rich.cursor = 1;
+    let mut auto = list.clone();
+    auto.values.insert(Id::ModulesAuto, "1".into());
+    auto.cursor = 4;
+    let mut details = list.clone();
+    details.cursor = 1;
+    details.handle(Button::Y);
     let mut store = list.clone();
-    store.cursor = 3;
+    // The store link comes after the modules and the automatic updates.
+    store.cursor = view.modules.len() + 1;
     store.handle(Button::A);
     let card =
         |owner: &str, repo: &str, name: &str, description: &str, icon: &str, stars, reviewed| {
@@ -1787,8 +1878,81 @@ fn module_pages(dir: &std::path::Path) -> Vec<(&'static str, Settings)> {
             ..Offer::default()
         })),
     ));
+    let mut api2 = offer.clone();
+    api2.modules.offer = None;
+    api2.module_store_reply(StoreReply::Offer(
+        "nuvem-dev/archr-backup".into(),
+        Ok(Box::new(Offer {
+            card: Card {
+                name: "Perfil de CPU".into(),
+                description: "Escolhe sozinho o perfil de CPU de cada jogo na hora de abrir: \
+                    desempenho nos sistemas pesados, economia nos leves."
+                    .into(),
+                icon: "cpu".into(),
+                ..cards[1].clone()
+            },
+            version: "2.0.0".into(),
+            author: "archr-linux".into(),
+            license: "MIT".into(),
+            size: 24 * 1024,
+            reviewed: true,
+            permissions: vec![
+                permission("modules.perm_config_write", "system.cpugovernor", true),
+                permission(
+                    "modules.perm_hooks_launch",
+                    "modules.perm_hooks_launch_detail",
+                    false,
+                ),
+                permission(
+                    "modules.perm_cpu_profile",
+                    "modules.perm_cpu_profile_detail",
+                    false,
+                ),
+                permission("modules.perm_launch", "modules.perm_launch_detail", false),
+                permission("modules.perm_quick", "", false),
+                permission("modules.perm_daemon", "", false),
+            ],
+            preview: None,
+            ..Offer::default()
+        })),
+    ));
+    let mut update = api2.clone();
+    update.modules.offer = None;
+    update.module_store_reply(StoreReply::Offer(
+        "nuvem-dev/archr-backup".into(),
+        Ok(Box::new(Offer {
+            card: Card {
+                name: "Perfil de CPU".into(),
+                description: "Novidades: lembra o perfil que você escolheu para cada jogo e \
+                    abre o jogo direto do menu Y."
+                    .into(),
+                icon: "cpu".into(),
+                ..cards[1].clone()
+            },
+            version: "2.0.0".into(),
+            installed: Some("1.2.0".into()),
+            author: "archr-linux".into(),
+            license: "MIT".into(),
+            size: 24 * 1024,
+            reviewed: true,
+            added: vec![
+                permission("modules.perm_config_write", "system.cpugovernor", true),
+                permission("modules.perm_launch", "modules.perm_launch_detail", false),
+            ],
+            kept: vec![
+                permission("modules.perm_hooks_launch", "", false),
+                permission("modules.perm_cpu_profile", "", false),
+            ],
+            ..Offer::default()
+        })),
+    ));
     vec![
         ("sistema", system),
+        ("loja-modulo-fase2", api2),
+        ("loja-modulo-atualizacao", update),
+        ("modulos-auto", auto),
+        ("modulo-detalhes", details),
+        ("pagina-rica", rich),
         ("modulos", list),
         ("modulos-vazio", none),
         ("pagina-modulo", page),
@@ -1882,5 +2046,19 @@ fn capture_modules() {
         ui.snap_animations();
         ui.draw(&hub, &Data, &theme, None).unwrap();
         save(&mut ui, format!("start-bloco-{language}.png"));
+        let screen = std::mem::replace(
+            &mut hub.screen,
+            crate::state::Screen::StartHub {
+                row: 2,
+                tile: 1,
+                shortcut: 0,
+            },
+        );
+        ui.snap_animations();
+        ui.draw(&hub, &Data, &theme, None).unwrap();
+        ui.snap_animations();
+        ui.draw(&hub, &Data, &theme, None).unwrap();
+        save(&mut ui, format!("start-widget-{language}.png"));
+        hub.screen = screen;
     }
 }

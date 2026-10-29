@@ -407,6 +407,13 @@ fn run(
                         Notice::Disabled(name) => ("modules.disabled_notice", name),
                         Notice::RolledBack(name) => ("modules.rolled_back", name),
                         Notice::TooMany(name) => ("modules.too_many", name),
+                        Notice::Updated(name, version) => {
+                            let text = ui.catalog.format(
+                                "modules.auto_updated",
+                                &[("name", &name), ("version", &version)],
+                            );
+                            ("", text)
+                        }
                         Notice::Text(text) => ("", text),
                     };
                     ui.banner = Some(if key.is_empty() {
