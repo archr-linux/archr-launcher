@@ -38,29 +38,19 @@ impl Paths {
         prefix(self.root.as_deref(), path)
     }
 }
-/// ArchR catalogs (user override, then packaged) come first. The ES paths are
-/// a transition fallback until the distribution installs the ArchR catalog.
-pub const CATALOGS: [&str; 4] = [
+/// ArchR systems catalogs: the user override, then the packaged one.
+pub const CATALOGS: [&str; 2] = [
     "/storage/.config/archr/systems.cfg",
     "/usr/share/archr/systems.cfg",
-    "/storage/.config/emulationstation/es_systems.cfg",
-    "/usr/config/emulationstation/es_systems.cfg",
 ];
 /// Which launch options each emulator and core accepts (archr package).
 pub const FEATURES: &str = "/usr/share/archr/es_features.cfg";
 fn systems_catalog(at: &impl Fn(&str) -> PathBuf) -> PathBuf {
-    let Some((index, path)) = CATALOGS
+    CATALOGS
         .iter()
         .map(|path| at(path))
-        .enumerate()
-        .find(|(_, path)| path.is_file())
-    else {
-        return at(CATALOGS[1]);
-    };
-    if index >= 2 {
-        log::warn!("Using legacy systems catalog {}", path.display());
-    }
-    path
+        .find(|path| path.is_file())
+        .unwrap_or_else(|| at(CATALOGS[1]))
 }
 fn prefix(root: Option<&Path>, path: &Path) -> PathBuf {
     match root {

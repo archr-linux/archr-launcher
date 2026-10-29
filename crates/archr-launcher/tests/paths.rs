@@ -25,19 +25,28 @@ fn root_prefix_includes_user_config_lock_run_and_executable() {
 }
 
 #[test]
-fn systems_catalog_prefers_archr_then_legacy_es_paths() {
+fn systems_catalog_prefers_the_user_copy_and_never_reads_es_catalogs() {
     use archr_launcher::paths::CATALOGS;
     let root = tempfile::tempdir().unwrap();
     let at = |path: &str| root.path().join(path.trim_start_matches('/'));
-    // Nothing installed: report the packaged ArchR catalog as missing.
+    let install = |path: &str| {
+        std::fs::create_dir_all(at(path).parent().unwrap()).unwrap();
+        std::fs::write(at(path), "<systemList/>").unwrap();
+    };
+    // Only ES catalogs installed: report the packaged ArchR catalog as missing.
+    for es in [
+        "/storage/.config/emulationstation/es_systems.cfg",
+        "/usr/config/emulationstation/es_systems.cfg",
+    ] {
+        install(es);
+    }
     assert_eq!(
         Paths::new(Some(root.path().to_owned())).systems,
         at("/usr/share/archr/systems.cfg")
     );
     // Install lowest precedence first; each newer file must win.
     for path in CATALOGS.iter().rev() {
-        std::fs::create_dir_all(at(path).parent().unwrap()).unwrap();
-        std::fs::write(at(path), "<systemList/>").unwrap();
+        install(path);
         assert_eq!(Paths::new(Some(root.path().to_owned())).systems, at(path));
     }
     // A directory never shadows a real catalog.

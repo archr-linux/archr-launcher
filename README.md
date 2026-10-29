@@ -35,11 +35,9 @@ do host. Isso facilita testes, mas não é uma sandbox de segurança.
 
 O catálogo de sistemas (XML no formato do `es_systems.cfg`, gerado pelo pacote
 `virtual/emulators`) é o primeiro arquivo existente entre
-`/storage/.config/archr/systems.cfg` (substituição do usuário),
-`/usr/share/archr/systems.cfg` (do pacote) e, só durante a transição, os
-caminhos antigos `/storage/.config/emulationstation/es_systems.cfg` e
-`/usr/config/emulationstation/es_systems.cfg`; usar um destes gera um aviso
-no log.
+`/storage/.config/archr/systems.cfg` (substituição do usuário) e
+`/usr/share/archr/systems.cfg` (do pacote). Os catálogos do EmulationStation
+não são lidos.
 Com um segundo cartão, o `automount` publica a pasta de ROMs dele no link
 `/run/archr/roms2`; cada sistema `/storage/roms/<sistema>` lê também
 `<cartão>/<sistema>`, com gamelist e mídia próprios (em duplicata vale o
