@@ -2,6 +2,7 @@
 //! decoded on a worker, and playing never blocks: a sound that is not ready
 //! is skipped. The device is released before any hand-off (game, tool,
 //! suspend, power) so it never holds the output the next program needs.
+use archr_config::SystemCfg;
 use archr_ui::{
     settings::{Id, Page, Settings},
     sounds::{Event, Sounds},
@@ -45,7 +46,8 @@ pub struct Audio {
     device: Device,
     /// Handed off to another program: stays closed until the next input.
     released: bool,
-    boot_pending: bool,
+    /// A notice-like sound asked for while the files were still loading.
+    queued: Option<Event>,
     dwell: Dwell,
 }
 
@@ -57,7 +59,7 @@ impl Audio {
             volume,
             device: Device::Closed,
             released: false,
-            boot_pending: false,
+            queued: None,
             dwell: Dwell::default(),
         };
         audio.open();
@@ -127,7 +129,7 @@ impl Audio {
                 mixer::close_audio();
             }
         }
-        self.boot_pending = false;
+        self.queued = None;
     }
     /// Before handing the screen and sound to another program: finish a
     /// closing sound (briefly), then free the output.
@@ -154,7 +156,9 @@ impl Audio {
             return;
         }
         match (event, &self.device) {
-            (Event::Boot, Device::Loading(_)) => self.boot_pending = true,
+            (Event::Boot | Event::Error | Event::Notice, Device::Loading(_)) => {
+                self.queued = Some(event)
+            }
             (_, Device::Ready(chunks)) => {
                 if let Some(chunk) = self.sounds.event(event).and_then(|file| chunks.get(file)) {
                     let channel = match event {
@@ -191,8 +195,8 @@ impl Audio {
                     }
                 };
             }
-            if std::mem::take(&mut self.boot_pending) {
-                self.play(Event::Boot);
+            if let Some(event) = self.queued.take() {
+                self.play(event);
             }
         }
         if let (Device::Ready(chunks), Some(system)) =
@@ -296,9 +300,22 @@ pub fn browse(
     }
 }
 
+/// The saved switch and 0-100 volume, each falling back to its default.
+pub fn saved(cfg: Option<&SystemCfg>) -> (bool, u8) {
+    let get = |id: Id| {
+        cfg.and_then(|cfg| cfg.get_setting(id.key(), None, None))
+            .unwrap_or_else(|| id.default_value().into())
+    };
+    (
+        get(Id::Sounds) == "1",
+        get(Id::SoundsVolume).parse().unwrap_or(60),
+    )
+}
+
 /// What a settings press changed: place, cursor, a value in flight or a value.
 #[derive(PartialEq)]
 pub struct Mark {
+    open: bool,
     page: Page,
     cursor: usize,
     pending: Option<Id>,
@@ -306,8 +323,9 @@ pub struct Mark {
 }
 
 impl Mark {
-    pub fn of(state: &Settings) -> Self {
+    pub fn of(state: &Settings, open: bool) -> Self {
         Self {
+            open,
             page: state.page(),
             cursor: state.cursor,
             pending: state.pending,
@@ -317,6 +335,9 @@ impl Mark {
 }
 
 pub fn settings(button: Button, before: &Mark, after: &Mark) -> Option<Event> {
+    if before.open && !after.open {
+        return Some(Event::Back);
+    }
     if before.pending != after.pending || before.values != after.values {
         return Some(Event::Toggle);
     }
@@ -400,16 +421,16 @@ mod tests {
     #[test]
     fn settings_toggle_beats_navigation() {
         let mut state = Settings::default();
-        let before = Mark::of(&state);
+        let before = Mark::of(&state, true);
         state.cursor = 2;
         assert_eq!(
-            settings(Button::Down, &before, &Mark::of(&state)),
+            settings(Button::Down, &before, &Mark::of(&state, true)),
             Some(Event::Move)
         );
-        let moved = Mark::of(&state);
+        let moved = Mark::of(&state, true);
         state.pending = Some(Id::Turbo);
         assert_eq!(
-            settings(Button::A, &moved, &Mark::of(&state)),
+            settings(Button::A, &moved, &Mark::of(&state, true)),
             Some(Event::Toggle)
         );
         assert_eq!(settings(Button::A, &moved, &moved), None);
@@ -440,7 +461,7 @@ mod tests {
     }
 
     /// A one-sample WAV is enough for the mixer to accept the file.
-    pub(crate) fn tiny_wav(path: &std::path::Path) {
+    fn tiny_wav(path: &std::path::Path) {
         let mut wav = b"RIFF".to_vec();
         wav.extend(40u32.to_le_bytes());
         wav.extend(b"WAVEfmt ");
@@ -458,7 +479,7 @@ mod tests {
         std::fs::write(path, wav).unwrap();
     }
 
-    pub(crate) fn theme_with_sounds() -> tempfile::TempDir {
+    fn theme_with_sounds() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir(dir.path().join("sounds")).unwrap();
         for event in ["move", "launch"] {
@@ -467,7 +488,7 @@ mod tests {
         dir
     }
 
-    pub(crate) fn wait_ready(audio: &mut Audio) {
+    fn wait_ready(audio: &mut Audio) {
         let deadline = Instant::now() + Duration::from_secs(5);
         while !matches!(audio.device, Device::Ready(_)) && Instant::now() < deadline {
             audio.poll();
