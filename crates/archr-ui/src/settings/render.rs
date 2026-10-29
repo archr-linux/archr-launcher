@@ -216,10 +216,15 @@ impl View<'_, '_, '_> {
         let rect = self.rect((x, y, 18., 18.));
         let corner = self.ui.px(5.) as f32;
         if on {
-            let accent = self.theme.highlight_bg;
-            self.ui.rounded(rect, corner, accent, Some(accent))?;
+            // On the highlighted row the box inverts, like a switch's track.
+            let (fill, ink) = selection(
+                selected,
+                (self.theme.highlight_bg, self.theme.highlight_text),
+                (self.theme.highlight_text, self.theme.highlight_bg),
+            );
+            self.ui.rounded(rect, corner, fill, Some(fill))?;
             let tick = self.rect((x + 3., y + 3., 12., 12.));
-            return self.ui.icon(Glyph::Check, tick, self.theme.highlight_text);
+            return self.ui.icon(Glyph::Check, tick, ink);
         }
         let edge = selection(
             selected,
