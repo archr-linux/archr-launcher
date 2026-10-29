@@ -9,7 +9,7 @@
 //! commands never do. Files are bounded, UTF-8, never symbolic links, and
 //! overrides only for installed cores. Shader presets point at this device's
 //! shader directory or are left out.
-use archr_io::{atomic_publish, read_utf8, remove_durable, Symlinks::Reject};
+use archr_io::{atomic_publish, read_bytes, read_utf8, remove_durable, Symlinks::Reject};
 use archr_ui::settings::raimport::Found;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -565,48 +565,65 @@ fn merged(current: &str, settings: &[(String, String)]) -> String {
     out
 }
 
-/// Writes every file, or puts back what was there when one fails.
+/// What a destination held before the import: None when it did not exist.
+type Before = Option<Vec<u8>>;
+
+/// A destination's bytes, read before anything is written. Anything that is
+/// not a readable regular file stops the import.
+fn before(path: &Path) -> Result<Before, String> {
+    match fs::symlink_metadata(path) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Ok(meta) if meta.is_file() => {
+            read_bytes(path, CONFIG_LIMIT, Reject)
+                .map(Some)
+                .map_err(|error| {
+                    log::warn!("Import: cannot read {}: {error}", path.display());
+                    "raimport.failed".to_owned()
+                })
+        }
+        _ => Err("raimport.failed".into()),
+    }
+}
+
+/// Saves what every destination holds, then writes each file; when one
+/// write fails, the earlier ones get their saved bytes back (a file that did
+/// not exist is removed, one that existed is never removed).
 pub fn apply(plan: &Plan, roots: &Roots) -> Result<usize, String> {
-    let mut writes = plan.files.clone();
+    let mut writes: Vec<(PathBuf, String, Before)> = Vec::new();
     if !plan.settings.is_empty() {
         let path = roots.retroarch.join("retroarch.cfg");
-        let current = read(&path, CONFIG_LIMIT).ok_or("raimport.no_retroarch_cfg")?;
-        writes.push((path, merged(&current, &plan.settings)));
+        let saved = before(&path)?.ok_or("raimport.no_retroarch_cfg")?;
+        let current = String::from_utf8(saved.clone()).map_err(|_| "raimport.failed")?;
+        let text = merged(&current, &plan.settings);
+        writes.push((path, text, Some(saved)));
     }
-    let mut done: Vec<(PathBuf, Option<String>)> = Vec::new();
-    for (path, text) in &writes {
-        let before = match fs::symlink_metadata(path) {
-            Ok(meta) if meta.is_file() => read(path, CONFIG_LIMIT.max(FILE_LIMIT)),
-            Ok(_) => {
-                undo(&done);
-                return Err("raimport.failed".into());
-            }
-            Err(_) => None,
-        };
-        if let Err(error) = publish(path, text) {
+    for (path, text) in &plan.files {
+        writes.push((path.clone(), text.clone(), before(path)?));
+    }
+    for (n, (path, text, _)) in writes.iter().enumerate() {
+        if let Err(error) = publish(path, text.as_bytes()) {
             log::warn!("Import: cannot write {}: {error}", path.display());
-            undo(&done);
+            undo(&writes[..n]);
             return Err("raimport.failed".into());
         }
-        done.push((path.clone(), before));
     }
     Ok(plan.settings.len() + plan.files.len())
 }
 
-fn publish(path: &Path, text: &str) -> io::Result<()> {
+fn publish(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let mode = fs::metadata(path).ok().map(|m| m.permissions());
     atomic_publish(path, true, |file| {
         if let Some(mode) = mode {
             file.set_permissions(mode)?;
         }
-        file.write_all(text.as_bytes())
+        file.write_all(bytes)
     })
 }
 
-fn undo(done: &[(PathBuf, Option<String>)]) {
-    for (path, before) in done.iter().rev() {
+fn undo(done: &[(PathBuf, String, Before)]) {
+    for (path, _, before) in done.iter().rev() {
         let result = match before {
-            Some(text) => publish(path, text),
+            Some(bytes) => publish(path, bytes),
             None => remove_durable(path),
         };
         if let Err(error) = result {

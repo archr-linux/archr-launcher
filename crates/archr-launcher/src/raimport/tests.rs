@@ -307,3 +307,74 @@ fn an_empty_or_missing_folder_finds_nothing() {
     assert!(plan.found.apply.is_empty() && plan.found.ignored.is_empty());
     assert!(plan.files.is_empty() && plan.settings.is_empty());
 }
+
+#[test]
+fn an_unreadable_destination_stops_before_any_write() {
+    let f = fixture();
+    put(
+        &f.roots.source,
+        "retroarch.cfg",
+        "video_smooth = \"true\"\n",
+    );
+    put(
+        &f.roots.source,
+        "config/mGBA/mGBA.opt",
+        "mgba_skip_bios = \"ON\"\n",
+    );
+    put(
+        &f.roots.source,
+        "config/mGBA/mGBA.cfg",
+        "video_smooth = \"true\"\n",
+    );
+    // Not UTF-8 is fine to keep; a symbolic link is not a file to replace.
+    fs::create_dir_all(f.roots.retroarch.join("config/mGBA")).unwrap();
+    fs::write(f.roots.retroarch.join("config/mGBA/mGBA.cfg"), [0xff, 0x00]).unwrap();
+    symlink(
+        f.roots.retroarch.join("retroarch.cfg"),
+        f.roots.retroarch.join("config/mGBA/mGBA.opt"),
+    )
+    .unwrap();
+    let before = fs::read(f.roots.retroarch.join("retroarch.cfg")).unwrap();
+    let plan = scan(&f.roots);
+    assert_eq!(apply(&plan, &f.roots), Err("raimport.failed".into()));
+    assert_eq!(
+        fs::read(f.roots.retroarch.join("retroarch.cfg")).unwrap(),
+        before
+    );
+    assert_eq!(
+        fs::read(f.roots.retroarch.join("config/mGBA/mGBA.cfg")).unwrap(),
+        [0xff, 0x00]
+    );
+}
+
+#[test]
+fn undo_restores_bytes_and_never_removes_a_file_that_existed() {
+    let f = fixture();
+    put(
+        &f.roots.source,
+        "config/mGBA/mGBA.cfg",
+        "video_smooth = \"true\"\n",
+    );
+    put(
+        &f.roots.source,
+        "config/mGBA/mGBA.opt",
+        "mgba_skip_bios = \"ON\"\n",
+    );
+    put(
+        &f.roots.source,
+        "remaps/mGBA/mGBA.rmp",
+        "input_remap_port_p1 = \"0\"\n",
+    );
+    fs::create_dir_all(f.roots.retroarch.join("config/mGBA")).unwrap();
+    // Existing, not UTF-8: it must come back byte for byte.
+    fs::write(f.roots.retroarch.join("config/mGBA/mGBA.cfg"), [0xff, b'x']).unwrap();
+    let plan = scan(&f.roots);
+    // The last write fails: a file stands where the remap folder goes.
+    fs::write(&f.roots.remaps, "").unwrap();
+    assert_eq!(apply(&plan, &f.roots), Err("raimport.failed".into()));
+    assert_eq!(
+        fs::read(f.roots.retroarch.join("config/mGBA/mGBA.cfg")).unwrap(),
+        [0xff, b'x']
+    );
+    assert!(!f.roots.retroarch.join("config/mGBA/mGBA.opt").exists());
+}
