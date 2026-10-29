@@ -22,13 +22,10 @@ fn sound_name(name: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b"-_ ".contains(&b))
 }
 
-fn profile(client: &Client, account: &Account, cancel: &AtomicBool) -> Profile {
-    let summary = client.summary(&account.user, cancel).unwrap_or_default();
+fn profile(account: &Account) -> Profile {
     Profile {
         points: account.points,
         softcore: account.softcore,
-        since: summary.since,
-        last_game: summary.last_game,
     }
 }
 
@@ -121,7 +118,7 @@ impl Backend {
             ],
         )
         .map_err(|e| e.to_string())?;
-        Ok((account.user.clone(), profile(client, &account, &never)))
+        Ok((account.user.clone(), profile(&account)))
     }
     /// Forgets the token (and any password an older setup saved).
     pub(super) fn cheevos_logout(&self) -> Result<(), String> {
@@ -142,7 +139,7 @@ impl Backend {
         let client = self.cheevos_client();
         let never = AtomicBool::new(false);
         match client.refresh(&user, &token, &never) {
-            Ok(account) => Some(profile(&client, &account, &never)),
+            Ok(account) => Some(profile(&account)),
             Err(error) => {
                 log::warn!("RetroAchievements profile: {}", error.key());
                 None

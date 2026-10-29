@@ -45,10 +45,6 @@ pub const CHEEVOS: &[Row] = &[
 pub struct Profile {
     pub points: u64,
     pub softcore: u64,
-    /// Year the account was created and the last game played; empty when
-    /// this build cannot ask the web API.
-    pub since: String,
-    pub last_game: String,
 }
 
 #[derive(Clone, Debug, Default)]

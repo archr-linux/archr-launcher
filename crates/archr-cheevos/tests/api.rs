@@ -175,21 +175,3 @@ fn badges_must_be_images_from_the_media_server() {
     assert_eq!(client.badge("../1", false, &NEVER), Err(Error::Service));
     assert_eq!(fake.seen.lock().unwrap().len(), 2);
 }
-
-#[test]
-fn the_profile_summary_needs_the_developer_login() {
-    let (client, fake) = serve(|_, _| {
-        json(
-            200,
-            r#"{"MemberSince":"2021-03-04 10:00:00","RecentlyPlayed":[{"Title":"Super Mario World"}]}"#,
-        )
-    });
-    assert_eq!(client.summary_as("bad", "douglas", &NEVER), None);
-    let summary = client.summary_as("z=dev&y=key", "douglas", &NEVER).unwrap();
-    assert_eq!(summary.since, "2021");
-    assert_eq!(summary.last_game, "Super Mario World");
-    assert_eq!(
-        fake.seen.lock().unwrap()[0].0,
-        "https://retroachievements.org/API/API_GetUserSummary.php?z=dev&y=key&u=douglas&g=1&a=0"
-    );
-}
