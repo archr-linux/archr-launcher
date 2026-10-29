@@ -1,5 +1,5 @@
 use super::*;
-use crate::{settings::network::Network, state::Button};
+use crate::{appearance::Appearance, settings::network::Network, state::Button};
 
 fn network(ssid: &str, security: &str, signal: u8, connected: bool) -> Network {
     Network {
@@ -190,6 +190,28 @@ fn pages() -> Vec<(&'static str, Settings)> {
     sound.handle(Button::R);
     sound.handle(Button::R);
     assert!(!sound.slides.is_empty() && sound.pending.is_none());
+    let mut appearance = ready();
+    appearance.values.insert(Id::Accent, "#FF6B4A".into());
+    appearance.open(Page::Appearance);
+    appearance.cursor = 1;
+    let mut custom = appearance.clone();
+    custom.handle(Button::A);
+    assert_eq!(custom.page(), Page::AccentColor);
+    let mut custom_value = custom.clone();
+    custom_value.cursor = 2;
+    let mut custom_hex = custom.clone();
+    custom_hex.cursor = 3;
+    let mut hex_keyboard = custom_hex.clone();
+    hex_keyboard.handle(Button::A);
+    assert_eq!(hex_keyboard.page(), Page::Keyboard);
+    // The whole interface in a very light accent, as after saving it.
+    let mut applied_light = ready();
+    applied_light.values.insert(Id::Accent, "#FFE14D".into());
+    applied_light.open(Page::Appearance);
+    applied_light.cursor = 1;
+    let mut applied_light_custom = applied_light.clone();
+    applied_light_custom.handle(Button::A);
+    applied_light_custom.cursor = 1;
     vec![
         // First, so the list snaps to its scrolled end.
         ("storage-end", storage_end),
@@ -217,6 +239,13 @@ fn pages() -> Vec<(&'static str, Settings)> {
         ("storage-reset-final", storage_reset),
         ("storage-working", storage_working),
         ("storage-password", storage_password),
+        ("appearance-custom", appearance),
+        ("custom", custom),
+        ("custom-value", custom_value),
+        ("custom-hex", custom_hex),
+        ("custom-keyboard", hex_keyboard),
+        ("applied-appearance", applied_light),
+        ("applied-custom", applied_light_custom),
     ]
 }
 #[test]
@@ -256,8 +285,66 @@ fn capture_network_and_games_pages() {
         for (name, state) in pages() {
             ui.canvas.set_draw_color(color(theme.background));
             ui.canvas.clear();
-            ui.settings_page(&state, &theme).unwrap();
+            let look = if name.starts_with("applied-") {
+                state.appearance().apply(&theme)
+            } else {
+                theme.clone()
+            };
+            ui.canvas.set_draw_color(color(look.background));
+            ui.canvas.clear();
+            ui.settings_page(&state, &look).unwrap();
             save(&mut ui, format!("{name}-{language}.png"));
+        }
+        struct Home(Vec<archr_index::cache::SystemEntry>);
+        impl crate::state::DataSource for Home {
+            fn systems(&self) -> &[archr_index::cache::SystemEntry] {
+                &self.0
+            }
+            fn games(&self, _: &str) -> &[archr_index::Game] {
+                &[]
+            }
+            fn origin(&self, _: &str, _: usize) -> Option<(String, usize)> {
+                None
+            }
+            fn cores(&self, _: &str) -> Vec<(String, String)> {
+                Vec::new()
+            }
+            fn current_core(&self, _: &str, _: usize) -> Option<(String, String)> {
+                None
+            }
+        }
+        let systems = [
+            ("gba", "Game Boy Advance", 146),
+            ("snes", "Super Nintendo", 213),
+            ("megadrive", "Mega Drive", 98),
+            ("n64", "Nintendo 64", 41),
+        ]
+        .map(
+            |(name, fullname, game_count)| archr_index::cache::SystemEntry {
+                name: name.into(),
+                fullname: fullname.into(),
+                game_count,
+                dir_mtime: 0,
+                source_fingerprint: 0,
+            },
+        );
+        let home = Home(systems.to_vec());
+        let app = crate::state::App::new(ui.page_size(&theme));
+        for (name, accent) in [
+            ("light", "#FFE14D"),
+            ("dark", "#1B2A6B"),
+            ("coral", "#FF6B4A"),
+        ] {
+            let look = Appearance {
+                accent: accent.into(),
+                ..Appearance::default()
+            }
+            .apply(&theme);
+            for _ in 0..2 {
+                ui.snap_animations();
+                ui.draw(&app, &home, &look, None).unwrap();
+            }
+            save(&mut ui, format!("home-{name}-{language}.png"));
         }
         let mut moonlight = crate::moonlight::State::new((640, 480));
         moonlight.busy = false;
