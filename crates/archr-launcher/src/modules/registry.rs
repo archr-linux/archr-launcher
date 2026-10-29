@@ -287,6 +287,8 @@ pub fn permissions(manifest: &Manifest) -> Vec<Permission> {
             false,
         ));
     }
+    // The amber ones first: a list cut short never hides them.
+    list.sort_by_key(|p| !p.sensitive);
     if list.is_empty() {
         list.push(line("modules.perm_none", "modules.perm_none_detail", false));
     }
@@ -611,6 +613,24 @@ mod tests {
         );
         assert_eq!(mode(&dirs.secrets_file("sec")), 0o600);
         assert_eq!(settings(&dirs, &manifest), values);
+    }
+
+    #[test]
+    fn amber_permissions_come_first() {
+        let source = "id = \"x-y\"\nversion = \"1.0.0\"\napi_version = 2\n\
+            [run]\nruntime = \"sh\"\nentry = \"main.sh\"\nmode = \"oneshot\"\n\
+            [permissions]\nconfig_read = [\"system.language\"]\nlaunch = true\n\
+            config_write = [\"system.cpugovernor\"]\n";
+        let (manifest, _) = manifest::parse(source).unwrap();
+        let keys: Vec<&str> = permissions(&manifest).iter().map(|p| p.key).collect();
+        assert_eq!(
+            keys,
+            [
+                "modules.perm_config_write",
+                "modules.perm_config_read",
+                "modules.perm_launch"
+            ]
+        );
     }
 
     #[test]
