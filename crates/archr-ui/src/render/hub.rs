@@ -70,6 +70,11 @@ impl Ui<'_, '_> {
                 None => self.catalog.text(TILES[i].0),
             })
             .collect();
+        // Tile labels may go 2 px under the theme's smallest text, so a
+        // long word ("Ferramentas") keeps the theme's font; the frame is
+        // rebuilt each draw, so the next screen has the usual minimum.
+        let minimum = self.frame.min;
+        self.frame.min = (minimum - 2.).max(8.);
         let (label_face, label_size) =
             self.tile_labels(&labels, (px(148.) - px(8.)).max(1) as u32)?;
         // More tiles than the screen holds: the row slides to keep the focus in.
@@ -184,6 +189,7 @@ impl Ui<'_, '_> {
             self.look.outlining = true;
         }
 
+        self.frame.min = minimum;
         let side = px(46.);
         let gap = px(14.);
         // Module shortcuts sit between Wi-Fi and Suspend.
