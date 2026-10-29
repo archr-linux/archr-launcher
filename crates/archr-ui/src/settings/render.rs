@@ -63,9 +63,14 @@ impl Placement {
 /// Mockup row heights: dense Netplay and Services lists, 40/46 elsewhere.
 fn placements(page: Page, rows: &[Row]) -> Vec<Placement> {
     let mut top = VIEW_TOP;
+    let mut previous = None;
     rows.iter()
         .map(|row| {
-            if row.section.is_some() {
+            // Rows that share a section (one of them may be hidden) show
+            // its header once.
+            let section = row.section.filter(|_| row.section != previous);
+            previous = row.section.or(previous);
+            if section.is_some() {
                 top += SECTION_HEIGHT;
             }
             let height = match page {
@@ -83,11 +88,11 @@ fn placements(page: Page, rows: &[Row]) -> Vec<Placement> {
             let place = Placement {
                 top,
                 height,
-                section: row.section,
+                section,
                 searching: None,
             };
             top += height + ROW_GAP;
-            if matches!(row.id, Id::StorageCard | Id::SecondCard) {
+            if matches!(row.id, Id::UnifiedCard | Id::StorageCard | Id::SecondCard) {
                 top += CARD_METER;
             }
             if row.id == Id::HotkeyModifier {
@@ -552,6 +557,7 @@ impl View<'_, '_, '_> {
                     |view, n, y, position, selected| {
                         view.row(state, &rows[n], (y, position.height), RIGHT, selected)?;
                         let card = match rows[n].id {
+                            Id::UnifiedCard => state.storage.unified.as_ref(),
                             Id::StorageCard => state.storage.card.as_ref(),
                             Id::SecondCard => state.storage.second.as_ref(),
                             _ => None,
