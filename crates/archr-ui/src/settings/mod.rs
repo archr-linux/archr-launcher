@@ -304,10 +304,11 @@ impl Id {
             // the keys runemu.sh passes on and setsettings.sh reads.
             Self::Emulator => ("emulator", ""),
             Self::Core => ("core", ""),
-            Self::Ratio => ("ratio", "core"),
-            Self::Filter => ("smooth", "0"),
+            // "" leaves the option to RetroArch: no key, nothing imposed.
+            Self::Ratio => ("ratio", ""),
+            Self::Filter => ("smooth", ""),
             Self::Autosave => ("autosave", "0"),
-            Self::StateSlot => ("incrementalsavestates", "0"),
+            Self::StateSlot => ("incrementalsavestates", ""),
             Self::NetplayEnabled => ("global.netplay", "0"),
             Self::Nickname => ("global.netplay.nickname", ""),
             Self::NetplayHost => ("global.netplay.host", ""),
@@ -427,9 +428,7 @@ impl Id {
             | Self::OnlyRelay
             | Self::MissingGames
             | Self::ScraperMissing
-            | Self::Filter
             | Self::Autosave
-            | Self::StateSlot
             | Self::Automount
             | Self::MergedStorage
             | Self::Mangohud
@@ -444,13 +443,23 @@ impl Id {
             | Self::UpdateNotify => &["0", "1"],
             Self::UpdateChannel => &["stable", "next", "dev"],
             Self::MangohudGame => &["", "1", "0"],
+            Self::Filter | Self::StateSlot => &["", "0", "1"],
             Self::MangohudLayout => &mangohud::LAYOUTS,
             Self::MangohudPosition => &mangohud::POSITIONS,
             Self::MangohudSize => &["18", "24", "30"],
             Self::MangohudAlpha => &["0", "25", "50", "75", "100"],
             Self::MangohudFps => &["0", "30", "60"],
             // setsettings.sh CORE_RATIOS names; "core" lets the core decide.
-            Self::Ratio => &["core", "4/3", "3/2", "16/9", "8/7", "squarepixel", "full"],
+            Self::Ratio => &[
+                "",
+                "core",
+                "4/3",
+                "3/2",
+                "16/9",
+                "8/7",
+                "squarepixel",
+                "full",
+            ],
             Self::ClockFormat => &["24", "12"],
             Self::Player => &["1", "2", "3", "4"],
             Self::Channel => &["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"],
@@ -895,6 +904,7 @@ impl Settings {
             (Id::ScraperStart, _) if self.scrape.running => "settings.cancel_scraping",
             (Id::ScraperStart, _) => return String::new(),
             (Id::GameSystem, _) => return self.games.fullname().to_owned(),
+            (Id::Ratio | Id::Filter | Id::StateSlot, "") => "settings.retroarch_default",
             (Id::Ratio, "core") => "settings.ratio_auto",
             (Id::Ratio, "squarepixel") => "settings.ratio_square",
             (Id::Ratio, "full") => "settings.ratio_full",

@@ -1,6 +1,8 @@
 //! Games page: per-system launch choices in system.cfg, under the keys
 //! runemu.sh receives (`<system>.emulator`, `<system>.core`) and
 //! setsettings.sh reads (`ratio`, `smooth`, `autosave`, `incrementalsavestates`).
+//! "RetroArch default" ("") removes the key: setsettings.sh then leaves the
+//! option to what the user saved in RetroArch.
 use super::*;
 use crate::paths::FEATURES;
 use archr_index::{load_features, SystemDef};
@@ -86,6 +88,14 @@ impl Backend {
                 .collect()
         };
         let key = |id: Id| format!("{system}.{}", id.key());
+        if value.is_empty() && OPTIONS.iter().any(|(o, _)| *o == id) {
+            if !id.choices().contains(&value) {
+                return Err("Invalid option".into());
+            }
+            SystemCfg::remove_and_save(&self.paths.config, &self.paths.lock, &key(id))
+                .map_err(|e| e.to_string())?;
+            return Ok(String::new());
+        }
         let core;
         let entries: Vec<(String, &str)> = match id {
             Id::Emulator => {
@@ -219,6 +229,17 @@ mod tests {
             "snes.core=snes9x\nsnes.emulator=retroarch\nsnes.ratio=16/9\nsnes.smooth=1\n\
              snes.incrementalsavestates=1\n"
         );
+    }
+    #[test]
+    fn retroarch_default_removes_the_key() {
+        let (_root, backend) = fixture("snes.ratio=3/2\nsnes.smooth=1\nsnes.autosave=1\n", None);
+        assert_eq!(backend.apply_game("snes", Id::Ratio, ""), Ok("".into()));
+        assert_eq!(backend.apply_game("snes", Id::Filter, ""), Ok("".into()));
+        assert!(backend.apply_game("snes", Id::Autosave, "").is_err());
+        assert_eq!(saved(&backend), "snes.autosave=1\n");
+        let snes = &games(&backend)[0];
+        assert!(!snes.saved.contains_key(&Id::Ratio));
+        assert!(!snes.saved.contains_key(&Id::Filter));
     }
     #[test]
     fn invalid_systems_pairs_and_values_are_not_written() {

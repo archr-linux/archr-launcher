@@ -417,6 +417,7 @@
 "settings.filter_smooth" = "Сглаживание"
 "settings.slot_auto" = "Автоматически"
 "settings.slot_fixed" = "Фиксированный"
+"settings.retroarch_default" = "Как в RetroArch"
 "settings.system_options" = "Параметры этой системы"
 "settings.games_system" = "Система"
 "settings.theme" = "Тема"

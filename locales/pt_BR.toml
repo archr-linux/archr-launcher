@@ -417,6 +417,7 @@
 "settings.filter_smooth" = "Suavizado"
 "settings.slot_auto" = "Automático"
 "settings.slot_fixed" = "Fixo"
+"settings.retroarch_default" = "Padrão do RetroArch"
 "settings.system_options" = "Opções deste sistema"
 "settings.games_system" = "Sistema"
 "settings.theme" = "Tema"
