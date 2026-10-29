@@ -962,7 +962,11 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 || self.list.pill.active(now)
                 || self.list.swap.active(now)
                 || self.menu_pill.active(now)
-                || self.cover_fade.active(now);
+                || self.cover_fade.active(now)
+                // The scrape-again dots loop until the job ends.
+                || (app.rescraping
+                    && matches!(backdrop, Screen::Details { .. })
+                    && self.motion != Motion::Off);
         }
         // The launch overlay is the last frame before a handoff: never mid-fade.
         if let Some(message) = self.transition.clone() {

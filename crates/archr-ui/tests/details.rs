@@ -2,6 +2,7 @@ mod common;
 use archr_index::{cache::SystemEntry, Details, Game};
 use archr_ui::{
     i18n::I18n,
+    motion::Motion,
     render::{Art, Ui},
     state::{App, Button, QuickItem},
     Theme,
@@ -143,8 +144,13 @@ fn details_render_in_every_locale_with_and_without_art_and_text() {
             app.details_focus = 2;
             ui.draw_with_settings(&app, &data, &theme, art, None)
                 .unwrap();
+            // Every locale's "scraping" label fits the row too.
+            app.rescraping = true;
+            ui.draw_with_settings(&app, &data, &theme, art, None)
+                .unwrap();
         }
     }
+    scraping_again_animates_the_button_unless_motion_is_off(&mut ui, creator, &theme);
 }
 
 #[test]
@@ -185,6 +191,80 @@ fn capture_details() {
                 app.details_focus = 2;
             }
             ui.screenshot = Some(output.join(format!("{name}-{language}.png")));
+            ui.draw_with_settings(&app, &data, &theme, art, None)
+                .unwrap();
+        }
+    }
+}
+
+/// SDL lives on one thread: run from the test that owns it.
+fn scraping_again_animates_the_button_unless_motion_is_off(
+    ui: &mut Ui<'static, 'static>,
+    creator: &'static sdl2::render::TextureCreator<sdl2::video::WindowContext>,
+    theme: &Theme,
+) {
+    let shot = creator
+        .create_texture_from_surface(surface(256, 224, false))
+        .unwrap();
+    let art = Art {
+        cover: None,
+        shot: Some(&shot),
+        logo: None,
+        badges: None,
+        video: None,
+    };
+    let data = data(true);
+    let mut app = open(&data);
+    app.details_focus = 2;
+    let draw = |ui: &mut Ui, app: &App| {
+        // Let the opening fades settle, so only the button can animate.
+        for _ in 0..2 {
+            std::thread::sleep(std::time::Duration::from_millis(400));
+            ui.draw_with_settings(app, &data, theme, art, None).unwrap();
+        }
+        ui.animating()
+    };
+    assert!(!draw(ui, &app), "idle details are still");
+    app.rescraping = true;
+    assert!(draw(ui, &app), "the dots loop while the job runs");
+    ui.set_motion(Motion::Off);
+    assert!(!draw(ui, &app), "motion off holds the dots still");
+    ui.set_motion(Motion::On);
+    app.rescraping = false;
+    assert!(!draw(ui, &app), "done: still again");
+}
+
+#[test]
+#[ignore = "manual capture, ARCHR_DETAILS_CAPTURE_DIR and ARCHR_CAPTURE_THEME required"]
+fn capture_scraping_again() {
+    let output = std::path::PathBuf::from(std::env::var_os("ARCHR_DETAILS_CAPTURE_DIR").unwrap());
+    let base = theme();
+    let dir = std::path::PathBuf::from(std::env::var_os("ARCHR_CAPTURE_THEME").unwrap());
+    let theme = Theme::load_over(&dir, &base);
+    let name = dir.file_name().unwrap().to_string_lossy().into_owned();
+    let (mut ui, creator) = ui_with_fonts(&theme);
+    let shot = creator
+        .create_texture_from_surface(surface(256, 224, false))
+        .unwrap();
+    let art = Art {
+        cover: None,
+        shot: Some(&shot),
+        logo: None,
+        badges: None,
+        video: None,
+    };
+    let data = data(true);
+    for language in ["pt_BR", "ru"] {
+        ui.catalog = I18n::load(std::path::Path::new("/nonexistent"), Some(language), None);
+        for (focus, rescraping) in [(2, true), (0, true), (0, false)] {
+            let mut app = open(&data);
+            app.rescraping = rescraping;
+            app.details_focus = focus;
+            ui.draw_with_settings(&app, &data, &theme, art, None)
+                .unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(450));
+            ui.screenshot =
+                Some(output.join(format!("{name}-{rescraping}-{focus}-{language}.png")));
             ui.draw_with_settings(&app, &data, &theme, art, None)
                 .unwrap();
         }
