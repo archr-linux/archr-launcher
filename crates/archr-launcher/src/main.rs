@@ -9,6 +9,7 @@ use archr_launcher::{
     library::Library,
     modules::{self, Modules, Notice},
     netplay,
+    notice::{self, Severity},
     paths::Paths,
     preview::Preview,
     rescrape::Rescrape,
@@ -210,7 +211,10 @@ fn run(
     app.netplay = netplay_on;
     app.cheevos = cheevos_on;
     app.mangohud = mangohud_on;
-    ui.banner = library.banner.take().map(|m| m.render(&ui.catalog));
+    let first = library.banner.take();
+    let mut banner_timer =
+        notice::Timer::new(Severity::of(first.as_ref().map_or("", |m| m.key)), began);
+    ui.banner = first.map(|m| m.render(&ui.catalog));
     ui.draw(&app, &library, &theme, None)?;
     eprintln!(
         "archr-launcher: first frame {} ms ({} system rows)",
@@ -287,7 +291,6 @@ fn run(
     let mut dirty = false;
     let mut deferred = None;
     let mut closing = false;
-    let mut banner_until = Instant::now() + Duration::from_secs(8);
     loop {
         // A successful power request owns the screen until the OS stops us.
         // Store is already flushed; no more input, scans, scripts or handoffs.
@@ -407,6 +410,10 @@ fn run(
                     }
                 }
                 modules::Event::Notice(notice) => {
+                    let severity = match notice {
+                        Notice::Updated(..) | Notice::Text(_) => Severity::Info,
+                        _ => Severity::Error,
+                    };
                     let (key, name) = match notice {
                         Notice::Disabled(name) => ("modules.disabled_notice", name),
                         Notice::RolledBack(name) => ("modules.rolled_back", name),
@@ -425,7 +432,7 @@ fn run(
                     } else {
                         ui.catalog.format(key, &[("name", &name)])
                     });
-                    banner_until = Instant::now() + Duration::from_secs(8);
+                    banner_timer.restart(severity, Instant::now());
                     audio.play(Sound::Notice);
                 }
             }
@@ -512,7 +519,11 @@ fn run(
             shots.clear();
             logos.clear();
             ui.banner = Some(ui.catalog.text(key));
-            banner_until = Instant::now() + Duration::from_secs(8);
+            let severity = match key {
+                "details.updated" => Severity::Info,
+                _ => Severity::Error,
+            };
+            banner_timer.restart(severity, Instant::now());
             dirty = true;
         }
         if !matches!(app.screen, Screen::Achievements { .. }) {
@@ -531,16 +542,16 @@ fn run(
         app.rescraping = rescrape.is_some();
         app.can_rescrape = archr_scraper::available() && !settings.state.scrape.running;
         if let Some(banner) = library.banner.take() {
-            audio.play(if banner.key.starts_with("error.") {
-                Sound::Error
-            } else {
-                Sound::Notice
+            let severity = Severity::of(banner.key);
+            audio.play(match severity {
+                Severity::Error => Sound::Error,
+                Severity::Info => Sound::Notice,
             });
             ui.banner = Some(banner.render(&ui.catalog));
-            banner_until = Instant::now() + Duration::from_secs(8);
+            banner_timer.restart(severity, Instant::now());
             dirty = true;
         }
-        if ui.banner.is_some() && Instant::now() >= banner_until {
+        if ui.banner.is_some() && banner_timer.expired(Instant::now()) {
             ui.banner = None;
             dirty = true;
         }
@@ -685,6 +696,7 @@ fn run(
             deferred = None;
             repeat.clear();
         } else if let Some(button) = button.or_else(|| repeat.poll(Instant::now())) {
+            notice::dismiss(&mut ui.banner);
             ui.snap_animations();
             audio.wake();
             let before = (app.screen.clone(), app.cursor);
@@ -780,7 +792,7 @@ fn run(
                 {
                     log::warn!("Cannot start Wi-Fi worker: {error}");
                     ui.banner = Some(ui.catalog.text("error.operation"));
-                    banner_until = Instant::now() + Duration::from_secs(8);
+                    banner_timer.restart(Severity::Error, Instant::now());
                 }
                 outcome = Some(Outcome::None);
             } else {
@@ -844,10 +856,10 @@ fn run(
                 modules.resume();
             }
             dirty = true;
-            banner_until = Instant::now() + Duration::from_secs(8);
             // Back from a failed hand-off (or a suspend): the output returns.
             audio.wake();
             if ui.banner != banner {
+                banner_timer.restart(Severity::Error, Instant::now());
                 audio.play(Sound::Error);
             }
         }

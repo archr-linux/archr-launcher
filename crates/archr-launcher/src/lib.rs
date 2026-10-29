@@ -10,6 +10,7 @@ pub mod themestore;
 
 pub mod library;
 pub mod netplay;
+pub mod notice;
 pub mod paths;
 pub mod preview;
 pub mod raimport;
