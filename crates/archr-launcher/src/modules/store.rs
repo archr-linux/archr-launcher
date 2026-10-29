@@ -131,6 +131,15 @@ impl Shop {
             })
             .collect()
     }
+    /// A `.tar.gz` of the latest release carries one of `digests`. Asked
+    /// only for repositories on the reviewed list (saved for an hour).
+    fn current_reviewed(&self, owner: &str, repo: &str, digests: &[String]) -> bool {
+        self.release(owner, repo).is_ok_and(|(_, assets)| {
+            assets.iter().any(|(name, asset)| {
+                name.ends_with(".tar.gz") && digests.iter().any(|d| same_digest(d, &asset.digest))
+            })
+        })
+    }
     fn records(&self) -> State {
         State::load(&self.dirs.state)
     }
@@ -149,10 +158,19 @@ impl Shop {
         let mut cards: Vec<Card> = repos
             .unwrap_or_default()
             .into_iter()
-            .map(|r| Card {
-                reviewed: reviewed
+            .map(|r| {
+                let source = format!("{}/{}", r.owner, r.repo);
+                let digests: Vec<String> = reviewed
                     .iter()
-                    .any(|(repo, _)| *repo == format!("{}/{}", r.owner, r.repo)),
+                    .filter(|(repo, _)| *repo == source)
+                    .map(|(_, digest)| digest.clone())
+                    .collect();
+                (r, digests)
+            })
+            .map(|(r, digests)| Card {
+                // Reviewed only if a package of the current release is.
+                reviewed: !digests.is_empty() && self.current_reviewed(&r.owner, &r.repo, &digests),
+                digests,
                 owner: r.owner,
                 repo: r.repo,
                 stars: r.stars,
@@ -233,7 +251,7 @@ impl Shop {
         });
         let records = self.records();
         let record = records.modules.get(&manifest.id);
-        let compatible = manifest.api_version == manifest::API_VERSION
+        let compatible = manifest::api_ok(manifest.api_version)
             && !archr_ui::settings::store::newer(&manifest.min_launcher, env!("CARGO_PKG_VERSION"));
         let blocked = match record {
             _ if !compatible => Some("modules.incompatible"),
@@ -249,33 +267,38 @@ impl Shop {
         let installed = record
             .filter(|r| r.source == card.source())
             .map(|r| r.version.clone());
-        let mut added = manifest.clone();
-        added.permissions.net &= !granted.iter().any(|t| t == "net");
-        added
-            .permissions
-            .read
-            .retain(|a| !granted.contains(&format!("read:{a}")));
-        added
-            .permissions
-            .config_read
-            .retain(|k| !granted.contains(&format!("config_read:{k}")));
-        let added = if installed.is_some() {
-            added.tiles.clear();
-            added.shortcuts.clear();
-            added.quick.clear();
-            added.pages.clear();
-            added.mode = manifest::Mode::Oneshot;
-            registry::permissions(&added)
+        // Access permissions only, without what it adds to the screens.
+        let access = |permissions: manifest::Permissions| {
+            let mut bare = manifest.clone();
+            bare.permissions = permissions;
+            bare.tiles.clear();
+            bare.shortcuts.clear();
+            bare.widgets.clear();
+            bare.quick.clear();
+            bare.pages.clear();
+            bare.mode = manifest::Mode::Oneshot;
+            registry::permissions(&bare)
                 .into_iter()
                 .filter(|p| p.key != "modules.perm_none")
-                .collect()
+                .collect::<Vec<_>>()
+        };
+        let (added, kept) = if installed.is_some() {
+            let new = manifest.permissions.without(&granted);
+            let kept = manifest.permissions.only(&granted);
+            let mut added = access(new);
+            // New places on the screen and a process that stays open are
+            // new too: the user sees them, and an update on its own never
+            // brings them.
+            let old = registry::Installed::read(&self.dirs.module(&manifest.id), "en").manifest;
+            added.extend(new_surface(&manifest, old.as_ref()));
+            (added, access(kept))
         } else {
-            Vec::new()
+            (Vec::new(), Vec::new())
         };
         let reviewed = self
             .reviewed()
             .iter()
-            .any(|(repo, digest)| *repo == card.source() && *digest == package.digest);
+            .any(|(repo, digest)| *repo == card.source() && same_digest(digest, &package.digest));
         Ok(Offer {
             card: Card {
                 id: manifest.id.clone(),
@@ -290,8 +313,10 @@ impl Shop {
             author: manifest.author.clone(),
             license: manifest.license.clone(),
             size: package.size,
+            digest: package.digest.clone(),
             permissions: registry::permissions(&manifest),
             added,
+            kept,
             preview,
             installed,
             reviewed,
@@ -356,6 +381,10 @@ impl Shop {
         let package = assets
             .get(&format!("{id}-{}.tar.gz", manifest.version))
             .ok_or("modules.no_package")?;
+        // The package the user saw, not one published since.
+        if !same_digest(&package.digest, &offer.digest) {
+            return Err("modules.digest_mismatch");
+        }
         let expected = package
             .digest
             .strip_prefix("sha256:")
@@ -421,6 +450,39 @@ impl Shop {
             granted: manifest.permissions.tokens().into_iter().collect(),
         })
     }
+    /// Module `id`, if its latest release is reviewed (its package's digest
+    /// on the list), newer, and asks for nothing new: installed through the
+    /// same checks as a manual install.
+    pub fn auto(&self, id: &str) -> Option<Installed> {
+        let records = self.records();
+        let record = records.modules.get(id)?;
+        // Off, failed or never allowed: the user decides about it first.
+        if !record.enabled || record.failed || !record.consent {
+            return None;
+        }
+        let (owner, repo) = record.source.split_once('/')?;
+        let card = Card {
+            owner: owner.into(),
+            repo: repo.into(),
+            id: id.to_owned(),
+            ..Card::default()
+        };
+        let offer = self.offer(&card).ok()?;
+        let newer = offer
+            .installed
+            .as_deref()
+            .is_some_and(|v| archr_ui::settings::store::newer(&offer.version, v));
+        if !(newer && offer.reviewed && offer.added.is_empty() && offer.blocked.is_none()) {
+            return None;
+        }
+        // It failed here once and was rolled back.
+        if same_digest(&offer.digest, &record.bad_digest) {
+            return None;
+        }
+        self.install(&offer)
+            .map_err(|problem| log::warn!("Automatic update of {id} failed: {problem}"))
+            .ok()
+    }
     fn handle(
         &self,
         action: StoreAction,
@@ -440,6 +502,7 @@ impl Shop {
                 StoreReply::Offer(card.source(), self.offer(&card).map(Box::new)),
                 None,
             ),
+            StoreAction::Auto(_) => (StoreReply::Done(Ok("")), None),
             StoreAction::Install(offer) => match self.install(&offer) {
                 Ok(installed) => (
                     StoreReply::Done(Ok("modules.installed_ok")),
@@ -455,6 +518,66 @@ impl Shop {
             },
         }
     }
+}
+
+/// Two `sha256:<hex>` digests name the same package.
+pub fn same_digest(a: &str, b: &str) -> bool {
+    let hex = |d: &str| d.strip_prefix("sha256:").unwrap_or(d).to_ascii_lowercase();
+    !hex(a).is_empty() && hex(a) == hex(b)
+}
+
+/// What `new` shows or keeps running that `old` did not: one line per kind,
+/// as the permission page names it. Without the old manifest, all of it.
+fn new_surface(new: &Manifest, old: Option<&Manifest>) -> Vec<archr_ui::modules::Permission> {
+    let ids = |list: &[archr_ui::modules::Entry]| -> Vec<String> {
+        list.iter().map(|e| e.id.clone()).collect()
+    };
+    let grows = |new: Vec<String>, old: Option<Vec<String>>| {
+        let old = old.unwrap_or_default();
+        new.iter().any(|id| !old.contains(id))
+    };
+    let kinds = [
+        (
+            "modules.perm_tile",
+            grows(ids(&new.tiles), old.map(|o| ids(&o.tiles))),
+        ),
+        (
+            "modules.perm_shortcut",
+            grows(ids(&new.shortcuts), old.map(|o| ids(&o.shortcuts))),
+        ),
+        (
+            "modules.perm_widget",
+            grows(ids(&new.widgets), old.map(|o| ids(&o.widgets))),
+        ),
+        (
+            "modules.perm_quick",
+            grows(
+                new.quick.iter().map(|q| q.id.clone()).collect(),
+                old.map(|o| o.quick.iter().map(|q| q.id.clone()).collect()),
+            ),
+        ),
+        (
+            "modules.perm_page",
+            grows(
+                new.pages.iter().map(|p| p.id.clone()).collect(),
+                old.map(|o| o.pages.iter().map(|p| p.id.clone()).collect()),
+            ),
+        ),
+        (
+            "modules.perm_daemon",
+            new.mode == manifest::Mode::Daemon
+                && old.is_none_or(|o| o.mode != manifest::Mode::Daemon),
+        ),
+    ];
+    kinds
+        .into_iter()
+        .filter(|(_, new)| *new)
+        .map(|(key, _)| archr_ui::modules::Permission {
+            key,
+            detail: String::new(),
+            sensitive: false,
+        })
+        .collect()
 }
 
 /// The unpacker speaks of themes; the module store has its own words.
@@ -504,6 +627,19 @@ pub(super) fn lane(
             Err(mpsc::TryRecvError::Empty) => None,
             Err(mpsc::TryRecvError::Disconnected) => return,
         };
+        if let Some(StoreAction::Auto(id)) = &action {
+            let answer = match shop.auto(id) {
+                Some(installed) => (
+                    StoreReply::Updated(installed.id.clone(), installed.version.clone()),
+                    Some(installed),
+                ),
+                None => (StoreReply::Checked(id.clone()), None),
+            };
+            if results.send(Input::Store(Box::new(answer))).is_err() {
+                return;
+            }
+            continue;
+        }
         let (reply, installed) = match action {
             Some(action) => shop.handle(action, &mut queue),
             None => match queue.pop_front().and_then(|card| shop.decorate(&card)) {
@@ -511,7 +647,10 @@ pub(super) fn lane(
                 None => continue,
             },
         };
-        if results.send(Input::Store(reply, installed)).is_err() {
+        if results
+            .send(Input::Store(Box::new((reply, installed))))
+            .is_err()
+        {
             return;
         }
     }

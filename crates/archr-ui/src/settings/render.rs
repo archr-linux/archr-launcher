@@ -104,6 +104,10 @@ fn placements(page: Page, rows: &[Row]) -> Vec<Placement> {
                 _ if row.subtitle.is_some() => 46.,
                 _ => 40.,
             };
+            if row.id == Id::ModulesAuto {
+                // Room for the rule under the modules.
+                top += 12.;
+            }
             let place = Placement {
                 top,
                 height,
@@ -620,6 +624,7 @@ impl View<'_, '_, '_> {
             Page::Store => self.store_grid(state)?,
             Page::StoreTheme => self.store_detail(state)?,
             Page::Modules => self.modules_list(state, &rows)?,
+            Page::Module(..) => self.module_page(state, &rows)?,
             Page::ModuleStore => self.module_store(state)?,
             Page::ModuleInfo | Page::ModuleOffer => self.module_offer(state)?,
             Page::AccentColor => self.custom_page(state)?,

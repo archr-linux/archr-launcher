@@ -2,7 +2,7 @@
 //! test ever reaches the network.
 use archr_launcher::modules::{
     registry::{Dirs, Record, State},
-    store::{Shop, HOSTS},
+    store::{same_digest, Shop, HOSTS},
 };
 use archr_scraper::{trusted_on, Http, NetError, Response};
 use archr_ui::modules::{Card, StoreReply, Tab};
@@ -153,6 +153,13 @@ fn reviewed_modules_come_first_and_the_badge_follows_the_digest() {
     };
     assert_eq!(cards.len(), 1);
     assert!(cards[0].reviewed);
+    // The digests travel with the card: the host checks the installed one.
+    assert_eq!(cards[0].digests, [format!("sha256:{}", sha(&tarball))]);
+    assert!(same_digest(
+        &cards[0].digests[0],
+        &sha(&tarball).to_uppercase()
+    ));
+    assert!(!same_digest("sha256:", ""), "nothing is not a match");
     let StoreReply::Listed { cards, .. } = store.list(Tab::All, false) else {
         panic!("not a list");
     };
@@ -175,14 +182,32 @@ fn reviewed_modules_come_first_and_the_badge_follows_the_digest() {
         .permissions
         .iter()
         .any(|p| p.key == "modules.perm_tile"));
-    // A new release under the same version: the badge goes.
+    // A new release under the same version: the badge goes, in the list too.
     let other = Tarball::module(MANIFEST)
         .file("bateria/x.txt", b"x")
         .bytes();
     let root = tempfile::tempdir().unwrap();
     let fake = Fake::default();
     publish(&fake, MANIFEST, &other, &sha(&other), &sha(&tarball));
-    assert!(!shop(root.path(), &fake).offer(&card).unwrap().reviewed);
+    let store = shop(root.path(), &fake);
+    assert!(!store.offer(&card).unwrap().reviewed);
+    let StoreReply::Listed { cards, .. } = store.list(Tab::All, false) else {
+        panic!("not a list");
+    };
+    let bateria = cards.iter().find(|c| c.repo == "archr-bateria").unwrap();
+    assert!(
+        !bateria.reviewed,
+        "the current release is not the reviewed one"
+    );
+    assert_eq!(
+        bateria.digests.len(),
+        1,
+        "an installed reviewed package keeps its badge"
+    );
+    let StoreReply::Listed { cards, .. } = store.list(Tab::Reviewed, false) else {
+        panic!("not a list");
+    };
+    assert!(cards.is_empty());
 }
 
 #[test]
@@ -193,6 +218,19 @@ fn an_install_checks_digest_manifest_and_paths_before_anything_lands() {
     publish(&fake, MANIFEST, &good, &sha(&good), "");
     let store = shop(root.path(), &fake);
     let offer = store.offer(&card()).unwrap();
+    assert_eq!(offer.digest, format!("sha256:{}", sha(&good)));
+    // Another package published after the page was shown, even a valid one.
+    let other = Tarball::module(MANIFEST)
+        .file("bateria/x.txt", b"x")
+        .bytes();
+    fs::remove_dir_all(root.path().join("cache")).unwrap();
+    let swapped_release = Fake::default();
+    publish(&swapped_release, MANIFEST, &other, &sha(&other), "");
+    assert_eq!(
+        shop(root.path(), &swapped_release).install(&offer),
+        Err("modules.digest_mismatch")
+    );
+    assert!(!root.path().join("modules/bateria").exists());
     // A package that is not the one GitHub describes (an hour later).
     fs::remove_dir_all(root.path().join("cache")).unwrap();
     publish(&fake, MANIFEST, &good, &sha(b"other"), "");
@@ -237,7 +275,12 @@ fn an_install_checks_digest_manifest_and_paths_before_anything_lands() {
         let fake = Fake::default();
         publish(&fake, MANIFEST, &tarball, &sha(&tarball), "");
         let store = shop(root.path(), &fake);
-        assert_eq!(store.install(&offer), Err(problem));
+        // As if shown with this package: the unpacking itself refuses it.
+        let shown = archr_ui::modules::Offer {
+            digest: format!("sha256:{}", sha(&tarball)),
+            ..offer.clone()
+        };
+        assert_eq!(store.install(&shown), Err(problem));
         let left: Vec<_> = fs::read_dir(root.path().join("modules"))
             .map(|d| d.flatten().map(|e| e.file_name()).collect())
             .unwrap_or_default();
@@ -328,4 +371,266 @@ fn updates_show_only_new_permissions_and_keep_the_previous_version() {
     );
     let offer = shop(root.path(), &fake).offer(&other).unwrap();
     assert_eq!(offer.blocked, Some("modules.other_source"));
+}
+
+/// kaio-dev/archr-bateria 1.0.0 installed from the store, as the host
+/// records it.
+fn installed_bateria(root: &Path) {
+    let fake = Fake::default();
+    let good = Tarball::module(MANIFEST).bytes();
+    publish(&fake, MANIFEST, &good, &sha(&good), "");
+    let store = shop(root, &fake);
+    let installed = store.install(&store.offer(&card()).unwrap()).unwrap();
+    let mut state = State::default();
+    state.modules.insert(
+        "bateria".into(),
+        Record {
+            source: installed.source,
+            version: installed.version,
+            digest: installed.digest,
+            granted: installed.granted,
+            consent: true,
+            enabled: true,
+            ..Record::default()
+        },
+    );
+    state.save(&root.join("modules.toml")).unwrap();
+    fs::remove_dir_all(root.join("cache")).unwrap();
+}
+/// Release 1.1.0 of `manifest`, reviewed when `reviewed`.
+fn release_1_1(manifest: &str, reviewed: bool) -> Fake {
+    let tarball = Tarball::module(manifest).bytes();
+    let fake = Fake::default();
+    let digest = sha(&tarball);
+    publish(
+        &fake,
+        manifest,
+        &tarball,
+        &digest,
+        if reviewed { &digest } else { "" },
+    );
+    let download = "https://github.com/kaio-dev/archr-bateria/releases/download/v1.1.0";
+    fake.answer(
+        &format!("{API}/kaio-dev/archr-bateria/releases/latest"),
+        format!(
+            r#"{{"tag_name":"v1.1.0","assets":[{{"name":"module.toml","size":1}},
+            {{"name":"bateria-1.1.0.tar.gz","size":{},"digest":"sha256:{digest}"}}]}}"#,
+            tarball.len(),
+        ),
+    );
+    fake.answer(&format!("{download}/module.toml"), manifest.to_owned());
+    fake.answer(&format!("{download}/bateria-1.1.0.tar.gz"), tarball);
+    fake
+}
+
+#[test]
+fn automatic_updates_leave_switched_off_and_failed_modules_alone() {
+    let newer = MANIFEST.replace("1.0.0", "1.1.0");
+    for change in [
+        (|r: &mut Record| r.enabled = false) as fn(&mut Record),
+        |r: &mut Record| r.failed = true,
+        |r: &mut Record| r.consent = false,
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        installed_bateria(root.path());
+        let path = root.path().join("modules.toml");
+        let mut state = State::load(&path);
+        change(state.modules.get_mut("bateria").unwrap());
+        state.save(&path).unwrap();
+        assert!(shop(root.path(), &release_1_1(&newer, true))
+            .auto("bateria")
+            .is_none());
+        let on_disk = fs::read_to_string(root.path().join("modules/bateria/module.toml")).unwrap();
+        assert!(on_disk.contains("1.0.0"));
+    }
+}
+
+#[test]
+fn a_new_surface_or_a_process_that_stays_open_is_asked_for() {
+    let oneshot = MANIFEST.replace("mode = \"daemon\"", "mode = \"oneshot\"");
+    let root = tempfile::tempdir().unwrap();
+    installed_bateria(root.path());
+    // As if 1.0.0 had been a one-shot.
+    fs::write(root.path().join("modules/bateria/module.toml"), &oneshot).unwrap();
+    let newer = MANIFEST.replace("1.0.0", "1.1.0").replace(
+        "[[start.tiles]]",
+        "[[start.widgets]]\nid = \"w\"\naction = \"refresh\"\n[[start.tiles]]",
+    );
+    let offer = shop(root.path(), &release_1_1(&newer, true))
+        .offer(&card())
+        .unwrap();
+    let added: Vec<&str> = offer.added.iter().map(|p| p.key).collect();
+    assert_eq!(added, ["modules.perm_widget", "modules.perm_daemon"]);
+}
+
+#[test]
+fn a_rolled_back_package_is_never_taken_again_on_its_own() {
+    let newer = MANIFEST.replace("1.0.0", "1.1.0");
+    let root = tempfile::tempdir().unwrap();
+    installed_bateria(root.path());
+    let fake = release_1_1(&newer, true);
+    let tarball = Tarball::module(&newer).bytes();
+    let path = root.path().join("modules.toml");
+    let mut state = State::load(&path);
+    state.modules.get_mut("bateria").unwrap().bad_digest = format!("sha256:{}", sha(&tarball));
+    state.save(&path).unwrap();
+    assert!(
+        shop(root.path(), &fake).auto("bateria").is_none(),
+        "no daily loop"
+    );
+}
+
+#[test]
+fn automatic_updates_take_only_reviewed_versions_that_ask_for_nothing_new() {
+    let newer = MANIFEST.replace("1.0.0", "1.1.0");
+    let asks = newer.replace(
+        "[[start.tiles]]",
+        "[permissions]\nnet = true\n[[start.tiles]]",
+    );
+    // A new place on the screen, or staying open, is new as well.
+    let tile = format!("{newer}[[start.tiles]]\nid = \"c\"\naction = \"refresh\"\n");
+    for (manifest, reviewed, updated) in [
+        (&newer, false, false),
+        (&asks, true, false),
+        (&tile, true, false),
+        (&newer, true, true),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        installed_bateria(root.path());
+        let done = shop(root.path(), &release_1_1(manifest, reviewed)).auto("bateria");
+        assert_eq!(done.is_some(), updated, "reviewed {reviewed}: {manifest}");
+        let on_disk = fs::read_to_string(root.path().join("modules/bateria/module.toml")).unwrap();
+        assert_eq!(on_disk.contains("1.1.0"), updated);
+        if updated {
+            assert_eq!(done.unwrap().version, "1.1.0");
+            assert!(
+                root.path().join("modules/.previous-bateria").is_dir(),
+                "the old version waits for the new one's first good run"
+            );
+        }
+    }
+}
+
+/// The module host with this store, as on a device with automatic updates
+/// on; daemons run plainly.
+fn host(
+    root: &Path,
+    fake: &Fake,
+    auto_delay: std::time::Duration,
+) -> archr_launcher::modules::Modules {
+    use archr_launcher::modules::{process::Direct, Config, Modules};
+    fs::write(root.join("system.cfg"), "launcher.modules.autoupdate=1\n").unwrap();
+    let direct = Arc::new(Direct::default());
+    Modules::start(Config {
+        dirs: Dirs::new(root),
+        run: root.join("run"),
+        system_cfg: root.join("system.cfg"),
+        lock: root.join("system.cfg.lock"),
+        executor: direct.clone(),
+        direct: Some(direct),
+        userdb: None,
+        language: "en".into(),
+        device: "test".into(),
+        delay: std::time::Duration::ZERO,
+        auto_delay,
+        firewall: None,
+        shop: Some(shop(root, fake)),
+    })
+}
+/// Store answers and notices until `done` holds, at most 10 s.
+fn until_store(
+    modules: &archr_launcher::modules::Modules,
+    done: impl Fn(&[StoreReply], &[archr_launcher::modules::Notice]) -> bool,
+) -> (Vec<StoreReply>, Vec<archr_launcher::modules::Notice>) {
+    use archr_launcher::modules::Event;
+    let (mut replies, mut notices) = (Vec::new(), Vec::new());
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !done(&replies, &notices) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "{replies:?} {notices:?}"
+        );
+        for event in modules.poll() {
+            match event {
+                Event::Store(reply) => replies.push(reply),
+                Event::Notice(notice) => notices.push(notice),
+                _ => {}
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    (replies, notices)
+}
+fn version_on_disk(root: &Path) -> String {
+    let toml = fs::read_to_string(root.join("modules/bateria/module.toml")).unwrap();
+    toml.lines()
+        .find(|l| l.starts_with("version"))
+        .unwrap_or("")
+        .to_owned()
+}
+
+#[test]
+fn the_host_updates_on_its_own_only_outside_games_and_keeps_the_switch() {
+    use archr_launcher::modules::Notice;
+    let newer = MANIFEST.replace("1.0.0", "1.1.0");
+    let root = tempfile::tempdir().unwrap();
+    installed_bateria(root.path());
+    let modules = host(
+        root.path(),
+        &release_1_1(&newer, true),
+        std::time::Duration::from_millis(400),
+    );
+    // A game takes the screen before the first look: nothing happens.
+    modules.hand_off("", "", "");
+    std::thread::sleep(std::time::Duration::from_millis(1200));
+    assert!(version_on_disk(root.path()).contains("1.0.0"));
+    modules.resume();
+    let updated =
+        |_: &[StoreReply], n: &[Notice]| n.iter().any(|n| matches!(n, Notice::Updated(..)));
+    until_store(&modules, updated);
+    assert!(version_on_disk(root.path()).contains("1.1.0"));
+    let record = State::load(&root.path().join("modules.toml")).modules["bateria"].clone();
+    assert!(record.enabled && record.consent && record.auto_updated > 0);
+    assert!(record.previous_digest.starts_with("sha256:"));
+}
+
+#[test]
+fn the_host_leaves_switched_off_and_rolled_back_modules_alone() {
+    let newer = MANIFEST.replace("1.0.0", "1.1.0");
+    let tarball = Tarball::module(&newer).bytes();
+    for off in [true, false] {
+        let root = tempfile::tempdir().unwrap();
+        installed_bateria(root.path());
+        let path = root.path().join("modules.toml");
+        let mut state = State::load(&path);
+        let record = state.modules.get_mut("bateria").unwrap();
+        if off {
+            record.enabled = false;
+        } else {
+            record.bad_digest = format!("sha256:{}", sha(&tarball));
+        }
+        state.save(&path).unwrap();
+        let modules = host(
+            root.path(),
+            &release_1_1(&newer, true),
+            std::time::Duration::ZERO,
+        );
+        if off {
+            // Not even asked about: give the host its first look.
+            std::thread::sleep(std::time::Duration::from_millis(800));
+            let (replies, notices) = until_store(&modules, |_, _| true);
+            assert!(
+                replies.is_empty() && notices.is_empty(),
+                "{replies:?} {notices:?}"
+            );
+        } else {
+            let (_, notices) = until_store(&modules, |r, _| {
+                r.iter()
+                    .any(|r| matches!(r, StoreReply::Checked(id) if id == "bateria"))
+            });
+            assert!(notices.is_empty(), "{notices:?}");
+        }
+        assert!(version_on_disk(root.path()).contains("1.0.0"));
+        assert_eq!(State::load(&path).modules["bateria"].enabled, !off);
+    }
 }

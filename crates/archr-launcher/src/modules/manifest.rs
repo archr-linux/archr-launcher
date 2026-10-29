@@ -7,7 +7,10 @@ use sha2::{Digest, Sha256};
 use std::{collections::BTreeSet, fs, path::Path};
 use toml::{Table, Value};
 
-pub const API_VERSION: i64 = 1;
+/// The newest API this launcher speaks; every one from 1 up runs.
+pub const API_VERSION: i64 = 2;
+/// The API that brought `config_write`, `hooks`, `system` and `launch`.
+const API_2: i64 = 2;
 pub const FILE: &str = "module.toml";
 /// Path aliases a module may read; never a free path.
 pub const ALIASES: &[(&str, &str)] = &[
@@ -30,6 +33,18 @@ pub const READABLE: &[&str] = &[
     "audio.volume",
     "display.brightness",
 ];
+/// Settings `config_write` may list: user choices whose owner is
+/// archr-config and that the next game reads. Each value is checked by
+/// `writable`.
+pub const WRITABLE: &[&str] = &["system.cpugovernor", "global.netplay.nickname"];
+/// The CPU governors runemu.sh knows. It runs the value as a shell function
+/// name, so nothing else may ever reach it.
+pub const GOVERNORS: &[&str] = &["performance", "ondemand", "schedutil", "powersave"];
+/// Hooks a module may ask for: `launch` answers `launch.before`.
+pub const HOOKS: &[&str] = &["launch"];
+/// System capabilities, a closed list: `cpu-profile` picks the governor of
+/// one launch from `launch.before`.
+pub const SYSTEM: &[&str] = &["cpu-profile"];
 /// The events this launcher delivers.
 pub const EVENTS: &[&str] = &[
     "launcher.started",
@@ -39,7 +54,7 @@ pub const EVENTS: &[&str] = &[
     "game.ended",
 ];
 /// Permissions of later API versions: asked for, they block the module.
-const LATER: &[&str] = &["write", "config_write", "hooks", "system", "launch"];
+const LATER: &[&str] = &["write"];
 /// Extension points of later API versions: ignored with a warning.
 const LATER_KEYS: &[&str] = &["screens", "collections", "replace", "provider"];
 const PAGES: usize = 8;
@@ -65,17 +80,96 @@ pub struct Permissions {
     pub read: Vec<String>,
     /// Keys from `READABLE`.
     pub config_read: Vec<String>,
+    /// Keys from `WRITABLE`.
+    pub config_write: Vec<String>,
+    /// From `HOOKS`.
+    pub hooks: Vec<String>,
+    /// From `SYSTEM`.
+    pub system: Vec<String>,
+    /// `game.launch` right after the user chose one of its actions.
+    pub launch: bool,
 }
 impl Permissions {
+    fn lists(&self) -> [(&'static str, &Vec<String>); 5] {
+        [
+            ("read", &self.read),
+            ("config_read", &self.config_read),
+            ("config_write", &self.config_write),
+            ("hooks", &self.hooks),
+            ("system", &self.system),
+        ]
+    }
     /// What a grant records, to tell which permissions an update adds.
     pub fn tokens(&self) -> BTreeSet<String> {
-        let mut tokens: BTreeSet<String> = self.read.iter().map(|a| format!("read:{a}")).collect();
-        tokens.extend(self.config_read.iter().map(|k| format!("config_read:{k}")));
-        if self.net {
-            tokens.insert("net".into());
+        let mut tokens: BTreeSet<String> = self
+            .lists()
+            .iter()
+            .flat_map(|(name, list)| list.iter().map(move |v| format!("{name}:{v}")))
+            .collect();
+        for (on, token) in [(self.net, "net"), (self.launch, "launch")] {
+            if on {
+                tokens.insert(token.into());
+            }
         }
         tokens
     }
+    /// Only what `granted` does not hold yet.
+    pub fn without(&self, granted: &[String]) -> Self {
+        let new = |name: &str, list: &[String]| -> Vec<String> {
+            list.iter()
+                .filter(|v| !granted.contains(&format!("{name}:{v}")))
+                .cloned()
+                .collect()
+        };
+        let has = |token: &str| granted.iter().any(|t| t == token);
+        Self {
+            net: self.net && !has("net"),
+            read: new("read", &self.read),
+            config_read: new("config_read", &self.config_read),
+            config_write: new("config_write", &self.config_write),
+            hooks: new("hooks", &self.hooks),
+            system: new("system", &self.system),
+            launch: self.launch && !has("launch"),
+        }
+    }
+    /// Only what `granted` already holds.
+    pub fn only(&self, granted: &[String]) -> Self {
+        let new = self.without(granted);
+        let old = |list: &[String], new: &[String]| -> Vec<String> {
+            list.iter().filter(|v| !new.contains(v)).cloned().collect()
+        };
+        Self {
+            net: self.net && !new.net,
+            read: old(&self.read, &new.read),
+            config_read: old(&self.config_read, &new.config_read),
+            config_write: old(&self.config_write, &new.config_write),
+            hooks: old(&self.hooks, &new.hooks),
+            system: old(&self.system, &new.system),
+            launch: self.launch && !new.launch,
+        }
+    }
+    /// Anything API 1 did not have.
+    fn api_2(&self) -> bool {
+        self.launch
+            || !(self.config_write.is_empty() && self.hooks.is_empty() && self.system.is_empty())
+    }
+}
+
+/// A value `config.set` may store under a `WRITABLE` key.
+pub fn writable(key: &str, value: &str) -> bool {
+    match key {
+        "system.cpugovernor" => GOVERNORS.contains(&value),
+        "global.netplay.nickname" => {
+            !value.trim().is_empty()
+                && value.chars().count() <= crate::handoff::NICK_MAX
+                && value.chars().all(crate::handoff::nick_char)
+        }
+        _ => false,
+    }
+}
+/// The API versions this launcher runs.
+pub fn api_ok(version: i64) -> bool {
+    (1..=API_VERSION).contains(&version)
 }
 
 /// A parsed module.toml. Texts may be `@keys` of the module's locales.
@@ -102,6 +196,7 @@ pub struct Manifest {
     pub shortcuts: Vec<Entry>,
     pub quick: Vec<Quick>,
     pub pages: Vec<Page>,
+    pub widgets: Vec<Entry>,
 }
 
 /// `id` rules: `[a-z0-9-]{3,40}`.
@@ -283,6 +378,11 @@ pub fn parse(source: &str) -> Result<(Manifest, Vec<String>), Vec<String>> {
         .int("memory_mb")
         .map_or(32, |m| m.clamp(8, 64) as u32);
     let permissions = read_permissions(&permissions, &mut warnings, &mut errors);
+    if permissions.api_2() && api_version.is_some_and(|v| v < API_2) {
+        errors.push(format!(
+            "permissions: config_write, hooks, system and launch need api_version = {API_2}"
+        ));
+    }
     let hooks = hooks
         .iter()
         .filter_map(|hook| {
@@ -298,8 +398,9 @@ pub fn parse(source: &str) -> Result<(Manifest, Vec<String>), Vec<String>> {
         })
         .collect();
     let mut start = reader(&start, "start.", &mut warnings);
-    start.check(&["tiles", "shortcuts"]);
+    start.check(&["tiles", "shortcuts", "widgets"]);
     let (tiles, shortcuts) = (start.tables("tiles"), start.tables("shortcuts"));
+    let widgets = start.tables("widgets");
     let mut settings = reader(&settings, "settings.", &mut warnings);
     settings.check(&["pages"]);
     let pages: Vec<Page> = settings
@@ -319,6 +420,7 @@ pub fn parse(source: &str) -> Result<(Manifest, Vec<String>), Vec<String>> {
     };
     let tiles = entries(&tiles, "start.tiles.", &mut warnings);
     let shortcuts = entries(&shortcuts, "start.shortcuts.", &mut warnings);
+    let widgets = entries(&widgets, "start.widgets.", &mut warnings);
     let quick = quick
         .iter()
         .filter_map(|q| read_quick(q, &mut warnings))
@@ -353,6 +455,7 @@ pub fn parse(source: &str) -> Result<(Manifest, Vec<String>), Vec<String>> {
                     shortcuts,
                     quick,
                     pages,
+                    widgets,
                 },
                 warnings,
             ))
@@ -371,12 +474,23 @@ fn read_permissions(
             errors.push(format!(
                 "permissions.{key}: not available in this launcher yet"
             ));
-        } else if !["net", "read", "config_read"].contains(&key.as_str()) {
+        } else if ![
+            "net",
+            "read",
+            "config_read",
+            "config_write",
+            "hooks",
+            "system",
+            "launch",
+        ]
+        .contains(&key.as_str())
+        {
             errors.push(format!("permissions.{key}: unknown permission"));
         }
     }
     let mut reader = reader(table, "permissions.", warnings);
     let net = reader.flag("net").unwrap_or(false);
+    let launch = reader.flag("launch").unwrap_or(false);
     let mut list = |key: &str, allowed: &[&str]| -> Vec<String> {
         let values = reader.texts(key);
         for value in &values {
@@ -389,10 +503,17 @@ fn read_permissions(
     let aliases: Vec<&str> = ALIASES.iter().map(|(a, _)| *a).collect();
     let read = list("read", &aliases);
     let config_read = list("config_read", READABLE);
+    let config_write = list("config_write", WRITABLE);
+    let hooks = list("hooks", HOOKS);
+    let system = list("system", SYSTEM);
     Permissions {
         net,
         read,
         config_read,
+        config_write,
+        hooks,
+        system,
+        launch,
     }
 }
 
@@ -543,6 +664,18 @@ fn read_row(table: &Table, warnings: &mut Vec<String>) -> Option<Row> {
             },
             row.text("value").unwrap_or_default(),
         ),
+        "progress" => (
+            RowKind::Progress {
+                id: row.text("id")?,
+            },
+            String::new(),
+        ),
+        "list" => (
+            RowKind::List {
+                id: row.text("id")?,
+            },
+            String::new(),
+        ),
         "keyboard" => (
             RowKind::Keyboard {
                 key: key()?,
@@ -636,6 +769,7 @@ pub fn check(dir: &Path) -> Result<(Manifest, Vec<String>), Vec<String>> {
                 .tiles
                 .iter()
                 .chain(&manifest.shortcuts)
+                .chain(&manifest.widgets)
                 .filter_map(|e| e.icon.as_deref()),
         )
         .collect();
@@ -684,6 +818,10 @@ open = "main"
 [[start.tiles]]
 id = "lost"
 open = "nowhere"
+[[start.widgets]]
+id = "carga"
+label = "@name"
+open = "main"
 [[settings.pages]]
 id = "main"
 title = "@name"
@@ -700,6 +838,12 @@ key = "watts"
 default = true
 [[settings.pages.rows]]
 type = "radio"
+[[settings.pages.rows]]
+type = "progress"
+id = "envio"
+[[settings.pages.rows]]
+type = "list"
+id = "jogos"
 "#;
 
     #[test]
@@ -714,8 +858,11 @@ type = "radio"
         assert_eq!(manifest.hooks, ["focus.game"]);
         assert_eq!(manifest.tiles.len(), 1);
         assert_eq!(manifest.tiles[0].target, Target::Page(0));
+        assert_eq!(manifest.widgets[0].id, "carga");
         let rows = &manifest.pages[0].rows;
-        assert_eq!(rows.len(), 2);
+        assert_eq!(rows.len(), 4);
+        assert!(matches!(&rows[2].kind, RowKind::Progress { id } if id == "envio"));
+        assert!(matches!(&rows[3].kind, RowKind::List { id } if id == "jogos"));
         assert_eq!(rows[0].default, "50");
         assert!(matches!(&rows[0].kind, RowKind::Value { choices, .. } if choices.len() == 5));
         assert_eq!(rows[1].default, "1");
@@ -729,7 +876,7 @@ type = "radio"
 
     #[test]
     fn identity_run_and_permissions_are_fatal() {
-        let errors = parse("id = \"X\"\nversion = \"1\"\n[permissions]\nhooks = [\"launch\"]\nfoo = 1\n[permissions.x]\n")
+        let errors = parse("id = \"X\"\nversion = \"1\"\n[permissions]\nwrite = [\"saves\"]\nfoo = 1\n[permissions.x]\n")
             .unwrap_err();
         for expected in [
             "id:",
@@ -737,7 +884,7 @@ type = "radio"
             "api_version:",
             "run.runtime",
             "run.entry",
-            "hooks",
+            "write",
             "foo",
             "x",
         ] {
@@ -752,6 +899,73 @@ type = "radio"
         assert!(parse(&escape).is_err());
         let secret = GOOD.replace("read = [\"roms\"]", "config_read = [\"wifi.key\"]");
         assert!(parse(&secret).is_err());
+    }
+
+    #[test]
+    fn api_2_permissions_are_closed_lists_and_need_api_2() {
+        let asks = "launch = true\nconfig_write = [\"system.cpugovernor\"]\n\
+                    hooks = [\"launch\"]\nsystem = [\"cpu-profile\"]";
+        let two = GOOD
+            .replace("api_version = 1", "api_version = 2")
+            .replace("read = [\"roms\"]", asks);
+        let (manifest, _) = parse(&two).unwrap();
+        let tokens: Vec<String> = manifest.permissions.tokens().into_iter().collect();
+        assert_eq!(
+            tokens,
+            [
+                "config_write:system.cpugovernor",
+                "hooks:launch",
+                "launch",
+                "system:cpu-profile"
+            ]
+        );
+        let granted = ["launch".to_owned(), "hooks:launch".to_owned()];
+        let added = manifest.permissions.without(&granted).tokens();
+        assert_eq!(added.len(), 2, "{added:?}");
+        let kept = manifest.permissions.only(&granted).tokens();
+        assert_eq!(kept, granted.into_iter().collect());
+        let one = GOOD.replace("read = [\"roms\"]", asks);
+        let errors = parse(&one).unwrap_err();
+        assert!(
+            errors.iter().any(|e| e.contains("api_version = 2")),
+            "{errors:?}"
+        );
+        for (key, value) in [
+            ("config_write", "\"wifi.key\""),
+            ("config_write", "\"system.timezone\""),
+            ("hooks", "\"input\""),
+            ("system", "\"reboot\""),
+        ] {
+            let bad = two.replace("launch = true", &format!("launch = true\n{key}_x = 0"));
+            assert!(parse(&bad).is_err(), "unknown key");
+            let line = format!("{key} = [{value}]");
+            let bad = two
+                .lines()
+                .map(|l| {
+                    if l.starts_with(&format!("{key} =")) {
+                        line.as_str()
+                    } else {
+                        l
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(parse(&bad).is_err(), "{line}");
+        }
+        assert!(api_ok(1) && api_ok(2) && !api_ok(3) && !api_ok(0));
+    }
+
+    #[test]
+    fn only_safe_values_reach_writable_settings() {
+        assert!(writable("system.cpugovernor", "performance"));
+        for bad in ["performance; reboot", "$(reboot)", "userspace", ""] {
+            assert!(!writable("system.cpugovernor", bad), "{bad}");
+        }
+        assert!(writable("global.netplay.nickname", "Ana 2"));
+        for bad in ["--host", "a\nb", "   ", &"x".repeat(33)] {
+            assert!(!writable("global.netplay.nickname", bad), "{bad:?}");
+        }
+        assert!(!writable("system.timezone", "UTC"));
     }
 
     #[test]

@@ -22,6 +22,8 @@ pub struct Library {
     pub banner: Option<Message>,
     pub pending_writes: usize,
     pub write_failed: bool,
+    /// The CPU governor a module chose for the next launch only.
+    pub governor: Option<String>,
     moonlight_available: bool,
     overview: Overview,
     definitions: Vec<SystemDef>,
@@ -92,6 +94,7 @@ impl Library {
             banner,
             pending_writes: 0,
             write_failed: false,
+            governor: None,
             overview,
             definitions,
             games: HashMap::new(),
@@ -331,7 +334,16 @@ impl Library {
                 return Ok(true);
             }
             Outcome::Launch { system, game } => {
-                let command = self.launch_command(&system, game, controllers)?;
+                let governor = self.governor.take();
+                let mut command = self.launch_command(&system, game, controllers)?;
+                // runemu.sh runs the governor as a function name: only the
+                // known ones, and only on its own command line.
+                if let Some(governor) = governor.filter(|g| {
+                    crate::modules::manifest::GOVERNORS.contains(&g.as_str())
+                        && self.current_core(&system, game).is_some()
+                }) {
+                    command.push_str(&format!(" --governor={governor}"));
+                }
                 let key = self.game_key(&system, game).ok_or("error.game_missing")?;
                 if !self.is_tools(&system) {
                     self.store.push_recent(&key);
@@ -425,6 +437,17 @@ impl Library {
     }
     fn definition(&self, name: &str) -> Option<&SystemDef> {
         self.definitions.iter().find(|system| system.name == name)
+    }
+    /// The game with this key, when it opens through runemu.sh: an emulated
+    /// game, never a tool or a port. Unloaded systems start loading.
+    pub fn emulated(&mut self, system: &str, key: &str) -> Option<usize> {
+        if system.starts_with('@') || self.is_tools(system) {
+            return None;
+        }
+        self.ensure(system);
+        let index = (0..self.games(system).len())
+            .find(|&n| self.game_key(system, n).as_deref() == Some(key))?;
+        self.current_core(system, index).map(|_| index)
     }
     pub fn game_key(&self, system: &str, index: usize) -> Option<String> {
         game_key(

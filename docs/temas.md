@@ -306,6 +306,21 @@ details_text = { x = 0.45625, y = 0.266666667, w = 0.50625, h = 0.529166667 }
 details_actions = { x = 0.45625, y = 0.8125, w = 0.50625, h = 0.070833333 }
 ```
 
+### Widgets de módulos no Menu Start
+
+`start_widgets` (`{ x, y, w, h }`, mesmas regras) é a faixa dos widgets 2×1
+dos módulos (até 2, lado a lado, divididos por igual). Quando há widget, os
+blocos sobem e encolhem para caber acima da faixa e os atalhos vão para logo
+abaixo dela; sem widget, o Menu Start fica como sempre. A faixa é
+limitada: começa depois de 178 px (os blocos precisam de 72 px), tem pelo
+menos 40 px de altura e termina a tempo de os atalhos e o nome deles caberem
+acima do rodapé; fora disso, o launcher a encosta no limite. O padrão (maquete
+Start-widget):
+
+```toml
+start_widgets = { x = 0.153125, y = 0.454166667, w = 0.69375, h = 0.216666667 }
+```
+
 As cores vêm das chaves gerais (`surface`, `border`, `text_secondary`,
 `muted`, `accent`, `warning` para as estrelas). Linhas da tabela que não
 cabem em `details_info` são omitidas; texto nunca é cortado com reticências:

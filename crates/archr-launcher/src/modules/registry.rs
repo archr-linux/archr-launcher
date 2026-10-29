@@ -68,6 +68,15 @@ pub struct Record {
     pub failed: bool,
     /// SHA-256 of the installed package, for the reviewed badge.
     pub digest: String,
+    /// The digest of the version before the last update, for a rollback.
+    pub previous_digest: String,
+    /// A package that failed and was rolled back: automatic updates never
+    /// take it again.
+    pub bad_digest: String,
+    /// When it last ran, and when the store last updated it on its own
+    /// (seconds since 1970; 0 = never).
+    pub used: u64,
+    pub auto_updated: u64,
 }
 /// Module uids, which are also their gids: above useradd's UID_MAX (60000)
 /// and systemd-homed's 60001–60513, below DynamicUser's 61184–65519.
@@ -80,6 +89,9 @@ pub struct State {
     /// Each module's own uid. Kept when the module is removed with its data
     /// kept, so the files still belong to it if it comes back.
     pub uids: BTreeMap<String, u32>,
+    /// When the store was last asked for automatic updates (seconds since
+    /// 1970).
+    pub checked: u64,
 }
 impl State {
     /// The module's uid: the one it has, else the first free one from a
@@ -149,7 +161,7 @@ impl Installed {
             }
         };
         let compatible = manifest.as_ref().is_some_and(|m| {
-            m.api_version == manifest::API_VERSION
+            manifest::api_ok(m.api_version)
                 && !archr_ui::settings::store::newer(&m.min_launcher, env!("CARGO_PKG_VERSION"))
         });
         let file = language.replace('-', "_");
@@ -258,12 +270,44 @@ pub fn permissions(manifest: &Manifest) -> Vec<Permission> {
             false,
         ));
     }
+    if !granted.config_write.is_empty() {
+        // It changes what the user chose.
+        list.push(line(
+            "modules.perm_config_write",
+            &granted.config_write.join(", "),
+            true,
+        ));
+    }
+    if granted.hooks.iter().any(|h| h == "launch") {
+        list.push(line(
+            "modules.perm_hooks_launch",
+            "modules.perm_hooks_launch_detail",
+            false,
+        ));
+    }
+    if granted.system.iter().any(|s| s == "cpu-profile") {
+        list.push(line(
+            "modules.perm_cpu_profile",
+            "modules.perm_cpu_profile_detail",
+            false,
+        ));
+    }
+    if granted.launch {
+        list.push(line(
+            "modules.perm_launch",
+            "modules.perm_launch_detail",
+            false,
+        ));
+    }
+    // The amber ones first: a list cut short never hides them.
+    list.sort_by_key(|p| !p.sensitive);
     if list.is_empty() {
         list.push(line("modules.perm_none", "modules.perm_none_detail", false));
     }
     for (used, key) in [
         (!manifest.tiles.is_empty(), "modules.perm_tile"),
         (!manifest.shortcuts.is_empty(), "modules.perm_shortcut"),
+        (!manifest.widgets.is_empty(), "modules.perm_widget"),
         (!manifest.quick.is_empty(), "modules.perm_quick"),
         (!manifest.pages.is_empty(), "modules.perm_page"),
         (manifest.mode == Mode::Daemon, "modules.perm_daemon"),
@@ -450,6 +494,11 @@ pub fn module(
         },
         tiles: entries(&manifest.tiles),
         shortcuts: entries(&manifest.shortcuts),
+        widgets: entries(&manifest.widgets),
+        digest: record.digest.clone(),
+        used: record.used,
+        auto_updated: record.auto_updated,
+        failures: 0,
         quick: manifest
             .quick
             .iter()
@@ -582,6 +631,24 @@ mod tests {
         );
         assert_eq!(mode(&dirs.secrets_file("sec")), 0o600);
         assert_eq!(settings(&dirs, &manifest), values);
+    }
+
+    #[test]
+    fn amber_permissions_come_first() {
+        let source = "id = \"x-y\"\nversion = \"1.0.0\"\napi_version = 2\n\
+            [run]\nruntime = \"sh\"\nentry = \"main.sh\"\nmode = \"oneshot\"\n\
+            [permissions]\nconfig_read = [\"system.language\"]\nlaunch = true\n\
+            config_write = [\"system.cpugovernor\"]\n";
+        let (manifest, _) = manifest::parse(source).unwrap();
+        let keys: Vec<&str> = permissions(&manifest).iter().map(|p| p.key).collect();
+        assert_eq!(
+            keys,
+            [
+                "modules.perm_config_write",
+                "modules.perm_config_read",
+                "modules.perm_launch"
+            ]
+        );
     }
 
     #[test]

@@ -229,6 +229,8 @@ pub struct App {
     pub updates: usize,
     /// Installed modules and their live values, from the host.
     pub modules: std::sync::Arc<crate::modules::View>,
+    /// The focused module widget of the Start menu (its row is 2).
+    pub hub_widget: usize,
     history: Vec<(Screen, usize)>,
     moving: Option<order::Moving>,
     selected_core: Option<(String, String)>,
@@ -259,6 +261,7 @@ impl App {
             selected_core: None,
             selected_mangohud: Default::default(),
             modules: std::sync::Arc::default(),
+            hub_widget: 0,
         }
     }
 
@@ -536,6 +539,7 @@ impl App {
                                     .get(*index)
                                     .map(|g| g.path.display().to_string())
                                     .unwrap_or_default(),
+                                item: None,
                             },
                             None => Call {
                                 system: self.quick_system(data).unwrap_or_default(),

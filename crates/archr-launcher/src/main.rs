@@ -392,11 +392,32 @@ fn run(
                     settings.state.set_modules(view);
                 }
                 modules::Event::Store(reply) => settings.state.module_store_reply(reply),
+                modules::Event::Config => library.reload_config(),
+                modules::Event::Launch { system, game_key } => {
+                    // Through the same path as the user's own choice: the
+                    // hand-off, the module stop and the pending writes.
+                    let game = library.emulated(&system, &game_key);
+                    if let (Some(game), None, None, false) =
+                        (game, &deferred, &ui.lobby, moonlight.active)
+                    {
+                        settings.close();
+                        deferred = Some(Outcome::Launch { system, game });
+                    } else {
+                        log::warn!("A module's launch of {system}/{game_key} was refused");
+                    }
+                }
                 modules::Event::Notice(notice) => {
                     let (key, name) = match notice {
                         Notice::Disabled(name) => ("modules.disabled_notice", name),
                         Notice::RolledBack(name) => ("modules.rolled_back", name),
                         Notice::TooMany(name) => ("modules.too_many", name),
+                        Notice::Updated(name, version) => {
+                            let text = ui.catalog.format(
+                                "modules.auto_updated",
+                                &[("name", &name), ("version", &version)],
+                            );
+                            ("", text)
+                        }
                         Notice::Text(text) => ("", text),
                     };
                     ui.banner = Some(if key.is_empty() {
@@ -805,7 +826,7 @@ fn run(
             if let Some((system, index)) = &game {
                 let key = library.game_key(system, *index).unwrap_or_default();
                 let name = library.games(system).get(*index).map(|g| g.name.clone());
-                modules.hand_off(system, &key, &name.unwrap_or_default());
+                library.governor = modules.hand_off(system, &key, &name.unwrap_or_default());
             }
             if transition::apply(
                 &mut ui,

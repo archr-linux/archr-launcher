@@ -199,6 +199,83 @@ fn module_tiles_and_shortcuts_join_the_start_menu() {
 }
 
 #[test]
+fn module_widgets_sit_between_the_tiles_and_the_shortcuts() {
+    use archr_ui::modules::{Entry, Module, Request, Target, View};
+    let entry = |id: &str, target| Entry {
+        id: id.into(),
+        label: id.into(),
+        icon: None,
+        target,
+    };
+    let module = |id: &str, widget| Module {
+        id: id.into(),
+        enabled: true,
+        granted: true,
+        widgets: vec![widget],
+        ..Module::default()
+    };
+    let mut app = App::new(8);
+    app.modules = std::sync::Arc::new(View {
+        modules: vec![
+            module("bateria", entry("carga", Target::Page(0))),
+            module("tempo", entry("hoje", Target::Action("agora".into()))),
+            module("terceiro", entry("x", Target::Page(0))),
+        ],
+        ..View::default()
+    });
+    assert_eq!(app.modules.widgets().len(), 2, "two in all");
+    let data = data(true);
+    app.handle(Button::Start, &data);
+    app.handle(Button::Down, &data);
+    assert!(
+        matches!(app.screen, Screen::StartHub { row: 2, .. }),
+        "{:?}",
+        app.screen
+    );
+    assert_eq!(
+        app.handle(Button::A, &data),
+        Outcome::Module(Request::Open {
+            module: "bateria".into(),
+            page: 0
+        })
+    );
+    app.handle(Button::R, &data);
+    app.handle(Button::R, &data);
+    assert_eq!(
+        app.handle(Button::A, &data),
+        Outcome::Module(Request::Invoke {
+            module: "tempo".into(),
+            action: "agora".into(),
+            call: None
+        })
+    );
+    app.handle(Button::Down, &data);
+    assert!(matches!(app.screen, Screen::StartHub { row: 1, .. }));
+    app.handle(Button::Up, &data);
+    assert!(matches!(app.screen, Screen::StartHub { row: 2, .. }));
+    app.handle(Button::Up, &data);
+    assert!(matches!(app.screen, Screen::StartHub { row: 0, .. }));
+    // The widgets go away under the focus: the next press starts from the
+    // tiles, never from a row that is no longer there.
+    app.handle(Button::Down, &data);
+    assert!(matches!(app.screen, Screen::StartHub { row: 2, .. }));
+    app.hub_widget = 7;
+    app.modules = std::sync::Arc::new(View::default());
+    app.handle(Button::R, &data);
+    assert!(
+        matches!(app.screen, Screen::StartHub { row: 0, .. }),
+        "{:?}",
+        app.screen
+    );
+    assert_eq!(app.hub_widget, 0);
+    // Without widgets Down goes straight to the shortcuts.
+    let mut plain = App::new(8);
+    plain.handle(Button::Start, &data);
+    plain.handle(Button::Down, &data);
+    assert!(matches!(plain.screen, Screen::StartHub { row: 1, .. }));
+}
+
+#[test]
 fn a_module_item_joins_the_quick_menu_before_suspend() {
     use archr_ui::modules::{Context, Module, Quick, Request, View};
     use archr_ui::state::QuickItem;

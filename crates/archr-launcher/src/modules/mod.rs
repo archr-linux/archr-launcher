@@ -37,6 +37,23 @@ const DEBOUNCE: Duration = Duration::from_millis(400);
 /// `ui.update`s reach the screens at most four times a second.
 const PUBLISH: Duration = Duration::from_millis(250);
 const NOTIFY: Duration = Duration::from_secs(10);
+/// All `launch.before` answers must arrive within this, together.
+pub const BEFORE: Duration = Duration::from_millis(300);
+/// Automatic updates: the first look this long after the host starts, then
+/// once a day; only with `AUTO_KEY` on.
+const AUTO_FIRST: Duration = Duration::from_secs(120);
+const AUTO_EVERY: u64 = 24 * 3600;
+pub const AUTO_KEY: &str = "launcher.modules.autoupdate";
+/// Late `launch.before` answers in a row before it counts as a failure.
+const LATE: u32 = 3;
+/// `game.launch` is honoured this long after the user chose one of the
+/// module's actions, once.
+const GESTURE: Duration = Duration::from_secs(5);
+/// One `config.set` per module in this time, and at most `CONFIG_HOURLY`
+/// writes in the last hour.
+const CONFIG_SET: Duration = Duration::from_secs(1);
+const CONFIG_HOURLY: usize = 10;
+const HOUR: Duration = Duration::from_secs(3600);
 const LAST_LAUNCH: &str = "last-launch.json";
 
 /// Where and how modules run.
@@ -44,8 +61,9 @@ pub struct Config {
     pub dirs: Dirs,
     /// /run/archr-launcher: the hand-off exit code and the last launch.
     pub run: PathBuf,
-    /// system.cfg, for `config.get`.
+    /// system.cfg, for `config.get` and `config.set`, and its lock.
     pub system_cfg: PathBuf,
+    pub lock: PathBuf,
     pub executor: Arc<dyn Executor>,
     /// Set when the executor is `Direct`, which tracks its process groups.
     pub direct: Option<Arc<Direct>>,
@@ -57,6 +75,12 @@ pub struct Config {
     pub device: String,
     /// Daemons start this long after the host.
     pub delay: Duration,
+    /// The first look for automatic updates, this long after the host.
+    pub auto_delay: Duration,
+    /// On the device: the file archr-modules-firewall leaves once module
+    /// uids cannot reach this device's own addresses. Without it no module
+    /// gets the network.
+    pub firewall: Option<PathBuf>,
     pub shop: Option<store::Shop>,
 }
 impl Config {
@@ -75,16 +99,23 @@ impl Config {
             };
             (Arc::new(systemd), None, Some("/run/userdb".into()))
         };
+        let firewall = paths
+            .root
+            .is_none()
+            .then(|| PathBuf::from("/run/archr/modules-firewall"));
         Self {
             dirs,
             run: paths.run.clone(),
             system_cfg: paths.config.clone(),
+            lock: paths.lock.clone(),
             executor,
             direct,
             userdb,
             language: language.to_owned(),
             device: String::new(),
             delay: Duration::from_secs(2),
+            auto_delay: AUTO_FIRST,
+            firewall,
             shop: Some(shop),
         }
     }
@@ -95,6 +126,13 @@ pub enum Event {
     View(Arc<View>),
     Notice(Notice),
     Store(StoreReply),
+    /// A module changed system.cfg: whoever caches it reads it again.
+    Config,
+    /// A module asks to open this game, as if the user chose it.
+    Launch {
+        system: String,
+        game_key: String,
+    },
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Notice {
@@ -104,15 +142,22 @@ pub enum Notice {
     RolledBack(String),
     /// Another daemon would pass the limit.
     TooMany(String),
+    /// Updated on its own: name and version.
+    Updated(String, String),
     /// `ui.notify` text.
     Text(String),
 }
+
+/// Where the governor chosen for one launch goes.
+type Governor = mpsc::Sender<Option<String>>;
 
 enum Input {
     Request(Request),
     Language(String),
     Focus(&'static str, Json),
     GameStarted(Json),
+    /// `launch.before` to the modules with the hook; the governor comes back.
+    Before(Json, Governor),
     Stop(mpsc::Sender<()>),
     Resume,
     Line {
@@ -127,7 +172,7 @@ enum Input {
         timeout: bool,
         code: Option<i32>,
     },
-    Store(StoreReply, Option<store::Installed>),
+    Store(Box<(StoreReply, Option<store::Installed>)>),
 }
 
 /// The event loop's handle on the host thread.
@@ -174,15 +219,28 @@ impl Modules {
     pub fn poll(&self) -> Vec<Event> {
         self.rx.try_iter().collect()
     }
-    /// A game is about to take the screen: tell the modules, then stop them
-    /// all. Returns once nothing runs (500 ms for daemons, then killed).
-    pub fn hand_off(&self, system: &str, game_key: &str, name: &str) {
+    /// A game is about to take the screen: ask the modules with the launch
+    /// hook (`BEFORE` at most), tell every module, then stop them all.
+    /// Returns once nothing runs (500 ms for daemons, then killed), with the
+    /// CPU governor a module chose for this launch.
+    pub fn hand_off(&self, system: &str, game_key: &str, name: &str) -> Option<String> {
         let game = json!({"system": system, "game_key": game_key, "name": name});
+        let mut governor = None;
+        if !system.is_empty() {
+            let (tx, rx) = mpsc::channel();
+            if self.tx.send(Input::Before(game.clone(), tx)).is_ok() {
+                governor = rx
+                    .recv_timeout(BEFORE + Duration::from_millis(200))
+                    .ok()
+                    .flatten();
+            }
+        }
         let _ = self.tx.send(Input::GameStarted(game));
         let (ack, done) = mpsc::channel();
         if self.tx.send(Input::Stop(ack)).is_ok() {
             let _ = done.recv_timeout(Duration::from_secs(5));
         }
+        governor
     }
     /// The hand-off failed: modules run again.
     pub fn resume(&self) {
@@ -201,6 +259,7 @@ enum Waiting {
     Initialize,
     Invoke(String),
     Shutdown,
+    Before,
 }
 
 struct Host {
@@ -226,6 +285,23 @@ struct Host {
     dirty: Option<Instant>,
     published: Instant,
     notified: BTreeMap<String, Instant>,
+    /// Each module's last `config.set`, written or not.
+    config_asked: BTreeMap<String, Instant>,
+    /// When each module's `config.set`s were saved, the last hour's.
+    written: BTreeMap<String, Vec<Instant>>,
+    /// When to look for automatic updates next.
+    auto_at: Instant,
+    /// Modules still to look at, one store action each, and whether one is
+    /// with the store now.
+    auto_queue: std::collections::VecDeque<String>,
+    auto_busy: bool,
+    /// `launch.before` answers each module was late for in a row.
+    late: BTreeMap<String, u32>,
+    /// When the user last chose an action of each module (`game.launch`).
+    gestures: BTreeMap<String, Instant>,
+    /// A launch waiting for `launch.before`: where the answer goes and the
+    /// governor each module chose.
+    before: Option<(Governor, BTreeMap<String, String>)>,
 }
 
 impl Host {
@@ -264,6 +340,14 @@ impl Host {
             dirty: None,
             published: Instant::now(),
             notified: BTreeMap::new(),
+            written: BTreeMap::new(),
+            config_asked: BTreeMap::new(),
+            gestures: BTreeMap::new(),
+            late: BTreeMap::new(),
+            auto_at: Instant::now() + config.delay.max(config.auto_delay),
+            auto_queue: std::collections::VecDeque::new(),
+            auto_busy: false,
+            before: None,
             config,
             inbox,
             out,
@@ -364,6 +448,14 @@ impl Host {
             .collect();
         let ids: BTreeSet<&String> = self.view.modules.iter().map(|m| &m.id).collect();
         self.view.values.retain(|(id, _), _| ids.contains(id));
+        self.view.details.retain(|(id, _), _| ids.contains(id));
+        self.view.progress.retain(|(id, _), _| ids.contains(id));
+        self.view.items.retain(|(id, _), _| ids.contains(id));
+        for module in &mut self.view.modules {
+            module.failures = self.failures.get(&module.id).map_or(0, |f| {
+                f.iter().filter(|at| at.elapsed() < PUNISH_WINDOW).count()
+            });
+        }
         self.publish();
     }
     fn save_state(&self) {
@@ -419,6 +511,7 @@ impl Host {
                 }
                 self.deliver("game.started", &json!({"game": game}));
             }
+            Input::Before(game, reply) => self.before(&game, reply),
             Input::Stop(ack) => {
                 self.stop();
                 let _ = ack.send(());
@@ -427,6 +520,7 @@ impl Host {
                 self.stopped = false;
                 self.started = false;
                 self.start_at = Instant::now();
+                self.next_auto();
             }
             Input::Line {
                 id,
@@ -473,9 +567,17 @@ impl Host {
                     self.punish(&id, why);
                 }
             }
-            Input::Store(reply, installed) => {
-                if let Some(installed) = installed {
-                    self.installed_from_store(installed);
+            Input::Store(answer) => {
+                let (reply, installed) = *answer;
+                let auto = matches!(reply, StoreReply::Updated(..) | StoreReply::Checked(_));
+                match (installed, &reply) {
+                    (Some(installed), StoreReply::Updated(..)) => self.auto_updated(installed),
+                    (Some(installed), _) => self.installed_from_store(installed),
+                    _ => {}
+                }
+                if auto {
+                    self.auto_busy = false;
+                    self.next_auto();
                 }
                 self.store_reply(&reply);
                 let _ = self.out.send(Event::Store(reply));
@@ -504,10 +606,10 @@ impl Host {
         let Some(mode) = self.active(id).map(|(_, m)| m.mode) else {
             return;
         };
-        let context = call.map_or(
-            json!({}),
-            |c| json!({"system": c.system, "game_key": c.game_key, "rom": c.rom}),
-        );
+        let context = call.map_or(json!({}), |c| match c.item {
+            Some(item) => json!({"item": item}),
+            None => json!({"system": c.system, "game_key": c.game_key, "rom": c.rom}),
+        });
         let params = json!({"action": action, "context": context});
         self.next += 1;
         let request_id = self.next;
@@ -532,6 +634,7 @@ impl Host {
             _ => false,
         };
         if sent {
+            self.gestures.insert(id.to_owned(), Instant::now());
             self.view.busy.insert((id.to_owned(), action.to_owned()));
             self.publish();
         }
@@ -649,7 +752,7 @@ impl Host {
         let record = registry::record(&mut self.state, &installed.id);
         record.source = installed.source;
         record.version = installed.version;
-        record.digest = installed.digest;
+        record.previous_digest = std::mem::replace(&mut record.digest, installed.digest);
         record.granted = installed.granted;
         record.consent = true;
         record.enabled = true;
@@ -666,9 +769,54 @@ impl Host {
             self.spawn_daemon(&installed.id);
         }
     }
-    /// Store cards tell which installed modules are reviewed or outdated.
+    /// An update the store made on its own. The module keeps the user's
+    /// switch and consent; one removed or taken by another source meanwhile
+    /// is not brought back.
+    fn auto_updated(&mut self, installed: store::Installed) {
+        let id = installed.id.clone();
+        match self.state.modules.get(&id) {
+            Some(record) if record.source == installed.source => {}
+            Some(_) => {
+                log::warn!("Module {id} changed source during its automatic update");
+                self.reload();
+                return;
+            }
+            None => {
+                // Removed while the store worked: it stays removed.
+                log::warn!("Module {id} was removed during its automatic update");
+                let dirs = &self.config.dirs;
+                for dir in [dirs.module(&id), dirs.previous(&id)] {
+                    let _ = fs::remove_dir_all(dir);
+                }
+                self.reload();
+                return;
+            }
+        }
+        let record = registry::record(&mut self.state, &id);
+        record.previous_digest = std::mem::take(&mut record.digest);
+        record.version = installed.version.clone();
+        record.digest = installed.digest;
+        record.auto_updated = now_secs();
+        self.save_state();
+        self.end_daemon(&id, false);
+        self.failures.remove(&id);
+        self.reload();
+        let daemon = self
+            .find(&id)
+            .and_then(|i| i.manifest.as_ref())
+            .is_some_and(|m| m.mode == Mode::Daemon);
+        if daemon && self.started && !self.stopped && self.active(&id).is_some() {
+            self.spawn_daemon(&id);
+        }
+        let notice = Notice::Updated(self.name(&id), installed.version);
+        let _ = self.out.send(Event::Notice(notice));
+    }
+    /// Store cards tell which installed modules are reviewed (the digest of
+    /// the installed package is on the reviewed list) or outdated.
     fn store_reply(&mut self, reply: &StoreReply) {
         let cards = match reply {
+            // The Installed tab comes from the disk: it knows neither.
+            StoreReply::Listed { tab, .. } if *tab == archr_ui::modules::Tab::Installed => return,
             StoreReply::Listed { cards, .. } => cards.as_slice(),
             StoreReply::Card(card) => std::slice::from_ref(card),
             _ => return,
@@ -680,7 +828,15 @@ impl Host {
                 .iter_mut()
                 .find(|m| m.source == card.source() && m.id == card.id)
             {
-                module.reviewed = card.reviewed && card.version == module.version;
+                let installed = self
+                    .state
+                    .modules
+                    .get(&module.id)
+                    .map_or("", |r| r.digest.as_str());
+                module.reviewed = card
+                    .digests
+                    .iter()
+                    .any(|d| store::same_digest(d, installed));
                 module.update = archr_ui::settings::store::newer(&card.version, &module.version)
                     .then(|| card.version.clone());
             }
@@ -729,7 +885,7 @@ impl Host {
             secrets,
             uid,
             env,
-            net: manifest.permissions.net,
+            net: manifest.permissions.net && self.firewall_ready(id),
             read: manifest
                 .permissions
                 .read
@@ -738,7 +894,30 @@ impl Host {
                 .map(|(_, p)| PathBuf::from(p))
                 .collect(),
             memory_mb: manifest.memory_mb,
+            resolv: if manifest.permissions.net {
+                archr_io::read_utf8(
+                    std::path::Path::new("/etc/resolv.conf"),
+                    64 << 10,
+                    archr_io::Symlinks::Follow,
+                )
+                .unwrap_or_default()
+            } else {
+                String::new()
+            },
         })
+    }
+    /// The device's own addresses are closed to module uids (or there is
+    /// no such guard to wait for, off the device).
+    fn firewall_ready(&self, id: &str) -> bool {
+        let ready = self
+            .config
+            .firewall
+            .as_ref()
+            .is_none_or(|marker| marker.exists());
+        if !ready {
+            log::warn!("Module {id} runs without network: the modules firewall is not up");
+        }
+        ready
     }
     /// The module's uid when its files are handed to it (on the device).
     fn owner(&self, id: &str) -> Option<u32> {
@@ -771,10 +950,25 @@ impl Host {
         }
         ok
     }
+    /// "Último uso" in the details: saved at most once an hour.
+    fn ran(&mut self, id: &str) {
+        let now = now_secs();
+        let record = registry::record(&mut self.state, id);
+        if now.saturating_sub(record.used) < 3600 {
+            return;
+        }
+        record.used = now;
+        self.save_state();
+        if let Some(module) = self.view.modules.iter_mut().find(|m| m.id == id) {
+            module.used = now;
+            self.touch();
+        }
+    }
     fn spawn_daemon(&mut self, id: &str) {
         if self.daemons.contains_key(id) || self.daemons.len() >= DAEMONS || !self.prepare(id) {
             return;
         }
+        self.ran(id);
         let Some(plan) = self.plan(id, format!("archr-mod-{id}")) else {
             return;
         };
@@ -838,7 +1032,8 @@ impl Host {
             "device": self.config.device,
             "settings": settings,
             "permissions": permissions,
-            "capabilities": ["ui.update", "ui.notify", "settings.set", "config.get", "log"],
+            "capabilities": ["ui.update", "ui.notify", "settings.set", "config.get",
+                "config.set", "game.launch", "launch.before", "log"],
         });
         self.send(
             id,
@@ -849,6 +1044,7 @@ impl Host {
         if !self.prepare(id) {
             return;
         }
+        self.ran(id);
         self.next += 1;
         let Some(plan) = self.plan(id, format!("archr-mod-{id}-{}", self.next)) else {
             return;
@@ -1038,6 +1234,10 @@ impl Host {
                 self.touch();
             }
             Waiting::Shutdown => {}
+            Waiting::Before => {
+                self.late.remove(id);
+                self.decision(id, &message["result"]);
+            }
         }
     }
     fn notification(&mut self, id: &str, method: &str, params: &Json) {
@@ -1053,14 +1253,56 @@ impl Host {
                     return;
                 };
                 let key = (id.to_owned(), target.to_owned());
-                let value = params.get("value").and_then(|v| installed.message(v));
+                let message = |field: &str| params.get(field).and_then(|v| installed.message(v));
+                let (value, detail) = (message("value"), message("detail"));
+                let items: Option<Vec<archr_ui::modules::Item>> =
+                    params["items"].as_array().map(|items| {
+                        let text = |item: &Json, field: &str| {
+                            item.get(field)
+                                .and_then(|v| installed.message(v))
+                                .unwrap_or_default()
+                        };
+                        items
+                            .iter()
+                            .take(archr_ui::modules::ITEMS)
+                            .map(|item| {
+                                let short = |field: &str| {
+                                    item[field]
+                                        .as_str()
+                                        .filter(|t| {
+                                            (1..=40).contains(&t.len())
+                                                && !t.chars().any(char::is_control)
+                                        })
+                                        .map(str::to_owned)
+                                };
+                                let id = short("id").unwrap_or_default();
+                                archr_ui::modules::Item {
+                                    title: text(item, "title"),
+                                    subtitle: text(item, "subtitle"),
+                                    value: text(item, "value"),
+                                    action: short("action").filter(|_| !id.is_empty()),
+                                    id,
+                                }
+                            })
+                            .collect()
+                    });
                 if params["hidden"] == true {
                     self.view.hidden.insert(key.clone());
                 } else {
                     self.view.hidden.remove(&key);
                 }
                 if let Some(value) = value {
-                    self.view.values.insert(key, value);
+                    self.view.values.insert(key.clone(), value);
+                }
+                if let Some(detail) = detail {
+                    self.view.details.insert(key.clone(), detail);
+                }
+                if let Some(progress) = params["progress"].as_f64() {
+                    let progress = progress.clamp(0., 100.).round() as u8;
+                    self.view.progress.insert(key.clone(), progress);
+                }
+                if let Some(items) = items {
+                    self.view.items.insert(key, items);
                 }
                 self.touch();
             }
@@ -1130,7 +1372,66 @@ impl Host {
                     .and_then(|cfg| cfg.get_setting(key, None, None));
                 Ok(json!({ "value": value }))
             }
-            "config.set" | "game.launch" => Err((-32001, "permission denied")),
+            "config.set" => {
+                let key = params["key"].as_str().ok_or((-32602, "key"))?;
+                if !manifest.permissions.config_write.iter().any(|k| k == key) {
+                    return Err((-32001, "permission denied"));
+                }
+                let value = params["value"].as_str().ok_or((-32602, "value"))?;
+                if !manifest::writable(key, value) {
+                    return Err((-32602, "value"));
+                }
+                // One request a second, before system.cfg is even read.
+                let now = Instant::now();
+                let last = self.config_asked.insert(id.to_owned(), now);
+                if last.is_some_and(|at| now.duration_since(at) < CONFIG_SET) {
+                    return Err((-32003, "too many requests"));
+                }
+                let (path, lock) = (&self.config.system_cfg, &self.config.lock);
+                let current = archr_config::SystemCfg::load(path)
+                    .ok()
+                    .and_then(|cfg| cfg.get_setting(key, None, None));
+                if current.as_deref() == Some(value) {
+                    // Nothing to write; it does not count against the hour.
+                    return Ok(json!({}));
+                }
+                let times = self.written.entry(id.to_owned()).or_default();
+                times.retain(|at| at.elapsed() < HOUR);
+                if times.len() >= CONFIG_HOURLY {
+                    return Err((-32003, "too many requests"));
+                }
+                times.push(now);
+                if let Err(error) = archr_config::SystemCfg::set_and_save(path, lock, key, value) {
+                    log::warn!("Module {id}: cannot save {key}: {error}");
+                    return Err((-32000, "cannot save"));
+                }
+                log::info!("Module {id} set {key} to {value}");
+                let _ = self.out.send(Event::Config);
+                Ok(json!({}))
+            }
+            "game.launch" => {
+                if !manifest.permissions.launch {
+                    return Err((-32001, "permission denied"));
+                }
+                let text = |key: &str, max: usize| {
+                    params[key]
+                        .as_str()
+                        .filter(|t| {
+                            !t.is_empty() && t.len() <= max && !t.chars().any(char::is_control)
+                        })
+                        .map(str::to_owned)
+                        .ok_or((-32602, "system and game_key"))
+                };
+                let (system, game_key) = (text("system", 64)?, text("game_key", 1024)?);
+                // Only right after the user chose one of its actions, once.
+                match self.gestures.remove(id) {
+                    Some(at) if at.elapsed() < GESTURE => {}
+                    _ => return Err((-32001, "only after the user's action")),
+                }
+                log::info!("Module {id} launches {system}/{game_key}");
+                let _ = self.out.send(Event::Launch { system, game_key });
+                Ok(json!({}))
+            }
             _ => Err((-32601, "method not found")),
         }
     }
@@ -1171,6 +1472,113 @@ impl Host {
         }
     }
 
+    /// Asks the store for automatic updates when the user switched them on
+    /// and a day passed since the last look. Never during a game: `tick`
+    /// does nothing while stopped.
+    fn auto_update(&mut self) {
+        let on = archr_config::SystemCfg::load(&self.config.system_cfg)
+            .ok()
+            .and_then(|cfg| cfg.get_setting(AUTO_KEY, None, None))
+            .is_some_and(|v| v == "1");
+        let (now, store) = (now_secs(), &self.store);
+        if !on || now.saturating_sub(self.state.checked) < AUTO_EVERY || store.is_none() {
+            return;
+        }
+        self.state.checked = now;
+        self.save_state();
+        self.auto_queue = self
+            .state
+            .modules
+            .iter()
+            .filter(|(_, r)| !r.source.is_empty() && r.enabled && r.consent && !r.failed)
+            .map(|(id, _)| id.clone())
+            .collect();
+        self.next_auto();
+    }
+    /// The next module to the store, one at a time and never while a game
+    /// has the screen: the batch waits for the launcher to come back.
+    fn next_auto(&mut self) {
+        if self.stopped || self.auto_busy {
+            return;
+        }
+        let (Some(store), Some(id)) = (&self.store, self.auto_queue.pop_front()) else {
+            return;
+        };
+        if store.send(StoreAction::Auto(id)).is_ok() {
+            self.auto_busy = true;
+        }
+    }
+
+    // ---- launch hook ----
+
+    /// `launch.before` to every ready daemon granted the launch hook.
+    fn before(&mut self, game: &Json, reply: Governor) {
+        let ids: Vec<String> = self
+            .daemons
+            .iter()
+            .filter(|(_, d)| d.ready)
+            .map(|(id, _)| id.clone())
+            .filter(|id| {
+                self.active(id)
+                    .is_some_and(|(_, m)| m.permissions.hooks.iter().any(|h| h == "launch"))
+            })
+            .collect();
+        self.before = Some((reply, BTreeMap::new()));
+        for id in ids {
+            self.next += 1;
+            let request = self.next;
+            self.pending.insert(
+                request,
+                (id.clone(), Waiting::Before, Instant::now() + BEFORE),
+            );
+            self.send(
+                &id,
+                &json!({"jsonrpc": "2.0", "id": request, "method": "launch.before",
+                    "params": {"game": game}}),
+            );
+        }
+        self.settle();
+    }
+    /// `{"decision": "allow"}` or `{"decision": "modify", "changes": {...}}`:
+    /// only the changes the module was granted count.
+    fn decision(&mut self, id: &str, result: &Json) {
+        if result["decision"] != "modify" {
+            return;
+        }
+        let granted = self
+            .active(id)
+            .is_some_and(|(_, m)| m.permissions.system.iter().any(|s| s == "cpu-profile"));
+        let governor = result["changes"]["governor"].as_str();
+        match (governor, &mut self.before) {
+            (Some(g), Some((_, chosen))) if granted && manifest::GOVERNORS.contains(&g) => {
+                chosen.insert(id.to_owned(), g.to_owned());
+            }
+            (Some(_), _) => log::warn!("Module {id}: launch change refused"),
+            _ => {}
+        }
+    }
+    /// Every answer is in, or late: the first module (by id) decides.
+    fn settle(&mut self) {
+        let waiting = self
+            .pending
+            .values()
+            .any(|p| matches!(p.1, Waiting::Before));
+        if waiting {
+            return;
+        }
+        if let Some((reply, chosen)) = self.before.take() {
+            let mut chosen = chosen.into_iter();
+            let first = chosen.next();
+            for (id, _) in chosen {
+                log::info!("Module {id}: another module already chose the governor");
+            }
+            if let Some((id, governor)) = &first {
+                log::info!("Module {id} runs this game with the {governor} governor");
+            }
+            let _ = reply.send(first.map(|(_, g)| g));
+        }
+    }
+
     // ---- failures ----
 
     fn punish(&mut self, id: &str, why: &str) {
@@ -1179,7 +1587,12 @@ impl Host {
         let list = self.failures.entry(id.to_owned()).or_default();
         list.retain(|at| now.duration_since(*at) < PUNISH_WINDOW);
         list.push(now);
-        if list.len() < PUNISHMENTS {
+        let count = list.len();
+        if let Some(module) = self.view.modules.iter_mut().find(|m| m.id == id) {
+            module.failures = count;
+            self.touch();
+        }
+        if count < PUNISHMENTS {
             return;
         }
         self.failures.remove(id);
@@ -1219,7 +1632,12 @@ impl Host {
             .manifest
             .map(|m| m.version)
             .unwrap_or_default();
-        registry::record(&mut self.state, id).version = version;
+        // The previous package is back, and the one that failed is never
+        // taken again on its own.
+        let record = registry::record(&mut self.state, id);
+        record.version = version;
+        record.bad_digest = std::mem::take(&mut record.digest);
+        record.digest = std::mem::take(&mut record.previous_digest);
         self.save_state();
         self.reload();
         true
@@ -1228,6 +1646,7 @@ impl Host {
     fn tick(&mut self) {
         let now = Instant::now();
         if self.stopped {
+            self.settle();
             return;
         }
         if !self.started && now >= self.start_at {
@@ -1260,7 +1679,13 @@ impl Host {
                 !self.daemons.contains_key(id)
                     && !self.restarts.contains_key(id)
                     && self.active(id).is_some_and(|(_, m)| m.mode == Mode::Daemon)
-                    && self.failures.get(id).is_none_or(Vec::is_empty)
+                    // A recent failure waits out the longest back-off; an
+                    // old one never keeps it down (e.g. after a game).
+                    && self
+                        .failures
+                        .get(id)
+                        .and_then(|f| f.last())
+                        .is_none_or(|at| at.elapsed() >= Duration::from_secs(BACKOFF[2]))
             });
             if let Some(id) = next {
                 self.spawn_daemon(&id);
@@ -1298,8 +1723,26 @@ impl Host {
                     self.touch();
                     self.punish(&id, "timed out");
                 }
+                // Late is "allow": the game never waits. Only a habit of it
+                // counts against the module.
+                Some(Waiting::Before) => {
+                    let count = self.late.entry(id.clone()).or_default();
+                    *count += 1;
+                    log::warn!(
+                        "Module {id} was late for launch.before ({count} in a row): allowed"
+                    );
+                    if *count >= LATE {
+                        self.late.remove(&id);
+                        self.punish(&id, "was late for launch.before 3 times in a row");
+                    }
+                }
                 _ => {}
             }
+        }
+        self.settle();
+        if now >= self.auto_at {
+            self.auto_at = now + Duration::from_secs(3600);
+            self.auto_update();
         }
         if self.focus.as_ref().is_some_and(|f| f.0 <= now) {
             let (_, name, data) = self.focus.take().expect("focus");

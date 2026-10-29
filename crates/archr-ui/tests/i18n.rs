@@ -439,6 +439,7 @@ const CONFIG_KEYS: &[&str] = &[
     "launcher.buttons",
     "launcher.clock.format",
     "launcher.font",
+    "launcher.modules.autoupdate",
     "launcher.scraper.media",
     "launcher.scraper.only_missing",
     "launcher.scraper.systems",

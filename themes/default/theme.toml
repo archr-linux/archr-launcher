@@ -67,6 +67,8 @@ details_title = { x = 0.45625, y = 0.104166667, w = 0.50625, h = 0.095833333 } #
 details_subtitle = { x = 0.45625, y = 0.216666667, w = 0.50625, h = 0.033333333 }
 details_text = { x = 0.45625, y = 0.266666667, w = 0.50625, h = 0.529166667 }
 details_actions = { x = 0.45625, y = 0.8125, w = 0.50625, h = 0.070833333 } # 34px
+# Start menu module widgets (Start-widget): 444x104px at 98,218.
+start_widgets = { x = 0.153125, y = 0.454166667, w = 0.69375, h = 0.216666667 }
 # Game achievements (RA-jogo): progress over a 604px column, list of 50px rows below.
 achievements_progress = { x = 0.025, y = 0.108333333, w = 0.94375, h = 0.0625 }
 achievements_list = { x = 0.025, y = 0.183333333, w = 0.94375, h = 0.7125 }

@@ -6,7 +6,11 @@ conversa por JSON. O módulo **declara** no `module.toml` o que acrescenta
 receber) e o launcher desenha tudo com os próprios componentes. O módulo nunca
 desenha pixels, nunca lê o controle e nunca roda como root.
 
-Este guia descreve a **API 1** (fase 1). Linguagens garantidas na imagem:
+Este guia descreve a **API 2**. Módulos com `api_version = 1` continuam
+rodando; as permissões `config_write`, `hooks`, `system` e `launch` exigem
+`api_version = 2`. A especificação completa das fases 2 e 3 (ameaças,
+mitigações, o que ainda aguarda) está em
+`docs/superpowers/specs/2026-10-29-modulos-fases-2-3.md`. Linguagens garantidas na imagem:
 **sh/bash + `jq`** e **binários aarch64**. Python pode existir na imagem, mas
 um módulo não pode depender dele (`runtime = "python3"` é recusado).
 
@@ -40,7 +44,7 @@ tipos errados) aparecem mas não impedem.
 ```toml
 id = "bateria-detalhada"        # [a-z0-9-]{3,40}, único no aparelho
 version = "1.0.0"               # x.y.z
-api_version = 1
+api_version = 2                 # 1 ou 2
 min_launcher = "0.1.0"          # opcional
 name = "@name"                  # texto, "@chave" do locales/, ou tabela por idioma
 description = "@description"
@@ -61,6 +65,10 @@ memory_mb = 16                  # padrão 32, entre 8 e 64
 # net = true
 # read = ["roms"]
 # config_read = ["system.language"]
+# config_write = ["system.cpugovernor"]   # API 2
+# hooks = ["launch"]                      # API 2
+# system = ["cpu-profile"]                # API 2
+# launch = true                           # API 2
 
 [[hooks]]
 event = "focus.game"
@@ -94,6 +102,13 @@ O bloco mostra um valor ao vivo embaixo do título quando o módulo manda
 **Atalho no Start** (`[[start.shortcuts]]`, mesmos campos; 1 por módulo, 2 no
 total), entre Wi-Fi e Suspender. O rótulo aparece embaixo da fileira quando o
 atalho tem o foco.
+
+**Widget no Start** (`[[start.widgets]]`, mesmos campos; 1 por módulo, 2 no
+total): um bloco 2×1 entre os blocos e os atalhos, com o ícone e o nome do
+módulo, o valor grande, um texto ao lado e uma barra. O módulo manda
+`ui.update` para `widget:<id>` com `value`, `detail` e `progress` (0–100). A
+posição e o tamanho vêm do tema (`start_widgets`, ver `docs/temas.md`); ↑↓
+chegam a ele, A abre a página ou envia a ação.
 
 **Item no menu Y** (1 por módulo, 3 no total), antes de Suspender:
 
@@ -135,6 +150,8 @@ default = true
 | `action` | A envia `action.invoke`; mostra "…" até a resposta | `action`, `confirm` (pergunta opcional) |
 | `text` | só leitura; valor vem de `ui.update` para `row:<id>` | `id`, `value` inicial |
 | `keyboard` | abre o teclado do launcher | `key`, `max` (≤ 64), `secret` |
+| `progress` | título, texto à direita e barra; tudo de `ui.update` para `row:<id>` (`value`, `progress` 0–100) | `id` |
+| `list` | linhas que o módulo manda: `ui.update` para `row:<id>` com `items: [{id, title, subtitle?, value?, action?}]` (até 20); A numa linha com `id` e `action` envia `action.invoke` com `context: {item: "<id>"}` (o id, não a posição: a lista pode mudar entre o desenho e o botão) | `id` |
 
 Os valores são do launcher (um dono por chave): ele grava
 `/storage/.config/archr-launcher/module-settings/<id>.json` de forma atômica.
@@ -154,18 +171,31 @@ usuário do próprio módulo. O valor também chega no `initialize` e no
 | `net = true` | rede liberada (sem ela: `PrivateNetwork`, só `AF_UNIX`) | "Rede · Acessa a internet" (âmbar) |
 | `read = ["roms", "bios", "screenshots"]` | `/storage/roms`, `/storage/roms/bios`, `/storage/roms/screenshots` só leitura | "Lê suas ROMs" … (âmbar junto com `net`) |
 | `config_read = [...]` | `config.get` só das chaves listadas | "Lê ajustes" |
+| `config_write = [...]` | `config.set` só das chaves listadas, valores conferidos (API 2) | "Muda ajustes" (âmbar) |
+| `hooks = ["launch"]` | recebe `launch.before` antes de cada jogo (API 2) | "Vê cada jogo que você abre" |
+| `system = ["cpu-profile"]` | em `launch.before`, pode escolher o governador daquela abertura (API 2) | "Escolhe o perfil de CPU de um jogo" |
+| `launch = true` | `game.launch` logo após o usuário escolher uma ação do módulo (API 2) | "Abre jogos" |
+
+As permissões em âmbar aparecem primeiro na lista.
 
 Chaves aceitas em `config_read`: `system.language`, `system.timezone`,
 `system.cpugovernor`, `system.hostname`, `global.netplay.nickname`,
 `global.retroachievements`, `audio.volume`, `display.brightness`. Senhas,
 tokens e chaves de Wi-Fi **nunca**.
 
+Chaves aceitas em `config_write`, com os valores que passam:
+
+| chave | valores |
+|---|---|
+| `system.cpugovernor` | `performance`, `ondemand`, `schedutil`, `powersave` (o `runemu.sh` executa o valor; nada mais passa) |
+| `global.netplay.nickname` | `[A-Za-z0-9 _.]`, 1 a 32 caracteres |
+
 Mesmo com `roms`, `/storage/roms/backup` (backups do `backuptool`, com o
 `system.cfg` e suas senhas) e `/storage/roms/backups` (chaves de pareamento
 Bluetooth) ficam inacessíveis (`InaccessiblePaths`).
 
-Reservadas para a fase 2 (pedir hoje bloqueia o módulo): `write`,
-`config_write`, `hooks`, `system`, `launch`.
+Reservada (pedir hoje bloqueia o módulo): `write`, que espera o teste das ACLs
+no aparelho.
 
 O usuário vê as permissões antes de instalar ("Permitir e instalar"). Um
 módulo copiado à mão aparece desligado com "Aguardando sua permissão" e a mesma
@@ -188,7 +218,17 @@ systemd 257). Também: `NoNewPrivileges`, sem capabilities, `ProtectSystem=stric
 `TemporaryFileSystem=/storage:ro` (toda a partição do usuário escondida),
 de volta só a pasta do módulo (de root, só leitura), `module-data/<id>`
 (gravável, é o `HOME`; 0700, do uid do módulo) e os arquivos de ajustes e de
-segredos (só leitura); `MemoryMax`, `TasksMax=16`,
+segredos (só leitura); `/run/dbus` e os sockets do userdbd
+(`/run/systemd/userdb`) inacessíveis (nenhum módulo fala com os serviços do
+sistema); com `net`, só sockets `AF_UNIX`, `AF_INET` e `AF_INET6` e nada em
+`localhost` (`IPAddressDeny=localhost`), exceto o stub de DNS do
+systemd-resolved (`127.0.0.53`/`.54`) quando o `resolv.conf` aponta para ele;
+um `resolv.conf` com `127.0.0.1` ou `::1` deixa o módulo sem DNS; e nenhum
+endereço do próprio aparelho (o IP do Wi-Fi ou do cabo USB, mesmo depois de um
+DHCP novo): o `archr-modules-firewall` da imagem recusa destino local para os
+uids 60600–61099, e o launcher só dá rede a um módulo depois de ver
+`/run/archr/modules-firewall`;
+`MemoryMax`, `TasksMax=16`,
 `CPUWeight=20`, `Nice=10`. Para ver a saída de erro no aparelho:
 `journalctl -u 'archr-mod-<id>*'`.
 
@@ -238,6 +278,16 @@ leitura), `ARCHR_MODULE_SETTINGS` (JSON dos ajustes), `ARCHR_MODULE_SECRETS`
 | `initialize` (só daemon) | `{api_version, launcher_version, language, device, settings, permissions, capabilities}` | `{"ready": true}` |
 | `action.invoke` | `{action, context: {system?, game_key?, rom?}}` | `{}` |
 | `shutdown` (só daemon) | `{}` | `{}`, e sair |
+| `launch.before` (só daemon, com `hooks = ["launch"]`) | `{game: {system, game_key, name}}` | `{"decision": "allow"}` ou `{"decision": "modify", "changes": {"governor": "<g>"}}` |
+
+`launch.before`: todas as respostas juntas têm **300 ms**; quem atrasa vale como
+`allow` naquela abertura (o jogo nunca espera); 3 atrasos seguidos contam uma
+falha. Não há `deny`: um módulo não
+impede o usuário de jogar. `changes.governor` só vale com
+`system = ["cpu-profile"]` e um dos quatro governadores; o launcher passa
+`--governor=<g>` ao `runemu.sh` só naquela execução, sem mudar o ajuste do
+usuário. Se dois módulos escolhem, vale o primeiro em ordem de `id`. Netplay e
+Moonlight não perguntam.
 
 ### Launcher → módulo, eventos (sem `id`)
 
@@ -257,11 +307,21 @@ só para quem assinou em `[[hooks]]`:
 
 | método | tipo | params |
 |---|---|---|
-| `ui.update` | notificação | `{target: "tile:<id>" \| "shortcut:<id>" \| "row:<id>" \| "quick:<id>", value?: texto ou {key, args}, hidden?: bool}` |
+| `ui.update` | notificação | `{target: "tile:<id>" \| "shortcut:<id>" \| "widget:<id>" \| "row:<id>" \| "quick:<id>", value?: texto ou {key, args}, detail?: texto, progress?: 0–100, items?: [...], hidden?: bool}` |
 | `ui.notify` | notificação | `{text: texto ou {key,args}}` ou `{key, args}`; faixa de aviso, no máx. 1 a cada 10 s |
 | `log` | notificação | `{level: "info" \| "error", message}` |
 | `settings.set` | pedido | `{key, value}`, só chaves declaradas no manifesto → `{}` |
 | `config.get` | pedido | `{key}`, só com `config_read` → `{value}` (`null` se ausente) |
+| `config.set` | pedido | `{key, value}`, só com `config_write` e valor aceito → `{}`; valor igual ao atual não grava nem conta; 1 por segundo e 10 por hora (`-32003`) |
+| `game.launch` | pedido | `{system, game_key}`, só com `launch` → `{}` |
+
+`game.launch` só vale até **5 s depois de o usuário escolher uma ação do
+módulo** (bloco, atalho, item do Y, linha de ação), uma vez por escolha, e só
+para jogos emulados (nunca ferramentas, ports ou coleções). O launcher abre o
+jogo pelo mesmo caminho da escolha do usuário: espera gravações pendentes,
+fecha Configurações, roda o `launch.before`, para todos os módulos e entrega a
+tela. Se não puder (lobby aberto, outra abertura pendente, sistema ainda não
+carregado), recusa e registra no log; o `{}` só confirma o recebimento.
 
 Textos: `"@chave"` resolve no catálogo do módulo (idioma do launcher, depois
 `en`); `{"key":"@st.watts","args":{"pct":87,"w":"1.9"}}` troca `{pct}` e `{w}`.
@@ -271,14 +331,15 @@ Textos: `"@chave"` resolve no catálogo do módulo (idioma do launcher, depois
 No **oneshot** o launcher escreve **uma** mensagem e fecha o stdin; o módulo
 pode emitir notificações (`ui.update`, `ui.notify`, `log`) e, se havia `id`,
 exatamente uma resposta. Não há `initialize` nem `shutdown`; os ajustes vêm de
-`ARCHR_MODULE_SETTINGS`. Pedidos do módulo (`config.get`, `settings.set`) só
-funcionam em daemons.
+`ARCHR_MODULE_SETTINGS`. Pedidos do módulo (`config.get`, `config.set`,
+`settings.set`, `game.launch`) só funcionam em daemons.
 
 ### Erros
 
 `error: {code, message}`: `-32700` JSON inválido, `-32600` pedido inválido,
 `-32601` método desconhecido, `-32602` parâmetros inválidos, `-32001` permissão
-negada, `-32002` tempo esgotado, `-32004` não encontrado. Responda `-32601` a
+negada, `-32002` tempo esgotado, `-32003` limite de taxa, `-32004` não
+encontrado, `-32000` o launcher não conseguiu (ex.: gravar). Responda `-32601` a
 métodos que não conhece (não conta como falha).
 
 ## 5. Exemplo 1 — "Bateria detalhada" (bash + jq, daemon)
@@ -395,11 +456,13 @@ jq -cn --arg s "$system" --arg g "$governor" \
 printf '{"jsonrpc":"2.0","id":%s,"result":{}}\n' "$id"
 ```
 
-**O que a fase 2 traz para este exemplo:** o pedido `launch.before` (permissões
-`hooks = ["launch"]` e `system = ["cpu-profile"]`), em que o módulo responde
-`{"decision":"modify","changes":{"governor":"performance"}}` e o launcher passa
-`--governor=<g>` ao `runemu.sh` só naquela execução, sem mudar o ajuste do
-usuário. Aí o item no menu Y deixa de ser necessário.
+**Com a API 2:** o mesmo módulo como daemon, com `api_version = 2`,
+`hooks = ["launch"]` e `system = ["cpu-profile"]`, responde ao
+`launch.before` com `{"decision":"modify","changes":{"governor":"performance"}}`
+e o launcher passa `--governor=performance` ao `runemu.sh` só naquela
+execução, sem mudar o ajuste do usuário; o item no menu Y deixa de ser
+necessário. (O `runemu.sh` da imagem ainda ignora `--governor=`; a mudança na
+distribuição está na especificação das fases 2 e 3.)
 
 ## 7. Testar
 
@@ -417,7 +480,9 @@ A Loja lista todo repositório público, não arquivado, com o tópico
 **`archr-launcher-module`**. Os revisados pelo projeto ganham o selo
 **Revisado pelo ArchR** e vêm primeiro: a lista é o `reviewed.json` da última
 release de `archr-linux/archr-modules`, com repositório e digest do pacote
-revisado; publicar outro pacote tira o selo até nova revisão.
+revisado; publicar outro pacote tira o selo até nova revisão. Um módulo
+instalado só mostra o selo se o digest do pacote que está no aparelho estiver
+na lista.
 
 Regras da release (a última, não pre-release):
 
@@ -435,5 +500,16 @@ tar -czf bateria-detalhada-1.0.0.tar.gz bateria-detalhada/
 A Loja confere o SHA-256 que o GitHub publica para o asset, exige o
 `module.toml` idêntico e valida o pacote antes de colocá-lo em `modules/<id>`.
 Um `id` pertence a um repositório: outro repositório com o mesmo `id` é
-recusado. Atualizações nunca são automáticas; a versão anterior fica guardada
-até a nova funcionar.
+recusado. A versão anterior fica guardada até a nova funcionar.
+
+**Atualização automática** (Configurações › Sistema › Módulos › "Atualizar
+sozinho os revisados", `launcher.modules.autoupdate`, desligada por padrão):
+uma vez por dia, 2 min depois do início e nunca durante um jogo, o launcher
+instala sozinho a versão nova de um módulo da Loja só se o pacote dela estiver
+na lista revisada (pelo digest) e ela não pedir nada novo (permissão, bloco,
+atalho, widget, item, página ou passar a ficar aberta); nunca um módulo
+desligado ou com falha, nem um pacote que já falhou e voltou atrás; senão
+fica "→ x.y.z disponível". Mesmas checagens da instalação à mão; aviso na
+faixa ("X foi atualizado para 1.2.0") e "atualizado sozinho" na lista por uma
+semana. Detalhes (Y na lista) mostram o digest do pacote, se ele confere com a
+lista revisada, o último uso e as falhas dos últimos 10 min.
