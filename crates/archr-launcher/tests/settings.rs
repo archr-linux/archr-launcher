@@ -445,21 +445,22 @@ fn usbgadget_exit_three_maps_to_specific_messages() {
         .contains("exit status: 1"));
     script(&dir, "usbgadget", "exit 0");
     assert_eq!(backend.apply(Id::UsbMode, "network").unwrap(), "network");
-    // "internet" goes through the same guard and errors.
+    // "internet" and the RNDIS switch go through the same guard and errors.
     script(&dir, "usbgadget", "exit 3");
-    assert_eq!(
-        backend.apply(Id::UsbMode, "internet").unwrap_err(),
-        "settings.usb_busy"
-    );
+    for (id, value) in [(Id::UsbMode, "internet"), (Id::UsbCompat, "1")] {
+        assert_eq!(backend.apply(id, value).unwrap_err(), "settings.usb_busy");
+    }
     script(
         &dir,
         "usbgadget",
         "echo \"$*\" >> \"$ARCHR_LAUNCHER_ROOT/calls\"",
     );
     assert_eq!(backend.apply(Id::UsbMode, "internet").unwrap(), "internet");
+    assert_eq!(backend.apply(Id::UsbCompat, "1").unwrap(), "1");
+    assert!(backend.apply(Id::UsbCompat, "2").is_err());
     assert!(backend.apply(Id::UsbMode, "ecm").is_err());
     let calls = fs::read_to_string(dir.path().join("calls")).unwrap();
-    assert_eq!(calls, "internet\n");
+    assert_eq!(calls, "internet\ncompat 1\n");
 }
 #[test]
 fn load_reads_the_usb_network_from_usbgadget_status() {
@@ -467,10 +468,11 @@ fn load_reads_the_usb_network_from_usbgadget_status() {
     script(
         &dir,
         "usbgadget",
-        "if [ \"$1\" = status ]; then printf 'mode=internet\\nlink=online\\naddress=192.168.137.42\\nwifi=held\\n'; else echo internet; fi",
+        "if [ \"$1\" = status ]; then printf 'mode=internet\\ncompat=1\\nlink=online\\naddress=192.168.137.42\\nwifi=held\\n'; else echo internet; fi",
     );
     let state = backend.load().unwrap();
     assert_eq!(state.value(Id::UsbMode), "internet");
+    assert_eq!(state.value(Id::UsbCompat), "1");
     assert_eq!(state.usb.address, "192.168.137.42");
     assert!(state.usb.wifi_held && state.usb.link == "online");
 }

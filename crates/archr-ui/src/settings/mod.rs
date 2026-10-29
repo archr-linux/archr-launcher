@@ -170,6 +170,8 @@ pub enum Id {
     Player,
     Channel,
     UsbMode,
+    /// RNDIS instead of NCM for Windows 10 (`usbgadget compat`).
+    UsbCompat,
     /// The address on the USB cable, shown, not edited.
     UsbAddress,
     /// Cable, lease and Wi-Fi hold, shown, not edited.
@@ -304,6 +306,7 @@ impl Id {
             Self::Player => ("wifi.adhoc.id", "1"),
             Self::Channel => ("wifi.adhoc.channel", "6"),
             Self::UsbMode => ("", "disabled"), // usbgadget owns its state file
+            Self::UsbCompat => ("", "0"),
             Self::UsbAddress | Self::UsbState => ("", ""),
             // Per-system suffixes: the Games page writes `<system>.<suffix>`,
             // the keys runemu.sh passes on and setsettings.sh reads.
@@ -428,6 +431,7 @@ impl Id {
             | Self::Samba
             | Self::Http
             | Self::Adhoc
+            | Self::UsbCompat
             | Self::NetplayEnabled
             | Self::OnlyRelay
             | Self::MissingGames
@@ -945,6 +949,9 @@ impl Settings {
             (Id::ClockFormat, "24") => "settings.clock_24",
             (Id::ClockFormat, "12") => "settings.clock_12",
             (Id::UsbMode, "disabled") => "settings.off",
+            (Id::UsbMode, "network") if self.value(Id::UsbCompat) == "1" => {
+                "settings.usb_network_rndis"
+            }
             (Id::UsbMode, "network") => "settings.usb_network",
             (Id::UsbMode, "internet") => "settings.usb_internet",
             (Id::UsbMode, "file_transfer") => "settings.usb_files",
@@ -1059,7 +1066,7 @@ impl Settings {
                     false
                 }
                 Id::CustomServer => self.value(Id::Relay) == "custom",
-                Id::UsbAddress | Id::UsbState => self.usb_network(),
+                Id::UsbCompat | Id::UsbAddress | Id::UsbState => self.usb_network(),
                 Id::SecondCard => self.storage.second.is_some(),
                 Id::UnifiedCard => self.storage.unified.is_some(),
                 id if Games::ROWS.contains(&id) => self.games.shows(id, self),
@@ -1072,7 +1079,8 @@ impl Settings {
             .copied()
             .collect()
     }
-    /// A network USB function is chosen: its address and state rows show.
+    /// A network USB function is chosen: its compatibility, address and
+    /// state rows show.
     pub fn usb_network(&self) -> bool {
         matches!(self.value(Id::UsbMode), "network" | "internet")
     }
@@ -1862,12 +1870,12 @@ mod dismiss_tests {
             state
                 .visible_rows()
                 .iter()
-                .filter(|r| matches!(r.id, Id::UsbAddress | Id::UsbState))
+                .filter(|r| matches!(r.id, Id::UsbCompat | Id::UsbAddress | Id::UsbState))
                 .count()
         };
         assert_eq!(usb_rows(&state), 0);
         state.values.insert(Id::UsbMode, "internet".into());
-        assert_eq!(usb_rows(&state), 2);
+        assert_eq!(usb_rows(&state), 3);
         assert!(state.fixed(Id::UsbAddress) && state.fixed(Id::UsbState));
         let catalog = crate::i18n::I18n::load(std::path::Path::new("/none"), Some("pt_BR"), None);
         assert_eq!(state.display_value(Id::UsbAddress, &catalog), "—");
@@ -1897,6 +1905,11 @@ mod dismiss_tests {
             subtitle(&state, Id::UsbAddress),
             "settings.usb_address_fixed"
         );
+        // The label names the function the gadget really uses.
+        state.values.insert(Id::UsbMode, "network".into());
+        assert_eq!(state.display_value(Id::UsbMode, &catalog), "Rede (NCM)");
+        state.values.insert(Id::UsbCompat, "1".into());
+        assert_eq!(state.display_value(Id::UsbMode, &catalog), "Rede (RNDIS)");
         state.values.insert(Id::UsbMode, "file_transfer".into());
         assert_eq!(usb_rows(&state), 0);
     }

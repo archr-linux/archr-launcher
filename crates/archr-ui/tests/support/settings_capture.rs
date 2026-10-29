@@ -90,7 +90,11 @@ fn pages() -> Vec<(&'static str, Settings)> {
     let mut usb_fallback = usb_internet.clone();
     usb_fallback.usb =
         crate::settings::network::Usb::parse("link=fallback\naddress=169.254.170.2\n");
-    usb_fallback.cursor = 6;
+    usb_fallback.cursor = 7;
+    let mut usb_rndis = services.clone();
+    usb_rndis.values.insert(Id::UsbCompat, "1".into());
+    usb_rndis.usb = crate::settings::network::Usb::parse("link=local\naddress=169.254.170.2\n");
+    usb_rndis.cursor = 5;
     let mut region = ready();
     region.open(Page::Region);
     region.values.insert(Id::Language, "pt_BR".into());
@@ -347,6 +351,7 @@ fn pages() -> Vec<(&'static str, Settings)> {
         ("services", services),
         ("services_usb_internet", usb_internet),
         ("services_usb_fallback", usb_fallback),
+        ("services_usb_rndis", usb_rndis),
         ("region", region),
         ("games", games),
         ("games-standalone", standalone),

@@ -191,6 +191,8 @@ impl Backend {
             state.values.insert(Id::UsbMode, mode);
         }
         state.usb = self.usb();
+        let compat = if state.usb.compat { "1" } else { "0" };
+        state.values.insert(Id::UsbCompat, compat.into());
         state.usb_busy = self.usb_busy();
         state.access_ip = self.address();
         keyboard_choices(
@@ -274,6 +276,7 @@ impl Backend {
                 | Id::Player
                 | Id::Channel
                 | Id::UsbMode
+                | Id::UsbCompat
                 | Id::KeyboardLayout
                 | Id::KeyboardVariant
                 | Id::ClockFormat
@@ -333,6 +336,11 @@ impl Backend {
                 }
                 Id::UsbMode => self
                     .command("usbgadget", &[value])
+                    .map(|_| value.into())
+                    .map_err(|e| usb_error(&e)),
+                // Rebuilding the gadget restarts an active network mode.
+                Id::UsbCompat => self
+                    .command("usbgadget", &["compat", value])
                     .map(|_| value.into())
                     .map_err(|e| usb_error(&e)),
                 Id::KeyboardLayout | Id::KeyboardVariant => {

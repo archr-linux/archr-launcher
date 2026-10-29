@@ -67,6 +67,7 @@ pub struct Usb {
     /// "waiting", "dhcp", "online", "local" or "fallback"; empty when off.
     pub link: String,
     pub address: String,
+    pub compat: bool,
     /// Wi-Fi is off while the PC shares its internet over the cable.
     pub wifi_held: bool,
 }
@@ -80,6 +81,7 @@ impl Usb {
                 "address" if value.bytes().all(|b| b.is_ascii_digit() || b == b'.') => {
                     usb.address = value.into()
                 }
+                "compat" => usb.compat = value == "1",
                 "wifi" => usb.wifi_held = value == "held",
                 _ => {}
             }
@@ -109,10 +111,11 @@ mod tests {
     }
     #[test]
     fn usb_status_reads_known_keys_and_drops_odd_addresses() {
-        let usb = Usb::parse("mode=internet\nlink=online\naddress=192.168.137.42\nwifi=held\n");
+        let usb =
+            Usb::parse("mode=internet\ncompat=1\nlink=online\naddress=192.168.137.42\nwifi=held\n");
         assert_eq!(usb.link, "online");
         assert_eq!(usb.address, "192.168.137.42");
-        assert!(usb.wifi_held);
+        assert!(usb.compat && usb.wifi_held);
         let off = Usb::parse("link=off\naddress=1.2.3.4|x\nwifi=free\n");
         assert_eq!(off, Usb::default());
         assert_eq!(Usb::parse("disabled"), Usb::default());

@@ -24,6 +24,12 @@ pub const SERVICES: &[Row] = &[
     .under("settings.online_play"),
     described(Id::UsbMode, "settings.usb_mode", "settings.usb_detail").under("settings.usb"),
     described(
+        Id::UsbCompat,
+        "settings.usb_compat",
+        "settings.usb_compat_detail",
+    )
+    .kind(Kind::Toggle),
+    described(
         Id::UsbAddress,
         "settings.usb_address",
         "settings.usb_address_fixed",
