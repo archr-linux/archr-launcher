@@ -450,6 +450,8 @@
 "settings.font" = "Font"
 "settings.text_size" = "Text size"
 "settings.animations" = "Animations"
+"settings.preview_video" = "Preview video"
+"settings.preview_video_detail" = "Plays muted in game details, in place of the screenshot"
 "settings.restore" = "Restore defaults"
 "appearance.preview" = "Preview"
 "appearance.preview_note" = "Changes show here at once and are saved when you leave."
@@ -630,6 +632,7 @@
 # Game details
 "menu.details" = "Details"
 "details.rescrape" = "Scrape again"
+"details.preview" = "Preview"
 "details.rescraping" = "Scraping…"
 "details.scroll" = "Scroll text"
 "details.options" = "Options"

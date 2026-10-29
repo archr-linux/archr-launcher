@@ -450,6 +450,8 @@
 "settings.font" = "Шрифт"
 "settings.text_size" = "Размер текста"
 "settings.animations" = "Анимации"
+"settings.preview_video" = "Видеопревью"
+"settings.preview_video_detail" = "Играет без звука в сведениях об игре вместо скриншота"
 "settings.restore" = "Сбросить настройки"
 "appearance.preview" = "Предпросмотр"
 "appearance.preview_note" = "Изменения видны здесь сразу и сохраняются при выходе."
@@ -630,6 +632,7 @@
 # Game details
 "menu.details" = "Подробнее"
 "details.rescrape" = "Обновить"
+"details.preview" = "Превью"
 "details.rescraping" = "Загрузка…"
 "details.scroll" = "Прокрутка"
 "details.options" = "Опции"

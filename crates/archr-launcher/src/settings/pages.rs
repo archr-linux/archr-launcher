@@ -190,6 +190,10 @@ impl Backend {
                 }
             }
         }
+        // The Games page's one launcher-wide row.
+        if let Some(value) = cfg.get_setting(Id::PreviewVideo.key(), None, None) {
+            state.values.insert(Id::PreviewVideo, value);
+        }
         if let Ok(mode) = self.command("usbgadget", &[]) {
             state.values.insert(Id::UsbMode, mode);
         }
@@ -294,6 +298,7 @@ impl Backend {
                 | Id::ScraperSystems
                 | Id::ScraperMedia
                 | Id::ScraperMissing
+                | Id::PreviewVideo
                 | Id::Automount
                 | Id::MergedStorage
                 | Id::UpdateChannel

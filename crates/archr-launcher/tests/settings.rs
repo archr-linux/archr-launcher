@@ -508,6 +508,18 @@ fn theme_sound_settings_persist_without_running_anything() {
 }
 
 #[test]
+fn preview_video_switch_is_saved_and_loaded_on() {
+    let (dir, backend) = fixture();
+    assert_eq!(backend.load().unwrap().value(Id::PreviewVideo), "1");
+    assert_eq!(backend.apply(Id::PreviewVideo, "0").unwrap(), "0");
+    assert!(backend.apply(Id::PreviewVideo, "2").is_err());
+    let saved =
+        fs::read_to_string(dir.path().join("storage/.config/system/configs/system.cfg")).unwrap();
+    assert!(saved.contains("launcher.preview_video=0"), "{saved}");
+    assert_eq!(backend.load().unwrap().value(Id::PreviewVideo), "0");
+}
+
+#[test]
 fn hotkeys_save_evdev_names_and_restart_a_running_input_service() {
     let (dir, backend) = fixture();
     let log = dir.path().join("systemctl.log");

@@ -10,6 +10,7 @@ use archr_launcher::{
     modules::{self, Modules, Notice},
     netplay,
     paths::Paths,
+    preview::Preview,
     rescrape::Rescrape,
     state::{App, DataSource, Outcome, Screen},
     wifi,
@@ -269,6 +270,7 @@ fn run(
     // Achievement badges, at the list icon's size.
     let side = (36. * height as f32 / 480.).round().max(1.) as u32;
     let mut badges = CoverCache::new(&creator, paths.cache.join("thumbs"), side, side);
+    let mut preview = Preview::new(&creator);
     let mut cheevos: Option<Lookup> = None;
     let mut rescrape: Option<Rescrape> = None;
     // The ROM on the details screen, followed across re-reads of its system.
@@ -537,12 +539,33 @@ fn run(
         logos.request(logo.as_slice());
         badges.request(&badge_paths(&app));
         dirty |= covers.poll() | shots.poll() | logos.poll() | badges.poll();
+        let video = match &app.screen {
+            Screen::Details { system, game }
+                if !settings.active && settings.state.value(Id::PreviewVideo) == "1" =>
+            {
+                let path = library
+                    .games(system)
+                    .get(*game)
+                    .and_then(|g| g.video.clone());
+                // The art box inside its 1px frame.
+                let (w, h) = sized(theme.details_shot);
+                path.map(|path| {
+                    (
+                        path,
+                        (w.saturating_sub(2).max(1), h.saturating_sub(2).max(1)),
+                    )
+                })
+            }
+            _ => None,
+        };
+        dirty |= preview.poll(video, Instant::now());
         if dirty {
             ui.moonlight = moonlight.active.then(|| moonlight.state.clone());
             let art = Art {
                 cover: selected.as_ref().and_then(|path| covers.get(path)),
                 shot: shot.as_ref().and_then(|path| shots.get(path)),
                 logo: logo.as_ref().and_then(|path| logos.get(path)),
+                video: preview.frame(),
                 badges: Some(&badges),
             };
             ui.draw_with_settings(
@@ -589,7 +612,10 @@ fn run(
             0
         } else {
             let now = Instant::now();
-            repeat.wait_ms(now).min(audio.wait_ms(now))
+            repeat
+                .wait_ms(now)
+                .min(audio.wait_ms(now))
+                .min(preview.wait_ms(now))
         }) {
             match event {
                 Event::Quit { .. } => close_requested = true,

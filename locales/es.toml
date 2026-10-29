@@ -450,6 +450,8 @@
 "settings.font" = "Fuente"
 "settings.text_size" = "Tamaño del texto"
 "settings.animations" = "Animaciones"
+"settings.preview_video" = "Video de vista previa"
+"settings.preview_video_detail" = "Se reproduce sin sonido en los detalles del juego, en lugar de la captura"
 "settings.restore" = "Restaurar valores"
 "appearance.preview" = "Vista previa"
 "appearance.preview_note" = "Los cambios se ven aquí al instante y se guardan al salir."
@@ -630,6 +632,7 @@
 # Game details
 "menu.details" = "Detalles"
 "details.rescrape" = "Volver a descargar"
+"details.preview" = "Avance"
 "details.rescraping" = "Descargando…"
 "details.scroll" = "Desplazar texto"
 "details.options" = "Opciones"

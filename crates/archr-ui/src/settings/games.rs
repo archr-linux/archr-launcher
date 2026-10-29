@@ -296,12 +296,17 @@ mod tests {
         assert_eq!(state.games.fullname(), "Nintendo 64");
     }
     #[test]
-    fn without_a_catalog_only_the_links_remain() {
+    fn without_a_catalog_only_the_launcher_wide_rows_remain() {
         let mut state = Settings::default();
         state.open(Page::Games);
         assert_eq!(
             ids(&state),
-            [Id::NetplayLink, Id::ScraperLink, Id::MangohudLink]
+            [
+                Id::PreviewVideo,
+                Id::NetplayLink,
+                Id::ScraperLink,
+                Id::MangohudLink
+            ]
         );
     }
     #[test]
