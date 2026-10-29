@@ -1,4 +1,6 @@
 # Grafite. Every field is optional and inherits individually from the builtin.
+# docs/temas.md describes every key.
+name = "Grafite"
 # Colors are #RRGGBB or #RRGGBBAA; accent/highlight_bg, accent_text/highlight_text
 # and dim/dim_text are aliases (the new spelling takes precedence).
 background = "#0B0F14"
@@ -39,3 +41,30 @@ game_selected_height = 0.0875 # 42px games
 list_width = 0.590625 # 378px, plus 16px gap to the cover
 cover = { x = 0.640625, y = 0.1125, w = 0.328125, h = 0.583333333 }
 system_screen = "list"
+
+# Views: [view.<id>] places the systems and games screens. "lista" is the
+# classic layout above; other views start from it, key by key.
+[view.lista]
+name = { en = "List", pt_BR = "Lista", es = "Lista", ru = "Список" }
+
+# Vitrine: immersive, the art leads.
+[view.vitrine]
+name = { en = "Showcase", pt_BR = "Vitrine", es = "Escaparate", ru = "Витрина" }
+
+[view.vitrine.systems]
+divider = false
+summary = false
+panel = false
+art = false
+list = { x = 0.0, y = 0.2, w = 1.0, h = 0.383333, row = 0.2, selected = 0.383333, gap = 0.045833, radius = 0.058333, mark = "tile" }
+info = { x = 0.0375, y = 0.633333, w = 0.925, h = 0.15, title = 0.0625, meta = 0.029167, align = "center", valign = "top", details = "inline" }
+dots = { x = 0.0, y = 0.816667, w = 1.0, h = 0.0125 }
+
+[view.vitrine.games]
+header = "compact"
+divider = false
+backdrop = { opacity = 0.55, solid = 0.42, edge = 0.6 }
+list = { x = 0.0375, y = 0.133333, w = 0.46875, h = 0.683333, row = 0.070833, selected = 0.1, gap = 0.004167, font = 0.03125, selected_font = 0.045833, mark = "bar", scroll = "center", fade = ["text", "text_secondary", "muted", "dim"] }
+panel = { x = 0.58125, y = 0.133333, w = 0.36875, h = 0.658333, radius = 0.029167 }
+art = { x = 0.58125, y = 0.133333, w = 0.36875, h = 0.658333, fit = "cover", radius = 0.027083 }
+meta = { x = 0.58125, y = 0.816667, w = 0.36875, h = 0.041667, size = 0.025 }

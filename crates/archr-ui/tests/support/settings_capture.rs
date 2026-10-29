@@ -358,3 +358,182 @@ fn capture_network_and_games_pages() {
         save(&mut ui, format!("moonlight-keyboard-{language}.png"));
     }
 }
+
+/// A small library for the browsing screens.
+struct Shelf {
+    systems: Vec<archr_index::cache::SystemEntry>,
+    games: Vec<archr_index::Game>,
+}
+impl Shelf {
+    fn new() -> Self {
+        let systems = [
+            ("gba", "Game Boy Advance", 146),
+            ("snes", "Super Nintendo", 213),
+            ("megadrive", "Mega Drive", 98),
+            ("n64", "Nintendo 64", 41),
+            ("psx", "PlayStation", 64),
+            ("nes", "Nintendo Entertainment System", 120),
+        ]
+        .map(
+            |(name, fullname, game_count)| archr_index::cache::SystemEntry {
+                name: name.into(),
+                fullname: fullname.into(),
+                game_count,
+                dir_mtime: 0,
+                source_fingerprint: 0,
+            },
+        )
+        .to_vec();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let games = [
+            "Chrono Trigger",
+            "Donkey Kong Country",
+            "F-Zero",
+            "Kirby Super Star",
+            "Mega Man X",
+            "Super Mario World",
+            "Super Metroid",
+            "The Legend of Zelda: A Link to the Past",
+            "Yoshi's Island",
+        ]
+        .iter()
+        .enumerate()
+        .map(|(n, name)| archr_index::Game {
+            path: format!("{name}.sfc").into(),
+            name: (*name).into(),
+            image: None,
+            video: None,
+            favorite: n == 5,
+            last_played: (n == 3).then(|| now - 3 * 86_400),
+            year: Some(1990 + n as u16),
+            players: Some("1-2".into()),
+        })
+        .collect();
+        Self { systems, games }
+    }
+}
+impl crate::state::DataSource for Shelf {
+    fn systems(&self) -> &[archr_index::cache::SystemEntry] {
+        &self.systems
+    }
+    fn games(&self, system: &str) -> &[archr_index::Game] {
+        if system == "snes" {
+            &self.games
+        } else {
+            &[]
+        }
+    }
+    fn origin(&self, system: &str, game: usize) -> Option<(String, usize)> {
+        Some((system.into(), game))
+    }
+    fn manufacturer(&self, system: &str) -> Option<(&str, &str)> {
+        (system == "snes").then_some(("Nintendo", "1990"))
+    }
+    fn cores(&self, _: &str) -> Vec<(String, String)> {
+        Vec::new()
+    }
+    fn current_core(&self, _: &str, _: usize) -> Option<(String, String)> {
+        None
+    }
+}
+/// A stand-in box art: a dusk gradient with a sun and a horizon.
+fn box_art(
+    creator: &sdl2::render::TextureCreator<sdl2::video::WindowContext>,
+) -> sdl2::render::Texture<'_> {
+    let (w, h) = (300u32, 420u32);
+    let mut pixels = Vec::with_capacity((w * h * 4) as usize);
+    for y in 0..h {
+        for x in 0..w {
+            let t = y as f32 / h as f32;
+            let (dx, dy) = (x as f32 - 150., y as f32 - 190.);
+            let sun = dx.hypot(dy) < 70.;
+            let ground = y > 300;
+            let [r, g, b] = if sun {
+                [250, 192, 74]
+            } else if ground {
+                [27, 42, 107]
+            } else {
+                [
+                    (122. + 120. * t) as u8,
+                    (59. + 60. * t) as u8,
+                    (47. + 20. * t) as u8,
+                ]
+            };
+            pixels.extend([r, g, b, 255]);
+        }
+    }
+    let mut texture = creator
+        .create_texture_static(sdl2::pixels::PixelFormatEnum::RGBA32, w, h)
+        .unwrap();
+    texture.update(None, &pixels, (w * 4) as usize).unwrap();
+    texture.set_blend_mode(sdl2::render::BlendMode::Blend);
+    texture
+}
+
+#[test]
+#[ignore = "manual capture, ARCHR_SETTINGS_CAPTURE_DIR required"]
+fn capture_views() {
+    std::env::set_var("SDL_VIDEODRIVER", "offscreen");
+    let output = std::path::PathBuf::from(
+        std::env::var_os("ARCHR_SETTINGS_CAPTURE_DIR").expect("capture directory"),
+    );
+    let ttf;
+    let creator;
+    let mut ui = Ui::new(640, 480, true).unwrap();
+    ttf = sdl2::ttf::init().unwrap();
+    creator = ui.canvas.texture_creator();
+    let themes = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../themes");
+    let cover = box_art(&creator);
+    let shelf = Shelf::new();
+    let save = |ui: &mut Ui, name: String| {
+        let pixels = ui
+            .canvas
+            .read_pixels(None, sdl2::pixels::PixelFormatEnum::RGBA32)
+            .unwrap();
+        image::save_buffer(
+            output.join(name),
+            &pixels,
+            640,
+            480,
+            image::ColorType::Rgba8,
+        )
+        .unwrap();
+    };
+    let languages =
+        std::env::var("ARCHR_SETTINGS_CAPTURE_LANGUAGES").unwrap_or_else(|_| "pt_BR,ru".into());
+    let views = std::env::var("ARCHR_CAPTURE_VIEWS")
+        .unwrap_or_else(|_| "default:lista,default:vitrine".into());
+    for spec in views.split(',') {
+        let (folder, view) = spec.split_once(':').unwrap();
+        let mut theme = Theme::load(&themes.join(folder));
+        theme.active_view = view.into();
+        ui.theme_dir = Some(themes.join(folder));
+        ui.configure(&ttf, &creator, &theme, None).unwrap();
+        for language in languages.split(',') {
+            ui.catalog = I18n::load(std::path::Path::new("/nonexistent"), Some(language), None);
+            let mut app = crate::state::App::new(ui.page_size(&theme));
+            app.cursor = 1;
+            // System art loads on the worker after the first frame.
+            let deadline = Instant::now() + Duration::from_secs(3);
+            while Instant::now() < deadline {
+                ui.tick();
+                ui.snap_animations();
+                ui.draw(&app, &shelf, &theme, None).unwrap();
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            save(&mut ui, format!("{folder}-{view}-systems-{language}.png"));
+            app.handle(crate::state::Button::A, &shelf);
+            app.cursor = 3;
+            for (name, art) in [("games", Some(&cover)), ("games-nocover", None)] {
+                for _ in 0..2 {
+                    ui.snap_animations();
+                    ui.draw(&app, &shelf, &theme, art).unwrap();
+                }
+                save(&mut ui, format!("{folder}-{view}-{name}-{language}.png"));
+            }
+        }
+    }
+}

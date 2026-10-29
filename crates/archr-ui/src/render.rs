@@ -3,8 +3,9 @@ pub use crate::text::PreparedText;
 use crate::{
     i18n::I18n,
     icons::Glyph,
+    layout::{Backdrop, Header, Layout, List, Mark, Scroll, View},
     motion::Tween,
-    primitives::{Geometry, Shadow},
+    primitives::{crop, gradient, Geometry, Shadow, WHOLE},
     startup::StartupTrace,
     startup_phase,
     state::{App, DataSource, QuickItem, Screen},
@@ -302,6 +303,8 @@ pub struct Ui<'font, 'texture> {
     cover_key: Option<PathBuf>,
     cover_visible: bool,
     cover_fade: Tween,
+    /// The active view and the theme it was resolved from.
+    view: Option<(Theme, View)>,
     animating: bool,
     /// Look-and-feel choices: text-size multiplier and motion on/off.
     pub text_scale: f32,
@@ -395,6 +398,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             cover_key: None,
             cover_visible: false,
             cover_fade: Tween::new(0., Duration::from_millis(120)),
+            view: None,
             animating: false,
             text_scale: 1.,
             animations: true,
@@ -486,6 +490,17 @@ impl<'font, 'texture> Ui<'font, 'texture> {
     }
     fn px(&self, value: f32) -> i32 {
         self.frame.px(value)
+    }
+    /// The layout of `theme`'s active view, resolved once per theme change.
+    fn view(&mut self, theme: &Theme) -> View {
+        if self.view.as_ref().is_none_or(|(seen, _)| seen != theme) {
+            self.view = Some((theme.clone(), theme.view(&theme.active_view)));
+        }
+        self.view.as_ref().expect("resolved view").1.clone()
+    }
+    /// A theme rectangle on this screen.
+    fn area(&self, rect: Rect01) -> Rect {
+        pixels(rect, self.frame.width, self.frame.height)
     }
     fn label(&mut self, text: &str, style: (Face, f32, Rgba), panel: Rect) -> Result<(), String> {
         self.label_aligned(text, style, panel, Align::Left)
@@ -604,7 +619,12 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 self.settings_scroll.tween.active(now) || self.settings_banner.busy(now);
         } else {
             let (backdrop, cursor) = app.backdrop();
-            self.header(backdrop, cursor, data, theme)?;
+            let view = self.view(theme);
+            let layout = view.screen(matches!(backdrop, Screen::Games { .. }));
+            if let (Screen::Games { .. }, Some(wash)) = (backdrop, layout.backdrop) {
+                self.backdrop(cover, wash, theme)?;
+            }
+            self.header(backdrop, cursor, data, theme, layout)?;
             if matches!(app.screen, Screen::StartHub { .. }) {
                 self.hub(app, data, theme)?;
             } else {
@@ -614,24 +634,23 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                     Vec::new()
                 };
                 let lifted = app.moving().is_some();
-                self.list(backdrop, (&rows, lifted), cursor, data, theme)?;
+                self.list(backdrop, (&rows, lifted), cursor, data, theme, layout)?;
                 // Secondary visuals follow the redraw requested by the artwork worker.
                 if self.has_presented && matches!(backdrop, Screen::Systems) {
-                    self.system_panel(&rows, cursor, data, theme)?;
-                    if lifted {
-                        let panel = system_art::panel_rect(self.frame, theme);
+                    self.system_panel(&rows, cursor, data, theme, layout)?;
+                    if let Some(panel) = layout.panel.filter(|_| lifted) {
                         self.canvas.set_draw_color(color(Rgba {
                             a: 140,
                             ..theme.background
                         }));
-                        self.canvas.fill_rect(panel)?;
+                        self.canvas.fill_rect(self.area(panel.rect))?;
                     }
                 }
                 if let Screen::Games { system } = backdrop {
-                    self.cover(system, cursor, data, theme, cover)?;
+                    self.cover(system, cursor, data, theme, cover, layout)?;
                 }
                 if self.has_presented {
-                    self.footer(app, data, theme)?;
+                    self.footer(app, data, theme, layout)?;
                 }
             }
             if matches!(app.screen, Screen::QuickMenu { .. }) {
@@ -729,21 +748,36 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         cursor: usize,
         data: &dyn DataSource,
         theme: &Theme,
+        layout: &Layout,
     ) -> Result<(), String> {
-        let right = self.status_header(theme)?;
-        let h = (theme.header_height * self.frame.height as f32).round() as u32;
         let pad = self.px(24.);
+        let right = if layout.status {
+            self.status_header(theme)?
+        } else {
+            self.frame.width as i32 - pad
+        };
+        let h = (theme.header_height * self.frame.height as f32).round() as u32;
         if let Screen::Games { system } = screen {
             let title = system_title(system, data, &self.catalog);
-            let pos = format!(
-                "{}/{}",
-                if data.games(system).is_empty() {
-                    0
-                } else {
-                    cursor + 1
-                },
-                data.games(system).len()
-            );
+            let total = data.games(system).len();
+            let n = if total == 0 { 0 } else { cursor + 1 };
+            if layout.header == Header::Compact {
+                let text = self.catalog.format(
+                    "games.position",
+                    &[
+                        ("system", &title),
+                        ("n", &n.to_string()),
+                        ("total", &total.to_string()),
+                    ],
+                );
+                let width = (right - pad - self.px(10.)).max(1) as u32;
+                return self.label(
+                    &text,
+                    (Face::Regular, 13., theme.muted),
+                    Rect::new(pad, 0, width, h),
+                );
+            }
+            let pos = format!("{n}/{total}");
             let pw = self.measure(&pos, Face::Mono, 13.)?;
             let title_w = self
                 .measure(&title, Face::Semibold, 15.)?
@@ -780,12 +814,14 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         cursor: usize,
         data: &dyn DataSource,
         theme: &Theme,
+        layout: &Layout,
     ) -> Result<(), String> {
-        let Frame {
-            width, height, now, ..
-        } = self.frame;
+        let l = &layout.list;
         let (key, len, collections, is_games) = match screen {
             Screen::Games { system } => (system.clone(), data.games(system).len(), 0, true),
+            _ if l.mark == Mark::Tile => {
+                return self.tiles(systems, cursor, lifted, theme, l);
+            }
             _ => (
                 "@systems".to_owned(),
                 systems.len(),
@@ -793,25 +829,13 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 false,
             ),
         };
-        let top = (theme.header_height * height as f32).round() as i32 + self.px(6.);
-        let margin = (theme.margin * height as f32).round() as i32;
-        let bottom =
-            height as i32 - (theme.footer_height * height as f32).round() as i32 - self.px(6.);
-        let list_width = if is_games {
-            (theme.list_width * width as f32).round() as u32
-        } else {
-            let panel = system_art::panel_rect(self.frame, theme);
-            (panel.x() - self.px(system_art::PANEL_GAP) - margin).max(1) as u32
-        }
-        .max(1);
-        let [row, selected] = if is_games {
-            [theme.game_row_height, theme.game_selected_height]
-        } else {
-            [theme.row_height, theme.selected_height]
-        }
-        .map(|h| (h * height as f32).round());
+        let Frame { height, now, .. } = self.frame;
+        let area = self.area(l.rect);
+        let (top, bottom, margin, list_width) = (area.y(), area.bottom(), area.x(), area.width());
+        // Games never use tiles; such a theme gets the pill.
+        let pill = l.mark != Mark::Bar;
+        let [row, selected, gap] = [l.row, l.selected, l.gap].map(|h| (h * height as f32).round());
         let extra = selected - row;
-        let gap = self.px(2.) as f32;
         let separator = if collections > 0 {
             self.px(15.) as f32
         } else {
@@ -822,14 +846,14 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         let target = y_of(cursor);
         let available = (bottom - top).max(1) as f32;
         let total = len as f32 * (row + gap) + separator + extra;
-        let mut scroll = self.list.scroll.target;
-        if target < scroll {
-            scroll = target;
+        let scroll = match l.scroll {
+            Scroll::Center => target + (selected - available) / 2.,
+            Scroll::Edge => {
+                let previous = self.list.scroll.target;
+                previous.min(target).max(target + selected - available)
+            }
         }
-        if target + selected > scroll + available {
-            scroll = target + selected - available;
-        }
-        scroll = scroll.clamp(0., (total - available).max(0.));
+        .clamp(0., (total - available).max(0.));
         if self.list.key != key {
             self.list.key = key;
             self.list.scroll.retarget(scroll, now);
@@ -857,33 +881,37 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         }
         self.list.held = lifted.then_some((cursor, collections));
         let offset = self.list.scroll.value(now);
-        self.canvas.set_clip_rect(Rect::new(
-            margin,
-            top,
-            list_width,
-            (bottom - top).max(1) as u32,
-        ));
+        self.canvas.set_clip_rect(area);
         // A lifted row sits slightly right of the list, in an outline.
         let lift = if lifted { self.px(6.) } else { 0 };
-        if len > 0 {
+        let radius = l.radius * height as f32;
+        let mark_y = top + (self.list.pill.value(now) - offset).round() as i32;
+        if len > 0 && lifted {
             let pill = Rect::new(
                 margin + lift,
-                top + (self.list.pill.value(now) - offset).round() as i32,
+                mark_y,
                 list_width - lift as u32,
                 selected.max(1.) as u32,
             );
-            let radius = theme.radius_item * height as f32;
-            if lifted {
-                let fill = Rgba {
-                    a: 40,
-                    ..theme.highlight_bg
-                };
-                self.rounded(pill, radius, fill, None)?;
-                self.geometry
-                    .dashed(&mut self.canvas, pill, radius, theme.highlight_bg)?;
-            } else {
-                self.rounded(pill, radius, theme.highlight_bg, None)?;
-            }
+            let fill = Rgba {
+                a: 40,
+                ..theme.highlight_bg
+            };
+            self.rounded(pill, radius, fill, None)?;
+            self.geometry
+                .dashed(&mut self.canvas, pill, radius, theme.highlight_bg)?;
+        } else if len > 0 && pill {
+            let pill = Rect::new(margin, mark_y, list_width, selected.max(1.) as u32);
+            self.rounded(pill, radius, theme.highlight_bg, None)?;
+        } else if len > 0 {
+            let h = (selected * 0.55).round().max(1.) as u32;
+            let bar = Rect::new(
+                margin,
+                mark_y + (selected as i32 - h as i32) / 2,
+                self.px(4.) as u32,
+                h,
+            );
+            self.rounded(bar, self.px(2.) as f32, theme.highlight_bg, None)?;
         }
         if collections > 0 {
             let y = top
@@ -897,6 +925,9 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 theme.border,
             )?;
         }
+        // On a pill the selection's ink is the accent's; beside a bar it stays plain.
+        let on_pill = pill || lifted;
+        let inset = if pill { self.px(14.) } else { 0 };
         // Visit only potentially visible rows, even in a ten-thousand-game list.
         let first = ((offset - separator - extra).max(0.) / (row + gap)).floor() as usize;
         let last = ((offset + available) / (row + gap)).ceil() as usize + 1;
@@ -912,9 +943,10 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 continue;
             }
             let selected = i == cursor;
-            let (face, size, c) = row_style(theme, i, collections, cursor, is_games);
-            let mut x = margin + self.px(14.);
-            let mut right = margin + list_width as i32 - self.px(14.);
+            let (face, size, c) = row_style(theme, l, i, collections, cursor);
+            let accent_ink = selected && on_pill;
+            let mut x = margin + inset + if selected && !pill { self.px(14.) } else { 0 };
+            let mut right = margin + list_width as i32 - inset;
             let name = if let Screen::Games { system } = screen {
                 let game = &data.games(system)[i];
                 if game.favorite {
@@ -926,7 +958,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                     self.icon(
                         Glyph::Star,
                         star,
-                        selection(selected, theme.highlight_bg, theme.highlight_text),
+                        selection(accent_ink, theme.highlight_bg, theme.highlight_text),
                     )?;
                     right -= self.px(24.);
                 }
@@ -944,24 +976,16 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                     self.icon(Glyph::ChevronsUpDown, rect, theme.highlight_bg)?;
                     right -= self.px(CHEVRON + 4.);
                     let icon = self.frame.square(x, mid - self.px(8.), 16.);
-                    self.icon(Glyph::ArrowUpDown, icon, theme.highlight_text)?;
+                    self.icon(Glyph::ArrowUpDown, icon, c)?;
                     x += self.px(26.);
                 } else {
-                    let count = if name.starts_with('@') {
-                        data.collection_len(name)
-                    } else {
-                        data.systems()
-                            .iter()
-                            .find(|s| s.name == *name)
-                            .map_or(0, |s| s.game_count as usize)
-                    };
                     let count = if name == crate::moonlight::SYSTEM {
                         String::new()
                     } else {
-                        count.to_string()
+                        system_count(name, data).to_string()
                     };
                     let face = selection(selected, Face::Mono, Face::MonoMedium);
-                    let color = selection(selected, theme.dim_text, theme.accent_text_secondary);
+                    let color = selection(accent_ink, theme.dim_text, theme.accent_text_secondary);
                     right = self.packed_label(
                         &count,
                         (face, 13., color),
@@ -978,7 +1002,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                             self.icon(
                                 Glyph::Star,
                                 icon,
-                                selection(selected, theme.highlight_bg, theme.highlight_text),
+                                selection(accent_ink, theme.highlight_bg, theme.highlight_text),
                             )?;
                         } else {
                             self.icon(Glyph::Clock, icon, c)?;
@@ -1020,6 +1044,40 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         self.canvas.set_clip_rect(None);
         Ok(())
     }
+    /// The cover again behind everything, faded into the background from the left.
+    fn backdrop(
+        &mut self,
+        cover: Option<&Texture<'_>>,
+        wash: Backdrop,
+        theme: &Theme,
+    ) -> Result<(), String> {
+        let Some(cover) = cover else { return Ok(()) };
+        let Frame { width, height, .. } = self.frame;
+        let screen = Rect::new(0, 0, width, height);
+        let size = cover.query();
+        let alpha = wash.opacity * self.cover_fade.value(self.frame.now);
+        self.geometry.cover(
+            &mut self.canvas,
+            cover,
+            screen,
+            0.,
+            (alpha * 255.).round() as u8,
+            crop((size.width, size.height), (width, height)),
+        )?;
+        let solid = (wash.solid * width as f32).round() as u32;
+        self.canvas.set_draw_color(color(theme.background));
+        self.canvas
+            .fill_rect(Rect::new(0, 0, solid.max(1), height))?;
+        gradient(
+            &mut self.canvas,
+            Rect::new(solid as i32, 0, width.saturating_sub(solid).max(1), height),
+            theme.background,
+            Rgba {
+                a: (wash.edge * 255.).round() as u8,
+                ..theme.background
+            },
+        )
+    }
     fn cover(
         &mut self,
         system: &str,
@@ -1027,17 +1085,18 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         data: &dyn DataSource,
         theme: &Theme,
         cover: Option<&Texture<'_>>,
+        layout: &Layout,
     ) -> Result<(), String> {
-        let Frame {
-            width, height, now, ..
-        } = self.frame;
-        let rect = pixels(theme.cover, width, height);
-        self.panel(
-            rect,
-            theme.radius_card * height as f32 * 0.75,
-            theme.surface,
-            theme.border,
-        )?;
+        let Frame { height, now, .. } = self.frame;
+        if let Some(panel) = layout.panel {
+            let rect = self.area(panel.rect);
+            self.panel(
+                rect,
+                panel.radius * height as f32,
+                theme.surface,
+                theme.border,
+            )?;
+        }
         let game = data.games(system).get(cursor);
         let key = game.map(|g| g.path.clone());
         if self.cover_key != key {
@@ -1045,44 +1104,69 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             self.cover_visible = false;
             self.cover_fade = Tween::new(0., Duration::from_millis(120));
         }
-        if let Some(cover) = cover {
-            if !self.cover_visible {
-                self.cover_visible = true;
-                self.cover_fade.retarget(1., now);
+        match (layout.art, cover) {
+            (Some(art), Some(cover)) => {
+                if !self.cover_visible {
+                    self.cover_visible = true;
+                    self.cover_fade.retarget(1., now);
+                }
+                // One pixel inside the frame's border.
+                let rect = self.area(art.rect);
+                let inner = Rect::new(
+                    rect.x() + 1,
+                    rect.y() + 1,
+                    rect.width().saturating_sub(2).max(1),
+                    rect.height().saturating_sub(2).max(1),
+                );
+                let size = cover.query();
+                let (dst, part) = match art.fit {
+                    crate::layout::Fit::Cover => (
+                        inner,
+                        crop((size.width, size.height), (inner.width(), inner.height())),
+                    ),
+                    crate::layout::Fit::Contain => {
+                        let scale = (inner.width() as f32 / size.width as f32)
+                            .min(inner.height() as f32 / size.height as f32);
+                        let w = (size.width as f32 * scale).round().max(1.) as u32;
+                        let h = (size.height as f32 * scale).round().max(1.) as u32;
+                        let dst = Rect::new(
+                            rect.x() + (rect.width() as i32 - w as i32) / 2,
+                            rect.y() + (rect.height() as i32 - h as i32) / 2,
+                            w,
+                            h,
+                        );
+                        (dst, WHOLE)
+                    }
+                };
+                self.geometry.cover(
+                    &mut self.canvas,
+                    cover,
+                    dst,
+                    art.radius * height as f32,
+                    (self.cover_fade.value(now) * 255.).round() as u8,
+                    part,
+                )?;
             }
-            let size = cover.query();
-            let scale = ((rect.width().saturating_sub(2)) as f32 / size.width as f32)
-                .min((rect.height().saturating_sub(2)) as f32 / size.height as f32);
-            let w = (size.width as f32 * scale).round().max(1.) as u32;
-            let h = (size.height as f32 * scale).round().max(1.) as u32;
-            let dst = Rect::new(
-                rect.x() + (rect.width() - w) as i32 / 2,
-                rect.y() + (rect.height() - h) as i32 / 2,
-                w,
-                h,
-            );
-            self.geometry.cover(
-                &mut self.canvas,
-                cover,
-                dst,
-                (theme.radius_card * height as f32 * 0.75 - 1.).max(0.),
-                (self.cover_fade.value(now) * 255.).round() as u8,
-            )?;
-        } else {
-            self.cover_visible = false;
-            self.label_aligned(
-                &system_title(system, data, &self.catalog),
-                (Face::Regular, 13., theme.dim_text),
-                Rect::new(
-                    rect.x() + self.px(12.),
-                    rect.y(),
-                    rect.width().saturating_sub(self.px(24.) as u32).max(1),
-                    rect.height(),
-                ),
-                Align::Center,
-            )?;
+            (Some(art), None) => {
+                self.cover_visible = false;
+                let rect = self.area(art.rect);
+                self.label_aligned(
+                    &system_title(system, data, &self.catalog),
+                    (Face::Regular, 13., theme.dim_text),
+                    Rect::new(
+                        rect.x() + self.px(12.),
+                        rect.y(),
+                        rect.width().saturating_sub(self.px(24.) as u32).max(1),
+                        rect.height(),
+                    ),
+                    Align::Center,
+                )?;
+            }
+            (None, _) => {}
         }
-        if let Some(game) = game {
+        if let (Some(game), Some(meta)) = (game, layout.meta) {
+            let rect = self.area(meta.rect);
+            let size = meta.size * 480.;
             let mut parts = Vec::new();
             if let Some(year) = game.year {
                 parts.push(year.to_string());
@@ -1094,29 +1178,36 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 .last_played
                 .map(|timestamp| self.catalog.relative_time(timestamp, self.frame.unix))
                 .unwrap_or_default();
-            let pw = self.measure(&played, Face::Regular, 12.)?;
-            let h = self.px(20.) as u32;
-            let y = rect.bottom() + self.px(9.);
+            let pw = self.measure(&played, Face::Regular, size)?;
             let gap = if pw > 0 { self.px(8.) as u32 } else { 0 };
+            let (y, h) = (rect.y(), rect.height());
             self.label(
                 &parts.join(" · "),
-                (Face::Regular, 12., theme.muted),
+                (Face::Regular, size, theme.muted),
                 Rect::new(rect.x(), y, rect.width().saturating_sub(pw + gap).max(1), h),
             )?;
             self.label_aligned(
                 &played,
-                (Face::Regular, 12., theme.muted),
+                (Face::Regular, size, theme.muted),
                 Rect::new(rect.right() - pw as i32, y, pw.max(1), h),
                 Align::Right,
             )?;
         }
         Ok(())
     }
-    fn footer(&mut self, app: &App, data: &dyn DataSource, theme: &Theme) -> Result<(), String> {
+    fn footer(
+        &mut self,
+        app: &App,
+        data: &dyn DataSource,
+        theme: &Theme,
+        layout: &Layout,
+    ) -> Result<(), String> {
         let Frame { width, height, .. } = self.frame;
         let h = (theme.footer_height * height as f32).round().max(1.) as u32;
         let y = height as i32 - h as i32;
-        self.divider(0, y, width, theme.border)?;
+        if layout.divider {
+            self.divider(0, y, width, theme.border)?;
+        }
         let moving = app.moving();
         let hint_keys: &[(char, &str)] = match app.screen {
             Screen::Systems if moving.is_some() => &[
@@ -1134,7 +1225,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             _ => &[('A', "hint.choose"), ('B', "hint.close")],
         };
         let left = self.hints(hint_keys, theme, width, y, h)?;
-        if matches!(app.screen, Screen::Systems) {
+        if matches!(app.screen, Screen::Systems) && (layout.summary || moving.is_some()) {
             let width = (left - self.px(40.)).max(1) as u32;
             let (text, size, ink) = match moving {
                 Some((name, n, total)) => {
@@ -1454,25 +1545,35 @@ fn system_title(name: &str, data: &dyn DataSource, catalog: &I18n) -> String {
 
 fn row_style(
     theme: &Theme,
+    list: &List,
     i: usize,
     collections: usize,
     cursor: usize,
-    games: bool,
 ) -> (Face, f32, Rgba) {
-    let color = if i < collections {
+    let selected = i == cursor;
+    let color = if selected {
+        selection(list.mark == Mark::Bar, theme.highlight_text, theme.text)
+    } else if i < collections {
         theme.muted
-    } else if i.abs_diff(cursor) >= 4 {
-        theme.dim_text
-    } else if i.abs_diff(cursor) >= 3 {
-        theme.text_secondary
     } else {
-        theme.text
+        list.tone(i.abs_diff(cursor)).ink(theme)
     };
     (
-        selection(i == cursor, Face::Regular, Face::Semibold),
-        theme.font_size * 480. - if games { 1. } else { 0. } + if i == cursor { 1. } else { 0. },
-        selection(i == cursor, color, theme.highlight_text),
+        selection(selected, Face::Regular, Face::Semibold),
+        selection(selected, list.font, list.selected_font) * 480.,
+        color,
     )
+}
+/// Games in a system or collection.
+fn system_count(name: &str, data: &dyn DataSource) -> usize {
+    if name.starts_with('@') {
+        data.collection_len(name)
+    } else {
+        data.systems()
+            .iter()
+            .find(|s| s.name == name)
+            .map_or(0, |s| s.game_count as usize)
+    }
 }
 fn library_summary(data: &dyn DataSource, catalog: &I18n) -> String {
     let systems = data
@@ -1542,18 +1643,27 @@ pub fn prepare_first_frame<'font>(
     }
     let systems = App::system_rows(data);
     let collections = systems.iter().take_while(|s| s.starts_with('@')).count();
-    let top = (theme.header_height * height as f32).round() as i32 + frame.px(6.);
-    let bottom =
-        height as i32 - (theme.footer_height * height as f32).round() as i32 - frame.px(6.);
-    let margin = (theme.margin * height as f32).round() as i32;
-    let panel = system_art::panel_rect(frame, theme);
-    let list_width = (panel.x() - frame.px(system_art::PANEL_GAP) - margin).max(1) as u32;
-    let row = (theme.row_height * height as f32).round();
-    let selected = (theme.selected_height * height as f32).round();
+    let view = theme.view(&theme.active_view);
+    let list = &view.systems.list;
+    let area = pixels(list.rect, width, height);
+    let (top, bottom, margin, list_width) = (area.y(), area.bottom(), area.x(), area.width());
+    let [row, selected, gap] =
+        [list.row, list.selected, list.gap].map(|h| (h * height as f32).round());
+    let inset = if list.mark == Mark::Pill {
+        frame.px(14.)
+    } else {
+        0
+    };
     let mut first_icons = Vec::new();
-    for (i, name) in systems.iter().enumerate() {
+    // Tiles show art, not labels: nothing to rasterize ahead.
+    let rows = if list.mark == Mark::Tile {
+        &[][..]
+    } else {
+        &systems[..]
+    };
+    for (i, name) in rows.iter().enumerate() {
         let y = top
-            + (i as f32 * (row + frame.px(2.) as f32)
+            + (i as f32 * (row + gap)
                 + if i >= collections && collections > 0 {
                     frame.px(15.) as f32
                 } else {
@@ -1574,14 +1684,8 @@ pub fn prepare_first_frame<'font>(
                 frame.px(16.) as u32,
             ));
         }
-        let count = if name.starts_with('@') {
-            data.collection_len(name)
-        } else {
-            data.systems()
-                .iter()
-                .find(|s| s.name == *name)
-                .map_or(0, |s| s.game_count as usize)
-        };
+        let count = system_count(name, data);
+        let accent = i == 0 && list.mark == Mark::Pill;
         let count_width = label(
             &mut prepared,
             &if name == crate::moonlight::SYSTEM {
@@ -1592,20 +1696,25 @@ pub fn prepare_first_frame<'font>(
             (
                 selection(i == 0, Face::Mono, Face::MonoMedium),
                 13.,
-                selection(i == 0, theme.dim_text, theme.accent_text_secondary),
+                selection(accent, theme.dim_text, theme.accent_text_secondary),
             ),
             None,
         )?;
         let x = margin
-            + frame.px(14.)
+            + inset
+            + if i == 0 && inset == 0 {
+                frame.px(14.)
+            } else {
+                0
+            }
             + if name.starts_with('@') {
                 frame.px(26.)
             } else {
                 0
             };
-        let right = margin + list_width as i32 - frame.px(14.) - count_width as i32 - frame.px(14.);
+        let right = margin + list_width as i32 - inset - count_width as i32 - frame.px(14.);
         let title = system_title(name, data, catalog);
-        let (face, size, color) = row_style(theme, i, collections, 0, false);
+        let (face, size, color) = row_style(theme, list, i, collections, 0);
         let width = (right - x).max(1) as u32;
         let minimum = f32::from(frame.font_size(0.)) / frame.scale;
         let (title, size) = fit_system_name(&title, width, (size, minimum), |text, size| {

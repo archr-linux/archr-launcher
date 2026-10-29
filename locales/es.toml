@@ -54,6 +54,7 @@
 "time.yesterday" = "ayer"
 "systems.count" = { one = "{count} sistema", other = "{count} sistemas" }
 "games.count" = { one = "{count} juego", other = "{count} juegos" }
+"games.position" = "{system} · {n} de {total}"
 "tools.count" = { one = "{count} herramienta", other = "{count} herramientas" }
 "favorites.count" = { one = "{count} favorito", other = "{count} favoritos" }
 "panel.stats" = "{games} · {favorites}"
