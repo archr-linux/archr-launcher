@@ -9,7 +9,6 @@ use std::{path::PathBuf, sync::atomic::AtomicBool};
 pub const HOSTS: &[&str] = &["retroachievements.org"];
 const DOREQUEST: &str = "https://retroachievements.org/dorequest.php";
 const BADGES: &str = "https://media.retroachievements.org/Badge/";
-const SUMMARY: &str = "https://retroachievements.org/API/API_GetUserSummary.php";
 const REPLY_LIMIT: u64 = 4 << 20;
 const BADGE_LIMIT: u64 = 256 << 10;
 /// Achievements kept per game; real sets stay far below.
@@ -17,7 +16,6 @@ const MAX_ACHIEVEMENTS: usize = 1000;
 
 /// Optional developer web API login from the build environment, in ES's own
 /// format (`z=<user>&y=<key>`). Only the profile card's extras need it.
-const DEV_LOGIN: Option<&str> = option_env!("CHEEVOS_DEV_LOGIN");
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error {
@@ -55,14 +53,6 @@ impl std::fmt::Debug for Account {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Account({}, <hidden>)", self.user)
     }
-}
-
-/// Profile extras only the web API has (needs the build's developer login).
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Summary {
-    /// Year the account was created.
-    pub since: String,
-    pub last_game: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -242,39 +232,5 @@ impl Client {
             return Err(Error::Service);
         }
         Ok(reply.body)
-    }
-
-    /// Member-since year and last game, when this build has the developer
-    /// web API login; `None` otherwise or on any failure.
-    pub fn summary(&self, user: &str, cancel: &AtomicBool) -> Option<Summary> {
-        self.summary_as(DEV_LOGIN?, user, cancel)
-    }
-
-    /// `summary` with an explicit developer login (`z=<user>&y=<key>`).
-    pub fn summary_as(&self, dev: &str, user: &str, cancel: &AtomicBool) -> Option<Summary> {
-        if !dev.contains("y=") || !dev.bytes().all(|b| b.is_ascii_graphic() && b != b'#') {
-            return None;
-        }
-        let url = format!("{SUMMARY}?{dev}&u={}&g=1&a=0", encode(user));
-        let reply = self
-            .http
-            .get(&url, REPLY_LIMIT, cancel)
-            .ok()
-            .filter(|r| r.status == 200)?;
-        let value: Value = serde_json::from_slice(&reply.body).ok()?;
-        let since: String = text(&value["MemberSince"]).chars().take(4).collect();
-        let last = &value["RecentlyPlayed"][0]["Title"];
-        Some(Summary {
-            since: if since.len() == 4 && since.bytes().all(|b| b.is_ascii_digit()) {
-                since
-            } else {
-                String::new()
-            },
-            last_game: text(if last.is_string() {
-                last
-            } else {
-                &value["LastGame"]["Title"]
-            }),
-        })
     }
 }

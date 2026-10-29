@@ -741,8 +741,6 @@ fn cheevos_pages() -> Vec<(&'static str, Settings)> {
     signed_in.cheevos.profile = Some(crate::settings::cheevos::Profile {
         points: 1240,
         softcore: 87,
-        since: "2021".into(),
-        last_game: "Super Mario World".into(),
     });
     for id in [Id::CheevosHardcore, Id::CheevosVerbose] {
         signed_in.values.insert(id, "1".into());
