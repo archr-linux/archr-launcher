@@ -91,17 +91,30 @@ impl Ui<'_, '_> {
                 Rect::new(x + (side - size) / 2, y + px(29.), size as u32, size as u32),
                 ink,
             )?;
-            self.label_aligned(
-                &self.catalog.text(key),
-                (Face::Semibold, 16., ink),
-                Rect::new(
-                    x + px(5.),
-                    y + px(100.),
-                    (side - px(10.)) as u32,
-                    px(28.) as u32,
-                ),
-                Align::Center,
-            )?;
+            // Shrinks down to the theme's smallest text, then wraps; a
+            // label is never cut.
+            let label = self.catalog.text(key);
+            let room = (side - px(10.)).max(1) as u32;
+            let floor = self.frame.min_size();
+            let mut size = 16.;
+            while size > floor && self.measure(&label, Face::Semibold, size)? > room {
+                size = (size - 1.).max(floor);
+            }
+            let lines = if self.measure(&label, Face::Semibold, size)? > room {
+                self.wrap(&label, Face::Semibold, size, room)?
+            } else {
+                vec![label]
+            };
+            let step = (f32::from(self.frame.font_size(size)) * 1.2).round() as i32;
+            let top = y + px(114.) - step * lines.len() as i32 / 2;
+            for (n, line) in lines.iter().enumerate() {
+                self.label_aligned(
+                    line,
+                    (Face::Semibold, size, ink),
+                    Rect::new(x + px(5.), top + step * n as i32, room, step.max(1) as u32),
+                    Align::Center,
+                )?;
+            }
         }
 
         let side = px(46.);

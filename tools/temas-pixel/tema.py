@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Builds the Praia or Retro theme folder (a theme store repository root).
 
-Usage: python3 tema.py <praia|retro> <out-dir> <fonts-dir> <cc-by-4.0.txt>
-  fonts-dir: the output of fontes.py; cc-by-4.0.txt: the CC BY 4.0 legal code.
+Usage: python3 tema.py <praia|retro> <out-dir> <fonts-dir> <cc-by-4.0.txt> <consoles-dir>
+  fonts-dir: the output of fontes.py; cc-by-4.0.txt: the CC BY 4.0 legal code;
+  consoles-dir: the console pictures (<system>.webp), copied to systems/.
 Needs Pillow and ffmpeg (sounds). The art and sounds are original, drawn and
 synthesized here; the fonts keep their own SIL OFL 1.1.
 """
@@ -107,7 +108,8 @@ text_outline = { color = "#3F2214", width = 2, ink = "#FFFFFF" }
 corners = 0
 border_width = 2
 shadow = "hard"
-art_scaling = "pixel"
+art_scaling = "smooth"
+image_scaling = "pixel"
 easing = "steps"
 header_height = 0.1
 footer_height = 0.1
@@ -300,7 +302,8 @@ font_min = 12
 corners = 0
 border_width = 2
 shadow = "hard"
-art_scaling = "pixel"
+art_scaling = "smooth"
+image_scaling = "pixel"
 easing = "steps"
 
 # Details: left column 18-216 (picture, facts), right column 240-627.
@@ -416,7 +419,7 @@ in the *-OFL.txt file next to each font.
 '''
 
 
-def build(theme, out, fonts, cc):
+def build(theme, out, fonts, cc, consoles):
     out.mkdir(parents=True, exist_ok=True)
     if theme == "praia":
         praia_art(out)
@@ -437,9 +440,13 @@ def build(theme, out, fonts, cc):
     for name in names:
         (out / "fonts").mkdir(exist_ok=True)
         shutil.copy(fonts / name, out / "fonts" / name)
-    for name in CONSOLES:
-        ink = B["outline"] if theme == "praia" else (0, 0, 0, 255)
-        save(P.console(name, ink), out, f"systems/{name}.png")
+    (out / "systems").mkdir(exist_ok=True)
+    for picture in sorted(consoles.glob("*.webp")):
+        shutil.copy(picture, out / "systems" / picture.name)
+    # No console picture of their own yet: the drawn stand-ins.
+    for name in ["pico-8", "psp"]:
+        if not (out / "systems" / f"{name}.webp").exists():
+            save(P.console(name), out, f"systems/{name}.png")
     sons.main(theme, out / "sounds")
     (out / "README.md").write_text(
         README.format(title=title, en=en, pt=pt, fonts=font_note[0], note=font_note[1]), encoding="utf-8")
@@ -448,4 +455,4 @@ def build(theme, out, fonts, cc):
 
 
 if __name__ == "__main__":
-    build(sys.argv[1], Path(sys.argv[2]), Path(sys.argv[3]), Path(sys.argv[4]))
+    build(sys.argv[1], Path(sys.argv[2]), Path(sys.argv[3]), Path(sys.argv[4]), Path(sys.argv[5]))
