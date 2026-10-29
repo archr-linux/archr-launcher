@@ -14,6 +14,25 @@ use sdl2::{
     video::WindowContext,
 };
 
+/// Theme pictures larger than this on either side are refused (a 640×480
+/// screen needs nothing near it), and the cache holds at most this many bytes
+/// of them, dropping the oldest first.
+pub const THEME_SIDE: u32 = 2048;
+pub const THEME_BUDGET: u64 = 32 << 20;
+
+/// How many of the oldest entries (`bytes` each, oldest first) to drop so at
+/// most `capacity` stay within `budget` bytes; the newest always stays.
+fn overflow(bytes: &[u64], capacity: usize, budget: u64) -> usize {
+    let mut total: u64 = bytes.iter().sum();
+    let mut drop = bytes.len().saturating_sub(capacity);
+    total -= bytes[..drop].iter().sum::<u64>();
+    while total > budget && drop + 1 < bytes.len() {
+        total -= bytes[drop];
+        drop += 1;
+    }
+    drop
+}
+
 pub struct Thumbnail {
     pub width: u32,
     pub height: u32,
@@ -59,7 +78,7 @@ fn thumbnail(
 ) -> io::Result<Thumbnail> {
     if (width, height) == (0, 0) {
         // Theme images: drawn at their own size, never resized nor cached.
-        let image = decode(source, 4096, 4096)?.to_rgba8();
+        let image = decode(source, THEME_SIDE, THEME_SIDE)?.to_rgba8();
         return Ok(Thumbnail {
             width: image.width(),
             height: image.height(),
@@ -161,6 +180,7 @@ pub struct CoverCache<'a> {
     textures: VecDeque<(PathBuf, Option<Texture<'a>>)>,
     pixel: bool,
     capacity: usize,
+    budget: u64,
 }
 
 impl<'a> CoverCache<'a> {
@@ -210,6 +230,11 @@ impl<'a> CoverCache<'a> {
             textures: VecDeque::new(),
             pixel,
             capacity: if (width, height) == (0, 0) { 64 } else { 16 },
+            budget: if (width, height) == (0, 0) {
+                THEME_BUDGET
+            } else {
+                u64::MAX
+            },
         }
     }
 
@@ -282,9 +307,18 @@ impl<'a> CoverCache<'a> {
                 }
             };
             self.textures.push_back((path, texture));
-            while self.textures.len() > self.capacity {
-                self.textures.pop_front();
-            }
+            let bytes: Vec<u64> = self
+                .textures
+                .iter()
+                .map(|(_, t)| {
+                    t.as_ref().map_or(0, |t| {
+                        let q = t.query();
+                        u64::from(q.width) * u64::from(q.height) * 4
+                    })
+                })
+                .collect();
+            self.textures
+                .drain(..overflow(&bytes, self.capacity, self.budget));
             changed = true;
         }
         changed
@@ -303,6 +337,10 @@ impl<'a> CoverCache<'a> {
             .iter()
             .find(|(cached, _)| cached == path)
             .and_then(|(_, texture)| texture.as_ref())
+    }
+    /// Whether `path` was loaded (or found missing) and is still kept.
+    pub fn has(&self, path: &Path) -> bool {
+        self.textures.iter().any(|(cached, _)| cached == path)
     }
     pub fn get(&mut self, path: &PathBuf) -> Option<&Texture<'a>> {
         self.get_mut(path).map(|texture| &*texture)
@@ -381,5 +419,25 @@ mod tests {
             (255, 0, 0),
             "hard edges"
         );
+    }
+    #[test]
+    fn theme_pictures_stay_small_and_within_the_budget() {
+        let dir = tempfile::tempdir().unwrap();
+        let huge = dir.path().join("huge").with_extension("png");
+        image::RgbaImage::new(THEME_SIDE + 1, 2)
+            .save(&huge)
+            .unwrap();
+        assert!(
+            thumbnail(dir.path(), &huge, (0, 0), true).is_err(),
+            "refused"
+        );
+        let fine = dir.path().join("fine").with_extension("png");
+        image::RgbaImage::new(64, 32).save(&fine).unwrap();
+        let kept = thumbnail(dir.path(), &fine, (0, 0), true).unwrap();
+        assert_eq!((kept.width, kept.height), (64, 32), "drawn as it is");
+        assert_eq!(overflow(&[10, 10, 10], 64, 100), 0);
+        assert_eq!(overflow(&[10, 10, 10], 2, 100), 1, "capacity");
+        assert_eq!(overflow(&[40, 30, 30], 64, 50), 2, "the oldest go first");
+        assert_eq!(overflow(&[500], 64, 64), 0, "the newest always stays");
     }
 }
