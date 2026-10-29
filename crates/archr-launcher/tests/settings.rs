@@ -471,3 +471,104 @@ fn theme_sound_settings_persist_without_running_anything() {
         fs::read_to_string(dir.path().join("storage/.config/system/configs/system.cfg")).unwrap();
     assert!(saved.contains("launcher.sounds_volume=70") && saved.contains("launcher.sounds=0"));
 }
+
+#[test]
+fn hotkeys_save_evdev_names_and_restart_a_running_input_service() {
+    let (dir, backend) = fixture();
+    let log = dir.path().join("systemctl.log");
+    script(
+        &dir,
+        "systemctl",
+        &format!(
+            "echo \"$*\" >> '{}'; [ \"$1\" = is-active ] && echo active; exit 0",
+            log.display()
+        ),
+    );
+    let config = || {
+        fs::read_to_string(dir.path().join("storage/.config/system/configs/system.cfg")).unwrap()
+    };
+    assert_eq!(backend.apply(Id::Hotkey(1), "BTN_TR2").unwrap(), "BTN_TR2");
+    assert!(config().contains("hotkey.mangohud=BTN_TR2"));
+    assert_eq!(
+        fs::read_to_string(&log).unwrap(),
+        "is-active input\nrestart input\n"
+    );
+    backend.apply(Id::Hotkey(0), "BTN_TR+BTN_START").unwrap();
+    backend.apply(Id::HotkeyModifier, "BTN_MODE").unwrap();
+    backend.apply(Id::HotkeyOn(2), "0").unwrap();
+    backend.apply(Id::Idle, "5").unwrap();
+    for line in [
+        "hotkey.exit=BTN_TR+BTN_START",
+        "key.hotkey.a=BTN_MODE",
+        "hotkey.screenshot.enabled=0",
+        "idle.timeout=5",
+    ] {
+        assert!(config().contains(line), "{line}");
+    }
+    assert_eq!(
+        fs::read_to_string(&log).unwrap().matches("restart").count(),
+        5
+    );
+    let state = backend.load().unwrap();
+    assert_eq!(state.hotkey_pads(0), ["FN", "R1", "START"]);
+    assert_eq!(state.value(Id::HotkeyOn(2)), "0");
+
+    fs::remove_file(&log).unwrap();
+    for (id, value) in [
+        (Id::Hotkey(0), "BTN_EAST"),
+        (Id::Hotkey(0), "BTN_EAST+BTN_EAST"),
+        (Id::Hotkey(1), "BTN_MODE"),
+        (Id::Hotkey(2), "KEY_POWER"),
+        (Id::Hotkey(2), "BTN_EAST\nkey.hotkey.a=BTN_A"),
+        (Id::HotkeyModifier, "BTN_EAST"),
+        (Id::HotkeyOn(0), "yes"),
+        (Id::Idle, "2h"),
+    ] {
+        assert!(backend.apply(id, value).is_err(), "{id:?} {value}");
+    }
+    assert!(!log.exists());
+}
+
+#[test]
+fn volume_and_brightness_share_the_dpad_switch_without_waking_each_other() {
+    let (dir, backend) = fixture();
+    script(&dir, "systemctl", "echo inactive; exit 3");
+    let config = || {
+        fs::read_to_string(dir.path().join("storage/.config/system/configs/system.cfg")).unwrap()
+    };
+    assert_eq!(backend.load().unwrap().value(Id::HotkeyOn(3)), "0");
+    backend.apply(Id::HotkeyOn(3), "1").unwrap();
+    for line in [
+        "hotkey.volume.enabled=1",
+        "hotkey.brightness.enabled=0",
+        "key.dpad.events=1",
+    ] {
+        assert!(config().contains(line), "{line}");
+    }
+    let state = backend.load().unwrap();
+    assert_eq!(
+        (state.value(Id::HotkeyOn(3)), state.value(Id::HotkeyOn(4))),
+        ("1", "0")
+    );
+    backend.apply(Id::HotkeyOn(4), "1").unwrap();
+    backend.apply(Id::HotkeyOn(3), "0").unwrap();
+    assert!(config().contains("key.dpad.events=1"));
+    backend.apply(Id::HotkeyOn(4), "0").unwrap();
+    assert!(config().contains("key.dpad.events=0"));
+}
+
+#[test]
+fn launcher_buttons_accept_only_a_full_mapping() {
+    let (_dir, backend) = fixture();
+    assert_eq!(
+        backend.apply(Id::Buttons, "B,A,X,Y,L2,R2,SELECT").unwrap(),
+        "B,A,X,Y,L2,R2,SELECT"
+    );
+    assert_eq!(
+        backend.load().unwrap().value(Id::Buttons),
+        "B,A,X,Y,L2,R2,SELECT"
+    );
+    for value in ["A,A,X,Y,L1,R1,START", "A,B", "↑,B,X,Y,L1,R1,START"] {
+        assert!(backend.apply(Id::Buttons, value).is_err(), "{value}");
+    }
+}

@@ -12,6 +12,7 @@ mod custom;
 pub(crate) mod games;
 pub(crate) mod information;
 pub use custom::Custom;
+pub mod hotkeys;
 pub mod mangohud;
 pub use games::{GameCore, GameSystem, Games};
 pub mod network;
@@ -45,6 +46,7 @@ pub enum Page {
     MangohudItems,
     Controls,
     LauncherControls,
+    Hotkeys,
     Soon(&'static str),
 }
 impl Page {
@@ -70,6 +72,7 @@ impl Page {
             Self::MangohudItems => "settings.mangohud_items",
             Self::Controls => "settings.controls",
             Self::LauncherControls => "controls.launcher",
+            Self::Hotkeys => "controls.hotkeys",
             Self::Soon(key) => key,
         }
     }
@@ -80,7 +83,7 @@ impl Page {
             Self::Netplay | Self::Scraper | Self::Mangohud => &["settings.games"],
             Self::MangohudItems => &["settings.games", "settings.mangohud_page"],
             Self::AccentColor => &["settings.appearance"],
-            Self::LauncherControls => &["settings.controls"],
+            Self::LauncherControls | Self::Hotkeys => &["settings.controls"],
             Self::ScraperMedia => &["settings.games", "settings.scraper_short"],
             _ => &[],
         }
@@ -102,6 +105,7 @@ impl Page {
             Self::Mangohud => mangohud::MANGOHUD,
             Self::Controls => controls::CONTROLS,
             Self::LauncherControls => controls::LAUNCHER,
+            Self::Hotkeys => hotkeys::HOTKEYS_PAGE,
             _ => &[],
         }
     }
@@ -194,6 +198,15 @@ pub enum Id {
     /// One action of the launcher Controls page: an index into `pad::ACTIONS`.
     Bind(u8),
     ButtonsRestore,
+    HotkeysLink,
+    /// `key.hotkey.a`, held for exit, MangoHud and screenshot.
+    HotkeyModifier,
+    /// `key.function.a`, held for volume and brightness; shown, not edited.
+    FunctionModifier,
+    /// One in-game hotkey: an index into `hotkeys::HOTKEYS`.
+    Hotkey(u8),
+    /// Whether that hotkey works now.
+    HotkeyOn(u8),
 }
 impl Id {
     fn metadata(self) -> (&'static str, &'static str) {
@@ -268,6 +281,14 @@ impl Id {
             Self::MangohudAlpha => ("archr.mangohud.alpha", "50"),
             Self::MangohudFps => ("archr.mangohud.fps_limit", "0"),
             Self::Buttons => ("launcher.buttons", "A,B,X,Y,L1,R1,START"),
+            // input_sense reads these at start; the launcher restarts it.
+            Self::HotkeyModifier => ("key.hotkey.a", "BTN_TL"),
+            Self::FunctionModifier => ("key.function.a", "BTN_SELECT"),
+            Self::Hotkey(n) => {
+                let hotkey = &hotkeys::HOTKEYS[usize::from(n)];
+                (hotkey.key, hotkey.default)
+            }
+            Self::HotkeyOn(n) => (hotkeys::HOTKEYS[usize::from(n)].enabled, "1"),
             Self::Update
             | Self::Restore
             | Self::Hidden
@@ -287,7 +308,8 @@ impl Id {
             | Self::MangohudLink
             | Self::LauncherLink
             | Self::Bind(_)
-            | Self::ButtonsRestore => ("", ""),
+            | Self::ButtonsRestore
+            | Self::HotkeysLink => ("", ""),
         }
     }
     pub fn key(self) -> &'static str {
@@ -299,6 +321,7 @@ impl Id {
     pub fn choices(self) -> &'static [&'static str] {
         match self {
             Self::Gpu => &["libmali", "panfrost"],
+            Self::HotkeyModifier => &hotkeys::MODIFIERS,
             Self::Language => &["en_US", "pt_BR", "es_ES", "ru_RU"],
             Self::Idle | Self::IdleGame => &["0", "1", "3", "5", "10", "15", "30"],
             Self::Governor => &["ondemand", "performance", "schedutil", "powersave"],
@@ -713,6 +736,9 @@ impl Settings {
             },
             (Id::Restore | Id::Accent | Id::ButtonsRestore, _) => return String::new(),
             (Id::Bind(n), _) => return self.bindings()[usize::from(n)].name().into(),
+            (Id::HotkeyModifier, key) => return hotkeys::key_name(key).into(),
+            (Id::Hotkey(n), _) if self.value(Id::HotkeyOn(n)) == "0" => "settings.off",
+            (Id::Hotkey(n), _) => return self.hotkey_pads(usize::from(n)).join(" + "),
             (Id::IndexNow, _) => "settings.soon",
             (Id::ScraperAccount, _) => "settings.sign_in",
             (Id::ScraperStart, _) if self.scrape.running => "settings.cancel_scraping",
@@ -733,7 +759,8 @@ impl Settings {
                 | Id::RestoreBackup
                 | Id::FactoryReset
                 | Id::MangohudLink
-                | Id::LauncherLink,
+                | Id::LauncherLink
+                | Id::HotkeysLink,
                 _,
             ) => return "›".into(),
             (Id::StorageCard, _) if self.storage.card.as_ref().is_some_and(|c| c.external) => {
@@ -898,7 +925,7 @@ impl Settings {
             ],
             Page::Info => &[(Key('A'), "settings.details"), (Key('B'), "hint.back")],
             Page::MangohudItems => &[(Key('A'), "mangohud.mark"), (Key('B'), "hint.back")],
-            Page::Controls | Page::LauncherControls => self.controls_hints(),
+            Page::Controls | Page::LauncherControls | Page::Hotkeys => self.controls_hints(),
             Page::ScraperMedia if !self.disabled(Id::ScraperMedia) => {
                 &[(Key('A'), "settings.mark"), (Key('B'), "hint.back")]
             }

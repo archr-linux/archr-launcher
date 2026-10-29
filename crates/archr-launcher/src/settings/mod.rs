@@ -1,5 +1,6 @@
 //! Serial settings worker. No process, config lock or sysfs access on SDL's thread.
 mod bluetooth;
+mod controls;
 mod games;
 mod info;
 mod mangohud;
@@ -124,6 +125,7 @@ impl Backend {
         self.load_pages(&cfg, &mut state);
         self.load_storage(&cfg, &mut state);
         self.load_mangohud(&cfg, &mut state);
+        self.load_controls(&cfg, &mut state);
         if let Ok(output) = self.command("pactl", &["get-sink-volume", "@DEFAULT_SINK@"]) {
             if let Some(volume) = output
                 .split_whitespace()
@@ -226,6 +228,7 @@ impl Backend {
         if let Some(result) = self
             .apply_page(id, value)
             .or_else(|| self.apply_mangohud(id, value))
+            .or_else(|| self.apply_controls(id, value))
         {
             return result;
         }
@@ -233,13 +236,9 @@ impl Backend {
             Id::Volume | Id::SoundsVolume | Id::Brightness => value
                 .parse::<u8>()
                 .is_ok_and(|n| n <= 100 && (id != Id::Brightness || n >= 5)),
-            Id::Sounds
-            | Id::Turbo
-            | Id::Gpu
-            | Id::Governor
-            | Id::Language
-            | Id::Idle
-            | Id::IdleGame => id.choices().contains(&value),
+            Id::Sounds | Id::Turbo | Id::Gpu | Id::Governor | Id::Language => {
+                id.choices().contains(&value)
+            }
             Id::Buttons => archr_ui::pad::bindings_text(&archr_ui::pad::bindings(value)) == value,
             Id::Suspend => {
                 matches!(value, "default" | "off")

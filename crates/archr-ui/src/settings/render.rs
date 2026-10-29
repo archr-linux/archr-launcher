@@ -27,6 +27,8 @@ const ROW_GAP: f32 = 3.;
 const SECTION_HEIGHT: f32 = 21.;
 /// Usage bar and percentage under the games card row (Config-armazenamento).
 const CARD_METER: f32 = 34.;
+/// The rule under the hotkey modifier row (Atalhos-jogos): 3 + 1 + 3 px.
+const HOTKEY_DIVIDER: f32 = 7.;
 /// Right edge of full-width rows; pages with a side panel stop earlier.
 const RIGHT: f32 = 624.;
 #[derive(Clone, Copy)]
@@ -63,7 +65,8 @@ fn placements(page: Page, rows: &[Row]) -> Vec<Placement> {
                 Page::Storage | Page::ScraperMedia => 40.,
                 Page::Mangohud if row.subtitle.is_some() => 44.,
                 Page::LauncherControls if row.id == Id::ButtonsRestore => 36.,
-                Page::LauncherControls => 38.,
+                Page::LauncherControls | Page::Hotkeys if row.subtitle.is_none() => 38.,
+                Page::Hotkeys => 44.,
                 _ if row.subtitle.is_some() => 46.,
                 _ => 40.,
             };
@@ -75,6 +78,9 @@ fn placements(page: Page, rows: &[Row]) -> Vec<Placement> {
             top += height + ROW_GAP;
             if row.id == Id::StorageCard {
                 top += CARD_METER;
+            }
+            if row.id == Id::HotkeyModifier {
+                top += HOTKEY_DIVIDER;
             }
             place
         })
@@ -459,6 +465,17 @@ impl View<'_, '_, '_> {
                     },
                 )?
             }
+            Page::Hotkeys => {
+                let positions = placements(Page::Hotkeys, &rows);
+                self.rows_at(state, &rows, &positions, RIGHT)?;
+                let rule = positions[0].bottom() + ROW_GAP + 3.;
+                self.ui.divider(
+                    self.ui.px(28.),
+                    self.ui.px(rule),
+                    self.ui.px(RIGHT - 40.) as u32,
+                    self.theme.border,
+                )?;
+            }
             page => self.rows_at(state, &rows, &placements(page, &rows), RIGHT)?,
         }
         let error = state.error.as_ref().filter(|(id, _)| {
@@ -520,6 +537,8 @@ impl View<'_, '_, '_> {
             / self.ui.frame.scale;
         let status = if state.loading {
             Some(self.ui.catalog.text("loading"))
+        } else if state.page() == Page::Hotkeys {
+            Some(self.tr("controls.hotkeys_note"))
         } else if state.capturing() && state.page() == Page::LauncherControls {
             Some(self.tr(&format!(
                 "controls.press_hint|button={}",
@@ -578,6 +597,12 @@ impl View<'_, '_, '_> {
             } else if let Some(confirm) = &state.storage.confirm {
                 let (question, detail, hints) = confirm.dialog();
                 Some((self.tr(question), Some(self.tr(detail)), Some(hints)))
+            } else if let Some((title, detail)) = state.hotkey_prompt() {
+                Some((
+                    self.tr(&title),
+                    Some(self.tr(&detail)),
+                    Some(&[(Key('B'), "hint.cancel")]),
+                ))
             } else if let Some(key) = state.storage.working {
                 Some((self.tr(key), Some(self.tr("settings.wait_storage")), None))
             } else {
@@ -887,6 +912,23 @@ impl View<'_, '_, '_> {
             let waiting = state.capture.as_ref().is_some_and(|c| c.id == id);
             let name = state.bindings()[usize::from(n)].name();
             return self.pads(&[(!waiting).then_some(name)], selected, (x, y, w, h));
+        }
+        if let Id::Hotkey(n) = id {
+            if state.value(Id::HotkeyOn(n)) == "0" {
+                let ink = selection(
+                    selected,
+                    self.theme.dim_text,
+                    self.theme.accent_text_secondary,
+                );
+                return self.text(
+                    (x, y, w, h),
+                    &self.tr("settings.off"),
+                    (14., ink, Align::Right),
+                );
+            }
+            let names = state.hotkey_pads(usize::from(n));
+            let names: Vec<Option<&str>> = names.iter().map(|n| Some(n.as_str())).collect();
+            return self.pads(&names, selected, (x, y, w, h));
         }
         let ink = if state.disabled(id) {
             selection(selected, self.theme.muted, self.theme.accent_text_secondary)

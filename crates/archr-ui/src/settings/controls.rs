@@ -1,15 +1,24 @@
 //! Controls pages (Controles-launcher): which control does each launcher
-//! action. Choices apply to the launcher as soon as they are saved.
+//! action. Choices apply to the launcher as soon as they are saved. The
+//! in-game hotkeys page lives in `hotkeys`.
 use super::{described, row, Effect, Id, Kind, Page, Row, Settings};
 use crate::pad::{bindings, bindings_text, Pad, Remap, ACTIONS};
 use crate::state::Button;
 
-pub const CONTROLS: &[Row] = &[described(
-    Id::LauncherLink,
-    "controls.launcher",
-    "controls.launcher_detail",
-)
-.kind(Kind::Action)];
+pub const CONTROLS: &[Row] = &[
+    described(
+        Id::LauncherLink,
+        "controls.launcher",
+        "controls.launcher_detail",
+    )
+    .kind(Kind::Action),
+    described(
+        Id::HotkeysLink,
+        "controls.hotkeys",
+        "controls.hotkeys_detail",
+    )
+    .kind(Kind::Action),
+];
 pub const LAUNCHER: &[Row] = &[
     row(Id::Bind(0), ACTIONS[0].2, Kind::Action),
     row(Id::Bind(1), ACTIONS[1].2, Kind::Action),
@@ -27,6 +36,19 @@ const BACK: usize = 1;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Capture {
     pub id: Id,
+    /// The first of two buttons, once pressed.
+    pub first: Option<Pad>,
+    /// Why the last press was refused: the control and who has it.
+    pub conflict: Option<(Pad, &'static str)>,
+}
+impl Capture {
+    pub fn new(id: Id) -> Self {
+        Self {
+            id,
+            first: None,
+            conflict: None,
+        }
+    }
 }
 
 impl Settings {
@@ -61,7 +83,7 @@ impl Settings {
         }
         Some(match self.visible_rows().get(self.cursor)?.id {
             id @ Id::Bind(_) => {
-                self.capture = Some(Capture { id });
+                self.capture = Some(Capture::new(id));
                 Effect::None
             }
             Id::ButtonsRestore => self.save_bindings(&ACTIONS.map(|a| a.1)),
@@ -74,13 +96,13 @@ impl Settings {
         let Some(capture) = self.capture.take() else {
             return Effect::None;
         };
-        let Id::Bind(action) = capture.id else {
-            return Effect::None;
-        };
-        let action = usize::from(action);
         if pad == self.cancel_pad() {
             return Effect::None;
         }
+        let Id::Bind(action) = capture.id else {
+            return self.hotkey_captured(capture, pad);
+        };
+        let action = usize::from(action);
         if pad.is_direction() || pad == Pad::Fn {
             self.capture = Some(capture);
             return Effect::None;
@@ -97,6 +119,20 @@ impl Settings {
         match self.visible_rows().get(self.cursor).map(|r| r.id) {
             Some(Id::ButtonsRestore) if self.default_bindings() => &[(Key('B'), "hint.back")],
             Some(Id::ButtonsRestore) => &[(Key('A'), "hint.choose"), (Key('B'), "hint.back")],
+            Some(Id::HotkeyModifier) => &[
+                (crate::HintButton::Pair('L', 'R'), "settings.change"),
+                (Key('B'), "hint.back"),
+            ],
+            Some(Id::Hotkey(n)) if self.value(Id::HotkeyOn(n)) == "0" => &[
+                (Key('A'), "settings.change"),
+                (Key('X'), "controls.enable"),
+                (Key('B'), "hint.back"),
+            ],
+            Some(Id::Hotkey(_)) => &[
+                (Key('A'), "settings.change"),
+                (Key('X'), "controls.disable"),
+                (Key('B'), "hint.back"),
+            ],
             _ if self.page() == Page::Controls => {
                 &[(Key('A'), "hint.open"), (Key('B'), "hint.back")]
             }
