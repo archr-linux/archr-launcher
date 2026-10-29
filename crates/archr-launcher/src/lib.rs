@@ -3,6 +3,7 @@ pub mod audio;
 pub mod cheevos;
 pub mod github;
 pub mod handoff;
+pub mod modules;
 pub mod state;
 pub mod store;
 pub mod themestore;
