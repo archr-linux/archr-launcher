@@ -506,7 +506,9 @@ recusado. A versão anterior fica guardada até a nova funcionar.
 sozinho os revisados", `launcher.modules.autoupdate`, desligada por padrão):
 uma vez por dia, 2 min depois do início e nunca durante um jogo, o launcher
 instala sozinho a versão nova de um módulo da Loja só se o pacote dela estiver
-na lista revisada (pelo digest) e ela não pedir nenhuma permissão nova; senão
+na lista revisada (pelo digest) e ela não pedir nada novo (permissão, bloco,
+atalho, widget, item, página ou passar a ficar aberta); nunca um módulo
+desligado ou com falha, nem um pacote que já falhou e voltou atrás; senão
 fica "→ x.y.z disponível". Mesmas checagens da instalação à mão; aviso na
 faixa ("X foi atualizado para 1.2.0") e "atualizado sozinho" na lista por uma
 semana. Detalhes (Y na lista) mostram o digest do pacote, se ele confere com a

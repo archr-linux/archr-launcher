@@ -364,7 +364,17 @@ Ameaça: a conta do autor (não a do ArchR) publica versão maliciosa → não
 atualiza sozinha, porque o digest não está no índice. Conta do ArchR →
 mitigado pela assinatura offline (4.2), que ainda aguarda a decisão do dono:
 até lá a atualização automática confia no índice publicado no GitHub, como o
-selo. O interruptor vem desligado. Implementado sem a condição "Configurações
+selo. O interruptor vem desligado.
+
+Depois da revisão: um módulo por vez (uma ação da Loja cada), e o lote para
+quando um jogo pega a tela e continua na volta; só módulos ligados, aceitos e
+sem falha; o registro do usuário (ligado, consentimento) nunca muda, e um
+módulo removido durante a atualização não volta. Blocos, atalhos, widgets,
+itens do Y ou páginas novos e a troca de oneshot para daemon contam como
+permissões novas (a atualização sozinha não acontece). A instalação só aceita
+o pacote cujo digest a página mostrou. Um rollback devolve o digest anterior e
+marca o pacote que falhou (`bad_digest`): a atualização automática nunca o
+pega de novo. Implementado sem a condição "Configurações
 fechadas": a troca acontece na thread dos módulos, sem tocar na tela.
 
 ## 6. Fase 3 (proposta)
