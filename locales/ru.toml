@@ -187,7 +187,7 @@
 "settings.keyboard_variant" = "Вариант раскладки"
 "settings.keyboard_detail" = "Клавиатура USB или Bluetooth"
 "settings.keyboard" = "Клавиатура"
-"settings.usb_network" = "Сеть (ECM)"
+"settings.usb_network" = "Сеть (NCM)"
 "settings.usb_files" = "Передача файлов"
 "settings.connected" = "Подключено"
 "settings.wpa_length" = "WPA2 · от 8 до 63 символов"

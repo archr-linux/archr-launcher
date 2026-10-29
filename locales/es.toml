@@ -187,7 +187,7 @@
 "settings.keyboard_variant" = "Variante"
 "settings.keyboard_detail" = "Teclado USB o Bluetooth"
 "settings.keyboard" = "Teclado"
-"settings.usb_network" = "Red (ECM)"
+"settings.usb_network" = "Red (NCM)"
 "settings.usb_files" = "Transferencia de archivos"
 "settings.connected" = "Conectado"
 "settings.wpa_length" = "WPA2 · 8 a 63 caracteres"
