@@ -355,6 +355,8 @@ pub(super) enum Work {
     /// A Games page row of the named system.
     Game(String, Id, String),
     Info,
+    /// `usbgadget status`, polled while Services shows a network USB mode.
+    Usb,
     Scan,
     BtScan,
     Bt(archr_ui::settings::bluetooth::Action, String),
@@ -382,6 +384,7 @@ enum Reply {
     Loaded(Result<Box<Settings>, String>),
     Set(Id, Result<String, String>),
     Info(Information),
+    Usb(archr_ui::settings::network::Usb),
     Scan(
         u64,
         Result<(Vec<archr_ui::settings::network::Network>, String), String>,
@@ -502,6 +505,7 @@ impl Worker {
                             Reply::Set(id, backend.apply_game(&system, id, &value))
                         }
                         Work::Info => Reply::Info(backend.refresh_info()),
+                        Work::Usb => Reply::Usb(backend.usb()),
                         Work::Scan | Work::BtScan => unreachable!("scans have their own lane"),
                         Work::Bt(action, addr) => Reply::Bt(backend.bt_act(action, &addr)),
                         Work::Connect(ssid, password) => {
@@ -649,6 +653,7 @@ impl Worker {
                     state.theme_names = loaded.theme_names;
                     state.access_ip = loaded.access_ip;
                     state.usb_busy = loaded.usb_busy;
+                    state.usb = loaded.usb;
                     state.info = loaded.info;
                     state.error = loaded.error;
                     state.scrape.available = loaded.scrape.available;
@@ -679,6 +684,9 @@ impl Worker {
                     }
                     if id == Id::UsbMode {
                         state.usb_busy = matches!(&result, Err(e) if e == "settings.usb_busy");
+                    }
+                    if matches!(&result, Err(e) if e == "settings.usb_rebuild_failed") {
+                        state.values.insert(Id::UsbMode, "disabled".into());
                     }
                     if id == Id::Language {
                         language = result.as_ref().ok().cloned();
@@ -723,6 +731,7 @@ impl Worker {
                     }
                 }
                 Reply::Info(info) => state.info = info,
+                Reply::Usb(usb) => state.usb = usb,
                 Reply::Store(reply) => state.store_reply(reply),
                 Reply::Theme(loaded) => (state.base_theme, state.base_dir) = *loaded,
                 Reply::Appearance(result) => {

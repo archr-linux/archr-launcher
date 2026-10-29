@@ -1,14 +1,91 @@
-//! Wi-Fi list (Config-wifi), text entry (Wifi-senha) and the scraper panel.
+//! Wi-Fi list (Config-wifi), network services (Config-usb), text entry
+//! (Wifi-senha) and the scraper panel.
 use super::*;
 use crate::keyboard::Mode;
 
+/// The sharing note under the USB rows (Config-usb): 6 px above it on top
+/// of the row gap, 4 px side margins, 10/12 px padding, 12.5 px text.
+const NOTE_GAP: f32 = 9.;
+const NOTE_INSET: f32 = 4.;
+const NOTE_PAD: (f32, f32) = (10., 12.);
+const NOTE_SIZE: f32 = 12.5;
+const NOTE_LINE: f32 = 18.;
+
 impl View<'_, '_, '_> {
+    /// Services: in "Internet pelo PC", how to turn sharing on in the PC
+    /// sits under the USB state, and the rows below make room for it.
+    pub(super) fn services(&mut self, state: &Settings, rows: &[Row]) -> Result<(), String> {
+        let mut positions = placements(Page::Services, rows);
+        let at = rows
+            .iter()
+            .position(|row| row.id == Id::UsbState)
+            .filter(|_| state.value(Id::UsbMode) == "internet");
+        let mut note = None;
+        if let Some(at) = at {
+            let width = self.ui.px(RIGHT - 16. - 2. * NOTE_INSET - 2. * NOTE_PAD.1) as u32;
+            let title = self.lines_face(
+                &self.tr("settings.usb_share_title"),
+                NOTE_SIZE,
+                width,
+                Face::Semibold,
+            )?;
+            let body = self.lines(&self.tr("settings.usb_share_body"), NOTE_SIZE, width)?;
+            let height = 2. * NOTE_PAD.0 + (title.len() + body.len()) as f32 * NOTE_LINE;
+            positions[at].trail = NOTE_GAP + height;
+            // Choosing the mode brings its rows and the note into view.
+            let end = positions[at].end();
+            if let Some(mode) = rows.iter().position(|row| row.id == Id::UsbMode) {
+                positions[mode].trail = end - positions[mode].bottom();
+            }
+            for place in &mut positions[at + 1..] {
+                place.top += NOTE_GAP + height;
+            }
+            note = Some((at, title, body, height));
+        }
+        self.list(state, &positions, RIGHT, |view, n, y, place, selected| {
+            view.row(state, &rows[n], (y, place.height), RIGHT, selected)?;
+            match &note {
+                Some((at, title, body, height)) if *at == n => {
+                    view.share_note(y + place.height + NOTE_GAP, *height, title, body)
+                }
+                _ => Ok(()),
+            }
+        })
+    }
+    fn share_note(
+        &mut self,
+        top: f32,
+        height: f32,
+        title: &[String],
+        body: &[String],
+    ) -> Result<(), String> {
+        let (x, w) = (16. + NOTE_INSET, RIGHT - 16. - 2. * NOTE_INSET);
+        self.panel((x, top, w, height), false)?;
+        let lines = title
+            .iter()
+            .map(|line| (line, Face::Semibold, self.theme.text))
+            .chain(
+                body.iter()
+                    .map(|line| (line, Face::Regular, self.theme.muted)),
+            );
+        for (n, (line, face, ink)) in lines.enumerate() {
+            let y = top + NOTE_PAD.0 + n as f32 * NOTE_LINE;
+            self.ui.label_aligned(
+                line,
+                (face, NOTE_SIZE, ink),
+                self.rect((x + NOTE_PAD.1, y, w - 2. * NOTE_PAD.1, NOTE_LINE)),
+                Align::Left,
+            )?;
+        }
+        Ok(())
+    }
     pub(super) fn wifi(&mut self, state: &Settings) -> Result<(), String> {
         let mut positions = vec![Placement {
             top: VIEW_TOP,
             height: 40.,
             section: None,
             searching: None,
+            trail: 0.,
         }];
         // Divider under the switch: 4 px margins around a 1 px rule.
         let mut top = VIEW_TOP + 40. + ROW_GAP + 9.;
@@ -35,6 +112,7 @@ impl View<'_, '_, '_> {
                 height,
                 section,
                 searching,
+                trail: 0.,
             });
             top += height + ROW_GAP;
         }

@@ -81,6 +81,20 @@ fn pages() -> Vec<(&'static str, Settings)> {
         services.values.insert(id, value.into());
     }
     services.cursor = 1;
+    // Config-usb: the console on the PC's internet, Wi-Fi held off.
+    let mut usb_internet = services.clone();
+    usb_internet.values.insert(Id::UsbMode, "internet".into());
+    usb_internet.usb =
+        crate::settings::network::Usb::parse("link=online\naddress=192.168.137.42\nwifi=held\n");
+    usb_internet.cursor = 4;
+    let mut usb_fallback = usb_internet.clone();
+    usb_fallback.usb =
+        crate::settings::network::Usb::parse("link=fallback\naddress=169.254.170.2\nwifi=held\n");
+    usb_fallback.cursor = 7;
+    let mut usb_rndis = services.clone();
+    usb_rndis.values.insert(Id::UsbCompat, "1".into());
+    usb_rndis.usb = crate::settings::network::Usb::parse("link=local\naddress=169.254.170.2\n");
+    usb_rndis.cursor = 5;
     let mut region = ready();
     region.open(Page::Region);
     region.values.insert(Id::Language, "pt_BR".into());
@@ -335,6 +349,9 @@ fn pages() -> Vec<(&'static str, Settings)> {
         ("bluetooth-pairing", bt_pairing),
         ("bluetooth-off", bt_off),
         ("services", services),
+        ("services_usb_internet", usb_internet),
+        ("services_usb_fallback", usb_fallback),
+        ("services_usb_rndis", usb_rndis),
         ("region", region),
         ("games", games),
         ("games-standalone", standalone),

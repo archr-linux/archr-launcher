@@ -170,6 +170,12 @@ pub enum Id {
     Player,
     Channel,
     UsbMode,
+    /// RNDIS instead of NCM for Windows 10 (`usbgadget compat`).
+    UsbCompat,
+    /// The address on the USB cable, shown, not edited.
+    UsbAddress,
+    /// Cable, lease and Wi-Fi hold, shown, not edited.
+    UsbState,
     Emulator,
     Core,
     Ratio,
@@ -300,6 +306,8 @@ impl Id {
             Self::Player => ("wifi.adhoc.id", "1"),
             Self::Channel => ("wifi.adhoc.channel", "6"),
             Self::UsbMode => ("", "disabled"), // usbgadget owns its state file
+            Self::UsbCompat => ("", "0"),
+            Self::UsbAddress | Self::UsbState => ("", ""),
             // Per-system suffixes: the Games page writes `<system>.<suffix>`,
             // the keys runemu.sh passes on and setsettings.sh reads.
             Self::Emulator => ("emulator", ""),
@@ -423,6 +431,7 @@ impl Id {
             | Self::Samba
             | Self::Http
             | Self::Adhoc
+            | Self::UsbCompat
             | Self::NetplayEnabled
             | Self::OnlyRelay
             | Self::MissingGames
@@ -454,7 +463,7 @@ impl Id {
             Self::ClockFormat => &["24", "12"],
             Self::Player => &["1", "2", "3", "4"],
             Self::Channel => &["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"],
-            Self::UsbMode => &["disabled", "network", "file_transfer"],
+            Self::UsbMode => &["disabled", "network", "internet", "file_transfer"],
             Self::Relay => &["none", "nyc", "madrid", "montreal", "saopaulo", "custom"],
             Self::ScraperSource => &["screenscraper"],
             Self::Accent => &appearance::ACCENTS,
@@ -737,6 +746,7 @@ pub struct Settings {
     pub access_ip: String,
     /// The single USB port hosts a device, so gadget mode is refused.
     pub usb_busy: bool,
+    pub usb: network::Usb,
     pub scrape: Scrape,
     pub cheevos: cheevos::Cheevos,
     pub games: Games,
@@ -796,6 +806,7 @@ impl Default for Settings {
             wifi_hidden: false,
             access_ip: String::new(),
             usb_busy: false,
+            usb: network::Usb::default(),
             scrape: Scrape::default(),
             cheevos: cheevos::Cheevos::default(),
             games: Games::default(),
@@ -938,8 +949,16 @@ impl Settings {
             (Id::ClockFormat, "24") => "settings.clock_24",
             (Id::ClockFormat, "12") => "settings.clock_12",
             (Id::UsbMode, "disabled") => "settings.off",
+            (Id::UsbMode, "network") if self.value(Id::UsbCompat) == "1" => {
+                "settings.usb_network_rndis"
+            }
             (Id::UsbMode, "network") => "settings.usb_network",
+            (Id::UsbMode, "internet") => "settings.usb_internet",
             (Id::UsbMode, "file_transfer") => "settings.usb_files",
+            (Id::UsbAddress, _) if self.usb.address.is_empty() => return "—".into(),
+            (Id::UsbAddress, _) => return self.usb.address.clone(),
+            (Id::UsbState, _) if self.usb.wifi_held => "settings.usb_wifi_off",
+            (Id::UsbState, _) => return String::new(),
             (Id::Relay, "none") => "settings.off",
             (Id::NetplayEnabled | Id::Adhoc, "0") => "settings.off",
             (Id::NetplayEnabled | Id::Adhoc, "1") => "settings.on",
@@ -963,6 +982,22 @@ impl Settings {
             Id::Ssh if !ip.is_empty() => format!("settings.ssh_at|ip={ip}"),
             Id::Http if !ip.is_empty() => format!("settings.http_at|ip={ip}"),
             Id::UsbMode if self.usb_busy => "settings.usb_in_use".into(),
+            // A lease from the PC, or the console's own fixed address.
+            Id::UsbAddress
+                if self.value(Id::UsbMode) == "internet"
+                    && matches!(self.usb.link.as_str(), "online" | "local") =>
+            {
+                "settings.usb_address_dhcp".into()
+            }
+            Id::UsbAddress => "settings.usb_address_fixed".into(),
+            Id::UsbState => match self.usb.link.as_str() {
+                "dhcp" => "settings.usb_link_dhcp",
+                "online" => "settings.usb_link_online",
+                "local" => "settings.usb_link_local",
+                "fallback" => "settings.usb_link_fallback",
+                _ => "settings.usb_link_waiting",
+            }
+            .into(),
             Id::ScraperAccount if self.scrape.verifying => "settings.verifying".into(),
             Id::CheevosAccount | Id::CheevosWebKey if self.cheevos.verifying => {
                 "settings.verifying".into()
@@ -1031,6 +1066,7 @@ impl Settings {
                     false
                 }
                 Id::CustomServer => self.value(Id::Relay) == "custom",
+                Id::UsbCompat | Id::UsbAddress | Id::UsbState => self.usb_network(),
                 Id::SecondCard => self.storage.second.is_some(),
                 Id::UnifiedCard => self.storage.unified.is_some(),
                 id if Games::ROWS.contains(&id) => self.games.shows(id, self),
@@ -1043,6 +1079,11 @@ impl Settings {
             .copied()
             .collect()
     }
+    /// A network USB function is chosen: its compatibility, address and
+    /// state rows show.
+    pub fn usb_network(&self) -> bool {
+        matches!(self.value(Id::UsbMode), "network" | "internet")
+    }
     /// Rows with at most one choice show their value and accept no input
     /// (one audio sink: the jack switches speaker and headphones itself).
     pub fn fixed(&self, id: Id) -> bool {
@@ -1051,7 +1092,7 @@ impl Settings {
                 .options
                 .get(&id)
                 .is_none_or(|choices| choices.len() <= 1),
-            Id::StorageCard | Id::UnifiedCard => true,
+            Id::StorageCard | Id::UnifiedCard | Id::UsbAddress | Id::UsbState => true,
             Id::ModuleRow(_) => self.module_fixed(id),
             _ => false,
         }
@@ -1820,5 +1861,56 @@ mod dismiss_tests {
         assert_eq!(state.subtitle(row).as_deref(), Some("settings.usb_detail"));
         state.usb_busy = true;
         assert_eq!(state.subtitle(row).as_deref(), Some("settings.usb_in_use"));
+    }
+    #[test]
+    fn usb_network_rows_follow_the_mode_and_the_status() {
+        let mut state = Settings::default();
+        state.open(Page::Services);
+        let usb_rows = |state: &Settings| {
+            state
+                .visible_rows()
+                .iter()
+                .filter(|r| matches!(r.id, Id::UsbCompat | Id::UsbAddress | Id::UsbState))
+                .count()
+        };
+        assert_eq!(usb_rows(&state), 0);
+        state.values.insert(Id::UsbMode, "internet".into());
+        assert_eq!(usb_rows(&state), 3);
+        assert!(state.fixed(Id::UsbAddress) && state.fixed(Id::UsbState));
+        let catalog = crate::i18n::I18n::load(std::path::Path::new("/none"), Some("pt_BR"), None);
+        assert_eq!(state.display_value(Id::UsbAddress, &catalog), "—");
+        assert_eq!(state.display_value(Id::UsbState, &catalog), "");
+        state.usb = network::Usb::parse("link=online\naddress=192.168.137.42\nwifi=held\n");
+        assert_eq!(
+            state.display_value(Id::UsbAddress, &catalog),
+            "192.168.137.42"
+        );
+        assert_eq!(
+            state.display_value(Id::UsbState, &catalog),
+            "Wi‑Fi desligado"
+        );
+        let subtitle = |state: &Settings, id| {
+            let row = pages::SERVICES.iter().find(|r| r.id == id).unwrap();
+            state.subtitle(row).unwrap()
+        };
+        assert_eq!(subtitle(&state, Id::UsbState), "settings.usb_link_online");
+        assert_eq!(
+            subtitle(&state, Id::UsbAddress),
+            "settings.usb_address_dhcp"
+        );
+        // No lease: the "network" mode's fixed address, said so.
+        state.usb.link = "fallback".into();
+        assert_eq!(subtitle(&state, Id::UsbState), "settings.usb_link_fallback");
+        assert_eq!(
+            subtitle(&state, Id::UsbAddress),
+            "settings.usb_address_fixed"
+        );
+        // The label names the function the gadget really uses.
+        state.values.insert(Id::UsbMode, "network".into());
+        assert_eq!(state.display_value(Id::UsbMode, &catalog), "Rede (NCM)");
+        state.values.insert(Id::UsbCompat, "1".into());
+        assert_eq!(state.display_value(Id::UsbMode, &catalog), "Rede (RNDIS)");
+        state.values.insert(Id::UsbMode, "file_transfer".into());
+        assert_eq!(usb_rows(&state), 0);
     }
 }

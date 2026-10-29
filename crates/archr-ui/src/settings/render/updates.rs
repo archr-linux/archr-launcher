@@ -249,6 +249,7 @@ impl View<'_, '_, '_> {
                     height: 34.,
                     section: None,
                     searching: None,
+                    trail: 0.,
                 };
                 top += 34. + ROW_GAP;
                 place
@@ -259,6 +260,7 @@ impl View<'_, '_, '_> {
             height: lines.len() as f32 * 17. + 12.,
             section: Some("updates.news"),
             searching: None,
+            trail: 0.,
         });
         let theme = self.theme;
         self.list(state, &positions, RIGHT, |view, n, y, place, selected| {

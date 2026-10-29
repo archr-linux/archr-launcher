@@ -48,6 +48,8 @@ struct Placement {
     section: Option<&'static str>,
     /// The section is a running search: height of the placeholder rows under it.
     searching: Option<f32>,
+    /// Space below the row that belongs to it (a note), kept in view with it.
+    trail: f32,
 }
 impl Placement {
     fn selected_top(self) -> f32 {
@@ -62,6 +64,10 @@ impl Placement {
     }
     fn bottom(self) -> f32 {
         self.top + self.height
+    }
+    /// Bottom of the row and what trails it.
+    fn end(self) -> f32 {
+        self.bottom() + self.trail
     }
 }
 /// Mockup row heights: dense Netplay and Services lists, 40/46 elsewhere.
@@ -100,6 +106,7 @@ fn placements(page: Page, rows: &[Row]) -> Vec<Placement> {
                 height,
                 section,
                 searching: None,
+                trail: 0.,
             };
             top += height + ROW_GAP;
             if matches!(row.id, Id::UnifiedCard | Id::StorageCard | Id::SecondCard) {
@@ -203,6 +210,10 @@ impl Banner {
     }
 }
 type Bounds = (f32, f32, f32, f32);
+/// Rows that show a reading in monospace (Config-usb).
+fn reading(id: Id) -> bool {
+    matches!(id, Id::UsbAddress | Id::UsbState)
+}
 struct View<'a, 'ttf, 'tex> {
     ui: &'a mut Ui<'ttf, 'tex>,
     theme: &'a Theme,
@@ -612,6 +623,7 @@ impl View<'_, '_, '_> {
             Page::Mangohud => self.mangohud_page(state, &rows)?,
             Page::MangohudItems => self.mangohud_items(state)?,
             Page::Wifi => self.wifi(state)?,
+            Page::Services => self.services(state, &rows)?,
             Page::Bluetooth => self.bluetooth(state)?,
             Page::Keyboard => self.keyboard(state)?,
             Page::Updates => self.updates_page(state, &rows)?,
@@ -945,12 +957,13 @@ impl View<'_, '_, '_> {
             height: 0.,
             section: None,
             searching: None,
+            trail: 0.,
         });
-        let bottom = positions.last().map_or(VIEW_TOP, |p| p.bottom());
+        let bottom = positions.last().map_or(VIEW_TOP, |p| p.end());
         let offset = self.ui.settings_scroll.offset(
             state.page(),
             selected.selected_top(),
-            selected.bottom(),
+            selected.end(),
             bottom,
             self.ui.frame.now,
         );
@@ -963,7 +976,7 @@ impl View<'_, '_, '_> {
         let result = (|| {
             for (n, position) in positions.iter().enumerate() {
                 let y = position.top - offset;
-                if position.bottom() - offset < VIEW_TOP
+                if position.end() - offset < VIEW_TOP
                     || position.selected_top() - offset >= VIEW_BOTTOM
                 {
                     continue;
@@ -1029,12 +1042,21 @@ impl View<'_, '_, '_> {
         } else {
             (right - 46.) * 0.48
         };
-        // Action rows only show a short link on the right: the label may use the rest.
+        // Action rows only show a short link on the right, and the USB rows a
+        // short reading: the label may use the rest.
         let link = match row.kind {
             Kind::Action => {
                 self.ui
                     .measure(&state.display_value(row.id, &self.ui.catalog), face, 14.)?
                     as f32
+                    / self.ui.frame.scale
+            }
+            _ if reading(row.id) => {
+                self.ui.measure(
+                    &state.display_value(row.id, &self.ui.catalog),
+                    Face::Mono,
+                    14.,
+                )? as f32
                     / self.ui.frame.scale
             }
             _ => f32::MAX,
@@ -1299,11 +1321,19 @@ impl View<'_, '_, '_> {
                     )?;
                 }
                 let inset = if chevrons { 20. } else { 0. };
+                let (ink, face) = if reading(id) {
+                    (
+                        selection(selected, self.theme.text_secondary, ink),
+                        Face::Mono,
+                    )
+                } else {
+                    (ink, selection(selected, Face::Regular, Face::Semibold))
+                };
                 self.text_face(
                     (x + inset, y, w - 2. * inset, h),
                     &v,
                     (14., ink, Align::Right),
-                    selection(selected, Face::Regular, Face::Semibold),
+                    face,
                 )?;
             }
         }

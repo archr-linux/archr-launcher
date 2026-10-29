@@ -23,8 +23,11 @@ fn wifi_error(error: String) -> String {
 }
 /// usbgadget exits 3 when the single OTG port hosts a device (Wi-Fi dongle or
 /// gamepad) and when the gadget was never prepared; both leave the value as is.
+/// "compat" exits 4 when no network gadget could be built: the function is off.
 pub(super) fn usb_error(error: &str) -> String {
-    if !error.contains("exit status: 3") {
+    if error.contains("exit status: 4") {
+        "settings.usb_rebuild_failed".into()
+    } else if !error.contains("exit status: 3") {
         error.into()
     } else if error.contains("not configured") {
         "settings.usb_unprepared".into()
@@ -138,6 +141,12 @@ impl Backend {
             Err(error) => log::warn!("Wi-Fi reconnect not started: {error}"),
         }
     }
+    /// Cable, lease and address of the USB network; usbgadget owns them.
+    pub(super) fn usb(&self) -> archr_ui::settings::network::Usb {
+        archr_ui::settings::network::Usb::parse(
+            &self.command("usbgadget", &["status"]).unwrap_or_default(),
+        )
+    }
     /// The OTG port already serves a downstream device: the same sysfs state
     /// usbgadget checks before it refuses to leave host mode.
     fn usb_busy(&self) -> bool {
@@ -184,6 +193,9 @@ impl Backend {
         if let Ok(mode) = self.command("usbgadget", &[]) {
             state.values.insert(Id::UsbMode, mode);
         }
+        state.usb = self.usb();
+        let compat = if state.usb.compat { "1" } else { "0" };
+        state.values.insert(Id::UsbCompat, compat.into());
         state.usb_busy = self.usb_busy();
         state.access_ip = self.address();
         keyboard_choices(
@@ -267,6 +279,7 @@ impl Backend {
                 | Id::Player
                 | Id::Channel
                 | Id::UsbMode
+                | Id::UsbCompat
                 | Id::KeyboardLayout
                 | Id::KeyboardVariant
                 | Id::ClockFormat
@@ -326,6 +339,11 @@ impl Backend {
                 }
                 Id::UsbMode => self
                     .command("usbgadget", &[value])
+                    .map(|_| value.into())
+                    .map_err(|e| usb_error(&e)),
+                // Rebuilding the gadget restarts an active network mode.
+                Id::UsbCompat => self
+                    .command("usbgadget", &["compat", value])
                     .map(|_| value.into())
                     .map_err(|e| usb_error(&e)),
                 Id::KeyboardLayout | Id::KeyboardVariant => {

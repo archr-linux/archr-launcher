@@ -10,6 +10,7 @@ impl View<'_, '_, '_> {
             height: 40.,
             section: None,
             searching: None,
+            trail: 0.,
         }];
         // Divider under the switch: 4 px margins around a 1 px rule.
         let mut top = VIEW_TOP + 40. + ROW_GAP + 9.;
@@ -33,6 +34,7 @@ impl View<'_, '_, '_> {
                 height: 40.,
                 section,
                 searching: None,
+                trail: 0.,
             });
             top += 40. + ROW_GAP;
         }
