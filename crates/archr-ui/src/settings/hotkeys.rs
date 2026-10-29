@@ -91,8 +91,13 @@ pub const HOTKEYS_PAGE: &[Row] = &[
     row(Id::Hotkey(0), HOTKEYS[0].label, Kind::Action),
     row(Id::Hotkey(1), HOTKEYS[1].label, Kind::Action),
     row(Id::Hotkey(2), HOTKEYS[2].label, Kind::Action),
-    row(Id::Hotkey(3), HOTKEYS[3].label, Kind::Action),
-    row(Id::Hotkey(4), HOTKEYS[4].label, Kind::Action),
+    described(Id::Hotkey(3), HOTKEYS[3].label, "controls.volume_detail").kind(Kind::Action),
+    described(
+        Id::Hotkey(4),
+        HOTKEYS[4].label,
+        "controls.brightness_detail",
+    )
+    .kind(Kind::Action),
     // RetroArch's own hotkeys, rewritten only when asked.
     described(
         Id::RaHotkeys,
