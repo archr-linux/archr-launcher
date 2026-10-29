@@ -138,6 +138,12 @@ impl Backend {
             Err(error) => log::warn!("Wi-Fi reconnect not started: {error}"),
         }
     }
+    /// Cable, lease and address of the USB network; usbgadget owns them.
+    pub(super) fn usb(&self) -> archr_ui::settings::network::Usb {
+        archr_ui::settings::network::Usb::parse(
+            &self.command("usbgadget", &["status"]).unwrap_or_default(),
+        )
+    }
     /// The OTG port already serves a downstream device: the same sysfs state
     /// usbgadget checks before it refuses to leave host mode.
     fn usb_busy(&self) -> bool {
@@ -184,6 +190,7 @@ impl Backend {
         if let Ok(mode) = self.command("usbgadget", &[]) {
             state.values.insert(Id::UsbMode, mode);
         }
+        state.usb = self.usb();
         state.usb_busy = self.usb_busy();
         state.access_ip = self.address();
         keyboard_choices(

@@ -61,6 +61,33 @@ fn unescape(input: &str) -> String {
     out
 }
 
+/// The USB network as `usbgadget status` reports it (key=value lines).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Usb {
+    /// "waiting", "dhcp", "online", "local" or "fallback"; empty when off.
+    pub link: String,
+    pub address: String,
+    /// Wi-Fi is off while the PC shares its internet over the cable.
+    pub wifi_held: bool,
+}
+impl Usb {
+    pub fn parse(output: &str) -> Self {
+        let mut usb = Self::default();
+        for (key, value) in output.lines().filter_map(|l| l.trim().split_once('=')) {
+            match key {
+                "link" if value != "off" => usb.link = value.into(),
+                // An address goes into a "ssh root@" hint: digits and dots only.
+                "address" if value.bytes().all(|b| b.is_ascii_digit() || b == b'.') => {
+                    usb.address = value.into()
+                }
+                "wifi" => usb.wifi_held = value == "held",
+                _ => {}
+            }
+        }
+        usb
+    }
+}
+
 /// WPA passphrase (8-63 bytes) or raw 64-digit hex key.
 pub fn wpa_valid(key: &str) -> bool {
     (8..=63).contains(&key.len()) || (key.len() == 64 && key.bytes().all(|b| b.is_ascii_hexdigit()))
@@ -79,6 +106,16 @@ mod tests {
         assert!(networks[0].connected);
         assert!(!networks[0].known);
         assert!(networks[1].known);
+    }
+    #[test]
+    fn usb_status_reads_known_keys_and_drops_odd_addresses() {
+        let usb = Usb::parse("mode=internet\nlink=online\naddress=192.168.137.42\nwifi=held\n");
+        assert_eq!(usb.link, "online");
+        assert_eq!(usb.address, "192.168.137.42");
+        assert!(usb.wifi_held);
+        let off = Usb::parse("link=off\naddress=1.2.3.4|x\nwifi=free\n");
+        assert_eq!(off, Usb::default());
+        assert_eq!(Usb::parse("disabled"), Usb::default());
     }
     #[test]
     fn wpa_accepts_passphrases_and_hex_keys_only() {

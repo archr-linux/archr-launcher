@@ -335,13 +335,12 @@ impl Runtime {
         if dirty {
             self.next_info = now + Duration::from_secs(2);
         }
-        if !self.closing
-            && !self.busy()
-            && self.active
-            && matches!(self.state.page(), Page::Info | Page::InfoDetail(_))
-            && now >= self.next_info
-        {
-            self.send(Work::Info);
+        if !self.closing && !self.busy() && self.active && now >= self.next_info {
+            match self.state.page() {
+                Page::Info | Page::InfoDetail(_) => self.send(Work::Info),
+                Page::Services if self.state.usb_network() => self.send(Work::Usb),
+                _ => {}
+            }
         }
         (dirty, language)
     }

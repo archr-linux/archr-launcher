@@ -21,8 +21,18 @@ pub const SERVICES: &[Row] = &[
         "settings.netplay",
         "settings.netplay_detail",
     )
-    .under("settings.game_usb"),
-    described(Id::UsbMode, "settings.usb_mode", "settings.usb_detail"),
+    .under("settings.online_play"),
+    described(Id::UsbMode, "settings.usb_mode", "settings.usb_detail").under("settings.usb"),
+    described(
+        Id::UsbAddress,
+        "settings.usb_address",
+        "settings.usb_address_fixed",
+    ),
+    described(
+        Id::UsbState,
+        "settings.usb_state",
+        "settings.usb_link_waiting",
+    ),
     described(Id::Adhoc, "settings.adhoc", "settings.adhoc_detail").under("settings.local_play"),
     described(Id::Player, "settings.player", "settings.player_detail"),
     described(Id::Channel, "settings.channel", "settings.channel_detail"),
