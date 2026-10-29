@@ -97,6 +97,46 @@ fn pages() -> Vec<(&'static str, Settings)> {
     running.scrape.outcome = None;
     running.scrape.done = 140;
     running.scrape.system = "Super Nintendo".into();
+    use crate::settings::storage::{Card, Confirm};
+    let mut storage = ready();
+    storage.open(Page::Storage);
+    storage.values.insert(Id::Automount, "1".into());
+    storage.storage.card = Some(Card {
+        external: true,
+        name: "settings.card_external|label=ROMS".into(),
+        detail: "settings.card_detail|fs=ext4|used=@41.2 GB|total=@119.0 GB".into(),
+        percent: 35,
+    });
+    storage.storage.backup = Some("settings.backup_today|time=14:42".into());
+    storage.storage.merge_supported = true;
+    storage.cursor = 3;
+    let mut storage_end = storage.clone();
+    storage_end.cursor = 6;
+    storage_end.storage.custom_password = true;
+    let mut storage_wifi = storage.clone();
+    storage_wifi.storage.confirm = Some(Confirm::BackupWifi);
+    let mut storage_backup = storage.clone();
+    storage_backup.storage.confirm = Some(Confirm::Backup);
+    let mut storage_reset = storage_end.clone();
+    storage_reset.storage.confirm = Some(Confirm::ResetFinal);
+    let mut storage_working = storage.clone();
+    storage_working.storage.working = Some("settings.backing_up");
+    let mut storage_password = storage.clone();
+    storage_password.cursor = 5;
+    storage_password.handle(Button::A);
+    for button in [Button::A; 6] {
+        storage_password.handle(button);
+    }
+    let mut storage_internal = storage.clone();
+    storage_internal.storage.card = Some(Card {
+        external: false,
+        name: "settings.card_internal".into(),
+        detail: "settings.card_detail|fs=ext4|used=@4.1 GB|total=@25.3 GB".into(),
+        percent: 16,
+    });
+    storage_internal.storage.backup = None;
+    storage_internal.storage.merge_supported = false;
+    storage_internal.cursor = 0;
     let mut unavailable = ready();
     unavailable.open(Page::Games);
     unavailable.open(Page::Scraper);
@@ -109,6 +149,8 @@ fn pages() -> Vec<(&'static str, Settings)> {
     sound.handle(Button::R);
     assert!(!sound.slides.is_empty() && sound.pending.is_none());
     vec![
+        // First, so the list snaps to its scrolled end.
+        ("storage-end", storage_end),
         ("sound-sliding", sound),
         ("wifi", wifi),
         ("password", password),
@@ -120,6 +162,13 @@ fn pages() -> Vec<(&'static str, Settings)> {
         ("scraper", scraper),
         ("scraper-running", running),
         ("scraper-unavailable", unavailable),
+        ("storage", storage),
+        ("storage-internal", storage_internal),
+        ("storage-backup", storage_backup),
+        ("storage-backup-wifi", storage_wifi),
+        ("storage-reset-final", storage_reset),
+        ("storage-working", storage_working),
+        ("storage-password", storage_password),
     ]
 }
 #[test]
@@ -152,7 +201,9 @@ fn capture_network_and_games_pages() {
         )
         .unwrap();
     };
-    for language in ["pt_BR", "ru"] {
+    let languages =
+        std::env::var("ARCHR_SETTINGS_CAPTURE_LANGUAGES").unwrap_or_else(|_| "pt_BR,ru".into());
+    for language in languages.split(',') {
         ui.catalog = I18n::load(std::path::Path::new("/nonexistent"), Some(language), None);
         for (name, state) in pages() {
             ui.canvas.set_draw_color(color(theme.background));

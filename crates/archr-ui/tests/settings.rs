@@ -40,9 +40,9 @@ fn system_info_shortcut_and_gpu_reboot_confirmation() {
     s.open(Page::System);
     assert_eq!(s.handle(Button::R), Effect::Set(Id::Gpu, "panfrost".into()));
     s.complete(Id::Gpu, Ok("panfrost".into()));
-    assert!(s.reboot_prompt);
+    assert_eq!(s.reboot_prompt, Some("settings.reboot_question"));
     assert_eq!(s.handle(Button::B), Effect::None);
-    assert!(!s.reboot_prompt);
+    assert!(s.reboot_prompt.is_none());
 }
 
 #[test]

@@ -10,6 +10,8 @@ const VIEW_BOTTOM: f32 = 428.;
 const FOOTER: f32 = 432.;
 const ROW_GAP: f32 = 3.;
 const SECTION_HEIGHT: f32 = 21.;
+/// Usage bar and percentage under the games card row (Config-armazenamento).
+const CARD_METER: f32 = 34.;
 /// Right edge of full-width rows; pages with a side panel stop earlier.
 const RIGHT: f32 = 624.;
 #[derive(Clone, Copy)]
@@ -42,6 +44,7 @@ fn placements(page: Page, rows: &[Row]) -> Vec<Placement> {
             let height = match page {
                 Page::Netplay => 34.,
                 Page::Services => 38.,
+                Page::Storage => 40.,
                 _ if row.subtitle.is_some() => 46.,
                 _ => 40.,
             };
@@ -51,6 +54,9 @@ fn placements(page: Page, rows: &[Row]) -> Vec<Placement> {
                 section: row.section,
             };
             top += height + ROW_GAP;
+            if row.id == Id::StorageCard {
+                top += CARD_METER;
+            }
             place
         })
         .collect()
@@ -410,6 +416,23 @@ impl View<'_, '_, '_> {
                 self.rows_at(state, &rows, &placements(Page::Scraper, &rows), 384.)?;
                 self.scraper_panel(state)?;
             }
+            Page::Storage => {
+                let positions = placements(Page::Storage, &rows);
+                self.list(
+                    state,
+                    &positions,
+                    RIGHT,
+                    |view, n, y, position, selected| {
+                        view.row(state, &rows[n], (y, position.height), RIGHT, selected)?;
+                        match (rows[n].id, &state.storage.card) {
+                            (Id::StorageCard, Some(card)) => {
+                                view.card_meter(card.percent, y + position.height)
+                            }
+                            _ => Ok(()),
+                        }
+                    },
+                )?
+            }
             page => self.rows_at(state, &rows, &placements(page, &rows), RIGHT)?,
         }
         let error = state.error.as_ref().filter(|(id, _)| {
@@ -490,42 +513,53 @@ impl View<'_, '_, '_> {
         if let Some(status) = status {
             self.note((24., footer, (left - 36.).max(60.), 48.), &status, 13.)?;
         }
-        let dialog = if state.reboot_prompt {
-            Some((self.tr("settings.reboot_question"), true))
-        } else if let Some(ssid) = &state.confirm_forget {
-            Some((
-                self.ui
-                    .catalog
-                    .format("settings.forget_question", &[("name", ssid)]),
-                true,
-            ))
-        } else {
-            state.connecting.as_ref().map(|ssid| {
-                (
+        use crate::HintButton::Key;
+        type Hints = &'static [(crate::HintButton, &'static str)];
+        // Question, explanation, and the answers (none while the host works).
+        let dialog: Option<(String, Option<String>, Option<Hints>)> =
+            if let Some(key) = state.reboot_prompt {
+                Some((
+                    self.tr(key),
+                    None,
+                    Some(&[(Key('A'), "menu.reboot"), (Key('B'), "settings.later")]),
+                ))
+            } else if let Some(ssid) = &state.confirm_forget {
+                Some((
                     self.ui
                         .catalog
-                        .format("settings.connecting", &[("name", ssid)]),
-                    false,
-                )
-            })
-        };
-        if let Some((question, choice)) = dialog {
+                        .format("settings.forget_question", &[("name", ssid)]),
+                    None,
+                    Some(&[(Key('A'), "settings.forget"), (Key('B'), "hint.cancel")]),
+                ))
+            } else if let Some(confirm) = &state.storage.confirm {
+                let (question, detail, hints) = confirm.dialog();
+                Some((self.tr(question), Some(self.tr(detail)), Some(hints)))
+            } else if let Some(key) = state.storage.working {
+                Some((self.tr(key), Some(self.tr("settings.wait_storage")), None))
+            } else {
+                state.connecting.as_ref().map(|ssid| {
+                    (
+                        self.ui
+                            .catalog
+                            .format("settings.connecting", &[("name", ssid)]),
+                        Some(self.tr("settings.wait")),
+                        None,
+                    )
+                })
+            };
+        if let Some((question, detail, hints)) = dialog {
             self.ui.scrim(self.theme, 1.)?;
+            if let (Some(detail), Some(hints)) = (&detail, hints) {
+                return self.question(&question, detail, hints);
+            }
             self.panel((80., 158., 480., 164.), false)?;
             self.label((104., 174., 432., 80.), &question, 18.)?;
-            if !choice {
-                self.note((104., 262., 432., 40.), &self.tr("settings.wait"), 14.)?;
-            } else if state.reboot_prompt {
+            if let Some(detail) = detail {
+                self.note((104., 262., 432., 40.), &detail, 14.)?;
+            }
+            if let Some(hints) = hints {
                 self.ui.hints(
-                    &[('A', "menu.reboot"), ('B', "settings.later")],
-                    self.theme,
-                    self.ui.px(550.) as u32,
-                    self.ui.px(264.),
-                    self.ui.px(34.) as u32,
-                )?;
-            } else {
-                self.ui.hints(
-                    &[('A', "settings.forget"), ('B', "hint.cancel")],
+                    hints,
                     self.theme,
                     self.ui.px(550.) as u32,
                     self.ui.px(264.),
@@ -534,6 +568,35 @@ impl View<'_, '_, '_> {
             }
         }
         Ok(())
+    }
+    /// A question, its explanation and the answers, in a panel sized to the
+    /// wrapped text and centered above the footer.
+    fn question(
+        &mut self,
+        question: &str,
+        detail: &str,
+        hints: &[(crate::HintButton, &str)],
+    ) -> Result<(), String> {
+        let height = |view: &mut Self, text: &str, size: f32, most: f32| {
+            view.fit((104., 0., 432., most), text, size, Face::Regular)
+                .map(|(lines, size)| lines.len() as f32 * (size + 3.))
+        };
+        let title = height(self, question, 18., 63.)?;
+        let body = height(self, detail, 14., 136.)?;
+        let total = 20. + title + 8. + body + 18. + 34. + 16.;
+        let top = ((432. - total) / 2.).round();
+        self.panel((80., top, 480., total), false)?;
+        self.label((104., top + 20., 432., title), question, 18.)?;
+        self.note((104., top + 28. + title, 432., body), detail, 14.)?;
+        self.ui
+            .hints(
+                hints,
+                self.theme,
+                self.ui.px(550.) as u32,
+                self.ui.px(top + total - 50.),
+                self.ui.px(34.) as u32,
+            )
+            .map(|_| ())
     }
     /// Shared scrolling list: sections, clipping and the eased offset.
     fn list(
@@ -613,7 +676,7 @@ impl View<'_, '_, '_> {
             self.ink(selected)
         };
         let face = selection(selected, Face::Regular, Face::Semibold);
-        let label = self.tr(row.label);
+        let label = self.tr(&state.label(row));
         let subtitle = state.subtitle(row).map(|text| self.tr(&text));
         let full = (right - 46.) * 0.48;
         let expand = subtitle.is_none()
@@ -663,6 +726,21 @@ impl View<'_, '_, '_> {
         } else {
             self.control(row.id, row.kind, state, selected, control)
         }
+    }
+    /// Thin usage bar and "35% in use" below the games card row.
+    fn card_meter(&mut self, percent: u8, top: f32) -> Result<(), String> {
+        let (x, width) = (30., RIGHT - 44.);
+        self.capsule((x, top + 5., width, 6.), self.theme.border)?;
+        if percent > 0 {
+            let fill = (width * f32::from(percent.min(100)) / 100.).max(6.);
+            self.capsule((x, top + 5., fill, 6.), self.theme.highlight_bg)?;
+        }
+        self.text_face(
+            (x, top + 14., width, 16.),
+            &self.tr(&format!("settings.percent_used|count={percent}")),
+            (12., self.theme.muted, Align::Left),
+            Face::Mono,
+        )
     }
     fn capsule(&mut self, bounds: Bounds, ink: Rgba) -> Result<(), String> {
         let rect = self.rect(bounds);

@@ -91,6 +91,9 @@ impl Settings {
         if self.connecting.is_some() {
             return Some(Effect::None);
         }
+        if let Some(effect) = self.storage_input(button) {
+            return Some(effect);
+        }
         if let Some(ssid) = self.confirm_forget.clone() {
             self.confirm_forget = None;
             return Some(if button == Button::A {
@@ -120,6 +123,10 @@ impl Settings {
             self.fail(None, "settings.wpa_length".into());
             return Effect::None;
         }
+        if target == Id::RootPassword && !super::storage::root_password_valid(&value) {
+            self.fail(None, "settings.root_invalid".into());
+            return Effect::None;
+        }
         self.keyboard = None;
         self.keyboard_target = None;
         self.error = None;
@@ -144,6 +151,10 @@ impl Settings {
             Id::ScraperPassword => {
                 self.scrape.verifying = true;
                 Effect::Login(std::mem::take(&mut self.scrape.draft), value)
+            }
+            Id::RootPassword => {
+                self.root_password_typed(value);
+                Effect::None
             }
             id => {
                 self.pending = Some(id);
@@ -222,7 +233,7 @@ impl Settings {
                 };
                 self.open_keyboard(id, mode, self.value(id).to_owned());
             }
-            _ => return None,
+            id => return self.storage_activate(id),
         }
         Some(Effect::None)
     }

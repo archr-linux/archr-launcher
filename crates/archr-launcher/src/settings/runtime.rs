@@ -18,7 +18,7 @@ pub struct Runtime {
     /// Seconds shown in the Wi-Fi footer, redrawn as they change.
     scan_age: u64,
     job: Option<(archr_scraper::Job, Vec<String>)>,
-    /// Systems whose art changed, for the library to reload.
+    /// Systems whose art or games changed, for the library to reload.
     scraped: Option<Vec<String>>,
     closing: bool,
 }
@@ -49,6 +49,7 @@ impl Runtime {
             log::warn!("Settings worker failed: {error}");
             self.state.fail(self.state.pending, error);
             self.state.pending = None;
+            self.state.storage.working = None;
             self.state.loading = false;
         }
     }
@@ -65,6 +66,7 @@ impl Runtime {
     pub fn mutations_pending(&self) -> bool {
         self.state.pending.is_some()
             || self.state.connecting.is_some()
+            || self.state.storage.working.is_some()
             || !self.state.slides.is_empty()
     }
     pub fn close(&mut self) {
@@ -87,6 +89,7 @@ impl Runtime {
                     job.cancel();
                 }
             }
+            Effect::Storage(action) => self.send(Work::Storage(action)),
             Effect::Reboot => return Outcome::Action(SessionAction::Reboot),
             Effect::None => {}
         }
@@ -130,7 +133,7 @@ impl Runtime {
     }
     pub fn poll(&mut self) -> (bool, Option<String>) {
         let (mut dirty, language) = match self.worker.as_mut() {
-            Some(worker) => worker.poll(&mut self.state, &mut self.job),
+            Some(worker) => worker.poll(&mut self.state, &mut self.job, &mut self.scraped),
             None => (false, None),
         };
         dirty |= self.poll_scrape();

@@ -5,6 +5,7 @@ use std::time::Instant;
 pub(crate) mod information;
 pub mod network;
 mod pages;
+pub mod storage;
 pub use information::{InfoCard, InfoDetail, InfoMeter, Information};
 use network::Network;
 
@@ -22,6 +23,7 @@ pub enum Page {
     Netplay,
     Scraper,
     Keyboard,
+    Storage,
     Soon(&'static str),
 }
 impl Page {
@@ -38,6 +40,7 @@ impl Page {
             Self::Netplay => "settings.netplay",
             Self::Scraper => "settings.scraper",
             Self::Keyboard => "settings.keyboard",
+            Self::Storage => "settings.storage",
             Self::Soon(key) => key,
         }
     }
@@ -59,6 +62,7 @@ impl Page {
             Self::Games => pages::GAMES,
             Self::Netplay => pages::NETPLAY,
             Self::Scraper => pages::SCRAPER,
+            Self::Storage => storage::STORAGE,
             _ => &[],
         }
     }
@@ -107,6 +111,13 @@ pub enum Id {
     ScraperMedia,
     ScraperMissing,
     ScraperStart,
+    StorageCard,
+    Automount,
+    MergedStorage,
+    Backup,
+    Restore,
+    RootPassword,
+    FactoryReset,
 }
 impl Id {
     fn metadata(self) -> (&'static str, &'static str) {
@@ -146,6 +157,9 @@ impl Id {
             Self::ScraperSystems => ("launcher.scraper.systems", ""),
             Self::ScraperMedia => ("launcher.scraper.media", "box"),
             Self::ScraperMissing => ("launcher.scraper.only_missing", "1"),
+            // Read by the automount script at boot.
+            Self::Automount => ("system.automount", "1"),
+            Self::MergedStorage => ("system.merged.storage", "0"),
             Self::Update
             | Self::Hidden
             | Self::NetplayLink
@@ -153,7 +167,12 @@ impl Id {
             | Self::ScraperLink
             | Self::ScraperAccount
             | Self::ScraperPassword
-            | Self::ScraperStart => ("", ""),
+            | Self::ScraperStart
+            | Self::StorageCard
+            | Self::Backup
+            | Self::Restore
+            | Self::RootPassword
+            | Self::FactoryReset => ("", ""),
         }
     }
     pub fn key(self) -> &'static str {
@@ -177,7 +196,9 @@ impl Id {
             | Self::NetplayEnabled
             | Self::OnlyRelay
             | Self::MissingGames
-            | Self::ScraperMissing => &["0", "1"],
+            | Self::ScraperMissing
+            | Self::Automount
+            | Self::MergedStorage => &["0", "1"],
             Self::ClockFormat => &["24", "12"],
             Self::Player => &["1", "2", "3", "4"],
             Self::Channel => &["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"],
@@ -318,11 +339,7 @@ pub(crate) const CATEGORIES: &[(Page, &str, Glyph)] = &[
         Glyph::Trophy,
     ),
     (Page::System, "settings.system_detail", Glyph::Gear),
-    (
-        Page::Soon("settings.storage"),
-        "settings.storage_detail",
-        Glyph::Storage,
-    ),
+    (Page::Storage, "settings.storage_detail", Glyph::Storage),
 ];
 #[derive(Clone, PartialEq, Eq)]
 pub enum Effect {
@@ -336,6 +353,7 @@ pub enum Effect {
     Login(String, String),
     Scrape,
     CancelScrape,
+    Storage(storage::Action),
 }
 /// Passwords never reach a log through `{:?}`.
 impl std::fmt::Debug for Effect {
@@ -351,6 +369,7 @@ impl std::fmt::Debug for Effect {
             Self::Login(user, _) => write!(f, "Login({user:?}, <hidden>)"),
             Self::Scrape => write!(f, "Scrape"),
             Self::CancelScrape => write!(f, "CancelScrape"),
+            Self::Storage(action) => write!(f, "Storage({action:?})"),
         }
     }
 }
@@ -389,7 +408,8 @@ pub struct Settings {
     pub error: Option<(Option<Id>, String)>,
     /// Bumped by every `fail`, so a repeated identical message restarts its timer.
     pub error_seq: u64,
-    pub reboot_prompt: bool,
+    /// Locale key of the question asking to reboot now.
+    pub reboot_prompt: Option<&'static str>,
     pub info: Information,
     pub networks: Vec<Network>,
     pub scanned: Option<Instant>,
@@ -406,6 +426,7 @@ pub struct Settings {
     /// The single USB port hosts a device, so gadget mode is refused.
     pub usb_busy: bool,
     pub scrape: Scrape,
+    pub storage: storage::Storage,
     /// Sliders in flight: last confirmed value and the newest unsent one.
     pub slides: BTreeMap<Id, (String, Option<String>)>,
 }
@@ -424,7 +445,7 @@ impl Default for Settings {
             loading: true,
             error: None,
             error_seq: 0,
-            reboot_prompt: false,
+            reboot_prompt: None,
             info: Information::default(),
             networks: Vec::new(),
             scanned: None,
@@ -438,6 +459,7 @@ impl Default for Settings {
             access_ip: String::new(),
             usb_busy: false,
             scrape: Scrape::default(),
+            storage: storage::Storage::default(),
             slides: BTreeMap::new(),
         }
     }
@@ -466,7 +488,15 @@ impl Settings {
             (Id::ScraperAccount, _) => "settings.sign_in",
             (Id::ScraperStart, _) if self.scrape.running => "settings.cancel_scraping",
             (Id::ScraperStart, _) => return String::new(),
-            (Id::NetplayLink | Id::ScraperLink, _) => return "›".into(),
+            (
+                Id::NetplayLink | Id::ScraperLink | Id::Backup | Id::Restore | Id::FactoryReset,
+                _,
+            ) => return "›".into(),
+            (Id::StorageCard, _) if self.storage.card.as_ref().is_some_and(|c| c.external) => {
+                "settings.eject_link"
+            }
+            (Id::StorageCard, _) => return String::new(),
+            (Id::RootPassword, _) => "settings.change_link",
             (Id::KeyboardVariant, "") => "menu.default",
             (Id::ScraperSystems, "") => "settings.all",
             (Id::ClockFormat, "24") => "settings.clock_24",
@@ -506,8 +536,25 @@ impl Settings {
                 self.scrape.user, self.scrape.threads
             ),
             Id::ScraperAccount => self.scrape.user.clone(),
+            Id::StorageCard => self.storage.card.as_ref()?.detail.clone(),
+            Id::MergedStorage if !self.storage.merge_supported => {
+                "settings.merged_unsupported".into()
+            }
+            Id::Restore => self
+                .storage
+                .backup
+                .clone()
+                .unwrap_or_else(|| "settings.restore_none".into()),
+            Id::RootPassword if self.storage.custom_password => "settings.root_custom".into(),
             _ => row.subtitle?.into(),
         })
+    }
+    /// Row title text, or a catalog reference.
+    pub fn label(&self, row: &Row) -> String {
+        match (row.id, &self.storage.card) {
+            (Id::StorageCard, Some(card)) => card.name.clone(),
+            _ => row.label.into(),
+        }
     }
     pub fn visible_rows(&self) -> Vec<&'static Row> {
         self.page()
@@ -532,12 +579,18 @@ impl Settings {
     /// Rows with at most one choice show their value and accept no input
     /// (one audio sink: the jack switches speaker and headphones itself).
     pub fn fixed(&self, id: Id) -> bool {
-        id == Id::Audio && self.options.get(&id).is_none_or(|sinks| sinks.len() <= 1)
+        match id {
+            Id::Audio => self.options.get(&id).is_none_or(|sinks| sinks.len() <= 1),
+            Id::StorageCard => !self.storage.card.as_ref().is_some_and(|c| c.external),
+            _ => false,
+        }
     }
     /// Disabled rows are drawn muted and accept no input.
     pub fn disabled(&self, id: Id) -> bool {
         match id {
             Id::IndexNow => true,
+            Id::Restore => self.storage.backup.is_none(),
+            Id::MergedStorage => !self.storage.merge_supported,
             Id::ScraperSource
             | Id::ScraperAccount
             | Id::ScraperSystems
@@ -555,8 +608,11 @@ impl Settings {
     pub fn hints(&self) -> &'static [(HintButton, &'static str)] {
         use HintButton::{Key, Pair};
         const BACK: &[(HintButton, &str)] = &[(Key('B'), "hint.back")];
-        if self.connecting.is_some() {
+        if self.connecting.is_some() || self.storage.working.is_some() {
             return &[];
+        }
+        if let Some(confirm) = &self.storage.confirm {
+            return confirm.dialog().2;
         }
         if self.confirm_forget.is_some() {
             return &[(Key('A'), "settings.forget"), (Key('B'), "hint.cancel")];
@@ -578,13 +634,24 @@ impl Settings {
                     .as_ref()
                     .is_some_and(|k| k.mode == crate::keyboard::Mode::Secret) =>
             {
-                &[
-                    (Key('A'), "settings.type"),
-                    (Key('Y'), "settings.delete"),
-                    (Key('X'), "settings.show"),
-                    (HintButton::Start, "settings.connect"),
-                    (Key('B'), "hint.back"),
-                ]
+                // Network and account passwords connect; the root password is confirmed.
+                if self.keyboard_target == Some(Id::RootPassword) {
+                    &[
+                        (Key('A'), "settings.type"),
+                        (Key('Y'), "settings.delete"),
+                        (Key('X'), "settings.show"),
+                        (HintButton::Start, "hint.confirm"),
+                        (Key('B'), "hint.back"),
+                    ]
+                } else {
+                    &[
+                        (Key('A'), "settings.type"),
+                        (Key('Y'), "settings.delete"),
+                        (Key('X'), "settings.show"),
+                        (HintButton::Start, "settings.connect"),
+                        (Key('B'), "hint.back"),
+                    ]
+                }
             }
             Page::Keyboard => &[
                 (Key('A'), "settings.type"),
@@ -671,7 +738,11 @@ impl Settings {
             Ok(value) => {
                 self.values.insert(id, value);
                 self.error = None;
-                self.reboot_prompt = id == Id::Gpu;
+                self.reboot_prompt = match id {
+                    Id::Gpu => Some("settings.reboot_question"),
+                    Id::Automount | Id::MergedStorage => Some("settings.storage_reboot_question"),
+                    _ => None,
+                };
             }
             Err(error) => self.fail(Some(id), error),
         }
@@ -701,11 +772,11 @@ impl Settings {
         None
     }
     pub fn handle(&mut self, button: Button) -> Effect {
-        if self.reboot_prompt {
+        if self.reboot_prompt.is_some() {
             return match button {
                 Button::A => Effect::Reboot,
                 Button::B => {
-                    self.reboot_prompt = false;
+                    self.reboot_prompt = None;
                     Effect::None
                 }
                 _ => Effect::None,

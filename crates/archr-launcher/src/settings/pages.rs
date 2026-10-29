@@ -242,6 +242,8 @@ impl Backend {
                 | Id::ScraperSystems
                 | Id::ScraperMedia
                 | Id::ScraperMissing
+                | Id::Automount
+                | Id::MergedStorage
         ) {
             return None;
         }
