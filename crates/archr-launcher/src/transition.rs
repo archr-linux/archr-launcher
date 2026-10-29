@@ -1,5 +1,6 @@
 //! Shared event-loop terminal transition, including delayed core-write handoffs.
 use archr_launcher::{
+    audio::Audio,
     library::Library,
     state::{App, DataSource, Outcome, SessionAction},
 };
@@ -13,8 +14,10 @@ use std::{
 /// immediate feedback first, then flush Store and publish the durable handoff.
 /// A persistence/handoff failure cancels exit and restores the launcher/banner.
 /// `None` requests window-close (Store flush only, without supervisor handoff).
+#[allow(clippy::too_many_arguments)]
 pub fn apply(
     ui: &mut Ui<'_, '_>,
+    audio: &mut Audio,
     app: &App,
     library: &mut Library,
     theme: &Theme,
@@ -22,6 +25,10 @@ pub fn apply(
     controllers: &str,
     cover: Option<&sdl2::render::Texture<'_>>,
 ) -> Result<bool, String> {
+    // A game, tool or power request must find the sound output free.
+    if outcome.as_ref().is_none_or(is_terminal) {
+        audio.release();
+    }
     ui.transition = message(outcome.as_ref(), library, &ui.catalog);
     if ui.transition.is_some() {
         ui.draw(app, library, theme, cover)?; // draw includes present, before any flush
@@ -124,6 +131,16 @@ pub fn apply(
         }
     }
 }
+/// Outcomes that end this launcher session or hand the screen to another program.
+pub fn is_terminal(outcome: &Outcome) -> bool {
+    matches!(
+        outcome,
+        Outcome::Launch { .. }
+            | Outcome::Netplay(_)
+            | Outcome::MoonlightStream(_)
+            | Outcome::Action(_)
+    )
+}
 fn message(outcome: Option<&Outcome>, data: &dyn DataSource, catalog: &I18n) -> Option<String> {
     Some(match outcome {
         None => catalog.text("notice.closing"),
@@ -161,6 +178,7 @@ mod tests {
         ));
     }
     use archr_launcher::{paths::Paths, state::SessionAction};
+    use archr_ui::sounds::Sounds;
     use sdl2::{
         event::{Event, WindowEvent},
         keyboard::{Keycode, Mod},
@@ -175,7 +193,8 @@ mod tests {
         let app = App::new(10);
         let theme = Theme::builtin();
         let outcome = action.map(Outcome::Action);
-        apply(ui, &app, library, &theme, outcome, "", None).unwrap()
+        let mut audio = Audio::new(Sounds::default(), false, 0);
+        apply(ui, &mut audio, &app, library, &theme, outcome, "", None).unwrap()
     }
 
     fn key_down(key: Keycode) -> Event {
@@ -369,19 +388,33 @@ esac
             "poweroff\n"
         );
         assert_eq!(fs::read(paths.store.join("store.toml")).unwrap(), invalid);
-        assert!(apply(
-            &mut ui,
-            &App::new(10),
-            &mut readonly,
-            &theme,
-            Some(Outcome::Launch {
-                system: "nes".into(),
-                game: 0,
-            }),
-            "",
-            None,
-        )
-        .unwrap());
+        // Only a hand-off frees the sound output; other outcomes leave it be.
+        std::env::set_var("SDL_AUDIODRIVER", "dummy");
+        let shipped = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../themes/default");
+        let mut audio = Audio::new(Sounds::load(&shipped), true, 100);
+        assert!(audio.is_open());
+        let mut go = |audio: &mut Audio, outcome| {
+            apply(
+                &mut ui,
+                audio,
+                &App::new(10),
+                &mut readonly,
+                &theme,
+                Some(outcome),
+                "",
+                None,
+            )
+            .unwrap()
+        };
+        assert!(!go(&mut audio, Outcome::None));
+        assert!(audio.is_open());
+        let launch = Outcome::Launch {
+            system: "nes".into(),
+            game: 0,
+        };
+        assert!(go(&mut audio, launch));
+        assert!(!audio.is_open(), "the emulator needs the output");
+        assert!(sdl2::mixer::query_spec().is_err());
         let next = fs::read_to_string(paths.run.join("next")).unwrap();
         assert!(next.starts_with("game "));
         assert!(next.contains("A.nes' '-Pnes' '--core=a' '--emulator=retroarch'"));

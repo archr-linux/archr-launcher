@@ -5,6 +5,7 @@ static SDL_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 pub mod appearance;
 pub mod i18n;
+pub mod sounds;
 pub mod theme;
 
 pub use theme::{resolve_theme, theme_dir, Rect01, Rgba, SystemScreen, Theme};

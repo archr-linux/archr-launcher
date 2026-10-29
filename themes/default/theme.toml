@@ -46,3 +46,7 @@ details_title = { x = 0.45625, y = 0.104166667, w = 0.50625, h = 0.095833333 } #
 details_subtitle = { x = 0.45625, y = 0.216666667, w = 0.50625, h = 0.033333333 }
 details_text = { x = 0.45625, y = 0.266666667, w = 0.50625, h = 0.529166667 }
 details_actions = { x = 0.45625, y = 0.8125, w = 0.50625, h = 0.070833333 } # 34px
+
+# Sounds: the files in sounds/ named after each event play without any
+# declaration. A [sounds] table is only needed to rename or silence one
+# (move = "sounds/tick.wav", select = ""); see docs/temas.md.

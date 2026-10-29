@@ -4,6 +4,7 @@ mod transition;
 use archr_config::SystemCfg;
 use archr_launcher::{
     appearance,
+    audio::{self, Audio},
     library::Library,
     netplay,
     paths::Paths,
@@ -18,6 +19,8 @@ use archr_ui::{
     input::{button_event, Repeat},
     netplay::{Effect, Lobby},
     render::{prepare_first_frame, Art, Ui},
+    settings::Id,
+    sounds::{Event as Sound, Sounds},
     startup::StartupTrace,
     startup_phase,
 };
@@ -179,6 +182,14 @@ fn run(
         App::system_rows(&library).len()
     );
     library.start();
+    let (sounds_on, sounds_volume) = audio::saved(SystemCfg::load(&paths.config).ok().as_ref());
+    let mut audio = Audio::new(
+        theme_sounds(ui.theme_dir.as_deref()),
+        sounds_on,
+        sounds_volume,
+    );
+    audio.play(Sound::Boot);
+    let mut seen_errors = 0;
     let (width, height) = ui.canvas.output_size()?;
     let mut settings = archr_launcher::settings::Runtime::new(paths.clone());
     settings.state.base_theme = base;
@@ -241,6 +252,16 @@ fn run(
             ui.set_settings_clock_format(settings.state.value(archr_ui::settings::Id::ClockFormat));
         }
         dirty |= settings_dirty;
+        if !settings.state.loading {
+            audio.configure(
+                settings.state.value(Id::Sounds) == "1",
+                settings.state.value(Id::SoundsVolume).parse().unwrap_or(60),
+            );
+        }
+        if settings.state.error_seq != seen_errors {
+            seen_errors = settings.state.error_seq;
+            audio.play(Sound::Error);
+        }
         if settings.take_games_saved() {
             library.reload_config();
         }
@@ -253,6 +274,7 @@ fn run(
                 || settings.state.base_dir != ui.theme_dir;
             theme = next;
             ui.theme_dir = settings.state.base_dir.clone();
+            audio.set_sounds(theme_sounds(ui.theme_dir.as_deref()));
             ui.text_scale = look.text_scale();
             ui.animations = look.animations;
             if reload {
@@ -292,6 +314,11 @@ fn run(
         } else {
             None
         };
+        audio.focus(
+            browsing.then_some(selected_system.as_deref()).flatten(),
+            Instant::now(),
+        );
+        audio.poll();
         if library.poll() {
             if let Some(name) = selected_system {
                 if let Some(index) = app.rows(&library).iter().position(|system| *system == name) {
@@ -328,6 +355,11 @@ fn run(
         app.rescraping = rescrape.is_some();
         app.can_rescrape = archr_scraper::available() && !settings.state.scrape.running;
         if let Some(banner) = library.banner.take() {
+            audio.play(if banner.key.starts_with("error.") {
+                Sound::Error
+            } else {
+                Sound::Notice
+            });
             ui.banner = Some(banner.render(&ui.catalog));
             banner_until = Instant::now() + Duration::from_secs(8);
             dirty = true;
@@ -400,7 +432,8 @@ fn run(
         if let Some(event) = events.wait_event_timeout(if button.is_some() || ui.animating() {
             0
         } else {
-            repeat.wait_ms(Instant::now())
+            let now = Instant::now();
+            repeat.wait_ms(now).min(audio.wait_ms(now))
         }) {
             match event {
                 Event::Quit { .. } => close_requested = true,
@@ -443,7 +476,12 @@ fn run(
             repeat.clear();
         } else if let Some(button) = button.or_else(|| repeat.poll(Instant::now())) {
             ui.snap_animations();
-
+            audio.wake();
+            let before = (app.screen.clone(), app.cursor);
+            let mark = settings
+                .active
+                .then(|| audio::Mark::of(&settings.state, true));
+            let overlay = ui.lobby.is_some() || moonlight.active;
             let requested = if ui.lobby.is_some() {
                 lobby_input(&mut ui.lobby, &mut rooms, button)
             } else if moonlight.active {
@@ -453,6 +491,22 @@ fn run(
             } else {
                 app.handle(button, &library)
             };
+            let cue = if overlay {
+                audio::by_button(button)
+            } else if let Some(before) = &mark {
+                let after = audio::Mark::of(&settings.state, settings.active);
+                audio::settings(button, before, &after)
+            } else {
+                audio::browse(
+                    button,
+                    (&before.0, before.1),
+                    (&app.screen, app.cursor),
+                    &requested,
+                )
+            };
+            if let Some(cue) = cue {
+                audio.play(cue);
+            }
             let requested = if requested == Outcome::Settings {
                 // The Games page opens on the system being browsed.
                 let system = match &app.screen {
@@ -502,13 +556,7 @@ fn run(
                 }
                 outcome = Some(Outcome::None);
             } else {
-                let terminal = matches!(
-                    requested,
-                    Outcome::Launch { .. }
-                        | Outcome::Netplay(_)
-                        | Outcome::MoonlightStream(_)
-                        | Outcome::Action(_)
-                );
+                let terminal = transition::is_terminal(&requested);
                 if terminal
                     && (library.pending_writes > 0
                         || settings.mutations_pending()
@@ -536,8 +584,10 @@ fn run(
             if let Some(outcome) = &outcome {
                 arm_terminal_snapshot(&mut ui, &mut script, outcome)?;
             }
+            let banner = ui.banner.clone();
             if transition::apply(
                 &mut ui,
+                &mut audio,
                 &app,
                 &mut library,
                 &theme,
@@ -549,8 +599,18 @@ fn run(
             }
             dirty = true;
             banner_until = Instant::now() + Duration::from_secs(8);
+            // Back from a failed hand-off (or a suspend): the output returns.
+            audio.wake();
+            if ui.banner != banner {
+                audio.play(Sound::Error);
+            }
         }
     }
+}
+
+/// The sounds of the theme in `dir`; the builtin theme has none.
+fn theme_sounds(dir: Option<&std::path::Path>) -> Sounds {
+    dir.map(Sounds::load).unwrap_or_default()
 }
 /// Lobby input: closing and refreshing are local; a chosen room becomes a terminal outcome.
 fn lobby_input(
@@ -605,15 +665,10 @@ fn arm_terminal_snapshot(
     script: &mut Option<script::Script>,
     outcome: &Outcome,
 ) -> Result<(), String> {
-    if matches!(
-        outcome,
-        Outcome::Launch { .. }
-            | Outcome::Netplay(_)
-            | Outcome::MoonlightStream(_)
-            | Outcome::Action(_)
-    ) && script
-        .as_mut()
-        .is_some_and(script::Script::take_terminal_snapshot)
+    if transition::is_terminal(outcome)
+        && script
+            .as_mut()
+            .is_some_and(script::Script::take_terminal_snapshot)
     {
         ui.screenshot = Some(
             std::env::var_os("ARCHR_LAUNCHER_SCREENSHOT")
