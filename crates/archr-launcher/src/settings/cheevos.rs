@@ -8,7 +8,7 @@
 //! clears the token and the web API key.
 use super::*;
 use archr_cheevos::{Account, Client, Error, Summary};
-use archr_io::{publish_private, read_utf8, remove_durable, Symlinks::Follow};
+use archr_io::{publish_private, read_utf8, remove_durable, Symlinks::Reject};
 use archr_ui::settings::cheevos::Profile;
 
 pub const USER: &str = "global.retroachievements.username";
@@ -70,8 +70,9 @@ impl Backend {
             cfg.get_setting(TOKEN, None, None)?,
         ))
     }
+    /// A symbolic link in its place is not followed: the key is ours alone.
     fn web_key(&self) -> Option<String> {
-        read_utf8(&self.paths.store.join(WEB_KEY), 256, Follow)
+        read_utf8(&self.paths.store.join(WEB_KEY), 256, Reject)
             .ok()
             .map(|key| key.trim().to_owned())
             .filter(|key| !key.is_empty())
@@ -488,5 +489,9 @@ mod tests {
         assert_eq!(fs::read_to_string(&file).unwrap(), "a&z=b");
         assert_eq!(backend.save_key(&client(&online), ""), Ok(None));
         assert!(!file.exists());
+        let elsewhere = dir.path().join("elsewhere");
+        fs::write(&elsewhere, "planted").unwrap();
+        std::os::unix::fs::symlink(&elsewhere, &file).unwrap();
+        assert_eq!(backend.web_key(), None);
     }
 }
