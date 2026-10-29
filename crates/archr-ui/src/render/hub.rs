@@ -136,12 +136,9 @@ impl Ui<'_, '_> {
             self.rounded(
                 rect,
                 side as f32 / 2.,
-                if focus && enabled {
+                // Selected is always the most marked, offered or not.
+                if focus {
                     theme.highlight_bg
-                } else if focus {
-                    // Selected but not offered yet: still the most marked
-                    // button, a tint of the accent under a full accent ring.
-                    crate::appearance::mix(theme.surface, theme.highlight_bg, 0.35)
                 } else {
                     theme.surface
                 },
@@ -154,7 +151,11 @@ impl Ui<'_, '_> {
             let ink = if focus && enabled {
                 theme.highlight_text
             } else if focus {
-                theme.text
+                // Not offered yet: the accent's ink, faded.
+                Rgba {
+                    a: 110,
+                    ..theme.highlight_text
+                }
             } else if active {
                 theme.highlight_bg
             } else if enabled {

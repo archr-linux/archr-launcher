@@ -723,6 +723,25 @@ fn capture_views() {
                     .unwrap();
             }
             save(&mut ui, format!("{label}-{view}-details-{language}.png"));
+            // The Start menu: a tile, then each shortcut, selected.
+            let hub = |row, tile, shortcut| crate::state::Screen::StartHub {
+                row,
+                tile,
+                shortcut,
+            };
+            for (name, screen) in [("hub-tile", hub(0, 2, 0))]
+                .into_iter()
+                .chain((0..6).map(|n| ("hub-shortcut", hub(1, 0, n))))
+                .enumerate()
+                .map(|(n, (name, screen))| (format!("{name}{}", n.saturating_sub(1)), screen))
+            {
+                app.screen = screen;
+                for _ in 0..2 {
+                    ui.snap_animations();
+                    ui.draw(&app, &shelf, &theme, None).unwrap();
+                }
+                save(&mut ui, format!("{label}-{view}-{name}-{language}.png"));
+            }
             app.screen = browsing;
             // Appearance with this theme installed and active.
             let mut look = ready();
