@@ -70,6 +70,9 @@ pub struct Record {
     pub digest: String,
     /// The digest of the version before the last update, for a rollback.
     pub previous_digest: String,
+    /// A package that failed and was rolled back: automatic updates never
+    /// take it again.
+    pub bad_digest: String,
     /// When it last ran, and when the store last updated it on its own
     /// (seconds since 1970; 0 = never).
     pub used: u64,

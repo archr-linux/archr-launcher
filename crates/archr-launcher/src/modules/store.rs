@@ -474,6 +474,10 @@ impl Shop {
             if !(newer && offer.reviewed && offer.added.is_empty() && offer.blocked.is_none()) {
                 continue;
             }
+            // It failed here once and was rolled back.
+            if same_digest(&offer.digest, &record.bad_digest) {
+                continue;
+            }
             match self.install(&offer) {
                 Ok(installed) => done.push(installed),
                 Err(problem) => log::warn!("Automatic update of {id} failed: {problem}"),

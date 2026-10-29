@@ -725,7 +725,7 @@ impl Host {
         let record = registry::record(&mut self.state, &installed.id);
         record.source = installed.source;
         record.version = installed.version;
-        record.digest = installed.digest;
+        record.previous_digest = std::mem::replace(&mut record.digest, installed.digest);
         record.granted = installed.granted;
         record.consent = true;
         record.enabled = true;
@@ -1559,7 +1559,12 @@ impl Host {
             .manifest
             .map(|m| m.version)
             .unwrap_or_default();
-        registry::record(&mut self.state, id).version = version;
+        // The previous package is back, and the one that failed is never
+        // taken again on its own.
+        let record = registry::record(&mut self.state, id);
+        record.version = version;
+        record.bad_digest = std::mem::take(&mut record.digest);
+        record.digest = std::mem::take(&mut record.previous_digest);
         self.save_state();
         self.reload();
         true

@@ -446,6 +446,20 @@ fn automatic_updates_leave_switched_off_and_failed_modules_alone() {
 }
 
 #[test]
+fn a_rolled_back_package_is_never_taken_again_on_its_own() {
+    let newer = MANIFEST.replace("1.0.0", "1.1.0");
+    let root = tempfile::tempdir().unwrap();
+    installed_bateria(root.path());
+    let fake = release_1_1(&newer, true);
+    let tarball = Tarball::module(&newer).bytes();
+    let path = root.path().join("modules.toml");
+    let mut state = State::load(&path);
+    state.modules.get_mut("bateria").unwrap().bad_digest = format!("sha256:{}", sha(&tarball));
+    state.save(&path).unwrap();
+    assert!(shop(root.path(), &fake).auto().is_empty(), "no daily loop");
+}
+
+#[test]
 fn automatic_updates_take_only_reviewed_versions_that_ask_for_nothing_new() {
     let newer = MANIFEST.replace("1.0.0", "1.1.0");
     let asks = newer.replace(
