@@ -60,10 +60,41 @@ impl App {
         else {
             unreachable!()
         };
+        // Rows: 0 tiles, 2 module widgets (between, when there are any),
+        // 1 shortcuts.
+        let widgets = self.modules.widgets();
         match button {
             Button::Start | Button::B => self.screen = Screen::Systems,
-            Button::Up => row = 0,
-            Button::Down => row = 1,
+            Button::Up => {
+                row = if row == 1 && !widgets.is_empty() {
+                    2
+                } else {
+                    0
+                }
+            }
+            Button::Down => {
+                row = if row == 0 && !widgets.is_empty() {
+                    2
+                } else {
+                    1
+                }
+            }
+            Button::L | Button::R if row == 2 => {
+                let last = widgets.len().saturating_sub(1);
+                self.hub_widget = if button == Button::R {
+                    (self.hub_widget + 1).min(last)
+                } else {
+                    self.hub_widget.saturating_sub(1)
+                };
+            }
+            Button::A if row == 2 => {
+                let Some((module, entry)) =
+                    widgets.get(self.hub_widget.min(widgets.len().saturating_sub(1)))
+                else {
+                    return Outcome::None;
+                };
+                return self.module_target(*module, &entry.target);
+            }
             Button::L | Button::R => {
                 let forward = button == Button::R;
                 if row == 0 {

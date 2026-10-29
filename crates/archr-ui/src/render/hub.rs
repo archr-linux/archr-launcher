@@ -62,6 +62,25 @@ impl Ui<'_, '_> {
             Align::Center,
         )?;
 
+        // With module widgets the tiles shrink above their band
+        // (`start_widgets`) and the shortcuts go under it.
+        let widgets = app.modules.widgets();
+        let band = theme.start_widgets;
+        let (tile_top, tile_h, tile_w, gap, row_y) = if widgets.is_empty() {
+            (104., 148., 148., 22., 278.)
+        } else {
+            let top = 90.;
+            let h = (band.y * 480. - 16. - top).clamp(72., 148.);
+            (
+                top,
+                h,
+                (h + 24.).min(148.),
+                18.,
+                (band.y + band.h) * 480. + 18.,
+            )
+        };
+        let f = tile_h / 148.;
+        let step_x = tile_w + gap;
         let modules = app.modules.tiles();
         let count = TILES.len() + modules.len();
         let labels: Vec<String> = (0..count)
@@ -76,23 +95,26 @@ impl Ui<'_, '_> {
         let minimum = self.frame.min;
         self.frame.min = (minimum - 2.).max(8.);
         let (label_face, label_size) =
-            self.tile_labels(&labels, (px(148.) - px(8.)).max(1) as u32)?;
+            self.tile_labels(&labels, (px(tile_w) - px(8.)).max(1) as u32)?;
         // More tiles than the screen holds: the row slides to keep the focus in.
-        let span = count as f32 * 170. - 22.;
+        let half = tile_w / 2.;
+        let span = count as f32 * step_x - gap;
         let first = if span <= 600. {
-            320. - span / 2. + 74.
+            320. - span / 2. + half
         } else {
-            (320. - tile as f32 * 170.).clamp(640. - 20. - 74. - (count - 1) as f32 * 170., 94.)
+            (320. - tile as f32 * step_x)
+                .clamp(640. - 20. - half - (count - 1) as f32 * step_x, 20. + half)
         };
         for index in 0..count {
             let (key, glyph) = TILES.get(index).copied().unwrap_or(("", Glyph::Puzzle));
             let module = index.checked_sub(TILES.len()).map(|n| modules[n]);
             let enabled = app.hub_tile_enabled(data, index);
             let focus = row == 0 && tile == index;
-            let side = px(if focus { 154. } else { 148. });
-            let x = px(first + index as f32 * 170.) - side / 2 + center - px(320.);
-            let y = px(104.) - (side - px(148.)) / 2;
-            let tile_rect = Rect::new(x, y, side as u32, side as u32);
+            let grow = if focus { 6. } else { 0. };
+            let (side, high) = (px(tile_w + grow), px(tile_h + grow));
+            let x = px(first + index as f32 * step_x) - side / 2 + center - px(320.);
+            let y = px(tile_top) - (high - px(tile_h)) / 2;
+            let tile_rect = Rect::new(x, y, side as u32, high as u32);
             if focus {
                 // Two translucent shells make an inexpensive, soft blue halo.
                 for (spread, alpha) in [(9., 14), (5., 25)] {
@@ -101,7 +123,7 @@ impl Ui<'_, '_> {
                             x - px(spread),
                             y - px(spread),
                             (side + px(spread * 2.)) as u32,
-                            (side + px(spread * 2.)) as u32,
+                            (high + px(spread * 2.)) as u32,
                         ),
                         px(18. + spread) as f32,
                         Rgba {
@@ -129,8 +151,13 @@ impl Ui<'_, '_> {
             } else {
                 theme.dim_text
             };
-            let size = px(48.);
-            let icon = Rect::new(x + (side - size) / 2, y + px(29.), size as u32, size as u32);
+            let size = px(48. * f);
+            let icon = Rect::new(
+                x + (side - size) / 2,
+                y + px(29. * f),
+                size as u32,
+                size as u32,
+            );
             let (label, value) = match module {
                 Some((n, entry)) => {
                     let id = &app.modules.modules[n].id;
@@ -152,7 +179,7 @@ impl Ui<'_, '_> {
                     (Face::Regular, 13., ink),
                     Rect::new(
                         x + px(5.),
-                        y + px(118.),
+                        y + px(118. * f),
                         (side - px(10.)) as u32,
                         px(20.) as u32,
                     ),
@@ -164,7 +191,7 @@ impl Ui<'_, '_> {
                     .value(&app.modules.modules[n].id, &format!("tile:{}", e.id))
                     .is_some()
             }) {
-                px(8.)
+                px(8. * f)
             } else {
                 0
             };
@@ -177,7 +204,7 @@ impl Ui<'_, '_> {
                 vec![label]
             };
             let step = (f32::from(self.frame.font_size(label_size)) * 1.2).round() as i32;
-            let top = y + px(114.) - raise - step * lines.len() as i32 / 2;
+            let top = y + px(114. * f) - raise - step * lines.len() as i32 / 2;
             for (n, line) in lines.iter().enumerate() {
                 self.label_aligned(
                     line,
@@ -190,6 +217,7 @@ impl Ui<'_, '_> {
         }
 
         self.frame.min = minimum;
+        self.hub_widgets(app, theme, row, &widgets)?;
         let side = px(46.);
         let gap = px(14.);
         // Module shortcuts sit between Wi-Fi and Suspend.
@@ -207,7 +235,7 @@ impl Ui<'_, '_> {
             let Some(fixed) = builtin(index) else {
                 let (_, entry) = extra[index - 3];
                 let x = start + index as i32 * (side + gap);
-                let rect = Rect::new(x, px(278.), side as u32, side as u32);
+                let rect = Rect::new(x, px(row_y), side as u32, side as u32);
                 let fill = if focus {
                     theme.highlight_bg
                 } else {
@@ -219,7 +247,7 @@ impl Ui<'_, '_> {
                 } else {
                     theme.text_secondary
                 };
-                let icon = Rect::new(x + px(11.), px(289.), px(24.) as u32, px(24.) as u32);
+                let icon = Rect::new(x + px(11.), px(row_y + 11.), px(24.) as u32, px(24.) as u32);
                 self.module_icon((entry.icon.as_deref(), ""), icon, ink)?;
                 continue;
             };
@@ -233,7 +261,7 @@ impl Ui<'_, '_> {
                 index
             };
             let x = start + at as i32 * (side + gap);
-            let rect = Rect::new(x, px(278.), side as u32, side as u32);
+            let rect = Rect::new(x, px(row_y), side as u32, side as u32);
             self.rounded(
                 rect,
                 side as f32 / 2.,
@@ -270,14 +298,14 @@ impl Ui<'_, '_> {
                 } else {
                     glyph
                 },
-                Rect::new(x + px(11.), px(289.), px(24.) as u32, px(24.) as u32),
+                Rect::new(x + px(11.), px(row_y + 11.), px(24.) as u32, px(24.) as u32),
                 ink,
             )?;
             // A system update is waiting: a dot on the update shortcut.
             if index == 1 && app.updates > 0 {
                 let dot = px(12.);
                 let ring = px(2.);
-                let (dx, dy) = (x + side - dot + px(1.), px(277.));
+                let (dx, dy) = (x + side - dot + px(1.), px(row_y - 1.));
                 self.rounded(
                     Rect::new(
                         dx - ring,
@@ -294,6 +322,23 @@ impl Ui<'_, '_> {
                     (dot / 2) as f32,
                     theme.highlight_bg,
                     None,
+                )?;
+            }
+        }
+        if row == 2 {
+            if let Some((_, entry)) =
+                widgets.get(app.hub_widget.min(widgets.len().saturating_sub(1)))
+            {
+                self.label_aligned(
+                    &entry.label,
+                    (Face::Regular, 14., theme.text_secondary),
+                    Rect::new(
+                        px(12.),
+                        px(row_y + 55.),
+                        width.saturating_sub(px(24.) as u32),
+                        px(22.) as u32,
+                    ),
+                    Align::Center,
                 )?;
             }
         }
@@ -334,7 +379,7 @@ impl Ui<'_, '_> {
                 (Face::Regular, 14., theme.text_secondary),
                 Rect::new(
                     px(12.),
-                    px(333.),
+                    px(row_y + 55.),
                     width.saturating_sub(px(24.) as u32),
                     px(22.) as u32,
                 ),
@@ -350,6 +395,113 @@ impl Ui<'_, '_> {
             footer_y,
             px(48.) as u32,
         )?;
+        Ok(())
+    }
+    /// Module widgets (Start-widget): side by side in `start_widgets`; the
+    /// module's icon and name, its value large with the detail beside it,
+    /// and a bar when it sent one.
+    fn hub_widgets(
+        &mut self,
+        app: &App,
+        theme: &Theme,
+        row: usize,
+        widgets: &[(usize, &crate::modules::Entry)],
+    ) -> Result<(), String> {
+        if widgets.is_empty() {
+            return Ok(());
+        }
+        let scale = self.frame.scale;
+        let px = |n: f32| (n * scale).round() as i32;
+        let (width, _) = self.canvas.output_size()?;
+        let offset = width as i32 / 2 - px(320.);
+        let band = theme.start_widgets;
+        let (bx, by, bw, bh) = (band.x * 640., band.y * 480., band.w * 640., band.h * 480.);
+        let gap = 16.;
+        let each = (bw - gap * (widgets.len() as f32 - 1.)) / widgets.len() as f32;
+        let focused = app.hub_widget.min(widgets.len() - 1);
+        // Text on the widget, not the background: no outline.
+        let outlining = std::mem::replace(&mut self.look.outlining, false);
+        for (n, (module, entry)) in widgets.iter().enumerate() {
+            let id = &app.modules.modules[*module].id;
+            let target = format!("widget:{}", entry.id);
+            let x = bx + n as f32 * (each + gap);
+            let rect = Rect::new(px(x) + offset, px(by), px(each) as u32, px(bh) as u32);
+            let focus = row == 2 && n == focused;
+            self.rounded(
+                rect,
+                px(16.) as f32,
+                theme.surface,
+                Some(if focus {
+                    theme.highlight_bg
+                } else {
+                    theme.border
+                }),
+            )?;
+            if focus {
+                // A second ring: the focus border is 2 px.
+                let inner = Rect::new(
+                    rect.x() + 1,
+                    rect.y() + 1,
+                    rect.width().saturating_sub(2),
+                    rect.height().saturating_sub(2),
+                );
+                self.rounded(
+                    inner,
+                    px(15.) as f32,
+                    theme.surface,
+                    Some(theme.highlight_bg),
+                )?;
+            }
+            let left = px(x + 18.) + offset;
+            let inner_w = px(each - 36.).max(1) as u32;
+            let icon = Rect::new(left, px(by + 14.), px(16.) as u32, px(16.) as u32);
+            self.module_icon((entry.icon.as_deref(), ""), icon, theme.muted)?;
+            self.label(
+                &entry.label,
+                (Face::Regular, 13., theme.muted),
+                Rect::new(
+                    left + px(24.),
+                    px(by + 12.),
+                    inner_w.saturating_sub(px(24.) as u32),
+                    px(20.) as u32,
+                ),
+            )?;
+            let value = app
+                .modules
+                .value(id, &target)
+                .unwrap_or_default()
+                .to_owned();
+            let detail = app
+                .modules
+                .detail(id, &target)
+                .unwrap_or_default()
+                .to_owned();
+            let value_w = self.measure(&value, Face::Mono, 30.)?;
+            self.label(
+                &value,
+                (Face::Mono, 30., theme.text),
+                Rect::new(left, px(by + 36.), value_w.min(inner_w) + 2, px(40.) as u32),
+            )?;
+            if !detail.is_empty() {
+                let at = left + value_w as i32 + px(12.);
+                let room = (left + inner_w as i32 - at).max(1) as u32;
+                self.label(
+                    &detail,
+                    (Face::Regular, 12., theme.text_secondary),
+                    Rect::new(at, px(by + 48.), room, px(20.) as u32),
+                )?;
+            }
+            if let Some(progress) = app.modules.progress(id, &target) {
+                let bar = Rect::new(left, px(by + bh - 26.), inner_w, px(6.) as u32);
+                self.rounded(bar, px(3.) as f32, theme.badge, None)?;
+                let filled = inner_w * u32::from(progress) / 100;
+                if filled > 0 {
+                    let fill = Rect::new(left, bar.y(), filled, bar.height());
+                    self.rounded(fill, px(3.) as f32, theme.success, None)?;
+                }
+            }
+        }
+        self.look.outlining = outlining;
         Ok(())
     }
     /// The face and size every tile label is drawn with: the theme's
