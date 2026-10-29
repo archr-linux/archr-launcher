@@ -238,10 +238,10 @@ fn run(
             .and_then(|cfg| cfg.get_setting(id.key(), None, None))
             .unwrap_or_else(|| id.default_value().into())
     };
-    settings
-        .state
-        .values
-        .insert(Id::UpdateNotify, saved(Id::UpdateNotify));
+    // Read before Settings first opens: the details screen needs them now.
+    for id in [Id::UpdateNotify, Id::PreviewVideo] {
+        settings.state.values.insert(id, saved(id));
+    }
     let mut update_check =
         (saved(Id::UpdateBoot) == "1").then(|| Instant::now() + UPDATE_CHECK_DELAY);
     // An update still running from before (the launcher restarted): its screen.
