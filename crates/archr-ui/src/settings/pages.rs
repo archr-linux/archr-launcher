@@ -28,6 +28,8 @@ pub const SERVICES: &[Row] = &[
     described(Id::Channel, "settings.channel", "settings.channel_detail"),
 ];
 pub const GAMES: &[Row] = &[
+    // The system decides every row below it, so it comes first.
+    row(Id::GameSystem, "settings.games_system", Kind::Value),
     row(Id::Emulator, "settings.emulator", Kind::Value).under(super::games::SYSTEM_SECTION),
     row(Id::Core, "settings.core", Kind::Value),
     row(Id::Ratio, "settings.ratio", Kind::Value),
@@ -40,8 +42,7 @@ pub const GAMES: &[Row] = &[
     .kind(Kind::Toggle),
     row(Id::StateSlot, "settings.state_slot", Kind::Value),
     row(Id::MangohudGame, "settings.mangohud", Kind::Value),
-    row(Id::GameSystem, "settings.other_system", Kind::Action).under("settings.other"),
-    row(Id::NetplayLink, "settings.netplay", Kind::Action),
+    row(Id::NetplayLink, "settings.netplay", Kind::Action).under("settings.other"),
     row(Id::ScraperLink, "settings.scraper", Kind::Action),
     row(Id::MangohudLink, "settings.mangohud_link", Kind::Action),
 ];

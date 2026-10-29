@@ -5,7 +5,7 @@ use crate::state::Button;
 use std::collections::BTreeMap;
 
 /// Heading key replaced by the shown system's name, when it has one.
-pub(crate) const SYSTEM_SECTION: &str = "settings.games_system";
+pub(crate) const SYSTEM_SECTION: &str = "settings.system_options";
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct GameCore {
@@ -163,7 +163,7 @@ impl Settings {
         self.labels
             .insert((Id::Emulator, "retroarch".into()), "RetroArch".into());
     }
-    /// L/R or A on "Choose another system" switches locally, never mid-write.
+    /// L/R or A on the System row switches locally, never mid-write.
     pub(super) fn games_input(&mut self, button: Button) -> Option<Effect> {
         let row = self.visible_rows().get(self.cursor)?.id;
         if row != Id::GameSystem || !matches!(button, Button::A | Button::L | Button::R) {
@@ -273,7 +273,7 @@ mod tests {
     #[test]
     fn option_rows_produce_writes_for_the_host() {
         let mut state = state();
-        state.cursor = 2;
+        state.cursor = ids(&state).iter().position(|id| *id == Id::Ratio).unwrap();
         assert_eq!(
             state.handle(Button::R),
             Effect::Set(Id::Ratio, "3/2".into())

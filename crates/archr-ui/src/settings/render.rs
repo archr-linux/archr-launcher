@@ -5,7 +5,6 @@ mod bluetooth;
 use crate::appearance::mix;
 use crate::motion::SWITCH;
 use crate::settings::{
-    games::SYSTEM_SECTION,
     pages::{MEDIA, MEDIA_SECTION},
     Id, Kind, Page, Row, Settings, CATEGORIES,
 };
@@ -684,11 +683,7 @@ impl View<'_, '_, '_> {
                     continue;
                 }
                 if let Some(section) = position.section {
-                    // The Games page names the system its rows configure.
-                    let name = state.games.fullname();
-                    let heading = if section == SYSTEM_SECTION && !name.is_empty() {
-                        name.to_owned()
-                    } else if section == MEDIA_SECTION {
+                    let heading = if section == MEDIA_SECTION {
                         let count = state.media_tokens().len();
                         self.tr(&format!("{section}|count={count}|total={}", MEDIA.len()))
                     } else {

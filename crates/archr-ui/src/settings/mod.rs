@@ -698,7 +698,7 @@ impl Settings {
             (Id::ScraperAccount, _) => "settings.sign_in",
             (Id::ScraperStart, _) if self.scrape.running => "settings.cancel_scraping",
             (Id::ScraperStart, _) => return String::new(),
-            (Id::GameSystem, _) => return format!("{} ›", self.games.fullname()),
+            (Id::GameSystem, _) => return self.games.fullname().to_owned(),
             (Id::Ratio, "core") => "settings.ratio_auto",
             (Id::Ratio, "squarepixel") => "settings.ratio_square",
             (Id::Ratio, "full") => "settings.ratio_full",
