@@ -38,6 +38,11 @@ pub enum Screen {
         system: String,
         game: usize,
     },
+    /// The game's RetroAchievements (`App::sheet`), by real system and index.
+    Achievements {
+        system: String,
+        game: usize,
+    },
 }
 
 /// Buttons of the details screen, left to right.
@@ -74,6 +79,11 @@ pub enum Outcome {
         system: String,
         game: usize,
     },
+    /// Fetch this game's achievements into `App::sheet`.
+    Achievements {
+        system: String,
+        game: usize,
+    },
     SetCore {
         system: String,
         game: usize,
@@ -88,6 +98,7 @@ pub enum Outcome {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum QuickItem {
     Details,
+    Achievements,
     Settings,
     Netplay,
     Core,
@@ -144,6 +155,12 @@ pub struct App {
     pub can_rescrape: bool,
     /// A single-game scrape is running.
     pub rescraping: bool,
+    /// RetroAchievements is on and signed in: the game menu offers it.
+    pub cheevos: bool,
+    /// The achievements screen's list, filled by the host.
+    pub sheet: crate::cheevos::Sheet,
+    /// Achievements per page, reported by the renderer (theme layout).
+    pub sheet_page: usize,
     history: Vec<(Screen, usize)>,
     moving: Option<order::Moving>,
     selected_core: Option<(String, String)>,
@@ -161,6 +178,9 @@ impl App {
             details_overflow: 0,
             can_rescrape: false,
             rescraping: false,
+            cheevos: false,
+            sheet: crate::cheevos::Sheet::default(),
+            sheet_page: 1,
             history: Vec::new(),
             moving: None,
             selected_core: None,
@@ -177,20 +197,28 @@ impl App {
         (&self.screen, self.cursor)
     }
 
-    pub fn quick_menu_items(&self, data: &dyn DataSource) -> &'static [QuickItem] {
+    pub fn quick_menu_items(&self, data: &dyn DataSource) -> Vec<QuickItem> {
         use QuickItem::*;
         let from_details = matches!(self.history.last(), Some((Screen::Details { .. }, _)));
         match &self.screen {
             Screen::QuickMenu {
                 game: Some((system, _)),
-            } => match (from_details, data.cores(system).len() > 1) {
-                (false, true) => &[Core, Details, Suspend, Reboot, Shutdown],
-                (false, false) => &[Details, Suspend, Reboot, Shutdown],
-                (true, true) => &[Core, Suspend, Reboot, Shutdown],
-                (true, false) => &[Suspend, Reboot, Shutdown],
-            },
+            } => {
+                let mut items = Vec::new();
+                if data.cores(system).len() > 1 {
+                    items.push(Core);
+                }
+                if !from_details {
+                    items.push(Details);
+                }
+                if self.cheevos {
+                    items.push(Achievements);
+                }
+                items.extend([Suspend, Reboot, Shutdown]);
+                items
+            }
             Screen::QuickMenu { game: None } => {
-                match (self.netplay, data.system_order().is_empty()) {
+                let items: &[QuickItem] = match (self.netplay, data.system_order().is_empty()) {
                     (false, true) => &[Settings, Move, Suspend, Reboot, Shutdown],
                     (false, false) => &[Settings, Move, RestoreOrder, Suspend, Reboot, Shutdown],
                     (true, true) => &[Settings, Netplay, Move, Suspend, Reboot, Shutdown],
@@ -203,9 +231,10 @@ impl App {
                         Reboot,
                         Shutdown,
                     ],
-                }
+                };
+                items.to_vec()
             }
-            _ => &[],
+            _ => Vec::new(),
         }
     }
     pub fn selected_core(&self) -> (&str, &str) {
@@ -234,8 +263,14 @@ impl App {
         if let Screen::Details { system, game } = self.screen.clone() {
             return self.handle_details(b, system, game, data);
         }
+        if matches!(self.screen, Screen::Achievements { .. }) {
+            self.handle_achievements(b);
+            return Outcome::None;
+        }
         let len = match &self.screen {
-            Screen::StartHub { .. } | Screen::Details { .. } => unreachable!(),
+            Screen::StartHub { .. } | Screen::Details { .. } | Screen::Achievements { .. } => {
+                unreachable!()
+            }
             Screen::Systems => Self::system_rows(data).len(),
             Screen::Games { system } => data.games(system).len(),
             Screen::QuickMenu { .. } => self.quick_menu_items(data).len(),
@@ -274,7 +309,9 @@ impl App {
                 Button::Y => self.enter(Screen::QuickMenu { game: None }),
                 _ => {}
             },
-            Screen::StartHub { .. } | Screen::Details { .. } => unreachable!(),
+            Screen::StartHub { .. } | Screen::Details { .. } | Screen::Achievements { .. } => {
+                unreachable!()
+            }
             Screen::Games { system } => match b {
                 Button::B => self.back(),
                 Button::A | Button::X | Button::Y => {
@@ -308,6 +345,17 @@ impl App {
                             self.enter(Screen::Details { system, game });
                             self.details_focus = 0;
                             self.details_scroll = 0;
+                        }
+                    }
+                    (Button::A, Some(QuickItem::Achievements)) => {
+                        self.back();
+                        if let Some((system, game)) = game {
+                            self.enter(Screen::Achievements {
+                                system: system.clone(),
+                                game,
+                            });
+                            self.sheet = crate::cheevos::Sheet::default();
+                            return Outcome::Achievements { system, game };
                         }
                     }
                     (Button::A, Some(QuickItem::Settings)) => {
@@ -401,6 +449,21 @@ impl App {
             _ => {}
         }
         Outcome::None
+    }
+
+    /// The list moves by one with ↑ ↓ and by a page with L R; B goes back.
+    fn handle_achievements(&mut self, b: Button) {
+        let last = self.sheet.items.len().saturating_sub(1);
+        let page = self.sheet_page.max(1);
+        self.cursor = match b {
+            Button::B => return self.back(),
+            Button::Up => self.cursor.saturating_sub(1),
+            Button::Down => self.cursor + 1,
+            Button::L => self.cursor.saturating_sub(page),
+            Button::R => self.cursor + page,
+            _ => self.cursor,
+        }
+        .min(last);
     }
 
     fn cycle_core(

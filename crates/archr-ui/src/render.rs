@@ -15,6 +15,7 @@ use crate::{
     HintButton,
 };
 pub use details::Art;
+mod cheevos;
 mod details;
 mod effects;
 pub(crate) use effects::Pop;
@@ -312,6 +313,8 @@ pub struct Ui<'font, 'texture> {
     details_wrap: details::Wrapped,
     /// Description lines below the details view, for the host's scroll limit.
     pub details_overflow: usize,
+    /// Achievements that fit one page of the list, for the host's paging.
+    pub achievements_page: usize,
     /// The active view and the theme it was resolved from.
     view: Option<(Theme, View)>,
     animating: bool,
@@ -411,6 +414,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             cover_fade: Tween::new(0., CROSSFADE),
             details_wrap: details::Wrapped::default(),
             details_overflow: 0,
+            achievements_page: 1,
             view: None,
             animating: false,
             text_scale: 1.,
@@ -689,7 +693,13 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                     key.map(|key| (key, self.area(picture.rect)))
                 });
             self.begin_page(games, picture, theme)?;
-            if let Screen::Details { system, game } = backdrop {
+            if let Screen::Achievements { system, game } = backdrop {
+                let name = data
+                    .games(system)
+                    .get(*game)
+                    .map_or("", |g| g.name.as_str());
+                self.achievements(app, name, theme, art)?;
+            } else if let Screen::Details { system, game } = backdrop {
                 let name = data
                     .games(system)
                     .get(*game)
@@ -1567,6 +1577,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             let c = selection(selected, theme.text, theme.highlight_text);
             let label = match item {
                 QuickItem::Details => "menu.details",
+                QuickItem::Achievements => "menu.achievements",
                 QuickItem::Settings => "settings.title",
                 QuickItem::Netplay => "netplay.menu",
                 QuickItem::Core => "menu.core",

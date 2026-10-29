@@ -19,3 +19,6 @@ crc32fast = "1"
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 tempfile = "3"
+
+[dev-dependencies]
+image = { version = "0.25", default-features = false, features = ["png"] }

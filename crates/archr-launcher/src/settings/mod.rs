@@ -1,6 +1,7 @@
 //! Serial settings worker. No process, config lock or sysfs access on SDL's thread.
 mod bluetooth;
 mod cheevos;
+pub use cheevos::{TOKEN as CHEEVOS_TOKEN, USER as CHEEVOS_USER};
 mod games;
 mod info;
 mod mangohud;

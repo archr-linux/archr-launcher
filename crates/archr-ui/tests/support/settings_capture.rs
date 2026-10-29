@@ -751,6 +751,61 @@ fn capture_achievements() {
         )
         .unwrap();
     };
+    // Badges as the lookup leaves them on disk: a few coloured squares.
+    let badge_dir = tempfile::tempdir().unwrap();
+    let badge = |n: u8, gray: bool| {
+        let path = badge_dir.path().join(format!("{n}.png"));
+        let rgb = if gray {
+            [90, 96, 104]
+        } else {
+            [40 + n * 30, 160, 255 - n * 25]
+        };
+        image::RgbaImage::from_fn(64, 64, |x, y| {
+            let edge = x < 6 || y < 6 || x > 57 || y > 57;
+            let c = if edge { rgb.map(|v| v / 2) } else { rgb };
+            image::Rgba([c[0], c[1], c[2], 255])
+        })
+        .save(&path)
+        .unwrap();
+        path
+    };
+    let item =
+        |title: &str, description: &str, points: u64, unlocked: bool, badge| crate::cheevos::Item {
+            title: title.into(),
+            description: description.into(),
+            points,
+            unlocked,
+            badge,
+        };
+    let sheet = crate::cheevos::Sheet {
+        fetch: crate::cheevos::Fetch::Fresh,
+        hardcore: true,
+        items: vec![
+            item("Começo de jornada", "Termine a primeira fase", 5, true, Some(badge(1, false))),
+            item("Caça às moedas", "Junte 100 moedas numa fase", 10, true, Some(badge(2, false))),
+            item("Mundo das estrelas", "Abra a Estrada Estelar", 25, false, Some(badge(3, true))),
+            item("Sem uma vida perdida", "Termine o mundo 1 sem morrer", 25, false, None),
+            item(
+                "Segredo do castelo",
+                "Ache a saída secreta do castelo de Bowser sem usar a capa nem o Yoshi em nenhum momento",
+                10,
+                false,
+                None,
+            ),
+            item("Все звёзды", "Соберите все звёзды в Мире звёзд", 50, false, None),
+            item("Último", "Página dois", 1, false, None),
+        ],
+    };
+    let mut badges =
+        crate::covers::CoverCache::new(&creator, badge_dir.path().join("thumbs"), 36, 36);
+    let wanted: Vec<_> = sheet.items.iter().filter_map(|i| i.badge.clone()).collect();
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while wanted.iter().any(|p| badges.peek(p).is_none()) && Instant::now() < deadline {
+        badges.request(&wanted);
+        badges.poll();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let shelf = Shelf::new();
     for language in ["pt_BR", "ru", "es", "en"] {
         ui.catalog = I18n::load(std::path::Path::new("/nonexistent"), Some(language), None);
         for (name, state) in cheevos_pages() {
@@ -762,5 +817,41 @@ fn capture_achievements() {
             ui.settings_page(&state, &theme).unwrap();
             save(&mut ui, format!("{name}-{language}.png"));
         }
+        // The game screen (RA-jogo) and the game menu that opens it.
+        let mut app = crate::state::App::new(ui.page_size(&theme));
+        app.cheevos = true;
+        app.screen = crate::state::Screen::Games {
+            system: "snes".into(),
+        };
+        app.cursor = 5;
+        app.handle(Button::Y, &shelf);
+        app.cursor = 1;
+        let art = crate::render::Art {
+            badges: Some(&badges),
+            ..Default::default()
+        };
+        let frame = |ui: &mut Ui, app: &crate::state::App, name: &str| {
+            for _ in 0..2 {
+                ui.snap_animations();
+                ui.draw_with_settings(app, &shelf, &theme, art, None)
+                    .unwrap();
+            }
+            save(ui, format!("{name}-{language}.png"));
+        };
+        frame(&mut ui, &app, "jogo-menu");
+        app.handle(Button::A, &shelf);
+        frame(&mut ui, &app, "jogo-carregando");
+        app.sheet = sheet.clone();
+        app.cursor = 1;
+        frame(&mut ui, &app, "jogo-conquistas");
+        app.sheet_page = ui.achievements_page;
+        app.handle(Button::R, &shelf);
+        app.sheet.fetch = crate::cheevos::Fetch::Saved;
+        frame(&mut ui, &app, "jogo-conquistas-pagina2");
+        app.sheet = crate::cheevos::Sheet {
+            fetch: crate::cheevos::Fetch::Failed("cheevos.unsupported"),
+            ..Default::default()
+        };
+        frame(&mut ui, &app, "jogo-sem-formato");
     }
 }

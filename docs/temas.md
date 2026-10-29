@@ -181,6 +181,32 @@ As cores vêm das chaves gerais (`surface`, `border`, `text_secondary`,
 cabem em `details_info` são omitidas; texto nunca é cortado com reticências:
 encolhe e quebra linha.
 
+## Conquistas do jogo
+
+A tela de conquistas (Y › Conquistas, na lista de jogos, com o
+RetroAchievements ligado e uma conta conectada) também segue retângulos do
+`theme.toml`, no topo do arquivo, com a mesma regra dos `details_*`: frações
+da tela, herança do tema padrão e volta ao padrão quando o valor é inválido.
+
+| chave | conteúdo |
+|---|---|
+| `achievements_progress` | "Progresso", contagem e pontos sobre a barra; o selo Hardcore fica na ponta direita |
+| `achievements_list` | lista das conquistas, linhas de 50 px (referência 480 px) com 2 px entre elas; L R vira a página |
+
+O padrão (maquete RA-jogo):
+
+```toml
+achievements_progress = { x = 0.025, y = 0.108333333, w = 0.94375, h = 0.0625 }
+achievements_list = { x = 0.025, y = 0.183333333, w = 0.94375, h = 0.7125 }
+```
+
+Cabem na página quantas linhas couberem na altura de `achievements_list`.
+As cores vêm das chaves gerais: `surface` e `accent` na linha selecionada,
+`accent` na barra e no selo, `border` no trilho da barra, `badge` no ícone
+de conquista bloqueada sem imagem, `muted` nas descrições e nos pontos.
+Conquistas bloqueadas aparecem esmaecidas. Títulos e descrições vêm do
+RetroAchievements: o título encolhe até 12 px e a descrição quebra em duas
+linhas menores antes de ser cortada.
 ## Animações
 
 Aparência › Animações (`launcher.animations`): **Ligadas** (`on`), **Reduzidas**

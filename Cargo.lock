@@ -61,6 +61,7 @@ dependencies = [
  "archr-scraper",
  "archr-ui",
  "crc32fast",
+ "image",
  "libc",
  "log",
  "sdl2",

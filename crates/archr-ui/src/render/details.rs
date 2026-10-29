@@ -9,6 +9,8 @@ pub struct Art<'a, 't> {
     pub cover: Option<&'a Texture<'t>>,
     pub shot: Option<&'a Texture<'t>>,
     pub logo: Option<&'a Texture<'t>>,
+    /// Achievement badges decoded so far, by file.
+    pub badges: Option<&'a crate::covers::CoverCache<'t>>,
 }
 
 /// Wrapped description lines, kept until the text, width or size changes.
@@ -35,7 +37,7 @@ fn fit(texture: &Texture<'_>, rect: Rect, left: bool) -> Rect {
 
 impl Ui<'_, '_> {
     /// Word wrap at measured boundaries; a word wider than the line breaks by character.
-    fn wrap(
+    pub(super) fn wrap(
         &mut self,
         text: &str,
         face: Face,
@@ -75,7 +77,7 @@ impl Ui<'_, '_> {
     }
 
     /// Largest size from `start` down to `min` at which `text` fits `width`.
-    fn shrink(
+    pub(super) fn shrink(
         &mut self,
         text: &str,
         face: Face,
@@ -100,10 +102,16 @@ impl Ui<'_, '_> {
         data: &dyn DataSource,
         theme: &Theme,
     ) -> Result<(), String> {
+        let trail = system_title(system, data, &self.catalog);
+        self.crumbs(&trail, game, theme)
+    }
+
+    /// "Trail /" in muted 13 px, then the current place in 15 px semibold.
+    pub(super) fn crumbs(&mut self, trail: &str, game: &str, theme: &Theme) -> Result<(), String> {
         let right = self.status_header(theme)?;
         let h = (theme.header_height * self.frame.height as f32).round() as u32;
         let pad = self.px(24.);
-        let trail = format!("{} /", system_title(system, data, &self.catalog));
+        let trail = format!("{trail} /");
         let tw = self
             .measure(&trail, Face::Regular, 13.)?
             .min((right - pad).max(1) as u32 / 2);

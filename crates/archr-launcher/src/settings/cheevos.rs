@@ -5,8 +5,8 @@ use super::*;
 use archr_cheevos::{Account, Client};
 use archr_ui::settings::cheevos::Profile;
 
-pub(crate) const USER: &str = "global.retroachievements.username";
-pub(crate) const TOKEN: &str = "global.retroachievements.token";
+pub const USER: &str = "global.retroachievements.username";
+pub const TOKEN: &str = "global.retroachievements.token";
 const PASSWORD: &str = "global.retroachievements.password";
 /// Where RetroArch looks for unlock sounds (retroarch patch 0011).
 const SOUNDS: [&str; 2] = [

@@ -5,6 +5,7 @@ use archr_config::SystemCfg;
 use archr_launcher::{
     appearance,
     audio::{self, Audio},
+    cheevos::Lookup,
     library::Library,
     netplay,
     paths::Paths,
@@ -90,82 +91,96 @@ fn run(
     startup_phase!(trace, "TTF_Init");
     let creator;
     #[allow(clippy::type_complexity)]
-    let (mut ui, (mut theme, (base, look), theme_path, catalog, mut library, prepared, netplay_on)) =
-        std::thread::scope(|scope| {
-            let (sized, size) = std::sync::mpsc::sync_channel(1);
-            let paths = &paths;
-            let ttf = &ttf;
-            let worker = scope.spawn(move || -> Result<_, String> {
-                let config = SystemCfg::load(&paths.config).ok();
-                startup_phase!(trace, "system.cfg read");
-                let language = config
+    let (
+        mut ui,
+        (
+            mut theme,
+            (base, look),
+            theme_path,
+            catalog,
+            mut library,
+            prepared,
+            (netplay_on, cheevos_on),
+        ),
+    ) = std::thread::scope(|scope| {
+        let (sized, size) = std::sync::mpsc::sync_channel(1);
+        let paths = &paths;
+        let ttf = &ttf;
+        let worker = scope.spawn(move || -> Result<_, String> {
+            let config = SystemCfg::load(&paths.config).ok();
+            startup_phase!(trace, "system.cfg read");
+            let language = config
+                .as_ref()
+                .and_then(|cfg| cfg.get_local("system", None, "language"));
+            let catalog = I18n::load(
+                &paths.at("/usr/share/archr-launcher/locales"),
+                language.as_deref(),
+                std::env::var("LANG").ok().as_deref(),
+            );
+            startup_phase!(trace, "locale selection");
+            let look = appearance::saved(config.as_ref());
+            let (base, theme_path) = appearance::load_theme(paths, &look.theme);
+            let theme = look.apply(&base);
+            startup_phase!(trace, "theme load");
+            // No per-system scans, controller enumeration or cover work yet.
+            let library = Library::initial_traced(paths.clone(), trace);
+            let size = size
+                .recv()
+                .map_err(|_| "Video initialization failed".to_owned())?;
+            let mut prepared = prepare_first_frame(
+                ttf,
+                &theme,
+                (
+                    paths.root.as_deref(),
+                    theme_path.as_deref(),
+                    &paths.at(archr_ui::DEFAULT_ICONS_DIR),
+                ),
+                &catalog,
+                &library,
+                size,
+                trace,
+            )?;
+            if let Some(banner) = &library.banner {
+                prepared.prepare_notice(&banner.render(&catalog), &theme, size)?;
+            }
+            startup_phase!(trace, "CPU assets ready");
+            let setting = |key: &str| {
+                config
                     .as_ref()
-                    .and_then(|cfg| cfg.get_local("system", None, "language"));
-                let catalog = I18n::load(
-                    &paths.at("/usr/share/archr-launcher/locales"),
-                    language.as_deref(),
-                    std::env::var("LANG").ok().as_deref(),
-                );
-                startup_phase!(trace, "locale selection");
-                let look = appearance::saved(config.as_ref());
-                let (base, theme_path) = appearance::load_theme(paths, &look.theme);
-                let theme = look.apply(&base);
-                startup_phase!(trace, "theme load");
-                // No per-system scans, controller enumeration or cover work yet.
-                let library = Library::initial_traced(paths.clone(), trace);
-                let size = size
-                    .recv()
-                    .map_err(|_| "Video initialization failed".to_owned())?;
-                let mut prepared = prepare_first_frame(
-                    ttf,
-                    &theme,
-                    (
-                        paths.root.as_deref(),
-                        theme_path.as_deref(),
-                        &paths.at(archr_ui::DEFAULT_ICONS_DIR),
-                    ),
-                    &catalog,
-                    &library,
-                    size,
-                    trace,
-                )?;
-                if let Some(banner) = &library.banner {
-                    prepared.prepare_notice(&banner.render(&catalog), &theme, size)?;
-                }
-                startup_phase!(trace, "CPU assets ready");
-                let netplay_on = config
-                    .as_ref()
-                    .and_then(|cfg| cfg.get_setting("netplay", None, None))
-                    .is_some_and(|value| value == "1");
-                Ok((
-                    theme,
-                    (base, look),
-                    theme_path,
-                    catalog,
-                    library,
-                    prepared,
-                    netplay_on,
-                ))
-            });
-            let sdl = sdl2::init()?;
-            let video = sdl.video()?;
-            startup_phase!(trace, "SDL_Init video");
-            let size = if windowed {
-                (640, 480)
-            } else {
-                let mode = video.desktop_display_mode(0)?;
-                (mode.w.max(1) as u32, mode.h.max(1) as u32)
+                    .and_then(|cfg| cfg.get_setting(key, None, None))
             };
-            // A stopped receiver is reported by join, preserving the worker error.
-            let _ = sized.send(size);
-            let ui = Ui::with_video(sdl, video, (640, 480), windowed, trace);
-            // Always join, including window/renderer errors, before TTF can quit.
-            let assets = worker
-                .join()
-                .map_err(|_| "Startup worker panicked".to_owned())?;
-            startup_phase!(trace, "worker join");
-            Ok::<_, String>((ui?, assets?))
-        })?;
+            let netplay_on = setting("netplay").is_some_and(|value| value == "1");
+            let cheevos_on = setting(Id::Cheevos.key()).is_some_and(|value| value == "1")
+                && setting(archr_launcher::settings::CHEEVOS_TOKEN).is_some();
+            Ok((
+                theme,
+                (base, look),
+                theme_path,
+                catalog,
+                library,
+                prepared,
+                (netplay_on, cheevos_on),
+            ))
+        });
+        let sdl = sdl2::init()?;
+        let video = sdl.video()?;
+        startup_phase!(trace, "SDL_Init video");
+        let size = if windowed {
+            (640, 480)
+        } else {
+            let mode = video.desktop_display_mode(0)?;
+            (mode.w.max(1) as u32, mode.h.max(1) as u32)
+        };
+        // A stopped receiver is reported by join, preserving the worker error.
+        let _ = sized.send(size);
+        let ui = Ui::with_video(sdl, video, (640, 480), windowed, trace);
+        // Always join, including window/renderer errors, before TTF can quit.
+        let assets = worker
+            .join()
+            .map_err(|_| "Startup worker panicked".to_owned())?;
+        startup_phase!(trace, "worker join");
+        Ok::<_, String>((ui?, assets?))
+    })?;
     creator = ui.canvas.texture_creator();
     ui.catalog = catalog;
     ui.theme_dir = theme_path;
@@ -175,6 +190,7 @@ fn run(
     ui.configure_prepared(&creator, prepared, paths.root.as_deref())?;
     let mut app = App::new(ui.page_size(&theme));
     app.netplay = netplay_on;
+    app.cheevos = cheevos_on;
     ui.banner = library.banner.take().map(|m| m.render(&ui.catalog));
     ui.draw(&app, &library, &theme, None)?;
     eprintln!(
@@ -214,6 +230,10 @@ fn run(
     let (logo_w, logo_h) = sized(theme.details_title);
     let mut shots = CoverCache::new(&creator, paths.cache.join("thumbs"), shot_w, shot_h);
     let mut logos = CoverCache::new(&creator, paths.cache.join("thumbs"), logo_w, logo_h);
+    // Achievement badges, at the list icon's size.
+    let side = (36. * height as f32 / 480.).round().max(1.) as u32;
+    let mut badges = CoverCache::new(&creator, paths.cache.join("thumbs"), side, side);
+    let mut cheevos: Option<Lookup> = None;
     let mut rescrape: Option<Rescrape> = None;
     // The ROM on the details screen, followed across re-reads of its system.
     let mut details_rom: Option<PathBuf> = None;
@@ -364,6 +384,18 @@ fn run(
             banner_until = Instant::now() + Duration::from_secs(8);
             dirty = true;
         }
+        if !matches!(app.screen, Screen::Achievements { .. }) {
+            cheevos = None;
+        }
+        if let Some(sheet) = cheevos.as_mut().and_then(Lookup::poll) {
+            app.sheet = sheet;
+            dirty = true;
+        }
+        // The game menu offers achievements once settings know the account.
+        if !settings.state.loading {
+            app.cheevos =
+                settings.state.value(Id::Cheevos) == "1" && !settings.state.cheevos.user.is_empty();
+        }
         app.rescraping = rescrape.is_some();
         app.can_rescrape = archr_scraper::available() && !settings.state.scrape.running;
         if let Some(banner) = library.banner.take() {
@@ -394,13 +426,15 @@ fn run(
         let (shot, logo) = details_art(&app, &library);
         shots.request(shot.as_slice());
         logos.request(logo.as_slice());
-        dirty |= covers.poll() | shots.poll() | logos.poll();
+        badges.request(&badge_paths(&app));
+        dirty |= covers.poll() | shots.poll() | logos.poll() | badges.poll();
         if dirty {
             ui.moonlight = moonlight.active.then(|| moonlight.state.clone());
             let art = Art {
                 cover: selected.as_ref().and_then(|path| covers.get(path)),
                 shot: shot.as_ref().and_then(|path| shots.get(path)),
                 logo: logo.as_ref().and_then(|path| logos.get(path)),
+                badges: Some(&badges),
             };
             ui.draw_with_settings(
                 &app,
@@ -410,6 +444,7 @@ fn run(
                 settings.active.then_some(&settings.state),
             )?;
             app.details_overflow = ui.details_overflow;
+            app.sheet_page = ui.achievements_page;
             dirty = false;
         }
         #[cfg(test)]
@@ -544,7 +579,13 @@ fn run(
             } else {
                 requested
             };
-            if let Outcome::Rescrape { system, game } = &requested {
+            if let Outcome::Achievements { system, game } = &requested {
+                cheevos = library
+                    .games(system)
+                    .get(*game)
+                    .map(|rom| Lookup::start(paths.clone(), system.clone(), rom.path.clone()));
+                outcome = Some(Outcome::None);
+            } else if let Outcome::Rescrape { system, game } = &requested {
                 if let Some(rom) = library
                     .games(system)
                     .get(*game)
@@ -646,6 +687,22 @@ fn details_art(app: &App, data: &dyn DataSource) -> (Option<PathBuf>, Option<Pat
     data.games(system).get(*game).map_or((None, None), |game| {
         (game.details.screenshot.clone(), game.details.logo.clone())
     })
+}
+
+/// Badges of the achievements on the page the list shows.
+fn badge_paths(app: &App) -> Vec<PathBuf> {
+    if !matches!(app.screen, Screen::Achievements { .. }) {
+        return Vec::new();
+    }
+    let page = app.sheet_page.max(1);
+    let first = app.cursor / page * page;
+    app.sheet
+        .items
+        .iter()
+        .skip(first)
+        .take(page)
+        .filter_map(|item| item.badge.clone())
+        .collect()
 }
 
 /// Pixel size of the games screen's cover in the active view.

@@ -78,6 +78,9 @@ pub struct Theme {
     pub details_subtitle: Rect01,
     pub details_text: Rect01,
     pub details_actions: Rect01,
+    /// Achievements screen: progress bar and counts, and the list.
+    pub achievements_progress: Rect01,
+    pub achievements_list: Rect01,
     /// Shown in Appearance; the folder name when the theme gives none.
     pub name: Names,
     /// Id of the view the screens are drawn with (an Appearance choice).
@@ -171,6 +174,8 @@ impl Theme {
             details_subtitle: token!(details_subtitle, rectangle),
             details_text: token!(details_text, rectangle),
             details_actions: token!(details_actions, rectangle),
+            achievements_progress: token!(achievements_progress, rectangle),
+            achievements_list: token!(achievements_list, rectangle),
             font: font("font"),
             font_semibold: font("font_semibold"),
             font_mono: font("font_mono"),
@@ -252,6 +257,8 @@ pub const KNOWN_KEYS: &[&str] = &[
     "details_subtitle",
     "details_text",
     "details_actions",
+    "achievements_progress",
+    "achievements_list",
 ];
 
 /// The inherited views, with this theme's tables laid over them.
