@@ -209,8 +209,12 @@ systemd 257). Também: `NoNewPrivileges`, sem capabilities, `ProtectSystem=stric
 `TemporaryFileSystem=/storage:ro` (toda a partição do usuário escondida),
 de volta só a pasta do módulo (de root, só leitura), `module-data/<id>`
 (gravável, é o `HOME`; 0700, do uid do módulo) e os arquivos de ajustes e de
-segredos (só leitura); `/run/dbus` inacessível (nenhum módulo fala com os
-serviços do sistema); com `net`, só sockets `AF_UNIX`, `AF_INET` e `AF_INET6`;
+segredos (só leitura); `/run/dbus` e os sockets do userdbd
+(`/run/systemd/userdb`) inacessíveis (nenhum módulo fala com os serviços do
+sistema); com `net`, só sockets `AF_UNIX`, `AF_INET` e `AF_INET6` e nada em
+`localhost` (`IPAddressDeny=localhost`), exceto o stub de DNS do
+systemd-resolved (`127.0.0.53`/`.54`) quando o `resolv.conf` aponta para ele;
+um `resolv.conf` com `127.0.0.1` ou `::1` deixa o módulo sem DNS;
 `MemoryMax`, `TasksMax=16`,
 `CPUWeight=20`, `Nice=10`. Para ver a saída de erro no aparelho:
 `journalctl -u 'archr-mod-<id>*'`.
@@ -263,8 +267,9 @@ leitura), `ARCHR_MODULE_SETTINGS` (JSON dos ajustes), `ARCHR_MODULE_SECRETS`
 | `shutdown` (só daemon) | `{}` | `{}`, e sair |
 | `launch.before` (só daemon, com `hooks = ["launch"]`) | `{game: {system, game_key, name}}` | `{"decision": "allow"}` ou `{"decision": "modify", "changes": {"governor": "<g>"}}` |
 
-`launch.before`: todas as respostas juntas têm **300 ms**; quem atrasa é
-ignorado naquela abertura e conta como falha. Não há `deny`: um módulo não
+`launch.before`: todas as respostas juntas têm **300 ms**; quem atrasa vale como
+`allow` naquela abertura (o jogo nunca espera); 3 atrasos seguidos contam uma
+falha. Não há `deny`: um módulo não
 impede o usuário de jogar. `changes.governor` só vale com
 `system = ["cpu-profile"]` e um dos quatro governadores; o launcher passa
 `--governor=<g>` ao `runemu.sh` só naquela execução, sem mudar o ajuste do
@@ -294,7 +299,7 @@ só para quem assinou em `[[hooks]]`:
 | `log` | notificação | `{level: "info" \| "error", message}` |
 | `settings.set` | pedido | `{key, value}`, só chaves declaradas no manifesto → `{}` |
 | `config.get` | pedido | `{key}`, só com `config_read` → `{value}` (`null` se ausente) |
-| `config.set` | pedido | `{key, value}`, só com `config_write` e valor aceito → `{}`; 1 por segundo (`-32003`) |
+| `config.set` | pedido | `{key, value}`, só com `config_write` e valor aceito → `{}`; valor igual ao atual não grava nem conta; 1 por segundo e 10 por hora (`-32003`) |
 | `game.launch` | pedido | `{system, game_key}`, só com `launch` → `{}` |
 
 `game.launch` só vale até **5 s depois de o usuário escolher uma ação do

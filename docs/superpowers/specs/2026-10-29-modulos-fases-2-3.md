@@ -50,10 +50,23 @@ do jogo.
 - Com `net = true`: `RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6` (antes
   ficava sem restrição: netlink e pacotes crus passavam).
 
-**[aguarda teste no aparelho]** `IPAddressDeny=localhost` para módulos com
-`net`: impede falar com serviços locais (porta de comandos do RetroArch, sshd).
-Só entra depois de confirmar onde fica o resolvedor de DNS do connman (se for
-`127.0.0.1`, quebra o DNS e precisa de `IPAddressAllow=` só para ele).
+**[feito]** Módulos com `net`: `IPAddressDeny=localhost` (127.0.0.0/8 e ::1:
+porta de comandos do RetroArch, sshd, Samba locais). DNS: o connman roda com
+`--nodnsproxy` e o `/etc/resolv.conf` acaba em `/run/connman/resolv.conf`, com
+os servidores do DHCP (não loopback), então o DNS segue funcionando. Se o
+`resolv.conf` apontar para o stub do systemd-resolved (`127.0.0.53`/`.54`, que
+só serve DNS), o launcher libera exatamente esse endereço
+(`IPAddressAllow=`). `IPAddressAllow` não filtra porta; por isso um servidor em
+`127.0.0.1` ou `::1` (que divide o endereço com outros serviços) **não** é
+liberado: o módulo fica sem DNS e o launcher registra no log. A alternativa
+completa para esse caso é o proxy de rede da fase 3 (o módulo fala só com um
+socket do launcher, que resolve nomes por ele).
+
+**[feito]** `InaccessiblePaths=-/run/systemd/userdb`: os sockets varlink do
+userdbd. O systemd 255 resolve `User=` antes de montar o namespace
+(`exec-invoke.c`: `get_fixed_user` antes de `apply_mount_namespace`), e o
+nss-systemd, sem os sockets, lê direto os registros em `/run/userdb`, onde fica
+o do módulo.
 
 ## 2. API 2
 
@@ -101,7 +114,9 @@ módulo não decide isso); volume e brilho (têm dono vivo — o caminho do OSD 
 voltam como ação de `system` na fase 3, não como chave).
 
 Execução: pedido `config.set {key, value}` (só daemon) → o launcher confere a
-permissão, o valor e a taxa (**1 por segundo por módulo**, senão `-32003`),
+permissão e o valor; se o valor é o atual, responde `{}` sem gravar nem
+contar; senão confere a taxa (**1 por segundo e 10 por hora por módulo**,
+senão `-32003`),
 grava com `SystemCfg::set_and_save` (trava + publicação atômica, o mesmo dono
 da chave que as páginas de Configurações usam), registra no log
 ("Module X set K to V") e avisa a biblioteca para reler o `system.cfg`. A
@@ -127,8 +142,10 @@ Resposta: `{"decision":"allow"}` ou
 - Só **daemons** prontos com `hooks = ["launch"]` recebem (um oneshot custa
   ~190 ms só para subir).
 - **300 ms no total** para todas as respostas, em paralelo. Quem passa do prazo
-  é ignorado naquela abertura e conta como falha (3 em 10 min desligam). O jogo
-  nunca espera mais que isso.
+  vale como `allow` naquela abertura, com aviso no log; **3 atrasos seguidos**
+  contam uma falha (e 3 falhas em 10 min desligam). O jogo nunca espera mais
+  que isso. Uma falha antiga (mais de 30 s) não impede o daemon de voltar
+  depois do jogo.
 - **Não existe `deny`**: um módulo não impede o usuário de jogar (golpe de
   "pague para liberar", travamento por bug).
 - `changes` só tem efeito com a capacidade de `system` correspondente; sem ela
@@ -156,8 +173,11 @@ Fase 2: só `cpu-profile`. Efeito: `launch.before` pode devolver
 `system.cfg`. A biblioteca confere de novo o valor e só acrescenta em jogos
 que abrem pelo `runemu.sh` (nunca em ferramentas ou ports).
 
-**Pendência na distribuição** (outro repositório, não mexido aqui): o
-`runemu.sh` hoje ignora `--governor=*` (cai no `--*) continue`). Falta:
+**Distribuição:** ramo `feat/runemu-governor` (worktree
+`distribution-wt/runemu-governor`), com teste
+`projects/ArchR/packages/archr/tests/runemu_governor_test.sh`. Até ele entrar,
+o `runemu.sh` ignora `--governor=*` (cai no `--*) continue`), o que é
+inofensivo. O patch:
 
 ```sh
 --governor=*) GOVERNOR_OVERRIDE="${ARG#*=}" ;;
@@ -257,11 +277,11 @@ tamanho dos arquivos do uid dele nessas pastas e desliga o módulo acima de
 | `game.started` | assinantes | — | 1 por jogo; o processo para em seguida (500 ms) |
 | `game.ended` | assinantes | — | 1 por volta |
 | `settings.changed` | o próprio daemon | — | 1 por mudança |
-| `launch.before` (pedido) | daemons com `hooks:launch` | 300 ms, todos juntos | 1 por jogo |
+| `launch.before` (pedido) | daemons com `hooks:launch` | 300 ms, todos juntos; atraso = allow, 3 seguidos = 1 falha | 1 por jogo |
 | `action.invoke` (pedido) | o módulo | 1 s daemon, 2 s oneshot | 1 por toque do usuário |
 | `ui.update` | — | — | a tela junta: 4 por segundo |
 | `ui.notify` | — | — | 1 a cada 10 s |
-| `config.set` (pedido do módulo) | — | — | 1 por segundo |
+| `config.set` (pedido do módulo) | — | — | 1 por segundo, 10 por hora; valor igual não conta |
 | `game.launch` (pedido do módulo) | — | — | 1 por ação do usuário, em 5 s |
 
 A fila para cada daemon tem 64 mensagens; cheia = o módulo parou de ler =
@@ -284,7 +304,10 @@ falha.
   no aparelho (`modules.toml`, `digest`) estiver na lista. Antes, bastava o
   repositório estar na lista e a versão ser igual (um autor podia publicar
   outro pacote com a mesma versão). A aba Instalados não mexe mais no selo
-  (ela só lê o disco). A comparação ignora maiúsculas e o prefixo `sha256:`.
+  (ela só lê o disco).
+- **Novo:** na lista da Loja, o cartão só tem selo se o pacote (`.tar.gz`) da
+  release **atual** tiver um digest da lista; um repositório revisado no
+  passado com release nova não revisada sai da aba Revisados. A comparação ignora maiúsculas e o prefixo `sha256:`.
 
 ### 4.2 Índice assinado [aguarda aprovação do dono]
 
@@ -380,9 +403,10 @@ tela de consentimento o usuário precisa ver tudo, então a coluna passa a rolar
 - Aprovação do dono: telas da seção 7; atualização automática; índice
   assinado (chave e dependência); ações de `system` da fase 3; proposta de
   mover os saves.
-- Distribuição: `--governor=` no `runemu.sh` (3.3).
-- Teste no aparelho: `write` com ACL (3.5); `IPAddressDeny=localhost` e o DNS
-  do connman (1); `InaccessiblePaths=-/run/dbus` sem efeito colateral.
+- Distribuição: merge de `feat/runemu-governor` (3.3).
+- Teste no aparelho: `write` com ACL (3.5); DNS de um módulo com `net` e
+  `IPAddressDeny=localhost`; `/run/dbus` e `/run/systemd/userdb` escondidos
+  sem efeito colateral.
 - A coluna de permissões da oferta corta com "+N" e precisa rolar (UI, com a
   maquete). Até lá, as sensíveis (âmbar) vêm primeiro na lista [feito], então um
   corte nunca esconde uma delas antes das outras.
