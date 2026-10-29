@@ -31,6 +31,8 @@ pub struct Library {
     requested: HashMap<String, bool>,
     config: Option<SystemCfg>,
     overrides: HashMap<(String, String), (String, String)>,
+    /// MangoHud chosen per game, until system.cfg is read back.
+    mangohud: HashMap<(String, String), String>,
     store: Store,
     store_writer: Option<StoreWriter>,
     worker: Option<Worker>,
@@ -98,6 +100,7 @@ impl Library {
             members: HashMap::new(),
             config: None,
             overrides: HashMap::new(),
+            mangohud: HashMap::new(),
             store,
             store_writer: None,
             worker: None,
@@ -247,14 +250,16 @@ impl Library {
                         self.config = config;
                     }
                 }
-                Update::CoreSaved(system, rom, result) => {
+                Update::GameSaved(system, rom, banner, result) => {
                     self.pending_writes = self.pending_writes.saturating_sub(1);
                     match result {
                         Ok(config) => self.config = config,
                         Err(error) => {
-                            self.overrides.remove(&(system, rom));
-                            log::warn!("Cannot save core: {error}");
-                            self.banner = Some(Message::new("error.core_save"));
+                            let key = (system, rom);
+                            self.overrides.remove(&key);
+                            self.mangohud.remove(&key);
+                            log::warn!("Cannot save the game's setting: {error}");
+                            self.banner = Some(Message::new(banner));
                             self.write_failed = true;
                         }
                     }
@@ -300,25 +305,24 @@ impl Library {
                 emulator,
                 core,
             } => {
-                let rom = self
-                    .games(&system)
-                    .get(game)
-                    .and_then(|game| game.path.file_name())
-                    .and_then(|name| name.to_str())
-                    .ok_or("error.rom_name")?
-                    .to_owned();
+                let rom = self.rom_name(&system, game)?;
                 self.overrides.insert(
                     (system.clone(), rom.clone()),
                     (emulator.clone(), core.clone()),
                 );
-                self.send(Work::Core {
-                    system,
-                    rom,
-                    emulator,
-                    core,
-                })?;
-                self.pending_writes += 1;
-                self.write_failed = false;
+                let entries = vec![("emulator", emulator), ("core", core)];
+                self.save_game(system, rom, entries, "error.core_save")?;
+            }
+            Outcome::SetMangohud {
+                system,
+                game,
+                value,
+            } => {
+                let rom = self.rom_name(&system, game)?;
+                self.mangohud
+                    .insert((system.clone(), rom.clone()), value.clone());
+                let entries = vec![(MANGOHUD, value)];
+                self.save_game(system, rom, entries, "error.mangohud_save")?;
             }
             Outcome::MoonlightStream(stream) => {
                 let command = crate::moonlight::stream_command(&self.paths, &stream)?;
@@ -457,6 +461,36 @@ impl Library {
         self.games.insert(name.to_owned(), games);
     }
 }
+impl Library {
+    fn rom_name(&self, system: &str, game: usize) -> Result<String, String> {
+        Ok(self
+            .games(system)
+            .get(game)
+            .and_then(|game| game.path.file_name())
+            .and_then(|name| name.to_str())
+            .ok_or("error.rom_name")?
+            .to_owned())
+    }
+    fn save_game(
+        &mut self,
+        system: String,
+        rom: String,
+        entries: Vec<(&'static str, String)>,
+        error: &'static str,
+    ) -> Result<(), String> {
+        self.send(Work::Game {
+            system,
+            rom,
+            entries,
+            error,
+        })?;
+        self.pending_writes += 1;
+        self.write_failed = false;
+        Ok(())
+    }
+}
+/// The key runemu.sh reads, per game first (`get_setting` with the ROM).
+const MANGOHUD: &str = "archr.mangohud.enabled";
 impl DataSource for Library {
     fn systems(&self) -> &[SystemEntry] {
         &self.overview.systems
@@ -526,5 +560,18 @@ impl DataSource for Library {
             get("emulator").or_else(|| default.map(|pair| pair.0.to_owned()))?,
             get("core").or_else(|| default.map(|pair| pair.1.to_owned()))?,
         ))
+    }
+    fn mangohud(&self, system: &str, game: usize) -> (String, String) {
+        let rom = self.rom_name(system, game).unwrap_or_default();
+        let config = self.config.as_ref();
+        let own = self
+            .mangohud
+            .get(&(system.to_owned(), rom.clone()))
+            .cloned()
+            .or_else(|| config.and_then(|cfg| cfg.get_game(system, &rom, MANGOHUD)))
+            .unwrap_or_default();
+        let on = config.and_then(|cfg| cfg.get_setting(MANGOHUD, Some(system), None));
+        let system = if on.as_deref() == Some("1") { "1" } else { "0" };
+        (own, system.to_owned())
     }
 }

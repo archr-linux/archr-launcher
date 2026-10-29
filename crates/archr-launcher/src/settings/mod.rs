@@ -6,6 +6,7 @@ mod controls;
 mod games;
 mod info;
 mod mangohud;
+pub use mangohud::supported as mangohud_supported;
 mod pages;
 mod raimport;
 pub(crate) use pages::{scrape_outcome, start_scrape};

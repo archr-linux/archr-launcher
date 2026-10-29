@@ -114,7 +114,7 @@ fn run(
             catalog,
             mut library,
             prepared,
-            (netplay_on, cheevos_on),
+            (netplay_on, cheevos_on, mangohud_on),
         ),
     ) = std::thread::scope(|scope| {
         let (sized, size) = std::sync::mpsc::sync_channel(1);
@@ -166,6 +166,7 @@ fn run(
             let netplay_on = setting("netplay").is_some_and(|value| value == "1");
             let cheevos_on = setting(Id::Cheevos.key()).is_some_and(|value| value == "1")
                 && setting(archr_launcher::settings::CHEEVOS_TOKEN).is_some();
+            let mangohud_on = archr_launcher::settings::mangohud_supported(paths);
             Ok((
                 theme,
                 (base, look),
@@ -173,7 +174,7 @@ fn run(
                 catalog,
                 library,
                 prepared,
-                (netplay_on, cheevos_on),
+                (netplay_on, cheevos_on, mangohud_on),
             ))
         });
         let sdl = sdl2::init()?;
@@ -207,6 +208,7 @@ fn run(
     app.set_view(&theme.view(&theme.active_view));
     app.netplay = netplay_on;
     app.cheevos = cheevos_on;
+    app.mangohud = mangohud_on;
     ui.banner = library.banner.take().map(|m| m.render(&ui.catalog));
     ui.draw(&app, &library, &theme, None)?;
     eprintln!(
@@ -501,6 +503,7 @@ fn run(
         if !settings.state.loading {
             app.cheevos =
                 settings.state.value(Id::Cheevos) == "1" && !settings.state.cheevos.user.is_empty();
+            app.mangohud = settings.state.mangohud_supported;
         }
         app.rescraping = rescrape.is_some();
         app.can_rescrape = archr_scraper::available() && !settings.state.scrape.running;

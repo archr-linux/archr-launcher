@@ -952,3 +952,37 @@ fn achievements_open_from_the_game_menu_only_when_signed_in_and_page_with_l_r() 
         .quick_menu_items(&data)
         .contains(&QuickItem::Achievements));
 }
+
+#[test]
+fn mangohud_row_steps_through_the_systems_choices_for_this_game() {
+    let data = FakeData::library();
+    let mut app = in_games("snes", 7);
+    app.handle(Button::Y, &data);
+    assert!(!app.quick_menu_items(&data).contains(&QuickItem::Mangohud));
+    app.handle(Button::B, &data);
+    app.mangohud = true;
+    app.handle(Button::Y, &data);
+    assert_eq!(
+        app.quick_menu_items(&data),
+        [QuickItem::Core, QuickItem::Details, QuickItem::Mangohud]
+    );
+    app.handle(Button::Down, &data);
+    app.handle(Button::Down, &data);
+    for (button, value) in [
+        (Button::R, "1"),
+        (Button::R, "0"),
+        (Button::R, ""),
+        (Button::L, "0"),
+    ] {
+        assert_eq!(
+            app.handle(button, &data),
+            Outcome::SetMangohud {
+                system: "snes".into(),
+                game: 7,
+                value: value.into()
+            }
+        );
+        assert_eq!(app.selected_mangohud().0, value);
+    }
+    assert_eq!(app.handle(Button::A, &data), Outcome::None);
+}

@@ -16,4 +16,10 @@ fn local_core_lookup_does_not_replace_es_default_with_global() {
         Some("nestopia".into())
     );
     assert_eq!(cfg.get("amiga", None, "core"), Some("unrelated".into()));
+    // The game's own entry only: no system or global fallback.
+    assert_eq!(
+        cfg.get_game("nes", "Game.nes", "core"),
+        Some("nestopia".into())
+    );
+    assert_eq!(cfg.get_game("nes", "Other.nes", "core"), None);
 }

@@ -94,6 +94,12 @@ pub enum Outcome {
         emulator: String,
         core: String,
     },
+    /// This game's MangoHud: "1", "0", or "" to follow the system.
+    SetMangohud {
+        system: String,
+        game: usize,
+        value: String,
+    },
     Action(SessionAction),
     /// Replaces the saved system order; empty restores the default order.
     SetOrder(Vec<String>),
@@ -108,6 +114,8 @@ pub enum QuickItem {
     Settings,
     Netplay,
     Core,
+    /// This game's MangoHud, over the system's choice.
+    Mangohud,
     Move,
     RestoreOrder,
     Suspend,
@@ -146,6 +154,11 @@ pub trait DataSource {
     }
     fn cores(&self, system: &str) -> Vec<(String, String)>;
     fn current_core(&self, system: &str, game: usize) -> Option<(String, String)>;
+    /// This game's own MangoHud value ("" when it follows the system), and
+    /// the system's, as a launch would resolve it without the game's.
+    fn mangohud(&self, _system: &str, _game: usize) -> (String, String) {
+        (String::new(), String::new())
+    }
     /// `system/relative/path.rom`, the key favorites and modules use.
     fn game_key(&self, _system: &str, _game: usize) -> Option<String> {
         None
@@ -206,6 +219,8 @@ pub struct App {
     pub rescraping: bool,
     /// RetroAchievements is on and signed in: the game menu offers it.
     pub cheevos: bool,
+    /// The device runs MangoHud: the game menu offers it per game.
+    pub mangohud: bool,
     /// The achievements screen's list, filled by the host.
     pub sheet: crate::cheevos::Sheet,
     /// Achievements per page, reported by the renderer (theme layout).
@@ -217,6 +232,8 @@ pub struct App {
     history: Vec<(Screen, usize)>,
     moving: Option<order::Moving>,
     selected_core: Option<(String, String)>,
+    /// The open game menu's MangoHud: the game's value, the system's.
+    selected_mangohud: (String, String),
 }
 
 impl App {
@@ -233,12 +250,14 @@ impl App {
             can_rescrape: false,
             rescraping: false,
             cheevos: false,
+            mangohud: false,
             sheet: crate::cheevos::Sheet::default(),
             sheet_page: 1,
             updates: 0,
             history: Vec::new(),
             moving: None,
             selected_core: None,
+            selected_mangohud: Default::default(),
             modules: std::sync::Arc::default(),
         }
     }
@@ -277,6 +296,9 @@ impl App {
         }
         if self.cheevos {
             items.push(Achievements);
+        }
+        if self.mangohud {
+            items.push(Mangohud);
         }
         items.extend(self.module_items(Context::Game, system));
         items
@@ -339,6 +361,10 @@ impl App {
         let items = self.modules.quick(context, &system);
         let (module, quick) = items.get(usize::from(n))?;
         Some((self.modules.modules[*module].id.clone(), *quick))
+    }
+    /// The game menu's MangoHud row: the game's value and the system's.
+    pub fn selected_mangohud(&self) -> (&str, &str) {
+        (&self.selected_mangohud.0, &self.selected_mangohud.1)
     }
     pub fn selected_core(&self) -> (&str, &str) {
         self.selected_core
@@ -438,6 +464,7 @@ impl App {
                                 return Outcome::None;
                             }
                             self.selected_core = data.current_core(&system, game);
+                            self.selected_mangohud = data.mangohud(&system, game);
                             self.enter(Screen::QuickMenu {
                                 game: Some((system, game)),
                             });
@@ -527,6 +554,11 @@ impl App {
                             return self.cycle_core(b, system, game, data);
                         }
                     }
+                    (Button::L | Button::R, Some(QuickItem::Mangohud)) => {
+                        if let Some((system, game)) = game {
+                            return self.cycle_mangohud(b, system, game);
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -574,6 +606,7 @@ impl App {
                     return Outcome::None;
                 }
                 self.selected_core = data.current_core(&system, game);
+                self.selected_mangohud = data.mangohud(&system, game);
                 self.enter(Screen::QuickMenu {
                     game: Some((system, game)),
                 });
@@ -635,6 +668,23 @@ impl App {
             game,
             emulator,
             core,
+        }
+    }
+
+    /// "" (as the system), on, off: the system's own choices.
+    fn cycle_mangohud(&mut self, b: Button, system: String, game: usize) -> Outcome {
+        let choices = crate::settings::Id::MangohudGame.choices();
+        let at = choices
+            .iter()
+            .position(|v| *v == self.selected_mangohud.0)
+            .unwrap_or(0);
+        let step = if b == Button::L { choices.len() - 1 } else { 1 };
+        let value = choices[(at + step) % choices.len()].to_owned();
+        self.selected_mangohud.0.clone_from(&value);
+        Outcome::SetMangohud {
+            system,
+            game,
+            value,
         }
     }
 

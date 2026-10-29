@@ -124,6 +124,41 @@ fn core_lock_is_waited_in_worker_not_in_ui_call() {
 }
 
 #[test]
+fn mangohud_per_game_is_saved_under_the_rom_and_removed_to_follow_the_system() {
+    let (_dir, paths) = fixture();
+    fs::write(
+        &paths.config,
+        "nes.archr.mangohud.enabled=1\narchr.mangohud.enabled=0\n",
+    )
+    .unwrap();
+    let mut library = ready(&paths, Some("nes"));
+    assert_eq!(library.mangohud("nes", 0), (String::new(), "1".into()));
+    for (value, line) in [
+        ("0", Some("nes[\"A.nes\"].archr.mangohud.enabled=0")),
+        ("", None),
+    ] {
+        library
+            .handle(
+                Outcome::SetMangohud {
+                    system: "nes".into(),
+                    game: 0,
+                    value: value.into(),
+                },
+                "",
+            )
+            .unwrap();
+        assert_eq!(library.mangohud("nes", 0).0, value);
+        wait(&mut library, |library| library.pending_writes == 0);
+        assert!(!library.write_failed);
+        let saved = fs::read_to_string(&paths.config).unwrap();
+        assert_eq!(saved.contains("nes[\"A.nes\"]"), line.is_some(), "{saved}");
+        if let Some(line) = line {
+            assert!(saved.contains(line), "{saved}");
+        }
+    }
+}
+
+#[test]
 fn launch_requires_final_store_flush_before_publishing_next() {
     let (_dir, paths) = fixture();
     let mut library = ready(&paths, Some("nes"));

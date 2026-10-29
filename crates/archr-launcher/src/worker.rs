@@ -24,11 +24,13 @@ pub enum Work {
         name: String,
         background: bool,
     },
-    Core {
+    /// This game's own keys (`system["rom"].key`); an empty value removes
+    /// one, so the system's applies again. `error` names the failure banner.
+    Game {
         system: String,
         rom: String,
-        emulator: String,
-        core: String,
+        entries: Vec<(&'static str, String)>,
+        error: &'static str,
     },
     /// Rescan a loaded system whose files changed (new scraped art).
     Reload(String),
@@ -45,7 +47,13 @@ pub enum Update {
     /// The second card came or went: new folders, loaded lists are stale.
     Systems(Vec<SystemDef>),
     Games(String, Vec<Game>),
-    CoreSaved(String, String, Result<Option<SystemCfg>, String>),
+    /// System, ROM, the banner for a failure, and the re-read config.
+    GameSaved(
+        String,
+        String,
+        &'static str,
+        Result<Option<SystemCfg>, String>,
+    ),
     Config(Option<SystemCfg>),
 }
 pub struct Worker {
@@ -198,16 +206,16 @@ pub fn start(paths: Paths, initial: Vec<SystemDef>) -> Worker {
                     }
                     Update::Games(name, games)
                 }
-                Work::Core {
+                Work::Game {
                     system,
                     rom,
-                    emulator,
-                    core,
+                    entries,
+                    error,
                 } => {
-                    let result = save_core(&paths, &system, &rom, &emulator, &core)
+                    let result = save_game(&paths, &system, &rom, &entries)
                         .map(|()| SystemCfg::load(&paths.config).ok())
                         .map_err(|error| error.to_string());
-                    Update::CoreSaved(system, rom, result)
+                    Update::GameSaved(system, rom, error, result)
                 }
             };
             if done.send(update).is_err() {
@@ -243,12 +251,11 @@ fn next_work(
     pending.remove(next).ok_or(RecvTimeoutError::Disconnected)
 }
 
-fn save_core(
+fn save_game(
     paths: &Paths,
     system: &str,
     rom: &str,
-    emulator: &str,
-    core: &str,
+    entries: &[(&str, String)],
 ) -> std::io::Result<()> {
     if let Some(parent) = paths.config.parent() {
         fs::create_dir_all(parent)?;
@@ -264,14 +271,22 @@ fn save_core(
         Err(error) if error.kind() != std::io::ErrorKind::AlreadyExists => return Err(error),
         _ => {}
     }
-    SystemCfg::set_many_and_save(
-        &paths.config,
-        &paths.lock,
-        &[
-            (&rom_key(system, rom, "emulator"), emulator),
-            (&rom_key(system, rom, "core"), core),
-        ],
-    )
+    let keys: Vec<(String, &str)> = entries
+        .iter()
+        .map(|(key, value)| (rom_key(system, rom, key), value.as_str()))
+        .collect();
+    for (key, _) in keys.iter().filter(|(_, value)| value.is_empty()) {
+        SystemCfg::remove_and_save(&paths.config, &paths.lock, key)?;
+    }
+    let set: Vec<(&str, &str)> = keys
+        .iter()
+        .filter(|(_, value)| !value.is_empty())
+        .map(|(key, value)| (key.as_str(), *value))
+        .collect();
+    if set.is_empty() {
+        return Ok(());
+    }
+    SystemCfg::set_many_and_save(&paths.config, &paths.lock, &set)
 }
 
 #[cfg(test)]

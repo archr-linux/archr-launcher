@@ -21,12 +21,17 @@ fn items_valid(value: &str) -> bool {
             .all(|(n, w)| !words[..n].contains(w))
 }
 
+/// The quirk found a GPU driver MangoHud runs on.
+pub fn supported(paths: &Paths) -> bool {
+    archr_io::read_utf8(&paths.at(SUPPORT), 64 * 1024, archr_io::Symlinks::Follow)
+        .unwrap_or_default()
+        .lines()
+        .any(|line| line.trim() == "DEVICE_MANGOHUD_SUPPORT=\"true\"")
+}
+
 impl Backend {
     pub(super) fn load_mangohud(&self, cfg: &SystemCfg, state: &mut Settings) {
-        state.mangohud_supported = self
-            .read(SUPPORT)
-            .lines()
-            .any(|line| line.trim() == "DEVICE_MANGOHUD_SUPPORT=\"true\"");
+        state.mangohud_supported = supported(&self.paths);
         for row in Page::Mangohud.rows() {
             if let Some(value) = cfg.get_setting(row.id.key(), None, None) {
                 let value = match row.id {
