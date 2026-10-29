@@ -103,14 +103,19 @@ fn retroarch_cfg_takes_only_allowed_keys() {
     for key in [
         "video_driver",
         "libretro_directory",
-        "video_threaded",
-        "video_fullscreen_x",
         "cheevos_password",
-        "input_player1_joypad_index",
-        "input_player1_a_btn",
         "menu_wallpaper",
     ] {
         assert_eq!(why(&plan, key), Some(BLOCKED), "{key}");
+    }
+    // Outside the allow-list: left out without a special rule.
+    for key in [
+        "video_threaded",
+        "video_fullscreen_x",
+        "input_player1_joypad_index",
+        "input_player1_a_btn",
+    ] {
+        assert_eq!(why(&plan, key), Some(UNKNOWN), "{key}");
     }
     assert_eq!(why(&plan, "audio_out_rate"), Some(UNKNOWN));
     // Button numbers belong to the other device's pad.

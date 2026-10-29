@@ -66,45 +66,16 @@ const NO_CORE: &str = "raimport.why_core";
 const NO_SHADER: &str = "raimport.why_shader";
 const FACTORY: &str = "raimport.why_factory";
 
-/// Never imported: where things live, which drivers run, the device's own
-/// video mode, accounts, and anything that runs a command.
+/// Never imported, whatever the file: where things live, which drivers run,
+/// accounts, and anything that runs a command or calls a server. Anything
+/// else outside the allow-list is left out anyway.
 fn blocked(key: &str) -> bool {
-    const EXACT: [&str; 12] = [
-        "video_threaded",
-        "video_refresh_rate",
-        "video_monitor_index",
-        "video_swap_interval",
-        "video_hard_sync",
-        "video_vsync",
-        "video_shader",
-        "video_filter",
-        "input_overlay",
-        "audio_device",
-        "audio_dsp_plugin",
-        "global_core_options",
-    ];
-    EXACT.contains(&key)
-        || ["_directory", "_dir", "_path", "_cmd", "_url"]
-            .iter()
-            .any(|end| key.ends_with(end))
-        || ["driver", "password", "token", "username"]
+    ["_dir", "_path", "_cmd", "_url"]
+        .iter()
+        .any(|end| key.ends_with(end))
+        || ["_directory", "driver", "password", "token", "username"]
             .iter()
             .any(|word| key.contains(word))
-        || [
-            "video_fullscreen",
-            "video_window",
-            "video_context",
-            "cheevos_",
-            "netplay_",
-            "ai_service",
-            "libretro_",
-            "core_updater",
-            "input_player",
-            "input_libretro_device",
-            "input_osk_overlay",
-        ]
-        .iter()
-        .any(|start| key.starts_with(start))
 }
 
 /// The retroarch.cfg keys worth carrying over (look, menu combos, overlay
@@ -267,15 +238,6 @@ impl Plan {
         item: &str,
         keep: impl Fn(&str) -> bool,
     ) -> Vec<(String, String)> {
-        self.filter_with(text, item, blocked, keep)
-    }
-    fn filter_with(
-        &mut self,
-        text: &str,
-        item: &str,
-        blocked: impl Fn(&str) -> bool,
-        keep: impl Fn(&str) -> bool,
-    ) -> Vec<(String, String)> {
         let mut kept = BTreeMap::new();
         let mut include = false;
         for line in text.lines() {
@@ -416,12 +378,9 @@ fn scan_remaps(plan: &mut Plan, roots: &Roots, cores: &BTreeSet<String>) {
                 continue;
             };
             // Remaps are player binds by nature; which pad is which stays.
-            let kept = plan.filter_with(
-                &text,
-                &item,
-                |key| key.contains("joypad_index"),
-                |key| key.starts_with("input_"),
-            );
+            let kept = plan.filter(&text, &item, |key| {
+                key.starts_with("input_") && !key.contains("joypad_index")
+            });
             if kept.is_empty() {
                 continue;
             }
