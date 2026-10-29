@@ -49,6 +49,7 @@ corners = 1.0
 border_width = 1
 shadow = "soft"
 art_scaling = "smooth"
+image_scaling = "smooth"
 easing = "smooth"
 # Text: sizes times font_scale (0.5-2), snapped to multiples of font_grid
 # reference pixels (0 = free), drawn without anti-aliasing when

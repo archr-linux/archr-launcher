@@ -45,7 +45,7 @@ impl<'t> Ui<'_, 't> {
             look.background.clone_from(&theme.background_image);
         }
         look.outline = theme.text_outline;
-        let key = (self.theme_dir.clone(), theme.pixel_art);
+        let key = (self.theme_dir.clone(), theme.pixel_images);
         let stale = look
             .images
             .as_ref()

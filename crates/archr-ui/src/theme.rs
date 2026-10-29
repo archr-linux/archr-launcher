@@ -141,6 +141,8 @@ pub struct Theme {
     pub border_width: f32,
     pub shadow: ShadowStyle,
     pub pixel_art: bool,
+    /// Theme pictures (background, frames, decorations) without smoothing.
+    pub pixel_images: bool,
     pub steps: bool,
     /// Text: every size times `font_scale`, then snapped to a multiple of
     /// `font_grid` reference pixels (0: free); `font_smoothing = false`
@@ -285,6 +287,7 @@ impl Theme {
             border_width: token!(border_width, border_width),
             shadow: token!(shadow, shadow),
             pixel_art: token!(pixel_art = "art_scaling", art_scaling),
+            pixel_images: token!(pixel_images = "image_scaling", art_scaling),
             steps: token!(steps = "easing", easing),
             font_scale: token!(font_scale, font_scale),
             font_grid: token!(font_grid, font_grid),
@@ -401,6 +404,7 @@ pub const KNOWN_KEYS: &[&str] = &[
     "border_width",
     "shadow",
     "art_scaling",
+    "image_scaling",
     "easing",
     "font_scale",
     "font_grid",

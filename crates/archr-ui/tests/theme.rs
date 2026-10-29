@@ -571,7 +571,12 @@ fn style_keys_inherit_and_reject_bad_values_one_by_one() {
         (builtin.corners, builtin.border_width, builtin.shadow),
         (1.0, 1.0, archr_ui::ShadowStyle::Soft)
     );
-    assert!(!builtin.pixel_art && !builtin.steps);
+    assert!(!builtin.pixel_art && !builtin.pixel_images && !builtin.steps);
+    let split = load("art_scaling = 'smooth'\nimage_scaling = 'pixel'");
+    assert!(
+        !split.pixel_art && split.pixel_images,
+        "console art and theme pictures apart"
+    );
     let pixel = load(
         "corners = 0\nborder_width = 3\nshadow = 'HARD'\nart_scaling = 'pixel'\neasing = 'steps'",
     );

@@ -140,6 +140,7 @@ pub(super) struct SystemArt<'a> {
     covers: CoverCache<'a>,
     dirs: Vec<PathBuf>,
     pixel: bool,
+    size: (u32, u32),
     wanted: Vec<Vec<PathBuf>>,
 }
 
@@ -156,6 +157,7 @@ impl<'a> SystemArt<'a> {
         Self {
             covers: CoverCache::scaled(creator, cache, size, pixel),
             pixel,
+            size,
             dirs,
             wanted: Vec::new(),
         }
@@ -223,15 +225,30 @@ impl Ui<'_, '_> {
         .flatten()
         .collect();
         dirs.dedup();
+        // Decoded at the largest box the active view shows them in, so a
+        // picture is only ever reduced on screen, never enlarged and blurred.
+        let mut size = (self.px(IMAGE_BOX.0) as u32, self.px(IMAGE_BOX.1) as u32);
+        if let Some((_, view)) = &self.view {
+            let systems = &view.systems;
+            let art = systems.art.map(|a| self.area(a.rect));
+            let tile = (systems.list.mark == crate::layout::Mark::Tile)
+                .then_some((systems.list.selected * self.frame.height as f32) as u32);
+            for (w, h) in art
+                .map(|r| (r.width(), r.height()))
+                .into_iter()
+                .chain(tile.map(|side| (side, side)))
+            {
+                size = (size.0.max(w), size.1.max(h));
+            }
+        }
         let pixel = self.pixel_art;
         if self
             .art
             .as_ref()
-            .is_some_and(|art| art.dirs == dirs && art.pixel == pixel)
+            .is_some_and(|art| art.dirs == dirs && art.pixel == pixel && art.size == size)
         {
             return;
         }
-        let size = (self.px(IMAGE_BOX.0) as u32, self.px(IMAGE_BOX.1) as u32);
         self.art = Some(SystemArt::new(
             creator,
             base.join("storage/.cache/archr-launcher/thumbs"),

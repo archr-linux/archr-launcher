@@ -122,7 +122,8 @@ volta ao padrão com aviso no log.
 | `corners` | 0 a 1 | `1.0` | multiplica todo raio de canto; `0` deixa tudo reto |
 | `border_width` | 1 a 8 | `1` | espessura das bordas, em px de referência (480 px de altura) |
 | `shadow` | `"soft"`, `"hard"`, `"none"` | `"soft"` | sombra dos painéis: esfumada, bloco preto deslocado 4 px, ou nenhuma (`"soft"` também põe a sombra de contato sob a imagem do console) |
-| `art_scaling` | `"smooth"`, `"pixel"` | `"smooth"` | `"pixel"` amplia as imagens de console em múltiplos inteiros e sem suavizar (pixel art nítida); capas de jogos não mudam |
+| `art_scaling` | `"smooth"`, `"pixel"` | `"smooth"` | imagens de console: `"smooth"` reduz com filtro (para ilustrações, com sombras e bordas suaves); `"pixel"` amplia em múltiplos inteiros sem suavizar (pixel art em grade). Capas de jogos não mudam |
+| `image_scaling` | `"smooth"`, `"pixel"` | `"smooth"` | o mesmo para as [imagens do tema](#imagens-do-tema): fundo, molduras e decorações |
 | `easing` | `"smooth"`, `"steps"` | `"smooth"` | `"steps"` troca a desaceleração por quatro saltos iguais, o primeiro na hora (movimento "8 bits") |
 
 ```toml
@@ -146,7 +147,7 @@ da thread de desenho: no primeiro quadro pode aparecer a caixa lisa.
 background_image = "images/fundo.png"   # cobre a tela inteira, cortado no centro
 ```
 
-Com `art_scaling = "pixel"` a imagem é ampliada sem suavizar (desenhe-a em
+Com `image_scaling = "pixel"` a imagem é ampliada sem suavizar (desenhe-a em
 320×240 para pixels 2×2).
 
 ### Molduras (9-slice)
