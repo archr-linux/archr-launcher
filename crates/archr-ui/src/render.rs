@@ -320,6 +320,8 @@ pub struct Ui<'font, 'texture> {
     animating: bool,
     /// Look-and-feel choices: text-size multiplier and how much things move.
     pub text_scale: f32,
+    /// The letter on the control of the A, B, X and Y actions, for hints.
+    pub face_letters: [char; 4],
     motion: Motion,
     effects: effects::Effects<'texture>,
     has_presented: bool,
@@ -419,6 +421,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             view: None,
             animating: false,
             text_scale: 1.,
+            face_letters: ['A', 'B', 'X', 'Y'],
             motion: Motion::On,
             effects: effects::Effects::default(),
             has_presented: false,
@@ -1361,9 +1364,15 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         let mut right = width as i32 - self.px(24.);
         for &(button, key) in hints.iter().rev() {
             let start = matches!(button.into(), HintButton::Start);
+            let letter = |key| {
+                ['A', 'B', 'X', 'Y']
+                    .iter()
+                    .position(|k| *k == key)
+                    .map_or(key, |n| self.face_letters[n])
+            };
             let buttons = match button.into() {
-                HintButton::Key(key) => [Some(key), None],
-                HintButton::Pair(left, right) => [Some(left), Some(right)],
+                HintButton::Key(key) => [Some(letter(key)), None],
+                HintButton::Pair(left, right) => [Some(letter(left)), Some(letter(right))],
                 HintButton::Start => [None, None],
             };
             let paired = buttons[1].is_some();

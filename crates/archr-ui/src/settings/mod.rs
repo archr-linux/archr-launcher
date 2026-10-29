@@ -7,10 +7,13 @@ use std::collections::BTreeMap;
 use std::time::Instant;
 pub mod bluetooth;
 pub mod cheevos;
+mod controls;
+pub use controls::Capture;
 mod custom;
 pub(crate) mod games;
 pub(crate) mod information;
 pub use custom::Custom;
+pub mod hotkeys;
 pub mod mangohud;
 pub use games::{GameCore, GameSystem, Games};
 pub mod network;
@@ -43,6 +46,9 @@ pub enum Page {
     Mangohud,
     MangohudItems,
     Achievements,
+    Controls,
+    LauncherControls,
+    Hotkeys,
     Soon(&'static str),
 }
 impl Page {
@@ -67,6 +73,9 @@ impl Page {
             Self::Mangohud => "settings.mangohud_page",
             Self::MangohudItems => "settings.mangohud_items",
             Self::Achievements => "settings.achievements",
+            Self::Controls => "settings.controls",
+            Self::LauncherControls => "controls.launcher",
+            Self::Hotkeys => "controls.hotkeys",
             Self::Soon(key) => key,
         }
     }
@@ -77,6 +86,7 @@ impl Page {
             Self::Netplay | Self::Scraper | Self::Mangohud => &["settings.games"],
             Self::MangohudItems => &["settings.games", "settings.mangohud_page"],
             Self::AccentColor => &["settings.appearance"],
+            Self::LauncherControls | Self::Hotkeys => &["settings.controls"],
             Self::ScraperMedia => &["settings.games", "settings.scraper_short"],
             _ => &[],
         }
@@ -97,6 +107,9 @@ impl Page {
             Self::Storage => storage::STORAGE,
             Self::Mangohud => mangohud::MANGOHUD,
             Self::Achievements => cheevos::CHEEVOS,
+            Self::Controls => controls::CONTROLS,
+            Self::LauncherControls => controls::LAUNCHER,
+            Self::Hotkeys => hotkeys::HOTKEYS_PAGE,
             _ => &[],
         }
     }
@@ -194,6 +207,21 @@ pub enum Id {
     CheevosScreenshot,
     CheevosSound,
     CheevosLogout,
+    LauncherLink,
+    /// `launcher.buttons`: the control of every launcher action.
+    Buttons,
+    /// One action of the launcher Controls page: an index into `pad::ACTIONS`.
+    Bind(u8),
+    ButtonsRestore,
+    HotkeysLink,
+    /// `key.hotkey.a`, held for exit, MangoHud and screenshot.
+    HotkeyModifier,
+    /// `key.function.a`, held for volume and brightness; shown, not edited.
+    FunctionModifier,
+    /// One in-game hotkey: an index into `hotkeys::HOTKEYS`.
+    Hotkey(u8),
+    /// Whether that hotkey works now.
+    HotkeyOn(u8),
 }
 impl Id {
     fn metadata(self) -> (&'static str, &'static str) {
@@ -276,6 +304,15 @@ impl Id {
             Self::CheevosScreenshot => ("global.retroachievements.screenshot", "0"),
             // An unlock sound's name, or "none".
             Self::CheevosSound => ("global.retroachievements.sound", "none"),
+            Self::Buttons => ("launcher.buttons", "A,B,X,Y,L1,R1,START"),
+            // input_sense reads these at start; the launcher restarts it.
+            Self::HotkeyModifier => ("key.hotkey.a", "BTN_TL"),
+            Self::FunctionModifier => ("key.function.a", "BTN_SELECT"),
+            Self::Hotkey(n) => {
+                let hotkey = &hotkeys::HOTKEYS[usize::from(n)];
+                (hotkey.key, hotkey.default)
+            }
+            Self::HotkeyOn(n) => (hotkeys::HOTKEYS[usize::from(n)].enabled, "1"),
             Self::Update
             | Self::Restore
             | Self::Hidden
@@ -296,6 +333,9 @@ impl Id {
             | Self::CheevosAccount
             | Self::CheevosPassword
             | Self::CheevosLogout => ("", ""),
+            Self::LauncherLink | Self::Bind(_) | Self::ButtonsRestore | Self::HotkeysLink => {
+                ("", "")
+            }
         }
     }
     pub fn key(self) -> &'static str {
@@ -307,8 +347,9 @@ impl Id {
     pub fn choices(self) -> &'static [&'static str] {
         match self {
             Self::Gpu => &["libmali", "panfrost"],
+            Self::HotkeyModifier => &hotkeys::MODIFIERS,
             Self::Language => &["en_US", "pt_BR", "es_ES", "ru_RU"],
-            Self::Idle | Self::IdleGame => &["0", "1", "3", "5", "10", "15", "30"],
+            Self::Idle | Self::IdleGame => &["0", "1", "2", "5", "10", "15", "30"],
             Self::Governor => &["ondemand", "performance", "schedutil", "powersave"],
             Self::Sounds
             | Self::Turbo
@@ -491,11 +532,7 @@ const REGION: &[Row] = &[
 pub(crate) const CATEGORIES: &[(Page, &str, Glyph)] = &[
     (Page::Wifi, "settings.network_detail", Glyph::Wifi),
     (Page::Sound, "settings.sound_detail", Glyph::Sound),
-    (
-        Page::Soon("settings.controls"),
-        "settings.controls_detail",
-        Glyph::Controls,
-    ),
+    (Page::Controls, "settings.controls_detail", Glyph::Controls),
     (Page::Games, "settings.games_detail", Glyph::Play),
     (Page::Region, "settings.region_detail", Glyph::Globe),
     (
@@ -632,6 +669,8 @@ pub struct Settings {
     pub mangohud_supported: bool,
     /// Layout and items when the items page opened, to save or restore.
     pub mangohud_saved: (String, String),
+    /// A "press a button" prompt is open.
+    pub capture: Option<Capture>,
     /// The remembered custom colour while the editor shows another one.
     custom_kept: Custom,
 }
@@ -679,6 +718,7 @@ impl Default for Settings {
             custom: Custom::default(),
             mangohud_supported: false,
             mangohud_saved: Default::default(),
+            capture: None,
             custom_kept: Custom::default(),
         }
     }
@@ -733,7 +773,11 @@ impl Settings {
                 crate::motion::Motion::Reduced => "appearance.anim_reduced",
                 crate::motion::Motion::Off => "appearance.anim_off",
             },
-            (Id::Restore | Id::Accent, _) => return String::new(),
+            (Id::Restore | Id::Accent | Id::ButtonsRestore, _) => return String::new(),
+            (Id::Bind(n), _) => return self.bindings()[usize::from(n)].name().into(),
+            (Id::HotkeyModifier, key) => return hotkeys::key_name(key).into(),
+            (Id::Hotkey(n), _) if self.value(Id::HotkeyOn(n)) == "0" => "settings.off",
+            (Id::Hotkey(n), _) => return self.hotkey_pads(usize::from(n)).join(" + "),
             (Id::IndexNow, _) => "settings.soon",
             (Id::ScraperAccount | Id::CheevosAccount, _) => "settings.sign_in",
             (Id::CheevosSound, "none") => "settings.cheevos_no_sound",
@@ -755,7 +799,9 @@ impl Settings {
                 | Id::Backup
                 | Id::RestoreBackup
                 | Id::FactoryReset
-                | Id::MangohudLink,
+                | Id::MangohudLink
+                | Id::LauncherLink
+                | Id::HotkeysLink,
                 _,
             ) => return "›".into(),
             (Id::StorageCard, _) if self.storage.card.as_ref().is_some_and(|c| c.external) => {
@@ -876,6 +922,7 @@ impl Settings {
         match id {
             Id::IndexNow => true,
             Id::RestoreBackup => self.storage.backup.is_none(),
+            Id::ButtonsRestore => self.default_bindings(),
             Id::MergedStorage => !self.storage.merge_supported,
             Id::MangohudGame
             | Id::Mangohud
@@ -930,6 +977,7 @@ impl Settings {
             ],
             Page::Info => &[(Key('A'), "settings.details"), (Key('B'), "hint.back")],
             Page::MangohudItems => &[(Key('A'), "mangohud.mark"), (Key('B'), "hint.back")],
+            Page::Controls | Page::LauncherControls | Page::Hotkeys => self.controls_hints(),
             Page::ScraperMedia if !self.disabled(Id::ScraperMedia) => {
                 &[(Key('A'), "settings.mark"), (Key('B'), "hint.back")]
             }
@@ -1163,6 +1211,10 @@ impl Settings {
                 }
                 _ => Effect::None,
             };
+        }
+        // Presses go to an open prompt (`captured`), never here.
+        if self.capturing() {
+            return Effect::None;
         }
         // Any navigation input dismisses the last message.
         self.error = None;

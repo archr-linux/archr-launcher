@@ -265,6 +265,35 @@ fn pages() -> Vec<(&'static str, Settings)> {
     let mut games_mangohud = games.clone();
     games_mangohud.mangohud_supported = true;
     games_mangohud.cursor = 6;
+    let mut controls = ready();
+    controls.open(Page::Controls);
+    let mut launcher_controls = controls.clone();
+    launcher_controls.open(Page::LauncherControls);
+    launcher_controls
+        .values
+        .insert(Id::Buttons, "B,A,X,Y,L1,R1,START".into());
+    launcher_controls.cursor = 2;
+    let mut launcher_press = launcher_controls.clone();
+    launcher_press.cursor = 3;
+    launcher_press.handle(Button::A);
+    let mut hotkeys = controls.clone();
+    hotkeys
+        .values
+        .extend(crate::settings::hotkeys::hotkey_values(|key| {
+            (key == "key.dpad.events").then(|| "1".into())
+        }));
+    hotkeys.values.insert(Id::HotkeyOn(2), "0".into());
+    hotkeys.open(Page::Hotkeys);
+    hotkeys.cursor = 2;
+    let mut hotkey_press = hotkeys.clone();
+    hotkey_press.cursor = 4;
+    hotkey_press.handle(Button::A);
+    hotkey_press.captured(crate::pad::Pad::R1);
+    let mut hotkey_conflict = hotkeys.clone();
+    hotkey_conflict.handle(Button::A);
+    hotkey_conflict.captured(crate::pad::Pad::A);
+    let mut hotkey_modifier = hotkeys.clone();
+    hotkey_modifier.cursor = 0;
     vec![
         // First, so the list snaps to its scrolled end.
         ("storage-end", storage_end),
@@ -308,6 +337,13 @@ fn pages() -> Vec<(&'static str, Settings)> {
         ("mangohud-custom", mangohud_custom),
         ("mangohud-unsupported", mangohud_off),
         ("games-mangohud", games_mangohud),
+        ("controls", controls),
+        ("controls-launcher", launcher_controls),
+        ("controls-launcher-press", launcher_press),
+        ("controls-hotkeys", hotkeys),
+        ("controls-hotkeys-modifier", hotkey_modifier),
+        ("controls-hotkeys-press", hotkey_press),
+        ("controls-hotkeys-conflict", hotkey_conflict),
     ]
 }
 #[test]
@@ -352,9 +388,13 @@ fn capture_network_and_games_pages() {
             } else {
                 theme.clone()
             };
-            ui.canvas.set_draw_color(color(look.background));
-            ui.canvas.clear();
-            ui.settings_page(&state, &look).unwrap();
+            // Twice: dialogs fade in, so the second frame shows them settled.
+            for _ in 0..2 {
+                ui.canvas.set_draw_color(color(look.background));
+                ui.canvas.clear();
+                ui.settings_page(&state, &look).unwrap();
+                ui.snap_animations();
+            }
             save(&mut ui, format!("{name}-{language}.png"));
         }
         struct Home(Vec<archr_index::cache::SystemEntry>);

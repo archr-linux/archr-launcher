@@ -2,6 +2,7 @@
 mod bluetooth;
 mod cheevos;
 pub use cheevos::{TOKEN as CHEEVOS_TOKEN, USER as CHEEVOS_USER};
+mod controls;
 mod games;
 mod info;
 mod mangohud;
@@ -114,17 +115,20 @@ impl Backend {
     pub fn load(&self) -> Result<Settings, String> {
         let cfg = self.cfg()?;
         let mut state = Settings::default();
-        for page in [Page::Sound, Page::System, Page::Region] {
-            for row in page.rows() {
-                if let Some(value) = cfg.get_setting(row.id.key(), None, None) {
-                    state.values.insert(row.id, row.id.normalize(&value));
-                }
+        let ids = [Page::Sound, Page::System, Page::Region]
+            .iter()
+            .flat_map(|page| page.rows().iter().map(|row| row.id))
+            .chain([Id::Buttons]);
+        for id in ids {
+            if let Some(value) = cfg.get_setting(id.key(), None, None) {
+                state.values.insert(id, id.normalize(&value));
             }
         }
         self.load_pages(&cfg, &mut state);
         self.load_storage(&cfg, &mut state);
         self.load_mangohud(&cfg, &mut state);
         self.load_cheevos(&cfg, &mut state);
+        self.load_controls(&cfg, &mut state);
         if let Ok(output) = self.command("pactl", &["get-sink-volume", "@DEFAULT_SINK@"]) {
             if let Some(volume) = output
                 .split_whitespace()
@@ -228,6 +232,7 @@ impl Backend {
             .apply_page(id, value)
             .or_else(|| self.apply_mangohud(id, value))
             .or_else(|| self.apply_cheevos(id, value))
+            .or_else(|| self.apply_controls(id, value))
         {
             return result;
         }
@@ -235,13 +240,10 @@ impl Backend {
             Id::Volume | Id::SoundsVolume | Id::Brightness => value
                 .parse::<u8>()
                 .is_ok_and(|n| n <= 100 && (id != Id::Brightness || n >= 5)),
-            Id::Sounds
-            | Id::Turbo
-            | Id::Gpu
-            | Id::Governor
-            | Id::Language
-            | Id::Idle
-            | Id::IdleGame => id.choices().contains(&value),
+            Id::Sounds | Id::Turbo | Id::Gpu | Id::Governor | Id::Language => {
+                id.choices().contains(&value)
+            }
+            Id::Buttons => archr_ui::pad::bindings_text(&archr_ui::pad::bindings(value)) == value,
             Id::Suspend => {
                 matches!(value, "default" | "off")
                     || self

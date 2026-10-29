@@ -195,6 +195,8 @@ impl Settings {
             Page::Bluetooth => self.bt_input(button),
             Page::Games => self.games_input(button),
             Page::MangohudItems => Some(self.mangohud_items_input(button)),
+            Page::LauncherControls => self.launcher_controls_input(button),
+            Page::Hotkeys => self.hotkeys_input(button),
             _ => None,
         }
     }
@@ -336,6 +338,8 @@ impl Settings {
             Id::NetplayLink => self.open(Page::Netplay),
             Id::ScraperLink => self.open(Page::Scraper),
             Id::MangohudLink => self.open(Page::Mangohud),
+            Id::LauncherLink => self.open(Page::LauncherControls),
+            Id::HotkeysLink => self.open(Page::Hotkeys),
             Id::MangohudItems => self.open(Page::MangohudItems),
             Id::ScraperMedia => self.open(Page::ScraperMedia),
             Id::MediaKind(n) => {

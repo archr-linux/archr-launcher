@@ -201,7 +201,8 @@ fn run(
         App::system_rows(&library).len()
     );
     library.start();
-    let (sounds_on, sounds_volume) = audio::saved(SystemCfg::load(&paths.config).ok().as_ref());
+    let startup_config = SystemCfg::load(&paths.config).ok();
+    let (sounds_on, sounds_volume) = audio::saved(startup_config.as_ref());
     let mut audio = Audio::new(
         theme_sounds(ui.theme_dir.as_deref(), &paths),
         sounds_on,
@@ -240,6 +241,12 @@ fn run(
     // The ROM on the details screen, followed across re-reads of its system.
     let mut details_rom: Option<PathBuf> = None;
     let mut controllers = Controllers::new_traced(&ui.sdl, trace)?;
+    let buttons = startup_config
+        .as_ref()
+        .and_then(|cfg| cfg.get_setting(Id::Buttons.key(), None, None))
+        .unwrap_or_default();
+    controllers.set_remap(archr_ui::pad::Remap::saved(&buttons));
+    ui.face_letters = archr_ui::pad::face_letters(&archr_ui::pad::bindings(&buttons));
     let mut events = ui.sdl.event_pump()?;
     let mut repeat = Repeat::default();
     let mut dirty = false;
@@ -277,6 +284,8 @@ fn run(
         }
         dirty |= settings_dirty;
         if !settings.state.loading {
+            controllers.set_remap(settings.state.remap());
+            ui.face_letters = archr_ui::pad::face_letters(&settings.state.bindings());
             audio.configure(
                 settings.state.value(Id::Sounds) == "1",
                 settings.state.value(Id::SoundsVolume).parse().unwrap_or(60),
@@ -503,6 +512,13 @@ fn run(
                     win_event: WindowEvent::FocusLost,
                     ..
                 } => repeat.clear(),
+                // An open "press a button" prompt takes the next press itself.
+                _ if settings.active && settings.state.capturing() => {
+                    if let Some(pad) = controllers.pressed(&event) {
+                        settings.capture(pad);
+                        dirty = true;
+                    }
+                }
                 _ => {
                     if let Some(mapped) = button_event(&event, &controllers, &mut repeat) {
                         button = Some(mapped);
