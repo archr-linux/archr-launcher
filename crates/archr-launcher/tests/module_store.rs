@@ -182,14 +182,32 @@ fn reviewed_modules_come_first_and_the_badge_follows_the_digest() {
         .permissions
         .iter()
         .any(|p| p.key == "modules.perm_tile"));
-    // A new release under the same version: the badge goes.
+    // A new release under the same version: the badge goes, in the list too.
     let other = Tarball::module(MANIFEST)
         .file("bateria/x.txt", b"x")
         .bytes();
     let root = tempfile::tempdir().unwrap();
     let fake = Fake::default();
     publish(&fake, MANIFEST, &other, &sha(&other), &sha(&tarball));
-    assert!(!shop(root.path(), &fake).offer(&card).unwrap().reviewed);
+    let store = shop(root.path(), &fake);
+    assert!(!store.offer(&card).unwrap().reviewed);
+    let StoreReply::Listed { cards, .. } = store.list(Tab::All, false) else {
+        panic!("not a list");
+    };
+    let bateria = cards.iter().find(|c| c.repo == "archr-bateria").unwrap();
+    assert!(
+        !bateria.reviewed,
+        "the current release is not the reviewed one"
+    );
+    assert_eq!(
+        bateria.digests.len(),
+        1,
+        "an installed reviewed package keeps its badge"
+    );
+    let StoreReply::Listed { cards, .. } = store.list(Tab::Reviewed, false) else {
+        panic!("not a list");
+    };
+    assert!(cards.is_empty());
 }
 
 #[test]

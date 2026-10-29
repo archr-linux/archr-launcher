@@ -131,6 +131,15 @@ impl Shop {
             })
             .collect()
     }
+    /// A `.tar.gz` of the latest release carries one of `digests`. Asked
+    /// only for repositories on the reviewed list (saved for an hour).
+    fn current_reviewed(&self, owner: &str, repo: &str, digests: &[String]) -> bool {
+        self.release(owner, repo).is_ok_and(|(_, assets)| {
+            assets.iter().any(|(name, asset)| {
+                name.ends_with(".tar.gz") && digests.iter().any(|d| same_digest(d, &asset.digest))
+            })
+        })
+    }
     fn records(&self) -> State {
         State::load(&self.dirs.state)
     }
@@ -159,7 +168,8 @@ impl Shop {
                 (r, digests)
             })
             .map(|(r, digests)| Card {
-                reviewed: !digests.is_empty(),
+                // Reviewed only if a package of the current release is.
+                reviewed: !digests.is_empty() && self.current_reviewed(&r.owner, &r.repo, &digests),
                 digests,
                 owner: r.owner,
                 repo: r.repo,
