@@ -119,6 +119,7 @@ impl Settings {
         match self.visible_rows().get(self.cursor).map(|r| r.id) {
             Some(Id::ButtonsRestore) if self.default_bindings() => &[(Key('B'), "hint.back")],
             Some(Id::ButtonsRestore) => &[(Key('A'), "hint.choose"), (Key('B'), "hint.back")],
+            Some(Id::RaHotkeys) => &[(Key('A'), "hint.choose"), (Key('B'), "hint.back")],
             Some(Id::HotkeyModifier) => &[
                 (crate::HintButton::Pair('L', 'R'), "settings.change"),
                 (Key('B'), "hint.back"),

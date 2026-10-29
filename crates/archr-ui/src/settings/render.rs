@@ -24,6 +24,8 @@ mod mangohud;
 mod modules;
 #[path = "render/network.rs"]
 mod network;
+#[path = "render/raimport.rs"]
+mod raimport;
 #[path = "render/store.rs"]
 mod store;
 #[path = "render/updates.rs"]
@@ -97,6 +99,7 @@ fn placements(page: Page, rows: &[Row]) -> Vec<Placement> {
                 Page::LauncherControls | Page::Hotkeys if row.subtitle.is_none() => 38.,
                 Page::Hotkeys => 44.,
                 Page::Updates if row.id == Id::UpdateInstall => 44.,
+                Page::RaImport => 38.,
                 Page::Updates => 40.,
                 _ if row.subtitle.is_some() => 46.,
                 _ => 40.,
@@ -628,6 +631,8 @@ impl View<'_, '_, '_> {
             Page::Keyboard => self.keyboard(state)?,
             Page::Updates => self.updates_page(state, &rows)?,
             Page::UpdatePackages => self.update_packages(state)?,
+            Page::RaImport => self.raimport_page(state, &rows)?,
+            Page::RaImportList => self.raimport_list(state)?,
             Page::Scraper => {
                 self.rows_at(state, &rows, &placements(Page::Scraper, &rows), 384.)?;
                 self.scraper_panel(state)?;
@@ -704,9 +709,16 @@ impl View<'_, '_, '_> {
             )?;
             let (x, y, w, h) = bounds;
             // Known failures arrive as locale keys; anything else stays generic.
-            let message = if ["settings.", "cheevos.", "store.", "updates.", "modules."]
-                .iter()
-                .any(|prefix| error.starts_with(prefix))
+            let message = if [
+                "settings.",
+                "cheevos.",
+                "store.",
+                "updates.",
+                "modules.",
+                "raimport.",
+            ]
+            .iter()
+            .any(|prefix| error.starts_with(prefix))
             {
                 self.tr(&error)
             } else {
@@ -740,6 +752,8 @@ impl View<'_, '_, '_> {
             self.store_status(state, left - 36.)
         } else if matches!(state.page(), Page::Updates | Page::UpdatePackages) {
             self.updates_status(state)
+        } else if state.raimport.working && state.page() == Page::RaImport {
+            Some(self.tr("raimport.importing"))
         } else if let Some(note) = self.modules_status(state) {
             Some(note)
         } else if state.page() == Page::Hotkeys {
@@ -1065,6 +1079,10 @@ impl View<'_, '_, '_> {
         let mut warning = false;
         let subtitle = match row.id {
             Id::ScraperMedia => Some(self.media_summary(state, full)?),
+            Id::RaOverrides | Id::RaShaders => state
+                .raimport_detail(row.id)
+                .map(|refs: Vec<String>| crate::settings::raimport::joined(&self.ui.catalog, &refs))
+                .or_else(|| row.subtitle.map(|key| self.tr(key))),
             Id::ModuleEntry(n) => state.modules.view.modules.get(usize::from(n)).map(|m| {
                 let (line, warn) = self.module_line(m);
                 warning = warn;

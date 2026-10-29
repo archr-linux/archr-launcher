@@ -82,6 +82,15 @@ impl SystemCfg {
         Self::set_many_with_timeout(path, lock, entries, LOCK_TIMEOUT)
     }
 
+    /// Remove every line of one key, under the same lock and atomic publish,
+    /// so the shell's fallback (system, then global) applies again.
+    pub fn remove_and_save(path: &Path, lock: &Path, entry_key: &str) -> io::Result<()> {
+        Self::edit_with_timeout(path, lock, LOCK_TIMEOUT, |cfg| {
+            cfg.lines
+                .retain(|line| entry_value(line, entry_key).is_none());
+        })
+    }
+
     fn entry(&self, key: &str) -> Option<&str> {
         self.lines.iter().find_map(|line| entry_value(line, key))
     }
@@ -103,10 +112,12 @@ impl SystemCfg {
         entries: &[(&str, &str)],
         timeout: Duration,
     ) -> io::Result<()> {
-        let _guard = PidLock::acquire(lock, timeout)?;
-        let mut cfg = Self::load(path)?;
+        Self::edit_with_timeout(path, lock, timeout, |cfg| cfg.set_entries(entries))
+    }
+
+    fn set_entries(&mut self, entries: &[(&str, &str)]) {
         for &(entry_key, value) in entries {
-            if let Some(line) = cfg
+            if let Some(line) = self
                 .lines
                 .iter_mut()
                 .find(|line| entry_value(line, entry_key).is_some())
@@ -114,14 +125,25 @@ impl SystemCfg {
                 let (_, ending) = split_line_ending(line);
                 *line = format!("{entry_key}={value}{ending}");
             } else {
-                if let Some(last) = cfg.lines.last_mut() {
+                if let Some(last) = self.lines.last_mut() {
                     if !last.ends_with('\n') {
                         last.push('\n');
                     }
                 }
-                cfg.lines.push(format!("{entry_key}={value}\n"));
+                self.lines.push(format!("{entry_key}={value}\n"));
             }
         }
+    }
+
+    fn edit_with_timeout(
+        path: &Path,
+        lock: &Path,
+        timeout: Duration,
+        edit: impl FnOnce(&mut Self),
+    ) -> io::Result<()> {
+        let _guard = PidLock::acquire(lock, timeout)?;
+        let mut cfg = Self::load(path)?;
+        edit(&mut cfg);
         if cfg.lines.iter().map(String::len).sum::<usize>() > 1024 * 1024 {
             return Err(archr_io::invalid_data("configuration exceeds 1 MiB"));
         }

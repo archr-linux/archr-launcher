@@ -7,6 +7,7 @@ mod games;
 mod info;
 mod mangohud;
 mod pages;
+mod raimport;
 pub(crate) use pages::{scrape_outcome, start_scrape};
 mod runtime;
 mod storage;
@@ -374,6 +375,9 @@ pub(super) enum Work {
     Appearance(Vec<(Id, String)>),
     Storage(archr_ui::settings::storage::Action),
     Store(archr_ui::settings::store::Action),
+    /// Import from RetroArch: look at the folder, or import (backup first?).
+    RaScan,
+    RaImport(bool, Box<archr_ui::settings::raimport::Found>),
 }
 /// A storage action's outcome and the page's refreshed facts.
 type StorageReply = (
@@ -406,6 +410,8 @@ enum Reply {
     /// The Storage page's facts after unified storage was switched.
     Facts(Box<archr_ui::settings::storage::Storage>),
     Store(archr_ui::settings::store::Reply),
+    RaScan(archr_ui::settings::raimport::Found),
+    RaImport(Result<String, String>),
 }
 /// A radio scan takes ~20 s on the R36S: it runs on its own lane so it never
 /// delays the Wi-Fi switch or any other action.
@@ -540,6 +546,10 @@ impl Worker {
                                 log::warn!("Storage {action:?} failed: {error}");
                             }
                             Reply::Storage((result, Box::new(backend.storage())))
+                        }
+                        Work::RaScan => Reply::RaScan(backend.ra_scan()),
+                        Work::RaImport(backup, seen) => {
+                            Reply::RaImport(backend.ra_import(backup, &seen))
                         }
                     };
                     if results.send(reply).is_err() {
@@ -734,6 +744,11 @@ impl Worker {
                 Reply::Usb(usb) => state.usb = usb,
                 Reply::Store(reply) => state.store_reply(reply),
                 Reply::Theme(loaded) => (state.base_theme, state.base_dir) = *loaded,
+                Reply::RaScan(found) => {
+                    state.raimport.scanning = false;
+                    state.raimport.found = Some(found);
+                }
+                Reply::RaImport(result) => state.raimport_done(result),
                 Reply::Appearance(result) => {
                     state.pending = None;
                     match result {

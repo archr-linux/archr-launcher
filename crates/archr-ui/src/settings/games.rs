@@ -236,7 +236,8 @@ mod tests {
         assert_eq!(state.value(Id::Emulator), "retroarch");
         assert_eq!(state.value(Id::Core), "bsnes");
         assert_eq!(state.value(Id::Ratio), "4/3");
-        assert_eq!(state.value(Id::Filter), "0");
+        // Unsaved RetroArch options stay RetroArch's.
+        assert_eq!(state.value(Id::Filter), "");
         assert_eq!(state.options[&Id::Core], ["snes9x", "bsnes"]);
         assert_eq!(state.options[&Id::Emulator], ["retroarch", "standalone"]);
     }
@@ -260,7 +261,7 @@ mod tests {
             .unwrap();
         assert_eq!(state.handle(Button::R), Effect::None);
         assert_eq!(state.games.name(), "n64");
-        assert_eq!(state.value(Id::Ratio), "core");
+        assert_eq!(state.value(Id::Ratio), "");
         assert_eq!(state.visible_rows()[state.cursor].id, Id::GameSystem);
         state.pending = Some(Id::Core);
         state.handle(Button::L);

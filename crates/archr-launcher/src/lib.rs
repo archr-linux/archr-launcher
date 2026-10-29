@@ -11,6 +11,7 @@ pub mod themestore;
 pub mod library;
 pub mod netplay;
 pub mod paths;
+pub mod raimport;
 pub mod rescrape;
 pub mod wifi;
 mod worker;
