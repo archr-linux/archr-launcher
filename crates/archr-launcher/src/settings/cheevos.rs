@@ -222,18 +222,6 @@ mod tests {
     use super::*;
     use archr_scraper::{Http, NetError, Response};
     use std::sync::{Arc, Mutex};
-    struct Fake(&'static str);
-    impl Http for Fake {
-        fn get(&self, _: &str, _: u64, _: &AtomicBool) -> Result<Response, NetError> {
-            Err(NetError::Failed)
-        }
-        fn post(&self, _: &str, _: &str, _: u64, _: &AtomicBool) -> Result<Response, NetError> {
-            Ok(Response {
-                status: 200,
-                body: self.0.as_bytes().to_vec(),
-            })
-        }
-    }
     /// One canned answer per method (`None`: no network), recording URLs.
     #[derive(Clone, Default)]
     struct Service {
@@ -261,6 +249,13 @@ mod tests {
     const SIGNED: &str = r#"{"Success":true,"User":"Douglas","Token":"abc123","Score":7}"#;
     const SUMMARY: &str =
         r#"{"User":"Douglas","MemberSince":"2021-03-04","RecentlyPlayed":[{"Title":"Zelda"}]}"#;
+    /// The sign-in answers `post`; the web API is offline.
+    fn answer(post: &'static str) -> Client {
+        client(&Service {
+            post: Some((200, post)),
+            ..Default::default()
+        })
+    }
     fn client(service: &Service) -> Client {
         Client::new(Box::new(service.clone()))
     }
@@ -286,9 +281,9 @@ mod tests {
     #[test]
     fn signing_in_saves_the_token_never_the_password_and_signing_out_forgets_it() {
         let (_dir, backend) = backend();
-        let client = Client::new(Box::new(Fake(
+        let client = answer(
             r#"{"Success":true,"User":"Douglas","Token":"abc123","Score":7,"SoftcoreScore":2}"#,
-        )));
+        );
         let (user, profile) = backend.sign_in(&client, "douglas", "s3cret!").unwrap();
         assert_eq!(
             (user.as_str(), profile.points, profile.softcore),
@@ -315,9 +310,7 @@ mod tests {
     #[test]
     fn a_refused_sign_in_saves_nothing() {
         let (_dir, backend) = backend();
-        let client = Client::new(Box::new(Fake(
-            r#"{"Success":false,"Code":"invalid_credentials","Error":"Invalid"}"#,
-        )));
+        let client = answer(r#"{"Success":false,"Code":"invalid_credentials","Error":"Invalid"}"#);
         assert_eq!(
             backend.sign_in(&client, "douglas", "wrong"),
             Err("cheevos.bad_login".into())
@@ -327,9 +320,7 @@ mod tests {
             Err("cheevos.bad_login".into())
         );
         // A token that is not plain text never reaches system.cfg.
-        let client = Client::new(Box::new(Fake(
-            r#"{"Success":true,"User":"douglas","Token":"a\nb=c"}"#,
-        )));
+        let client = answer(r#"{"Success":true,"User":"douglas","Token":"a\nb=c"}"#);
         assert_eq!(
             backend.sign_in(&client, "douglas", "x"),
             Err("cheevos.service".into())
