@@ -411,20 +411,38 @@ impl Ui<'_, '_> {
         // Shrink text and padding together until the three buttons fit.
         let icon = |n: usize| n == 1;
         let mut size = 14.;
-        let (widths, pad) = loop {
+        let floor = self.frame.min_size().max(10. / self.frame.font.max(1.));
+        let gap = self.px(8.);
+        let (mut widths, mut pad) = loop {
             let pad = self.px(size + 1.);
             let mut widths = Vec::new();
             for (n, label) in labels.iter().enumerate() {
                 let extra = if icon(n) { self.px(size + 6.) } else { 0 };
                 widths.push(self.measure(label, Face::Semibold, size)? as i32 + pad * 2 + extra);
             }
-            let total: i32 = widths.iter().sum::<i32>() + self.px(8.) * 2;
-            // The floor is 10 px on screen, whatever the theme's font scale.
-            if total <= area.width() as i32 || size <= 10. / self.frame.font.max(1.) {
+            let total: i32 = widths.iter().sum::<i32>() + gap * 2;
+            // The floor: 10 px on screen and the theme's smallest text.
+            if total <= area.width() as i32 || size <= floor {
                 break (widths, pad);
             }
             size -= 1.;
         };
+        // Still too wide at the floor: labels break between words. Each
+        // button holds its longest word, and the room left is shared.
+        let total: i32 = widths.iter().sum::<i32>() + gap * 2;
+        if total > area.width() as i32 {
+            pad = self.px(6.);
+            let mut least = Vec::new();
+            for (n, label) in labels.iter().enumerate() {
+                let mut word = 0;
+                for w in label.split_whitespace() {
+                    word = word.max(self.measure(w, Face::Semibold, size)? as i32);
+                }
+                least.push(word + pad * 2 + if icon(n) { self.px(size + 6.) } else { 0 });
+            }
+            let spare = (area.width() as i32 - gap * 2 - least.iter().sum::<i32>()) / 3;
+            widths = least.iter().map(|w| (w + spare).max(1)).collect();
+        }
         let mut x = area.x();
         for (n, label) in labels.iter().enumerate() {
             let focused = n == app.details_focus;
@@ -464,17 +482,26 @@ impl Ui<'_, '_> {
             } else {
                 Face::Regular
             };
-            self.label(
-                label,
-                (face, size, ink),
-                Rect::new(
-                    text_x,
-                    button.y(),
-                    (button.right() - text_x).max(1) as u32,
-                    button.height(),
-                ),
-            )?;
-            x += widths[n] + self.px(8.);
+            let room = (button.right() - text_x - pad.min(text_x - button.x())).max(1) as u32;
+            let lines = if self.measure(label, face, size)? > room {
+                self.wrap(label, face, size, room)?
+            } else {
+                vec![label.clone()]
+            };
+            let step = button.height() as i32 / lines.len() as i32;
+            for (k, line) in lines.iter().enumerate() {
+                self.label(
+                    line,
+                    (face, size, ink),
+                    Rect::new(
+                        text_x,
+                        button.y() + step * k as i32,
+                        room,
+                        step.max(1) as u32,
+                    ),
+                )?;
+            }
+            x += widths[n] + gap;
         }
         Ok(())
     }
