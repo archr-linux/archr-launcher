@@ -223,10 +223,10 @@ mod tests {
     #[test]
     fn declared_paths_stay_inside_the_theme() {
         let (_dir, sounds) = theme(
-            &["sounds/a.ogg"],
-            "[sounds]\nmove = \"../outside.ogg\"\npage = \"/etc/passwd\"\nback = \"sounds/a.mp3\"",
+            &["sounds/in-theme.ogg"],
+            "[sounds]\nmove = \"../outside.ogg\"\npage = \"/etc/passwd\"\nback = \"sounds/inside.mp3\"",
         );
-        assert!(sounds.files().iter().all(|f| f.ends_with("a.ogg")));
+        assert!(sounds.files().iter().all(|f| f.ends_with("in-theme.ogg")));
         assert!(sounds.event(Event::Move).is_none());
         assert!(sounds.event(Event::Page).is_none());
         assert!(sounds.event(Event::Back).is_none());

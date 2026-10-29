@@ -371,6 +371,8 @@ const CONFIG_KEYS: &[&str] = &[
     "launcher.scraper.media",
     "launcher.scraper.only_missing",
     "launcher.scraper.systems",
+    "launcher.sounds",
+    "launcher.sounds_volume",
     "launcher.text_size",
     "launcher.theme",
     "moonlight.cfg",
