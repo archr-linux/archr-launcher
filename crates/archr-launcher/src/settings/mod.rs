@@ -4,6 +4,7 @@ mod games;
 mod info;
 mod pages;
 mod runtime;
+mod storage;
 use crate::paths::Paths;
 use archr_config::SystemCfg;
 use archr_ui::settings::{Id, Information, Page, Settings};
@@ -103,6 +104,7 @@ impl Backend {
             }
         }
         self.load_pages(&cfg, &mut state);
+        self.load_storage(&cfg, &mut state);
         if let Ok(output) = self.command("pactl", &["get-sink-volume", "@DEFAULT_SINK@"]) {
             if let Some(volume) = output
                 .split_whitespace()
@@ -332,7 +334,14 @@ pub(super) enum Work {
     Scrape,
     Theme(String),
     Appearance(Vec<(Id, String)>),
+    Storage(archr_ui::settings::storage::Action),
 }
+/// A storage action's outcome, the systems to reload after an eject, and the
+/// page's refreshed facts.
+type StorageReply = (
+    Result<(&'static str, Option<Vec<String>>), String>,
+    Box<archr_ui::settings::storage::Storage>,
+);
 enum Reply {
     Loaded(Result<Box<Settings>, String>),
     Set(Id, Result<String, String>),
@@ -350,6 +359,7 @@ enum Reply {
     Scrape(Result<(archr_scraper::Job, Vec<String>), String>),
     Theme(Box<(archr_ui::Theme, Option<std::path::PathBuf>)>),
     Appearance(Result<(), String>),
+    Storage(StorageReply),
 }
 /// A radio scan takes ~20 s on the R36S: it runs on its own lane so it never
 /// delays the Wi-Fi switch or any other action.
@@ -435,6 +445,13 @@ impl Worker {
                         Work::Appearance(choices) => {
                             Reply::Appearance(backend.save_appearance(&choices))
                         }
+                        Work::Storage(action) => {
+                            let result = backend.run_storage(&action);
+                            if let Err(error) = &result {
+                                log::warn!("Storage {action:?} failed: {error}");
+                            }
+                            Reply::Storage((result, Box::new(backend.storage())))
+                        }
                     };
                     if results.send(reply).is_err() {
                         break;
@@ -503,6 +520,7 @@ impl Worker {
         &mut self,
         state: &mut Settings,
         job: &mut Option<(archr_scraper::Job, Vec<String>)>,
+        reload: &mut Option<Vec<String>>,
     ) -> (bool, Option<String>) {
         let mut changed = false;
         let mut language = None;
@@ -537,6 +555,7 @@ impl Worker {
                     state.scrape.available = loaded.scrape.available;
                     state.games.replace(loaded.games.systems);
                     state.sync_games();
+                    refresh_storage(state, loaded.storage);
                     if !state.scrape.verifying {
                         state.scrape.user = loaded.scrape.user;
                     }
@@ -673,6 +692,20 @@ impl Worker {
                         Err(error) => state.fail(None, error),
                     }
                 }
+                Reply::Storage((result, facts)) => {
+                    refresh_storage(state, *facts);
+                    match result {
+                        // factoryreset reboots: its notice stays until then.
+                        Ok(("settings.resetting", _)) => {}
+                        Ok((key, systems)) => {
+                            if let Some(systems) = systems {
+                                reload.get_or_insert_with(Vec::new).extend(systems);
+                            }
+                            state.storage_done(Ok(key));
+                        }
+                        Err(error) => state.storage_done(Err(error)),
+                    }
+                }
                 Reply::Scrape(result) => {
                     state.scrape.starting = false;
                     match result {
@@ -689,4 +722,13 @@ impl Worker {
         }
         (changed, language)
     }
+}
+/// Host facts replace the old ones; the open question and running action stay.
+fn refresh_storage(state: &mut Settings, facts: archr_ui::settings::storage::Storage) {
+    let ui = std::mem::take(&mut state.storage);
+    state.storage = archr_ui::settings::storage::Storage {
+        confirm: ui.confirm,
+        working: ui.working,
+        ..facts
+    };
 }
