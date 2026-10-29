@@ -204,6 +204,30 @@ impl Ui<'_, '_> {
     }
 }
 impl View<'_, '_, '_> {
+    /// The one check box of the settings pages: an accent box with a tick
+    /// when on, a thin ring over `back` when off.
+    fn checkbox(
+        &mut self,
+        (x, y): (f32, f32),
+        on: bool,
+        selected: bool,
+        back: Rgba,
+    ) -> Result<(), String> {
+        let rect = self.rect((x, y, 18., 18.));
+        let corner = self.ui.px(5.) as f32;
+        if on {
+            let accent = self.theme.highlight_bg;
+            self.ui.rounded(rect, corner, accent, Some(accent))?;
+            let tick = self.rect((x + 3., y + 3., 12., 12.));
+            return self.ui.icon(Glyph::Check, tick, self.theme.highlight_text);
+        }
+        let edge = selection(
+            selected,
+            self.theme.dim_text,
+            self.theme.accent_text_secondary,
+        );
+        self.ui.rounded(rect, corner, back, Some(edge))
+    }
     fn rect(&self, (x, y, w, h): Bounds) -> Rect {
         Rect::new(
             self.ui.px(x),
@@ -965,26 +989,9 @@ impl View<'_, '_, '_> {
                 };
                 let (token, _, _, used) = MEDIA[usize::from(n)];
                 let on = state.media_tokens().contains(&token);
-                let (bx, by) = (x + w - 18., y + (h - 18.) / 2.);
-                let rect = self.rect((bx, by, 18., 18.));
-                let radius = self.ui.px(5.) as f32;
-                if on {
-                    // On the highlighted row the box inverts to stay visible.
-                    let (fill, ink) = selection(
-                        selected,
-                        (self.theme.highlight_bg, self.theme.highlight_text),
-                        (self.theme.highlight_text, self.theme.highlight_bg),
-                    );
-                    self.ui.rounded(rect, radius, fill, None)?;
-                    let tick = self.rect((bx + 3., by + 3., 12., 12.));
-                    self.ui.icon(Glyph::Check, tick, ink)?;
-                } else {
-                    // A 1.5px dim ring: the box face drawn over a dim square.
-                    self.ui.rounded(rect, radius, self.theme.dim_text, None)?;
-                    let face = self.rect((bx + 1.5, by + 1.5, 15., 15.));
-                    let fill = selection(selected, self.theme.background, self.theme.highlight_bg);
-                    self.ui.rounded(face, radius - 1., fill, None)?;
-                }
+                // The page's own surface shows through an empty box.
+                let back = selection(selected, self.theme.background, self.theme.highlight_bg);
+                self.checkbox((x + w - 18., y + (h - 18.) / 2.), on, selected, back)?;
                 if let Some(used) = used {
                     self.text(
                         (x, y, w - 28., h),
