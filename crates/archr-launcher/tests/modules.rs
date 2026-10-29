@@ -65,6 +65,7 @@ fn start_with(
         dirs: Dirs::new(base),
         run: base.join("run"),
         system_cfg: base.join("system.cfg"),
+        lock: base.join("system.cfg.lock"),
         executor,
         direct,
         userdb,
@@ -79,6 +80,9 @@ struct Probe {
     modules: Modules,
     view: Arc<View>,
     notices: Vec<Notice>,
+    /// `Event::Launch`es: system and game key.
+    launches: Vec<(String, String)>,
+    configs: usize,
 }
 impl Probe {
     fn new(base: &Path) -> Self {
@@ -86,6 +90,8 @@ impl Probe {
             modules: start(base),
             view: Arc::default(),
             notices: Vec::new(),
+            launches: Vec::new(),
+            configs: 0,
         }
     }
     /// Polls until `done` holds for the latest view.
@@ -97,6 +103,8 @@ impl Probe {
                     Event::View(view) => self.view = view,
                     Event::Notice(notice) => self.notices.push(notice),
                     Event::Store(_) => {}
+                    Event::Config => self.configs += 1,
+                    Event::Launch { system, game_key } => self.launches.push((system, game_key)),
                 }
             }
             if done(&self.view, &self.notices) {
@@ -280,6 +288,8 @@ fn each_module_runs_as_its_own_user_and_keeps_its_secrets_apart() {
         modules: start_with(base, sandboxes.clone(), None, userdb.clone()),
         view: Arc::default(),
         notices: Vec::new(),
+        launches: Vec::new(),
+        configs: 0,
     };
     probe.wait(both);
     let (alpha, beta) = (sandboxes.user("alpha"), sandboxes.user("beta"));
@@ -345,6 +355,8 @@ fn each_module_runs_as_its_own_user_and_keeps_its_secrets_apart() {
         modules: start_with(base, again.clone(), None, None),
         view: Arc::default(),
         notices: Vec::new(),
+        launches: Vec::new(),
+        configs: 0,
     };
     let view = probe.wait(both);
     assert_eq!((again.user("alpha"), again.user("beta")), (alpha, beta));
@@ -644,4 +656,243 @@ fn walk(dir: &Path) -> Vec<std::path::PathBuf> {
         }
     }
     files
+}
+
+/// An API 2 daemon driven by files in its folder: `<action>.jsonl` holds
+/// the lines it sends after answering that action; `before.json` is its
+/// `launch.before` result and `delay` how long it thinks first.
+const SCRIPTED: &str = r#"#!/bin/bash
+send() { printf '%s\n' "$1"; }
+while IFS= read -r line; do
+    printf '%s\n' "$line" >> "$HOME/seen.log"
+    id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+    case "$line" in
+    *'"method":"initialize"'*)
+        send "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"ready\":true}}" ;;
+    *'"method":"launch.before"'*)
+        sleep "$(cat "$ARCHR_MODULE_DIR/delay" 2>/dev/null || echo 0)"
+        send "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":$(cat "$ARCHR_MODULE_DIR/before.json")}" ;;
+    *'"method":"action.invoke"'*)
+        action=$(printf '%s' "$line" | sed -n 's/.*"action":"\([a-z]*\)".*/\1/p')
+        send "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{}}"
+        while IFS= read -r out; do send "$out"; done < "$ARCHR_MODULE_DIR/$action.jsonl" ;;
+    *'"method":"shutdown"'*)
+        send "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{}}"; exit 0 ;;
+    esac
+done
+"#;
+/// An API 2 module running `SCRIPTED` with these permissions, all granted.
+fn api_2(base: &Path, id: &str, permissions: &str, granted: &[&str]) -> std::path::PathBuf {
+    module(
+        base,
+        id,
+        "daemon",
+        &format!("[permissions]\n{permissions}\n"),
+        SCRIPTED,
+    );
+    let dir = base.join("modules").join(id);
+    let toml = fs::read_to_string(dir.join("module.toml")).unwrap();
+    fs::write(
+        dir.join("module.toml"),
+        toml.replace("api_version = 1", "api_version = 2"),
+    )
+    .unwrap();
+    let mut state = State::load(&base.join("modules.toml"));
+    state.modules.insert(
+        id.into(),
+        Record {
+            consent: true,
+            enabled: true,
+            granted: granted.iter().map(|g| (*g).into()).collect(),
+            ..Record::default()
+        },
+    );
+    state.save(&base.join("modules.toml")).unwrap();
+    dir
+}
+fn rpc(id: &str, method: &str, params: &str) -> String {
+    format!("{{\"jsonrpc\":\"2.0\",\"id\":\"{id}\",\"method\":\"{method}\",\"params\":{params}}}\n")
+}
+/// The daemons got `initialize`, and the host had time to read "ready".
+fn ready(base: &Path, ids: &[&str]) {
+    for id in ids {
+        until(
+            &base.join(format!("module-data/{id}/seen.log")),
+            "initialize",
+        );
+    }
+    std::thread::sleep(Duration::from_millis(300));
+}
+/// The answer the module got to its request `id`.
+fn answer(log: &str, id: &str) -> String {
+    let tag = format!("\"id\":\"{id}\"");
+    log.lines()
+        .find(|l| l.contains(&tag))
+        .unwrap_or("")
+        .to_owned()
+}
+
+#[test]
+fn config_set_writes_only_allowed_keys_and_values_at_a_bounded_rate() {
+    let root = tempfile::tempdir().unwrap();
+    let base = root.path();
+    let dir = api_2(
+        base,
+        "perfil",
+        "config_write = [\"system.cpugovernor\"]",
+        &["config_write:system.cpugovernor"],
+    );
+    fs::write(base.join("system.cfg"), "system.cpugovernor=ondemand\n").unwrap();
+    let lines = [
+        rpc(
+            "w1",
+            "config.set",
+            r#"{"key":"system.cpugovernor","value":"performance"}"#,
+        ),
+        rpc(
+            "w2",
+            "config.set",
+            r#"{"key":"system.cpugovernor","value":"powersave"}"#,
+        ),
+        rpc(
+            "w3",
+            "config.set",
+            r#"{"key":"system.timezone","value":"UTC"}"#,
+        ),
+        rpc("w4", "config.get", r#"{"key":"system.cpugovernor"}"#),
+    ];
+    fs::write(dir.join("go.jsonl"), lines.concat()).unwrap();
+    let bad = rpc(
+        "w5",
+        "config.set",
+        r#"{"key":"system.cpugovernor","value":"$(reboot)"}"#,
+    );
+    fs::write(dir.join("bad.jsonl"), bad).unwrap();
+    let mut probe = Probe::new(base);
+    probe.wait(|v, _| !v.modules.is_empty());
+    let log = base.join("module-data/perfil/seen.log");
+    ready(base, &["perfil"]);
+    probe.invoke("perfil", "go");
+    let seen = until(&log, "\"id\":\"w4\"");
+    assert!(answer(&seen, "w1").contains("\"result\""), "{seen}");
+    assert!(
+        answer(&seen, "w2").contains("-32003"),
+        "one a second: {seen}"
+    );
+    assert!(
+        answer(&seen, "w3").contains("-32001"),
+        "not granted: {seen}"
+    );
+    assert!(
+        answer(&seen, "w4").contains("-32001"),
+        "writing is not reading: {seen}"
+    );
+    let cfg = fs::read_to_string(base.join("system.cfg")).unwrap();
+    assert!(cfg.contains("system.cpugovernor=performance"), "{cfg}");
+    probe.wait(|_, _| true);
+    std::thread::sleep(Duration::from_millis(1100));
+    probe.invoke("perfil", "bad");
+    let seen = until(&log, "\"id\":\"w5\"");
+    assert!(answer(&seen, "w5").contains("-32602"), "{seen}");
+    let cfg = fs::read_to_string(base.join("system.cfg")).unwrap();
+    assert!(cfg.contains("system.cpugovernor=performance"), "{cfg}");
+    probe.wait(|_, _| true);
+    assert_eq!(probe.configs, 1, "the launcher re-reads system.cfg once");
+}
+
+#[test]
+fn launch_before_picks_the_governor_only_with_cpu_profile_and_in_time() {
+    let root = tempfile::tempdir().unwrap();
+    let base = root.path();
+    let both = ["hooks:launch", "system:cpu-profile"];
+    let fast = api_2(
+        base,
+        "a-fast",
+        "hooks = [\"launch\"]\nsystem = [\"cpu-profile\"]",
+        &both,
+    );
+    let modify = r#"{"decision":"modify","changes":{"governor":"performance"}}"#;
+    fs::write(fast.join("before.json"), modify).unwrap();
+    // Asks without the system capability: heard, not obeyed.
+    let plain = api_2(base, "b-plain", "hooks = [\"launch\"]", &["hooks:launch"]);
+    fs::write(
+        plain.join("before.json"),
+        modify.replace("performance", "powersave"),
+    )
+    .unwrap();
+    let mut probe = Probe::new(base);
+    for id in ["a-fast", "b-plain"] {
+        until(
+            &base.join(format!("module-data/{id}/seen.log")),
+            "initialize",
+        );
+    }
+    probe.wait(|_, _| true);
+    std::thread::sleep(Duration::from_millis(300));
+    let started = Instant::now();
+    let governor = probe.modules.hand_off("n64", "n64/mario.z64", "Mario");
+    assert_eq!(governor.as_deref(), Some("performance"));
+    assert!(started.elapsed() < Duration::from_secs(2));
+    let seen = fs::read_to_string(base.join("module-data/b-plain/seen.log")).unwrap();
+    assert!(seen.contains("\"method\":\"launch.before\""), "{seen}");
+    assert!(seen.contains("\"game_key\":\"n64/mario.z64\""), "{seen}");
+    // Back from the game: a module that thinks too long is not waited for.
+    fs::write(fast.join("delay"), "1").unwrap();
+    for id in ["a-fast", "b-plain"] {
+        let _ = fs::remove_file(base.join(format!("module-data/{id}/seen.log")));
+    }
+    probe.modules.resume();
+    for id in ["a-fast", "b-plain"] {
+        until(
+            &base.join(format!("module-data/{id}/seen.log")),
+            "initialize",
+        );
+    }
+    std::thread::sleep(Duration::from_millis(300));
+    let started = Instant::now();
+    assert_eq!(
+        probe.modules.hand_off("n64", "n64/mario.z64", "Mario"),
+        None
+    );
+    assert!(
+        started.elapsed() < Duration::from_millis(1500),
+        "{:?}",
+        started.elapsed()
+    );
+    // Netplay and streams have no game of their own: nobody is asked.
+    probe.modules.resume();
+    assert_eq!(probe.modules.hand_off("", "", ""), None);
+}
+
+#[test]
+fn game_launch_needs_the_permission_and_a_fresh_user_action() {
+    let root = tempfile::tempdir().unwrap();
+    let base = root.path();
+    let open = rpc(
+        "l1",
+        "game.launch",
+        r#"{"system":"snes","game_key":"snes/zelda.sfc"}"#,
+    );
+    let twice = [open.clone(), open.replace("l1", "l2")].concat();
+    let allowed = api_2(base, "abre", "launch = true", &["launch"]);
+    fs::write(allowed.join("go.jsonl"), &twice).unwrap();
+    let denied = api_2(base, "nega", "", &[]);
+    fs::write(denied.join("go.jsonl"), &open).unwrap();
+    let mut probe = Probe::new(base);
+    ready(base, &["abre", "nega"]);
+    probe.invoke("abre", "go");
+    probe.invoke("nega", "go");
+    let seen = until(&base.join("module-data/abre/seen.log"), "\"id\":\"l2\"");
+    assert!(answer(&seen, "l1").contains("\"result\""), "{seen}");
+    assert!(
+        answer(&seen, "l2").contains("-32001"),
+        "one launch per action: {seen}"
+    );
+    let seen = until(&base.join("module-data/nega/seen.log"), "\"id\":\"l1\"");
+    assert!(answer(&seen, "l1").contains("-32001"), "{seen}");
+    probe.wait(|_, _| true);
+    assert_eq!(
+        probe.launches,
+        [("snes".to_owned(), "snes/zelda.sfc".to_owned())]
+    );
 }

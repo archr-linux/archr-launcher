@@ -37,6 +37,13 @@ const DEBOUNCE: Duration = Duration::from_millis(400);
 /// `ui.update`s reach the screens at most four times a second.
 const PUBLISH: Duration = Duration::from_millis(250);
 const NOTIFY: Duration = Duration::from_secs(10);
+/// All `launch.before` answers must arrive within this, together.
+pub const BEFORE: Duration = Duration::from_millis(300);
+/// `game.launch` is honoured this long after the user chose one of the
+/// module's actions, once.
+const GESTURE: Duration = Duration::from_secs(5);
+/// One `config.set` per module in this time.
+const CONFIG_SET: Duration = Duration::from_secs(1);
 const LAST_LAUNCH: &str = "last-launch.json";
 
 /// Where and how modules run.
@@ -44,8 +51,9 @@ pub struct Config {
     pub dirs: Dirs,
     /// /run/archr-launcher: the hand-off exit code and the last launch.
     pub run: PathBuf,
-    /// system.cfg, for `config.get`.
+    /// system.cfg, for `config.get` and `config.set`, and its lock.
     pub system_cfg: PathBuf,
+    pub lock: PathBuf,
     pub executor: Arc<dyn Executor>,
     /// Set when the executor is `Direct`, which tracks its process groups.
     pub direct: Option<Arc<Direct>>,
@@ -79,6 +87,7 @@ impl Config {
             dirs,
             run: paths.run.clone(),
             system_cfg: paths.config.clone(),
+            lock: paths.lock.clone(),
             executor,
             direct,
             userdb,
@@ -95,6 +104,13 @@ pub enum Event {
     View(Arc<View>),
     Notice(Notice),
     Store(StoreReply),
+    /// A module changed system.cfg: whoever caches it reads it again.
+    Config,
+    /// A module asks to open this game, as if the user chose it.
+    Launch {
+        system: String,
+        game_key: String,
+    },
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Notice {
@@ -108,11 +124,16 @@ pub enum Notice {
     Text(String),
 }
 
+/// Where the governor chosen for one launch goes.
+type Governor = mpsc::Sender<Option<String>>;
+
 enum Input {
     Request(Request),
     Language(String),
     Focus(&'static str, Json),
     GameStarted(Json),
+    /// `launch.before` to the modules with the hook; the governor comes back.
+    Before(Json, Governor),
     Stop(mpsc::Sender<()>),
     Resume,
     Line {
@@ -174,15 +195,28 @@ impl Modules {
     pub fn poll(&self) -> Vec<Event> {
         self.rx.try_iter().collect()
     }
-    /// A game is about to take the screen: tell the modules, then stop them
-    /// all. Returns once nothing runs (500 ms for daemons, then killed).
-    pub fn hand_off(&self, system: &str, game_key: &str, name: &str) {
+    /// A game is about to take the screen: ask the modules with the launch
+    /// hook (`BEFORE` at most), tell every module, then stop them all.
+    /// Returns once nothing runs (500 ms for daemons, then killed), with the
+    /// CPU governor a module chose for this launch.
+    pub fn hand_off(&self, system: &str, game_key: &str, name: &str) -> Option<String> {
         let game = json!({"system": system, "game_key": game_key, "name": name});
+        let mut governor = None;
+        if !system.is_empty() {
+            let (tx, rx) = mpsc::channel();
+            if self.tx.send(Input::Before(game.clone(), tx)).is_ok() {
+                governor = rx
+                    .recv_timeout(BEFORE + Duration::from_millis(200))
+                    .ok()
+                    .flatten();
+            }
+        }
         let _ = self.tx.send(Input::GameStarted(game));
         let (ack, done) = mpsc::channel();
         if self.tx.send(Input::Stop(ack)).is_ok() {
             let _ = done.recv_timeout(Duration::from_secs(5));
         }
+        governor
     }
     /// The hand-off failed: modules run again.
     pub fn resume(&self) {
@@ -201,6 +235,7 @@ enum Waiting {
     Initialize,
     Invoke(String),
     Shutdown,
+    Before,
 }
 
 struct Host {
@@ -226,6 +261,13 @@ struct Host {
     dirty: Option<Instant>,
     published: Instant,
     notified: BTreeMap<String, Instant>,
+    /// The last `config.set` of each module.
+    written: BTreeMap<String, Instant>,
+    /// When the user last chose an action of each module (`game.launch`).
+    gestures: BTreeMap<String, Instant>,
+    /// A launch waiting for `launch.before`: where the answer goes and the
+    /// governor each module chose.
+    before: Option<(Governor, BTreeMap<String, String>)>,
 }
 
 impl Host {
@@ -264,6 +306,9 @@ impl Host {
             dirty: None,
             published: Instant::now(),
             notified: BTreeMap::new(),
+            written: BTreeMap::new(),
+            gestures: BTreeMap::new(),
+            before: None,
             config,
             inbox,
             out,
@@ -419,6 +464,7 @@ impl Host {
                 }
                 self.deliver("game.started", &json!({"game": game}));
             }
+            Input::Before(game, reply) => self.before(&game, reply),
             Input::Stop(ack) => {
                 self.stop();
                 let _ = ack.send(());
@@ -532,6 +578,7 @@ impl Host {
             _ => false,
         };
         if sent {
+            self.gestures.insert(id.to_owned(), Instant::now());
             self.view.busy.insert((id.to_owned(), action.to_owned()));
             self.publish();
         }
@@ -838,7 +885,8 @@ impl Host {
             "device": self.config.device,
             "settings": settings,
             "permissions": permissions,
-            "capabilities": ["ui.update", "ui.notify", "settings.set", "config.get", "log"],
+            "capabilities": ["ui.update", "ui.notify", "settings.set", "config.get",
+                "config.set", "game.launch", "launch.before", "log"],
         });
         self.send(
             id,
@@ -1038,6 +1086,7 @@ impl Host {
                 self.touch();
             }
             Waiting::Shutdown => {}
+            Waiting::Before => self.decision(id, &message["result"]),
         }
     }
     fn notification(&mut self, id: &str, method: &str, params: &Json) {
@@ -1130,7 +1179,55 @@ impl Host {
                     .and_then(|cfg| cfg.get_setting(key, None, None));
                 Ok(json!({ "value": value }))
             }
-            "config.set" | "game.launch" => Err((-32001, "permission denied")),
+            "config.set" => {
+                let key = params["key"].as_str().ok_or((-32602, "key"))?;
+                if !manifest.permissions.config_write.iter().any(|k| k == key) {
+                    return Err((-32001, "permission denied"));
+                }
+                let value = params["value"].as_str().ok_or((-32602, "value"))?;
+                if !manifest::writable(key, value) {
+                    return Err((-32602, "value"));
+                }
+                if self
+                    .written
+                    .get(id)
+                    .is_some_and(|at| at.elapsed() < CONFIG_SET)
+                {
+                    return Err((-32003, "too many requests"));
+                }
+                self.written.insert(id.to_owned(), Instant::now());
+                let (path, lock) = (&self.config.system_cfg, &self.config.lock);
+                if let Err(error) = archr_config::SystemCfg::set_and_save(path, lock, key, value) {
+                    log::warn!("Module {id}: cannot save {key}: {error}");
+                    return Err((-32000, "cannot save"));
+                }
+                log::info!("Module {id} set {key} to {value}");
+                let _ = self.out.send(Event::Config);
+                Ok(json!({}))
+            }
+            "game.launch" => {
+                if !manifest.permissions.launch {
+                    return Err((-32001, "permission denied"));
+                }
+                let text = |key: &str, max: usize| {
+                    params[key]
+                        .as_str()
+                        .filter(|t| {
+                            !t.is_empty() && t.len() <= max && !t.chars().any(char::is_control)
+                        })
+                        .map(str::to_owned)
+                        .ok_or((-32602, "system and game_key"))
+                };
+                let (system, game_key) = (text("system", 64)?, text("game_key", 1024)?);
+                // Only right after the user chose one of its actions, once.
+                match self.gestures.remove(id) {
+                    Some(at) if at.elapsed() < GESTURE => {}
+                    _ => return Err((-32001, "only after the user's action")),
+                }
+                log::info!("Module {id} launches {system}/{game_key}");
+                let _ = self.out.send(Event::Launch { system, game_key });
+                Ok(json!({}))
+            }
             _ => Err((-32601, "method not found")),
         }
     }
@@ -1168,6 +1265,76 @@ impl Host {
                 }
                 _ => {}
             }
+        }
+    }
+
+    // ---- launch hook ----
+
+    /// `launch.before` to every ready daemon granted the launch hook.
+    fn before(&mut self, game: &Json, reply: Governor) {
+        let ids: Vec<String> = self
+            .daemons
+            .iter()
+            .filter(|(_, d)| d.ready)
+            .map(|(id, _)| id.clone())
+            .filter(|id| {
+                self.active(id)
+                    .is_some_and(|(_, m)| m.permissions.hooks.iter().any(|h| h == "launch"))
+            })
+            .collect();
+        self.before = Some((reply, BTreeMap::new()));
+        for id in ids {
+            self.next += 1;
+            let request = self.next;
+            self.pending.insert(
+                request,
+                (id.clone(), Waiting::Before, Instant::now() + BEFORE),
+            );
+            self.send(
+                &id,
+                &json!({"jsonrpc": "2.0", "id": request, "method": "launch.before",
+                    "params": {"game": game}}),
+            );
+        }
+        self.settle();
+    }
+    /// `{"decision": "allow"}` or `{"decision": "modify", "changes": {...}}`:
+    /// only the changes the module was granted count.
+    fn decision(&mut self, id: &str, result: &Json) {
+        if result["decision"] != "modify" {
+            return;
+        }
+        let granted = self
+            .active(id)
+            .is_some_and(|(_, m)| m.permissions.system.iter().any(|s| s == "cpu-profile"));
+        let governor = result["changes"]["governor"].as_str();
+        match (governor, &mut self.before) {
+            (Some(g), Some((_, chosen))) if granted && manifest::GOVERNORS.contains(&g) => {
+                chosen.insert(id.to_owned(), g.to_owned());
+            }
+            (Some(_), _) => log::warn!("Module {id}: launch change refused"),
+            _ => {}
+        }
+    }
+    /// Every answer is in, or late: the first module (by id) decides.
+    fn settle(&mut self) {
+        let waiting = self
+            .pending
+            .values()
+            .any(|p| matches!(p.1, Waiting::Before));
+        if waiting {
+            return;
+        }
+        if let Some((reply, chosen)) = self.before.take() {
+            let mut chosen = chosen.into_iter();
+            let first = chosen.next();
+            for (id, _) in chosen {
+                log::info!("Module {id}: another module already chose the governor");
+            }
+            if let Some((id, governor)) = &first {
+                log::info!("Module {id} runs this game with the {governor} governor");
+            }
+            let _ = reply.send(first.map(|(_, g)| g));
         }
     }
 
@@ -1228,6 +1395,7 @@ impl Host {
     fn tick(&mut self) {
         let now = Instant::now();
         if self.stopped {
+            self.settle();
             return;
         }
         if !self.started && now >= self.start_at {
@@ -1298,9 +1466,11 @@ impl Host {
                     self.touch();
                     self.punish(&id, "timed out");
                 }
+                Some(Waiting::Before) => self.punish(&id, "was late for launch.before"),
                 _ => {}
             }
         }
+        self.settle();
         if self.focus.as_ref().is_some_and(|f| f.0 <= now) {
             let (_, name, data) = self.focus.take().expect("focus");
             self.deliver(name, &data);
