@@ -796,8 +796,61 @@ fn config_set_writes_only_allowed_keys_and_values_at_a_bounded_rate() {
     assert!(answer(&seen, "w5").contains("-32602"), "{seen}");
     let cfg = fs::read_to_string(base.join("system.cfg")).unwrap();
     assert!(cfg.contains("system.cpugovernor=performance"), "{cfg}");
+    // The same value again: nothing written, nothing counted.
+    std::thread::sleep(Duration::from_millis(1100));
+    let same = rpc(
+        "w6",
+        "config.set",
+        r#"{"key":"system.cpugovernor","value":"performance"}"#,
+    );
+    fs::write(dir.join("same.jsonl"), same).unwrap();
+    // A save publishes a new file: the inode tells a rewrite.
+    let inode = || fs::metadata(base.join("system.cfg")).unwrap().ino();
+    let before = inode();
+    probe.invoke("perfil", "same");
+    let seen = until(&log, "\"id\":\"w6\"");
+    assert!(answer(&seen, "w6").contains("\"result\""), "{seen}");
+    assert_eq!(inode(), before, "not rewritten");
     probe.wait(|_, _| true);
     assert_eq!(probe.configs, 1, "the launcher re-reads system.cfg once");
+}
+
+#[test]
+fn config_set_allows_ten_writes_an_hour() {
+    let root = tempfile::tempdir().unwrap();
+    let base = root.path();
+    let dir = api_2(
+        base,
+        "perfil",
+        "config_write = [\"global.netplay.nickname\"]",
+        &["config_write:global.netplay.nickname"],
+    );
+    fs::write(base.join("system.cfg"), "").unwrap();
+    let mut probe = Probe::new(base);
+    let log = base.join("module-data/perfil/seen.log");
+    ready(base, &["perfil"]);
+    for n in 1..=11 {
+        let line = rpc(
+            &format!("n{n}"),
+            "config.set",
+            &format!(r#"{{"key":"global.netplay.nickname","value":"Ana {n}"}}"#),
+        );
+        fs::write(dir.join("go.jsonl"), line).unwrap();
+        probe.invoke("perfil", "go");
+        until(&log, &format!("\"id\":\"n{n}\""));
+        std::thread::sleep(Duration::from_millis(1050));
+    }
+    let seen = fs::read_to_string(&log).unwrap();
+    for n in 1..=10 {
+        assert!(
+            answer(&seen, &format!("n{n}")).contains("\"result\""),
+            "n{n}: {seen}"
+        );
+    }
+    assert!(answer(&seen, "n11").contains("-32003"), "{seen}");
+    let cfg = fs::read_to_string(base.join("system.cfg")).unwrap();
+    assert!(cfg.contains("Ana 10") && !cfg.contains("Ana 11"), "{cfg}");
+    probe.wait(|_, _| true);
 }
 
 #[test]

@@ -42,8 +42,11 @@ pub const BEFORE: Duration = Duration::from_millis(300);
 /// `game.launch` is honoured this long after the user chose one of the
 /// module's actions, once.
 const GESTURE: Duration = Duration::from_secs(5);
-/// One `config.set` per module in this time.
+/// One `config.set` per module in this time, and at most `CONFIG_HOURLY`
+/// writes in the last hour.
 const CONFIG_SET: Duration = Duration::from_secs(1);
+const CONFIG_HOURLY: usize = 10;
+const HOUR: Duration = Duration::from_secs(3600);
 const LAST_LAUNCH: &str = "last-launch.json";
 
 /// Where and how modules run.
@@ -261,8 +264,8 @@ struct Host {
     dirty: Option<Instant>,
     published: Instant,
     notified: BTreeMap<String, Instant>,
-    /// The last `config.set` of each module.
-    written: BTreeMap<String, Instant>,
+    /// When each module's `config.set`s were saved, the last hour's.
+    written: BTreeMap<String, Vec<Instant>>,
     /// When the user last chose an action of each module (`game.launch`).
     gestures: BTreeMap<String, Instant>,
     /// A launch waiting for `launch.before`: where the answer goes and the
@@ -1200,15 +1203,21 @@ impl Host {
                 if !manifest::writable(key, value) {
                     return Err((-32602, "value"));
                 }
-                if self
-                    .written
-                    .get(id)
-                    .is_some_and(|at| at.elapsed() < CONFIG_SET)
-                {
+                let (path, lock) = (&self.config.system_cfg, &self.config.lock);
+                let current = archr_config::SystemCfg::load(path)
+                    .ok()
+                    .and_then(|cfg| cfg.get_setting(key, None, None));
+                if current.as_deref() == Some(value) {
+                    // Nothing to write; it does not count either.
+                    return Ok(json!({}));
+                }
+                let times = self.written.entry(id.to_owned()).or_default();
+                times.retain(|at| at.elapsed() < HOUR);
+                let busy = times.last().is_some_and(|at| at.elapsed() < CONFIG_SET);
+                if busy || times.len() >= CONFIG_HOURLY {
                     return Err((-32003, "too many requests"));
                 }
-                self.written.insert(id.to_owned(), Instant::now());
-                let (path, lock) = (&self.config.system_cfg, &self.config.lock);
+                times.push(Instant::now());
                 if let Err(error) = archr_config::SystemCfg::set_and_save(path, lock, key, value) {
                     log::warn!("Module {id}: cannot save {key}: {error}");
                     return Err((-32000, "cannot save"));
