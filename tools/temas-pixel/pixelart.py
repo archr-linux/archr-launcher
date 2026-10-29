@@ -111,13 +111,14 @@ def text_mask(width, height):
 
 # ---------------------------------------------------------------- textures
 
-def sand(w, h, seed=1, p=BEACH):
-    """Sand with a sparse speckle: no clumps, never two dark grains touching."""
+def sand(w, h, seed=1, p=BEACH, grain=1.0, base="sand"):
+    """Sand with a sparse speckle: no clumps, never two dark grains touching.
+    `grain` scales how many grains there are (0: smooth, for text)."""
     rnd = random.Random(seed)
-    img = canvas(w, h, p["sand"])
+    img = canvas(w, h, p[base])
     for y in range(h):
         for x in range(w):
-            r = rnd.random()
+            r = rnd.random() / max(grain, 1e-6)
             if r < 0.05:
                 px(img, x, y, p["sand_md"])
             elif r < 0.07:
@@ -271,11 +272,11 @@ def foam(w, h, seed=3, p=BEACH):
 
 # ------------------------------------------------------------------ frames
 
-def ragged(w, h, seed, p=BEACH, inset=True):
+def ragged(w, h, seed, p=BEACH, inset=True, grain=0.6):
     """A sand slab with an uneven edge, dark outline, light top-left and a
     darker lower lip; `inset` carves a recessed well inside."""
     rnd = random.Random(seed)
-    body = sand(w, h, seed, p)
+    body = sand(w, h, seed, p, grain)
     mask = canvas(w, h)
     rect(mask, 0, 0, w, h, (255, 255, 255, 255))
     # Wobble: runs of 0 or 1 pixel bites along each edge, round corners.
@@ -316,9 +317,10 @@ def ragged(w, h, seed, p=BEACH, inset=True):
     return outline(padded(shape), p["outline"])
 
 
-def well(img, x, y, w, h, seed, p=BEACH):
-    """A recessed sand area: shaded top-left lip, lit bottom-right lip."""
-    inner = sand(w, h, seed, p)
+def well(img, x, y, w, h, seed, p=BEACH, grain=0.0):
+    """A recessed sand area: shaded top-left lip, lit bottom-right lip;
+    smooth inside by default, so text on it stays clear."""
+    inner = sand(w, h, seed, p, grain, "sand_lt")
     rect(inner, 0, 0, w, 1, p["sand_dk"])
     rect(inner, 0, 0, 1, h, p["sand_dk"])
     rect(inner, 0, 1, w, 1, p["sand_md"])
@@ -345,12 +347,12 @@ def button(w, h, p=BEACH, selected=False, seed=11):
             px(img, x, y, p["sea_hi"])
         framed = outline(padded(img), p["foam"])
         return outline(padded(framed), p["deep"])
-    body = sand(w, h, seed, p)
+    body = sand(w, h, seed, p, 0.0, "sand_lt")
     mask = canvas(w, h)
     chunky(mask, 0, 0, w, h, (255, 255, 255, 255), 2)
     img.paste(body, (0, 0), mask)
     rect(img, 2, 0, w - 4, 1, p["sand_hi"])
-    rect(img, 1, 1, w - 2, 1, p["sand_lt"])
+    rect(img, 1, 1, w - 2, 1, p["sand_hi"])
     rect(img, 2, h - 2, w - 4, 1, p["sand_md"])
     rect(img, 2, h - 1, w - 4, 1, p["sand_dk"])
     return outline(padded(img), p["outline"])
