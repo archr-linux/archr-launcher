@@ -888,7 +888,13 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 if let (Screen::Games { .. }, Some(wash)) = (backdrop, layout.backdrop) {
                     self.backdrop(art.cover, wash, theme)?;
                 }
-                self.header(backdrop, cursor, data, theme, layout)?;
+                // The hub names itself in a view that titles screens.
+                let shown = if matches!(app.screen, Screen::StartHub { .. }) {
+                    &app.screen
+                } else {
+                    backdrop
+                };
+                self.header(shown, cursor, data, theme, layout)?;
                 if matches!(app.screen, Screen::StartHub { .. }) {
                     self.hub(app, data, theme)?;
                 } else {
@@ -1067,7 +1073,13 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 Rect::new(pad + title_w as i32 + self.px(10.), 0, pw, h),
             )?;
         } else if !layout.brand {
-            let title = self.catalog.text("systems.heading");
+            let title = self
+                .catalog
+                .text(if matches!(screen, Screen::StartHub { .. }) {
+                    "start.title"
+                } else {
+                    "systems.heading"
+                });
             let width = (right - pad - self.px(10.)).max(1) as u32;
             self.label(
                 &title,

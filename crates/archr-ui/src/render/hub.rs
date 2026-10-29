@@ -35,8 +35,14 @@ impl Ui<'_, '_> {
         let scale = self.frame.scale;
         let px = |n: f32| (n * scale).round() as i32;
         let center = width as i32 / 2;
+        // A view that titles screens already says "Start" in the header.
+        let title = if self.view(theme).systems.brand {
+            self.catalog.text("start.title")
+        } else {
+            String::new()
+        };
         self.label_aligned(
-            &self.catalog.text("start.title"),
+            &title,
             (Face::Semibold, 17., theme.text),
             Rect::new(0, px(57.), width, px(28.) as u32),
             Align::Center,
