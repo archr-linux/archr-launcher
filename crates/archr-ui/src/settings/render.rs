@@ -10,6 +10,8 @@ use crate::settings::{
 };
 #[path = "render/appearance.rs"]
 mod appearance;
+#[path = "render/controls.rs"]
+mod controls;
 #[path = "render/custom.rs"]
 mod custom;
 #[path = "render/information.rs"]
@@ -60,6 +62,8 @@ fn placements(page: Page, rows: &[Row]) -> Vec<Placement> {
                 Page::Services => 38.,
                 Page::Storage | Page::ScraperMedia => 40.,
                 Page::Mangohud if row.subtitle.is_some() => 44.,
+                Page::LauncherControls if row.id == Id::ButtonsRestore => 36.,
+                Page::LauncherControls => 38.,
                 _ if row.subtitle.is_some() => 46.,
                 _ => 40.,
             };
@@ -516,6 +520,11 @@ impl View<'_, '_, '_> {
             / self.ui.frame.scale;
         let status = if state.loading {
             Some(self.ui.catalog.text("loading"))
+        } else if state.capturing() && state.page() == Page::LauncherControls {
+            Some(self.tr(&format!(
+                "controls.press_hint|button={}",
+                state.cancel_pad().name()
+            )))
         } else if matches!(state.page(), Page::Info | Page::InfoDetail(_)) {
             Some(self.tr(if state.page() == Page::Info {
                 "settings.updated_now"
@@ -874,6 +883,11 @@ impl View<'_, '_, '_> {
         selected: bool,
         (x, y, w, h): Bounds,
     ) -> Result<(), String> {
+        if let Id::Bind(n) = id {
+            let waiting = state.capture.as_ref().is_some_and(|c| c.id == id);
+            let name = state.bindings()[usize::from(n)].name();
+            return self.pads(&[(!waiting).then_some(name)], selected, (x, y, w, h));
+        }
         let ink = if state.disabled(id) {
             selection(selected, self.theme.muted, self.theme.accent_text_secondary)
         } else {

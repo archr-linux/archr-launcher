@@ -91,9 +91,25 @@ impl Runtime {
     pub fn close(&mut self) {
         self.closing = true;
     }
+    /// The press an open "press a button" prompt waited for.
+    pub fn capture(&mut self, pad: archr_ui::pad::Pad) {
+        let effect = self.state.captured(pad);
+        self.apply(effect);
+    }
     pub fn handle(&mut self, button: Button) -> Outcome {
         let before = self.state.page();
-        match self.state.handle(button) {
+        let effect = self.state.handle(button);
+        let outcome = self.apply(effect);
+        if before != Page::Wifi && self.state.page() == Page::Wifi {
+            self.next_scan = Instant::now();
+        }
+        if before != Page::Bluetooth && self.state.page() == Page::Bluetooth {
+            self.next_bt_scan = Instant::now();
+        }
+        outcome
+    }
+    fn apply(&mut self, effect: Effect) -> Outcome {
+        match effect {
             Effect::Close => self.active = false,
             Effect::Set(id, value) if Games::ROWS.contains(&id) => {
                 let system = self.state.games.name().to_owned();
@@ -132,12 +148,6 @@ impl Runtime {
             Effect::Storage(action) => self.send(Work::Storage(action)),
             Effect::Reboot => return Outcome::Action(SessionAction::Reboot),
             Effect::None => {}
-        }
-        if before != Page::Wifi && self.state.page() == Page::Wifi {
-            self.next_scan = Instant::now();
-        }
-        if before != Page::Bluetooth && self.state.page() == Page::Bluetooth {
-            self.next_bt_scan = Instant::now();
         }
         Outcome::None
     }

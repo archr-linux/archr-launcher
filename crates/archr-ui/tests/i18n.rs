@@ -374,6 +374,7 @@ const CONFIG_KEYS: &[&str] = &[
     "launcher.accent",
     "launcher.animations",
     "launcher.background",
+    "launcher.buttons",
     "launcher.clock.format",
     "launcher.font",
     "launcher.scraper.media",

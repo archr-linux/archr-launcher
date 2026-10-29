@@ -265,6 +265,17 @@ fn pages() -> Vec<(&'static str, Settings)> {
     let mut games_mangohud = games.clone();
     games_mangohud.mangohud_supported = true;
     games_mangohud.cursor = 6;
+    let mut controls = ready();
+    controls.open(Page::Controls);
+    let mut launcher_controls = controls.clone();
+    launcher_controls.open(Page::LauncherControls);
+    launcher_controls
+        .values
+        .insert(Id::Buttons, "B,A,X,Y,L1,R1,START".into());
+    launcher_controls.cursor = 2;
+    let mut launcher_press = launcher_controls.clone();
+    launcher_press.cursor = 3;
+    launcher_press.handle(Button::A);
     vec![
         // First, so the list snaps to its scrolled end.
         ("storage-end", storage_end),
@@ -308,6 +319,9 @@ fn pages() -> Vec<(&'static str, Settings)> {
         ("mangohud-custom", mangohud_custom),
         ("mangohud-unsupported", mangohud_off),
         ("games-mangohud", games_mangohud),
+        ("controls", controls),
+        ("controls-launcher", launcher_controls),
+        ("controls-launcher-press", launcher_press),
     ]
 }
 #[test]

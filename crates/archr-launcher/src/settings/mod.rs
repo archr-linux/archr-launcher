@@ -112,11 +112,13 @@ impl Backend {
     pub fn load(&self) -> Result<Settings, String> {
         let cfg = self.cfg()?;
         let mut state = Settings::default();
-        for page in [Page::Sound, Page::System, Page::Region] {
-            for row in page.rows() {
-                if let Some(value) = cfg.get_setting(row.id.key(), None, None) {
-                    state.values.insert(row.id, row.id.normalize(&value));
-                }
+        let ids = [Page::Sound, Page::System, Page::Region]
+            .iter()
+            .flat_map(|page| page.rows().iter().map(|row| row.id))
+            .chain([Id::Buttons]);
+        for id in ids {
+            if let Some(value) = cfg.get_setting(id.key(), None, None) {
+                state.values.insert(id, id.normalize(&value));
             }
         }
         self.load_pages(&cfg, &mut state);
@@ -238,6 +240,7 @@ impl Backend {
             | Id::Language
             | Id::Idle
             | Id::IdleGame => id.choices().contains(&value),
+            Id::Buttons => archr_ui::pad::bindings_text(&archr_ui::pad::bindings(value)) == value,
             Id::Suspend => {
                 matches!(value, "default" | "off")
                     || self

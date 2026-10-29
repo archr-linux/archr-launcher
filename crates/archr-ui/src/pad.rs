@@ -62,6 +62,38 @@ pub const ACTIONS: [(Button, Pad, &str); 7] = [
     (Button::R, Pad::R1, "controls.page_next"),
     (Button::Start, Pad::Start, "controls.start_menu"),
 ];
+/// `launcher.buttons`: the control of each action, comma-separated in
+/// `ACTIONS` order. Anything else (a direction, a repeat, a wrong count)
+/// means the defaults.
+pub fn bindings(saved: &str) -> [Pad; ACTIONS.len()] {
+    let mut out = ACTIONS.map(|action| action.1);
+    let parsed: Vec<Option<Pad>> = saved.split(',').map(Pad::from_name).collect();
+    if parsed.len() == out.len()
+        && parsed.iter().enumerate().all(|(n, pad)| {
+            pad.is_some_and(|p| !p.is_direction() && p != Pad::Fn && !parsed[..n].contains(pad))
+        })
+    {
+        for (slot, pad) in out.iter_mut().zip(parsed) {
+            *slot = pad.expect("checked");
+        }
+    }
+    out
+}
+pub fn bindings_text(bound: &[Pad]) -> String {
+    bound.iter().map(|p| p.name()).collect::<Vec<_>>().join(",")
+}
+/// The letter footer hints show for the A, B, X and Y actions: the face
+/// button now doing each, or the action's own letter when another kind of
+/// control (L2, START) does it.
+pub fn face_letters(bound: &[Pad; ACTIONS.len()]) -> [char; 4] {
+    let mut out = ['A', 'B', 'X', 'Y'];
+    for (letter, pad) in out.iter_mut().zip(bound) {
+        if matches!(pad, Pad::A | Pad::B | Pad::X | Pad::Y) {
+            *letter = pad.name().chars().next().expect("named");
+        }
+    }
+    out
+}
 impl Pad {
     pub fn name(self) -> &'static str {
         PADS[self as usize].1
@@ -175,6 +207,10 @@ impl Default for Remap {
     }
 }
 impl Remap {
+    /// The remap a saved `launcher.buttons` asks for.
+    pub fn saved(saved: &str) -> Self {
+        Self::new(bindings(saved).into_iter().zip(ACTIONS.map(|a| a.0)))
+    }
     pub fn new(bound: impl IntoIterator<Item = (Pad, Button)>) -> Self {
         let mut map = [None; PADS.len()];
         for (pad, button) in [
@@ -289,6 +325,36 @@ mod tests {
         assert_eq!(Pad::from_evdev("BTN_MODE"), Some(Pad::Fn));
         assert_eq!(Pad::from_evdev("KEY_POWER"), None);
         assert_eq!(Pad::pressed(&pad(Sdl::Guide)), None);
+    }
+
+    #[test]
+    fn saved_bindings_parse_strictly_and_round_trip() {
+        let default = ACTIONS.map(|a| a.1);
+        assert_eq!(bindings_text(&default), "A,B,X,Y,L1,R1,START");
+        assert_eq!(bindings(""), default);
+        let swapped = bindings("B,A,X,Y,L2,R2,SELECT");
+        assert_eq!(bindings(&bindings_text(&swapped)), swapped);
+        assert_eq!(swapped[0], Pad::B);
+        for broken in [
+            "A,A,X,Y,L1,R1,START",
+            "A,B,X,Y,L1,R1",
+            "A,B,X,Y,L1,R1,START,SELECT",
+            "↑,B,X,Y,L1,R1,START",
+            "FN,B,X,Y,L1,R1,START",
+            "a,b,x,y,l1,r1,start",
+        ] {
+            assert_eq!(bindings(broken), default, "{broken}");
+        }
+        assert_eq!(Remap::saved("garbage"), Remap::default());
+        assert_eq!(face_letters(&swapped), ['B', 'A', 'X', 'Y']);
+        assert_eq!(
+            face_letters(&bindings("L2,B,A,X,L1,R1,START")),
+            ['A', 'B', 'A', 'X']
+        );
+        assert_eq!(
+            Remap::saved("B,A,X,Y,L1,R1,START").button(Pad::B),
+            Some(Button::A)
+        );
     }
 
     #[test]

@@ -6,6 +6,8 @@ use crate::{
 use std::collections::BTreeMap;
 use std::time::Instant;
 pub mod bluetooth;
+mod controls;
+pub use controls::Capture;
 mod custom;
 pub(crate) mod games;
 pub(crate) mod information;
@@ -41,6 +43,8 @@ pub enum Page {
     Storage,
     Mangohud,
     MangohudItems,
+    Controls,
+    LauncherControls,
     Soon(&'static str),
 }
 impl Page {
@@ -64,6 +68,8 @@ impl Page {
             Self::Storage => "settings.storage",
             Self::Mangohud => "settings.mangohud_page",
             Self::MangohudItems => "settings.mangohud_items",
+            Self::Controls => "settings.controls",
+            Self::LauncherControls => "controls.launcher",
             Self::Soon(key) => key,
         }
     }
@@ -74,6 +80,7 @@ impl Page {
             Self::Netplay | Self::Scraper | Self::Mangohud => &["settings.games"],
             Self::MangohudItems => &["settings.games", "settings.mangohud_page"],
             Self::AccentColor => &["settings.appearance"],
+            Self::LauncherControls => &["settings.controls"],
             Self::ScraperMedia => &["settings.games", "settings.scraper_short"],
             _ => &[],
         }
@@ -93,6 +100,8 @@ impl Page {
             Self::Appearance => pages::APPEARANCE,
             Self::Storage => storage::STORAGE,
             Self::Mangohud => mangohud::MANGOHUD,
+            Self::Controls => controls::CONTROLS,
+            Self::LauncherControls => controls::LAUNCHER,
             _ => &[],
         }
     }
@@ -179,6 +188,12 @@ pub enum Id {
     MangohudSize,
     MangohudAlpha,
     MangohudFps,
+    LauncherLink,
+    /// `launcher.buttons`: the control of every launcher action.
+    Buttons,
+    /// One action of the launcher Controls page: an index into `pad::ACTIONS`.
+    Bind(u8),
+    ButtonsRestore,
 }
 impl Id {
     fn metadata(self) -> (&'static str, &'static str) {
@@ -252,6 +267,7 @@ impl Id {
             Self::MangohudSize => ("archr.mangohud.font_size", "24"),
             Self::MangohudAlpha => ("archr.mangohud.alpha", "50"),
             Self::MangohudFps => ("archr.mangohud.fps_limit", "0"),
+            Self::Buttons => ("launcher.buttons", "A,B,X,Y,L1,R1,START"),
             Self::Update
             | Self::Restore
             | Self::Hidden
@@ -268,7 +284,10 @@ impl Id {
             | Self::RestoreBackup
             | Self::RootPassword
             | Self::FactoryReset
-            | Self::MangohudLink => ("", ""),
+            | Self::MangohudLink
+            | Self::LauncherLink
+            | Self::Bind(_)
+            | Self::ButtonsRestore => ("", ""),
         }
     }
     pub fn key(self) -> &'static str {
@@ -458,11 +477,7 @@ const REGION: &[Row] = &[
 pub(crate) const CATEGORIES: &[(Page, &str, Glyph)] = &[
     (Page::Wifi, "settings.network_detail", Glyph::Wifi),
     (Page::Sound, "settings.sound_detail", Glyph::Sound),
-    (
-        Page::Soon("settings.controls"),
-        "settings.controls_detail",
-        Glyph::Controls,
-    ),
+    (Page::Controls, "settings.controls_detail", Glyph::Controls),
     (Page::Games, "settings.games_detail", Glyph::Play),
     (Page::Region, "settings.region_detail", Glyph::Globe),
     (
@@ -593,6 +608,8 @@ pub struct Settings {
     pub mangohud_supported: bool,
     /// Layout and items when the items page opened, to save or restore.
     pub mangohud_saved: (String, String),
+    /// A "press a button" prompt is open.
+    pub capture: Option<Capture>,
     /// The remembered custom colour while the editor shows another one.
     custom_kept: Custom,
 }
@@ -639,6 +656,7 @@ impl Default for Settings {
             custom: Custom::default(),
             mangohud_supported: false,
             mangohud_saved: Default::default(),
+            capture: None,
             custom_kept: Custom::default(),
         }
     }
@@ -693,7 +711,8 @@ impl Settings {
                 crate::motion::Motion::Reduced => "appearance.anim_reduced",
                 crate::motion::Motion::Off => "appearance.anim_off",
             },
-            (Id::Restore | Id::Accent, _) => return String::new(),
+            (Id::Restore | Id::Accent | Id::ButtonsRestore, _) => return String::new(),
+            (Id::Bind(n), _) => return self.bindings()[usize::from(n)].name().into(),
             (Id::IndexNow, _) => "settings.soon",
             (Id::ScraperAccount, _) => "settings.sign_in",
             (Id::ScraperStart, _) if self.scrape.running => "settings.cancel_scraping",
@@ -713,7 +732,8 @@ impl Settings {
                 | Id::Backup
                 | Id::RestoreBackup
                 | Id::FactoryReset
-                | Id::MangohudLink,
+                | Id::MangohudLink
+                | Id::LauncherLink,
                 _,
             ) => return "›".into(),
             (Id::StorageCard, _) if self.storage.card.as_ref().is_some_and(|c| c.external) => {
@@ -832,6 +852,7 @@ impl Settings {
         match id {
             Id::IndexNow => true,
             Id::RestoreBackup => self.storage.backup.is_none(),
+            Id::ButtonsRestore => self.default_bindings(),
             Id::MergedStorage => !self.storage.merge_supported,
             Id::MangohudGame
             | Id::Mangohud
@@ -877,6 +898,7 @@ impl Settings {
             ],
             Page::Info => &[(Key('A'), "settings.details"), (Key('B'), "hint.back")],
             Page::MangohudItems => &[(Key('A'), "mangohud.mark"), (Key('B'), "hint.back")],
+            Page::Controls | Page::LauncherControls => self.controls_hints(),
             Page::ScraperMedia if !self.disabled(Id::ScraperMedia) => {
                 &[(Key('A'), "settings.mark"), (Key('B'), "hint.back")]
             }
@@ -1101,6 +1123,10 @@ impl Settings {
                 }
                 _ => Effect::None,
             };
+        }
+        // Presses go to an open prompt (`captured`), never here.
+        if self.capturing() {
+            return Effect::None;
         }
         // Any navigation input dismisses the last message.
         self.error = None;
