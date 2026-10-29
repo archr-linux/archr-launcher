@@ -37,6 +37,7 @@ fn grafite_layout_motion_glyphs_and_untrusted_text_render_offscreen() {
                 favorite: false,
                 year: None,
                 players: None,
+                details: Default::default(),
                 last_played: None,
             }],
         )]

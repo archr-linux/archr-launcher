@@ -69,6 +69,14 @@ pub struct Theme {
     pub list_width: f32,
     pub cover: Rect01,
     pub system_screen: SystemScreen,
+    /// Game details screen: screen shot, info table, logo or name, the line
+    /// under it, description and action buttons.
+    pub details_shot: Rect01,
+    pub details_info: Rect01,
+    pub details_title: Rect01,
+    pub details_subtitle: Rect01,
+    pub details_text: Rect01,
+    pub details_actions: Rect01,
 }
 
 impl Theme {
@@ -144,6 +152,12 @@ impl Theme {
             list_width: token!(list_width, fraction),
             cover: token!(cover, rectangle),
             system_screen: token!(system_screen, system_screen),
+            details_shot: token!(details_shot, rectangle),
+            details_info: token!(details_info, rectangle),
+            details_title: token!(details_title, rectangle),
+            details_subtitle: token!(details_subtitle, rectangle),
+            details_text: token!(details_text, rectangle),
+            details_actions: token!(details_actions, rectangle),
             font: font("font"),
             font_semibold: font("font_semibold"),
             font_mono: font("font_mono"),

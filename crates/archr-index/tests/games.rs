@@ -177,7 +177,7 @@ fn sort_uses_display_name_case_insensitively_then_path() {
 }
 
 #[test]
-fn gamelist_image_thumbnail_and_video_references_precede_folder_media() {
+fn gamelist_thumbnail_image_and_video_references_precede_folder_media() {
     let directory = tempfile::tempdir().unwrap();
     touch(directory.path(), "Game.sfc");
     let image = touch(directory.path(), "chosen.png");
@@ -189,19 +189,55 @@ fn gamelist_image_thumbnail_and_video_references_precede_folder_media() {
         "<gameList><game><path>{}</path><image>{}</image><thumbnail>./thumb.jpg</thumbnail><video>{}</video></game></gameList>",
         directory.path().join("Game.sfc").display(), image.display(), video.display()))
         .unwrap();
+    // As in ES, <thumbnail> is the box and <image> the screen shot.
+    let game = scan_system(&system(directory.path())).remove(0);
+    assert_eq!(game.image, Some(thumbnail.clone()));
+    assert_eq!(game.details.screenshot, Some(image.clone()));
+    assert_eq!(game.video, Some(video.clone()));
+    fs::remove_file(&thumbnail).unwrap();
     let game = scan_system(&system(directory.path())).remove(0);
     assert_eq!(game.image, Some(image.clone()));
-    assert_eq!(game.video, Some(video.clone()));
+    assert_eq!(game.details.screenshot, None);
     fs::remove_file(image).unwrap();
-    assert_eq!(
-        scan_system(&system(directory.path()))[0].image,
-        Some(thumbnail.clone())
-    );
-    fs::remove_file(thumbnail).unwrap();
     fs::remove_file(video).unwrap();
     let game = scan_system(&system(directory.path())).remove(0);
     assert_eq!(game.image, Some(fallback_image));
     assert_eq!(game.video, Some(fallback_video));
+}
+
+#[test]
+fn gamelist_supplies_scraped_details_and_art_falls_back_to_scraper_folders() {
+    let dir = tempfile::tempdir().unwrap();
+    touch(dir.path(), "Chrono.sfc");
+    let logo = touch(dir.path(), "logo.png");
+    let shot = touch(dir.path(), "media/screenshots/Chrono.png");
+    let wheel = touch(dir.path(), "media/wheel/Chrono.jpg");
+    fs::write(
+        dir.path().join("gamelist.xml"),
+        "<gameList><game><path>./Chrono.sfc</path>\
+        <desc>Crono &amp; Marle\ntravel.</desc><genre>RPG</genre><developer>Square</developer>\
+        <publisher>Nintendo</publisher><rating>0.95</rating><marquee>./logo.png</marquee>\
+        </game></gameList>",
+    )
+    .unwrap();
+    let game = scan_system(&system(dir.path())).remove(0);
+    assert_eq!(game.details.description, "Crono & Marle\ntravel.");
+    assert_eq!(game.details.genre, "RPG");
+    assert_eq!(game.details.developer, "Square");
+    assert_eq!(game.details.publisher, "Nintendo");
+    assert_eq!(game.details.rating, Some(95));
+    assert_eq!(game.details.logo, Some(logo.clone()));
+    assert_eq!(game.details.screenshot, Some(shot));
+    fs::remove_file(logo).unwrap();
+    fs::write(
+        dir.path().join("gamelist.xml"),
+        "<gameList><game><path>./Chrono.sfc</path><rating>0.000000</rating></game></gameList>",
+    )
+    .unwrap();
+    let game = scan_system(&system(dir.path())).remove(0);
+    assert_eq!(game.details.logo, Some(wheel));
+    assert_eq!(game.details.rating, None);
+    assert!(game.details.description.is_empty());
 }
 
 #[test]

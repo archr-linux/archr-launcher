@@ -74,12 +74,66 @@ pub const SCRAPER: &[Row] = &[
     )
     .kind(Kind::Action),
     row(Id::ScraperSystems, "settings.scraper_systems", Kind::Value),
-    row(Id::ScraperMedia, "settings.media", Kind::Value),
+    described(Id::ScraperMedia, "settings.media", "settings.choose_link").kind(Kind::Action),
     row(Id::ScraperMissing, "settings.only_missing", Kind::Toggle),
     row(Id::ScraperStart, "settings.start_scraping", Kind::Action),
 ];
+/// Scraper media choices, in page order: setting token, label, detail and
+/// where the launcher shows it. The tokens are archr-scraper's `Media` names.
+pub const MEDIA: [(&str, &str, &str, Option<&str>); 8] = [
+    (
+        "box",
+        "media.box",
+        "media.box_detail",
+        Some("media.used_list"),
+    ),
+    ("box3d", "media.box3d", "media.box3d_detail", None),
+    ("mix", "media.mix", "media.mix_detail", None),
+    (
+        "screenshot",
+        "media.screenshot",
+        "media.screenshot_detail",
+        Some("media.used_details"),
+    ),
+    ("title", "media.title", "media.title_detail", None),
+    (
+        "wheel",
+        "media.logo",
+        "media.logo_detail",
+        Some("media.used_details_logo"),
+    ),
+    ("video", "media.video", "media.video_detail", None),
+    ("manual", "media.manual", "media.manual_detail", None),
+];
+const fn media(n: u8) -> Row {
+    let (_, label, detail, _) = MEDIA[n as usize];
+    Row {
+        subtitle: Some(detail),
+        ..row(Id::MediaKind(n), label, Kind::Check)
+    }
+}
+pub const MEDIA_SECTION: &str = "settings.media_section";
+pub const SCRAPER_MEDIA: &[Row] = &[
+    media(0).under(MEDIA_SECTION),
+    media(1),
+    media(2),
+    media(3),
+    media(4),
+    media(5),
+    media(6),
+    media(7),
+];
 
 impl Settings {
+    /// Checked `MEDIA` tokens, in page order.
+    pub fn media_tokens(&self) -> Vec<&'static str> {
+        let value = self.value(Id::ScraperMedia);
+        MEDIA
+            .iter()
+            .map(|m| m.0)
+            .filter(|token| value.split(',').any(|t| t.trim() == *token))
+            .collect()
+    }
     pub(crate) fn text_input(id: Id) -> bool {
         matches!(
             id,
@@ -278,6 +332,30 @@ impl Settings {
             Id::ScraperLink => self.open(Page::Scraper),
             Id::MangohudLink => self.open(Page::Mangohud),
             Id::MangohudItems => self.open(Page::MangohudItems),
+            Id::ScraperMedia => self.open(Page::ScraperMedia),
+            Id::MediaKind(n) => {
+                let token = MEDIA[usize::from(n)].0;
+                let mut chosen = self.media_tokens();
+                if let Some(at) = chosen.iter().position(|t| *t == token) {
+                    chosen.remove(at);
+                } else {
+                    chosen.push(token);
+                }
+                let next: Vec<_> = MEDIA
+                    .iter()
+                    .map(|m| m.0)
+                    .filter(|t| chosen.contains(t))
+                    .collect();
+                self.pending = Some(Id::ScraperMedia);
+                return Some(Effect::Set(
+                    Id::ScraperMedia,
+                    if next.is_empty() {
+                        "none".into()
+                    } else {
+                        next.join(",")
+                    },
+                ));
+            }
             Id::ScraperAccount => {
                 let user = self.scrape.user.clone();
                 self.open_keyboard(Id::ScraperAccount, Mode::Text, user);
@@ -460,6 +538,45 @@ mod tests {
         state.handle(Button::B);
         assert_eq!(state.page(), Page::Scraper);
         assert_eq!(state.scrape.user, "saved");
+    }
+    #[test]
+    fn media_page_checks_and_unchecks_kinds_in_page_order() {
+        let mut state = Settings {
+            loading: false,
+            ..Default::default()
+        };
+        state.scrape.available = true;
+        state.open(Page::Scraper);
+        state.cursor = 3;
+        assert_eq!(state.handle(Button::A), Effect::None);
+        assert_eq!(state.page(), Page::ScraperMedia);
+        assert_eq!(state.visible_rows().len(), MEDIA.len());
+        assert_eq!(state.media_tokens(), ["box", "screenshot", "wheel"]);
+        assert_eq!(state.hints()[0].1, "settings.mark");
+        // Checking the video adds it in page order, not at the end.
+        state.cursor = 6;
+        let set = |value: &str| Effect::Set(Id::ScraperMedia, value.into());
+        assert_eq!(state.handle(Button::A), set("box,screenshot,wheel,video"));
+        state.complete(Id::ScraperMedia, Ok("box,screenshot,wheel,video".into()));
+        state.cursor = 1;
+        assert_eq!(
+            state.handle(Button::A),
+            set("box,box3d,screenshot,wheel,video")
+        );
+        state.complete(Id::ScraperMedia, Ok("box,screenshot".into()));
+        // L/R never toggle a check box; unchecking everything saves "none".
+        assert_eq!(state.handle(Button::R), Effect::None);
+        state.cursor = 0;
+        assert_eq!(state.handle(Button::A), set("screenshot"));
+        state.complete(Id::ScraperMedia, Ok("screenshot".into()));
+        state.cursor = 3;
+        assert_eq!(state.handle(Button::A), set("none"));
+        state.complete(Id::ScraperMedia, Ok("none".into()));
+        assert!(state.media_tokens().is_empty());
+        // While a run is going the page only goes back.
+        state.scrape.running = true;
+        assert_eq!(state.hints().len(), 1);
+        assert_eq!(state.handle(Button::A), Effect::None);
     }
     #[test]
     fn a_second_start_press_before_the_reply_starts_nothing() {

@@ -97,7 +97,8 @@ impl Curl {
         // Redirect metadata goes to a file, not a pipe: a server-chosen Location
         // can be arbitrarily long and must never be able to stall curl.
         let mut meta = tempfile::tempfile_in(&self.tmp).map_err(fail)?;
-        let timeout = if limit > 16 << 20 { 240 } else { 30 };
+        // Videos and manuals get longer than a page of art.
+        let timeout = if limit > 8 << 20 { 240 } else { 30 };
         let mut command = Command::new("curl");
         command
             .args([

@@ -14,6 +14,9 @@ pub(crate) struct Metadata {
     pub image: String,
     pub thumbnail: String,
     pub video: String,
+    pub marquee: String,
+    /// Text fields only; art paths are resolved by the scan.
+    pub details: crate::Details,
     pub favorite: bool,
     pub last_played: Option<u64>,
     pub year: Option<u16>,
@@ -29,6 +32,18 @@ impl Metadata {
             b"image" => self.image = text.to_owned(),
             b"thumbnail" => self.thumbnail = text.to_owned(),
             b"video" => self.video = text.to_owned(),
+            b"marquee" => self.marquee = text.to_owned(),
+            b"desc" => self.details.description = text.to_owned(),
+            b"genre" => self.details.genre = text.to_owned(),
+            b"developer" => self.details.developer = text.to_owned(),
+            b"publisher" => self.details.publisher = text.to_owned(),
+            b"rating" => {
+                self.details.rating = text
+                    .parse::<f32>()
+                    .ok()
+                    .filter(|r| *r > 0. && *r <= 1.)
+                    .map(|r| (r * 100.).round() as u8)
+            }
             b"favorite" => self.favorite = text == "true",
             b"releasedate" => {
                 self.year = text
@@ -53,6 +68,12 @@ fn known_field(name: &[u8]) -> bool {
             | b"image"
             | b"thumbnail"
             | b"video"
+            | b"marquee"
+            | b"desc"
+            | b"genre"
+            | b"developer"
+            | b"publisher"
+            | b"rating"
             | b"favorite"
             | b"lastplayed"
             | b"releasedate"

@@ -7,6 +7,7 @@ use archr_launcher::{
     library::Library,
     netplay,
     paths::Paths,
+    rescrape::Rescrape,
     state::{App, DataSource, Outcome, Screen},
     wifi,
 };
@@ -16,7 +17,7 @@ use archr_ui::{
     i18n::I18n,
     input::{button_event, Repeat},
     netplay::{Effect, Lobby},
-    render::{prepare_first_frame, Ui},
+    render::{prepare_first_frame, Art, Ui},
     startup::StartupTrace,
     startup_phase,
 };
@@ -191,6 +192,18 @@ fn run(
         (theme.cover.w * width as f32).round().max(1.) as u32,
         (theme.cover.h * height as f32).round().max(1.) as u32,
     );
+    // Details art: the screen shot box and the logo title, at their own sizes.
+    let sized = |rect: archr_ui::theme::Rect01| {
+        let w = (rect.w * width as f32).round().max(1.) as u32;
+        (w, (rect.h * height as f32).round().max(1.) as u32)
+    };
+    let (shot_w, shot_h) = sized(theme.details_shot);
+    let (logo_w, logo_h) = sized(theme.details_title);
+    let mut shots = CoverCache::new(&creator, paths.cache.join("thumbs"), shot_w, shot_h);
+    let mut logos = CoverCache::new(&creator, paths.cache.join("thumbs"), logo_w, logo_h);
+    let mut rescrape: Option<Rescrape> = None;
+    // The ROM on the details screen, followed across re-reads of its system.
+    let mut details_rom: Option<PathBuf> = None;
     let mut controllers = Controllers::new_traced(&ui.sdl, trace)?;
     let mut events = ui.sdl.event_pump()?;
     let mut repeat = Repeat::default();
@@ -287,6 +300,33 @@ fn run(
             }
             dirty = true;
         }
+        if let Screen::Details { system, game } = app.backdrop().0.clone() {
+            library.ensure(&system);
+            let games = library.games(&system);
+            match (&details_rom, games.get(game)) {
+                (Some(rom), Some(shown)) if shown.path != *rom => {
+                    if let Some(index) = games.iter().position(|g| g.path == *rom) {
+                        app.retarget_details(index);
+                    }
+                }
+                (None, Some(shown)) => details_rom = Some(shown.path.clone()),
+                _ => {}
+            }
+        } else {
+            details_rom = None;
+        }
+        if let Some(key) = rescrape.as_mut().and_then(Rescrape::poll) {
+            let system = rescrape.take().map(|r| r.system).unwrap_or_default();
+            library.reload(&[system]);
+            covers.clear();
+            shots.clear();
+            logos.clear();
+            ui.banner = Some(ui.catalog.text(key));
+            banner_until = Instant::now() + Duration::from_secs(8);
+            dirty = true;
+        }
+        app.rescraping = rescrape.is_some();
+        app.can_rescrape = archr_scraper::available() && !settings.state.scrape.running;
         if let Some(banner) = library.banner.take() {
             ui.banner = Some(banner.render(&ui.catalog));
             banner_until = Instant::now() + Duration::from_secs(8);
@@ -307,17 +347,25 @@ fn run(
         }
         let (selected, neighbours) = cover_paths(&app, &library);
         covers.request(&neighbours);
-        dirty |= covers.poll();
+        let (shot, logo) = details_art(&app, &library);
+        shots.request(shot.as_slice());
+        logos.request(logo.as_slice());
+        dirty |= covers.poll() | shots.poll() | logos.poll();
         if dirty {
             ui.moonlight = moonlight.active.then(|| moonlight.state.clone());
-            let cover = selected.as_ref().and_then(|path| covers.get(path));
+            let art = Art {
+                cover: selected.as_ref().and_then(|path| covers.get(path)),
+                shot: shot.as_ref().and_then(|path| shots.get(path)),
+                logo: logo.as_ref().and_then(|path| logos.get(path)),
+            };
             ui.draw_with_settings(
                 &app,
                 &library,
                 &theme,
-                cover,
+                art,
                 settings.active.then_some(&settings.state),
             )?;
+            app.details_overflow = ui.details_overflow;
             dirty = false;
         }
         #[cfg(test)]
@@ -430,7 +478,21 @@ fn run(
             } else {
                 requested
             };
-            if requested == Outcome::ToggleWifi {
+            if let Outcome::Rescrape { system, game } = &requested {
+                if let Some(rom) = library
+                    .games(system)
+                    .get(*game)
+                    .filter(|_| rescrape.is_none())
+                {
+                    rescrape = Some(Rescrape::start(
+                        paths.clone(),
+                        system.clone(),
+                        rom.path.clone(),
+                    ));
+                    app.rescraping = true;
+                }
+                outcome = Some(Outcome::None);
+            } else if requested == Outcome::ToggleWifi {
                 if let Err(error) =
                     wifi::toggle(&paths, !ui.wifi_enabled(), ui.wifi_refresh_signal())
                 {
@@ -504,8 +566,21 @@ fn lobby_input(
     }
     Outcome::None
 }
+/// Screen shot and logo of the game on the details screen, if any.
+fn details_art(app: &App, data: &dyn DataSource) -> (Option<PathBuf>, Option<PathBuf>) {
+    let Screen::Details { system, game } = app.backdrop().0 else {
+        return (None, None);
+    };
+    data.games(system).get(*game).map_or((None, None), |game| {
+        (game.details.screenshot.clone(), game.details.logo.clone())
+    })
+}
 fn cover_paths(app: &App, data: &dyn DataSource) -> (Option<PathBuf>, Vec<PathBuf>) {
     let (screen, cursor) = app.backdrop();
+    if let Screen::Details { system, game } = screen {
+        let image = data.games(system).get(*game).and_then(|g| g.image.clone());
+        return (image.clone(), image.into_iter().collect());
+    }
     let Screen::Games { system } = screen else {
         return (None, Vec::new());
     };

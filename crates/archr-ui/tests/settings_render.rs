@@ -91,7 +91,7 @@ fn all_locales_and_pages_render_and_selected_on_toggle_has_contrast() {
                 &App::new(9),
                 &FakeData::default(),
                 &theme,
-                None,
+                Default::default(),
                 Some(&state),
             )
             .unwrap();
@@ -116,7 +116,7 @@ fn all_locales_and_pages_render_and_selected_on_toggle_has_contrast() {
                     &App::new(9),
                     &FakeData::default(),
                     &theme,
-                    None,
+                    Default::default(),
                     Some(&state),
                 )
                 .unwrap();
@@ -129,7 +129,7 @@ fn all_locales_and_pages_render_and_selected_on_toggle_has_contrast() {
                     &App::new(9),
                     &FakeData::default(),
                     &theme,
-                    None,
+                    Default::default(),
                     Some(&state),
                 )
                 .unwrap();
@@ -151,7 +151,7 @@ fn all_locales_and_pages_render_and_selected_on_toggle_has_contrast() {
                     &App::new(9),
                     &FakeData::default(),
                     &theme,
-                    None,
+                    Default::default(),
                     Some(&state),
                 )
                 .unwrap();
@@ -167,7 +167,7 @@ fn all_locales_and_pages_render_and_selected_on_toggle_has_contrast() {
                     &App::new(9),
                     &FakeData::default(),
                     &theme,
-                    None,
+                    Default::default(),
                     Some(&state),
                 )
                 .unwrap();
@@ -177,7 +177,7 @@ fn all_locales_and_pages_render_and_selected_on_toggle_has_contrast() {
                     &App::new(9),
                     &FakeData::default(),
                     &theme,
-                    None,
+                    Default::default(),
                     Some(&state),
                 )
                 .unwrap();
@@ -203,7 +203,7 @@ fn all_locales_and_pages_render_and_selected_on_toggle_has_contrast() {
                     &App::new(9),
                     &FakeData::default(),
                     &theme,
-                    None,
+                    Default::default(),
                     Some(&state),
                 )
                 .unwrap();
@@ -216,7 +216,7 @@ fn all_locales_and_pages_render_and_selected_on_toggle_has_contrast() {
                     &App::new(9),
                     &FakeData::default(),
                     &theme,
-                    None,
+                    Default::default(),
                     Some(&state),
                 )
                 .unwrap();
@@ -235,7 +235,7 @@ fn all_locales_and_pages_render_and_selected_on_toggle_has_contrast() {
                     &App::new(9),
                     &FakeData::default(),
                     &theme,
-                    None,
+                    Default::default(),
                     Some(&state),
                 )
                 .unwrap();

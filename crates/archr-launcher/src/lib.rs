@@ -6,6 +6,7 @@ pub mod store;
 pub mod library;
 pub mod netplay;
 pub mod paths;
+pub mod rescrape;
 pub mod wifi;
 mod worker;
 

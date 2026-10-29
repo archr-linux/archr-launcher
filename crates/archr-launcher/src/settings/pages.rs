@@ -2,6 +2,7 @@
 use super::*;
 use archr_scraper::{Credentials, Engine, Job, Media, Options, Stop};
 use archr_ui::settings::network::{parse_scanlist, wpa_valid, Network};
+use archr_ui::settings::MEDIA;
 use std::os::unix::process::CommandExt;
 
 /// wifictl's worst case: scan, connect, hidden-network retry and DHCP wait.
@@ -31,7 +32,42 @@ pub(super) fn usb_error(error: &str) -> String {
         "settings.usb_busy".into()
     }
 }
-pub(super) fn scrape_outcome(stop: Stop) -> &'static str {
+/// A scraping job from the saved options. `only` names one system and ROM:
+/// a forced "scrape again" of that game. Blocking file reads: worker only.
+pub(crate) fn start_scrape(
+    paths: &crate::paths::Paths,
+    only: Option<(&str, std::path::PathBuf)>,
+) -> Result<(Job, Vec<String>), String> {
+    let cfg = SystemCfg::load(&paths.config).map_err(|e| e.to_string())?;
+    let get = |id: Id| {
+        cfg.get_setting(id.key(), None, None)
+            .unwrap_or_else(|| id.default_value().into())
+    };
+    let engine = Engine::production(paths.cache.clone(), Credentials::load(&paths.store))
+        .ok_or("settings.scraper_unavailable")?;
+    let mut options = Options::new(&get(Id::Language));
+    options.only_missing = get(Id::ScraperMissing) == "1";
+    options.media = Media::parse_list(&get(Id::ScraperMedia));
+    options.systems = Some(get(Id::ScraperSystems))
+        .filter(|s| !s.is_empty())
+        .into_iter()
+        .collect();
+    if let Some((system, rom)) = only {
+        options.systems = vec![system.to_owned()];
+        options.game = Some(rom);
+        options.force = true;
+    }
+    fs::create_dir_all(&paths.cache).map_err(|e| e.to_string())?;
+    let systems = crate::worker::definitions(paths)?;
+    let touched = systems
+        .iter()
+        .filter(|s| options.systems.is_empty() || options.systems.contains(&s.name))
+        .filter(|s| archr_scraper::system_id(&s.name).is_some())
+        .map(|s| s.name.clone())
+        .collect();
+    Ok((engine.start(systems, options), touched))
+}
+pub(crate) fn scrape_outcome(stop: Stop) -> &'static str {
     match stop {
         Stop::Completed => "settings.scrape_done",
         Stop::Cancelled => "settings.scrape_cancelled",
@@ -205,40 +241,7 @@ impl Backend {
     /// Starts the engine's own background job from the saved options; also
     /// names the systems whose art may change.
     pub(super) fn scrape(&self) -> Result<(Job, Vec<String>), String> {
-        let cfg = self.cfg()?;
-        let get = |id: Id| {
-            cfg.get_setting(id.key(), None, None)
-                .unwrap_or_else(|| id.default_value().into())
-        };
-        let engine = Engine::production(
-            self.paths.cache.clone(),
-            Credentials::load(&self.paths.store),
-        )
-        .ok_or("settings.scraper_unavailable")?;
-        let mut options = Options::new(&get(Id::Language));
-        options.only_missing = get(Id::ScraperMissing) == "1";
-        options.systems = Some(get(Id::ScraperSystems))
-            .filter(|s| !s.is_empty())
-            .into_iter()
-            .collect();
-        options.media = get(Id::ScraperMedia)
-            .split(',')
-            .filter_map(|kind| match kind {
-                "box" => Some(Media::Box2d),
-                "screenshot" => Some(Media::Screenshot),
-                "wheel" => Some(Media::Wheel),
-                _ => None,
-            })
-            .collect();
-        fs::create_dir_all(&self.paths.cache).map_err(|e| e.to_string())?;
-        let systems = crate::worker::definitions(&self.paths)?;
-        let touched = systems
-            .iter()
-            .filter(|s| options.systems.is_empty() || options.systems.contains(&s.name))
-            .filter(|s| archr_scraper::system_id(&s.name).is_some())
-            .map(|s| s.name.clone())
-            .collect();
-        Ok((engine.start(systems, options), touched))
+        start_scrape(&self.paths, None)
     }
     pub(super) fn apply_page(&self, id: Id, value: &str) -> Option<Result<String, String>> {
         if !matches!(
@@ -358,6 +361,17 @@ impl Backend {
                         self.save(id, value).map(|_| value.into())
                     } else {
                         Err("settings.invalid_address".into())
+                    }
+                }
+                Id::ScraperMedia => {
+                    let tokens: Vec<_> = value.split(',').collect();
+                    if value == "none"
+                        || Media::parse_list(value).len() == tokens.len()
+                            && tokens.iter().all(|t| MEDIA.iter().any(|m| m.0 == *t))
+                    {
+                        self.save(id, value).map(|_| value.into())
+                    } else {
+                        Err("Invalid option".into())
                     }
                 }
                 Id::ScraperSystems => {
@@ -584,6 +598,30 @@ mod tests {
             assert!(backend.scrape().is_err());
             assert!(!paths.store.join("scraper.toml").exists());
         }
+    }
+    #[test]
+    fn media_choices_are_scraper_kinds_and_only_known_lists_are_saved() {
+        let tokens: Vec<_> = MEDIA.iter().map(|m| m.0).collect();
+        assert_eq!(Media::parse_list(&tokens.join(",")), Media::ALL);
+        let (_root, paths) = fixture("");
+        let backend = Backend::new(paths.clone());
+        for bad in ["box,bogus", "box,box", "Box", ""] {
+            assert!(
+                backend.apply_page(Id::ScraperMedia, bad).unwrap().is_err(),
+                "{bad}"
+            );
+        }
+        for good in ["none", "box,video,manual"] {
+            assert_eq!(
+                backend.apply_page(Id::ScraperMedia, good),
+                Some(Ok(good.into()))
+            );
+        }
+        let saved =
+            SystemCfg::load(&paths.config)
+                .unwrap()
+                .get_setting(Id::ScraperMedia.key(), None, None);
+        assert_eq!(saved.as_deref(), Some("box,video,manual"));
     }
     #[test]
     fn invalid_port_and_nickname_are_not_published() {

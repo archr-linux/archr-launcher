@@ -13,6 +13,8 @@ use crate::{
     theme::{Rect01, Rgba, Theme},
     HintButton,
 };
+pub use details::Art;
+mod details;
 mod hub;
 mod keyboard;
 mod moonlight;
@@ -302,6 +304,9 @@ pub struct Ui<'font, 'texture> {
     cover_key: Option<PathBuf>,
     cover_visible: bool,
     cover_fade: Tween,
+    details_wrap: details::Wrapped,
+    /// Description lines below the details view, for the host's scroll limit.
+    pub details_overflow: usize,
     animating: bool,
     /// Look-and-feel choices: text-size multiplier and motion on/off.
     pub text_scale: f32,
@@ -395,6 +400,8 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             cover_key: None,
             cover_visible: false,
             cover_fade: Tween::new(0., Duration::from_millis(120)),
+            details_wrap: details::Wrapped::default(),
+            details_overflow: 0,
             animating: false,
             text_scale: 1.,
             animations: true,
@@ -571,14 +578,18 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         theme: &Theme,
         cover: Option<&Texture<'_>>,
     ) -> Result<(), String> {
-        self.draw_with_settings(app, data, theme, cover, None)
+        let art = Art {
+            cover,
+            ..Art::default()
+        };
+        self.draw_with_settings(app, data, theme, art, None)
     }
     pub fn draw_with_settings(
         &mut self,
         app: &App,
         data: &dyn DataSource,
         theme: &Theme,
-        cover: Option<&Texture<'_>>,
+        art: Art<'_, '_>,
         settings: Option<&crate::settings::Settings>,
     ) -> Result<(), String> {
         self.frame = Frame::from_size(self.canvas.output_size()?);
@@ -604,10 +615,19 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 self.settings_scroll.tween.active(now) || self.settings_banner.busy(now);
         } else {
             let (backdrop, cursor) = app.backdrop();
-            self.header(backdrop, cursor, data, theme)?;
-            if matches!(app.screen, Screen::StartHub { .. }) {
+            if let Screen::Details { system, game } = backdrop {
+                let name = data
+                    .games(system)
+                    .get(*game)
+                    .map_or("", |g| g.name.as_str());
+                self.details_header(system, name, data, theme)?;
+                self.details(app, (system, *game), data, theme, art)?;
+                self.footer(app, data, theme)?;
+            } else if matches!(app.screen, Screen::StartHub { .. }) {
+                self.header(backdrop, cursor, data, theme)?;
                 self.hub(app, data, theme)?;
             } else {
+                self.header(backdrop, cursor, data, theme)?;
                 let rows = if matches!(backdrop, Screen::Systems) {
                     app.rows(data)
                 } else {
@@ -628,7 +648,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                     }
                 }
                 if let Screen::Games { system } = backdrop {
-                    self.cover(system, cursor, data, theme, cover)?;
+                    self.cover(system, cursor, data, theme, art.cover)?;
                 }
                 if self.has_presented {
                     self.footer(app, data, theme)?;
@@ -1118,7 +1138,21 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         let y = height as i32 - h as i32;
         self.divider(0, y, width, theme.border)?;
         let moving = app.moving();
+        let details: Vec<(char, &str)>;
         let hint_keys: &[(char, &str)] = match app.screen {
+            Screen::Details { .. } => {
+                let action = crate::state::DETAILS_ACTIONS[app.details_focus.min(2)];
+                details = [
+                    ('A', action),
+                    ('↕', "details.scroll"),
+                    ('Y', "details.options"),
+                    ('B', "hint.back"),
+                ]
+                .into_iter()
+                .filter(|(button, _)| *button != '↕' || self.details_overflow > 0)
+                .collect();
+                &details
+            }
             Screen::Systems if moving.is_some() => &[
                 ('↕', "hint.move"),
                 ('A', "hint.confirm"),
@@ -1369,6 +1403,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             let selected = index == app.cursor;
             let c = selection(selected, theme.text, theme.highlight_text);
             let label = match item {
+                QuickItem::Details => "menu.details",
                 QuickItem::Settings => "settings.title",
                 QuickItem::Netplay => "netplay.menu",
                 QuickItem::Core => "menu.core",

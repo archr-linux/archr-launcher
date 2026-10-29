@@ -4,6 +4,7 @@ mod games;
 mod info;
 mod mangohud;
 mod pages;
+pub(crate) use pages::{scrape_outcome, start_scrape};
 mod runtime;
 mod storage;
 use crate::paths::Paths;
