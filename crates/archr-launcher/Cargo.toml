@@ -9,7 +9,7 @@ libc = "0.2"
 archr-io = { path = "../archr-io" }
 archr-config = { path = "../archr-config" }
 archr-ui = { path = "../archr-ui" }
-sdl2 = { version = "0.38", features = ["ttf", "image"] }
+sdl2 = { version = "0.38", features = ["ttf", "image", "mixer"] }
 archr-index = { path = "../archr-index" }
 archr-scraper = { path = "../archr-scraper" }
 log = "0.4"

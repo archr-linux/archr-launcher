@@ -1,4 +1,5 @@
 pub mod appearance;
+pub mod audio;
 pub mod handoff;
 pub mod state;
 pub mod store;
