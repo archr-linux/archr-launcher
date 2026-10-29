@@ -364,3 +364,57 @@ fn move_mode_draws_from_prepared_icons_without_touching_the_filesystem() {
         "the lifted row icon must come from startup preparation"
     );
 }
+
+#[test]
+fn theme_views_place_the_list_and_the_art() {
+    let _guard = SDL_LOCK.lock().unwrap();
+    std::env::set_var("SDL_VIDEODRIVER", "offscreen");
+    let ttf;
+    let creator;
+    let mut ui = Ui::new(640, 480, true).unwrap();
+    ttf = sdl2::ttf::init().unwrap();
+    creator = ui.canvas.texture_creator();
+    let themes = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../themes");
+    let data = Data {
+        systems: ["gba", "snes", "n64"]
+            .map(|name| SystemEntry {
+                name: name.into(),
+                fullname: name.to_uppercase(),
+                game_count: 3,
+                dir_mtime: 0,
+                source_fingerprint: 0,
+            })
+            .to_vec(),
+        ..Data::default()
+    };
+    let app = App::new(10);
+    let mut shot = |theme: &Theme| {
+        ui.configure(&ttf, &creator, theme, None).unwrap();
+        for _ in 0..2 {
+            ui.snap_animations();
+            ui.draw(&app, &data, theme, None).unwrap();
+        }
+        let rgba = ui
+            .canvas
+            .read_pixels(None, sdl2::pixels::PixelFormatEnum::RGBA32)
+            .unwrap();
+        move |x: usize, y: usize| rgba[(y * 640 + x) * 4..(y * 640 + x) * 4 + 3].to_vec()
+    };
+    // The example theme moves the yellow selection to the right, the panel left.
+    let beach = Theme::load(&themes.join("praia"));
+    let pixel = shot(&beach);
+    assert_eq!(pixel(450, 70), [0xFF, 0xC9, 0x3C], "selection on the right");
+    assert_eq!(pixel(100, 300), [0x0F, 0x30, 0x57], "panel on the left");
+    assert_ne!(pixel(30, 70), [0xFF, 0xC9, 0x3C]);
+    // Vitrine: the first system is a large tile in the middle, ringed in the accent.
+    let mut vitrine = Theme::builtin();
+    vitrine.active_view = "vitrine".into();
+    let pixel = shot(&vitrine);
+    let edge = 320 - 92;
+    assert_eq!(
+        pixel(edge, 188),
+        [0x1E, 0x88, 0xFF],
+        "accent ring of the centre tile"
+    );
+    assert_ne!(pixel(40, 70), [0x1E, 0x88, 0xFF], "no list pill");
+}

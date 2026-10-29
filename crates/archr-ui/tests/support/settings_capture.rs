@@ -534,6 +534,23 @@ fn capture_views() {
                 }
                 save(&mut ui, format!("{folder}-{view}-{name}-{language}.png"));
             }
+            // Appearance with this theme installed and active.
+            let mut look = ready();
+            look.base_theme = theme.clone();
+            look.values.insert(Id::Theme, folder.into());
+            look.values.insert(Id::View, view.into());
+            look.theme_names.insert(folder.into(), theme.name.clone());
+            look.open(Page::Appearance);
+            // On the View row, so the accent dots show unhighlighted.
+            look.cursor = 1;
+            ui.canvas.set_draw_color(color(theme.background));
+            ui.canvas.clear();
+            ui.settings_page(&look, &look.appearance().apply(&theme))
+                .unwrap();
+            save(
+                &mut ui,
+                format!("{folder}-{view}-appearance-{language}.png"),
+            );
         }
     }
 }
