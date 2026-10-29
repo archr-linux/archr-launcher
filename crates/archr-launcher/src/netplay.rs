@@ -1,7 +1,11 @@
 //! Netplay lobby host: the RetroArch room list plus LAN discovery, matched against the
 //! local library the way EmulationStation's GuiNetPlay did. One short-lived thread per
 //! refresh; the UI thread only polls for the result.
-use crate::{handoff::is_ip, paths::Paths, worker::definitions};
+use crate::{
+    handoff::{is_ip, is_session},
+    paths::Paths,
+    worker::definitions,
+};
 use archr_config::SystemCfg;
 use archr_index::{cache, clean_name, SystemDef};
 use archr_ui::netplay::{Group, Join, Lobby, Rom, Room};
@@ -227,7 +231,7 @@ pub fn resolve(
     };
     let dialable = is_ip(dial_ip)
         && dial_port != 0
-        && session.bytes().all(|b| b.is_ascii_alphanumeric())
+        && is_session(session)
         && (entry.relay.is_none() || !session.is_empty());
     let (rom, join) = match found {
         None => (

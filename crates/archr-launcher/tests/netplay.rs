@@ -442,7 +442,9 @@ fn relay_rooms_need_a_valid_session_and_forward_it() {
     let mut hash = |_: &Path| Some(7);
     let ok = resolve(&relay("a1B2"), &locals, &mut hash);
     assert_eq!(ok.join.as_ref().unwrap().session, "a1B2");
-    for bad in ["", "a b", "x;y", "--bad"] {
+    // A session the join line would refuse is not offered either.
+    let long = "a".repeat(65);
+    for bad in ["", "a b", "x;y", "--bad", &long] {
         assert!(
             resolve(&relay(bad), &locals, &mut hash).join.is_none(),
             "{bad:?}"
