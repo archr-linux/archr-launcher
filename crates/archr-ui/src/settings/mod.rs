@@ -90,6 +90,8 @@ pub enum Id {
     Volume,
     Brightness,
     Audio,
+    Sounds,
+    SoundsVolume,
     Idle,
     IdleGame,
     Gpu,
@@ -158,6 +160,8 @@ impl Id {
             Self::Volume => ("audio.volume", "60"),
             Self::Brightness => ("display.brightness", "50"),
             Self::Audio => ("audio.device", ""),
+            Self::Sounds => ("launcher.sounds", "1"),
+            Self::SoundsVolume => ("launcher.sounds_volume", "60"),
             Self::Idle => ("idle.timeout", "0"),
             Self::IdleGame => ("idle.timeout.game", "0"),
             Self::Gpu => ("gpu.driver", "libmali"),
@@ -238,7 +242,8 @@ impl Id {
             Self::Language => &["en_US", "pt_BR", "es_ES", "ru_RU"],
             Self::Idle | Self::IdleGame => &["0", "1", "3", "5", "10", "15", "30"],
             Self::Governor => &["ondemand", "performance", "schedutil", "powersave"],
-            Self::Turbo
+            Self::Sounds
+            | Self::Turbo
             | Self::WifiSwitch
             | Self::BtSwitch
             | Self::Ssh
@@ -272,7 +277,7 @@ impl Id {
         }
     }
     pub fn normalize(self, value: &str) -> String {
-        if !matches!(self, Self::Volume | Self::Brightness) {
+        if !matches!(self, Self::Volume | Self::Brightness | Self::SoundsVolume) {
             return value.into();
         }
         let min = if self == Self::Brightness { 5 } else { 0 };
@@ -349,6 +354,19 @@ const SOUND: &[Row] = &[
     slider(Id::Volume, "settings.volume", 0),
     slider(Id::Brightness, "settings.brightness", 5),
     row(Id::Audio, "settings.audio", Kind::Value),
+    Row {
+        subtitle: Some("settings.sounds_subtitle"),
+        ..row(Id::Sounds, "settings.sounds", Kind::Toggle)
+    },
+    row(
+        Id::SoundsVolume,
+        "settings.sounds_volume",
+        Kind::Slider {
+            min: 0,
+            max: 100,
+            step: 10,
+        },
+    ),
     described(Id::Idle, "settings.idle", "settings.idle_subtitle"),
     described(
         Id::IdleGame,

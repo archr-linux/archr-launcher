@@ -222,12 +222,16 @@ impl Backend {
             return result;
         }
         let valid = match id {
-            Id::Volume | Id::Brightness => value
+            Id::Volume | Id::SoundsVolume | Id::Brightness => value
                 .parse::<u8>()
                 .is_ok_and(|n| n <= 100 && (id != Id::Brightness || n >= 5)),
-            Id::Turbo | Id::Gpu | Id::Governor | Id::Language | Id::Idle | Id::IdleGame => {
-                id.choices().contains(&value)
-            }
+            Id::Sounds
+            | Id::Turbo
+            | Id::Gpu
+            | Id::Governor
+            | Id::Language
+            | Id::Idle
+            | Id::IdleGame => id.choices().contains(&value),
             Id::Suspend => {
                 matches!(value, "default" | "off")
                     || self

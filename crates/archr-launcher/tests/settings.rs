@@ -459,3 +459,15 @@ fn load_flags_a_busy_usb_port_from_the_same_sysfs_state_usbgadget_checks() {
     fs::write(port.join("state"), "not attached\n").unwrap();
     assert!(!backend.load().unwrap().usb_busy);
 }
+#[test]
+fn theme_sound_settings_persist_without_running_anything() {
+    let (dir, backend) = fixture();
+    assert_eq!(backend.apply(Id::SoundsVolume, "70").unwrap(), "70");
+    assert_eq!(backend.apply(Id::Sounds, "0").unwrap(), "0");
+    for (id, value) in [(Id::SoundsVolume, "101"), (Id::Sounds, "2")] {
+        assert!(backend.apply(id, value).is_err(), "{value}");
+    }
+    let saved =
+        fs::read_to_string(dir.path().join("storage/.config/system/configs/system.cfg")).unwrap();
+    assert!(saved.contains("launcher.sounds_volume=70") && saved.contains("launcher.sounds=0"));
+}
