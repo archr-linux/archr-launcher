@@ -365,6 +365,9 @@ pub struct Offer {
     pub license: String,
     /// Bytes of the package.
     pub size: u64,
+    /// The package's SHA-256 (`sha256:<hex>`) when the page was shown: the
+    /// install takes only that very package.
+    pub digest: String,
     pub permissions: Vec<Permission>,
     /// For an update: only the permissions it adds, empty when none.
     pub added: Vec<Permission>,

@@ -218,6 +218,19 @@ fn an_install_checks_digest_manifest_and_paths_before_anything_lands() {
     publish(&fake, MANIFEST, &good, &sha(&good), "");
     let store = shop(root.path(), &fake);
     let offer = store.offer(&card()).unwrap();
+    assert_eq!(offer.digest, format!("sha256:{}", sha(&good)));
+    // Another package published after the page was shown, even a valid one.
+    let other = Tarball::module(MANIFEST)
+        .file("bateria/x.txt", b"x")
+        .bytes();
+    fs::remove_dir_all(root.path().join("cache")).unwrap();
+    let swapped_release = Fake::default();
+    publish(&swapped_release, MANIFEST, &other, &sha(&other), "");
+    assert_eq!(
+        shop(root.path(), &swapped_release).install(&offer),
+        Err("modules.digest_mismatch")
+    );
+    assert!(!root.path().join("modules/bateria").exists());
     // A package that is not the one GitHub describes (an hour later).
     fs::remove_dir_all(root.path().join("cache")).unwrap();
     publish(&fake, MANIFEST, &good, &sha(b"other"), "");
@@ -262,7 +275,12 @@ fn an_install_checks_digest_manifest_and_paths_before_anything_lands() {
         let fake = Fake::default();
         publish(&fake, MANIFEST, &tarball, &sha(&tarball), "");
         let store = shop(root.path(), &fake);
-        assert_eq!(store.install(&offer), Err(problem));
+        // As if shown with this package: the unpacking itself refuses it.
+        let shown = archr_ui::modules::Offer {
+            digest: format!("sha256:{}", sha(&tarball)),
+            ..offer.clone()
+        };
+        assert_eq!(store.install(&shown), Err(problem));
         let left: Vec<_> = fs::read_dir(root.path().join("modules"))
             .map(|d| d.flatten().map(|e| e.file_name()).collect())
             .unwrap_or_default();

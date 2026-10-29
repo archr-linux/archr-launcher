@@ -307,6 +307,7 @@ impl Shop {
             author: manifest.author.clone(),
             license: manifest.license.clone(),
             size: package.size,
+            digest: package.digest.clone(),
             permissions: registry::permissions(&manifest),
             added,
             kept,
@@ -374,6 +375,10 @@ impl Shop {
         let package = assets
             .get(&format!("{id}-{}.tar.gz", manifest.version))
             .ok_or("modules.no_package")?;
+        // The package the user saw, not one published since.
+        if !same_digest(&package.digest, &offer.digest) {
+            return Err("modules.digest_mismatch");
+        }
         let expected = package
             .digest
             .strip_prefix("sha256:")
