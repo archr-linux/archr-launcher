@@ -14,6 +14,7 @@ fn fixture() -> Fixture {
         remaps: at("remappings"),
         shaders: at("shaders"),
         cores: at("cores"),
+        factory: vec![at("factory")],
     };
     for path in [
         &roots.source,
@@ -206,10 +207,23 @@ fn shader_presets_point_at_this_device() {
          shader0 = \"C:\\RetroArch\\shaders\\shaders_slang\\crt\\zfast.slang\"\n\
          filter_linear0 = \"false\"\n",
     );
+    // A reference to another imported preset is not followed.
     put(
         &f.roots.source,
         "shaders/Mine.slangp",
         "#reference \"presets/mGBA/Game.slangp\"\n",
+    );
+    // A shipped preset with the same name is never hidden.
+    put(&f.roots.factory[0], "crt/zfast.slangp", "shaders = \"1\"\n");
+    put(
+        &f.roots.source,
+        "shaders/crt/zfast.slangp",
+        "shaders = \"1\"\nshader0 = \"zfast.slang\"\n",
+    );
+    put(
+        &f.roots.source,
+        "shaders/Ref.slangp",
+        "#reference \"crt/zfast.slang\"\n",
     );
     put(
         &f.roots.source,
@@ -233,19 +247,15 @@ fn shader_presets_point_at_this_device() {
         .1
         .contains(&format!("shader0 = \"{}\"", zfast.display())));
     assert!(game.1.contains("filter_linear0 = \"false\""));
-    let mine = plan
+    let reference = plan
         .files
         .iter()
-        .find(|(p, _)| p.ends_with("Mine.slangp"))
+        .find(|(p, _)| p.ends_with("Ref.slangp"))
         .unwrap();
-    assert_eq!(
-        mine.1,
-        format!(
-            "#reference \"{}\"\n",
-            f.roots.shaders.join("presets/mGBA/Game.slangp").display()
-        )
-    );
+    assert_eq!(reference.1, format!("#reference \"{}\"\n", zfast.display()));
     assert_eq!(plan.found.presets, 2);
+    assert_eq!(why(&plan, "shaders/Mine.slangp"), Some(NO_SHADER));
+    assert_eq!(why(&plan, "shaders/crt/zfast.slangp"), Some(FACTORY));
     assert_eq!(why(&plan, "shaders/missing.glslp"), Some(NO_SHADER));
     assert_eq!(why(&plan, "shaders/escape.glslp"), Some(NO_SHADER));
 }

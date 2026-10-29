@@ -44,6 +44,8 @@ pub struct Roots {
     pub shaders: PathBuf,
     /// libretro_directory: `<name>_libretro.so` beside its `.info`.
     pub cores: PathBuf,
+    /// The system's shader trees under video_shader_dir.
+    pub factory: Vec<PathBuf>,
 }
 
 /// What an import would do: the screen's summary and the files to write.
@@ -62,6 +64,7 @@ const INCLUDE: &str = "raimport.why_include";
 const BAD_FILE: &str = "raimport.why_file";
 const NO_CORE: &str = "raimport.why_core";
 const NO_SHADER: &str = "raimport.why_shader";
+const FACTORY: &str = "raimport.why_factory";
 
 /// Never imported: where things live, which drivers run, the device's own
 /// video mode, accounts, and anything that runs a command.
@@ -451,10 +454,14 @@ fn scan_shaders(plan: &mut Plan, roots: &Roots) {
         }
     }
     presets.sort();
-    let imported: BTreeSet<PathBuf> = presets.iter().map(|p| p.0.clone()).collect();
     for (item, path) in presets {
         let shown = format!("shaders/{}", item.display());
-        match read(&path, FILE_LIMIT).map(|text| preset(&text, &item, roots, &imported)) {
+        // Never hide a preset the system ships under the same name.
+        if roots.factory.iter().any(|dir| dir.join(&item).exists()) {
+            plan.ignore(shown, FACTORY);
+            continue;
+        }
+        match read(&path, FILE_LIMIT).map(|text| preset(&text, &item, roots)) {
             Some(Ok(text)) => {
                 let to = roots.shaders.join(&item);
                 if plan.write(to, shown, "raimport.file_preset".into(), text) {
@@ -469,12 +476,7 @@ fn scan_shaders(plan: &mut Plan, roots: &Roots) {
 
 /// A preset with every shader, texture and reference pointing at this
 /// device's shader directory, or why it cannot.
-fn preset(
-    text: &str,
-    item: &Path,
-    roots: &Roots,
-    imported: &BTreeSet<PathBuf>,
-) -> Result<String, &'static str> {
+fn preset(text: &str, item: &Path, roots: &Roots) -> Result<String, &'static str> {
     let textures: Vec<String> = text
         .lines()
         .find_map(|line| match parse(line)? {
@@ -489,7 +491,7 @@ fn preset(
         let trimmed = line.trim();
         if let Some(target) = trimmed.strip_prefix("#reference") {
             let target = target.trim().trim_matches('"');
-            let found = locate(target, here, roots, imported).ok_or(NO_SHADER)?;
+            let found = locate(target, here, roots).ok_or(NO_SHADER)?;
             out.push_str(&format!("#reference \"{}\"\n", found.display()));
             continue;
         }
@@ -502,7 +504,7 @@ fn preset(
                     .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
                     || textures.contains(&key);
                 let value = if file {
-                    let found = locate(&value, here, roots, imported).ok_or(NO_SHADER)?;
+                    let found = locate(&value, here, roots).ok_or(NO_SHADER)?;
                     found.display().to_string()
                 } else {
                     value
@@ -516,12 +518,7 @@ fn preset(
 
 /// A shader file on this device for a path saved elsewhere: the part after a
 /// known shader tree, else the path beside the preset; never outside.
-fn locate(
-    saved: &str,
-    here: &Path,
-    roots: &Roots,
-    imported: &BTreeSet<PathBuf>,
-) -> Option<PathBuf> {
+fn locate(saved: &str, here: &Path, roots: &Roots) -> Option<PathBuf> {
     let saved = saved.replace('\\', "/");
     let parts: Vec<&str> = saved.split('/').collect();
     let tail = parts
@@ -534,7 +531,9 @@ fn locate(
         None => return None,
     };
     let path = roots.shaders.join(&relative);
-    (fs::metadata(&path).is_ok_and(|m| m.is_file()) || imported.contains(&relative)).then_some(path)
+    fs::metadata(&path)
+        .is_ok_and(|m| m.is_file())
+        .then_some(path)
 }
 
 /// A relative path with ".." resolved, or None when it leaves its root.

@@ -966,3 +966,4 @@
 "settings.ra_hotkeys_failed" = "O mapa do controle não foi encontrado; os atalhos do RetroArch não mudaram."
 "raimport.changed" = "Os arquivos mudaram; revise de novo."
 "raimport.more" = { one = "mais {count}", other = "mais {count}" }
+"raimport.why_factory" = "já existe um preset do sistema com esse nome"

@@ -15,6 +15,11 @@ impl Backend {
             remaps: self.paths.at("/storage/remappings"),
             shaders: self.paths.at("/tmp/shaders"),
             cores: self.paths.at("/tmp/cores"),
+            // The lower layers of the /tmp/shaders overlay.
+            factory: ["common-shaders", "glsl-shaders", "slang-shaders"]
+                .iter()
+                .map(|dir| self.paths.at(&format!("/usr/share/{dir}")))
+                .collect(),
         }
     }
     pub(super) fn ra_scan(&self) -> Found {
