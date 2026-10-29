@@ -445,6 +445,7 @@ impl Ui<'_, '_> {
         let mut size = 14.;
         let floor = self.frame.min_size().max(10. / self.frame.font.max(1.));
         let mut gap = self.px(8.);
+        let between = labels.len().saturating_sub(1) as i32;
         let (mut widths, mut pad) = loop {
             let pad = self.px(size + 1.);
             let mut widths = Vec::new();
@@ -452,7 +453,7 @@ impl Ui<'_, '_> {
                 let extra = if icon(n) { self.px(size + 6.) } else { 0 };
                 widths.push(self.measure(label, Face::Semibold, size)? as i32 + pad * 2 + extra);
             }
-            let total: i32 = widths.iter().sum::<i32>() + gap * 2;
+            let total: i32 = widths.iter().sum::<i32>() + gap * between;
             // The floor: 10 px on screen and the theme's smallest text.
             if total <= area.width() as i32 || size <= floor {
                 break (widths, pad);
@@ -460,10 +461,12 @@ impl Ui<'_, '_> {
             size -= 1.;
         };
         // Still too wide at the floor: labels break between words. Each
-        // button holds its longest word, and the room left is shared.
-        let total: i32 = widths.iter().sum::<i32>() + gap * 2;
+        // button holds its longest word, and the room left is shared; when
+        // even that is too wide, the buttons share the row equally and words
+        // break. A button never leaves its row.
+        let total: i32 = widths.iter().sum::<i32>() + gap * between;
         if total > area.width() as i32 {
-            (pad, gap) = (self.px(4.), self.px(4.));
+            (pad, gap) = (self.px(6.), self.px(4.));
             let mut least = Vec::new();
             for (n, label) in labels.iter().enumerate() {
                 // In the face it is drawn with: semibold only when focused.
@@ -478,8 +481,14 @@ impl Ui<'_, '_> {
                 }
                 least.push(word + pad * 2 + if icon(n) { self.px(size + 6.) } else { 0 });
             }
-            let spare = (area.width() as i32 - gap * 2 - least.iter().sum::<i32>()) / 3;
-            widths = least.iter().map(|w| (w + spare).max(1)).collect();
+            let count = labels.len().max(1) as i32;
+            let room = area.width() as i32 - gap * between;
+            let spare = (room - least.iter().sum::<i32>()) / count;
+            widths = if spare >= 0 {
+                least.iter().map(|w| w + spare).collect()
+            } else {
+                vec![(room / count).max(1); labels.len()]
+            };
         }
         let mut x = area.x();
         for (n, label) in labels.iter().enumerate() {
