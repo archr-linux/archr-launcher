@@ -37,8 +37,11 @@ RetroArch (outro aparelho, o PC).
    lista cada ajuste e o que ficou de fora, com o motivo.
 3. "Fazer backup antes" (ligado por padrão) salva o estado atual; restaure em
    Armazenamento › Restaurar backup.
-4. "Importar agora" aplica tudo de uma vez; vale a partir do próximo jogo. Se
-   algo falhar no meio, os arquivos voltam ao que eram.
+4. "Importar agora" vale a partir do próximo jogo. Antes de escrever, o
+   launcher confere que a pasta é a mesma da revisão e guarda o conteúdo de
+   cada arquivo que vai trocar; se uma escrita falhar, as anteriores são
+   desfeitas. Uma queda de energia no meio pode deixar parte aplicada: para
+   isso serve o backup.
 
 O que entra:
 
