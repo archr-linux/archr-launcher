@@ -5,6 +5,8 @@ mod bluetooth;
 use crate::settings::{games::SYSTEM_SECTION, Id, Kind, Page, Row, Settings, CATEGORIES};
 #[path = "render/appearance.rs"]
 mod appearance;
+#[path = "render/custom.rs"]
+mod custom;
 #[path = "render/information.rs"]
 mod information;
 #[path = "render/network.rs"]
@@ -416,6 +418,7 @@ impl View<'_, '_, '_> {
                 )?;
             }
             Page::Appearance => self.appearance_page(state, &rows)?,
+            Page::AccentColor => self.custom_page(state)?,
             Page::Wifi => self.wifi(state)?,
             Page::Bluetooth => self.bluetooth(state)?,
             Page::Keyboard => self.keyboard(state)?,

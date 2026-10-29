@@ -1,6 +1,6 @@
 //! Appearance page (Aparencia): the rows, accent swatches and a live preview.
 use super::*;
-use crate::appearance::{rgb, ACCENT_RGB};
+use crate::appearance::{mix, parse_hex, rgb, Appearance, ACCENT_RGB};
 
 /// Rows stop short of the preview column.
 const LIST_RIGHT: f32 = 372.;
@@ -17,34 +17,46 @@ impl View<'_, '_, '_> {
     pub(super) fn appearance_page(&mut self, state: &Settings, rows: &[Row]) -> Result<(), String> {
         self.rows_at(state, rows, &placements(Page::Appearance, rows), LIST_RIGHT)?;
         let draft = state.appearance();
-        let theme = draft.apply(&state.base_theme);
-        // Text size is previewed here only; the page itself changes on leaving.
-        let scale = std::mem::replace(&mut self.ui.text_scale, draft.text_scale());
-        self.ui.frame.text = self.ui.text_scale;
-        let preview = self.preview(&theme);
-        self.ui.text_scale = scale;
-        self.ui.frame.text = scale;
-        preview?;
+        self.draft_preview(state, &draft)?;
         self.note(
             (PREVIEW_X, 292., PREVIEW_W, 60.),
             &self.tr("appearance.preview_note"),
             12.,
         )
     }
-    /// The accent choices as dots; a ring marks the one in effect.
+    /// The preview column for `draft`, whose text size shows here only: the
+    /// page itself changes on leaving.
+    pub(super) fn draft_preview(
+        &mut self,
+        state: &Settings,
+        draft: &Appearance,
+    ) -> Result<(), String> {
+        let theme = draft.apply(&state.base_theme);
+        let scale = std::mem::replace(&mut self.ui.text_scale, draft.text_scale());
+        self.ui.frame.text = self.ui.text_scale;
+        let preview = self.preview(&theme);
+        self.ui.text_scale = scale;
+        self.ui.frame.text = scale;
+        preview
+    }
+    /// The accent choices as dots, the custom colour last as a colour wheel;
+    /// a ring marks the one in effect.
     pub(super) fn swatches(
         &mut self,
         state: &Settings,
         selected: bool,
         (x, y, w, h): Bounds,
     ) -> Result<(), String> {
-        let active = state.appearance().apply(&state.base_theme).highlight_bg;
+        let look = state.appearance();
+        let active = look.apply(&state.base_theme).highlight_bg;
+        let custom = parse_hex(&look.accent).is_some();
         let ink = self.ink(selected);
         let behind = selection(selected, self.theme.background, self.theme.highlight_bg);
-        let mut left = x + w - (ACCENT_RGB.len() as f32 * 27. - 9.);
-        for hex in ACCENT_RGB {
-            let color = rgb(hex);
-            let (cy, ring) = (y + h / 2., color == active);
+        let dots = ACCENT_RGB.len() + 1;
+        let mut left = x + w - (dots as f32 * 26. - 8.);
+        for n in 0..dots {
+            let color = ACCENT_RGB.get(n).map(|hex| rgb(*hex));
+            let (cy, ring) = (y + h / 2., color.map_or(custom, |c| !custom && c == active));
             if ring {
                 for (size, fill) in [(26., ink), (22., behind)] {
                     let bounds = (left + 9. - size / 2., cy - size / 2., size, size);
@@ -52,13 +64,58 @@ impl View<'_, '_, '_> {
                         .rounded(self.rect(bounds), self.ui.px(size / 2.) as f32, fill, None)?;
                 }
             }
-            self.ui.rounded(
-                self.rect((left, cy - 9., 18., 18.)),
-                self.ui.px(9.) as f32,
-                color,
-                None,
-            )?;
-            left += 27.;
+            if selected && !ring {
+                // A thin dark edge keeps a dot of the row's own colour visible.
+                let edge = (left - 1., cy - 10., 20., 20.);
+                self.ui.rounded(
+                    self.rect(edge),
+                    self.ui.px(10.) as f32,
+                    self.theme.background,
+                    None,
+                )?;
+            }
+            match color {
+                Some(color) => self.ui.rounded(
+                    self.rect((left, cy - 9., 18., 18.)),
+                    self.ui.px(9.) as f32,
+                    color,
+                    None,
+                )?,
+                None => self.wheel(self.rect((left, cy - 9., 18., 18.)), behind)?,
+            }
+            left += 26.;
+        }
+        Ok(())
+    }
+    /// A conic rainbow disc with a hole in the middle, drawn pixel by pixel.
+    fn wheel(&mut self, rect: Rect, hole: Rgba) -> Result<(), String> {
+        const STOPS: [u32; 7] = [
+            0xEF4444, 0xF59E0B, 0x22C55E, 0x06B6D4, 0x3B82F6, 0xA855F7, 0xEF4444,
+        ];
+        let radius = rect.width() as f32 / 2.;
+        let canvas = &mut self.ui.canvas;
+        canvas.set_blend_mode(sdl2::render::BlendMode::Blend);
+        for dy in 0..rect.height() {
+            for dx in 0..rect.width() {
+                let (px, py) = (dx as f32 + 0.5 - radius, dy as f32 + 0.5 - radius);
+                let distance = px.hypot(py);
+                let cover = (radius - distance + 0.5).clamp(0., 1.);
+                if cover == 0. {
+                    continue;
+                }
+                let turn = (py.atan2(px).to_degrees() + 450.) % 360. / 60.;
+                let (n, part) = (turn as usize, turn.fract());
+                let paint = if distance < radius * 0.44 {
+                    hole
+                } else {
+                    mix(rgb(STOPS[n]), rgb(STOPS[n + 1]), part)
+                };
+                canvas.set_draw_color(color(Rgba {
+                    a: (cover * 255.) as u8,
+                    ..paint
+                }));
+                canvas.fill_rect(Rect::new(rect.x() + dx as i32, rect.y() + dy as i32, 1, 1))?;
+            }
         }
         Ok(())
     }
