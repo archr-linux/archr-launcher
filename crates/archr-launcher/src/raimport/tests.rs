@@ -68,6 +68,7 @@ fn retroarch_cfg_takes_only_allowed_keys() {
          aspect_ratio_index = \"23\"\n\
          custom_viewport_y = \"12\"\n\
          input_menu_toggle_btn = \"2\"\n\
+         input_menu_toggle_gamepad_combo = \"2\"\n\
          input_overlay_opacity = \"0.7\"\n\
          audio_latency = \"64\"\n\
          video_driver = \"vulkan\"\n\
@@ -89,7 +90,7 @@ fn retroarch_cfg_takes_only_allowed_keys() {
             "aspect_ratio_index",
             "audio_latency",
             "custom_viewport_y",
-            "input_menu_toggle_btn",
+            "input_menu_toggle_gamepad_combo",
             "input_overlay_opacity",
             "video_scale_integer",
             "video_scale_integer_overscale",
@@ -108,8 +109,10 @@ fn retroarch_cfg_takes_only_allowed_keys() {
         assert_eq!(why(&plan, key), Some(BLOCKED), "{key}");
     }
     assert_eq!(why(&plan, "audio_out_rate"), Some(UNKNOWN));
+    // Button numbers belong to the other device's pad.
+    assert_eq!(why(&plan, "input_menu_toggle_btn"), Some(UNKNOWN));
     assert_eq!(why(&plan, "retroarch.cfg: #include"), Some(INCLUDE));
-    assert_eq!((plan.found.settings, plan.found.skipped), (7, 10));
+    assert_eq!((plan.found.settings, plan.found.skipped), (7, 11));
 }
 
 #[test]
@@ -241,7 +244,7 @@ fn import_merges_retroarch_cfg_and_writes_files() {
     put(
         &f.roots.source,
         "retroarch.cfg",
-        "video_scale_integer = \"true\"\ninput_menu_toggle_btn = \"2\"\n",
+        "video_scale_integer = \"true\"\ninput_menu_toggle_gamepad_combo = \"2\"\n",
     );
     put(
         &f.roots.source,
@@ -253,7 +256,7 @@ fn import_merges_retroarch_cfg_and_writes_files() {
     assert_eq!(
         fs::read_to_string(f.roots.retroarch.join("retroarch.cfg")).unwrap(),
         "video_driver = \"gl\"\nvideo_scale_integer = \"true\"\nmenu_driver = \"ozone\"\n\
-         input_menu_toggle_btn = \"2\"\n"
+         input_menu_toggle_gamepad_combo = \"2\"\n"
     );
     assert!(f.roots.retroarch.join("config/mGBA/mGBA.opt").is_file());
 }

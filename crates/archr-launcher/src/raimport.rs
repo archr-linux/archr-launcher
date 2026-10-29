@@ -105,7 +105,7 @@ fn blocked(key: &str) -> bool {
 /// The retroarch.cfg keys worth carrying over (look, hotkeys, overlay
 /// placement, latency, rewind, run-ahead, savestates, menu).
 fn allowed(key: &str) -> bool {
-    const EXACT: [&str; 26] = [
+    const EXACT: [&str; 25] = [
         "video_scale_integer",
         "video_scale_integer_overscale",
         "video_smooth",
@@ -131,7 +131,6 @@ fn allowed(key: &str) -> bool {
         "slowmotion_ratio",
         "pause_nonactive",
         "config_save_on_exit",
-        "input_bind_hold",
     ];
     EXACT.contains(&key)
         || [
@@ -150,44 +149,15 @@ fn allowed(key: &str) -> bool {
         || hotkey(key)
 }
 
-/// RetroArch's hotkey binds (`input_menu_toggle_btn`, `input_exit_emulator`).
+/// Hotkey settings that mean the same on any pad. Button and axis numbers
+/// (`input_*_btn`, `_axis`, `_mbtn`) belong to the other device's pad.
 fn hotkey(key: &str) -> bool {
-    let Some(name) = key.strip_prefix("input_") else {
-        return false;
-    };
-    let name = ["_btn", "_axis", "_mbtn"]
-        .iter()
-        .find_map(|end| name.strip_suffix(end))
-        .unwrap_or(name);
     [
-        "enable_hotkey",
-        "exit_emulator",
-        "menu_toggle",
-        "save_state",
-        "load_state",
-        "state_slot_increase",
-        "state_slot_decrease",
-        "toggle_fast_forward",
-        "hold_fast_forward",
-        "rewind",
-        "pause_toggle",
-        "reset",
-        "screenshot",
-        "fps_toggle",
-        "shader_next",
-        "shader_prev",
-        "overlay_next",
-        "toggle_slowmotion",
-        "hold_slowmotion",
-        "frame_advance",
-        "audio_mute",
-        "volume_up",
-        "volume_down",
-        "hotkey_block_delay",
-        "menu_toggle_gamepad_combo",
-        "quit_gamepad_combo",
+        "input_menu_toggle_gamepad_combo",
+        "input_quit_gamepad_combo",
+        "input_hotkey_block_delay",
     ]
-    .contains(&name)
+    .contains(&key)
 }
 
 /// One `key = "value"` line, or None for blanks and comments. An include

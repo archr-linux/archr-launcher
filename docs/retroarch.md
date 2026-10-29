@@ -43,10 +43,11 @@ RetroArch (outro aparelho, o PC).
 O que entra:
 
 - do `retroarch.cfg`, só uma lista de chaves seguras (escala inteira,
-  proporção e viewport, suavização, shader ligado/desligado, atalhos, posição e
-  opacidade do overlay, latência de áudio, FPS, rewind, run-ahead, savestates,
-  aparência do menu), gravadas no `retroarch.cfg` do aparelho, nunca no
-  `system.cfg`;
+  proporção e viewport, suavização, shader ligado/desligado, combinação de
+  botões do menu, posição e opacidade do overlay, latência de áudio, FPS,
+  rewind, run-ahead, savestates, aparência do menu), gravadas no
+  `retroarch.cfg` do aparelho, nunca no `system.cfg`. Atalhos por número de
+  botão não entram: são do controle do outro aparelho;
 - substituições e opções só de núcleos instalados;
 - presets de shader cujos arquivos existem no aparelho; os caminhos são
   reescritos para o diretório de shaders do ArchR.
