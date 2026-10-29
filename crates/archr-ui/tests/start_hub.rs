@@ -255,6 +255,19 @@ fn module_widgets_sit_between_the_tiles_and_the_shortcuts() {
     assert!(matches!(app.screen, Screen::StartHub { row: 2, .. }));
     app.handle(Button::Up, &data);
     assert!(matches!(app.screen, Screen::StartHub { row: 0, .. }));
+    // The widgets go away under the focus: the next press starts from the
+    // tiles, never from a row that is no longer there.
+    app.handle(Button::Down, &data);
+    assert!(matches!(app.screen, Screen::StartHub { row: 2, .. }));
+    app.hub_widget = 7;
+    app.modules = std::sync::Arc::new(View::default());
+    app.handle(Button::R, &data);
+    assert!(
+        matches!(app.screen, Screen::StartHub { row: 0, .. }),
+        "{:?}",
+        app.screen
+    );
+    assert_eq!(app.hub_widget, 0);
     // Without widgets Down goes straight to the shortcuts.
     let mut plain = App::new(8);
     plain.handle(Button::Start, &data);

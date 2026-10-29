@@ -115,6 +115,13 @@ impl Ui<'_, '_> {
         // With module widgets the tiles shrink above their band
         // (`start_widgets`) and the shortcuts go under it.
         let widgets = app.modules.widgets();
+        // Until the next press the state still names a widget row that is
+        // gone: the tiles show the focus, as the press will put it there.
+        let row = if row == 2 && widgets.is_empty() {
+            0
+        } else {
+            row
+        };
         let layout = Layout::new(theme.start_widgets, !widgets.is_empty());
         let (tile_top, tile_h, tile_w, gap, row_y) = (
             layout.tile_top,

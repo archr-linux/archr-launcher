@@ -63,6 +63,12 @@ impl App {
         // Rows: 0 tiles, 2 module widgets (between, when there are any),
         // 1 shortcuts.
         let widgets = self.modules.widgets();
+        // The widgets went away (a module switched off) under the focus:
+        // it goes back to the tiles; the chosen widget stays in range.
+        if row == 2 && widgets.is_empty() {
+            row = 0;
+        }
+        self.hub_widget = self.hub_widget.min(widgets.len().saturating_sub(1));
         match button {
             Button::Start | Button::B => self.screen = Screen::Systems,
             Button::Up => {
