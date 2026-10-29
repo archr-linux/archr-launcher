@@ -286,6 +286,8 @@ pub enum Id {
     /// Back up before importing: this page only, never saved.
     RaBackup,
     RaRun,
+    /// Hotkeys page: write RetroArch's hotkeys again from the built-in pad.
+    RaHotkeys,
 }
 impl Id {
     fn metadata(self) -> (&'static str, &'static str) {
@@ -424,7 +426,8 @@ impl Id {
             | Self::RaOverrides
             | Self::RaShaders
             | Self::RaPreview
-            | Self::RaRun => ("", ""),
+            | Self::RaRun
+            | Self::RaHotkeys => ("", ""),
         }
     }
     pub fn key(self) -> &'static str {
@@ -922,7 +925,9 @@ impl Settings {
                 crate::motion::Motion::Reduced => "appearance.anim_reduced",
                 crate::motion::Motion::Off => "appearance.anim_off",
             },
-            (Id::Restore | Id::Accent | Id::ButtonsRestore, _) => return String::new(),
+            (Id::Restore | Id::Accent | Id::ButtonsRestore | Id::RaHotkeys, _) => {
+                return String::new()
+            }
             (Id::Bind(n), _) => return self.bindings()[usize::from(n)].name().into(),
             (Id::HotkeyModifier, key) => return hotkeys::key_name(key).into(),
             (Id::Hotkey(n), _) if self.value(Id::HotkeyOn(n)) == "0" => "settings.off",
@@ -1365,6 +1370,9 @@ impl Settings {
                 self.values.insert(id, value);
                 self.sync_games();
                 self.error = None;
+                if id == Id::RaHotkeys {
+                    self.fail(None, "settings.ra_hotkeys_done".into());
+                }
                 self.reboot_prompt = match id {
                     Id::Gpu => Some("settings.reboot_question"),
                     Id::Automount => Some("settings.storage_reboot_question"),

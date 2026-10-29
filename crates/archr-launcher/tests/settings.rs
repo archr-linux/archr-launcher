@@ -515,10 +515,15 @@ fn hotkeys_save_evdev_names_and_restart_a_running_input_service() {
         fs::read_to_string(&log).unwrap().matches("restart").count(),
         5
     );
-    // RetroArch's hotkeys follow every hotkey change, not inactivity.
+    // RetroArch's own hotkeys stay as the user left them...
+    assert!(!retroarch.exists());
+    // ...until asked to restore them.
+    assert_eq!(backend.apply(Id::RaHotkeys, "").unwrap(), "");
+    assert_eq!(fs::read_to_string(&retroarch).unwrap(), "--force\n");
+    script(&dir, "archr-retroarch-hotkeys", "exit 1");
     assert_eq!(
-        fs::read_to_string(&retroarch).unwrap(),
-        "--force\n--force\n--force\n--force\n"
+        backend.apply(Id::RaHotkeys, ""),
+        Err("settings.ra_hotkeys_failed".into())
     );
     let state = backend.load().unwrap();
     assert_eq!(state.hotkey_pads(0), ["FN", "R1", "START"]);

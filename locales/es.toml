@@ -960,3 +960,7 @@
 "raimport.remaps_count" = { one = "{count} reasignación", other = "{count} reasignaciones" }
 "raimport.file_settings" = { one = "{count} ajuste", other = "{count} ajustes" }
 "raimport.done" = { one = "{count} elemento importado; se aplica desde el próximo juego.", other = "{count} elementos importados; se aplican desde el próximo juego." }
+"controls.ra_hotkeys" = "Restaurar atajos de RetroArch"
+"controls.ra_hotkeys_detail" = "Menú, estados y avance rápido con el mando del equipo"
+"settings.ra_hotkeys_done" = "Atajos de RetroArch restaurados; se aplican desde el próximo juego."
+"settings.ra_hotkeys_failed" = "No se encontró el mapa del mando; los atajos de RetroArch no cambiaron."

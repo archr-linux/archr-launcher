@@ -960,3 +960,7 @@
 "raimport.remaps_count" = { one = "{count} переназначение", few = "{count} переназначения", many = "{count} переназначений", other = "{count} переназначения" }
 "raimport.file_settings" = { one = "{count} параметр", few = "{count} параметра", many = "{count} параметров", other = "{count} параметра" }
 "raimport.done" = { one = "Импортирован {count} элемент; действует со следующей игры.", few = "Импортировано {count} элемента; действуют со следующей игры.", many = "Импортировано {count} элементов; действуют со следующей игры.", other = "Импортировано {count} элемента; действуют со следующей игры." }
+"controls.ra_hotkeys" = "Сбросить горячие клавиши RetroArch"
+"controls.ra_hotkeys_detail" = "Меню, сохранения и перемотка с кнопок устройства"
+"settings.ra_hotkeys_done" = "Горячие клавиши RetroArch сброшены; действуют со следующей игры."
+"settings.ra_hotkeys_failed" = "Раскладка контроллера не найдена; горячие клавиши RetroArch не изменены."

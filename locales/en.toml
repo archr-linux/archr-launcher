@@ -960,3 +960,7 @@
 "raimport.remaps_count" = { one = "{count} remap", other = "{count} remaps" }
 "raimport.file_settings" = { one = "{count} setting", other = "{count} settings" }
 "raimport.done" = { one = "{count} item imported; it applies from the next game.", other = "{count} items imported; they apply from the next game." }
+"controls.ra_hotkeys" = "Restore RetroArch hotkeys"
+"controls.ra_hotkeys_detail" = "Menu, states and fast forward from this pad"
+"settings.ra_hotkeys_done" = "RetroArch hotkeys restored; they apply from the next game."
+"settings.ra_hotkeys_failed" = "The pad's layout was not found; RetroArch hotkeys are unchanged."

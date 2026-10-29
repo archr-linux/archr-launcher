@@ -1,7 +1,7 @@
 //! In-game hotkeys and inactivity: system.cfg keys input_sense reads once at
-//! start, so every save restarts its unit, as the device quirks do. A hotkey
-//! change also rewrites RetroArch's hotkeys, which otherwise stay as the user
-//! left them in RetroArch.
+//! start, so every save restarts its unit, as the device quirks do.
+//! RetroArch's own hotkeys are separate: only "Restore RetroArch hotkeys"
+//! rewrites them, so the ones set inside RetroArch stay.
 use super::Backend;
 use archr_config::SystemCfg;
 use archr_ui::{
@@ -45,17 +45,22 @@ impl Backend {
         }
         Ok(())
     }
-    /// The distribution's script; a pad without autoconfig only logs.
-    fn retroarch_hotkeys(&self) {
-        if let Err(error) = self.command_with_timeout(
-            "archr-retroarch-hotkeys",
-            &["--force"],
-            Duration::from_secs(10),
-        ) {
-            log::warn!("RetroArch hotkeys not written: {error}");
-        }
-    }
     pub(super) fn apply_controls(&self, id: Id, value: &str) -> Option<Result<String, String>> {
+        // The distribution's script, from the built-in pad's autoconfig.
+        if id == Id::RaHotkeys {
+            return Some(
+                self.command_with_timeout(
+                    "archr-retroarch-hotkeys",
+                    &["--force"],
+                    Duration::from_secs(10),
+                )
+                .map(|_| String::new())
+                .map_err(|error| {
+                    log::warn!("RetroArch hotkeys not written: {error}");
+                    "settings.ra_hotkeys_failed".to_owned()
+                }),
+            );
+        }
         let entries: Vec<(&str, String)> = match id {
             Id::HotkeyModifier if MODIFIERS.contains(&value) => vec![(id.key(), value.into())],
             Id::Hotkey(n) if valid_hotkey(usize::from(n), value) => {
@@ -94,13 +99,9 @@ impl Backend {
             _ => return None,
         };
         let entries: Vec<(&str, &str)> = entries.iter().map(|(k, v)| (*k, v.as_str())).collect();
-        let saved = SystemCfg::set_many_and_save(&self.paths.config, &self.paths.lock, &entries)
-            .map_err(|e| e.to_string());
-        if saved.is_ok() && !matches!(id, Id::Idle | Id::IdleGame) {
-            self.retroarch_hotkeys();
-        }
         Some(
-            saved
+            SystemCfg::set_many_and_save(&self.paths.config, &self.paths.lock, &entries)
+                .map_err(|e| e.to_string())
                 .and_then(|()| self.restart_input())
                 .map(|()| value.into()),
         )

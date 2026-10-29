@@ -93,6 +93,13 @@ pub const HOTKEYS_PAGE: &[Row] = &[
     row(Id::Hotkey(2), HOTKEYS[2].label, Kind::Action),
     row(Id::Hotkey(3), HOTKEYS[3].label, Kind::Action),
     row(Id::Hotkey(4), HOTKEYS[4].label, Kind::Action),
+    // RetroArch's own hotkeys, rewritten only when asked.
+    described(
+        Id::RaHotkeys,
+        "controls.ra_hotkeys",
+        "controls.ra_hotkeys_detail",
+    )
+    .kind(Kind::Action),
 ];
 
 /// The shown name of an evdev key: the pad's, or the key without "BTN_".
@@ -205,6 +212,7 @@ impl Settings {
                 self.capture = Some(Capture::new(id));
                 Effect::None
             }
+            (Id::RaHotkeys, Button::A) => Effect::Set(Id::RaHotkeys, String::new()),
             (Id::Hotkey(n), Button::X) => {
                 let on = self.value(Id::HotkeyOn(n)) == "0";
                 Effect::Set(Id::HotkeyOn(n), if on { "1" } else { "0" }.into())
@@ -462,5 +470,21 @@ mod tests {
             state.hotkey_prompt().unwrap().1,
             "controls.press_one|modifier=L1"
         );
+    }
+    #[test]
+    fn retroarch_hotkeys_are_restored_only_on_request() {
+        let mut state = page(&[]);
+        state.cursor = state
+            .visible_rows()
+            .iter()
+            .position(|r| r.id == Id::RaHotkeys)
+            .unwrap();
+        assert_eq!(state.handle(Button::R), Effect::None);
+        assert_eq!(
+            state.handle(Button::A),
+            Effect::Set(Id::RaHotkeys, String::new())
+        );
+        state.complete(Id::RaHotkeys, Ok(String::new()));
+        assert_eq!(state.error, Some((None, "settings.ra_hotkeys_done".into())));
     }
 }

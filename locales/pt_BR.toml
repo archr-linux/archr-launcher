@@ -960,3 +960,7 @@
 "raimport.remaps_count" = { one = "{count} remap", other = "{count} remaps" }
 "raimport.file_settings" = { one = "{count} ajuste", other = "{count} ajustes" }
 "raimport.done" = { one = "{count} item importado; vale a partir do próximo jogo.", other = "{count} itens importados; valem a partir do próximo jogo." }
+"controls.ra_hotkeys" = "Restaurar atalhos do RetroArch"
+"controls.ra_hotkeys_detail" = "Menu, estados e avanço rápido pelo controle do aparelho"
+"settings.ra_hotkeys_done" = "Atalhos do RetroArch restaurados; valem a partir do próximo jogo."
+"settings.ra_hotkeys_failed" = "O mapa do controle não foi encontrado; os atalhos do RetroArch não mudaram."

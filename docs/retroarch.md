@@ -17,9 +17,11 @@
   do que o launcher definiu. Presets de shader salvos para o núcleo ou o jogo
   também vencem: o launcher só passa um shader quando você escolheu um nele.
 - **Atalhos do RetroArch** (menu, salvar/carregar estado, avanço rápido...)
-  são gravados uma vez, no primeiro jogo, a partir do controle do aparelho, e de
-  novo só quando você muda os atalhos em Configurações › Controles › Atalhos.
-  Atalhos trocados dentro do RetroArch passam a durar.
+  são gravados uma vez, no primeiro jogo, a partir do controle embutido. Depois
+  só mudam por você: dentro do RetroArch (e passam a durar) ou por
+  Configurações › Controles › Atalhos › "Restaurar atalhos do RetroArch", que
+  volta ao padrão do aparelho. Os atalhos do launcher (sair, volume, brilho,
+  captura, MangoHud) são outra coisa e não mexem nos do RetroArch.
 
 ## Importar do RetroArch
 
