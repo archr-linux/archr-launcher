@@ -329,26 +329,8 @@ impl View<'_, '_, '_> {
                 (14., self.ink(selected), Align::Left),
                 selection(selected, Face::Regular, Face::Semibold),
             )?;
-            let check = (cell.0 + cell.2 - 30., cell.1 + 11., 18., 18.);
-            let corner = self.ui.px(5.) as f32;
-            if items.contains(code) {
-                let accent = self.theme.highlight_bg;
-                self.ui
-                    .rounded(self.rect(check), corner, accent, Some(accent))?;
-                self.ui.icon(
-                    Glyph::Check,
-                    self.rect((check.0 + 3., check.1 + 3., 12., 12.)),
-                    self.theme.highlight_text,
-                )?;
-            } else {
-                let edge = selection(
-                    selected,
-                    self.theme.dim_text,
-                    self.theme.accent_text_secondary,
-                );
-                self.ui
-                    .rounded(self.rect(check), corner, back, Some(edge))?;
-            }
+            let on = items.contains(code);
+            self.checkbox((cell.0 + cell.2 - 30., cell.1 + 11.), on, selected, back)?;
         }
         Ok(())
     }
