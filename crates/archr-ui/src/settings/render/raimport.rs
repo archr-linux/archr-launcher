@@ -79,6 +79,7 @@ impl View<'_, '_, '_> {
                 height: 30.,
                 section: (n == 0).then_some("raimport.will_apply"),
                 searching: None,
+                trail: 0.,
             });
             top += 30. + ROW_GAP;
             items.push((name.clone(), self.tr(detail), false));
@@ -92,6 +93,7 @@ impl View<'_, '_, '_> {
                 height: 30.,
                 section: (n == 0).then_some("raimport.ignored"),
                 searching: None,
+                trail: 0.,
             });
             top += 30. + ROW_GAP;
             items.push((name.clone(), self.tr(why), true));
