@@ -496,7 +496,13 @@ impl Engine {
             };
             let mut file = stem.to_os_string();
             file.push(format!(".{ext}"));
-            let dest = item.system.path.join("media").join(kind.dir()).join(file);
+            // Media and gamelist go to the card holding the ROM.
+            let dest = item
+                .system
+                .root_of(&item.game.path)
+                .join("media")
+                .join(kind.dir())
+                .join(file);
             match atomic_publish(&dest, false, |f| f.write_all(&body)) {
                 Ok(()) => fields.push((kind.tag(), dest.to_string_lossy().into_owned())),
                 Err(_) => failed += 1,
@@ -528,7 +534,9 @@ impl Engine {
             rom: item.game.path.clone(),
             fields,
         };
-        if let Err(error) = update_gamelist(&item.system.path, &[update], prefs.force) {
+        if let Err(error) =
+            update_gamelist(item.system.root_of(&item.game.path), &[update], prefs.force)
+        {
             log::warn!(
                 "scraper: cannot update the {} gamelist: {error}",
                 item.system.name
@@ -802,7 +810,7 @@ fn present(system: &SystemDef, game: &Game, kind: Media) -> bool {
             let mut file = stem.to_os_string();
             file.push(format!(".{ext}"));
             system
-                .path
+                .root_of(&game.path)
                 .join("media")
                 .join(kind.dir())
                 .join(file)
