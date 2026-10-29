@@ -475,6 +475,8 @@ pub struct Settings {
     pub options: BTreeMap<Id, Vec<String>>,
     /// Display names for option codes (keyboard layouts, systems).
     pub labels: BTreeMap<(Id, String), String>,
+    /// Names the installed themes give themselves, by folder.
+    pub theme_names: BTreeMap<String, crate::layout::Names>,
     pub pending: Option<Id>,
     pub loading: bool,
     pub error: Option<(Option<Id>, String)>,
@@ -514,6 +516,8 @@ pub struct Settings {
     /// The custom accent colour: remembered while other dots are chosen and
     /// edited on its own page.
     pub custom: Custom,
+    /// The remembered custom colour while the editor shows another one.
+    custom_kept: Custom,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -526,6 +530,7 @@ impl Default for Settings {
                 .map(|id| (id, id.choices().iter().map(|v| (*v).into()).collect()))
                 .collect(),
             labels: BTreeMap::new(),
+            theme_names: BTreeMap::new(),
             pending: None,
             loading: true,
             error: None,
@@ -555,6 +560,7 @@ impl Default for Settings {
             base_dir: None,
             applied: None,
             custom: Custom::default(),
+            custom_kept: Custom::default(),
         }
     }
 }
@@ -578,13 +584,22 @@ impl Settings {
             (Id::Suspend, "mem") => "settings.suspend_mem",
             (Id::Suspend, "freeze") => "settings.suspend_freeze",
             (Id::Suspend, "standby") => "settings.suspend_standby",
-            (Id::Theme, "default") => "appearance.theme_default",
+            (Id::Theme, folder) => {
+                let named = self.theme_names.get(folder).cloned().or_else(|| {
+                    (folder == Id::Theme.default_value()).then(|| Theme::builtin().name)
+                });
+                return named
+                    .as_ref()
+                    .and_then(|n| n.get(catalog.language()))
+                    .unwrap_or(folder)
+                    .to_owned();
+            }
             (Id::View, view) => {
                 let views = self.base_theme.views();
                 let (id, names) = views.iter().find(|(id, _)| id == view).unwrap_or(&views[0]);
                 return names.get(catalog.language()).unwrap_or(id).to_owned();
             }
-            (Id::Background, "") => return self.display_value(Id::Theme, catalog),
+            (Id::Background, "") => "appearance.bg_theme",
             (Id::Background, "black") => "appearance.bg_black",
             (Id::Background, "slate") => "appearance.bg_slate",
             (Id::Font, "") if self.value(Id::Theme) == "default" => "appearance.font_inter",
@@ -1043,7 +1058,11 @@ impl Settings {
                         if options.is_empty() {
                             return Effect::None;
                         }
-                        let index = options.iter().position(|v| v == old).unwrap_or(0);
+                        let index = if row.id == Id::Accent {
+                            self.accent_index()
+                        } else {
+                            options.iter().position(|v| v == old).unwrap_or(0)
+                        };
                         options[(index
                             + if button == Button::L {
                                 options.len() - 1
@@ -1216,9 +1235,12 @@ mod appearance_tests {
     fn theme_changes_ask_the_host_to_load_the_preview() {
         let mut state = page();
         assert_eq!(state.handle(Button::R), Effect::Theme("night".into()));
+        // Restoring keeps the theme and returns the rest to it.
+        state.values.insert(Id::Accent, "pink".into());
         state.cursor = 7;
-        assert_eq!(state.handle(Button::A), Effect::Theme("default".into()));
-        assert_eq!(state.value(Id::Theme), "default");
+        assert_eq!(state.handle(Button::A), Effect::None);
+        assert_eq!(state.value(Id::Theme), "night");
+        assert_eq!(state.value(Id::Accent), "");
     }
     fn custom_dot() -> Settings {
         let mut state = page();
@@ -1233,9 +1255,16 @@ mod appearance_tests {
         let remembered = state.value(Id::Accent).to_owned();
         assert_eq!(remembered, appearance::hex(Custom::default().rgb()));
         state.handle(Button::R);
-        assert_eq!(state.value(Id::Accent), "blue");
+        assert_eq!(
+            state.value(Id::Accent),
+            "",
+            "the theme's own accent comes first"
+        );
+        // A anywhere on the row edits the colour in effect.
         assert_eq!(state.handle(Button::A), Effect::None);
-        assert_eq!(state.page(), Page::Appearance);
+        assert_eq!(state.page(), Page::AccentColor);
+        assert_eq!(state.custom, Custom::from_rgb(0x1E88FF));
+        state.handle(Button::B);
         state.handle(Button::L);
         assert_eq!(state.value(Id::Accent), remembered);
         state.handle(Button::A);
@@ -1335,6 +1364,45 @@ mod appearance_tests {
         assert_eq!(gone.display_value(Id::View, &catalog), "Lista");
         let theme = gone.appearance().apply(&gone.base_theme);
         assert_eq!(theme.view(&theme.active_view).id, "lista");
+    }
+    #[test]
+    fn the_first_dot_is_the_theme_accent_and_presets_like_it_are_hidden() {
+        let mut state = page();
+        let grafite = state.accent_choices();
+        assert_eq!(grafite.first().map(String::as_str), Some(""));
+        assert!(
+            !grafite.iter().any(|c| c == "blue"),
+            "the theme's blue is the first dot"
+        );
+        assert_eq!(grafite.len(), 1 + 5 + 1);
+        // A theme in yellow and blue shows all six presets after its own.
+        state.base_theme.highlight_bg = appearance::parse_hex("#FFC93C")
+            .map(appearance::rgb)
+            .unwrap();
+        state.base_theme.highlight_text = appearance::rgb(0x0A2540);
+        assert_eq!(state.accent_choices().len(), 1 + 6 + 1);
+        // A saved preset equal to the theme's accent rings the theme's dot.
+        let mut matching = page();
+        matching.values.insert(Id::Accent, "blue".into());
+        assert_eq!(matching.accent_index(), 0);
+        // The theme's accent keeps the theme's own ink.
+        let look = state.appearance().apply(&state.base_theme);
+        assert_eq!(look.highlight_text, appearance::rgb(0x0A2540));
+        state.values.insert(Id::Accent, "violet".into());
+        assert_eq!(
+            state.appearance().apply(&state.base_theme).highlight_bg,
+            appearance::rgb(0x8B5CF6)
+        );
+        let catalog = crate::i18n::I18n::load(std::path::Path::new("/none"), Some("pt_BR"), None);
+        assert_eq!(state.display_value(Id::Background, &catalog), "Do tema");
+        assert_eq!(state.display_value(Id::Theme, &catalog), "Grafite");
+        state
+            .theme_names
+            .insert("night".into(), crate::layout::Names::plain("Noite"));
+        state.values.insert(Id::Theme, "night".into());
+        assert_eq!(state.display_value(Id::Theme, &catalog), "Noite");
+        state.values.insert(Id::Theme, "sol".into());
+        assert_eq!(state.display_value(Id::Theme, &catalog), "sol");
     }
 }
 #[cfg(test)]

@@ -423,7 +423,7 @@
 "settings.restore" = "Restore defaults"
 "appearance.preview" = "Preview"
 "appearance.preview_note" = "Changes show here at once and are saved when you leave."
-"appearance.theme_default" = "Graphite"
+"appearance.bg_theme" = "From the theme"
 "appearance.bg_black" = "Black"
 "appearance.bg_slate" = "Midnight blue"
 "appearance.font_inter" = "Inter"

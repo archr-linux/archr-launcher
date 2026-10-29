@@ -176,6 +176,12 @@ impl Backend {
         themes.push(state.value(Id::Theme).to_owned());
         themes.sort();
         themes.dedup();
+        for theme in &themes {
+            let (loaded, dir) = crate::appearance::load_theme(&self.paths, theme);
+            if dir.is_some() || theme == "default" {
+                state.theme_names.insert(theme.clone(), loaded.name);
+            }
+        }
         state.options.insert(Id::Theme, themes);
     }
     /// One locked, atomic publish for all the page's choices.

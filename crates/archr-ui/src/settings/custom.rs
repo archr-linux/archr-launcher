@@ -1,7 +1,7 @@
 //! Custom accent colour: hue, saturation and brightness sliders and a hex code.
 use super::{Effect, Id, Page, Settings};
 use crate::{
-    appearance::{hex, hsv_to_rgb, parse_hex, rgb_to_hsv, ACCENTS},
+    appearance::{hex, hsv_to_rgb, parse_hex, rgb, rgb_to_hsv, ACCENTS, ACCENT_RGB},
     keyboard::Mode,
     state::Button,
 };
@@ -48,28 +48,46 @@ impl Settings {
     pub fn accent_is_custom(&self) -> bool {
         parse_hex(self.value(Id::Accent)).is_some()
     }
-    /// The preset names and, last, the remembered custom colour.
-    pub(super) fn accent_choices(&self) -> Vec<String> {
-        ACCENTS
-            .iter()
-            .map(|a| (*a).into())
+    /// The theme's own accent (an empty value), the presets that differ
+    /// from it and, last, the remembered custom colour.
+    pub fn accent_choices(&self) -> Vec<String> {
+        let own = self.base_theme.highlight_bg;
+        std::iter::once(String::new())
+            .chain(
+                ACCENTS
+                    .iter()
+                    .zip(ACCENT_RGB)
+                    .filter(|(_, color)| rgb(*color) != own)
+                    .map(|(name, _)| (*name).into()),
+            )
             .chain([hex(self.custom.rgb())])
             .collect()
     }
-    /// A on the custom dot opens the editor at the colour in effect.
-    pub(super) fn open_custom(&mut self) -> bool {
-        let Some(rgb) = parse_hex(self.value(Id::Accent)) else {
-            return false;
-        };
-        self.custom = Custom::from_rgb(rgb);
+    /// Which dot is chosen: a preset hidden for matching the theme's accent
+    /// is the theme's dot.
+    pub fn accent_index(&self) -> usize {
+        let value = self.value(Id::Accent);
+        self.accent_choices()
+            .iter()
+            .position(|choice| choice == value)
+            .unwrap_or(0)
+    }
+    /// A on the accent row opens the editor at the colour in effect.
+    pub(super) fn open_custom(&mut self) {
+        let accent = self.appearance().apply(&self.base_theme).highlight_bg;
+        let effective = u32::from(accent.r) << 16 | u32::from(accent.g) << 8 | u32::from(accent.b);
+        self.custom_kept = self.custom;
+        self.custom = Custom::from_rgb(effective);
         self.open(Page::AccentColor);
-        true
     }
     pub(super) fn custom_input(&mut self, button: Button) -> Effect {
         let row = self.cursor;
         let sliding = row < ROWS - 1;
         match button {
-            Button::B => return self.back(),
+            Button::B => {
+                self.custom = self.custom_kept;
+                return self.back();
+            }
             Button::Up => self.cursor = row.saturating_sub(1),
             Button::Down => self.cursor = (row + 1).min(ROWS - 1),
             Button::L | Button::R | Button::X | Button::Y if sliding => {

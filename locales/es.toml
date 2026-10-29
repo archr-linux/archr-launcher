@@ -423,7 +423,7 @@
 "settings.restore" = "Restaurar valores"
 "appearance.preview" = "Vista previa"
 "appearance.preview_note" = "Los cambios se ven aquí al instante y se guardan al salir."
-"appearance.theme_default" = "Grafito"
+"appearance.bg_theme" = "Del tema"
 "appearance.bg_black" = "Negro"
 "appearance.bg_slate" = "Azul noche"
 "appearance.font_inter" = "Inter"

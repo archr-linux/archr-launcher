@@ -562,6 +562,7 @@ impl Worker {
                     std::mem::swap(&mut state.values, &mut loaded.values);
                     state.options = loaded.options;
                     state.labels = loaded.labels;
+                    state.theme_names = loaded.theme_names;
                     state.access_ip = loaded.access_ip;
                     state.usb_busy = loaded.usb_busy;
                     state.info = loaded.info;

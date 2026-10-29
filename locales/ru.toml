@@ -423,7 +423,7 @@
 "settings.restore" = "Сбросить настройки"
 "appearance.preview" = "Предпросмотр"
 "appearance.preview_note" = "Изменения видны здесь сразу и сохраняются при выходе."
-"appearance.theme_default" = "Графит"
+"appearance.bg_theme" = "Из темы"
 "appearance.bg_black" = "Чёрный"
 "appearance.bg_slate" = "Полуночный синий"
 "appearance.font_inter" = "Inter"
