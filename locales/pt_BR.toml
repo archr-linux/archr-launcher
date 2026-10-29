@@ -163,6 +163,7 @@
 "settings.usb_busy" = "A porta USB está em uso (Wi‑Fi ou controle USB). Desconecte o dispositivo para usar a função USB."
 "settings.usb_in_use" = "Porta USB em uso: desconecte o dispositivo"
 "settings.usb_unprepared" = "A função USB não está configurada neste sistema."
+"settings.usb_rebuild_failed" = "Não foi possível montar a rede USB; a função USB foi desligada."
 "settings.usb_detail" = "Ao conectar no PC"
 "settings.netplay_enabled" = "Ativar Netplay"
 "settings.nickname" = "Apelido"

@@ -163,6 +163,7 @@
 "settings.usb_busy" = "El puerto USB está en uso (Wi‑Fi o mando USB). Desconecta el dispositivo para usar la función USB."
 "settings.usb_in_use" = "Puerto USB en uso: desconecta el dispositivo"
 "settings.usb_unprepared" = "La función USB no está configurada en este sistema."
+"settings.usb_rebuild_failed" = "No se pudo preparar la red USB; la función USB se apagó."
 "settings.usb_detail" = "Al conectar al PC"
 "settings.netplay_enabled" = "Activar Netplay"
 "settings.nickname" = "Apodo"

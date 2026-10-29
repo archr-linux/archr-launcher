@@ -458,6 +458,11 @@ fn usbgadget_exit_three_maps_to_specific_messages() {
     assert_eq!(backend.apply(Id::UsbMode, "internet").unwrap(), "internet");
     assert_eq!(backend.apply(Id::UsbCompat, "1").unwrap(), "1");
     assert!(backend.apply(Id::UsbCompat, "2").is_err());
+    script(&dir, "usbgadget", "exit 4");
+    assert_eq!(
+        backend.apply(Id::UsbCompat, "0").unwrap_err(),
+        "settings.usb_rebuild_failed"
+    );
     assert!(backend.apply(Id::UsbMode, "ecm").is_err());
     let calls = fs::read_to_string(dir.path().join("calls")).unwrap();
     assert_eq!(calls, "internet\ncompat 1\n");

@@ -163,6 +163,7 @@
 "settings.usb_busy" = "The USB port is in use (Wi-Fi or USB controller). Unplug the device to use the USB function."
 "settings.usb_in_use" = "USB port in use: unplug the device"
 "settings.usb_unprepared" = "The USB gadget is not set up on this system."
+"settings.usb_rebuild_failed" = "The USB network could not be set up; the USB function was turned off."
 "settings.usb_detail" = "When connected to a PC"
 "settings.netplay_enabled" = "Enable Netplay"
 "settings.nickname" = "Nickname"

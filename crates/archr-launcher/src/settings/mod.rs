@@ -685,6 +685,9 @@ impl Worker {
                     if id == Id::UsbMode {
                         state.usb_busy = matches!(&result, Err(e) if e == "settings.usb_busy");
                     }
+                    if matches!(&result, Err(e) if e == "settings.usb_rebuild_failed") {
+                        state.values.insert(Id::UsbMode, "disabled".into());
+                    }
                     if id == Id::Language {
                         language = result.as_ref().ok().cloned();
                     }

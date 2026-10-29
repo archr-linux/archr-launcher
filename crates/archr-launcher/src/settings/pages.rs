@@ -23,8 +23,11 @@ fn wifi_error(error: String) -> String {
 }
 /// usbgadget exits 3 when the single OTG port hosts a device (Wi-Fi dongle or
 /// gamepad) and when the gadget was never prepared; both leave the value as is.
+/// "compat" exits 4 when no network gadget could be built: the function is off.
 pub(super) fn usb_error(error: &str) -> String {
-    if !error.contains("exit status: 3") {
+    if error.contains("exit status: 4") {
+        "settings.usb_rebuild_failed".into()
+    } else if !error.contains("exit status: 3") {
         error.into()
     } else if error.contains("not configured") {
         "settings.usb_unprepared".into()
