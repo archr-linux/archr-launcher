@@ -86,6 +86,7 @@ impl Runtime {
         self.state.pending.is_some()
             || self.state.connecting.is_some()
             || self.state.storage.working.is_some()
+            || self.state.cheevos.verifying
             || !self.state.slides.is_empty()
     }
     pub fn close(&mut self) {
@@ -109,6 +110,8 @@ impl Runtime {
             Effect::Connect(ssid, password) => self.send(Work::Connect(ssid, password)),
             Effect::Forget(ssid) => self.send(Work::Forget(ssid)),
             Effect::Login(user, password) => self.send(Work::Login(user, password)),
+            Effect::CheevosLogin(user, password) => self.send(Work::CheevosLogin(user, password)),
+            Effect::CheevosLogout => self.send(Work::CheevosLogout),
             Effect::Scrape if self.job.is_some() => self.state.scrape.starting = false,
             Effect::Scrape => self.send(Work::Scrape),
             Effect::CancelScrape => {
@@ -138,6 +141,12 @@ impl Runtime {
         }
         if before != Page::Bluetooth && self.state.page() == Page::Bluetooth {
             self.next_bt_scan = Instant::now();
+        }
+        if before != Page::Achievements
+            && self.state.page() == Page::Achievements
+            && !self.state.cheevos.user.is_empty()
+        {
+            self.send(Work::CheevosProfile);
         }
         Outcome::None
     }

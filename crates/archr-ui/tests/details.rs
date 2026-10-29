@@ -131,6 +131,7 @@ fn details_render_in_every_locale_with_and_without_art_and_text() {
                 cover: None,
                 shot: rich.then_some(&shot),
                 logo: rich.then_some(&logo),
+                badges: None,
             };
             ui.draw_with_settings(&app, &data, &theme, art, None)
                 .unwrap();
@@ -170,6 +171,7 @@ fn capture_details() {
                 cover: None,
                 shot: rich.then_some(&shot),
                 logo: rich.then_some(&logo),
+                badges: None,
             };
             ui.draw_with_settings(&app, &data, &theme, art, None)
                 .unwrap();

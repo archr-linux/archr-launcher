@@ -262,7 +262,8 @@ impl Library {
             | Outcome::Settings
             | Outcome::OpenNetplay
             | Outcome::Moonlight
-            | Outcome::Rescrape { .. } => {}
+            | Outcome::Rescrape { .. }
+            | Outcome::Achievements { .. } => {}
             Outcome::ToggleFavorite { system, game } => {
                 let key = self.game_key(&system, game).ok_or("error.game_missing")?;
                 self.store.toggle_favorite(&key);

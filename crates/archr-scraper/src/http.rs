@@ -26,12 +26,32 @@ pub trait Http: Send + Sync {
     /// Must return promptly with `Cancelled` once `cancel` is raised.
     /// Implementations must never log or return the URL: it carries credentials.
     fn get(&self, url: &str, limit: u64, cancel: &AtomicBool) -> Result<Response, NetError>;
+    /// POST `form` (already URL-encoded) to `url`; no redirects. The form may
+    /// carry passwords: the same never-log rule applies.
+    fn post(
+        &self,
+        _url: &str,
+        _form: &str,
+        _limit: u64,
+        _cancel: &AtomicBool,
+    ) -> Result<Response, NetError> {
+        Err(NetError::Failed)
+    }
 }
 
-/// An https URL on screenscraper.fr or a subdomain, nothing else: plain
-/// lowercase hostname (no userinfo, port, fragment, backslash or control
-/// characters). Every URL we fetch carries our login, so this gates all hops.
+/// ScreenScraper and its media servers.
+pub const SCREENSCRAPER: &[&str] = &["screenscraper.fr"];
+
+/// An https URL on screenscraper.fr or a subdomain. Every URL we fetch
+/// there carries our login, so this gates all hops.
 pub fn trusted(url: &str) -> bool {
+    trusted_on(url, SCREENSCRAPER)
+}
+
+/// An https URL on one of `hosts` or a subdomain, nothing else: plain
+/// lowercase hostname (no userinfo, port, fragment, backslash or control
+/// characters).
+pub fn trusted_on(url: &str, hosts: &[&str]) -> bool {
     let Some(rest) = url.strip_prefix("https://") else {
         return false;
     };
@@ -43,7 +63,23 @@ pub fn trusted(url: &str) -> bool {
         && host
             .bytes()
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'.' || b == b'-');
-    clean && plain && (host == "screenscraper.fr" || host.ends_with(".screenscraper.fr"))
+    clean
+        && plain
+        && hosts
+            .iter()
+            .any(|h| host == *h || host.strip_suffix(h).is_some_and(|s| s.ends_with('.')))
+}
+
+/// Percent-encoding for query strings and form bodies.
+pub fn encode(text: &str) -> String {
+    text.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (b as char).to_string()
+            }
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
 }
 
 fn fail<E>(_: E) -> NetError {
@@ -77,23 +113,32 @@ impl Drop for Reaped {
 pub struct Curl {
     pub tmp: PathBuf,
     pub user_agent: String,
+    /// Hosts every hop must stay on (`trusted_on`).
+    pub hosts: &'static [&'static str],
 }
 
 impl Curl {
     fn once(
         &self,
         url: &str,
+        form: Option<&str>,
         limit: u64,
         cancel: &AtomicBool,
     ) -> Result<(u16, String, Vec<u8>), NetError> {
+        if !trusted_on(url, self.hosts) {
+            return Err(NetError::Failed);
+        }
         std::fs::create_dir_all(&self.tmp).map_err(fail)?;
         let out = tempfile::NamedTempFile::new_in(&self.tmp).map_err(fail)?;
-        let config = format!(
+        let mut config = format!(
             "user-agent = {}\nurl = {}\noutput = {}\nwrite-out = \"%{{http_code}} %{{redirect_url}}\"\n",
             quoted(&self.user_agent)?,
             quoted(url)?,
             quoted(&out.path().to_string_lossy())?,
         );
+        if let Some(form) = form {
+            config += &format!("data = {}\n", quoted(form)?);
+        }
         // Redirect metadata goes to a file, not a pipe: a server-chosen Location
         // can be arbitrarily long and must never be able to stall curl.
         let mut meta = tempfile::tempfile_in(&self.tmp).map_err(fail)?;
@@ -160,15 +205,22 @@ impl Http for Curl {
     fn get(&self, url: &str, limit: u64, cancel: &AtomicBool) -> Result<Response, NetError> {
         let mut url = url.to_owned();
         for _ in 0..4 {
-            if !trusted(&url) {
-                return Err(NetError::Failed);
-            }
-            let (status, location, body) = self.once(&url, limit, cancel)?;
+            let (status, location, body) = self.once(&url, None, limit, cancel)?;
             if !matches!(status, 301 | 302 | 303 | 307 | 308) {
                 return Ok(Response { status, body });
             }
             url = location;
         }
         Err(NetError::Failed)
+    }
+    fn post(
+        &self,
+        url: &str,
+        form: &str,
+        limit: u64,
+        cancel: &AtomicBool,
+    ) -> Result<Response, NetError> {
+        let (status, _, body) = self.once(url, Some(form), limit, cancel)?;
+        Ok(Response { status, body })
     }
 }

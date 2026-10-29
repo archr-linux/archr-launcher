@@ -145,7 +145,8 @@ impl Settings {
     pub(super) fn open_keyboard(&mut self, id: Id, mode: Mode, value: String) {
         let mut keyboard = Keyboard::new(mode, value);
         keyboard.max = match id {
-            Id::Hidden => 32,     // IEEE 802.11 SSID
+            Id::Hidden => 32, // IEEE 802.11 SSID
+            Id::CheevosAccount => 32,
             Id::WifiSwitch => 64, // WPA passphrase or hex key
             Id::Nickname => 32,   // RetroArch nickname
             Id::NetplayHost | Id::CustomServer => 253,
@@ -251,6 +252,7 @@ impl Settings {
                 self.root_password_typed(value);
                 Effect::None
             }
+            Id::CheevosAccount | Id::CheevosPassword => self.cheevos_typed(target, value),
             id => {
                 self.pending = Some(id);
                 Effect::Set(id, value)
@@ -392,6 +394,7 @@ impl Settings {
                 };
                 self.open_keyboard(id, mode, self.value(id).to_owned());
             }
+            id @ (Id::CheevosAccount | Id::CheevosLogout) => return self.cheevos_activate(id),
             id => return self.storage_activate(id),
         }
         Some(Effect::None)

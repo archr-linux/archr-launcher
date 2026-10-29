@@ -900,3 +900,73 @@ fn the_carousel_moves_a_lifted_system_with_left_and_right() {
     assert_eq!(app.rows(&data), ["@recent", "@favorites", "nes", "snes"]);
     assert_eq!(app.cursor, 0);
 }
+
+#[test]
+fn achievements_open_from_the_game_menu_only_when_signed_in_and_page_with_l_r() {
+    use archr_ui::cheevos::{Fetch, Item, Sheet};
+    let data = FakeData::library();
+    let mut app = in_games("nes", 1);
+    app.handle(Button::Y, &data);
+    assert!(!app
+        .quick_menu_items(&data)
+        .contains(&QuickItem::Achievements));
+    app.handle(Button::B, &data);
+    app.cheevos = true;
+    app.handle(Button::Y, &data);
+    let items = app.quick_menu_items(&data);
+    assert_eq!(
+        items,
+        [
+            QuickItem::Details,
+            QuickItem::Achievements,
+            QuickItem::Suspend,
+            QuickItem::Reboot,
+            QuickItem::Shutdown
+        ]
+    );
+    app.cursor = 1;
+    assert_eq!(
+        app.handle(Button::A, &data),
+        Outcome::Achievements {
+            system: "nes".into(),
+            game: 1
+        }
+    );
+    assert_eq!(
+        app.screen,
+        Screen::Achievements {
+            system: "nes".into(),
+            game: 1
+        }
+    );
+    assert_eq!(app.sheet.fetch, Fetch::Loading);
+    app.sheet = Sheet {
+        fetch: Fetch::Fresh,
+        hardcore: false,
+        items: vec![Item::default(); 14],
+    };
+    app.sheet_page = 6;
+    app.handle(Button::R, &data);
+    assert_eq!(app.cursor, 6);
+    app.handle(Button::R, &data);
+    app.handle(Button::R, &data);
+    assert_eq!(app.cursor, 13, "stops at the last one");
+    app.handle(Button::Up, &data);
+    app.handle(Button::L, &data);
+    assert_eq!(app.cursor, 6);
+    // The details menu offers it too, and B goes back where it came from.
+    app.handle(Button::B, &data);
+    assert_eq!(
+        app.screen,
+        Screen::Games {
+            system: "nes".into()
+        }
+    );
+    assert_eq!(app.cursor, 1);
+    let mut details = open_details(&data, "nes", 1);
+    details.cheevos = true;
+    details.handle(Button::Y, &data);
+    assert!(details
+        .quick_menu_items(&data)
+        .contains(&QuickItem::Achievements));
+}

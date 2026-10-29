@@ -370,6 +370,7 @@ fn curl_is_hardened_and_config_injection_is_refused() {
     let curl = |agent: &str| Curl {
         tmp: dir.path().join("tmp"),
         user_agent: agent.into(),
+        hosts: archr_scraper::SCREENSCRAPER,
     };
     // Control characters (a newline would inject a curl directive) never reach curl.
     for bad in [
@@ -666,6 +667,7 @@ fn long_redirect_metadata_cannot_stall_curl() {
     let curl = Curl {
         tmp: dir.path().join("tmp"),
         user_agent: "t".into(),
+        hosts: archr_scraper::SCREENSCRAPER,
     };
     let never = AtomicBool::new(false);
     let started = Instant::now();
@@ -673,6 +675,44 @@ fn long_redirect_metadata_cannot_stall_curl() {
         .get("https://www.screenscraper.fr/x", 1024, &never)
         .is_err());
     assert!(started.elapsed() < Duration::from_secs(5));
+}
+
+#[test]
+fn form_posts_travel_on_stdin_and_stay_on_the_given_hosts() {
+    let _path = PATH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = tempfile::tempdir().unwrap();
+    let never = AtomicBool::new(false);
+    let curl = Curl {
+        tmp: dir.path().join("tmp"),
+        user_agent: "ua".into(),
+        hosts: &["example.org"],
+    };
+    std::env::set_var("PATH", format!("{}:/usr/bin:/bin", dir.path().display()));
+    fake_curl(dir.path(), "200 ");
+    let form = "r=login2&u=me&p=s%26cret";
+    let response = curl
+        .post("https://api.example.org/do", form, 1024, &never)
+        .unwrap();
+    assert_eq!(response.status, 200);
+    let stdin = fs::read_to_string(dir.path().join("stdin")).unwrap();
+    assert!(
+        stdin.contains("data = \"r=login2&u=me&p=s%26cret\""),
+        "{stdin}"
+    );
+    let args = fs::read_to_string(dir.path().join("args")).unwrap();
+    assert!(
+        !args.contains("cret") && !args.contains("example"),
+        "{args}"
+    );
+    for bad in ["https://example.org.evil/do", "https://screenscraper.fr/x"] {
+        assert!(curl.post(bad, form, 1024, &never).is_err());
+        assert!(curl.get(bad, 1024, &never).is_err());
+    }
+    assert!(!archr_scraper::trusted_on(
+        "https://notexample.org/",
+        &["example.org"]
+    ));
+    assert_eq!(archr_scraper::encode("a b&ç"), "a%20b%26%C3%A7");
 }
 
 #[test]

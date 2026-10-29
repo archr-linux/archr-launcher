@@ -2,7 +2,7 @@ use crate::{
     api::{self, Game as Hit, Media as Art},
     creds::Credentials,
     hash::digest,
-    http::{trusted, Curl, Http, NetError},
+    http::{encode, trusted, Curl, Http, NetError, SCREENSCRAPER},
     systems::system_id,
 };
 use archr_index::{clean_name, scan_system, update_gamelist, Game, GameUpdate, SystemDef};
@@ -210,6 +210,7 @@ impl Engine {
         let http = Curl {
             tmp: cache.join("scraper-tmp"),
             user_agent,
+            hosts: SCREENSCRAPER,
         };
         DEV_LOGIN
             .filter(|login| valid_dev(login))
@@ -825,7 +826,7 @@ fn needed(options: &Options, system: &SystemDef, game: &Game) -> Vec<Media> {
 /// read from the header first: decoder scratch (progressive JPEG) ignores the
 /// allocation limit. Decodes are serialized so worker threads never stack up
 /// big buffers on a small device.
-fn image_ext(bytes: &[u8]) -> Option<&'static str> {
+pub fn image_ext(bytes: &[u8]) -> Option<&'static str> {
     use image::{ImageFormat, ImageReader, Limits};
     static ONE_DECODE: Mutex<()> = Mutex::new(());
     // Every reader gets the small limits: even reading the header can inflate
@@ -909,15 +910,4 @@ fn pick(medias: &[Art], types: &[&str], regions: &[&str]) -> Option<String> {
                 })
         })
     })
-}
-
-fn encode(text: &str) -> String {
-    text.bytes()
-        .map(|b| match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                (b as char).to_string()
-            }
-            _ => format!("%{b:02X}"),
-        })
-        .collect()
 }

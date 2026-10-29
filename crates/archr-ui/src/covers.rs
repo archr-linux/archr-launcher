@@ -245,6 +245,14 @@ impl<'a> CoverCache<'a> {
         self.textures.clear();
         self.stale.extend(self.pending.drain());
     }
+    /// A decoded texture without touching the recency order, so several can
+    /// be borrowed for one frame.
+    pub fn peek(&self, path: &Path) -> Option<&Texture<'a>> {
+        self.textures
+            .iter()
+            .find(|(cached, _)| cached == path)
+            .and_then(|(_, texture)| texture.as_ref())
+    }
     pub fn get(&mut self, path: &PathBuf) -> Option<&Texture<'a>> {
         self.get_mut(path).map(|texture| &*texture)
     }

@@ -164,6 +164,7 @@ impl View<'_, '_, '_> {
             Some(Id::WifiSwitch) => state.wifi_ssid.clone(),
             Some(Id::Hidden) => self.tr("settings.hidden"),
             Some(Id::ScraperAccount | Id::ScraperPassword) => self.tr("settings.account"),
+            Some(Id::CheevosAccount | Id::CheevosPassword) => self.tr("settings.cheevos_account"),
             Some(Id::RootPassword) => self.tr("settings.root_password"),
             Some(Id::Accent) => self.tr("appearance.hex"),
             Some(id) => Page::Netplay
@@ -192,6 +193,8 @@ impl View<'_, '_, '_> {
             Some(Id::Hidden) => (self.tr("settings.network_name"), None),
             Some(Id::ScraperAccount) => (self.tr("settings.user"), None),
             Some(Id::ScraperPassword) => (self.tr("settings.password"), None),
+            Some(Id::CheevosAccount) => (self.tr("settings.cheevos_user"), None),
+            Some(Id::CheevosPassword) => (self.tr("settings.cheevos_password"), None),
             Some(Id::RootPassword) => (
                 self.tr("settings.new_password"),
                 Some("settings.root_length"),

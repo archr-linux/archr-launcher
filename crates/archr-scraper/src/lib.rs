@@ -19,7 +19,8 @@ mod systems;
 
 pub use creds::Credentials;
 pub use engine::{
-    available, Engine, Event, Job, Media, Options, Progress, Report, Stop, Timing, UserInfo,
+    available, image_ext, Engine, Event, Job, Media, Options, Progress, Report, Stop, Timing,
+    UserInfo,
 };
-pub use http::{trusted, Curl, Http, NetError, Response};
+pub use http::{encode, trusted, trusted_on, Curl, Http, NetError, Response, SCREENSCRAPER};
 pub use systems::system_id;
