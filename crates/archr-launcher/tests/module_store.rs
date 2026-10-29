@@ -438,8 +438,8 @@ fn automatic_updates_leave_switched_off_and_failed_modules_alone() {
         change(state.modules.get_mut("bateria").unwrap());
         state.save(&path).unwrap();
         assert!(shop(root.path(), &release_1_1(&newer, true))
-            .auto()
-            .is_empty());
+            .auto("bateria")
+            .is_none());
         let on_disk = fs::read_to_string(root.path().join("modules/bateria/module.toml")).unwrap();
         assert!(on_disk.contains("1.0.0"));
     }
@@ -456,7 +456,10 @@ fn a_rolled_back_package_is_never_taken_again_on_its_own() {
     let mut state = State::load(&path);
     state.modules.get_mut("bateria").unwrap().bad_digest = format!("sha256:{}", sha(&tarball));
     state.save(&path).unwrap();
-    assert!(shop(root.path(), &fake).auto().is_empty(), "no daily loop");
+    assert!(
+        shop(root.path(), &fake).auto("bateria").is_none(),
+        "no daily loop"
+    );
 }
 
 #[test]
@@ -473,16 +476,139 @@ fn automatic_updates_take_only_reviewed_versions_that_ask_for_nothing_new() {
     ] {
         let root = tempfile::tempdir().unwrap();
         installed_bateria(root.path());
-        let done = shop(root.path(), &release_1_1(manifest, reviewed)).auto();
-        assert_eq!(!done.is_empty(), updated, "reviewed {reviewed}: {manifest}");
+        let done = shop(root.path(), &release_1_1(manifest, reviewed)).auto("bateria");
+        assert_eq!(done.is_some(), updated, "reviewed {reviewed}: {manifest}");
         let on_disk = fs::read_to_string(root.path().join("modules/bateria/module.toml")).unwrap();
         assert_eq!(on_disk.contains("1.1.0"), updated);
         if updated {
-            assert_eq!(done[0].version, "1.1.0");
+            assert_eq!(done.unwrap().version, "1.1.0");
             assert!(
                 root.path().join("modules/.previous-bateria").is_dir(),
                 "the old version waits for the new one's first good run"
             );
         }
+    }
+}
+
+/// The module host with this store, as on a device with automatic updates
+/// on; daemons run plainly.
+fn host(
+    root: &Path,
+    fake: &Fake,
+    auto_delay: std::time::Duration,
+) -> archr_launcher::modules::Modules {
+    use archr_launcher::modules::{process::Direct, Config, Modules};
+    fs::write(root.join("system.cfg"), "launcher.modules.autoupdate=1\n").unwrap();
+    let direct = Arc::new(Direct::default());
+    Modules::start(Config {
+        dirs: Dirs::new(root),
+        run: root.join("run"),
+        system_cfg: root.join("system.cfg"),
+        lock: root.join("system.cfg.lock"),
+        executor: direct.clone(),
+        direct: Some(direct),
+        userdb: None,
+        language: "en".into(),
+        device: "test".into(),
+        delay: std::time::Duration::ZERO,
+        auto_delay,
+        shop: Some(shop(root, fake)),
+    })
+}
+/// Store answers and notices until `done` holds, at most 10 s.
+fn until_store(
+    modules: &archr_launcher::modules::Modules,
+    done: impl Fn(&[StoreReply], &[archr_launcher::modules::Notice]) -> bool,
+) -> (Vec<StoreReply>, Vec<archr_launcher::modules::Notice>) {
+    use archr_launcher::modules::Event;
+    let (mut replies, mut notices) = (Vec::new(), Vec::new());
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !done(&replies, &notices) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "{replies:?} {notices:?}"
+        );
+        for event in modules.poll() {
+            match event {
+                Event::Store(reply) => replies.push(reply),
+                Event::Notice(notice) => notices.push(notice),
+                _ => {}
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    (replies, notices)
+}
+fn version_on_disk(root: &Path) -> String {
+    let toml = fs::read_to_string(root.join("modules/bateria/module.toml")).unwrap();
+    toml.lines()
+        .find(|l| l.starts_with("version"))
+        .unwrap_or("")
+        .to_owned()
+}
+
+#[test]
+fn the_host_updates_on_its_own_only_outside_games_and_keeps_the_switch() {
+    use archr_launcher::modules::Notice;
+    let newer = MANIFEST.replace("1.0.0", "1.1.0");
+    let root = tempfile::tempdir().unwrap();
+    installed_bateria(root.path());
+    let modules = host(
+        root.path(),
+        &release_1_1(&newer, true),
+        std::time::Duration::from_millis(400),
+    );
+    // A game takes the screen before the first look: nothing happens.
+    modules.hand_off("", "", "");
+    std::thread::sleep(std::time::Duration::from_millis(1200));
+    assert!(version_on_disk(root.path()).contains("1.0.0"));
+    modules.resume();
+    let updated =
+        |_: &[StoreReply], n: &[Notice]| n.iter().any(|n| matches!(n, Notice::Updated(..)));
+    until_store(&modules, updated);
+    assert!(version_on_disk(root.path()).contains("1.1.0"));
+    let record = State::load(&root.path().join("modules.toml")).modules["bateria"].clone();
+    assert!(record.enabled && record.consent && record.auto_updated > 0);
+    assert!(record.previous_digest.starts_with("sha256:"));
+}
+
+#[test]
+fn the_host_leaves_switched_off_and_rolled_back_modules_alone() {
+    let newer = MANIFEST.replace("1.0.0", "1.1.0");
+    let tarball = Tarball::module(&newer).bytes();
+    for off in [true, false] {
+        let root = tempfile::tempdir().unwrap();
+        installed_bateria(root.path());
+        let path = root.path().join("modules.toml");
+        let mut state = State::load(&path);
+        let record = state.modules.get_mut("bateria").unwrap();
+        if off {
+            record.enabled = false;
+        } else {
+            record.bad_digest = format!("sha256:{}", sha(&tarball));
+        }
+        state.save(&path).unwrap();
+        let modules = host(
+            root.path(),
+            &release_1_1(&newer, true),
+            std::time::Duration::ZERO,
+        );
+        if off {
+            // Not even asked about: give the host its first look.
+            std::thread::sleep(std::time::Duration::from_millis(800));
+            let (replies, notices) = until_store(&modules, |_, _| true);
+            assert!(
+                replies.is_empty() && notices.is_empty(),
+                "{replies:?} {notices:?}"
+            );
+        } else {
+            let (_, notices) = until_store(&modules, |r, _| {
+                r.iter()
+                    .any(|r| matches!(r, StoreReply::Checked(id) if id == "bateria"))
+            });
+            assert!(notices.is_empty(), "{notices:?}");
+        }
+        assert!(version_on_disk(root.path()).contains("1.0.0"));
+        assert_eq!(State::load(&path).modules["bateria"].enabled, !off);
     }
 }

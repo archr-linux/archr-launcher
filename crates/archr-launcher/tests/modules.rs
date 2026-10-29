@@ -72,6 +72,7 @@ fn start_with(
         language: "en".into(),
         device: "test".into(),
         delay: Duration::ZERO,
+        auto_delay: Duration::ZERO,
         shop: None,
     })
 }

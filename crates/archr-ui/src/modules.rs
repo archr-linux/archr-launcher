@@ -386,9 +386,9 @@ pub struct Offer {
 pub enum StoreAction {
     /// Show a tab; `true` asks GitHub again.
     List(Tab, bool),
-    /// Update on their own the store modules whose new version is reviewed
-    /// and asks for nothing new.
-    Auto,
+    /// Update this store module on its own if its new version is reviewed
+    /// and asks for nothing new; one module per action.
+    Auto(String),
     Open(Box<Card>),
     Install(Box<Offer>),
 }
@@ -407,6 +407,8 @@ pub enum StoreReply {
     Done(Result<&'static str, &'static str>),
     /// A module was updated on its own: its id and new version.
     Updated(String, String),
+    /// A module was looked at for an automatic update and left as it was.
+    Checked(String),
 }
 
 /// What the screens ask the host to do.

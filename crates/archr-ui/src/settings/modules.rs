@@ -727,7 +727,7 @@ impl Settings {
                     Err(key) => modules.problem = Some(key),
                 }
             }
-            StoreReply::Updated(..) => {}
+            StoreReply::Updated(..) | StoreReply::Checked(_) => {}
             StoreReply::Done(result) => {
                 modules.working = false;
                 let key = match result {

@@ -444,46 +444,38 @@ impl Shop {
             granted: manifest.permissions.tokens().into_iter().collect(),
         })
     }
-    /// The store modules whose latest release is reviewed (its package's
-    /// digest on the list), newer, and asks for nothing new: installed, one
-    /// by one, through the same checks as a manual install.
-    pub fn auto(&self) -> Vec<Installed> {
+    /// Module `id`, if its latest release is reviewed (its package's digest
+    /// on the list), newer, and asks for nothing new: installed through the
+    /// same checks as a manual install.
+    pub fn auto(&self, id: &str) -> Option<Installed> {
         let records = self.records();
-        let mut done = Vec::new();
-        for (id, record) in &records.modules {
-            // Off, failed or never allowed: the user decides about it first.
-            if !record.enabled || record.failed || !record.consent {
-                continue;
-            }
-            let Some((owner, repo)) = record.source.split_once('/') else {
-                continue;
-            };
-            let card = Card {
-                owner: owner.into(),
-                repo: repo.into(),
-                id: id.clone(),
-                ..Card::default()
-            };
-            let Ok(offer) = self.offer(&card) else {
-                continue;
-            };
-            let newer = offer
-                .installed
-                .as_deref()
-                .is_some_and(|v| archr_ui::settings::store::newer(&offer.version, v));
-            if !(newer && offer.reviewed && offer.added.is_empty() && offer.blocked.is_none()) {
-                continue;
-            }
-            // It failed here once and was rolled back.
-            if same_digest(&offer.digest, &record.bad_digest) {
-                continue;
-            }
-            match self.install(&offer) {
-                Ok(installed) => done.push(installed),
-                Err(problem) => log::warn!("Automatic update of {id} failed: {problem}"),
-            }
+        let record = records.modules.get(id)?;
+        // Off, failed or never allowed: the user decides about it first.
+        if !record.enabled || record.failed || !record.consent {
+            return None;
         }
-        done
+        let (owner, repo) = record.source.split_once('/')?;
+        let card = Card {
+            owner: owner.into(),
+            repo: repo.into(),
+            id: id.to_owned(),
+            ..Card::default()
+        };
+        let offer = self.offer(&card).ok()?;
+        let newer = offer
+            .installed
+            .as_deref()
+            .is_some_and(|v| archr_ui::settings::store::newer(&offer.version, v));
+        if !(newer && offer.reviewed && offer.added.is_empty() && offer.blocked.is_none()) {
+            return None;
+        }
+        // It failed here once and was rolled back.
+        if same_digest(&offer.digest, &record.bad_digest) {
+            return None;
+        }
+        self.install(&offer)
+            .map_err(|problem| log::warn!("Automatic update of {id} failed: {problem}"))
+            .ok()
     }
     fn handle(
         &self,
@@ -504,7 +496,7 @@ impl Shop {
                 StoreReply::Offer(card.source(), self.offer(&card).map(Box::new)),
                 None,
             ),
-            StoreAction::Auto => (StoreReply::Done(Ok("")), None),
+            StoreAction::Auto(_) => (StoreReply::Done(Ok("")), None),
             StoreAction::Install(offer) => match self.install(&offer) {
                 Ok(installed) => (
                     StoreReply::Done(Ok("modules.installed_ok")),
@@ -575,15 +567,16 @@ pub(super) fn lane(
             Err(mpsc::TryRecvError::Empty) => None,
             Err(mpsc::TryRecvError::Disconnected) => return,
         };
-        if let Some(StoreAction::Auto) = action {
-            for installed in shop.auto() {
-                let reply = StoreReply::Updated(installed.id.clone(), installed.version.clone());
-                if results
-                    .send(Input::Store(Box::new((reply, Some(installed)))))
-                    .is_err()
-                {
-                    return;
-                }
+        if let Some(StoreAction::Auto(id)) = &action {
+            let answer = match shop.auto(id) {
+                Some(installed) => (
+                    StoreReply::Updated(installed.id.clone(), installed.version.clone()),
+                    Some(installed),
+                ),
+                None => (StoreReply::Checked(id.clone()), None),
+            };
+            if results.send(Input::Store(Box::new(answer))).is_err() {
+                return;
             }
             continue;
         }

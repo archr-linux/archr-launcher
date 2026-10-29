@@ -75,6 +75,8 @@ pub struct Config {
     pub device: String,
     /// Daemons start this long after the host.
     pub delay: Duration,
+    /// The first look for automatic updates, this long after the host.
+    pub auto_delay: Duration,
     pub shop: Option<store::Shop>,
 }
 impl Config {
@@ -104,6 +106,7 @@ impl Config {
             language: language.to_owned(),
             device: String::new(),
             delay: Duration::from_secs(2),
+            auto_delay: AUTO_FIRST,
             shop: Some(shop),
         }
     }
@@ -277,6 +280,10 @@ struct Host {
     written: BTreeMap<String, Vec<Instant>>,
     /// When to look for automatic updates next.
     auto_at: Instant,
+    /// Modules still to look at, one store action each, and whether one is
+    /// with the store now.
+    auto_queue: std::collections::VecDeque<String>,
+    auto_busy: bool,
     /// `launch.before` answers each module was late for in a row.
     late: BTreeMap<String, u32>,
     /// When the user last chose an action of each module (`game.launch`).
@@ -325,7 +332,9 @@ impl Host {
             written: BTreeMap::new(),
             gestures: BTreeMap::new(),
             late: BTreeMap::new(),
-            auto_at: Instant::now() + AUTO_FIRST,
+            auto_at: Instant::now() + config.delay.max(config.auto_delay),
+            auto_queue: std::collections::VecDeque::new(),
+            auto_busy: false,
             before: None,
             config,
             inbox,
@@ -499,6 +508,7 @@ impl Host {
                 self.stopped = false;
                 self.started = false;
                 self.start_at = Instant::now();
+                self.next_auto();
             }
             Input::Line {
                 id,
@@ -547,10 +557,15 @@ impl Host {
             }
             Input::Store(answer) => {
                 let (reply, installed) = *answer;
+                let auto = matches!(reply, StoreReply::Updated(..) | StoreReply::Checked(_));
                 match (installed, &reply) {
                     (Some(installed), StoreReply::Updated(..)) => self.auto_updated(installed),
                     (Some(installed), _) => self.installed_from_store(installed),
                     _ => {}
+                }
+                if auto {
+                    self.auto_busy = false;
+                    self.next_auto();
                 }
                 self.store_reply(&reply);
                 let _ = self.out.send(Event::Store(reply));
@@ -1431,8 +1446,26 @@ impl Host {
         }
         self.state.checked = now;
         self.save_state();
-        if let Some(store) = &self.store {
-            let _ = store.send(StoreAction::Auto);
+        self.auto_queue = self
+            .state
+            .modules
+            .iter()
+            .filter(|(_, r)| !r.source.is_empty() && r.enabled && r.consent && !r.failed)
+            .map(|(id, _)| id.clone())
+            .collect();
+        self.next_auto();
+    }
+    /// The next module to the store, one at a time and never while a game
+    /// has the screen: the batch waits for the launcher to come back.
+    fn next_auto(&mut self) {
+        if self.stopped || self.auto_busy {
+            return;
+        }
+        let (Some(store), Some(id)) = (&self.store, self.auto_queue.pop_front()) else {
+            return;
+        };
+        if store.send(StoreAction::Auto(id)).is_ok() {
+            self.auto_busy = true;
         }
     }
 
