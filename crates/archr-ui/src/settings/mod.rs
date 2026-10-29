@@ -21,6 +21,7 @@ pub(crate) mod pages;
 use bluetooth::{Action, Device};
 pub use pages::MEDIA;
 pub mod storage;
+pub mod store;
 pub use information::{InfoCard, InfoDetail, InfoMeter, Information};
 use network::Network;
 
@@ -49,6 +50,8 @@ pub enum Page {
     Controls,
     LauncherControls,
     Hotkeys,
+    Store,
+    StoreTheme,
     Soon(&'static str),
 }
 impl Page {
@@ -76,6 +79,7 @@ impl Page {
             Self::Controls => "settings.controls",
             Self::LauncherControls => "controls.launcher",
             Self::Hotkeys => "controls.hotkeys",
+            Self::Store | Self::StoreTheme => "settings.theme_store",
             Self::Soon(key) => key,
         }
     }
@@ -85,7 +89,8 @@ impl Page {
             Self::Wifi | Self::Bluetooth | Self::Services => &["settings.network"],
             Self::Netplay | Self::Scraper | Self::Mangohud => &["settings.games"],
             Self::MangohudItems => &["settings.games", "settings.mangohud_page"],
-            Self::AccentColor => &["settings.appearance"],
+            Self::AccentColor | Self::Store => &["settings.appearance"],
+            Self::StoreTheme => &["settings.appearance", "settings.theme_store"],
             Self::LauncherControls | Self::Hotkeys => &["settings.controls"],
             Self::ScraperMedia => &["settings.games", "settings.scraper_short"],
             _ => &[],
@@ -171,6 +176,8 @@ pub enum Id {
     ScraperMissing,
     ScraperStart,
     Theme,
+    /// Appearance link to the theme store.
+    ThemeStore,
     View,
     Accent,
     Background,
@@ -315,6 +322,7 @@ impl Id {
             Self::HotkeyOn(n) => (hotkeys::HOTKEYS[usize::from(n)].enabled, "1"),
             Self::Update
             | Self::Restore
+            | Self::ThemeStore
             | Self::Hidden
             | Self::GameSystem
             | Self::NetplayLink
@@ -569,6 +577,7 @@ pub enum Effect {
     /// Leaving Appearance with changes: persist the choices and apply them.
     Appearance,
     Storage(storage::Action),
+    Store(store::Action),
 }
 /// Passwords never reach a log through `{:?}`.
 impl std::fmt::Debug for Effect {
@@ -590,6 +599,7 @@ impl std::fmt::Debug for Effect {
             Self::Theme(name) => write!(f, "Theme({name:?})"),
             Self::Appearance => write!(f, "Appearance"),
             Self::Storage(action) => write!(f, "Storage({action:?})"),
+            Self::Store(action) => write!(f, "Store({action:?})"),
         }
     }
 }
@@ -654,6 +664,7 @@ pub struct Settings {
     pub cheevos: cheevos::Cheevos,
     pub games: Games,
     pub storage: storage::Storage,
+    pub store: store::Store,
     /// Sliders in flight: last confirmed value and the newest unsent one.
     pub slides: BTreeMap<Id, (String, Option<String>)>,
     /// Appearance page: the choices when it opened, the theme being previewed
@@ -710,6 +721,7 @@ impl Default for Settings {
             cheevos: cheevos::Cheevos::default(),
             games: Games::default(),
             storage: storage::Storage::default(),
+            store: store::Store::default(),
             slides: BTreeMap::new(),
             appearance_saved: Appearance::default(),
             base_theme: Theme::builtin(),
@@ -801,7 +813,8 @@ impl Settings {
                 | Id::FactoryReset
                 | Id::MangohudLink
                 | Id::LauncherLink
-                | Id::HotkeysLink,
+                | Id::HotkeysLink
+                | Id::ThemeStore,
                 _,
             ) => return "›".into(),
             (Id::StorageCard, _) if self.storage.card.as_ref().is_some_and(|c| c.external) => {
@@ -980,6 +993,7 @@ impl Settings {
             ],
             Page::Info => &[(Key('A'), "settings.details"), (Key('B'), "hint.back")],
             Page::MangohudItems => &[(Key('A'), "mangohud.mark"), (Key('B'), "hint.back")],
+            Page::Store | Page::StoreTheme => self.store_hints(),
             Page::Controls | Page::LauncherControls | Page::Hotkeys => self.controls_hints(),
             Page::ScraperMedia if !self.disabled(Id::ScraperMedia) => {
                 &[(Key('A'), "settings.mark"), (Key('B'), "hint.back")]
@@ -1448,7 +1462,7 @@ mod appearance_tests {
     #[test]
     fn choices_are_a_draft_until_the_page_is_left() {
         let mut state = page();
-        state.cursor = 2;
+        state.cursor = 3;
         assert_eq!(state.handle(Button::R), Effect::None);
         assert_eq!(state.value(Id::Accent), "teal");
         assert_eq!(state.pending, None);
@@ -1459,7 +1473,7 @@ mod appearance_tests {
     #[test]
     fn leaving_unchanged_or_restored_saves_nothing() {
         let mut state = page();
-        state.cursor = 5;
+        state.cursor = 6;
         state.handle(Button::R);
         state.handle(Button::L);
         assert_eq!(state.handle(Button::B), Effect::None);
@@ -1471,14 +1485,14 @@ mod appearance_tests {
         assert_eq!(state.handle(Button::R), Effect::Theme("night".into()));
         // Restoring keeps the theme and returns the rest to it.
         state.values.insert(Id::Accent, "pink".into());
-        state.cursor = 7;
+        state.cursor = 8;
         assert_eq!(state.handle(Button::A), Effect::None);
         assert_eq!(state.value(Id::Theme), "night");
         assert_eq!(state.value(Id::Accent), "");
     }
     fn custom_dot() -> Settings {
         let mut state = page();
-        state.cursor = 2;
+        state.cursor = 3;
         state.handle(Button::L);
         assert!(state.accent_is_custom());
         state
@@ -1558,7 +1572,7 @@ mod appearance_tests {
         ] {
             state.values.insert(id, value.into());
         }
-        state.cursor = 7;
+        state.cursor = 8;
         assert_eq!(state.handle(Button::A), Effect::None);
         assert_eq!(
             state.appearance(),
@@ -1574,7 +1588,7 @@ mod appearance_tests {
     #[test]
     fn the_view_row_offers_the_previewed_theme_views_by_name() {
         let mut state = page();
-        state.cursor = 1;
+        state.cursor = 2;
         let catalog = crate::i18n::I18n::load(std::path::Path::new("/none"), Some("pt_BR"), None);
         assert_eq!(state.display_value(Id::View, &catalog), "Lista");
         assert_eq!(state.handle(Button::R), Effect::None);

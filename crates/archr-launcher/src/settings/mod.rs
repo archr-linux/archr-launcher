@@ -369,6 +369,7 @@ pub(super) enum Work {
     Theme(String),
     Appearance(Vec<(Id, String)>),
     Storage(archr_ui::settings::storage::Action),
+    Store(archr_ui::settings::store::Action),
 }
 /// A storage action's outcome, the systems to reload after an eject, and the
 /// page's refreshed facts.
@@ -397,6 +398,7 @@ enum Reply {
     Theme(Box<(archr_ui::Theme, Option<std::path::PathBuf>)>),
     Appearance(Result<(), String>),
     Storage(StorageReply),
+    Store(archr_ui::settings::store::Reply),
 }
 /// A radio scan takes ~20 s on the R36S: it runs on its own lane so it never
 /// delays the Wi-Fi switch or any other action.
@@ -406,6 +408,7 @@ pub struct Worker {
     scans: mpsc::Sender<u64>,
     bt_scans: mpsc::Sender<()>,
     profiles: mpsc::Sender<()>,
+    store: mpsc::Sender<archr_ui::settings::store::Action>,
     rx: mpsc::Receiver<Reply>,
     pending: usize,
     scanning: bool,
@@ -428,6 +431,12 @@ impl Worker {
         let profile_results = results.clone();
         let (scan_paths, bt_paths) = (paths.clone(), paths.clone());
         let profile_paths = paths.clone();
+        let (store, store_requests) = mpsc::channel();
+        let (store_results, store_paths) = (results.clone(), paths.clone());
+        thread::Builder::new()
+            .name("launcher-store".into())
+            .spawn(move || store_lane(&store_paths, &store_requests, &store_results))
+            .map_err(|e| e.to_string())?;
         thread::Builder::new()
             .name("launcher-cheevos".into())
             .spawn(move || {
@@ -497,7 +506,9 @@ impl Worker {
                             Reply::CheevosLogin(backend.cheevos_login(&user, &password))
                         }
                         Work::CheevosLogout => Reply::CheevosLogout(backend.cheevos_logout()),
-                        Work::CheevosProfile => unreachable!("the profile has its own lane"),
+                        Work::CheevosProfile | Work::Store(_) => {
+                            unreachable!("the profile and the store have their own lanes")
+                        }
                         Work::Scrape => Reply::Scrape(backend.scrape()),
                         Work::Theme(name) => Reply::Theme(Box::new(crate::appearance::load_theme(
                             &backend.paths,
@@ -525,6 +536,7 @@ impl Worker {
             scans,
             bt_scans,
             profiles,
+            store,
             rx,
             pending: 0,
             scanning: false,
@@ -573,6 +585,9 @@ impl Worker {
         if matches!(work, Work::CheevosProfile) {
             return self.profiles.send(()).map_err(|e| e.to_string());
         }
+        if let Work::Store(action) = work {
+            return self.store.send(action).map_err(|e| e.to_string());
+        }
         if matches!(work, Work::Set(Id::WifiSwitch, _)) {
             self.generation += 1;
         }
@@ -605,7 +620,7 @@ impl Worker {
                 if stale {
                     continue;
                 }
-            } else if !matches!(reply, Reply::CheevosProfile(_)) {
+            } else if !matches!(reply, Reply::CheevosProfile(_) | Reply::Store(_)) {
                 self.pending = self.pending.saturating_sub(1);
             }
             match reply {
@@ -689,6 +704,7 @@ impl Worker {
                     }
                 }
                 Reply::Info(info) => state.info = info,
+                Reply::Store(reply) => state.store_reply(reply),
                 Reply::Theme(loaded) => (state.base_theme, state.base_dir) = *loaded,
                 Reply::Appearance(result) => {
                     state.pending = None;
@@ -823,6 +839,54 @@ impl Worker {
     }
 }
 /// Host facts replace the old ones; the open question and running action stay.
+/// The theme store's own lane: GitHub can be slow, settings never wait on it.
+/// Covers are fetched between requests, a new request always first.
+fn store_lane(
+    paths: &Paths,
+    requests: &mpsc::Receiver<archr_ui::settings::store::Action>,
+    results: &mpsc::Sender<Reply>,
+) {
+    let shop = crate::themestore::Shop::production(
+        paths.cache.join("store"),
+        paths.at(crate::appearance::USER_THEMES),
+    );
+    let mut queue = std::collections::VecDeque::new();
+    let mut next = None;
+    loop {
+        let action = match next.take().map_or_else(|| requests.try_recv(), Ok) {
+            Ok(action) => Some(action),
+            Err(mpsc::TryRecvError::Empty) => None,
+            Err(mpsc::TryRecvError::Disconnected) => return,
+        };
+        let replies = match (action, queue.pop_front()) {
+            (Some(action), card) => {
+                queue.extend(card);
+                let active = SystemCfg::load(&paths.config)
+                    .ok()
+                    .and_then(|cfg| cfg.get_setting(Id::Theme.key(), None, None))
+                    .unwrap_or_default();
+                shop.handle(action, &active, &mut queue)
+            }
+            (None, Some(card)) => shop
+                .decorate(&card)
+                .map(archr_ui::settings::store::Reply::Card)
+                .into_iter()
+                .collect(),
+            (None, None) => match requests.recv() {
+                Ok(action) => {
+                    next = Some(action);
+                    continue;
+                }
+                Err(_) => return,
+            },
+        };
+        for reply in replies {
+            if results.send(Reply::Store(reply)).is_err() {
+                return;
+            }
+        }
+    }
+}
 fn refresh_storage(state: &mut Settings, facts: archr_ui::settings::storage::Storage) {
     let ui = std::mem::take(&mut state.storage);
     state.storage = archr_ui::settings::storage::Storage {

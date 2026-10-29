@@ -350,6 +350,12 @@ fn sources(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
 
 /// Config entries and file names that look like catalog keys.
 const CONFIG_KEYS: &[&str] = &[
+    // Theme store hosts and file names.
+    "api.github.com",
+    "codeload.github.com",
+    "objects.githubusercontent.com",
+    "preview.png",
+    "raw.githubusercontent.com",
     "archr.mangohud.alpha",
     "archr.mangohud.enabled",
     "archr.mangohud.font_size",

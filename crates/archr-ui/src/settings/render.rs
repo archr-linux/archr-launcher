@@ -22,6 +22,8 @@ mod information;
 mod mangohud;
 #[path = "render/network.rs"]
 mod network;
+#[path = "render/store.rs"]
+mod store;
 const VIEW_TOP: f32 = 50.;
 const VIEW_BOTTOM: f32 = 428.;
 const FOOTER: f32 = 432.;
@@ -202,6 +204,7 @@ impl Ui<'_, '_> {
         }
     }
     pub(super) fn settings_page(&mut self, state: &Settings, theme: &Theme) -> Result<(), String> {
+        self.store_wanted.clear();
         if state.page().rows().is_empty() {
             self.settings_scroll.page = None;
             self.settings_scroll.tween.retarget(0., self.frame.now);
@@ -412,6 +415,16 @@ impl View<'_, '_, '_> {
         let mut trail = Vec::new();
         let current = match page {
             Page::Root => self.tr("settings.title"),
+            // Loja-tema: "Aparência / Loja de temas / <theme>".
+            Page::StoreTheme => {
+                trail.extend(page.parent().iter().map(|key| self.tr(key)));
+                let card = state.store.detail.as_ref().map(|d| &d.card);
+                let card = card.or_else(|| state.store.cards().get(state.cursor));
+                card.map_or_else(
+                    || self.tr(page.title()),
+                    |c| c.title(self.ui.catalog.language()).to_owned(),
+                )
+            }
             Page::Keyboard => {
                 trail.push(self.tr("settings.title"));
                 trail.push(self.tr(state.parent_page().title()));
@@ -513,6 +526,8 @@ impl View<'_, '_, '_> {
                 )?;
             }
             Page::Appearance => self.appearance_page(state, &rows)?,
+            Page::Store => self.store_grid(state)?,
+            Page::StoreTheme => self.store_detail(state)?,
             Page::AccentColor => self.custom_page(state)?,
             Page::Mangohud => self.mangohud_page(state, &rows)?,
             Page::MangohudItems => self.mangohud_items(state)?,
@@ -575,6 +590,9 @@ impl View<'_, '_, '_> {
                 (386., 318., 230., 110.)
             } else if state.page() == Page::Keyboard {
                 (24., 296., 592., 40.)
+            } else if state.page() == Page::StoreTheme {
+                // Above the install button, which must stay in sight.
+                (20., 336., 600., 40.)
             } else {
                 (24., 384., 592., 40.)
             };
@@ -588,7 +606,10 @@ impl View<'_, '_, '_> {
             )?;
             let (x, y, w, h) = bounds;
             // Known failures arrive as locale keys; anything else stays generic.
-            let message = if error.starts_with("settings.") || error.starts_with("cheevos.") {
+            let message = if ["settings.", "cheevos.", "store."]
+                .iter()
+                .any(|prefix| error.starts_with(prefix))
+            {
                 self.tr(&error)
             } else {
                 log::debug!("Settings error on {id:?}: {error}");
@@ -617,6 +638,8 @@ impl View<'_, '_, '_> {
             / self.ui.frame.scale;
         let status = if state.loading {
             Some(self.ui.catalog.text("loading"))
+        } else if matches!(state.page(), Page::Store | Page::StoreTheme) {
+            self.store_status(state, left - 36.)
         } else if state.page() == Page::Hotkeys {
             Some(self.tr("controls.hotkeys_note"))
         } else if state.capturing() && state.page() == Page::LauncherControls {
@@ -685,6 +708,27 @@ impl View<'_, '_, '_> {
                     Some(self.tr(&detail)),
                     Some(&[(Key('B'), "hint.cancel")]),
                 ))
+            } else if let Some(detail) = state
+                .store
+                .detail
+                .as_ref()
+                .filter(|_| state.store.working.is_some() || state.store.confirm_remove)
+            {
+                let name = detail.card.title(self.ui.catalog.language()).to_owned();
+                Some(match state.store.working {
+                    Some(key) => (
+                        self.ui.catalog.format(key, &[("name", &name)]),
+                        Some(self.tr("store.wait")),
+                        None,
+                    ),
+                    None => (
+                        self.ui
+                            .catalog
+                            .format("store.remove_question", &[("name", &name)]),
+                        Some(self.tr("store.remove_detail")),
+                        Some(&[(Key('A'), "store.remove"), (Key('B'), "hint.cancel")]),
+                    ),
+                })
             } else if let Some(key) = state.storage.working {
                 Some((self.tr(key), Some(self.tr("settings.wait_storage")), None))
             } else {

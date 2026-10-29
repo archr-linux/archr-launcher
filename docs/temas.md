@@ -288,6 +288,117 @@ nes = ""
 - O tema `default` traz um conjunto sintetizado (ver `themes/default/sounds/README.md`)
   e nenhum som por sistema.
 
+## Publicar na Loja de temas
+
+Configurações › Aparência › **Loja de temas** procura temas no GitHub, mostra
+capa, detalhes e imagens, e instala com um botão. A loja só enxerga
+repositórios que seguem as regras abaixo; o resto do GitHub não aparece.
+
+### O que a loja procura
+
+1. **Repositório público** no GitHub, não arquivado.
+2. Com o **tópico `archr-launcher-theme`** (na página do repositório:
+   engrenagem ao lado de "About" › Topics).
+3. A **raiz do repositório é a pasta do tema**: `theme.toml` fica na raiz,
+   não numa subpasta. Um repositório = um tema.
+4. `theme.toml` com `name` (ver [Nome](#nome)). Sem `name`, ou com um
+   `theme.toml` que não é TOML válido, o tema aparece na lista mas não instala.
+5. **`preview.png`** na raiz: 640×480, PNG, até 2 MB. É a capa na grade e a
+   primeira imagem dos detalhes. Na grade aparece recortada no meio
+   (faixa larga e baixa), então deixe o centro da imagem representativo: uma
+   captura da tela de sistemas ou de jogos com o tema funciona bem.
+6. Opcional: **`screenshots/1.png`**, `2.png` e `3.png`, 640×480, até 2 MB
+   cada. Aparecem nos detalhes, trocadas com L/R.
+
+Nomes de dono, repositório e tag: letras, números, `.`, `_` e `-` (sem `/`).
+A loja mostra os 30 primeiros resultados da busca, por estrelas (Populares)
+ou por atualização (Recentes).
+
+### Metadados no `theme.toml`
+
+Todos opcionais; os detalhes mostram o que houver.
+
+```toml
+name = { en = "Neon Arcade", pt_BR = "Neon Arcade" }
+description = { en = "Neon pink over deep purple.", pt_BR = "Rosa neon sobre roxo profundo." }
+author = "kaio-dev"          # sem autor, aparece o dono do repositório
+version = "1.2.0"            # sem versão, aparece a tag da release
+license = "CC BY 4.0"        # texto curto; o arquivo LICENSE também é instalado
+min_launcher = "0.2"         # versão mínima do launcher; abaixo dela não instala
+```
+
+`description` aceita texto ou tabela por idioma, como `name`, até 200
+caracteres. "Inclui" nos detalhes é calculado pelos arquivos: cores sempre;
+fontes (`.ttf`/`.otf`), layout (`[view.*]`), artes (`systems/`), ícones
+(`icons/`) e sons (`sounds/`) quando existem. "Tamanho" soma só o que é
+instalado.
+
+### Qual versão é instalada
+
+- Com **release** no GitHub: a mais recente ("Latest release"), pela tag.
+- Sem release: o **branch padrão** como está.
+
+A loja guarda o identificador do conteúdo instalado. Quando a release (ou o
+branch) muda, o botão dos detalhes passa de **Usar agora** para
+**Atualizar**. Para soltar uma versão nova, publique uma release nova.
+
+### O que é instalado
+
+O tarball da versão é baixado de `codeload.github.com` e só estes arquivos
+são copiados:
+
+- extensões `toml`, `png`, `jpg`, `jpeg`, `svg`, `ttf`, `otf`, `ogg`, `wav`,
+  `txt`, `md`;
+- `LICENSE`, `LICENCE` e `COPYING`.
+
+Qualquer outro arquivo é ignorado, assim como arquivos e pastas que começam
+com `.` (`.github/`, `.gitignore`), links simbólicos, hard links e arquivos
+especiais. Um caminho com `..` ou absoluto recusa o tema inteiro. Nada é
+executado.
+
+Limites: download até **25 MB**, conteúdo instalado até **60 MB**, até
+5000 entradas no arquivo e 8 níveis de pasta. Lembre que sons do tema têm
+limite próprio de 1 MiB cada (ver [Sons](#sons)).
+
+O tema vai para `/storage/.config/archr-launcher/themes/<dono>-<repositório>/`
+com um arquivo `.archr-store.toml` (de onde veio, qual versão). A troca é
+atômica: até terminar, a versão anterior continua lá. A loja nunca escreve
+por cima de uma pasta que ela não criou, e só remove temas que ela instalou;
+o tema em uso não pode ser removido. Instalar não ativa: depois de instalar,
+**Usar agora** escolhe o tema na Aparência, que grava ao sair.
+
+### Exemplo de repositório
+
+```
+github.com/kaio-dev/archr-neon-arcade     tópico: archr-launcher-theme
+├── theme.toml          name, description, author, version, license
+├── preview.png         640×480
+├── screenshots/
+│   ├── 1.png
+│   └── 2.png
+├── fonts/
+│   └── Orbitron-Regular.ttf
+├── systems/
+│   └── snes.png
+├── sounds/
+│   ├── move.ogg
+│   └── select.ogg
+├── LICENSE
+└── README.md
+```
+
+Teste antes de publicar copiando a pasta para
+`/storage/.config/archr-launcher/themes/` no aparelho; o que funciona ali
+funciona instalado pela loja.
+
+### Rede e limites do GitHub
+
+A loja usa a API do GitHub sem login, que permite poucas consultas por hora.
+Listas e detalhes ficam guardados por uma hora (Y força uma nova busca);
+quando o GitHub limita, a lista guardada continua aparecendo com um aviso.
+Sem rede, a aba **Instalados** funciona e mostra os detalhes de cada tema a
+partir da pasta instalada.
+
 ## Testar no PC
 
 Captura das telas de sistemas, jogos (com e sem capa), Detalhes do jogo e

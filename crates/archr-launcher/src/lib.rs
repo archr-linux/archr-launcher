@@ -4,6 +4,7 @@ pub mod cheevos;
 pub mod handoff;
 pub mod state;
 pub mod store;
+pub mod themestore;
 
 pub mod library;
 pub mod netplay;

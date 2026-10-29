@@ -136,6 +136,10 @@ impl Theme {
         }
         theme
     }
+    /// A theme.toml's table over the builtin, without its folder (fonts unresolved).
+    pub fn parse(table: &toml::Table) -> Self {
+        Self::from_table(table, None, Some(&Self::builtin()))
+    }
     fn from_table(table: &toml::Table, dir: Option<&Path>, defaults: Option<&Self>) -> Self {
         // One field list serves both the embedded theme and user overrides.
         // Only the embedded TOML must be complete and valid.
@@ -282,6 +286,12 @@ pub const KNOWN_KEYS: &[&str] = &[
     "details_actions",
     "achievements_progress",
     "achievements_list",
+    // Store metadata (docs/temas.md, Publicar na Loja de temas).
+    "description",
+    "author",
+    "version",
+    "license",
+    "min_launcher",
 ];
 
 /// The inherited views, with this theme's tables laid over them.

@@ -297,6 +297,9 @@ pub struct Ui<'font, 'texture> {
     shadow: Option<Shadow<'texture>>,
     creator: Option<&'texture TextureCreator<WindowContext>>,
     art: Option<SystemArt<'texture>>,
+    /// Theme store covers and screenshots, and the ones the page shows now.
+    store_art: Option<crate::covers::CoverCache<'texture>>,
+    store_wanted: Vec<PathBuf>,
     root: Option<PathBuf>,
     geometry: Geometry,
     status: Option<Status>,
@@ -404,6 +407,8 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             shadow: None,
             creator: None,
             art: None,
+            store_art: None,
+            store_wanted: Vec::new(),
             root: None,
             geometry: Geometry::new(),
             status: None,
@@ -532,8 +537,30 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         let created = self.art.is_none() && self.creator.is_some();
         self.ensure_art();
         let art = self.art.as_mut().is_some_and(SystemArt::tick);
+        let store = self.store_tick();
         let status = self.status.as_mut().is_some_and(|s| s.poll(Instant::now()));
-        created || art || status
+        created || art || store || status
+    }
+    /// Loads what the theme store page asked for, sized for its largest box.
+    fn store_tick(&mut self) -> bool {
+        if self.store_wanted.is_empty() {
+            return false;
+        }
+        let Some(creator) = self.creator else {
+            return false;
+        };
+        let (w, h) = (self.px(324.) as u32, self.px(243.) as u32);
+        let cache = self.root.clone().unwrap_or_else(|| PathBuf::from("/"));
+        let art = self.store_art.get_or_insert_with(|| {
+            crate::covers::CoverCache::new(
+                creator,
+                cache.join("storage/.cache/archr-launcher/thumbs"),
+                w,
+                h,
+            )
+        });
+        art.request(&self.store_wanted);
+        art.poll()
     }
     fn px(&self, value: f32) -> i32 {
         self.frame.px(value)
@@ -654,6 +681,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         } = self.frame;
         self.canvas.set_draw_color(color(theme.background));
         self.canvas.clear();
+        self.store_wanted.clear();
         if let Some(lobby) = self.lobby.take() {
             let drawn = self.lobby_page(&lobby, theme);
             self.lobby = Some(lobby);

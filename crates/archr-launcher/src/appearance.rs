@@ -4,7 +4,7 @@ use archr_config::SystemCfg;
 use archr_ui::{appearance::Appearance, settings::Id, theme_dir, Theme, DEFAULT_THEME_DIR};
 use std::{fs, path::PathBuf};
 
-const USER_THEMES: &str = "/storage/.config/archr-launcher/themes";
+pub(crate) const USER_THEMES: &str = "/storage/.config/archr-launcher/themes";
 const SYSTEM_THEMES: &str = "/usr/share/archr-launcher/themes";
 
 /// The named theme and its directory, or the default when it cannot be
