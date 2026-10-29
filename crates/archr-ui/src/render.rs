@@ -1614,10 +1614,18 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                     20.,
                 );
                 if self.framed("badge", badge)? {
+                    if button == '↕' {
+                        let icon = self.frame.square(
+                            badge.x() + (badge.width() as i32 - self.px(14.)) / 2,
+                            badge.y() + (badge.height() as i32 - self.px(14.)) / 2,
+                            14.,
+                        );
+                        self.icon(Glyph::ArrowUpDown, icon, theme.text)?;
+                        continue;
+                    }
                     let outlining = std::mem::replace(&mut self.look.outlining, false);
-                    let letter = if button == '↕' { '↓' } else { button };
                     self.label_aligned(
-                        &letter.to_string(),
+                        &button.to_string(),
                         (Face::Semibold, 12., theme.text),
                         badge,
                         Align::Center,

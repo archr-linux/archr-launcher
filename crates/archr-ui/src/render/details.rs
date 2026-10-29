@@ -410,7 +410,8 @@ impl Ui<'_, '_> {
                 widths.push(self.measure(label, Face::Semibold, size)? as i32 + pad * 2 + extra);
             }
             let total: i32 = widths.iter().sum::<i32>() + self.px(8.) * 2;
-            if total <= area.width() as i32 || size <= 10. {
+            // The floor is 10 px on screen, whatever the theme's font scale.
+            if total <= area.width() as i32 || size <= 10. / self.frame.font.max(1.) {
                 break (widths, pad);
             }
             size -= 1.;

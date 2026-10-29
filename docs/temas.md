@@ -525,6 +525,7 @@ ARCHR_CAPTURE_VIEWS=default:vitrine,praia:lista,praia:vitrine:noart \
 cargo test -p archr-ui --lib capture_views -- --ignored
 ```
 
-`:noart` captura como se não houvesse imagem de console nenhuma. O tema
-precisa estar em `themes/` do repositório para esse comando. No
+`:noart` captura como se não houvesse imagem de console nenhuma. A pasta é
+relativa a `themes/` do repositório, ou um caminho absoluto (um tema que vive
+no próprio repositório, como os da Loja). No
 aparelho, os avisos sobre chaves inválidas ficam no log do launcher.

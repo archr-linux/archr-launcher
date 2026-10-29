@@ -24,6 +24,8 @@ pub(super) struct Look<'t> {
     /// The next moment an animated decoration changes frame.
     pub due: Option<Instant>,
     images: Option<(Option<PathBuf>, bool, CoverCache<'t>)>,
+    /// Every picture the theme names, loaded ahead so no screen pops in.
+    wanted: Vec<PathBuf>,
 }
 
 impl<'t> Ui<'_, 't> {
@@ -53,17 +55,32 @@ impl<'t> Ui<'_, 't> {
                 (0, 0),
                 key.1,
             );
+            look.wanted = theme
+                .frames
+                .iter()
+                .map(|(_, frame)| frame.image.clone())
+                .chain(theme.background_image.clone())
+                .collect();
+            if let Some(dir) = &key.0 {
+                for (id, _) in theme.views() {
+                    let view = theme.view(&id);
+                    for decor in view.systems.decor.iter().chain(&view.games.decor) {
+                        look.wanted.push(dir.join(&decor.image));
+                    }
+                }
+            }
+            look.wanted.dedup();
             look.images = Some((key.0, key.1, cache));
         }
     }
     /// Uploads pictures that finished decoding; true when one arrived.
     pub(super) fn look_tick(&mut self) -> bool {
         let due = self.look.due.is_some_and(|due| Instant::now() >= due);
-        let loaded = self
-            .look
-            .images
-            .as_mut()
-            .is_some_and(|(_, _, cache)| cache.poll());
+        let wanted = &self.look.wanted;
+        let loaded = self.look.images.as_mut().is_some_and(|(_, _, cache)| {
+            cache.request(wanted);
+            cache.poll()
+        });
         due || loaded
     }
     /// The theme picture at `path`, asking the loader for it the first time.
