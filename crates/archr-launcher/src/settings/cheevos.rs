@@ -256,7 +256,8 @@ mod tests {
         }
     }
     const SIGNED: &str = r#"{"Success":true,"User":"Douglas","Token":"abc123","Score":7}"#;
-    const SUMMARY: &str = r#"{"MemberSince":"2021-03-04","RecentlyPlayed":[{"Title":"Zelda"}]}"#;
+    const SUMMARY: &str =
+        r#"{"User":"Douglas","MemberSince":"2021-03-04","RecentlyPlayed":[{"Title":"Zelda"}]}"#;
     fn client(service: &Service) -> Client {
         Client::new(Box::new(service.clone()))
     }

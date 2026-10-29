@@ -256,6 +256,10 @@ impl Client {
             _ => return Err(Error::Service),
         }
         let value: Value = serde_json::from_slice(&reply.body).map_err(|_| Error::Service)?;
+        // Only a real summary proves the key works; `{}` or `{"error":…}` do not.
+        if text(&value["User"]).is_empty() {
+            return Err(Error::Service);
+        }
         let since: String = text(&value["MemberSince"]).chars().take(4).collect();
         let last = &value["RecentlyPlayed"][0]["Title"];
         Ok(Summary {

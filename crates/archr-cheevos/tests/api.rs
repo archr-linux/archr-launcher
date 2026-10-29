@@ -181,7 +181,7 @@ fn the_profile_summary_is_signed_with_the_users_encoded_key() {
     let (client, fake) = serve(|_, _| {
         json(
             200,
-            r#"{"MemberSince":"2021-03-04 10:00:00","RecentlyPlayed":[{"Title":"Super Mario World"}]}"#,
+            r#"{"User":"douglas","MemberSince":"2021-03-04 10:00:00","RecentlyPlayed":[{"Title":"Super Mario World"}]}"#,
         )
     });
     let summary = client.summary("douglas", "k&u=x=1 ", &NEVER).unwrap();
@@ -203,6 +203,13 @@ fn a_refused_key_is_auth_and_silence_is_network() {
         client.summary("douglas", "key", &NEVER),
         Err(Error::Network)
     );
+    for body in ["{}", r#"{"error":"nope"}"#] {
+        let (client, _) = serve(move |_, _| json(200, body));
+        assert_eq!(
+            client.summary("douglas", "key", &NEVER),
+            Err(Error::Service)
+        );
+    }
     let (client, _) = serve(|_, _| json(503, "down"));
     assert_eq!(
         client.summary("douglas", "key", &NEVER),
