@@ -3,6 +3,8 @@ use super::*;
 #[path = "render/bluetooth.rs"]
 mod bluetooth;
 use crate::settings::{games::SYSTEM_SECTION, Id, Kind, Page, Row, Settings, CATEGORIES};
+#[path = "render/appearance.rs"]
+mod appearance;
 #[path = "render/information.rs"]
 mod information;
 #[path = "render/network.rs"]
@@ -407,6 +409,7 @@ impl View<'_, '_, '_> {
                     (20., self.theme.text, Align::Center),
                 )?;
             }
+            Page::Appearance => self.appearance_page(state, &rows)?,
             Page::Wifi => self.wifi(state)?,
             Page::Bluetooth => self.bluetooth(state)?,
             Page::Keyboard => self.keyboard(state)?,
@@ -723,6 +726,7 @@ impl View<'_, '_, '_> {
                     (14., ink, Align::Right),
                 )?;
             }
+            Kind::Value if id == Id::Accent => self.swatches(state, selected, (x, y, w, h))?,
             Kind::Toggle => {
                 let on = state.value(id) == "1";
                 let track = selection(
@@ -806,7 +810,7 @@ impl View<'_, '_, '_> {
         self.label((402., 82., 198., 64.), &self.tr(key), 18.)?;
         self.note((402., 146., 198., 112.), &self.tr(detail), 15.)?;
         self.text(
-            (402., 272., 198., 28.),
+            (402., 268., 198., 36.),
             &self.tr("settings.instant"),
             (12., self.theme.dim_text, Align::Left),
         )

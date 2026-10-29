@@ -4,7 +4,7 @@ use crate::{
     paths::Paths,
     state::{Button, Outcome, SessionAction},
 };
-use archr_ui::settings::{Effect, Games, Page, Settings};
+use archr_ui::settings::{Effect, Games, Id, Page, Settings};
 use std::time::{Duration, Instant};
 /// Active radio scans are not free: refresh an open Wi-Fi page once a minute.
 const SCAN_INTERVAL: Duration = Duration::from_secs(60);
@@ -113,6 +113,18 @@ impl Runtime {
                 if let Some((job, _)) = &self.job {
                     job.cancel();
                 }
+            }
+            Effect::Theme(name) => self.send(Work::Theme(name)),
+            Effect::Appearance => {
+                let look = self.state.appearance();
+                self.send(Work::Appearance(vec![
+                    (Id::Theme, look.theme),
+                    (Id::Accent, look.accent),
+                    (Id::Background, look.background),
+                    (Id::Font, look.font),
+                    (Id::TextSize, look.text_size),
+                    (Id::Animations, u8::from(look.animations).to_string()),
+                ]))
             }
             Effect::Reboot => return Outcome::Action(SessionAction::Reboot),
             Effect::None => {}

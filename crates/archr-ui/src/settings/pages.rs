@@ -3,6 +3,7 @@ use super::{
     bluetooth::Action, described, network::wpa_valid, row, Effect, Id, Kind, Page, Row, Settings,
 };
 use crate::{
+    appearance::Appearance,
     keyboard::{Keyboard, Mode},
     state::Button,
 };
@@ -41,6 +42,15 @@ pub const GAMES: &[Row] = &[
     row(Id::GameSystem, "settings.other_system", Kind::Action).under("settings.other"),
     row(Id::NetplayLink, "settings.netplay", Kind::Action),
     row(Id::ScraperLink, "settings.scraper", Kind::Action),
+];
+pub const APPEARANCE: &[Row] = &[
+    row(Id::Theme, "settings.theme", Kind::Value),
+    row(Id::Accent, "settings.accent", Kind::Value),
+    row(Id::Background, "settings.background", Kind::Value),
+    row(Id::Font, "settings.font", Kind::Value),
+    row(Id::TextSize, "settings.text_size", Kind::Value),
+    row(Id::Animations, "settings.animations", Kind::Value),
+    row(Id::Restore, "settings.restore", Kind::Action),
 ];
 pub const NETPLAY: &[Row] = &[
     row(Id::NetplayEnabled, "settings.netplay_enabled", Kind::Toggle),
@@ -216,6 +226,29 @@ impl Settings {
         }
         Some(Effect::None)
     }
+    /// The choices on the Appearance page, drafts included.
+    pub fn appearance(&self) -> Appearance {
+        let text = |id| self.value(id).to_owned();
+        Appearance {
+            theme: text(Id::Theme),
+            accent: text(Id::Accent),
+            background: text(Id::Background),
+            font: text(Id::Font),
+            text_size: text(Id::TextSize),
+            animations: self.value(Id::Animations) == "1",
+        }
+    }
+    /// B saves the draft only when something changed.
+    pub(super) fn leave_appearance(&mut self) -> Effect {
+        let changed = self.appearance() != self.appearance_saved;
+        self.back();
+        if changed {
+            self.pending = Some(Id::Theme);
+            Effect::Appearance
+        } else {
+            Effect::None
+        }
+    }
     /// A on rows that open something instead of changing a value.
     pub(super) fn activate(&mut self, id: Id) -> Option<Effect> {
         match id {
@@ -224,6 +257,24 @@ impl Settings {
             Id::ScraperAccount => {
                 let user = self.scrape.user.clone();
                 self.open_keyboard(Id::ScraperAccount, Mode::Text, user);
+            }
+            Id::Restore => {
+                let theme = self.value(Id::Theme) != Id::Theme.default_value();
+                for id in [
+                    Id::Theme,
+                    Id::Accent,
+                    Id::Background,
+                    Id::Font,
+                    Id::TextSize,
+                    Id::Animations,
+                ] {
+                    self.values.insert(id, id.default_value().into());
+                }
+                return Some(if theme {
+                    Effect::Theme(Id::Theme.default_value().into())
+                } else {
+                    Effect::None
+                });
             }
             Id::ScraperStart if self.scrape.running => return Some(Effect::CancelScrape),
             // Pending from the first press: a second A never starts a second job.

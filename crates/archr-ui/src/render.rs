@@ -37,6 +37,8 @@ struct Frame {
     width: u32,
     height: u32,
     scale: f32,
+    /// User text-size multiplier, applied to every font size.
+    text: f32,
     now: Instant,
     unix: u64,
 }
@@ -46,6 +48,7 @@ impl Frame {
             width,
             height,
             scale: height as f32 / 480.,
+            text: 1.,
             now: Instant::now(),
             unix: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -74,7 +77,7 @@ impl Frame {
         Rect::new(x, y, self.px(side) as u32, self.px(side) as u32)
     }
     fn font_size(self, value: f32) -> u16 {
-        self.px(value).clamp(8, 128) as u16
+        self.px(value * self.text).clamp(8, 128) as u16
     }
 }
 fn localized_error(catalog: &I18n, error: String) -> String {
@@ -300,6 +303,9 @@ pub struct Ui<'font, 'texture> {
     cover_visible: bool,
     cover_fade: Tween,
     animating: bool,
+    /// Look-and-feel choices: text-size multiplier and motion on/off.
+    pub text_scale: f32,
+    pub animations: bool,
     has_presented: bool,
     frame: Frame,
     pub catalog: I18n,
@@ -390,6 +396,8 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             cover_visible: false,
             cover_fade: Tween::new(0., Duration::from_millis(120)),
             animating: false,
+            text_scale: 1.,
+            animations: true,
             has_presented: false,
             frame: Frame::new(width, height),
             catalog: I18n::default(),
@@ -426,6 +434,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         root: Option<&Path>,
     ) -> Result<(), String> {
         self.frame = Frame::from_size(self.canvas.output_size()?);
+        self.frame.text = self.text_scale;
         self.creator = Some(creator);
         self.root = root.map(Path::to_path_buf);
         self.art = None;
@@ -573,6 +582,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         settings: Option<&crate::settings::Settings>,
     ) -> Result<(), String> {
         self.frame = Frame::from_size(self.canvas.output_size()?);
+        self.frame.text = self.text_scale;
         let Frame {
             width, height, now, ..
         } = self.frame;
@@ -634,6 +644,10 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 || self.list.swap.active(now)
                 || self.menu_pill.active(now)
                 || self.cover_fade.active(now);
+        }
+        // Motion off: finish every glide, with one more frame to show the end.
+        if !self.animations && self.animating {
+            self.snap_animations();
         }
         if let Some(banner) = self.banner.clone() {
             self.notice(&banner, theme)?;

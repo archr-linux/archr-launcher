@@ -1,3 +1,4 @@
+pub mod appearance;
 pub mod handoff;
 pub mod state;
 pub mod store;

@@ -133,6 +133,7 @@ impl Backend {
             Page::Services,
             Page::Netplay,
             Page::Scraper,
+            Page::Appearance,
         ] {
             for row in page.rows() {
                 if !row.id.key().is_empty() {
@@ -171,6 +172,20 @@ impl Backend {
             }
         }
         state.options.insert(Id::ScraperSystems, systems);
+        let mut themes = crate::appearance::theme_names(&self.paths);
+        themes.push(state.value(Id::Theme).to_owned());
+        themes.sort();
+        themes.dedup();
+        state.options.insert(Id::Theme, themes);
+    }
+    /// One locked, atomic publish for all the page's choices.
+    pub(super) fn save_appearance(&self, choices: &[(Id, String)]) -> Result<(), String> {
+        let entries: Vec<_> = choices
+            .iter()
+            .map(|(id, v)| (id.key(), v.as_str()))
+            .collect();
+        SystemCfg::set_many_and_save(&self.paths.config, &self.paths.lock, &entries)
+            .map_err(|e| e.to_string())
     }
     /// Blocking login check; the login is stored only once the service accepts it.
     pub(super) fn login(&self, user: &str, password: &str) -> Result<(String, usize), String> {
@@ -587,5 +602,34 @@ mod tests {
                 .as_deref(),
             Some("55435")
         );
+    }
+    #[test]
+    fn appearance_choices_publish_together_and_load_back_with_their_themes() {
+        let (_root, paths) = fixture("launcher.accent=pink\n");
+        let backend = Backend::new(paths.clone());
+        let night = paths.at("/storage/.config/archr-launcher/themes/night");
+        fs::create_dir_all(&night).unwrap();
+        fs::write(night.join("theme.toml"), "accent = \"#FF0000\"\n").unwrap();
+        backend
+            .save_appearance(&[
+                (Id::Theme, "night".into()),
+                (Id::Accent, "teal".into()),
+                (Id::Animations, "0".into()),
+            ])
+            .unwrap();
+        let cfg = SystemCfg::load(&paths.config).unwrap();
+        let look = crate::appearance::saved(Some(&cfg));
+        assert_eq!(
+            (look.theme.as_str(), look.accent.as_str()),
+            ("night", "teal")
+        );
+        assert!(!look.animations);
+        assert_eq!(look.text_size, "normal");
+        assert_eq!(crate::appearance::theme_names(&paths), ["default", "night"]);
+        let (theme, dir) = crate::appearance::load_theme(&paths, "night");
+        assert_eq!(dir, Some(night));
+        assert_eq!(theme.highlight_bg.r, 255);
+        // A theme that vanished falls back to the builtin one.
+        assert_eq!(crate::appearance::load_theme(&paths, "gone").1, None);
     }
 }
