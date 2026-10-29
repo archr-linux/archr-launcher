@@ -798,6 +798,10 @@ fn run(
                 Some(Outcome::Netplay(_) | Outcome::MoonlightStream(_)) => Some((String::new(), 0)),
                 _ => None,
             };
+            // No preview outlives the launcher's screen.
+            if close_requested || outcome.as_ref().is_some_and(transition::is_terminal) {
+                preview.stop();
+            }
             if let Some((system, index)) = &game {
                 let key = library.game_key(system, *index).unwrap_or_default();
                 let name = library.games(system).get(*index).map(|g| g.name.clone());

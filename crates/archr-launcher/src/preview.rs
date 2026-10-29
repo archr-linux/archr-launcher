@@ -22,8 +22,8 @@ use std::{
 
 /// Resting on the game this long starts the video.
 const DELAY: Duration = Duration::from_secs(1);
-const FPS: u32 = 25;
 const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+const FPS: u32 = 25;
 
 /// The clip and the box it fills, in pixels.
 pub type Want = (PathBuf, (u32, u32));
@@ -38,21 +38,28 @@ struct Slot {
     done: bool,
 }
 
-/// One running clip. Dropping it asks the reader to kill ffmpeg, which it
-/// does after the next frame (a frame comes every 1/FPS s).
+/// ffmpeg's process group while it runs unreaped; 0 before and after.
+/// The reader clears it, under the lock, before it reaps the child, so a
+/// kill through it never reaches a reused PID.
+type Group = Arc<Mutex<i32>>;
+
+/// One running clip. Dropping it kills ffmpeg's group at once, wherever the
+/// reader is (even blocked before the first frame); the reader then reaps.
 struct Player {
     slot: Arc<Mutex<Slot>>,
     stop: Arc<AtomicBool>,
+    group: Group,
 }
 impl Player {
     fn start(path: PathBuf, size: (u32, u32)) -> Self {
         let slot = Arc::new(Mutex::new(Slot::default()));
         let stop = Arc::new(AtomicBool::new(false));
-        let (shared, cancel) = (slot.clone(), stop.clone());
+        let group = Group::default();
+        let (shared, cancel, pgid) = (slot.clone(), stop.clone(), group.clone());
         let spawned = thread::Builder::new()
             .name("preview".into())
             .spawn(move || {
-                if let Err(error) = play(&path, size, &shared, &cancel) {
+                if let Err(error) = play(&path, size, &shared, &cancel, &pgid) {
                     log::warn!("Preview {}: {error}", path.display());
                 }
                 shared.lock().unwrap_or_else(|e| e.into_inner()).done = true;
@@ -60,18 +67,36 @@ impl Player {
         if spawned.is_err() {
             slot.lock().unwrap_or_else(|e| e.into_inner()).done = true;
         }
-        Self { slot, stop }
+        Self { slot, stop, group }
     }
 }
 impl Drop for Player {
     fn drop(&mut self) {
-        self.stop.store(true, Ordering::Relaxed);
+        self.stop.store(true, Ordering::SeqCst);
+        let group = *self.group.lock().unwrap_or_else(|e| e.into_inner());
+        if group > 0 {
+            // SAFETY: plain syscall; the group is live and unreaped (see Group).
+            unsafe { libc::kill(-group, libc::SIGKILL) };
+        }
+    }
+}
+
+/// ffmpeg and ffprobe die with the thread that started them, so a launcher
+/// that exits (a game starting) never leaves one behind.
+fn die_with_parent(command: &mut Command) {
+    // SAFETY: prctl is async-signal-safe; nothing is allocated after fork.
+    unsafe {
+        command.pre_exec(|| {
+            libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL);
+            Ok(())
+        });
     }
 }
 
 /// Clip length in seconds, for the progress line.
 fn duration(path: &Path, stop: &AtomicBool) -> Option<f32> {
     let mut command = Command::new("ffprobe");
+    die_with_parent(&mut command);
     command
         .args(["-v", "error", "-show_entries", "format=duration", "-of"])
         .args(["csv=p=0"])
@@ -89,15 +114,17 @@ fn play(
     (w, h): (u32, u32),
     slot: &Mutex<Slot>,
     stop: &AtomicBool,
+    group: &Mutex<i32>,
 ) -> Result<(), String> {
     let length = duration(path, stop);
-    if stop.load(Ordering::Relaxed) {
+    if stop.load(Ordering::SeqCst) {
         return Ok(());
     }
     let filter = format!(
         "fps={FPS},scale={w}:{h}:force_original_aspect_ratio=increase:flags=bilinear,crop={w}:{h}"
     );
     let mut command = Command::new("ffmpeg");
+    die_with_parent(&mut command);
     command
         .args(["-nostdin", "-hide_banner", "-loglevel", "error"])
         // Real time, in a loop, one decoding thread: the menus stay first.
@@ -111,6 +138,21 @@ fn play(
         .stderr(Stdio::null());
     let child = process::spawn(&mut command).map_err(|e| format!("ffmpeg: {e}"))?;
     let mut child = process::Running(child);
+    {
+        let mut pgid = group.lock().unwrap_or_else(|e| e.into_inner());
+        if stop.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+        *pgid = child.0.id() as i32;
+    }
+    // Cleared before any return reaps the child (Running's drop).
+    struct Clear<'a>(&'a Mutex<i32>);
+    impl Drop for Clear<'_> {
+        fn drop(&mut self) {
+            *self.0.lock().unwrap_or_else(|e| e.into_inner()) = 0;
+        }
+    }
+    let clear = Clear(group);
     let mut out = child.0.stdout.take().ok_or("ffmpeg: no output")?;
     let mut frame = vec![0; w as usize * h as usize * 3];
     let mut seq = 0u64;
@@ -127,6 +169,7 @@ fn play(
         shared.seq = seq;
         shared.progress = length.map_or(0., |l| (at % l) / l);
     }
+    drop(clear);
     drop(child);
     Ok(())
 }
@@ -210,6 +253,10 @@ impl<'t> Preview<'t> {
         self.progress = slot.progress;
         true
     }
+    /// Stop now, before the launcher hands the screen to a game.
+    pub fn stop(&mut self) {
+        self.poll(None, Instant::now());
+    }
     /// The newest frame and the clip's progress, once one arrived.
     pub fn frame(&self) -> Option<(&Texture<'t>, f32)> {
         (self.seen > 0)
@@ -276,6 +323,42 @@ mod tests {
             assert!(Instant::now() < deadline, "reader kept running");
             thread::sleep(Duration::from_millis(20));
         }
+    }
+
+    #[test]
+    fn dropping_the_player_kills_ffmpeg_blocked_before_its_first_frame() {
+        if Command::new("ffmpeg").arg("-version").output().is_err() {
+            eprintln!("ffmpeg missing: preview test skipped");
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let fifo = dir.path().join("Waiting.mp4");
+        let name = std::ffi::CString::new(fifo.to_str().unwrap()).unwrap();
+        // SAFETY: a valid NUL-terminated path.
+        assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+        // No writer ever comes: ffmpeg waits in open(), no frame arrives.
+        let player = Player::start(fifo, (40, 30));
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let pid = loop {
+            let pid = *player.group.lock().unwrap();
+            if pid > 0 {
+                break pid;
+            }
+            assert!(Instant::now() < deadline, "ffmpeg never started");
+            thread::sleep(Duration::from_millis(10));
+        };
+        let slot = player.slot.clone();
+        drop(player);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        // SAFETY: signal 0 only checks that the process exists.
+        while unsafe { libc::kill(pid, 0) } == 0 {
+            assert!(
+                Instant::now() < deadline,
+                "ffmpeg {pid} outlived its player"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(slot.lock().unwrap().seq, 0);
     }
 
     #[test]
