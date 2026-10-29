@@ -547,3 +547,19 @@ fn views_inherit_from_the_builtin_and_themes_add_their_own() {
     );
     assert_eq!(theme.view("ruim").systems, theme.view("lista").systems);
 }
+
+#[test]
+fn every_key_the_default_theme_uses_is_known() {
+    let source = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../themes/default/theme.toml"
+    ))
+    .unwrap();
+    let table: toml::Table = source.parse().unwrap();
+    for key in table.keys() {
+        assert!(
+            archr_ui::theme::KNOWN_KEYS.contains(&key.as_str()),
+            "themes/default/theme.toml uses {key}, which the loader warns about"
+        );
+    }
+}

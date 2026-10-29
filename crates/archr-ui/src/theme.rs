@@ -206,7 +206,8 @@ impl Theme {
     }
 }
 
-const KNOWN_KEYS: &[&str] = &[
+/// Top-level keys the loader reads; anything else is logged and ignored.
+pub const KNOWN_KEYS: &[&str] = &[
     "background",
     "text",
     "highlight_bg",
@@ -244,6 +245,13 @@ const KNOWN_KEYS: &[&str] = &[
     "font_mono_medium",
     "name",
     "view",
+    "sounds",
+    "details_shot",
+    "details_info",
+    "details_title",
+    "details_subtitle",
+    "details_text",
+    "details_actions",
 ];
 
 /// The inherited views, with this theme's tables laid over them.
