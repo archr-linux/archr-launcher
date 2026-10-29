@@ -80,8 +80,8 @@ pub struct Detail {
 
 /// Files an install keeps; everything else in the repository is ignored.
 pub fn allowed(path: &str) -> bool {
-    const EXTENSIONS: [&str; 11] = [
-        "toml", "png", "jpg", "jpeg", "svg", "ttf", "otf", "ogg", "wav", "txt", "md",
+    const EXTENSIONS: [&str; 12] = [
+        "toml", "png", "jpg", "jpeg", "webp", "svg", "ttf", "otf", "ogg", "wav", "txt", "md",
     ];
     let name = path.rsplit('/').next().unwrap_or(path);
     let upper = name.to_ascii_uppercase();
@@ -641,6 +641,7 @@ mod tests {
             "LICENSE",
             "screenshots/1.png",
             "X.jpeg",
+            "systems/snes.webp",
         ] {
             assert!(allowed(ok), "{ok}");
         }

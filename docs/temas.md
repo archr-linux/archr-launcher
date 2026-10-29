@@ -466,7 +466,7 @@ branch) muda, o botão dos detalhes passa de **Usar agora** para
 O tarball da versão é baixado de `codeload.github.com` e só estes arquivos
 são copiados:
 
-- extensões `toml`, `png`, `jpg`, `jpeg`, `svg`, `ttf`, `otf`, `ogg`, `wav`,
+- extensões `toml`, `png`, `jpg`, `jpeg`, `webp`, `svg`, `ttf`, `otf`, `ogg`, `wav`,
   `txt`, `md`;
 - `LICENSE`, `LICENCE` e `COPYING`.
 
