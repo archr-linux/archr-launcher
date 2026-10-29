@@ -446,6 +446,10 @@ impl Shop {
         let records = self.records();
         let mut done = Vec::new();
         for (id, record) in &records.modules {
+            // Off, failed or never allowed: the user decides about it first.
+            if !record.enabled || record.failed || !record.consent {
+                continue;
+            }
             let Some((owner, repo)) = record.source.split_once('/') else {
                 continue;
             };

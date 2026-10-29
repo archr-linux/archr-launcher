@@ -406,6 +406,28 @@ fn release_1_1(manifest: &str, reviewed: bool) -> Fake {
 }
 
 #[test]
+fn automatic_updates_leave_switched_off_and_failed_modules_alone() {
+    let newer = MANIFEST.replace("1.0.0", "1.1.0");
+    for change in [
+        (|r: &mut Record| r.enabled = false) as fn(&mut Record),
+        |r: &mut Record| r.failed = true,
+        |r: &mut Record| r.consent = false,
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        installed_bateria(root.path());
+        let path = root.path().join("modules.toml");
+        let mut state = State::load(&path);
+        change(state.modules.get_mut("bateria").unwrap());
+        state.save(&path).unwrap();
+        assert!(shop(root.path(), &release_1_1(&newer, true))
+            .auto()
+            .is_empty());
+        let on_disk = fs::read_to_string(root.path().join("modules/bateria/module.toml")).unwrap();
+        assert!(on_disk.contains("1.0.0"));
+    }
+}
+
+#[test]
 fn automatic_updates_take_only_reviewed_versions_that_ask_for_nothing_new() {
     let newer = MANIFEST.replace("1.0.0", "1.1.0");
     let asks = newer.replace(

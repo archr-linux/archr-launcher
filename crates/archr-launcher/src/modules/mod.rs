@@ -547,16 +547,10 @@ impl Host {
             }
             Input::Store(answer) => {
                 let (reply, installed) = *answer;
-                if let Some(installed) = installed {
-                    let id = installed.id.clone();
-                    self.installed_from_store(installed);
-                    if let StoreReply::Updated(_, version) = &reply {
-                        registry::record(&mut self.state, &id).auto_updated = now_secs();
-                        self.save_state();
-                        self.reload();
-                        let notice = Notice::Updated(self.name(&id), version.clone());
-                        let _ = self.out.send(Event::Notice(notice));
-                    }
+                match (installed, &reply) {
+                    (Some(installed), StoreReply::Updated(..)) => self.auto_updated(installed),
+                    (Some(installed), _) => self.installed_from_store(installed),
+                    _ => {}
                 }
                 self.store_reply(&reply);
                 let _ = self.out.send(Event::Store(reply));
@@ -747,6 +741,48 @@ impl Host {
         if daemon && self.started && !self.stopped {
             self.spawn_daemon(&installed.id);
         }
+    }
+    /// An update the store made on its own. The module keeps the user's
+    /// switch and consent; one removed or taken by another source meanwhile
+    /// is not brought back.
+    fn auto_updated(&mut self, installed: store::Installed) {
+        let id = installed.id.clone();
+        match self.state.modules.get(&id) {
+            Some(record) if record.source == installed.source => {}
+            Some(_) => {
+                log::warn!("Module {id} changed source during its automatic update");
+                self.reload();
+                return;
+            }
+            None => {
+                // Removed while the store worked: it stays removed.
+                log::warn!("Module {id} was removed during its automatic update");
+                let dirs = &self.config.dirs;
+                for dir in [dirs.module(&id), dirs.previous(&id)] {
+                    let _ = fs::remove_dir_all(dir);
+                }
+                self.reload();
+                return;
+            }
+        }
+        let record = registry::record(&mut self.state, &id);
+        record.previous_digest = std::mem::take(&mut record.digest);
+        record.version = installed.version.clone();
+        record.digest = installed.digest;
+        record.auto_updated = now_secs();
+        self.save_state();
+        self.end_daemon(&id, false);
+        self.failures.remove(&id);
+        self.reload();
+        let daemon = self
+            .find(&id)
+            .and_then(|i| i.manifest.as_ref())
+            .is_some_and(|m| m.mode == Mode::Daemon);
+        if daemon && self.started && !self.stopped && self.active(&id).is_some() {
+            self.spawn_daemon(&id);
+        }
+        let notice = Notice::Updated(self.name(&id), installed.version);
+        let _ = self.out.send(Event::Notice(notice));
     }
     /// Store cards tell which installed modules are reviewed (the digest of
     /// the installed package is on the reviewed list) or outdated.

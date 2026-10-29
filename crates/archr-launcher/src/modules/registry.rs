@@ -68,6 +68,8 @@ pub struct Record {
     pub failed: bool,
     /// SHA-256 of the installed package, for the reviewed badge.
     pub digest: String,
+    /// The digest of the version before the last update, for a rollback.
+    pub previous_digest: String,
     /// When it last ran, and when the store last updated it on its own
     /// (seconds since 1970; 0 = never).
     pub used: u64,
