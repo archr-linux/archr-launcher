@@ -56,6 +56,8 @@ pub struct List {
     pub axis: Axis,
     pub mark: Mark,
     pub scroll: Scroll,
+    /// Text drawn before the selected entry, blinking; empty for none.
+    pub cursor: String,
 }
 /// A raised card (the systems panel, the frame behind a cover).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -200,6 +202,7 @@ impl View {
             axis: Axis::Vertical,
             mark: Mark::Pill,
             scroll: Scroll::Edge,
+            cursor: String::new(),
         };
         let column = |x, width| Rect01 {
             x,
@@ -388,6 +391,7 @@ impl List {
                 "axis",
                 "mark",
                 "scroll",
+                "cursor",
             ],
         );
         self.rect = r.rect(self.rect);
@@ -419,6 +423,11 @@ impl List {
             self.scroll,
             &[("edge", Scroll::Edge), ("center", Scroll::Center)],
         );
+        match t.get("cursor") {
+            None => {}
+            Some(Value::String(cursor)) => self.cursor = cursor.chars().take(4).collect(),
+            Some(_) => log::warn!("Theme {at}.cursor must be text; ignored"),
+        }
         // A tile list is always a centered horizontal row.
         if self.mark == Mark::Tile {
             self.axis = Axis::Horizontal;
@@ -634,6 +643,15 @@ mod tests {
         assert_eq!(info.align, Align::Center);
         assert_eq!(info.title, base.systems.info.unwrap().title);
         assert_eq!(changed.systems.list, base.systems.list);
+    }
+    #[test]
+    fn the_cursor_is_short_text_and_off_by_default() {
+        assert_eq!(view("").games.list.cursor, "");
+        assert_eq!(
+            view("[games.list]\ncursor = '>>>>>>'").games.list.cursor,
+            ">>>>"
+        );
+        assert_eq!(view("[games.list]\ncursor = 1").games.list.cursor, "");
     }
     #[test]
     fn tiles_are_horizontal() {

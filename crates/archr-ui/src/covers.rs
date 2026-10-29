@@ -46,12 +46,35 @@ pub fn load_thumbnail(
     width: u32,
     height: u32,
 ) -> io::Result<Thumbnail> {
+    thumbnail(cache, source, (width.max(1), height.max(1)), false)
+}
+
+/// Pixel art keeps hard edges: it grows by whole multiples and shrinks
+/// without smoothing.
+fn thumbnail(
+    cache: &Path,
+    source: &Path,
+    (width, height): (u32, u32),
+    pixel: bool,
+) -> io::Result<Thumbnail> {
     let path = thumbnail_path(cache, source, width, height)?;
-    let cached = decode(&path, width.max(1), height.max(1)).ok();
+    let cached = decode(&path, width, height).ok();
     let image = match cached {
         Some(image) => image,
         None => {
-            let image = decode(source, 16384, 16384)?.thumbnail(width.max(1), height.max(1));
+            let image = decode(source, 16384, 16384)?;
+            let image = if pixel {
+                let (w, h) = (image.width().max(1), image.height().max(1));
+                let k = (width / w).min(height / h);
+                let (w, h) = if k >= 1 {
+                    (w * k, h * k)
+                } else {
+                    (width, height)
+                };
+                image.resize(w, h, image::imageops::FilterType::Nearest)
+            } else {
+                image.thumbnail(width, height)
+            };
             // Cache failure is nonfatal; the thumbnail is still usable.
             if let Err(error) = atomic_publish(&path, false, |file| {
                 image
@@ -127,6 +150,7 @@ pub struct CoverCache<'a> {
     /// Requests issued before `clear`; their results may predate the new art.
     stale: HashSet<PathBuf>,
     textures: VecDeque<(PathBuf, Option<Texture<'a>>)>,
+    pixel: bool,
 }
 
 impl<'a> CoverCache<'a> {
@@ -135,6 +159,16 @@ impl<'a> CoverCache<'a> {
         dir: PathBuf,
         width: u32,
         height: u32,
+    ) -> Self {
+        Self::scaled(creator, dir, (width, height), false)
+    }
+    /// With `pixel`, pictures are scaled without smoothing (pixel art); the
+    /// caller gives such a cache its own `dir`.
+    pub fn scaled(
+        creator: &'a TextureCreator<WindowContext>,
+        dir: PathBuf,
+        (width, height): (u32, u32),
+        pixel: bool,
     ) -> Self {
         let (requests, jobs) = mpsc::sync_channel::<Vec<Vec<PathBuf>>>(1);
         let (done, ready) = mpsc::sync_channel(16);
@@ -148,7 +182,7 @@ impl<'a> CoverCache<'a> {
                     let result = candidates
                         .iter()
                         .find(|path| path.is_file())
-                        .map(|path| load_thumbnail(&dir, path, width, height))
+                        .map(|path| thumbnail(&dir, path, (width.max(1), height.max(1)), pixel))
                         .transpose();
                     if done.send((key.clone(), result)).is_err() {
                         return;
@@ -163,6 +197,7 @@ impl<'a> CoverCache<'a> {
             pending: HashSet::new(),
             stale: HashSet::new(),
             textures: VecDeque::new(),
+            pixel,
         }
     }
 
@@ -218,7 +253,11 @@ impl<'a> CoverCache<'a> {
                             .update(None, &thumb.rgba, thumb.width as usize * 4)
                             .map_err(|error| error.to_string())?;
                         texture.set_blend_mode(sdl2::render::BlendMode::Blend);
-                        texture.set_scale_mode(sdl2::render::ScaleMode::Linear);
+                        texture.set_scale_mode(if self.pixel {
+                            sdl2::render::ScaleMode::Nearest
+                        } else {
+                            sdl2::render::ScaleMode::Linear
+                        });
                         Ok(texture)
                     })
                     .transpose()
@@ -310,5 +349,25 @@ mod tests {
         assert!(nested.join("legacy.size").is_file());
         cleanup_thumbnails(&cache);
         assert_eq!(fs::read_dir(cache).unwrap().count(), 4);
+    }
+    #[test]
+    fn pixel_art_grows_by_whole_multiples_without_smoothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("sprite").with_extension("png");
+        let mut art = image::RgbaImage::from_pixel(4, 3, image::Rgba([0, 0, 0, 255]));
+        art.put_pixel(0, 0, image::Rgba([255, 255, 255, 255]));
+        art.save(&source).unwrap();
+        let thumb = thumbnail(&dir.path().join("cache"), &source, (30, 30), true).unwrap();
+        assert_eq!(
+            (thumb.width, thumb.height),
+            (28, 21),
+            "seven times, the most that fits"
+        );
+        let pixel = |x: usize, y: usize| thumb.rgba[(y * 28 + x) * 4];
+        assert_eq!(
+            (pixel(6, 6), pixel(7, 6), pixel(6, 7)),
+            (255, 0, 0),
+            "hard edges"
+        );
     }
 }

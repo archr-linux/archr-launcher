@@ -55,10 +55,15 @@ pub(crate) fn between(left: i32, top: i32, right: i32, bottom: i32) -> Rect {
         (bottom - top).max(1) as u32,
     )
 }
-fn border_rect(rect: Rect, inner: bool) -> Rect {
-    let delta = if inner { 1 } else { -1 };
-    let [w, h] = [rect.width(), rect.height()].map(|n| if inner { n - 2 } else { n + 2 });
-    Rect::new(rect.x() + delta, rect.y() + delta, w, h)
+/// `rect` grown by `by` pixels on every side (shrunk when negative).
+fn grown(rect: Rect, by: i32) -> Rect {
+    let size = |n: u32| (n as i32 + 2 * by).max(1) as u32;
+    Rect::new(
+        rect.x() - by,
+        rect.y() - by,
+        size(rect.width()),
+        size(rect.height()),
+    )
 }
 fn slice_axis(start: i32, end: i32, pad: i32, corner: i32, shift: i32) -> [i32; 4] {
     [start - pad, start + corner, end - corner, end + pad].map(|n| n + shift)
@@ -116,9 +121,11 @@ impl Mesh {
             ]);
         }
     }
-    fn rounded(&mut self, rect: Rect, radius: f32, fill: Rgba, border: Option<Rgba>) {
+    /// Filled, with a `width` pixel border when `border` is given.
+    fn rounded(&mut self, rect: Rect, radius: f32, fill: Rgba, border: Option<(Rgba, u32)>) {
         let points = outline(rect, radius);
-        let outer = outline(border_rect(rect, false), radius + 1.);
+        let outer = outline(grown(rect, 1), radius + 1.);
+        let (border, width) = border.map_or((None, 0), |(c, w)| (Some(c), w));
         let edge = border.unwrap_or(fill);
         for (&p, &q) in points.iter().zip(&outer) {
             self.vertices.push(vertex(p, color(edge), (0., 0.)));
@@ -131,10 +138,10 @@ impl Mesh {
             self.indices.extend([a, a + 1, b, b, a + 1, b + 1]);
         }
         self.fan(&points, color(edge), rect, None);
-        if border.is_some() && rect.width() > 2 && rect.height() > 2 {
-            let inner = border_rect(rect, true);
+        if border.is_some() && rect.width() > 2 * width && rect.height() > 2 * width {
+            let inner = grown(rect, -(width as i32));
             self.fan(
-                &outline(inner, (radius - 1.).max(0.)),
+                &outline(inner, (radius - width as f32).max(0.)),
                 color(fill),
                 inner,
                 None,
@@ -204,7 +211,7 @@ impl Mesh {
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Key {
-    Rounded(Rect, u32, Rgba, Option<Rgba>),
+    Rounded(Rect, u32, Rgba, Option<(Rgba, u32)>),
     Cover(Rect, u32, [u32; 4]),
     Dashed(Rect, u32, Rgba),
 }
@@ -212,13 +219,22 @@ enum Key {
 /// donate their Vec allocations to the next moving-pill mesh.
 pub(crate) struct Geometry {
     meshes: VecDeque<(Key, Mesh)>,
+    /// The theme's style: every radius times `corners`, borders `border` pixels.
+    corners: f32,
+    border: u32,
 }
 impl Geometry {
     pub fn new() -> Self {
         corner_arcs();
         Self {
             meshes: VecDeque::with_capacity(CACHE_SIZE),
+            corners: 1.,
+            border: 1,
         }
+    }
+    /// The theme's corner factor and border width in pixels, for every shape.
+    pub fn style(&mut self, corners: f32, border: u32) {
+        (self.corners, self.border) = (corners, border.max(1));
     }
     fn mesh(&mut self, key: Key) -> &mut Mesh {
         if let Some(index) = self.meshes.iter().position(|(k, _)| *k == key) {
@@ -255,6 +271,8 @@ impl Geometry {
         fill: Rgba,
         border: Option<Rgba>,
     ) -> Result<(), String> {
+        let radius = radius * self.corners;
+        let border = border.map(|c| (c, self.border));
         self.mesh(Key::Rounded(rect, radius.to_bits(), fill, border))
             .draw(canvas, None)
     }
@@ -265,7 +283,7 @@ impl Geometry {
         radius: f32,
         c: Rgba,
     ) -> Result<(), String> {
-        self.mesh(Key::Dashed(rect, radius.to_bits(), c))
+        self.mesh(Key::Dashed(rect, (radius * self.corners).to_bits(), c))
             .draw(canvas, None)
     }
     pub fn cover(
@@ -277,6 +295,7 @@ impl Geometry {
         alpha: u8,
         crop: [f32; 4],
     ) -> Result<(), String> {
+        let radius = radius * self.corners;
         let mesh = self.mesh(Key::Cover(rect, radius.to_bits(), crop.map(f32::to_bits)));
         for vertex in &mut mesh.vertices {
             vertex.color.a = alpha;
@@ -389,6 +408,27 @@ impl<'a> Shadow<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn borders_take_the_theme_width_and_square_corners_stay_square() {
+        let ink = |r| Rgba {
+            r,
+            g: 0,
+            b: 0,
+            a: 255,
+        };
+        let mut mesh = Mesh::new();
+        mesh.rounded(Rect::new(10, 10, 40, 30), 0., ink(1), Some((ink(2), 3)));
+        let fill: Vec<_> = mesh.vertices.iter().filter(|v| v.color.r == 1).collect();
+        let xs = fill.iter().map(|v| v.position.x);
+        let ys = fill.iter().map(|v| v.position.y);
+        assert_eq!(xs.clone().fold(f32::MAX, f32::min), 13.);
+        assert_eq!(xs.fold(f32::MIN, f32::max), 47.);
+        assert_eq!(ys.fold(f32::MAX, f32::min), 13.);
+        // Radius 0: every outline point sits on a corner of the rectangle.
+        assert!(outline(Rect::new(10, 10, 40, 30), 0.)
+            .iter()
+            .all(|p| [10., 50.].contains(&p.0) && [10., 40.].contains(&p.1)));
+    }
     #[test]
     fn cached_meshes_retain_buffers_and_recycle_evicted_storage() {
         let mut geometry = Geometry::new();

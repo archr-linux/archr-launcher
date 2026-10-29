@@ -563,3 +563,25 @@ fn every_key_the_default_theme_uses_is_known() {
         );
     }
 }
+
+#[test]
+fn style_keys_inherit_and_reject_bad_values_one_by_one() {
+    let builtin = Theme::builtin();
+    assert_eq!(
+        (builtin.corners, builtin.border_width, builtin.shadow),
+        (1.0, 1.0, archr_ui::ShadowStyle::Soft)
+    );
+    assert!(!builtin.pixel_art && !builtin.steps);
+    let pixel = load(
+        "corners = 0\nborder_width = 3\nshadow = 'HARD'\nart_scaling = 'pixel'\neasing = 'steps'",
+    );
+    assert_eq!(
+        (pixel.corners, pixel.border_width, pixel.shadow),
+        (0.0, 3.0, archr_ui::ShadowStyle::Hard)
+    );
+    assert!(pixel.pixel_art && pixel.steps);
+    let mut bad = load("corners = 1.5\nborder_width = 0\nshadow = 'blur'\nart_scaling = true\neasing = 'bounce'\nmargin = 0.05");
+    assert_eq!(bad.margin, 0.05, "valid neighbours still apply");
+    bad.margin = builtin.margin;
+    assert_eq!(bad, builtin);
+}

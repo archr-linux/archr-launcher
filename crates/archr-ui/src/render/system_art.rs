@@ -139,6 +139,7 @@ pub(super) fn wrap(
 pub(super) struct SystemArt<'a> {
     covers: CoverCache<'a>,
     dirs: Vec<PathBuf>,
+    pixel: bool,
     wanted: Vec<Vec<PathBuf>>,
 }
 
@@ -147,10 +148,14 @@ impl<'a> SystemArt<'a> {
         creator: &'a TextureCreator<WindowContext>,
         cache: PathBuf,
         dirs: Vec<PathBuf>,
-        (width, height): (u32, u32),
+        size: (u32, u32),
+        pixel: bool,
     ) -> Self {
+        // Pixel thumbnails live apart from the smooth ones of the same files.
+        let cache = if pixel { cache.join("pixel") } else { cache };
         Self {
-            covers: CoverCache::new(creator, cache, width, height),
+            covers: CoverCache::scaled(creator, cache, size, pixel),
+            pixel,
             dirs,
             wanted: Vec::new(),
         }
@@ -218,7 +223,12 @@ impl Ui<'_, '_> {
         .flatten()
         .collect();
         dirs.dedup();
-        if self.art.as_ref().is_some_and(|art| art.dirs == dirs) {
+        let pixel = self.pixel_art;
+        if self
+            .art
+            .as_ref()
+            .is_some_and(|art| art.dirs == dirs && art.pixel == pixel)
+        {
             return;
         }
         let size = (self.px(IMAGE_BOX.0) as u32, self.px(IMAGE_BOX.1) as u32);
@@ -227,6 +237,7 @@ impl Ui<'_, '_> {
             base.join("storage/.cache/archr-launcher/thumbs"),
             dirs,
             size,
+            pixel,
         ));
     }
 
@@ -483,7 +494,11 @@ impl Ui<'_, '_> {
             b: 0,
             a: (u16::from(a) * u16::from(alpha) / 255) as u8,
         };
-        for (span, thick, shade) in [(0.9, 14., 26), (0.72, 10., 30), (0.5, 6., 36)] {
+        let soft = self.shadow_style == crate::theme::ShadowStyle::Soft;
+        for (span, thick, shade) in [(0.9, 14., 26), (0.72, 10., 30), (0.5, 6., 36)]
+            .into_iter()
+            .filter(|_| soft)
+        {
             let sw = (w as f32 * span) as u32;
             let sh = self.frame.px(thick) as u32;
             let shadow = Rect::new(
@@ -814,6 +829,7 @@ mod tests {
             root.path().join("cache"),
             vec![user.clone(), theme.clone()],
             (2, 2),
+            false,
         );
         art.want(&["sfc", "@favorites"]);
         // Files appear after want(): only the worker may resolve them.

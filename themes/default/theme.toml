@@ -41,6 +41,15 @@ game_selected_height = 0.0875 # 42px games
 list_width = 0.590625 # 378px, plus 16px gap to the cover
 cover = { x = 0.640625, y = 0.1125, w = 0.328125, h = 0.583333333 }
 system_screen = "list"
+# Style: corner radii times corners (0 = square), panel border thickness in
+# reference pixels (1-8), shadow under panels ("soft", "hard" or "none"),
+# console pictures scaled "smooth" or "pixel" (no smoothing) and motion
+# "smooth" (ease-out) or "steps" (in four jumps).
+corners = 1.0
+border_width = 1
+shadow = "soft"
+art_scaling = "smooth"
+easing = "smooth"
 # Game details (Jogo-detalhes): left column 24px+250px, right column 292px+324px.
 details_shot = { x = 0.0375, y = 0.104166667, w = 0.390625, h = 0.3125 } # 150px tall
 details_info = { x = 0.0375, y = 0.4375, w = 0.390625, h = 0.445833333 }

@@ -11,7 +11,7 @@ use crate::{
     state::{App, DataSource, QuickItem, Screen},
     status::{Battery, Status},
     text::{color, Align, Face, Style, TextCache},
-    theme::{Rect01, Rgba, Theme},
+    theme::{Rect01, Rgba, ShadowStyle, Theme},
     HintButton,
 };
 pub use details::Art;
@@ -328,6 +328,11 @@ pub struct Ui<'font, 'texture> {
     /// The letter on the control of the A, B, X and Y actions, for hints.
     pub face_letters: [char; 4],
     motion: Motion,
+    /// The theme's shadow under panels and its console picture scaling.
+    shadow_style: ShadowStyle,
+    pixel_art: bool,
+    /// The list cursor's blink phase as last drawn; None when nothing blinks.
+    blink: Option<bool>,
     effects: effects::Effects<'texture>,
     has_presented: bool,
     frame: Frame,
@@ -431,6 +436,9 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             text_scale: 1.,
             face_letters: ['A', 'B', 'X', 'Y'],
             motion: Motion::On,
+            shadow_style: ShadowStyle::Soft,
+            pixel_art: false,
+            blink: None,
             effects: effects::Effects::default(),
             has_presented: false,
             frame: Frame::new(width, height),
@@ -539,7 +547,10 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         let art = self.art.as_mut().is_some_and(SystemArt::tick);
         let store = self.store_tick();
         let status = self.status.as_mut().is_some_and(|s| s.poll(Instant::now()));
-        created || art || store || status
+        let blink = self
+            .blink
+            .is_some_and(|on| on != self.blink_on(Instant::now()));
+        created || art || store || status || blink
     }
     /// Loads what the theme store page asked for, sized for its largest box.
     fn store_tick(&mut self) -> bool {
@@ -564,6 +575,12 @@ impl<'font, 'texture> Ui<'font, 'texture> {
     }
     fn px(&self, value: f32) -> i32 {
         self.frame.px(value)
+    }
+    /// Whether a blinking cursor shows at `now`: half a second on, half off;
+    /// steady when animations are off.
+    fn blink_on(&self, now: Instant) -> bool {
+        self.motion == Motion::Off
+            || (now.saturating_duration_since(self.born).as_millis() / 500).is_multiple_of(2)
     }
     /// The layout of `theme`'s active view, resolved once per theme change.
     fn view(&mut self, theme: &Theme) -> View {
@@ -637,8 +654,31 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 startup_phase!(self.startup, "shadow texture");
             }
         }
-        if let Some(shadow) = &self.shadow {
-            shadow.draw(&mut self.canvas, rect, self.frame.scale, radius)?;
+        match (self.shadow_style, &self.shadow) {
+            (ShadowStyle::Soft, Some(shadow)) => {
+                shadow.draw(&mut self.canvas, rect, self.frame.scale, radius)?
+            }
+            (ShadowStyle::Hard, _) => {
+                let offset = self.px(4.);
+                let block = Rect::new(
+                    rect.x() + offset,
+                    rect.y() + offset,
+                    rect.width(),
+                    rect.height(),
+                );
+                self.rounded(
+                    block,
+                    radius,
+                    Rgba {
+                        r: 0,
+                        g: 0,
+                        b: 0,
+                        a: 150,
+                    },
+                    None,
+                )?;
+            }
+            _ => {}
         }
         self.rounded(rect, radius, fill, Some(border))
     }
@@ -682,6 +722,10 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         self.canvas.set_draw_color(color(theme.background));
         self.canvas.clear();
         self.store_wanted.clear();
+        self.geometry
+            .style(theme.corners, self.px(theme.border_width).max(1) as u32);
+        crate::motion::set_steps(theme.steps);
+        (self.shadow_style, self.pixel_art, self.blink) = (theme.shadow, theme.pixel_art, None);
         if let Some(lobby) = self.lobby.take() {
             let drawn = self.lobby_page(&lobby, theme);
             self.lobby = Some(lobby);
@@ -1128,6 +1172,16 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 }
                 system_title(name, data, &self.catalog)
             };
+            if selected && !lifted && !l.cursor.is_empty() {
+                let w = self.measure(&l.cursor, face, size)?;
+                let on = self.blink_on(now);
+                self.blink = Some(on);
+                if on {
+                    let ink = selection(accent_ink, theme.highlight_bg, theme.highlight_text);
+                    self.label(&l.cursor, (face, size, ink), Rect::new(x, y, w, rh))?;
+                }
+                x += w as i32 + self.px(6.);
+            }
             let width = (right - x).max(1) as u32;
             let (name, size) = if is_games {
                 (name.as_str(), size)

@@ -97,6 +97,28 @@ cover = { x = 0.640625, y = 0.1125, w = 0.328125, h = 0.583333333 }
 
 Essas medidas montam a visualização clássica, `lista`.
 
+## Estilo
+
+Cinco chaves no topo do `theme.toml` mudam o acabamento de todas as telas,
+inclusive as Configurações. Cada uma herda do padrão sozinha; valor inválido
+volta ao padrão com aviso no log.
+
+| chave | valores | padrão | efeito |
+|---|---|---|---|
+| `corners` | 0 a 1 | `1.0` | multiplica todo raio de canto; `0` deixa tudo reto |
+| `border_width` | 1 a 8 | `1` | espessura das bordas, em px de referência (480 px de altura) |
+| `shadow` | `"soft"`, `"hard"`, `"none"` | `"soft"` | sombra dos painéis: esfumada, bloco preto deslocado 4 px, ou nenhuma (`"soft"` também põe a sombra de contato sob a imagem do console) |
+| `art_scaling` | `"smooth"`, `"pixel"` | `"smooth"` | `"pixel"` amplia as imagens de console em múltiplos inteiros e sem suavizar (pixel art nítida); capas de jogos não mudam |
+| `easing` | `"smooth"`, `"steps"` | `"smooth"` | `"steps"` troca a desaceleração por quatro saltos iguais, o primeiro na hora (movimento "8 bits") |
+
+```toml
+corners = 0
+border_width = 3
+shadow = "hard"
+art_scaling = "pixel"
+easing = "steps"
+```
+
 ## Visualizações
 
 Uma visualização posiciona os elementos das telas de sistemas (`systems`) e de
@@ -122,7 +144,7 @@ Elementos de cada tela (`[view.<id>.systems]` ou `[view.<id>.games]`):
 | `status` | pílula de relógio/bateria | `true`/`false` |
 | `divider` | linha acima do rodapé | `true`/`false` |
 | `summary` | resumo da biblioteca no rodapé (sistemas) | `true`/`false` |
-| `list` | a lista | `x y w h`, `row`, `selected` (altura da linha escolhida), `gap`, `font`, `selected_font`, `radius`, `mark`, `scroll` |
+| `list` | a lista | `x y w h`, `row`, `selected` (altura da linha escolhida), `gap`, `font`, `selected_font`, `radius`, `mark`, `scroll`, `cursor` |
 | `panel` | cartão em relevo (painel do sistema, moldura da capa) | `x y w h`, `radius` |
 | `art` | imagem do console ou capa do jogo | `x y w h`, `fit`, `radius` |
 | `backdrop` | a capa ao fundo da tela de jogos | `opacity`, `solid` (fração da largura em fundo puro), `edge` (opacidade do fundo na borda direita) |
@@ -140,6 +162,10 @@ Valores de `list`:
   ↑/↓ andam uma linha e ←/→ uma página, do tamanho que a lista mostra
   (`h` dividido por `row + gap`).
 - `scroll`: `"edge"` (rola ao chegar na borda) ou `"center"` (mantém a escolha no meio).
+- `cursor`: texto curto (até 4 caracteres, na fonte da lista) desenhado antes
+  do item escolhido, piscando meio segundo aceso e meio apagado, por exemplo
+  `cursor = "▶"` (a fonte precisa ter o caractere). Com Animações desligadas
+  fica aceso. Vazio (o padrão) não desenha nada. Não vale para blocos (`tile`).
 
 Todas as linhas não escolhidas usam uma cor só: `text_secondary` (coleções em
 `muted`). Mover a escolha nunca muda a cor das outras linhas.
@@ -225,6 +251,7 @@ Aparência › Animações (`launcher.animations`): **Ligadas** (`on`), **Reduzi
 (`off`: tudo instantâneo). Os valores antigos `1` e `0` valem como Ligadas e
 Desligadas. Os tempos são fixos: seleção 180 ms, sistemas→jogos 220 ms, troca de
 capa 200 ms, menus 160 ms, avisos 200 ms, interruptores 150 ms, abertura 300 ms.
+O tema escolhe só a curva (`easing`, ver [Estilo](#estilo)).
 Qualquer botão encerra a animação em curso; a entrada nunca espera.
 
 ## Sons

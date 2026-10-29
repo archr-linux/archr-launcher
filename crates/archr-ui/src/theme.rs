@@ -29,6 +29,14 @@ pub struct Rect01 {
     pub h: f32,
 }
 
+/// What a raised panel casts: a blurred shadow, a solid offset block, or nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ShadowStyle {
+    Soft,
+    Hard,
+    None,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SystemScreen {
     List,
@@ -84,6 +92,15 @@ pub struct Theme {
     /// Achievements screen: progress bar and counts, and the list.
     pub achievements_progress: Rect01,
     pub achievements_list: Rect01,
+    /// Style (docs/temas.md, Estilo): every corner radius times `corners`
+    /// (0 = square), panel borders `border_width` reference pixels thick,
+    /// the shadow under panels, console pictures scaled without smoothing
+    /// (`art_scaling = "pixel"`) and motion in steps (`easing = "steps"`).
+    pub corners: f32,
+    pub border_width: f32,
+    pub shadow: ShadowStyle,
+    pub pixel_art: bool,
+    pub steps: bool,
     /// Shown in Appearance; the folder name when the theme gives none.
     pub name: Names,
     /// Id of the view the screens are drawn with (an Appearance choice).
@@ -145,7 +162,10 @@ impl Theme {
         // Only the embedded TOML must be complete and valid.
         macro_rules! token {
             ($name:ident, $parse:ident) => {
-                parsed(table, stringify!($name), $parse)
+                token!($name = stringify!($name), $parse)
+            };
+            ($name:ident = $key:expr, $parse:ident) => {
+                parsed(table, $key, $parse)
                     .or_else(|| defaults.map(|theme| theme.$name))
                     .expect(concat!("invalid builtin theme field: ", stringify!($name)))
             };
@@ -203,6 +223,11 @@ impl Theme {
             details_actions: token!(details_actions, rectangle),
             achievements_progress: token!(achievements_progress, rectangle),
             achievements_list: token!(achievements_list, rectangle),
+            corners: token!(corners, unit),
+            border_width: token!(border_width, border_width),
+            shadow: token!(shadow, shadow),
+            pixel_art: token!(pixel_art = "art_scaling", art_scaling),
+            steps: token!(steps = "easing", easing),
             font: font_regular,
             font_semibold,
             font_mono,
@@ -286,6 +311,11 @@ pub const KNOWN_KEYS: &[&str] = &[
     "details_actions",
     "achievements_progress",
     "achievements_list",
+    "corners",
+    "border_width",
+    "shadow",
+    "art_scaling",
+    "easing",
     // Store metadata (docs/temas.md, Publicar na Loja de temas).
     "description",
     "author",
@@ -398,6 +428,35 @@ fn color(value: String) -> Option<Rgba> {
 }
 fn fraction(value: f32) -> Option<f32> {
     (value.is_finite() && value > 0.0 && value <= 1.0).then_some(value)
+}
+fn unit(value: f32) -> Option<f32> {
+    (0.0..=1.0).contains(&value).then_some(value)
+}
+fn border_width(value: f32) -> Option<f32> {
+    (1.0..=8.0).contains(&value).then_some(value)
+}
+/// `value` among `options`, ignoring case.
+fn choice<T: Copy>(value: &str, options: &[(&str, T)]) -> Option<T> {
+    options
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case(value))
+        .map(|(_, choice)| *choice)
+}
+fn shadow(value: String) -> Option<ShadowStyle> {
+    choice(
+        &value,
+        &[
+            ("soft", ShadowStyle::Soft),
+            ("hard", ShadowStyle::Hard),
+            ("none", ShadowStyle::None),
+        ],
+    )
+}
+fn art_scaling(value: String) -> Option<bool> {
+    choice(&value, &[("smooth", false), ("pixel", true)])
+}
+fn easing(value: String) -> Option<bool> {
+    choice(&value, &[("smooth", false), ("steps", true)])
 }
 fn rectangle(rect: Rect01) -> Option<Rect01> {
     ([rect.x, rect.y, rect.w, rect.h]
