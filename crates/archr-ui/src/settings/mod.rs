@@ -942,13 +942,16 @@ impl Settings {
             | Id::CheevosScreenshot
             | Id::CheevosSound
             | Id::CheevosLogout => self.cheevos.verifying,
+            // Choices are kept for when the service is reachable; only what
+            // talks to ScreenScraper needs the build's developer key.
             Id::ScraperSource
-            | Id::ScraperAccount
             | Id::ScraperSystems
             | Id::ScraperMedia
             | Id::MediaKind(_)
-            | Id::ScraperMissing
-            | Id::ScraperStart => {
+            | Id::ScraperMissing => {
+                self.scrape.verifying || self.scrape.starting || self.scrape.running
+            }
+            Id::ScraperAccount | Id::ScraperStart => {
                 !self.scrape.available
                     || self.scrape.verifying
                     || self.scrape.starting
@@ -1381,7 +1384,9 @@ mod tests {
     fn disabled_rows_offer_only_back() {
         let mut state = Settings::default();
         state.open(Page::Scraper);
-        assert_eq!(state.hints().len(), 1);
+        state.cursor = 1;
+        assert_eq!(state.visible_rows()[1].id, Id::ScraperAccount);
+        assert_eq!(state.hints().len(), 1, "no developer key: no sign-in");
         state.scrape.available = true;
         assert_eq!(state.hints().len(), 2);
         state.open(Page::Netplay);
