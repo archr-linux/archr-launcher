@@ -738,3 +738,4 @@
 "store.invalid" = "O tema não segue as regras da loja e não foi instalado."
 "store.too_big" = "O tema passa do tamanho que a loja aceita."
 "store.name_taken" = "Já existe uma pasta de tema com esse nome que não veio da loja."
+"store.download_failed" = "O download não terminou. Confira a rede; a loja aceita temas de até 25 MB."

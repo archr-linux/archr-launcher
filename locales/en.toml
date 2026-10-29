@@ -738,3 +738,4 @@
 "store.invalid" = "This theme does not follow the store rules and was not installed."
 "store.too_big" = "This theme is larger than the store allows."
 "store.name_taken" = "A theme folder with this name, not from the store, already exists."
+"store.download_failed" = "The download did not finish. Check the network; the store takes themes up to 25 MB."
