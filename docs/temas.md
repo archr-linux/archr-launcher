@@ -22,7 +22,8 @@ Pasta que o tema não traz vem do tema padrão instalado
 (`/usr/share/archr-launcher/themes/default/`): sem `fonts/` e sem chaves de
 fonte, ele usa as fontes do padrão; sem a imagem de um console, a do padrão;
 sem um ícone, o do padrão; sem um som, o do padrão.
-Um exemplo completo e pequeno está em `themes/praia/`.
+Um exemplo completo e pequeno está em `themes/praia/` (aparece como "Exemplo";
+o tema Praia completo é publicado à parte, na Loja de temas).
 
 ## Nome
 
