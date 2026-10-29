@@ -484,6 +484,12 @@ impl Ui<'_, '_> {
         let (box_w, box_h) = (area.width() as i32, area.height() as i32);
         let size = texture.query();
         let scale = (box_w as f32 / size.width as f32).min(box_h as f32 / size.height as f32);
+        // Pixel art grows by whole multiples only.
+        let scale = if self.pixel_art && scale >= 1. {
+            scale.floor()
+        } else {
+            scale
+        };
         let w = (size.width as f32 * scale).round().max(1.) as u32;
         let h = (size.height as f32 * scale).round().max(1.) as u32;
         let dst = Rect::new(

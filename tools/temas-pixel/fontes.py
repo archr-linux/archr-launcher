@@ -81,10 +81,26 @@ def add_triangle(font):
         font.setGlyphOrder(font.getGlyphOrder() + ["uni25B6"])
 
 
+FIVE = [(150, -11), (150, 75), (61, 75), (61, 200), (179, 200), (179, 113), (417, 113),
+        (417, 337), (61, 337), (61, 636), (536, 636), (536, 512), (179, 512), (179, 449),
+        (446, 449), (446, 374), (536, 374), (536, 75), (446, 75), (446, -11)]
+
+
+def square_five(font):
+    """5 on the same grid as S and 2: flat top bar, straight stem, bowl."""
+    pen = TTGlyphPen(None)
+    pen.moveTo(FIVE[0])
+    for point in FIVE[1:]:
+        pen.lineTo(point)
+    pen.closePath()
+    font["glyf"]["five"] = pen.glyph()
+
+
 def pixelify(variable, weight, style, out):
     font = instantiateVariableFont(TTFont(variable), {"wght": weight}, updateFontNames=False)
     add_pe(font)
     add_triangle(font)
+    square_five(font)
     for table in font["cmap"].tables:
         if table.isUnicode():
             table.cmap[0x041E] = "O"
