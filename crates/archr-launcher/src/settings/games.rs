@@ -53,6 +53,9 @@ impl Backend {
                         saved.insert(id, value);
                     }
                 }
+                if let Some(value) = cfg.get_local(name, None, Id::MangohudGame.key()) {
+                    saved.insert(Id::MangohudGame, value);
+                }
                 for (id, _) in OPTIONS {
                     if let Some(value) = cfg.get_setting(id.key(), Some(name), None) {
                         saved.insert(id, value);
@@ -107,7 +110,9 @@ impl Backend {
                 }
                 vec![(key(id), value)]
             }
-            _ if OPTIONS.iter().any(|(o, _)| *o == id) && id.choices().contains(&value) => {
+            _ if (id == Id::MangohudGame || OPTIONS.iter().any(|(o, _)| *o == id))
+                && id.choices().contains(&value) =>
+            {
                 vec![(key(id), value)]
             }
             _ => return Err("Invalid option".into()),
@@ -234,5 +239,25 @@ mod tests {
             );
         }
         assert_eq!(saved(&backend), "snes.emulator=standalone\n");
+    }
+    #[test]
+    fn mangohud_override_uses_the_key_runemu_reads() {
+        let (_root, backend) = fixture("snes.archr.mangohud.enabled=0\n", None);
+        assert_eq!(games(&backend)[0].saved[&Id::MangohudGame], "0");
+        assert_eq!(
+            backend.apply_game("snes", Id::MangohudGame, "1"),
+            Ok("1".into())
+        );
+        assert_eq!(
+            backend.apply_game("snes", Id::MangohudGame, ""),
+            Ok("".into())
+        );
+        assert!(backend.apply_game("snes", Id::MangohudGame, "2").is_err());
+        assert_eq!(saved(&backend), "snes.archr.mangohud.enabled=\n");
+        let cfg = backend.cfg().unwrap();
+        assert_eq!(
+            cfg.get_setting(Id::MangohudGame.key(), Some("snes"), None),
+            None
+        );
     }
 }

@@ -52,13 +52,14 @@ pub struct Games {
 }
 impl Games {
     /// Rows bound to the shown system, in page order.
-    pub const ROWS: [Id; 7] = [
+    pub const ROWS: [Id; 8] = [
         Id::Emulator,
         Id::Core,
         Id::Ratio,
         Id::Filter,
         Id::Autosave,
         Id::StateSlot,
+        Id::MangohudGame,
         Id::GameSystem,
     ];
     pub fn current(&self) -> Option<&GameSystem> {
@@ -106,12 +107,14 @@ impl Games {
         let Some(system) = self.current() else {
             return false;
         };
-        matches!(id, Id::Emulator | Id::Core | Id::GameSystem)
-            || system.cores.iter().any(|pair| {
-                pair.emulator == state.value(Id::Emulator)
-                    && pair.core == state.value(Id::Core)
-                    && pair.options.contains(&id)
-            })
+        matches!(
+            id,
+            Id::Emulator | Id::Core | Id::MangohudGame | Id::GameSystem
+        ) || system.cores.iter().any(|pair| {
+            pair.emulator == state.value(Id::Emulator)
+                && pair.core == state.value(Id::Core)
+                && pair.options.contains(&id)
+        })
     }
 }
 impl Settings {
@@ -145,7 +148,13 @@ impl Settings {
             .map(|pair| pair.core.clone())
             .collect();
         let mut values = vec![(Id::Emulator, emulator), (Id::Core, core)];
-        for id in [Id::Ratio, Id::Filter, Id::Autosave, Id::StateSlot] {
+        for id in [
+            Id::Ratio,
+            Id::Filter,
+            Id::Autosave,
+            Id::StateSlot,
+            Id::MangohudGame,
+        ] {
             values.push((id, saved(id).unwrap_or_else(|| id.default_value().into())));
         }
         self.values.extend(values);
@@ -289,6 +298,29 @@ mod tests {
     fn without_a_catalog_only_the_links_remain() {
         let mut state = Settings::default();
         state.open(Page::Games);
-        assert_eq!(ids(&state), [Id::NetplayLink, Id::ScraperLink]);
+        assert_eq!(
+            ids(&state),
+            [Id::NetplayLink, Id::ScraperLink, Id::MangohudLink]
+        );
+    }
+    #[test]
+    fn games_page_cycles_the_system_override() {
+        let mut state = state();
+        state.mangohud_supported = true;
+        state.cursor = state
+            .visible_rows()
+            .iter()
+            .position(|r| r.id == Id::MangohudGame)
+            .unwrap();
+        assert_eq!(state.value(Id::MangohudGame), "");
+        assert_eq!(
+            state.handle(Button::R),
+            Effect::Set(Id::MangohudGame, "1".into())
+        );
+        state.complete(Id::MangohudGame, Ok("1".into()));
+        assert_eq!(
+            state.handle(Button::R),
+            Effect::Set(Id::MangohudGame, "0".into())
+        );
     }
 }

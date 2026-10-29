@@ -2,6 +2,7 @@
 mod bluetooth;
 mod games;
 mod info;
+mod mangohud;
 mod pages;
 mod runtime;
 mod storage;
@@ -119,6 +120,7 @@ impl Backend {
         }
         self.load_pages(&cfg, &mut state);
         self.load_storage(&cfg, &mut state);
+        self.load_mangohud(&cfg, &mut state);
         if let Ok(output) = self.command("pactl", &["get-sink-volume", "@DEFAULT_SINK@"]) {
             if let Some(volume) = output
                 .split_whitespace()
@@ -218,7 +220,10 @@ impl Backend {
         Ok(state)
     }
     pub fn apply(&self, id: Id, value: &str) -> Result<String, String> {
-        if let Some(result) = self.apply_page(id, value) {
+        if let Some(result) = self
+            .apply_page(id, value)
+            .or_else(|| self.apply_mangohud(id, value))
+        {
             return result;
         }
         let valid = match id {
@@ -567,6 +572,7 @@ impl Worker {
                     state.info = loaded.info;
                     state.error = loaded.error;
                     state.scrape.available = loaded.scrape.available;
+                    state.mangohud_supported = loaded.mangohud_supported;
                     state.games.replace(loaded.games.systems);
                     state.sync_games();
                     refresh_storage(state, loaded.storage);

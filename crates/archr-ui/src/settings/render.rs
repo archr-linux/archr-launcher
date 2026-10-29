@@ -9,6 +9,8 @@ mod appearance;
 mod custom;
 #[path = "render/information.rs"]
 mod information;
+#[path = "render/mangohud.rs"]
+mod mangohud;
 #[path = "render/network.rs"]
 mod network;
 const VIEW_TOP: f32 = 50.;
@@ -52,6 +54,7 @@ fn placements(page: Page, rows: &[Row]) -> Vec<Placement> {
                 Page::Netplay | Page::Games => 34.,
                 Page::Services => 38.,
                 Page::Storage => 40.,
+                Page::Mangohud if row.subtitle.is_some() => 44.,
                 _ if row.subtitle.is_some() => 46.,
                 _ => 40.,
             };
@@ -324,7 +327,7 @@ impl View<'_, '_, '_> {
             }
             _ => {
                 trail.push(self.tr("settings.title"));
-                trail.extend(page.parent().map(|key| self.tr(key)));
+                trail.extend(page.parent().iter().map(|key| self.tr(key)));
                 self.tr(page.title())
             }
         };
@@ -419,6 +422,8 @@ impl View<'_, '_, '_> {
             }
             Page::Appearance => self.appearance_page(state, &rows)?,
             Page::AccentColor => self.custom_page(state)?,
+            Page::Mangohud => self.mangohud_page(state, &rows)?,
+            Page::MangohudItems => self.mangohud_items(state)?,
             Page::Wifi => self.wifi(state)?,
             Page::Bluetooth => self.bluetooth(state)?,
             Page::Keyboard => self.keyboard(state)?,
@@ -706,16 +711,27 @@ impl View<'_, '_, '_> {
         let face = selection(selected, Face::Regular, Face::Semibold);
         let label = self.tr(&state.label(row));
         let subtitle = state.subtitle(row).map(|text| self.tr(&text));
-        let full = (right - 46.) * 0.48;
+        // A switch needs little room: its title and subtitle take the rest.
+        let full = if row.kind == Kind::Toggle {
+            right - 98.
+        } else {
+            (right - 46.) * 0.48
+        };
         let expand = subtitle.is_none()
-            && row.kind == Kind::Value
+            && (row.kind == Kind::Value || row.id == Id::MangohudItems)
             && self
                 .ui
                 .measure(&state.display_value(row.id, &self.ui.catalog), face, 14.)?
                 as f32
                 > right - full - 66.;
         let label_width = if expand {
-            (self.ui.measure(&label, face, 15.)? as f32).clamp(120., full)
+            // The items summary is the long value of a short title.
+            let least = if row.id == Id::MangohudItems {
+                60.
+            } else {
+                120.
+            };
+            (self.ui.measure(&label, face, 15.)? as f32).clamp(least, full)
         } else {
             full
         };
