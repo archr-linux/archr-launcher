@@ -601,7 +601,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             }
         }
         if let Some(shadow) = &self.shadow {
-            shadow.draw(&mut self.canvas, rect, self.frame.scale)?;
+            shadow.draw(&mut self.canvas, rect, self.frame.scale, radius)?;
         }
         self.rounded(rect, radius, fill, Some(border))
     }

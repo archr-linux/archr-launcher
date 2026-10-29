@@ -340,7 +340,10 @@ impl Ui<'_, '_> {
             .collect();
         // Nearest last, so the selection's shadow lies over its neighbours.
         tiles.sort_by_key(|tile| std::cmp::Reverse(tile.0.abs_diff(cursor)));
-        self.canvas.set_clip_rect(area);
+        // Kept within the row's width only: the selection's shadow spills
+        // above and below it.
+        self.canvas
+            .set_clip_rect(Rect::new(area.x(), 0, area.width(), self.frame.height));
         for (i, x, side) in tiles {
             let focus = ((side - small) / (big - small).max(1.)).clamp(0., 1.);
             let rect = Rect::new(
