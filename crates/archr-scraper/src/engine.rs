@@ -826,7 +826,7 @@ fn needed(options: &Options, system: &SystemDef, game: &Game) -> Vec<Media> {
 /// read from the header first: decoder scratch (progressive JPEG) ignores the
 /// allocation limit. Decodes are serialized so worker threads never stack up
 /// big buffers on a small device.
-fn image_ext(bytes: &[u8]) -> Option<&'static str> {
+pub fn image_ext(bytes: &[u8]) -> Option<&'static str> {
     use image::{ImageFormat, ImageReader, Limits};
     static ONE_DECODE: Mutex<()> = Mutex::new(());
     // Every reader gets the small limits: even reading the header can inflate
