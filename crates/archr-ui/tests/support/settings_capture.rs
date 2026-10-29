@@ -525,8 +525,21 @@ fn capture_views() {
                 std::thread::sleep(Duration::from_millis(20));
             }
             save(&mut ui, format!("{folder}-{view}-systems-{language}.png"));
+            // Frames in the middle of each motion, to prove they exist.
+            let midway = |ui: &mut Ui, app: &crate::state::App, art, wait: u64, name: &str| {
+                ui.draw(app, &shelf, &theme, art).unwrap();
+                std::thread::sleep(Duration::from_millis(wait));
+                ui.draw(app, &shelf, &theme, art).unwrap();
+                assert!(ui.animating(), "{name} is still moving");
+                save(ui, format!("{folder}-{view}-{name}-{language}.png"));
+            };
+            ui.start_opening();
+            midway(&mut ui, &app, None, 110, "opening-mid");
+            ui.snap_animations();
+            app.cursor = 1;
             app.handle(crate::state::Button::A, &shelf);
             app.cursor = 3;
+            midway(&mut ui, &app, Some(&cover), 80, "slide-mid");
             for (name, art) in [("games", Some(&cover)), ("games-nocover", None)] {
                 for _ in 0..2 {
                     ui.snap_animations();
@@ -534,6 +547,18 @@ fn capture_views() {
                 }
                 save(&mut ui, format!("{folder}-{view}-{name}-{language}.png"));
             }
+            ui.snap_animations();
+            ui.draw(&app, &shelf, &theme, Some(&cover)).unwrap();
+            app.cursor = 4;
+            midway(&mut ui, &app, None, 90, "crossfade-mid");
+            ui.snap_animations();
+            app.cursor = 3;
+            ui.draw(&app, &shelf, &theme, Some(&cover)).unwrap();
+            app.handle(crate::state::Button::Y, &shelf);
+            midway(&mut ui, &app, Some(&cover), 60, "dialog-mid");
+            ui.snap_animations();
+            ui.draw(&app, &shelf, &theme, Some(&cover)).unwrap();
+            save(&mut ui, format!("{folder}-{view}-dialog-{language}.png"));
             // Appearance with this theme installed and active.
             let mut look = ready();
             look.base_theme = theme.clone();

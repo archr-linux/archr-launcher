@@ -47,7 +47,7 @@ pub fn saved(cfg: Option<&SystemCfg>) -> Appearance {
         background: get(Id::Background),
         font: get(Id::Font),
         text_size: get(Id::TextSize),
-        animations: get(Id::Animations) == "1",
+        animations: archr_ui::motion::Motion::parse(&get(Id::Animations)),
         view: get(Id::View),
     }
 }

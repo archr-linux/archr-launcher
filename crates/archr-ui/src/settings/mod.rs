@@ -207,7 +207,7 @@ impl Id {
             Self::Background => ("launcher.background", ""),
             Self::Font => ("launcher.font", ""),
             Self::TextSize => ("launcher.text_size", "normal"),
-            Self::Animations => ("launcher.animations", "1"),
+            Self::Animations => ("launcher.animations", "on"),
             // Read by the automount script at boot.
             Self::Automount => ("system.automount", "1"),
             Self::MergedStorage => ("system.merged.storage", "0"),
@@ -269,11 +269,14 @@ impl Id {
             Self::Background => &appearance::BACKGROUNDS,
             Self::Font => &appearance::FONTS,
             Self::TextSize => &appearance::TEXT_SIZES,
-            Self::Animations => &["1", "0"],
+            Self::Animations => &crate::motion::Motion::CODES,
             _ => &[],
         }
     }
     pub fn normalize(self, value: &str) -> String {
+        if self == Self::Animations {
+            return crate::motion::Motion::parse(value).code().into();
+        }
         if !matches!(self, Self::Volume | Self::Brightness) {
             return value.into();
         }
@@ -609,8 +612,11 @@ impl Settings {
             (Id::TextSize, "small") => "appearance.text_small",
             (Id::TextSize, "normal") => "appearance.text_normal",
             (Id::TextSize, "large") => "appearance.text_large",
-            (Id::Animations, "1") => "appearance.anim_on",
-            (Id::Animations, "0") => "appearance.anim_off",
+            (Id::Animations, v) => match crate::motion::Motion::parse(v) {
+                crate::motion::Motion::On => "appearance.anim_on",
+                crate::motion::Motion::Reduced => "appearance.anim_reduced",
+                crate::motion::Motion::Off => "appearance.anim_off",
+            },
             (Id::Restore | Id::Accent, _) => return String::new(),
             (Id::IndexNow, _) => "settings.soon",
             (Id::ScraperAccount, _) => "settings.sign_in",
@@ -1331,7 +1337,7 @@ mod appearance_tests {
             Appearance {
                 text_size: "normal".into(),
                 theme: "default".into(),
-                animations: true,
+                animations: crate::motion::Motion::On,
                 view: "lista".into(),
                 ..Appearance::default()
             }

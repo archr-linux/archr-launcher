@@ -126,7 +126,7 @@ impl Runtime {
                     (Id::Background, look.background),
                     (Id::Font, look.font),
                     (Id::TextSize, look.text_size),
-                    (Id::Animations, u8::from(look.animations).to_string()),
+                    (Id::Animations, look.animations.code().into()),
                 ]))
             }
             Effect::Storage(action) => self.send(Work::Storage(action)),

@@ -6,13 +6,7 @@ fn variable_heights_keep_selection_and_section_visible_and_snap_on_page_change()
     assert_eq!(scroll.offset(Page::System, 50., 90., 600., now), 0.);
     assert_eq!(scroll.offset(Page::System, 533., 579., 600., now), 0.);
     assert!(scroll.tween.active(now));
-    let settled = scroll.offset(
-        Page::System,
-        533.,
-        579.,
-        600.,
-        now + Duration::from_millis(100),
-    );
+    let settled = scroll.offset(Page::System, 533., 579., 600., now + crate::motion::SELECT);
     assert_eq!(settled, 151.);
     assert!(533. - settled >= VIEW_TOP && 579. - settled <= VIEW_BOTTOM);
     let section = Placement {

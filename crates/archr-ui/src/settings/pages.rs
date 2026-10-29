@@ -254,7 +254,7 @@ impl Settings {
             background: text(Id::Background),
             font: text(Id::Font),
             text_size: text(Id::TextSize),
-            animations: self.value(Id::Animations) == "1",
+            animations: crate::motion::Motion::parse(self.value(Id::Animations)),
             view: text(Id::View),
         }
     }

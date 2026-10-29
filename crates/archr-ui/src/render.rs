@@ -4,7 +4,7 @@ use crate::{
     i18n::I18n,
     icons::Glyph,
     layout::{Backdrop, Header, Layout, List, Mark, Scroll, View},
-    motion::Tween,
+    motion::{Motion, Tween, CROSSFADE, SELECT},
     primitives::{crop, gradient, Geometry, Shadow, WHOLE},
     startup::StartupTrace,
     startup_phase,
@@ -14,6 +14,8 @@ use crate::{
     theme::{Rect01, Rgba, Theme},
     HintButton,
 };
+mod effects;
+pub(crate) use effects::Pop;
 mod hub;
 mod keyboard;
 mod moonlight;
@@ -215,11 +217,11 @@ impl ListMotion {
     fn new() -> Self {
         Self {
             key: String::new(),
-            scroll: Tween::new(0., Duration::from_millis(90)),
-            pill: Tween::new(0., Duration::from_millis(90)),
+            scroll: Tween::new(0., SELECT),
+            pill: Tween::new(0., SELECT),
             held: None,
             swap_row: 0,
-            swap: Tween::new(0., Duration::from_millis(90)),
+            swap: Tween::new(0., SELECT),
         }
     }
 }
@@ -300,15 +302,18 @@ pub struct Ui<'font, 'texture> {
     settings_scroll: settings_render::Scroll,
     settings_banner: settings_render::Banner,
     menu_open: bool,
+    /// Each settings switch's last state and its knob's position.
+    switches: std::collections::BTreeMap<crate::settings::Id, (bool, Tween)>,
     cover_key: Option<PathBuf>,
     cover_visible: bool,
     cover_fade: Tween,
     /// The active view and the theme it was resolved from.
     view: Option<(Theme, View)>,
     animating: bool,
-    /// Look-and-feel choices: text-size multiplier and motion on/off.
+    /// Look-and-feel choices: text-size multiplier and how much things move.
     pub text_scale: f32,
-    pub animations: bool,
+    motion: Motion,
+    effects: effects::Effects<'texture>,
     has_presented: bool,
     frame: Frame,
     pub catalog: I18n,
@@ -390,18 +395,20 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             geometry: Geometry::new(),
             status: None,
             list: ListMotion::new(),
-            menu_pill: Tween::new(0., Duration::from_millis(90)),
+            menu_pill: Tween::new(0., SELECT),
             settings_scroll: settings_render::Scroll::default(),
             settings_banner: settings_render::Banner::default(),
             menu_open: false,
+            switches: std::collections::BTreeMap::new(),
             lobby: None,
             cover_key: None,
             cover_visible: false,
-            cover_fade: Tween::new(0., Duration::from_millis(120)),
+            cover_fade: Tween::new(0., CROSSFADE),
             view: None,
             animating: false,
             text_scale: 1.,
-            animations: true,
+            motion: Motion::On,
+            effects: effects::Effects::default(),
             has_presented: false,
             frame: Frame::new(width, height),
             catalog: I18n::default(),
@@ -474,7 +481,33 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         self.list.swap.snap();
         self.menu_pill.snap();
         self.settings_scroll.tween.snap();
+        self.settings_banner.fade.snap();
+        for (_, switch) in self.switches.values_mut() {
+            switch.snap();
+        }
         self.cover_fade.snap();
+        self.effects.snap();
+    }
+    pub fn motion(&self) -> Motion {
+        self.motion
+    }
+    /// Full motion, short fades only, or everything instant.
+    pub fn set_motion(&mut self, motion: Motion) {
+        self.motion = motion;
+        for tween in [
+            &mut self.list.scroll,
+            &mut self.list.pill,
+            &mut self.list.swap,
+            &mut self.menu_pill,
+            &mut self.settings_scroll.tween,
+        ] {
+            tween.set_duration(motion.travel(SELECT));
+        }
+        self.cover_fade.set_duration(motion.fade(CROSSFADE));
+        self.settings_banner
+            .fade
+            .set_duration(motion.fade(crate::motion::NOTICE));
+        self.switches.clear();
     }
     pub fn animating(&self) -> bool {
         self.animating
@@ -615,12 +648,35 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             self.animating = false;
         } else if let Some(settings) = settings {
             self.settings_page(settings, theme)?;
-            self.animating =
-                self.settings_scroll.tween.active(now) || self.settings_banner.busy(now);
+            self.animating = self.settings_scroll.tween.active(now)
+                || self.settings_banner.busy(now)
+                || self.switches.values().any(|(_, knob)| knob.active(now));
         } else {
             let (backdrop, cursor) = app.backdrop();
             let view = self.view(theme);
-            let layout = view.screen(matches!(backdrop, Screen::Games { .. }));
+            let games = matches!(backdrop, Screen::Games { .. });
+            let layout = view.screen(games);
+            let rows = if matches!(backdrop, Screen::Systems) {
+                app.rows(data)
+            } else {
+                Vec::new()
+            };
+            // The picture that crossfades when the selection changes.
+            let art = layout
+                .art
+                .filter(|_| layout.list.mark != Mark::Tile)
+                .and_then(|art| {
+                    let key = match backdrop {
+                        Screen::Games { system } => data
+                            .games(system)
+                            .get(cursor)
+                            .map(|g| g.path.display().to_string()),
+                        Screen::Systems => rows.get(cursor).cloned(),
+                        _ => None,
+                    };
+                    key.map(|key| (key, self.area(art.rect)))
+                });
+            self.begin_page(games, art, theme)?;
             if let (Screen::Games { .. }, Some(wash)) = (backdrop, layout.backdrop) {
                 self.backdrop(cover, wash, theme)?;
             }
@@ -628,11 +684,6 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             if matches!(app.screen, Screen::StartHub { .. }) {
                 self.hub(app, data, theme)?;
             } else {
-                let rows = if matches!(backdrop, Screen::Systems) {
-                    app.rows(data)
-                } else {
-                    Vec::new()
-                };
                 let lifted = app.moving().is_some();
                 self.list(backdrop, (&rows, lifted), cursor, data, theme, layout)?;
                 // Secondary visuals follow the redraw requested by the artwork worker.
@@ -653,6 +704,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                     self.footer(app, data, theme, layout)?;
                 }
             }
+            self.end_page(theme)?;
             if matches!(app.screen, Screen::QuickMenu { .. }) {
                 self.menu(app, data, theme)?;
             } else {
@@ -664,16 +716,15 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 || self.menu_pill.active(now)
                 || self.cover_fade.active(now);
         }
-        // Motion off: finish every glide, with one more frame to show the end.
-        if !self.animations && self.animating {
-            self.snap_animations();
-        }
-        if let Some(banner) = self.banner.clone() {
+        // The launch overlay is the last frame before a handoff: never mid-fade.
+        if let Some(message) = self.transition.clone() {
+            self.scrim(theme, 1.0)?;
+            self.notice_panel(&message, theme)?;
+        } else if let Some(banner) = self.banner.clone() {
             self.notice(&banner, theme)?;
         }
-        if let Some(message) = self.transition.clone() {
-            self.notice(&message, theme)?;
-        }
+        self.settle_entrances();
+        self.animating |= self.effects.active(now);
         // Explicit debug readback; normal rendering does no disk I/O.
         if let Some(path) = self.screenshot.take() {
             let rgba = self
@@ -1102,7 +1153,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         if self.cover_key != key {
             self.cover_key = key;
             self.cover_visible = false;
-            self.cover_fade = Tween::new(0., Duration::from_millis(120));
+            self.cover_fade = Tween::new(0., self.motion.fade(CROSSFADE));
         }
         match (layout.art, cover) {
             (Some(art), Some(cover)) => {
@@ -1164,6 +1215,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             }
             (None, _) => {}
         }
+        self.old_art()?;
         if let (Some(game), Some(meta)) = (game, layout.meta) {
             let rect = self.area(meta.rect);
             let size = meta.size * 480.;
@@ -1372,11 +1424,29 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         Ok(panel)
     }
     fn menu(&mut self, app: &App, data: &dyn DataSource, theme: &Theme) -> Result<(), String> {
-        let Frame {
-            width, height, now, ..
-        } = self.frame;
         // The mockup combines a dimmed backdrop and its base scrim.
-        self.scrim(theme, 1.2)?;
+        self.pop_in(effects::Pop::Menu, "menu", (theme, 1.2), |ui| {
+            ui.menu_panel(app, data, theme)
+        })?;
+        // Above the scrim and in place: they replace the footer's own hints.
+        let Frame { width, height, .. } = self.frame;
+        let footer = (theme.footer_height * height as f32).round().max(1.) as u32;
+        self.hints(
+            &[('A', "hint.choose"), ('B', "hint.close")],
+            theme,
+            width,
+            height as i32 - footer as i32,
+            footer,
+        )?;
+        Ok(())
+    }
+    fn menu_panel(
+        &mut self,
+        app: &App,
+        data: &dyn DataSource,
+        theme: &Theme,
+    ) -> Result<(), String> {
+        let Frame { height, now, .. } = self.frame;
         let items = app.quick_menu_items(data);
         let has_core = matches!(items.first(), Some(QuickItem::Core));
         let (base_h, base_items) = if has_core || items.first() == Some(&QuickItem::Settings) {
@@ -1497,18 +1567,14 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 Rect::new(x, y, label_width, item_height),
             )?;
         }
-        let footer = (theme.footer_height * height as f32).round().max(1.) as u32;
-        self.hints(
-            &[('A', "hint.choose"), ('B', "hint.close")],
-            theme,
-            width,
-            height as i32 - footer as i32,
-            footer,
-        )?;
         Ok(())
     }
     fn notice(&mut self, message: &str, theme: &Theme) -> Result<(), String> {
-        self.scrim(theme, 1.0)?;
+        self.pop_in(effects::Pop::Notice, message, (theme, 1.0), |ui| {
+            ui.notice_panel(message, theme)
+        })
+    }
+    fn notice_panel(&mut self, message: &str, theme: &Theme) -> Result<(), String> {
         let lines: Vec<_> = message.split('\n').take(3).collect();
         let panel = self.modal(theme, (380., 48., 64. + lines.len() as f32 * 24., 0))?;
         for (i, line) in lines.iter().enumerate() {

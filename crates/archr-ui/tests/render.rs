@@ -1,6 +1,7 @@
 mod common;
 use archr_index::{cache::SystemEntry, Game};
 use archr_ui::{
+    motion::Motion,
     render::{prepare_first_frame, Ui},
     startup::StartupTrace,
     state::{App, Button, Screen},
@@ -94,13 +95,15 @@ fn grafite_layout_motion_glyphs_and_untrusted_text_render_offscreen() {
     ui.snap_animations();
     app.cursor = 1;
     ui.draw(&app, &data, &theme, None).unwrap();
-    assert!(ui.animating(), "selection starts its 90ms slide");
+    assert!(ui.animating(), "selection starts its slide");
     ui.snap_animations();
     ui.draw(&app, &data, &theme, None).unwrap();
     assert!(
         !ui.animating(),
         "new input can finish the previous target immediately"
     );
+    // Still pictures from here: screens and menus arrive at once.
+    ui.set_motion(Motion::Off);
     app.cursor = 0;
     theme =
         Theme::load(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../themes/default"));
@@ -135,6 +138,7 @@ fn grafite_layout_motion_glyphs_and_untrusted_text_render_offscreen() {
         &[30, 136, 255],
         "quick-menu core row matches the approved y=134 layout"
     );
+    ui.set_motion(Motion::On);
     let scroll_data = Data {
         systems: data.systems.clone(),
         games: [(
@@ -417,4 +421,86 @@ fn theme_views_place_the_list_and_the_art() {
         "accent ring of the centre tile"
     );
     assert_ne!(pixel(40, 70), [0x1E, 0x88, 0xFF], "no list pill");
+}
+
+#[test]
+fn motion_levels_decide_what_moves() {
+    let _guard = SDL_LOCK.lock().unwrap();
+    std::env::set_var("SDL_VIDEODRIVER", "offscreen");
+    let ttf;
+    let creator;
+    let mut ui = Ui::new(640, 480, true).unwrap();
+    ttf = sdl2::ttf::init().unwrap();
+    creator = ui.canvas.texture_creator();
+    let theme = Theme::builtin();
+    ui.configure(&ttf, &creator, &theme, None).unwrap();
+    let game = |name: &str| Game {
+        path: format!("{name}.nes").into(),
+        name: name.into(),
+        image: None,
+        video: None,
+        favorite: false,
+        year: None,
+        players: None,
+        last_played: None,
+    };
+    let data = Data {
+        systems: ["nes", "snes"]
+            .map(|name| SystemEntry {
+                name: name.into(),
+                fullname: name.into(),
+                game_count: 2,
+                dir_mtime: 0,
+                source_fingerprint: 0,
+            })
+            .to_vec(),
+        games: [("nes".into(), vec![game("a"), game("b")])].into(),
+        ..Data::default()
+    };
+    // What animates after each gesture, for one motion level.
+    let mut gestures = |motion: Motion| {
+        ui.set_motion(motion);
+        let mut app = App::new(10);
+        let mut moved = Vec::new();
+        let step = |ui: &mut Ui, app: &mut App, button: Option<Button>| {
+            ui.snap_animations();
+            if let Some(button) = button {
+                app.handle(button, &data);
+            }
+            ui.draw(app, &data, &theme, None).unwrap();
+            ui.animating()
+        };
+        step(&mut ui, &mut app, None);
+        step(&mut ui, &mut app, None);
+        step(&mut ui, &mut app, Some(Button::Down));
+        // Has the pill already reached the second row?
+        let rgba = ui
+            .canvas
+            .read_pixels(None, sdl2::pixels::PixelFormatEnum::RGBA32)
+            .unwrap();
+        let at = (120 * 640 + 28) * 4;
+        moved.push(rgba[at..at + 3] != [30, 136, 255]);
+        app.cursor = 0;
+        step(&mut ui, &mut app, None);
+        moved.push(step(&mut ui, &mut app, Some(Button::A)));
+        moved.push(step(&mut ui, &mut app, Some(Button::Y)));
+        moved
+    };
+    // Selection glide, systems to games (slide or fade), quick menu.
+    assert_eq!(gestures(Motion::On), [true, true, true]);
+    assert_eq!(
+        gestures(Motion::Reduced),
+        [false, true, true],
+        "fades only, nothing travels"
+    );
+    assert_eq!(gestures(Motion::Off), [false, false, false]);
+    // Input never waits: snapping ends whatever was moving.
+    ui.set_motion(Motion::On);
+    ui.start_opening();
+    let app = App::new(10);
+    ui.draw(&app, &data, &theme, None).unwrap();
+    assert!(ui.animating());
+    ui.snap_animations();
+    ui.draw(&app, &data, &theme, None).unwrap();
+    assert!(!ui.animating());
 }

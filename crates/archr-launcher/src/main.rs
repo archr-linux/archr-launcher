@@ -166,7 +166,8 @@ fn run(
     ui.catalog = catalog;
     ui.theme_dir = theme_path;
     ui.text_scale = look.text_scale();
-    ui.animations = look.animations;
+    ui.set_motion(look.animations);
+    ui.start_opening();
     ui.configure_prepared(&creator, prepared, paths.root.as_deref())?;
     let mut app = App::new(ui.page_size(&theme));
     app.netplay = netplay_on;
@@ -242,7 +243,7 @@ fn run(
             theme = next;
             ui.theme_dir = settings.state.base_dir.clone();
             ui.text_scale = look.text_scale();
-            ui.animations = look.animations;
+            ui.set_motion(look.animations);
             if reload {
                 ui.configure(&ttf, &creator, &theme, paths.root.as_deref())?;
             }

@@ -433,6 +433,7 @@
 "appearance.text_normal" = "Обычный"
 "appearance.text_large" = "Крупный"
 "appearance.anim_on" = "Включены"
+"appearance.anim_reduced" = "Уменьшены"
 "appearance.anim_off" = "Выключены"
 "appearance.custom" = "Свой цвет"
 "appearance.custom_note" = "Идёт после шести готовых цветов"

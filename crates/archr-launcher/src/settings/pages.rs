@@ -138,7 +138,7 @@ impl Backend {
             for row in page.rows() {
                 if !row.id.key().is_empty() {
                     if let Some(value) = cfg.get_setting(row.id.key(), None, None) {
-                        state.values.insert(row.id, value);
+                        state.values.insert(row.id, row.id.normalize(&value));
                     }
                 }
             }
@@ -631,7 +631,8 @@ mod tests {
             (look.theme.as_str(), look.accent.as_str()),
             ("night", "teal")
         );
-        assert!(!look.animations);
+        // "0", as earlier versions saved it, still reads as off.
+        assert_eq!(look.animations, archr_ui::motion::Motion::Off);
         assert_eq!(look.text_size, "normal");
         assert_eq!(crate::appearance::theme_names(&paths), ["default", "night"]);
         let (theme, dir) = crate::appearance::load_theme(&paths, "night");

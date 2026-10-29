@@ -142,6 +142,15 @@ errados são ignorados com aviso no log; nada disso derruba o launcher.
 3. Em Aparência, escolha o tema **meu** e a visualização **minha**; ao sair da
    página a mudança vale na hora, sem reiniciar.
 
+## Animações
+
+Aparência › Animações (`launcher.animations`): **Ligadas** (`on`), **Reduzidas**
+(`reduced`: só fades curtos, nada se desloca nem cresce) e **Desligadas**
+(`off`: tudo instantâneo). Os valores antigos `1` e `0` valem como Ligadas e
+Desligadas. Os tempos são fixos: seleção 180 ms, sistemas→jogos 220 ms, troca de
+capa 200 ms, menus 160 ms, avisos 200 ms, interruptores 150 ms, abertura 300 ms.
+Qualquer botão encerra a animação em curso; a entrada nunca espera.
+
 ## Testar no PC
 
 Captura das telas de sistemas, jogos (com e sem capa) e da Aparência, em

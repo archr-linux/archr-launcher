@@ -253,6 +253,7 @@ impl Ui<'_, '_> {
             if !self.console_image(rect, path.as_ref(), 255) {
                 self.generated_card(panel.map_or(rect, |p| p.0), name, theme)?;
             }
+            self.old_art()?;
         }
         if let Some((rect, _)) = panel {
             let pad = self.px(16.);

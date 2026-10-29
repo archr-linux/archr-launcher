@@ -22,7 +22,7 @@ pub struct Appearance {
     pub background: String,
     pub font: String,
     pub text_size: String,
-    pub animations: bool,
+    pub animations: crate::motion::Motion,
     /// Id of one of the theme's views.
     pub view: String,
 }

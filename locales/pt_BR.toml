@@ -433,6 +433,7 @@
 "appearance.text_normal" = "Normal"
 "appearance.text_large" = "Grande"
 "appearance.anim_on" = "Ligadas"
+"appearance.anim_reduced" = "Reduzidas"
 "appearance.anim_off" = "Desligadas"
 "appearance.custom" = "Cor personalizada"
 "appearance.custom_note" = "Fica depois das seis cores prontas"

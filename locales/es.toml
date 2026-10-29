@@ -433,6 +433,7 @@
 "appearance.text_normal" = "Normal"
 "appearance.text_large" = "Grande"
 "appearance.anim_on" = "Activadas"
+"appearance.anim_reduced" = "Reducidas"
 "appearance.anim_off" = "Desactivadas"
 "appearance.custom" = "Color personalizado"
 "appearance.custom_note" = "Va después de los seis colores predefinidos"
