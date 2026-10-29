@@ -1,8 +1,8 @@
 //! Bounded regular-file reads and same-directory atomic publication.
 use std::{
     fs::{self, File, OpenOptions},
-    io::{self, Read},
-    os::unix::fs::OpenOptionsExt,
+    io::{self, Read, Write},
+    os::unix::fs::{OpenOptionsExt, PermissionsExt},
     path::Path,
 };
 
@@ -60,13 +60,46 @@ pub fn atomic_publish(
     write: impl FnOnce(&mut File) -> io::Result<()>,
 ) -> io::Result<()> {
     let parent = parent_dir(path);
-    fs::create_dir_all(parent)?;
+    create_dirs(parent, durable)?;
     let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
     write(temporary.as_file_mut())?;
     temporary.as_file().sync_all()?;
     temporary.persist(path).map_err(|error| error.error)?;
     if durable {
         File::open(parent)?.sync_all()?;
+    }
+    Ok(())
+}
+
+/// A secret (passwords, keys): mode 0600 before it becomes visible, durable.
+pub fn publish_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    atomic_publish(path, true, |file| {
+        file.set_permissions(fs::Permissions::from_mode(0o600))?;
+        file.write_all(bytes)
+    })
+}
+
+/// Remove a file (already missing is fine) and sync the removal.
+pub fn remove_durable(path: &Path) -> io::Result<()> {
+    match fs::remove_file(path) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+        Ok(()) => File::open(parent_dir(path))?.sync_all(),
+    }
+}
+
+/// `create_dir_all`; durable data also syncs the parent of every folder it
+/// had to create, so a power cut cannot lose the new folder's entry.
+fn create_dirs(dir: &Path, durable: bool) -> io::Result<()> {
+    let missing: Vec<&Path> = dir
+        .ancestors()
+        .take_while(|p| !p.as_os_str().is_empty() && !p.exists())
+        .collect();
+    fs::create_dir_all(dir)?;
+    if durable {
+        for created in missing.iter().rev() {
+            File::open(parent_dir(created))?.sync_all()?;
+        }
     }
     Ok(())
 }
