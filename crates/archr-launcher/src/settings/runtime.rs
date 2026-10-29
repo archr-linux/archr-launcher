@@ -157,6 +157,7 @@ impl Runtime {
             }
             Effect::Storage(action) => self.send(Work::Storage(action)),
             Effect::Store(action) => self.send(Work::Store(action)),
+            Effect::Module(request) => return Outcome::Module(request),
             Effect::Reboot => return Outcome::Action(SessionAction::Reboot),
             Effect::None => {}
         }

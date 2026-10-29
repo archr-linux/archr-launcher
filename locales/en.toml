@@ -808,3 +808,7 @@
 "modules.invalid" = "The module does not follow the store rules and was not installed."
 "modules.too_big" = "The module is larger than the store accepts."
 "modules.download_failed" = "The download did not finish. Check the network; the store takes modules up to 8 MB."
+"modules.uses_tile" = "tile in Start"
+"modules.uses_shortcut" = "shortcut in Start"
+"modules.uses_quick" = "item in the Y menu"
+"modules.uses_page" = "page in Settings"

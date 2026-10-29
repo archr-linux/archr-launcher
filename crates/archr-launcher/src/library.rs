@@ -263,7 +263,8 @@ impl Library {
             | Outcome::OpenNetplay
             | Outcome::Moonlight
             | Outcome::Rescrape { .. }
-            | Outcome::Achievements { .. } => {}
+            | Outcome::Achievements { .. }
+            | Outcome::Module(_) => {}
             Outcome::ToggleFavorite { system, game } => {
                 let key = self.game_key(&system, game).ok_or("error.game_missing")?;
                 self.store.toggle_favorite(&key);
@@ -407,7 +408,7 @@ impl Library {
     fn definition(&self, name: &str) -> Option<&SystemDef> {
         self.definitions.iter().find(|system| system.name == name)
     }
-    fn game_key(&self, system: &str, index: usize) -> Option<String> {
+    pub fn game_key(&self, system: &str, index: usize) -> Option<String> {
         game_key(
             self.definition(system)?,
             &self.games(system).get(index)?.path,
@@ -488,6 +489,10 @@ impl DataSource for Library {
                     .map(|core| (emulator.name.clone(), core.name.clone()))
             })
             .collect()
+    }
+    fn game_key(&self, system: &str, game: usize) -> Option<String> {
+        let (system, game) = self.origin(system, game)?;
+        Library::game_key(self, &system, game)
     }
     fn current_core(&self, system: &str, game: usize) -> Option<(String, String)> {
         let game = self.games(system).get(game)?;

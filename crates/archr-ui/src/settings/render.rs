@@ -20,6 +20,8 @@ mod custom;
 mod information;
 #[path = "render/mangohud.rs"]
 mod mangohud;
+#[path = "render/modules.rs"]
+mod modules;
 #[path = "render/network.rs"]
 mod network;
 #[path = "render/store.rs"]
@@ -205,7 +207,7 @@ impl Ui<'_, '_> {
     }
     pub(super) fn settings_page(&mut self, state: &Settings, theme: &Theme) -> Result<(), String> {
         self.store_wanted.clear();
-        if state.page().rows().is_empty() {
+        if state.visible_rows().is_empty() {
             self.settings_scroll.page = None;
             self.settings_scroll.tween.retarget(0., self.frame.now);
             self.settings_scroll.tween.snap();
@@ -430,6 +432,32 @@ impl View<'_, '_, '_> {
                 trail.push(self.tr(state.parent_page().title()));
                 self.keyboard_name(state)
             }
+            // Loja-modulo: "Sistema / Loja de módulos / <module>".
+            Page::ModuleOffer => {
+                trail.extend(page.parent().iter().map(|key| self.tr(key)));
+                let card = state.modules.offer.as_ref().map(|o| &o.card);
+                let card = card.or_else(|| state.modules.cards().get(state.cursor));
+                card.map_or_else(|| self.tr(page.title()), |c| c.title().to_owned())
+            }
+            // "Sistema / Módulos / <module>" and its pages.
+            Page::ModuleInfo | Page::Module(..) => {
+                trail.extend(page.parent().iter().map(|key| self.tr(key)));
+                let module = state.modules.module();
+                let title = match page {
+                    Page::Module(m, p) => state
+                        .modules
+                        .view
+                        .modules
+                        .get(usize::from(m))
+                        .and_then(|m| m.pages.get(usize::from(p)))
+                        .map(|p| p.title.clone())
+                        .filter(|t| !t.is_empty()),
+                    _ => None,
+                };
+                title
+                    .or_else(|| module.map(|m| m.name.clone()))
+                    .unwrap_or_else(|| self.tr(page.title()))
+            }
             _ => {
                 trail.push(self.tr("settings.title"));
                 trail.extend(page.parent().iter().map(|key| self.tr(key)));
@@ -512,7 +540,7 @@ impl View<'_, '_, '_> {
         } else {
             self.breadcrumbs(state, right)?;
         }
-        let rows: Vec<Row> = state.visible_rows().into_iter().copied().collect();
+        let rows: Vec<Row> = state.visible_rows();
         match state.page() {
             Page::Root => self.root(state)?,
             Page::Info => self.info(state)?,
@@ -528,6 +556,9 @@ impl View<'_, '_, '_> {
             Page::Appearance => self.appearance_page(state, &rows)?,
             Page::Store => self.store_grid(state)?,
             Page::StoreTheme => self.store_detail(state)?,
+            Page::Modules => self.modules_list(state, &rows)?,
+            Page::ModuleStore => self.module_store(state)?,
+            Page::ModuleInfo | Page::ModuleOffer => self.module_offer(state)?,
             Page::AccentColor => self.custom_page(state)?,
             Page::Mangohud => self.mangohud_page(state, &rows)?,
             Page::MangohudItems => self.mangohud_items(state)?,
@@ -606,7 +637,7 @@ impl View<'_, '_, '_> {
             )?;
             let (x, y, w, h) = bounds;
             // Known failures arrive as locale keys; anything else stays generic.
-            let message = if ["settings.", "cheevos.", "store."]
+            let message = if ["settings.", "cheevos.", "store.", "modules."]
                 .iter()
                 .any(|prefix| error.starts_with(prefix))
             {
@@ -640,6 +671,8 @@ impl View<'_, '_, '_> {
             Some(self.ui.catalog.text("loading"))
         } else if matches!(state.page(), Page::Store | Page::StoreTheme) {
             self.store_status(state, left - 36.)
+        } else if let Some(note) = self.modules_status(state) {
+            Some(note)
         } else if state.page() == Page::Hotkeys {
             Some(self.tr("controls.hotkeys_note"))
         } else if state.capturing() && state.page() == Page::LauncherControls {
@@ -729,6 +762,41 @@ impl View<'_, '_, '_> {
                         Some(&[(Key('A'), "store.remove"), (Key('B'), "hint.cancel")]),
                     ),
                 })
+            } else if let Some((_, question)) = &state.modules.confirm {
+                Some((
+                    question.clone(),
+                    None,
+                    Some(&[(Key('A'), "hint.confirm"), (Key('B'), "hint.cancel")]),
+                ))
+            } else if let Some(module) = state
+                .modules
+                .module()
+                .filter(|_| state.modules.confirm_remove)
+            {
+                Some((
+                    self.ui
+                        .catalog
+                        .format("modules.remove_question", &[("name", &module.name)]),
+                    Some(self.tr("modules.remove_detail")),
+                    Some(&[
+                        (Key('A'), "modules.remove"),
+                        (Key('X'), "modules.remove_all"),
+                        (Key('B'), "hint.cancel"),
+                    ]),
+                ))
+            } else if let Some(offer) = state
+                .modules
+                .offer
+                .as_ref()
+                .filter(|_| state.modules.working)
+            {
+                Some((
+                    self.ui
+                        .catalog
+                        .format("store.installing", &[("name", offer.card.title())]),
+                    Some(self.tr("store.wait")),
+                    None,
+                ))
             } else if let Some(key) = state.storage.working {
                 Some((self.tr(key), Some(self.tr("settings.wait_storage")), None))
             } else {
@@ -846,7 +914,9 @@ impl View<'_, '_, '_> {
                 if let (Some(section), Some(skeleton)) = (position.section, position.searching) {
                     self.searching(section, y - position.lead(), skeleton)?;
                 } else if let Some(section) = position.section {
-                    let heading = if section == MEDIA_SECTION {
+                    let heading = if let Some(text) = self.module_section(state, section, n) {
+                        text
+                    } else if section == MEDIA_SECTION {
                         let count = state.media_tokens().len();
                         self.tr(&format!("{section}|count={count}|total={}", MEDIA.len()))
                     } else {
@@ -913,8 +983,14 @@ impl View<'_, '_, '_> {
             _ => f32::MAX,
         };
         let full = full.max(right - 46. - link - 24.);
+        let mut warning = false;
         let subtitle = match row.id {
             Id::ScraperMedia => Some(self.media_summary(state, full)?),
+            Id::ModuleEntry(n) => state.modules.view.modules.get(usize::from(n)).map(|m| {
+                let (line, warn) = self.module_line(m);
+                warning = warn;
+                line
+            }),
             _ => state.subtitle(row).map(|text| self.tr(&text)),
         };
         let expand = subtitle.is_none()
@@ -955,7 +1031,12 @@ impl View<'_, '_, '_> {
                 &subtitle,
                 (
                     12.,
-                    selection(selected, self.theme.muted, self.theme.accent_text_secondary),
+                    match (warning, selected) {
+                        (true, false) => self.theme.warning,
+                        _ => {
+                            selection(selected, self.theme.muted, self.theme.accent_text_secondary)
+                        }
+                    },
                     Align::Left,
                 ),
             )?;
@@ -1080,11 +1161,14 @@ impl View<'_, '_, '_> {
             }
             Kind::Value if id == Id::Accent => self.swatches(state, selected, (x, y, w, h))?,
             Kind::Check => {
-                let Id::MediaKind(n) = id else {
-                    return Ok(());
+                let (on, used) = match id {
+                    Id::MediaKind(n) => {
+                        let (token, _, _, used) = MEDIA[usize::from(n)];
+                        (state.media_tokens().contains(&token), used)
+                    }
+                    Id::ModuleRow(_) => (state.value(id) == "1", None),
+                    _ => return Ok(()),
                 };
-                let (token, _, _, used) = MEDIA[usize::from(n)];
-                let on = state.media_tokens().contains(&token);
                 // The page's own surface shows through an empty box.
                 let back = selection(selected, self.theme.background, self.theme.highlight_bg);
                 self.checkbox((x + w - 18., y + (h - 18.) / 2.), on, selected, back)?;

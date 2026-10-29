@@ -808,3 +808,7 @@
 "modules.invalid" = "Модуль не соответствует правилам магазина и не установлен."
 "modules.too_big" = "Модуль больше, чем допускает магазин."
 "modules.download_failed" = "Загрузка не завершилась. Проверьте сеть; магазин принимает модули до 8 МБ."
+"modules.uses_tile" = "плитка в Start"
+"modules.uses_shortcut" = "ярлык в Start"
+"modules.uses_quick" = "пункт в меню Y"
+"modules.uses_page" = "страница в настройках"

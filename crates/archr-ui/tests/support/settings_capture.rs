@@ -1202,3 +1202,360 @@ fn capture_store() {
         }
     }
 }
+
+/// System › Modules, the module store, the permission page, a module page
+/// and a module tile on the Start menu, as installed on a device.
+fn module_view() -> crate::modules::View {
+    use crate::modules::{
+        Context, Entry, Module, Page as ModPage, Permission, Quick, Row as ModRow, RowKind, Status,
+        Target,
+    };
+    let icons =
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../themes/default/icons");
+    let svg = |name: &str| {
+        Some(
+            std::fs::read_to_string(icons.join(format!("{name}.svg")))
+                .unwrap()
+                .into(),
+        )
+    };
+    let permission = |key, detail: &str, sensitive| Permission {
+        key,
+        detail: detail.into(),
+        sensitive,
+    };
+    let row = |label: &str, section: Option<&str>, kind, default: &str| ModRow {
+        label: label.into(),
+        subtitle: None,
+        section: section.map(Into::into),
+        kind,
+        default: default.into(),
+    };
+    let battery = Module {
+        id: "bateria-detalhada".into(),
+        name: "Bateria detalhada".into(),
+        description: "Carga, potência e saúde da bateria no menu Start.".into(),
+        author: "archr-linux".into(),
+        version: "1.0.2".into(),
+        license: "MIT".into(),
+        icon: svg("battery-full"),
+        enabled: true,
+        granted: true,
+        source: "archr-linux/archr-bateria".into(),
+        reviewed: true,
+        permissions: vec![
+            permission("modules.perm_none", "modules.perm_none_detail", false),
+            permission("modules.perm_tile", "", false),
+            permission("modules.perm_page", "", false),
+            permission("modules.perm_daemon", "", false),
+        ],
+        tiles: vec![Entry {
+            id: "bateria".into(),
+            label: "Bateria".into(),
+            icon: svg("battery-full"),
+            target: Target::Page(0),
+        }],
+        pages: vec![ModPage {
+            id: "main".into(),
+            title: "Bateria detalhada".into(),
+            rows: vec![
+                row(
+                    "Agora",
+                    Some("Estado"),
+                    RowKind::Text { id: "agora".into() },
+                    "",
+                ),
+                row("Saúde", None, RowKind::Text { id: "saude".into() }, ""),
+                row(
+                    "Mostrar potência",
+                    Some("Opções"),
+                    RowKind::Toggle {
+                        key: "watts".into(),
+                    },
+                    "1",
+                ),
+                row(
+                    "Atualizar a cada",
+                    None,
+                    RowKind::Value {
+                        key: "intervalo".into(),
+                        choices: vec!["5".into(), "15".into(), "30".into()],
+                        labels: vec![
+                            "5 segundos".into(),
+                            "15 segundos".into(),
+                            "30 segundos".into(),
+                        ],
+                    },
+                    "15",
+                ),
+                row(
+                    "Atualizar agora",
+                    None,
+                    RowKind::Action {
+                        action: "atualizar".into(),
+                        confirm: None,
+                    },
+                    "",
+                ),
+            ],
+        }],
+        settings: [
+            ("watts".to_owned(), "1".to_owned()),
+            ("intervalo".to_owned(), "15".to_owned()),
+        ]
+        .into(),
+        ..Module::default()
+    };
+    let cpu = Module {
+        id: "perfil-cpu".into(),
+        name: "Perfil de CPU".into(),
+        version: "1.1.0".into(),
+        icon: svg("cpu"),
+        enabled: true,
+        granted: true,
+        source: "archr-linux/archr-perfil-cpu".into(),
+        reviewed: true,
+        update: Some("1.2.0".into()),
+        permissions: vec![permission("modules.perm_quick", "", false)],
+        quick: vec![Quick {
+            id: "perfil".into(),
+            label: "Perfil de CPU sugerido".into(),
+            context: Context::Game,
+            systems: Vec::new(),
+            action: "sugerir".into(),
+        }],
+        ..Module::default()
+    };
+    let playtime = Module {
+        id: "tempo-de-jogo".into(),
+        name: "Tempo de jogo".into(),
+        version: "0.3.0".into(),
+        enabled: true,
+        granted: true,
+        status: Status::Failed,
+        source: "kaio-dev/archr-tempo".into(),
+        ..Module::default()
+    };
+    let mut view = crate::modules::View {
+        modules: vec![battery, cpu, playtime],
+        ..Default::default()
+    };
+    for (target, value) in [
+        ("tile:bateria", "87 % · 1,9 W"),
+        ("row:agora", "87 % · 1,9 W"),
+        ("row:saude", "94 %"),
+    ] {
+        view.values
+            .insert(("bateria-detalhada".into(), target.into()), value.into());
+    }
+    view
+}
+fn module_pages(dir: &std::path::Path) -> Vec<(&'static str, Settings)> {
+    use crate::modules::{Card, Offer, Permission, StoreReply, Tab as ModTab};
+    let view = std::sync::Arc::new(module_view());
+    let mut list = ready();
+    list.set_modules(view.clone());
+    list.open(Page::System);
+    list.open(Page::Modules);
+    let mut page = list.clone();
+    page.open_module_page("bateria-detalhada", 0);
+    page.cursor = 2;
+    let mut store = list.clone();
+    store.cursor = 3;
+    store.handle(Button::A);
+    let card =
+        |owner: &str, repo: &str, name: &str, description: &str, icon: &str, stars, reviewed| {
+            Card {
+                owner: owner.into(),
+                repo: repo.into(),
+                id: repo.trim_start_matches("archr-").into(),
+                name: name.into(),
+                description: description.into(),
+                icon: icon.into(),
+                version: "1.0.2".into(),
+                stars,
+                reviewed,
+            }
+        };
+    let cards = vec![
+        card(
+            "archr-linux",
+            "archr-bateria",
+            "Bateria detalhada",
+            "Bloco no Start com consumo e tempo restante",
+            "battery-full",
+            0,
+            true,
+        ),
+        Card {
+            version: "1.2.0".into(),
+            ..card(
+                "archr-linux",
+                "archr-perfil-cpu",
+                "Perfil de CPU",
+                "Perfil de desempenho por jogo",
+                "cpu",
+                0,
+                true,
+            )
+        },
+        card(
+            "nuvem-dev",
+            "archr-backup",
+            "Backup na nuvem",
+            "Envia os saves para o seu WebDAV",
+            "cloud",
+            132,
+            false,
+        ),
+        card(
+            "kaio-dev",
+            "archr-tempo",
+            "Tempo de jogo",
+            "Horas por jogo e por semana",
+            "clock",
+            87,
+            false,
+        ),
+    ];
+    store.module_store_reply(StoreReply::Listed {
+        tab: ModTab::All,
+        cards: cards.clone(),
+        problem: None,
+    });
+    store.modules.tab = ModTab::All;
+    store.module_store_reply(StoreReply::Listed {
+        tab: ModTab::All,
+        cards: cards.clone(),
+        problem: None,
+    });
+    store.cursor = 2;
+    let preview = dir.join("preview.png");
+    image::RgbaImage::from_fn(640, 480, |x, y| {
+        image::Rgba([(x / 3) as u8, 40 + (y / 4) as u8, 120, 255])
+    })
+    .save(&preview)
+    .unwrap();
+    let mut offer = store.clone();
+    offer.handle(Button::A);
+    let permission = |key, detail: &str, sensitive| Permission {
+        key,
+        detail: detail.into(),
+        sensitive,
+    };
+    offer.module_store_reply(StoreReply::Offer(
+        "nuvem-dev/archr-backup".into(),
+        Ok(Box::new(Offer {
+            card: cards[2].clone(),
+            version: "0.4.1".into(),
+            author: "nuvem-dev".into(),
+            license: "MIT".into(),
+            size: 180 * 1024,
+            permissions: vec![
+                permission("modules.perm_net", "modules.perm_net_detail", true),
+                permission(
+                    "modules.perm_read_screenshots",
+                    "/storage/roms/screenshots",
+                    true,
+                ),
+                permission("modules.perm_tile", "", false),
+                permission("modules.perm_page", "", false),
+            ],
+            preview: Some(preview),
+            ..Offer::default()
+        })),
+    ));
+    vec![
+        ("modulos", list),
+        ("pagina-modulo", page),
+        ("loja-modulos", store),
+        ("permissoes", offer),
+    ]
+}
+#[test]
+#[ignore = "manual capture, ARCHR_SETTINGS_CAPTURE_DIR required"]
+fn capture_modules() {
+    std::env::set_var("SDL_VIDEODRIVER", "offscreen");
+    let output = std::path::PathBuf::from(
+        std::env::var_os("ARCHR_SETTINGS_CAPTURE_DIR").expect("capture directory"),
+    );
+    let ttf;
+    let creator;
+    let mut ui = Ui::new(640, 480, true).unwrap();
+    ttf = sdl2::ttf::init().unwrap();
+    creator = ui.canvas.texture_creator();
+    let themes = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../themes");
+    let theme = Theme::load(&themes.join("default"));
+    let images = tempfile::tempdir().unwrap();
+    ui.theme_dir = Some(themes.join("default"));
+    ui.configure(&ttf, &creator, &theme, None).unwrap();
+    ui.root = Some(images.path().to_path_buf());
+    let pages = module_pages(images.path());
+    struct Data;
+    impl crate::state::DataSource for Data {
+        fn systems(&self) -> &[archr_index::cache::SystemEntry] {
+            &[]
+        }
+        fn games(&self, _: &str) -> &[archr_index::Game] {
+            &[]
+        }
+        fn origin(&self, _: &str, _: usize) -> Option<(String, usize)> {
+            None
+        }
+        fn cores(&self, _: &str) -> Vec<(String, String)> {
+            Vec::new()
+        }
+        fn current_core(&self, _: &str, _: usize) -> Option<(String, String)> {
+            None
+        }
+    }
+    let mut hub = crate::state::App::new(8);
+    hub.modules = std::sync::Arc::new(module_view());
+    hub.screen = crate::state::Screen::StartHub {
+        row: 0,
+        tile: 3,
+        shortcut: 0,
+    };
+    let save = |ui: &mut Ui, name: String| {
+        let pixels = ui
+            .canvas
+            .read_pixels(None, sdl2::pixels::PixelFormatEnum::RGBA32)
+            .unwrap();
+        image::save_buffer(
+            output.join(name),
+            &pixels,
+            640,
+            480,
+            image::ColorType::Rgba8,
+        )
+        .unwrap();
+    };
+    for language in ["pt_BR", "ru", "es", "en"] {
+        ui.catalog = I18n::load(std::path::Path::new("/nonexistent"), Some(language), None);
+        for (name, state) in &pages {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            ui.switches.clear();
+            loop {
+                ui.snap_animations();
+                ui.canvas.set_draw_color(color(theme.background));
+                ui.canvas.clear();
+                ui.settings_page(state, &theme).unwrap();
+                let wanted = ui.store_wanted.clone();
+                let ready = wanted
+                    .iter()
+                    .all(|p| ui.store_art.as_ref().is_some_and(|a| a.peek(p).is_some()));
+                if ready || Instant::now() > deadline {
+                    break;
+                }
+                ui.tick();
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            save(&mut ui, format!("{name}-{language}.png"));
+        }
+        ui.snap_animations();
+        ui.draw(&hub, &Data, &theme, None).unwrap();
+        ui.snap_animations();
+        ui.draw(&hub, &Data, &theme, None).unwrap();
+        save(&mut ui, format!("start-bloco-{language}.png"));
+    }
+}

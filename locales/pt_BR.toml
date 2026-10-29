@@ -808,3 +808,7 @@
 "modules.invalid" = "O módulo não segue as regras da loja e não foi instalado."
 "modules.too_big" = "O módulo passa do tamanho que a loja aceita."
 "modules.download_failed" = "O download não terminou. Confira a rede; a loja aceita módulos de até 8 MB."
+"modules.uses_tile" = "bloco no Start"
+"modules.uses_shortcut" = "atalho no Start"
+"modules.uses_quick" = "item no menu Y"
+"modules.uses_page" = "página em Configurações"

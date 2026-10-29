@@ -139,3 +139,107 @@ fn focus_never_lands_on_a_disabled_tile() {
     app.handle(Button::L, &all);
     assert_eq!(tile(&app), 0);
 }
+
+#[test]
+fn module_tiles_and_shortcuts_join_the_start_menu() {
+    use archr_ui::modules::{Entry, Module, Request, Target, View};
+    let entry = |id: &str, target| Entry {
+        id: id.into(),
+        label: id.into(),
+        icon: None,
+        target,
+    };
+    let mut app = App::new(8);
+    app.modules = std::sync::Arc::new(View {
+        modules: vec![Module {
+            id: "bateria".into(),
+            enabled: true,
+            granted: true,
+            tiles: vec![entry("t", Target::Page(0))],
+            shortcuts: vec![entry("s", Target::Action("refresh".into()))],
+            ..Module::default()
+        }],
+        ..View::default()
+    });
+    let data = data(true);
+    app.handle(Button::Start, &data);
+    for _ in 0..5 {
+        app.handle(Button::R, &data);
+    }
+    assert!(
+        matches!(app.screen, Screen::StartHub { tile: 3, .. }),
+        "{:?}",
+        app.screen
+    );
+    assert_eq!(
+        app.handle(Button::A, &data),
+        Outcome::Module(Request::Open {
+            module: "bateria".into(),
+            page: 0
+        })
+    );
+    app.handle(Button::Down, &data);
+    for _ in 0..3 {
+        app.handle(Button::R, &data);
+    }
+    assert_eq!(
+        app.handle(Button::A, &data),
+        Outcome::Module(Request::Invoke {
+            module: "bateria".into(),
+            action: "refresh".into(),
+            call: None
+        })
+    );
+    // Suspend moved one place right and still suspends.
+    app.handle(Button::R, &data);
+    assert_eq!(
+        app.handle(Button::A, &data),
+        Outcome::Action(SessionAction::Suspend)
+    );
+}
+
+#[test]
+fn a_module_item_joins_the_quick_menu_before_suspend() {
+    use archr_ui::modules::{Context, Module, Quick, Request, View};
+    use archr_ui::state::QuickItem;
+    let mut app = App::new(8);
+    app.modules = std::sync::Arc::new(View {
+        modules: vec![Module {
+            id: "perfil-cpu".into(),
+            enabled: true,
+            granted: true,
+            quick: vec![Quick {
+                id: "q".into(),
+                label: "Perfil".into(),
+                context: Context::System,
+                systems: Vec::new(),
+                action: "sugerir".into(),
+            }],
+            ..Module::default()
+        }],
+        ..View::default()
+    });
+    let data = data(true);
+    app.handle(Button::Y, &data);
+    let items = app.quick_menu_items(&data);
+    let at = items
+        .iter()
+        .position(|i| *i == QuickItem::Module(0))
+        .unwrap();
+    assert_eq!(items[at + 1], QuickItem::Suspend);
+    app.cursor = at;
+    let Outcome::Module(Request::Invoke {
+        module,
+        action,
+        call,
+    }) = app.handle(Button::A, &data)
+    else {
+        panic!("no module call");
+    };
+    assert_eq!(
+        (module.as_str(), action.as_str()),
+        ("perfil-cpu", "sugerir")
+    );
+    assert!(call.is_some());
+    assert_eq!(app.screen, Screen::Systems);
+}

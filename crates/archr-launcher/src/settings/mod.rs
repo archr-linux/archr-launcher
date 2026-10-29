@@ -626,6 +626,9 @@ impl Worker {
             match reply {
                 Reply::Loaded(Ok(mut loaded)) => {
                     std::mem::swap(&mut state.values, &mut loaded.values);
+                    // Module switches and rows live in the values too.
+                    let modules = state.modules.view.clone();
+                    state.set_modules(modules);
                     state.options = loaded.options;
                     state.labels = loaded.labels;
                     state.theme_names = loaded.theme_names;

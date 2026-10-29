@@ -649,6 +649,25 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             .ok_or_else(|| self.catalog.text("error.font_init"))?;
         text.draw_icon(&mut self.canvas, glyph, panel, ink)
     }
+    /// A module's icon: its own SVG, else a shipped glyph by Lucide name,
+    /// else the puzzle piece.
+    fn module_icon(
+        &mut self,
+        (svg, name): (Option<&str>, &str),
+        panel: Rect,
+        ink: Rgba,
+    ) -> Result<(), String> {
+        match svg {
+            Some(svg) => {
+                let text = self
+                    .text
+                    .as_mut()
+                    .ok_or_else(|| self.catalog.text("error.font_init"))?;
+                text.draw_svg(&mut self.canvas, svg, panel, ink)
+            }
+            None => self.icon(Glyph::named(name).unwrap_or(Glyph::Puzzle), panel, ink),
+        }
+    }
     fn divider(&mut self, x: i32, y: i32, w: u32, c: Rgba) -> Result<(), String> {
         self.canvas.set_draw_color(color(c));
         self.canvas.fill_rect(Rect::new(x, y, w, 1))
@@ -1615,6 +1634,16 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             let selected = index == app.cursor;
             let c = selection(selected, theme.text, theme.highlight_text);
             let label = match item {
+                QuickItem::Module(n) => {
+                    let label = app.quick_module(*n, data).map(|(_, q)| q.label.clone());
+                    let face = selection(selected, Face::Regular, Face::Semibold);
+                    self.label(
+                        &label.unwrap_or_default(),
+                        (face, 15., c),
+                        Rect::new(x, y, content_w, item_height),
+                    )?;
+                    continue;
+                }
                 QuickItem::Details => "menu.details",
                 QuickItem::Achievements => "menu.achievements",
                 QuickItem::Settings => "settings.title",

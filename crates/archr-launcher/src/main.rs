@@ -7,6 +7,7 @@ use archr_launcher::{
     audio::{self, Audio},
     cheevos::Lookup,
     library::Library,
+    modules::{self, Modules, Notice},
     netplay,
     paths::Paths,
     rescrape::Rescrape,
@@ -69,8 +70,19 @@ fn run(
                 script_source = Some(args.next().ok_or("--script requires a button sequence")?)
             }
             "--help" => {
-                println!("archr-launcher [--windowed]");
+                println!("archr-launcher [--windowed] [--check-module <dir>]");
                 return Ok(());
+            }
+            "--check-module" => {
+                let dir = PathBuf::from(args.next().ok_or("--check-module requires a folder")?);
+                return match modules::check_module(&dir) {
+                    Ok(warnings) => {
+                        warnings.iter().for_each(|w| println!("warning: {w}"));
+                        println!("{}: ok", dir.display());
+                        Ok(())
+                    }
+                    Err(errors) => Err(errors.join("\n")),
+                };
             }
             _ => return Err(format!("Unknown argument: {arg}")),
         }
@@ -201,6 +213,9 @@ fn run(
         App::system_rows(&library).len()
     );
     library.start();
+    // Modules start after the first frame; daemons two seconds later.
+    let mut modules = Modules::start(modules::Config::production(&paths, ui.catalog.language()));
+    let mut module_focus = None;
     let startup_config = SystemCfg::load(&paths.config).ok();
     let (sounds_on, sounds_volume) = audio::saved(startup_config.as_ref());
     let mut audio = Audio::new(
@@ -332,6 +347,34 @@ fn run(
             dirty = true;
         }
         dirty |= moonlight.poll();
+        for event in modules.poll() {
+            match event {
+                modules::Event::View(view) => {
+                    app.modules = view.clone();
+                    settings.state.set_modules(view);
+                }
+                modules::Event::Store(reply) => settings.state.module_store_reply(reply),
+                modules::Event::Notice(notice) => {
+                    let (key, name) = match notice {
+                        Notice::Disabled(name) => ("modules.disabled_notice", name),
+                        Notice::RolledBack(name) => ("modules.rolled_back", name),
+                        Notice::TooMany(name) => ("modules.too_many", name),
+                        Notice::Text(text) => ("", text),
+                    };
+                    ui.banner = Some(if key.is_empty() {
+                        name
+                    } else {
+                        ui.catalog.format(key, &[("name", &name)])
+                    });
+                    banner_until = Instant::now() + Duration::from_secs(8);
+                    audio.play(Sound::Notice);
+                }
+            }
+            dirty = true;
+        }
+        if let Some(language) = &language {
+            modules.language(language);
+        }
         if let Some(language) = language {
             ui.catalog = I18n::load(
                 &paths.at("/usr/share/archr-launcher/locales"),
@@ -362,6 +405,23 @@ fn run(
             browsing.then_some(selected_system.as_deref()).flatten(),
             Instant::now(),
         );
+        // What the user rests on, for modules (debounced by the host).
+        let focus = match &app.screen {
+            _ if settings.active => None,
+            Screen::Systems => selected_system.clone().map(|s| (s, None)),
+            Screen::Games { system } => library.origin(system, app.cursor).map(|(real, game)| {
+                let key = library.game_key(&real, game).unwrap_or_default();
+                let name = library.games(&real).get(game).map(|g| g.name.clone());
+                (real, Some((key, name.unwrap_or_default())))
+            }),
+            _ => None,
+        };
+        if focus.is_some() && focus != module_focus {
+            if let Some((system, game)) = &focus {
+                modules.focus(system, game.as_ref().map(|(k, n)| (k.as_str(), n.as_str())));
+            }
+            module_focus = focus;
+        }
         audio.poll();
         if library.poll() {
             if let Some(name) = selected_system {
@@ -618,6 +678,15 @@ fn run(
                     app.rescraping = true;
                 }
                 outcome = Some(Outcome::None);
+            } else if let Outcome::Module(request) = &requested {
+                match request {
+                    archr_ui::modules::Request::Open { module, page } => {
+                        settings.open();
+                        settings.state.open_module_page(module, *page);
+                    }
+                    request => modules.request(request.clone()),
+                }
+                outcome = Some(Outcome::None);
             } else if requested == Outcome::ToggleWifi {
                 if let Err(error) =
                     wifi::toggle(&paths, !ui.wifi_enabled(), ui.wifi_refresh_signal())
@@ -657,6 +726,17 @@ fn run(
                 arm_terminal_snapshot(&mut ui, &mut script, outcome)?;
             }
             let banner = ui.banner.clone();
+            // No module runs while a game has the screen.
+            let game = match &outcome {
+                Some(Outcome::Launch { system, game }) => Some((system.clone(), *game)),
+                Some(Outcome::Netplay(_) | Outcome::MoonlightStream(_)) => Some((String::new(), 0)),
+                _ => None,
+            };
+            if let Some((system, index)) = &game {
+                let key = library.game_key(system, *index).unwrap_or_default();
+                let name = library.games(system).get(*index).map(|g| g.name.clone());
+                modules.hand_off(system, &key, &name.unwrap_or_default());
+            }
             if transition::apply(
                 &mut ui,
                 &mut audio,
@@ -668,6 +748,9 @@ fn run(
                 selected.as_ref().and_then(|path| covers.get(path)),
             )? {
                 return Ok(());
+            }
+            if game.is_some() {
+                modules.resume();
             }
             dirty = true;
             banner_until = Instant::now() + Duration::from_secs(8);
