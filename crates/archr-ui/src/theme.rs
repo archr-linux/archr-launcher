@@ -58,6 +58,8 @@ pub struct Theme {
     /// Positive and cautionary status ink (e.g. matching / different ROM).
     pub success: Rgba,
     pub warning: Rgba,
+    /// Failure ink (a system update that did not go through).
+    pub danger: Rgba,
     /// Radii, heights, font size and margin are screen-height fractions.
     pub radius_item: f32,
     pub radius_card: f32,
@@ -178,6 +180,7 @@ impl Theme {
             scrim: token!(scrim, color),
             success: token!(success, color),
             warning: token!(warning, color),
+            danger: token!(danger, color),
             radius_item: token!(radius_item, fraction),
             radius_card: token!(radius_card, fraction),
             header_height: token!(header_height, fraction),
@@ -254,6 +257,7 @@ pub const KNOWN_KEYS: &[&str] = &[
     "scrim",
     "success",
     "warning",
+    "danger",
     "radius_item",
     "radius_card",
     "header_height",
