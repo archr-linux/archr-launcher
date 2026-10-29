@@ -3,7 +3,7 @@ use super::{
     bluetooth::Action, described, network::wpa_valid, row, Effect, Id, Kind, Page, Row, Settings,
 };
 use crate::{
-    appearance::Appearance,
+    appearance::{parse_hex, Appearance},
     keyboard::{Keyboard, Mode},
     state::Button,
 };
@@ -84,7 +84,7 @@ impl Settings {
             Id::Nickname | Id::NetplayHost | Id::NetplayPort | Id::CustomServer
         )
     }
-    fn open_keyboard(&mut self, id: Id, mode: Mode, value: String) {
+    pub(super) fn open_keyboard(&mut self, id: Id, mode: Mode, value: String) {
         let mut keyboard = Keyboard::new(mode, value);
         keyboard.max = match id {
             Id::Hidden => 32,     // IEEE 802.11 SSID
@@ -131,6 +131,7 @@ impl Settings {
         }
         match self.page() {
             Page::Keyboard => Some(self.keyboard_input(button)),
+            Page::AccentColor => Some(self.custom_input(button)),
             Page::Wifi => self.wifi_input(button),
             Page::Bluetooth => self.bt_input(button),
             Page::Games => self.games_input(button),
@@ -161,6 +162,12 @@ impl Settings {
         self.error = None;
         self.back();
         match target {
+            Id::Accent => {
+                if let Some(rgb) = parse_hex(&value) {
+                    self.custom = super::Custom::from_rgb(rgb);
+                }
+                Effect::None
+            }
             Id::Hidden => {
                 self.wifi_ssid = value;
                 self.wifi_hidden = true;
@@ -263,6 +270,7 @@ impl Settings {
     /// A on rows that open something instead of changing a value.
     pub(super) fn activate(&mut self, id: Id) -> Option<Effect> {
         match id {
+            Id::Accent if self.open_custom() => {}
             Id::NetplayLink => self.open(Page::Netplay),
             Id::ScraperLink => self.open(Page::Scraper),
             Id::ScraperAccount => {

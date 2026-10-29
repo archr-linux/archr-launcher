@@ -9,6 +9,8 @@ pub enum Mode {
     Secret,
     Ipv4,
     Digits,
+    /// Six hexadecimal digits of a colour.
+    Hex,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Key {
@@ -104,6 +106,20 @@ const DIGITS: Layer = &[
     &[Key::Back, Key::Submit],
 ];
 
+const HEX: Layer = &[
+    chars!("1" "2" "3" "4" "5" "6" "7" "8" "9" "0"),
+    &[
+        Key::Char("A"),
+        Key::Char("B"),
+        Key::Char("C"),
+        Key::Char("D"),
+        Key::Char("E"),
+        Key::Char("F"),
+        Key::Back,
+        Key::Submit,
+    ],
+];
+
 /// Partial input is never logged: `Debug` hides the value.
 #[derive(Clone)]
 pub struct Keyboard {
@@ -132,6 +148,7 @@ impl Keyboard {
             max: match mode {
                 Mode::Ipv4 => 15,
                 Mode::Digits => 5,
+                Mode::Hex => 6,
                 _ => 128,
             },
             optional: false,
@@ -149,6 +166,7 @@ impl Keyboard {
         match (self.mode, self.layer) {
             (Mode::Ipv4, _) => IPV4,
             (Mode::Digits, _) => DIGITS,
+            (Mode::Hex, _) => HEX,
             (_, 1) => SYMBOLS,
             (_, 2) => MORE,
             _ => LETTERS,
@@ -171,6 +189,7 @@ impl Keyboard {
         match self.mode {
             Mode::Ipv4 => self.value.parse::<Ipv4Addr>().is_ok(),
             Mode::Digits => self.value.parse::<u16>().is_ok_and(|port| port > 0),
+            Mode::Hex => crate::appearance::parse_hex(&self.value).is_some(),
             _ => true,
         }
     }
@@ -303,6 +322,12 @@ mod tests {
         assert_eq!(ip.handle(Button::Start), Some("192.168.0.7".into()));
         let mut port = Keyboard::new(Mode::Digits, "0".into());
         assert_eq!(port.handle(Button::Start), None);
+        let mut hex = Keyboard::new(Mode::Hex, "FFE14".into());
+        assert_eq!(press(&mut hex, Key::Submit), None);
+        press(&mut hex, Key::Char("D"));
+        press(&mut hex, Key::Char("4"));
+        assert_eq!(hex.text(), "FFE14D");
+        assert_eq!(hex.handle(Button::Start), Some("FFE14D".into()));
         let mut hidden = Keyboard::new(Mode::Secret, String::new());
         assert_eq!(hidden.handle(Button::Start), None);
         hidden.optional = true;

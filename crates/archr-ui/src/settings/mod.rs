@@ -6,8 +6,10 @@ use crate::{
 use std::collections::BTreeMap;
 use std::time::Instant;
 pub mod bluetooth;
+mod custom;
 pub(crate) mod games;
 pub(crate) mod information;
+pub use custom::Custom;
 pub use games::{GameCore, GameSystem, Games};
 pub mod network;
 mod pages;
@@ -31,6 +33,7 @@ pub enum Page {
     Netplay,
     Scraper,
     Appearance,
+    AccentColor,
     Keyboard,
     Storage,
     Soon(&'static str),
@@ -50,6 +53,7 @@ impl Page {
             Self::Netplay => "settings.netplay",
             Self::Scraper => "settings.scraper",
             Self::Appearance => "settings.appearance",
+            Self::AccentColor => "appearance.custom",
             Self::Keyboard => "settings.keyboard",
             Self::Storage => "settings.storage",
             Self::Soon(key) => key,
@@ -60,6 +64,7 @@ impl Page {
         match self {
             Self::Wifi | Self::Bluetooth | Self::Services => Some("settings.network"),
             Self::Netplay | Self::Scraper => Some("settings.games"),
+            Self::AccentColor => Some("settings.appearance"),
             _ => None,
         }
     }
@@ -504,6 +509,9 @@ pub struct Settings {
     pub base_theme: Theme,
     pub base_dir: Option<std::path::PathBuf>,
     pub applied: Option<Appearance>,
+    /// The custom accent colour: remembered while other dots are chosen and
+    /// edited on its own page.
+    pub custom: Custom,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -544,6 +552,7 @@ impl Default for Settings {
             base_theme: Theme::builtin(),
             base_dir: None,
             applied: None,
+            custom: Custom::default(),
         }
     }
 }
@@ -746,6 +755,25 @@ impl Settings {
                 (Pair('L', 'R'), "settings.previous_next"),
                 (Key('B'), "hint.back"),
             ],
+            Page::AccentColor if self.cursor == custom::ROWS - 1 => {
+                &[(Key('A'), "settings.edit"), (Key('B'), "hint.cancel")]
+            }
+            Page::AccentColor => &[
+                (Pair('‹', '›'), "hint.adjust"),
+                (Pair('X', 'Y'), "hint.fast"),
+                (Key('A'), "hint.use"),
+                (Key('B'), "hint.cancel"),
+            ],
+            Page::Appearance
+                if self.accent_is_custom()
+                    && self.visible_rows().get(self.cursor).map(|r| r.id) == Some(Id::Accent) =>
+            {
+                &[
+                    (Pair('L', 'R'), "settings.change"),
+                    (Key('A'), "settings.edit"),
+                    (Key('B'), "hint.back"),
+                ]
+            }
             Page::Keyboard
                 if self
                     .keyboard
@@ -861,6 +889,9 @@ impl Settings {
         self.cursor = 0;
         if page == Page::Appearance {
             self.appearance_saved = self.appearance();
+            if let Some(rgb) = appearance::parse_hex(self.value(Id::Accent)) {
+                self.custom = Custom::from_rgb(rgb);
+            }
         }
     }
     fn back(&mut self) -> Effect {
@@ -996,6 +1027,7 @@ impl Settings {
                     Kind::Value if button != Button::A => {
                         let options = match self.options.get(&row.id).filter(|v| !v.is_empty()) {
                             Some(options) => options.clone(),
+                            None if row.id == Id::Accent => self.accent_choices(),
                             None => row.id.choices().iter().map(|v| (*v).into()).collect(),
                         };
                         if options.is_empty() {
@@ -1177,6 +1209,71 @@ mod appearance_tests {
         state.cursor = 6;
         assert_eq!(state.handle(Button::A), Effect::Theme("default".into()));
         assert_eq!(state.value(Id::Theme), "default");
+    }
+    fn custom_dot() -> Settings {
+        let mut state = page();
+        state.cursor = 1;
+        state.handle(Button::L);
+        assert!(state.accent_is_custom());
+        state
+    }
+    #[test]
+    fn the_custom_dot_follows_the_presets_and_opens_its_page_on_a() {
+        let mut state = custom_dot();
+        let remembered = state.value(Id::Accent).to_owned();
+        assert_eq!(remembered, appearance::hex(Custom::default().rgb()));
+        state.handle(Button::R);
+        assert_eq!(state.value(Id::Accent), "blue");
+        assert_eq!(state.handle(Button::A), Effect::None);
+        assert_eq!(state.page(), Page::Appearance);
+        state.handle(Button::L);
+        assert_eq!(state.value(Id::Accent), remembered);
+        state.handle(Button::A);
+        assert_eq!(state.page(), Page::AccentColor);
+        assert_eq!(
+            state.custom.rgb(),
+            appearance::parse_hex(&remembered).unwrap()
+        );
+    }
+    #[test]
+    fn custom_sliders_step_small_and_large_and_a_keeps_the_draft() {
+        let mut state = custom_dot();
+        state.handle(Button::A);
+        let start = state.custom;
+        state.handle(Button::R);
+        assert_eq!(state.custom.hue, (start.hue + 3) % 360);
+        state.handle(Button::X);
+        assert_eq!(state.custom.hue, (start.hue + 3 + 330) % 360);
+        state.handle(Button::Down);
+        for _ in 0..20 {
+            state.handle(Button::Y);
+        }
+        assert_eq!(state.custom.sat, 100);
+        let wanted = appearance::hex(state.custom.rgb());
+        assert_eq!(state.handle(Button::A), Effect::None);
+        assert_eq!(state.page(), Page::Appearance);
+        assert_eq!(state.value(Id::Accent), wanted);
+        assert_eq!(state.handle(Button::B), Effect::Appearance);
+    }
+    #[test]
+    fn b_on_the_custom_page_discards_and_hex_input_sets_the_colour() {
+        let mut state = custom_dot();
+        let before = state.value(Id::Accent).to_owned();
+        state.handle(Button::A);
+        state.handle(Button::R);
+        state.handle(Button::B);
+        assert_eq!(state.value(Id::Accent), before);
+        state.handle(Button::A);
+        state.cursor = 3;
+        state.handle(Button::A);
+        assert_eq!(state.page(), Page::Keyboard);
+        let keyboard = state.keyboard.as_mut().unwrap();
+        assert_eq!(keyboard.mode, crate::keyboard::Mode::Hex);
+        *keyboard = crate::keyboard::Keyboard::new(crate::keyboard::Mode::Hex, "FFE14D".into());
+        assert_eq!(state.handle(Button::Start), Effect::None);
+        assert_eq!(state.page(), Page::AccentColor);
+        assert_eq!(state.custom.rgb(), 0xFFE14D);
+        assert_eq!(state.value(Id::Accent), before);
     }
     #[test]
     fn restore_returns_every_choice_to_its_default() {

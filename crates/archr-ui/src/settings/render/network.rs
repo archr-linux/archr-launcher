@@ -165,6 +165,7 @@ impl View<'_, '_, '_> {
             Some(Id::Hidden) => self.tr("settings.hidden"),
             Some(Id::ScraperAccount | Id::ScraperPassword) => self.tr("settings.account"),
             Some(Id::RootPassword) => self.tr("settings.root_password"),
+            Some(Id::Accent) => self.tr("appearance.hex"),
             Some(id) => Page::Netplay
                 .rows()
                 .iter()
@@ -195,6 +196,7 @@ impl View<'_, '_, '_> {
                 self.tr("settings.new_password"),
                 Some("settings.root_length"),
             ),
+            Some(Id::Accent) => (self.tr("appearance.hex"), Some("appearance.hex_rule")),
             _ => (self.keyboard_name(state), None),
         };
         let rule = rule.map(|key| self.tr(key));
