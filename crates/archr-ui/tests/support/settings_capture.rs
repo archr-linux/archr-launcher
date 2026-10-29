@@ -131,7 +131,7 @@ fn pages() -> Vec<(&'static str, Settings)> {
     storage.cursor = 3;
     let mut storage_end = storage.clone();
     storage_end.cursor = 6;
-    storage_end.storage.custom_password = true;
+    storage_end.storage.password = "Pl4yR00m".into();
     let mut storage_wifi = storage.clone();
     storage_wifi.storage.confirm = Some(Confirm::BackupWifi);
     let mut storage_backup = storage.clone();

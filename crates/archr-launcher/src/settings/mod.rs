@@ -76,11 +76,25 @@ impl Backend {
         args: &[&str],
         timeout: Duration,
     ) -> Result<String, String> {
+        self.command_with_input(name, args, None, timeout)
+    }
+    fn command_with_input(
+        &self,
+        name: &str,
+        args: &[&str],
+        input: Option<&[u8]>,
+        timeout: Duration,
+    ) -> Result<String, String> {
         let mut command = self.tool(name);
         command.args(args);
-        let output =
-            crate::process::capture(&mut command, timeout, &AtomicBool::new(false), 64 * 1024)
-                .map_err(|e| format!("{name}: {e}"))?;
+        let output = crate::process::capture_with_input(
+            &mut command,
+            input,
+            timeout,
+            &AtomicBool::new(false),
+            64 * 1024,
+        )
+        .map_err(|e| format!("{name}: {e}"))?;
         if output.status.success() {
             String::from_utf8(output.stdout)
                 .map(|s| s.trim().to_owned())

@@ -655,7 +655,11 @@ impl Settings {
                 .backup
                 .clone()
                 .unwrap_or_else(|| "settings.restore_none".into()),
-            Id::RootPassword if self.storage.custom_password => "settings.root_custom".into(),
+            // Catalog arguments are split on '|', which a password cannot hold.
+            Id::RootPassword => format!(
+                "settings.root_shown|password={}",
+                self.storage.password.replace('|', "")
+            ),
             _ => row.subtitle?.into(),
         })
     }

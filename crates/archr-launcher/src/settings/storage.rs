@@ -108,7 +108,7 @@ impl Backend {
         Storage {
             card: self.card(),
             backup: self.latest_backup(setting(Id::ClockFormat.key()).as_deref() == Some("12")),
-            custom_password: setting("root.password").is_some_and(|p| p != "archr"),
+            password: setting("root.password").unwrap_or_else(|| "archr".into()),
             // automount's own verdict on the card it last inspected.
             merge_supported: !self.paths.at("/storage/.ms_unsupported").exists(),
             ..Storage::default()
@@ -168,8 +168,9 @@ impl Backend {
                 }),
         }
     }
-    /// setrootpass takes the password only as its argument. It never reaches
-    /// a log: errors are scrubbed, and success is read back from system.cfg.
+    /// setrootpass reads the password on stdin, out of every process's argv.
+    /// It never reaches a log: errors are scrubbed, and success is read back
+    /// from system.cfg.
     fn root_password(&self, password: &str) -> Result<(), String> {
         if !root_password_valid(password) {
             return Err("settings.root_invalid".into());
@@ -178,8 +179,14 @@ impl Backend {
             log::warn!("{}", error.replace(password, "<hidden>"));
             "settings.password_failed".to_owned()
         };
-        self.command_with_timeout("setrootpass", &[password], Duration::from_secs(60))
-            .map_err(failed)?;
+        let line = format!("{password}\n");
+        self.command_with_input(
+            "setrootpass",
+            &["-"],
+            Some(line.as_bytes()),
+            Duration::from_secs(60),
+        )
+        .map_err(failed)?;
         let stored = self
             .cfg()
             .map_err(failed)?
@@ -340,7 +347,7 @@ mod tests {
             Err("settings.password_failed".into())
         );
         let save = format!(
-            "printf 'root.password=%s\\n' \"$1\" > {}",
+            "[ \"$1\" = - ] && read -r pw && printf 'root.password=%s\\n' \"$pw\" > {}",
             paths.config.display()
         );
         script(&root, &paths, "setrootpass", &save);
@@ -348,7 +355,7 @@ mod tests {
             backend.run_storage(&Action::RootPassword(SECRET.into())),
             Ok(("settings.password_done", None))
         );
-        assert!(backend.storage().custom_password);
+        assert_eq!(backend.storage().password, SECRET);
         assert_eq!(
             backend.run_storage(&Action::RootPassword("a b".into())),
             Err("settings.root_invalid".into())
@@ -379,7 +386,7 @@ mod tests {
         assert!(storage
             .backup
             .is_some_and(|b| b.starts_with("settings.backup_today|time=")));
-        assert!(!storage.custom_password && storage.merge_supported);
+        assert!(storage.password == "archr" && storage.merge_supported);
     }
     #[test]
     fn older_backups_show_their_date() {

@@ -1,7 +1,7 @@
 //! Bounded worker-side helpers; callers never run these on SDL's thread.
 use std::{
     fs::File,
-    io::{self, Read, Seek, SeekFrom},
+    io::{self, Read, Seek, SeekFrom, Write},
     os::unix::process::CommandExt,
     process::{Child, Command, ExitStatus, Output, Stdio},
     sync::atomic::{AtomicBool, Ordering},
@@ -68,14 +68,35 @@ pub(crate) fn capture(
     cancel: &AtomicBool,
     limit: u64,
 ) -> io::Result<Output> {
+    capture_with_input(command, None, timeout, cancel, limit)
+}
+
+/// `capture` with `input` on stdin, for secrets that must stay out of argv.
+/// The input fits the pipe buffer, so writing it never waits on the child.
+pub(crate) fn capture_with_input(
+    command: &mut Command,
+    input: Option<&[u8]>,
+    timeout: Duration,
+    cancel: &AtomicBool,
+    limit: u64,
+) -> io::Result<Output> {
     let mut stdout = tempfile::tempfile()?;
     let mut stderr = tempfile::tempfile()?;
     if cancel.load(Ordering::Relaxed) {
         return Err(io::Error::new(io::ErrorKind::Interrupted, "cancelled"));
     }
+    let stdin = match input {
+        Some(input) if input.len() <= 4096 => {
+            let (reader, mut writer) = io::pipe()?;
+            writer.write_all(input)?;
+            Stdio::from(reader)
+        }
+        Some(_) => return Err(io::Error::other("stdin input too large")),
+        None => Stdio::null(),
+    };
     command
         .process_group(0)
-        .stdin(Stdio::null())
+        .stdin(stdin)
         .stdout(stdout.try_clone()?)
         .stderr(stderr.try_clone()?);
     let child = spawn(command)?;

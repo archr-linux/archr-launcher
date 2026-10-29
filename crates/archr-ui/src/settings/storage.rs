@@ -36,7 +36,7 @@ pub const STORAGE: &[Row] = &[
     described(
         Id::RootPassword,
         "settings.root_password",
-        "settings.root_default",
+        "settings.root_shown",
     )
     .kind(Kind::Action),
     described(
@@ -63,8 +63,8 @@ pub struct Storage {
     pub card: Option<Card>,
     /// Subtitle reference naming the newest backup's time, if one exists.
     pub backup: Option<String>,
-    /// root.password differs from the image default.
-    pub custom_password: bool,
+    /// root.password as setrootpass saved it; shown so it can be used.
+    pub password: String,
     /// The games card's filesystem can hold an overlay (ext4, btrfs).
     pub merge_supported: bool,
     pub confirm: Option<Confirm>,
