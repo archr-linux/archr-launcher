@@ -888,13 +888,13 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 if let (Screen::Games { .. }, Some(wash)) = (backdrop, layout.backdrop) {
                     self.backdrop(art.cover, wash, theme)?;
                 }
-                // The hub names itself in a view that titles screens.
-                let shown = if matches!(app.screen, Screen::StartHub { .. }) {
-                    &app.screen
+                // The hub names itself in a view that titles screens; it
+                // follows the systems screen's header, whatever lies behind.
+                if matches!(app.screen, Screen::StartHub { .. }) {
+                    self.header(&app.screen, cursor, data, theme, &view.systems)?;
                 } else {
-                    backdrop
-                };
-                self.header(shown, cursor, data, theme, layout)?;
+                    self.header(backdrop, cursor, data, theme, layout)?;
+                }
                 if matches!(app.screen, Screen::StartHub { .. }) {
                     self.hub(app, data, theme)?;
                 } else {
