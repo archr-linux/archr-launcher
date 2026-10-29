@@ -71,6 +71,10 @@ fn retroarch_cfg_takes_only_allowed_keys() {
          input_menu_toggle_gamepad_combo = \"2\"\n\
          input_overlay_opacity = \"0.7\"\n\
          audio_latency = \"64\"\n\
+         video_rotation = \"1\"\n\
+         video_frame_delay = \"4\"\n\
+         video_font_size = \"30\"\n\
+         config_save_on_exit = \"true\"\n\
          video_driver = \"vulkan\"\n\
          libretro_directory = \"~/cores\"\n\
          video_threaded = \"true\"\n\
@@ -89,7 +93,6 @@ fn retroarch_cfg_takes_only_allowed_keys() {
         [
             "aspect_ratio_index",
             "audio_latency",
-            "custom_viewport_y",
             "input_menu_toggle_gamepad_combo",
             "input_overlay_opacity",
             "video_scale_integer",
@@ -111,8 +114,17 @@ fn retroarch_cfg_takes_only_allowed_keys() {
     assert_eq!(why(&plan, "audio_out_rate"), Some(UNKNOWN));
     // Button numbers belong to the other device's pad.
     assert_eq!(why(&plan, "input_menu_toggle_btn"), Some(UNKNOWN));
+    for key in [
+        "custom_viewport_y",
+        "video_rotation",
+        "video_frame_delay",
+        "video_font_size",
+        "config_save_on_exit",
+    ] {
+        assert_eq!(why(&plan, key), Some(UNKNOWN), "{key}");
+    }
     assert_eq!(why(&plan, "retroarch.cfg: #include"), Some(INCLUDE));
-    assert_eq!((plan.found.settings, plan.found.skipped), (7, 11));
+    assert_eq!((plan.found.settings, plan.found.skipped), (6, 16));
 }
 
 #[test]

@@ -102,23 +102,22 @@ fn blocked(key: &str) -> bool {
         .any(|start| key.starts_with(start))
 }
 
-/// The retroarch.cfg keys worth carrying over (look, hotkeys, overlay
-/// placement, latency, rewind, run-ahead, savestates, menu).
+/// The retroarch.cfg keys worth carrying over (look, menu combos, overlay
+/// placement, latency, rewind, run-ahead, savestates, menu). Not the custom
+/// viewport, rotation, frame delay or font size, sized for another screen
+/// and CPU, nor "save on exit", which stays the user's choice here.
 fn allowed(key: &str) -> bool {
-    const EXACT: [&str; 25] = [
+    const EXACT: [&str; 21] = [
         "video_scale_integer",
         "video_scale_integer_overscale",
         "video_smooth",
         "video_ctx_scaling",
-        "video_rotation",
         "aspect_ratio_index",
         "video_aspect_ratio",
         "video_aspect_ratio_auto",
         "video_shader_enable",
-        "video_frame_delay",
         "video_frame_delay_auto",
         "video_font_enable",
-        "video_font_size",
         "audio_latency",
         "audio_sync",
         "audio_volume",
@@ -130,11 +129,9 @@ fn allowed(key: &str) -> bool {
         "fastforward_ratio",
         "slowmotion_ratio",
         "pause_nonactive",
-        "config_save_on_exit",
     ];
     EXACT.contains(&key)
         || [
-            "custom_viewport_",
             "video_viewport_bias_",
             "video_msg_",
             "input_overlay_",
