@@ -965,3 +965,4 @@
 "settings.ra_hotkeys_done" = "Atajos de RetroArch restaurados; se aplican desde el próximo juego."
 "settings.ra_hotkeys_failed" = "No se encontró el mapa del mando; los atajos de RetroArch no cambiaron."
 "raimport.changed" = "Los archivos cambiaron; revísalos de nuevo."
+"raimport.more" = { one = "{count} más", other = "{count} más" }

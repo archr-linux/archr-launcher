@@ -390,3 +390,17 @@ fn undo_restores_bytes_and_never_removes_a_file_that_existed() {
     );
     assert!(!f.roots.retroarch.join("config/mGBA/mGBA.opt").exists());
 }
+
+#[test]
+fn long_lists_end_in_one_plus_line() {
+    let f = fixture();
+    let text: String = (0..300).map(|n| format!("unknown_{n} = \"1\"\n")).collect();
+    put(&f.roots.source, "retroarch.cfg", &text);
+    let plan = scan(&f.roots);
+    assert_eq!(plan.found.skipped, 300);
+    assert_eq!(plan.found.ignored.len(), 200);
+    assert_eq!(
+        plan.found.ignored[199],
+        ("+101".into(), "raimport.more|count=101".into())
+    );
+}

@@ -965,3 +965,4 @@
 "settings.ra_hotkeys_done" = "Горячие клавиши RetroArch сброшены; действуют со следующей игры."
 "settings.ra_hotkeys_failed" = "Раскладка контроллера не найдена; горячие клавиши RetroArch не изменены."
 "raimport.changed" = "Файлы изменились; проверьте ещё раз."
+"raimport.more" = { one = "ещё {count}", few = "ещё {count}", many = "ещё {count}", other = "ещё {count}" }

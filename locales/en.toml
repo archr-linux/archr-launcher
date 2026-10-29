@@ -965,3 +965,4 @@
 "settings.ra_hotkeys_done" = "RetroArch hotkeys restored; they apply from the next game."
 "settings.ra_hotkeys_failed" = "The pad's layout was not found; RetroArch hotkeys are unchanged."
 "raimport.changed" = "The files changed; review them again."
+"raimport.more" = { one = "{count} more", other = "{count} more" }

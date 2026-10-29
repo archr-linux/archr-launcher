@@ -20,6 +20,8 @@ const CONFIG_LIMIT: u64 = 1024 * 1024;
 const FILE_LIMIT: u64 = 256 * 1024;
 const FILES_LIMIT: usize = 200;
 const VALUE_LIMIT: usize = 512;
+/// Lines the list page shows of each kind; the rest is one "+N" line.
+const LIST_LIMIT: usize = 200;
 /// Shader trees a preset may have been saved against, on any system.
 const SHADER_ROOTS: [&str; 6] = [
     "shaders_slang",
@@ -330,7 +332,17 @@ pub fn scan(roots: &Roots) -> Plan {
     scan_overrides(&mut plan, roots, &cores);
     scan_remaps(&mut plan, roots, &cores);
     scan_shaders(&mut plan, roots);
+    cap(&mut plan.found.apply);
+    cap(&mut plan.found.ignored);
     plan
+}
+
+fn cap(list: &mut Vec<(String, String)>) {
+    if list.len() > LIST_LIMIT {
+        let more = list.len() - (LIST_LIMIT - 1);
+        list.truncate(LIST_LIMIT - 1);
+        list.push((format!("+{more}"), format!("raimport.more|count={more}")));
+    }
 }
 
 /// `config/<core>/`: overrides (`.cfg`, same keys as retroarch.cfg) and core
