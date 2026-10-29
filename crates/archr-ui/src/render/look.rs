@@ -24,8 +24,11 @@ pub(super) struct Look<'t> {
     /// The next moment an animated decoration changes frame.
     pub due: Option<Instant>,
     images: Option<(Option<PathBuf>, bool, CoverCache<'t>)>,
-    /// Every picture the theme names, loaded ahead so no screen pops in.
+    /// Pictures of the active view still to load ahead, so no screen pops
+    /// in; each is asked for until it arrives once. Made for this folder and
+    /// view.
     wanted: Vec<PathBuf>,
+    wanted_for: Option<(Option<PathBuf>, String)>,
 }
 
 impl<'t> Ui<'_, 't> {
@@ -55,30 +58,39 @@ impl<'t> Ui<'_, 't> {
                 (0, 0),
                 key.1,
             );
-            look.wanted = theme
+            look.images = Some((key.0.clone(), key.1, cache));
+            look.wanted_for = None;
+        }
+        let view = Some((key.0, theme.active_view.clone()));
+        if look.wanted_for != view {
+            look.wanted_for = view;
+            let active = theme.view(&theme.active_view);
+            let decor = active.systems.decor.iter().chain(&active.games.decor);
+            let mut wanted: Vec<PathBuf> = theme
                 .frames
                 .iter()
                 .map(|(_, frame)| frame.image.clone())
                 .chain(theme.background_image.clone())
+                .chain(decor.filter_map(|d| theme.decor_file(&d.image).map(Path::to_path_buf)))
                 .collect();
-            for (id, _) in theme.views() {
-                let view = theme.view(&id);
-                for decor in view.systems.decor.iter().chain(&view.games.decor) {
-                    look.wanted
-                        .extend(theme.decor_file(&decor.image).map(Path::to_path_buf));
-                }
-            }
-            look.wanted.dedup();
-            look.images = Some((key.0, key.1, cache));
+            wanted.sort();
+            wanted.dedup();
+            look.wanted = wanted;
         }
     }
     /// Uploads pictures that finished decoding; true when one arrived.
     pub(super) fn look_tick(&mut self) -> bool {
         let due = self.look.due.is_some_and(|due| Instant::now() >= due);
-        let wanted = &self.look.wanted;
-        let loaded = self.look.images.as_mut().is_some_and(|(_, _, cache)| {
-            cache.request(wanted);
-            cache.poll()
+        let look = &mut self.look;
+        let loaded = look.images.as_mut().is_some_and(|(_, _, cache)| {
+            let loaded = cache.poll();
+            // Arrived (or found missing) once: never asked for again here, so
+            // more pictures than the cache holds cannot loop.
+            look.wanted.retain(|path| !cache.has(path));
+            if !look.wanted.is_empty() {
+                cache.request(&look.wanted);
+            }
+            loaded
         });
         due || loaded
     }
@@ -199,5 +211,49 @@ impl<'t> Ui<'_, 't> {
             .outline
             .filter(|_| self.look.outlining && self.look.on)
             .map(|o| (o, (o.width * self.frame.scale).round().max(1.) as i32))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn pictures_load_once_even_beyond_the_cache_capacity() {
+        let _sdl = crate::SDL_TEST_LOCK.lock().unwrap();
+        std::env::set_var("SDL_VIDEODRIVER", "offscreen");
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("decor")).unwrap();
+        let mut decor = String::from("[view.lista.systems]\ndecor = [");
+        for n in 0..80 {
+            image::RgbaImage::new(4, 4)
+                .save(dir.path().join(format!("decor/{n}.png")))
+                .unwrap();
+            decor += &format!("{{ image = 'decor/{n}.png' }},");
+        }
+        std::fs::write(dir.path().join("theme.toml"), decor + "]").unwrap();
+        let theme = Theme::load(dir.path());
+        let (ttf, creator);
+        let mut ui = Ui::new(640, 480, true).unwrap();
+        ttf = sdl2::ttf::init().unwrap();
+        creator = ui.canvas.texture_creator();
+        ui.theme_dir = Some(dir.path().to_path_buf());
+        ui.configure(&ttf, &creator, &theme, None).unwrap();
+        ui.look(&theme, true);
+        assert_eq!(
+            ui.look.wanted.len(),
+            80,
+            "the active view's pictures, once each"
+        );
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !ui.look.wanted.is_empty() && Instant::now() < deadline {
+            ui.look_tick();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(ui.look.wanted.is_empty(), "every picture arrived");
+        std::thread::sleep(Duration::from_millis(50));
+        ui.look_tick();
+        assert!(!ui.look_tick(), "nothing left to load: no endless redraws");
     }
 }
