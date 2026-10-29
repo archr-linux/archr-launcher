@@ -174,7 +174,7 @@ impl Ui<'_, '_> {
             self.look.outlining = false;
             if let Some(value) = value {
                 // The live value sits under a raised title.
-                self.label_aligned(
+                self.fitted(
                     &value,
                     (Face::Regular, 13., ink),
                     Rect::new(
@@ -329,7 +329,7 @@ impl Ui<'_, '_> {
             if let Some((_, entry)) =
                 widgets.get(app.hub_widget.min(widgets.len().saturating_sub(1)))
             {
-                self.label_aligned(
+                self.fitted(
                     &entry.label,
                     (Face::Regular, 14., theme.text_secondary),
                     Rect::new(
@@ -374,7 +374,7 @@ impl Ui<'_, '_> {
             } else {
                 self.catalog.text(key)
             };
-            self.label_aligned(
+            self.fitted(
                 &label,
                 (Face::Regular, 14., theme.text_secondary),
                 Rect::new(
@@ -456,7 +456,7 @@ impl Ui<'_, '_> {
             let inner_w = px(each - 36.).max(1) as u32;
             let icon = Rect::new(left, px(by + 14.), px(16.) as u32, px(16.) as u32);
             self.module_icon((entry.icon.as_deref(), ""), icon, theme.muted)?;
-            self.label(
+            self.fitted(
                 &entry.label,
                 (Face::Regular, 13., theme.muted),
                 Rect::new(
@@ -465,6 +465,7 @@ impl Ui<'_, '_> {
                     inner_w.saturating_sub(px(24.) as u32),
                     px(20.) as u32,
                 ),
+                Align::Left,
             )?;
             let value = app
                 .modules
@@ -476,19 +477,27 @@ impl Ui<'_, '_> {
                 .detail(id, &target)
                 .unwrap_or_default()
                 .to_owned();
-            let value_w = self.measure(&value, Face::Mono, 30.)?;
-            self.label(
+            // The value keeps at most two thirds when a detail follows it.
+            let cap = if detail.is_empty() {
+                inner_w
+            } else {
+                inner_w * 2 / 3
+            };
+            let value_w = self.measure(&value, Face::Mono, 30.)?.min(cap);
+            self.fitted(
                 &value,
                 (Face::Mono, 30., theme.text),
-                Rect::new(left, px(by + 36.), value_w.min(inner_w) + 2, px(40.) as u32),
+                Rect::new(left, px(by + 36.), value_w + 2, px(40.) as u32),
+                Align::Left,
             )?;
             if !detail.is_empty() {
                 let at = left + value_w as i32 + px(12.);
                 let room = (left + inner_w as i32 - at).max(1) as u32;
-                self.label(
+                self.fitted(
                     &detail,
                     (Face::Regular, 12., theme.text_secondary),
-                    Rect::new(at, px(by + 48.), room, px(20.) as u32),
+                    Rect::new(at, px(by + 40.), room, px(34.) as u32),
+                    Align::Left,
                 )?;
             }
             if let Some(progress) = app.modules.progress(id, &target) {
@@ -502,6 +511,30 @@ impl Ui<'_, '_> {
             }
         }
         self.look.outlining = outlining;
+        Ok(())
+    }
+    /// A module's text in `rect`: as large as fits up to `start`, down to
+    /// the theme's smallest; still too wide, wrapped at that size. Never cut
+    /// with an ellipsis.
+    fn fitted(
+        &mut self,
+        text: &str,
+        (face, start, color): (Face, f32, Rgba),
+        rect: Rect,
+        align: Align,
+    ) -> Result<(), String> {
+        let floor = self.frame.min_size().min(start);
+        let width = rect.width().max(1);
+        if let Some(size) = self.shrink(text, face, start, floor, width)? {
+            return self.label_aligned(text, (face, size, color), rect, align);
+        }
+        let lines = self.wrap(text, face, floor, width)?;
+        let step = (f32::from(self.frame.font_size(floor)) * 1.2).round() as i32;
+        let top = rect.y() + (rect.height() as i32 - step * lines.len() as i32) / 2;
+        for (n, line) in lines.iter().enumerate() {
+            let at = Rect::new(rect.x(), top + step * n as i32, width, step.max(1) as u32);
+            self.label_aligned(line, (face, floor, color), at, align)?;
+        }
         Ok(())
     }
     /// The face and size every tile label is drawn with: the theme's
