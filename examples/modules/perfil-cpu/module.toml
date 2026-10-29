@@ -1,0 +1,57 @@
+id = "perfil-cpu"
+version = "1.0.0"
+api_version = 1
+min_launcher = "0.1.0"
+name = { en = "CPU profile", pt_BR = "Perfil de CPU", es = "Perfil de CPU", ru = "Профиль CPU" }
+description = { en = "Suggests a CPU governor for each system and shows the current one.", pt_BR = "Sugere um governador de CPU para cada sistema e mostra o atual.", es = "Sugiere un gobernador de CPU para cada sistema y muestra el actual.", ru = "Подсказывает режим CPU для каждой системы и показывает текущий." }
+author = "ArchR <contato@archr.dev>"
+license = "MIT"
+homepage = "https://github.com/archr-linux/archr-launcher"
+icon = "cpu"
+
+[run]
+runtime = "sh"
+entry = "main.sh"
+mode = "oneshot"
+
+# API 1 has no launch.before: the suggestion is shown, not applied.
+# The second phase adds hooks = ["launch"] and system = ["cpu-profile"].
+[[quick]]
+id = "sugerir"
+label = "@quick.suggest"
+context = "game"
+action = "sugerir"
+
+[[settings.pages]]
+id = "main"
+title = "@name"
+
+[[settings.pages.rows]]
+type = "value"
+key = "pesados"
+label = "@row.heavy"
+subtitle = "@row.heavy_sub"
+section = "@section.choices"
+choices = ["performance", "schedutil"]
+labels = ["@gov.performance", "@gov.schedutil"]
+default = "performance"
+
+[[settings.pages.rows]]
+type = "value"
+key = "leves"
+label = "@row.light"
+subtitle = "@row.light_sub"
+choices = ["ondemand", "powersave"]
+labels = ["@gov.ondemand", "@gov.powersave"]
+default = "powersave"
+
+[[settings.pages.rows]]
+type = "text"
+id = "agora"
+label = "@row.now"
+section = "@section.now"
+
+[[settings.pages.rows]]
+type = "action"
+action = "verificar"
+label = "@row.check"

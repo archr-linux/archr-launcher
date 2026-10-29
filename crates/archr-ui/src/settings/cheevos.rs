@@ -132,7 +132,7 @@ mod tests {
         // Nothing else starts while the service answers.
         assert_eq!(state.handle(Button::A), Effect::None);
         assert_eq!(
-            state.subtitle(state.visible_rows()[1]).as_deref(),
+            state.subtitle(&state.visible_rows()[1]).as_deref(),
             Some("settings.verifying")
         );
     }

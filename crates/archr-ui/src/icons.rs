@@ -20,6 +20,10 @@ macro_rules! glyphs {
                     $(Self::$variant => include_str!(concat!("../../../themes/default/icons/", $file, ".svg"))),+
                 }
             }
+            /// The glyph of a Lucide name the launcher ships.
+            pub(crate) fn named(name: &str) -> Option<Self> {
+                match name { $($file => Some(Self::$variant),)+ _ => None }
+            }
             #[cfg(test)]
             const ALL: &'static [Self] = &[$(Self::$variant),+];
         }
@@ -41,7 +45,7 @@ glyphs! {
     ArrowUpDown => "arrow-up-down", ChevronsUpDown => "chevrons-up-down",
     Shift => "arrow-big-up", Backspace => "delete", Eye => "eye", EyeOff => "eye-off",
     Signal => "signal", SignalLow => "signal-low", SignalMedium => "signal-medium",
-    SignalHigh => "signal-high",
+    SignalHigh => "signal-high", Puzzle => "puzzle", ShieldCheck => "shield-check",
 }
 
 #[link(name = "SDL2_image")]
@@ -174,7 +178,7 @@ fn normalize_dots(svg: &str) -> String {
     result
 }
 
-fn rasterize(svg: &str, size: u32) -> Result<Surface<'static>, String> {
+pub(crate) fn rasterize(svg: &str, size: u32) -> Result<Surface<'static>, String> {
     let svg = normalize_dots(svg).replace("currentColor", "#ffffff");
     let rw = RWops::from_bytes(svg.as_bytes())?;
     let dimension = i32::try_from(size).map_err(|e| e.to_string())?;

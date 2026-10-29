@@ -17,7 +17,12 @@ const BUTTONS: f32 = 388.;
 impl View<'_, '_, '_> {
     /// `path`'s picture inside `bounds`: cropped to fill, or whole and centred.
     /// False until the loader has it.
-    fn picture(&mut self, path: Option<&Path>, bounds: Bounds, fill: bool) -> Result<bool, String> {
+    pub(super) fn picture(
+        &mut self,
+        path: Option<&Path>,
+        bounds: Bounds,
+        fill: bool,
+    ) -> Result<bool, String> {
         let Some(path) = path else { return Ok(false) };
         self.ui.store_wanted.push(path.to_owned());
         let dst = self.rect(bounds);
@@ -75,7 +80,7 @@ impl View<'_, '_, '_> {
         Ok(())
     }
     /// One line of GitHub text, clipped like a game name.
-    fn plain(
+    pub(super) fn plain(
         &mut self,
         text: &str,
         bounds: Bounds,
@@ -85,40 +90,39 @@ impl View<'_, '_, '_> {
         self.ui.label(text, style, rect)
     }
     /// "★ 214": the star and the count, right-aligned at `right`; returns the left edge.
-    fn stars(
+    pub(super) fn stars(
         &mut self,
         count: u64,
         right: f32,
         (y, h): (f32, f32),
-        size: f32,
+        (size, ink): (f32, Rgba),
     ) -> Result<f32, String> {
         let text = count.to_string();
         let width = self.ui.measure(&text, Face::Regular, size)? as f32;
         let left = right - width - size - 3.;
         let icon = self.rect((left, y + (h - size) / 2., size, size));
-        self.ui.icon(Glyph::Star, icon, self.theme.muted)?;
+        self.ui.icon(Glyph::Star, icon, ink)?;
         self.text(
             (right - width, y, width + 1., h),
             &text,
-            (size, self.theme.muted, Align::Right),
+            (size, ink, Align::Right),
         )?;
         Ok(left)
     }
-    pub(super) fn store_grid(&mut self, state: &Settings) -> Result<(), String> {
-        let store = &state.store;
+    /// The store tabs (Loja-temas, Loja-modulos) and the source note.
+    pub(super) fn tabs(&mut self, keys: &[&str], chosen: usize, note: &str) -> Result<(), String> {
         let theme = self.theme;
         let (top, height) = TABS;
         let mut x = 20.;
-        for tab in Tab::ALL {
-            let label = self.tr(tab.key());
-            let chosen = tab == store.tab;
-            let face = if chosen {
+        for (n, key) in keys.iter().enumerate() {
+            let label = self.tr(key);
+            let face = if n == chosen {
                 Face::Semibold
             } else {
                 Face::Regular
             };
             let w = self.ui.measure(&label, face, 12.)? as f32 + 20.;
-            let (fill, ink) = if chosen {
+            let (fill, ink) = if n == chosen {
                 (theme.highlight_bg, theme.highlight_text)
             } else {
                 (theme.surface, theme.muted)
@@ -132,14 +136,24 @@ impl View<'_, '_, '_> {
             self.text_face((x, top, w, height), &label, (12., ink, Align::Center), face)?;
             x += w + 8.;
         }
-        let source = self.tr(&format!("store.source|topic={TOPIC}"));
-        if self.ui.measure(&source, Face::Regular, 12.)? as f32 <= 620. - x {
+        let note = self.tr(note);
+        if self.ui.measure(&note, Face::Regular, 12.)? as f32 <= 620. - x {
             self.text(
                 (x, top, 620. - x, height),
-                &source,
+                &note,
                 (12., theme.muted, Align::Right),
             )?;
         }
+        Ok(())
+    }
+    pub(super) fn store_grid(&mut self, state: &Settings) -> Result<(), String> {
+        let store = &state.store;
+        let keys = Tab::ALL.map(Tab::key);
+        self.tabs(
+            &keys,
+            store.tab as usize,
+            &format!("store.source|topic={TOPIC}"),
+        )?;
         let cards = store.cards();
         if cards.is_empty() {
             return self.grid_message(state);
@@ -203,7 +217,7 @@ impl View<'_, '_, '_> {
             )?;
             right - width
         } else {
-            self.stars(card.stars, right, line, 11.)?
+            self.stars(card.stars, right, line, (11., self.theme.muted))?
         };
         let title = card.title(self.ui.catalog.language()).to_owned();
         self.plain(
@@ -297,7 +311,7 @@ impl View<'_, '_, '_> {
     }
     /// Top-aligned wrapped text that shrinks to 12 px to fit `max` lines;
     /// returns the bottom.
-    fn flow(
+    pub(super) fn flow(
         &mut self,
         (x, y, w): (f32, f32, f32),
         text: &str,
@@ -413,7 +427,12 @@ impl View<'_, '_, '_> {
             theme.surface,
             Some(theme.border),
         )?;
-        self.stars(detail.card.stars, x + w - 12., (BUTTONS, 36.), 14.)?;
+        self.stars(
+            detail.card.stars,
+            x + w - 12.,
+            (BUTTONS, 36.),
+            (14., theme.muted),
+        )?;
         if let Some(action) = store.action() {
             let button = (x, BUTTONS, pill_x - 8. - x, 36.);
             self.ui.rounded(

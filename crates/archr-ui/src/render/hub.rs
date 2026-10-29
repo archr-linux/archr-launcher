@@ -42,11 +42,22 @@ impl Ui<'_, '_> {
             Align::Center,
         )?;
 
-        for (index, &(key, glyph)) in TILES.iter().enumerate() {
+        let modules = app.modules.tiles();
+        let count = TILES.len() + modules.len();
+        // More tiles than the screen holds: the row slides to keep the focus in.
+        let span = count as f32 * 170. - 22.;
+        let first = if span <= 600. {
+            320. - span / 2. + 74.
+        } else {
+            (320. - tile as f32 * 170.).clamp(640. - 20. - 74. - (count - 1) as f32 * 170., 94.)
+        };
+        for index in 0..count {
+            let (key, glyph) = TILES.get(index).copied().unwrap_or(("", Glyph::Puzzle));
+            let module = index.checked_sub(TILES.len()).map(|n| modules[n]);
             let enabled = app.hub_tile_enabled(data, index);
             let focus = row == 0 && tile == index;
             let side = px(if focus { 154. } else { 148. });
-            let x = center + px((index as f32 - 1.) * 170.) - side / 2;
+            let x = px(first + index as f32 * 170.) - side / 2 + center - px(320.);
             let y = px(104.) - (side - px(148.)) / 2;
             let tile_rect = Rect::new(x, y, side as u32, side as u32);
             if focus {
@@ -86,17 +97,48 @@ impl Ui<'_, '_> {
                 theme.dim_text
             };
             let size = px(48.);
-            self.icon(
-                glyph,
-                Rect::new(x + (side - size) / 2, y + px(29.), size as u32, size as u32),
-                ink,
-            )?;
+            let icon = Rect::new(x + (side - size) / 2, y + px(29.), size as u32, size as u32);
+            let (label, value) = match module {
+                Some((n, entry)) => {
+                    let id = &app.modules.modules[n].id;
+                    self.module_icon((entry.icon.as_deref(), ""), icon, ink)?;
+                    let value = app.modules.value(id, &format!("tile:{}", entry.id));
+                    (entry.label.clone(), value.map(str::to_owned))
+                }
+                None => {
+                    self.icon(glyph, icon, ink)?;
+                    (self.catalog.text(key), None)
+                }
+            };
+            if let Some(value) = value {
+                // The live value sits under a raised title.
+                self.label_aligned(
+                    &value,
+                    (Face::Regular, 13., ink),
+                    Rect::new(
+                        x + px(5.),
+                        y + px(118.),
+                        (side - px(10.)) as u32,
+                        px(20.) as u32,
+                    ),
+                    Align::Center,
+                )?;
+            }
+            let raise = if module.is_some_and(|(n, e)| {
+                app.modules
+                    .value(&app.modules.modules[n].id, &format!("tile:{}", e.id))
+                    .is_some()
+            }) {
+                px(8.)
+            } else {
+                0
+            };
             self.label_aligned(
-                &self.catalog.text(key),
+                &label,
                 (Face::Semibold, 16., ink),
                 Rect::new(
                     x + px(5.),
-                    y + px(100.),
+                    y + px(100.) - raise,
                     (side - px(10.)) as u32,
                     px(28.) as u32,
                 ),
@@ -106,13 +148,47 @@ impl Ui<'_, '_> {
 
         let side = px(46.);
         let gap = px(14.);
-        let start = center - (side * 6 + gap * 5) / 2;
+        // Module shortcuts sit between Wi-Fi and Suspend.
+        let extra = app.modules.shortcuts();
+        let count = SHORTCUTS.len() + extra.len();
+        let start = center - (side * count as i32 + gap * (count as i32 - 1)) / 2;
         let wifi_on = self.wifi_enabled();
-        for (index, &(_, glyph)) in SHORTCUTS.iter().enumerate() {
+        let builtin = |index: usize| match index.checked_sub(3) {
+            Some(n) if n < extra.len() => None,
+            Some(n) => Some(3 + n - extra.len()),
+            None => Some(index),
+        };
+        for index in 0..count {
             let focus = row == 1 && shortcut == index;
+            let Some(fixed) = builtin(index) else {
+                let (_, entry) = extra[index - 3];
+                let x = start + index as i32 * (side + gap);
+                let rect = Rect::new(x, px(278.), side as u32, side as u32);
+                let fill = if focus {
+                    theme.highlight_bg
+                } else {
+                    theme.surface
+                };
+                self.rounded(rect, side as f32 / 2., fill, Some(theme.border))?;
+                let ink = if focus {
+                    theme.highlight_text
+                } else {
+                    theme.text_secondary
+                };
+                let icon = Rect::new(x + px(11.), px(289.), px(24.) as u32, px(24.) as u32);
+                self.module_icon((entry.icon.as_deref(), ""), icon, ink)?;
+                continue;
+            };
+            let glyph = SHORTCUTS[fixed].1;
+            let index = fixed;
             let enabled = index >= 2;
             let active = index == 2 && wifi_on;
-            let x = start + index as i32 * (side + gap);
+            let at = if index >= 3 {
+                index + extra.len()
+            } else {
+                index
+            };
+            let x = start + at as i32 * (side + gap);
             let rect = Rect::new(x, px(278.), side as u32, side as u32);
             self.rounded(
                 rect,
@@ -176,15 +252,29 @@ impl Ui<'_, '_> {
             }
         }
         if row == 1 {
-            let key = SHORTCUTS[shortcut].0;
-            let label = if shortcut == 1 && app.updates > 0 {
+            let fixed = builtin(shortcut);
+            let key = fixed.map_or("", |n| SHORTCUTS[n].0);
+            let label = if let Some((n, entry)) = shortcut
+                .checked_sub(3)
+                .and_then(|n| extra.get(n))
+                .filter(|_| fixed.is_none())
+            {
+                let value = app.modules.value(
+                    &app.modules.modules[*n].id,
+                    &format!("shortcut:{}", entry.id),
+                );
+                match value {
+                    Some(value) => format!("{} · {value}", entry.label),
+                    None => entry.label.clone(),
+                }
+            } else if fixed == Some(1) && app.updates > 0 {
                 let count = app.updates.to_string();
                 self.catalog.plural(
                     "start.update_ready",
                     app.updates as f64,
                     &[("count", &count)],
                 )
-            } else if shortcut == 2 {
+            } else if fixed == Some(2) {
                 self.catalog.text(if wifi_on {
                     "start.wifi_on"
                 } else {

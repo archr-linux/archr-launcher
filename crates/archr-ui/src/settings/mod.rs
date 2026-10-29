@@ -20,6 +20,7 @@ pub mod network;
 pub(crate) mod pages;
 use bluetooth::{Action, Device};
 pub use pages::MEDIA;
+pub mod modules;
 pub mod storage;
 pub mod store;
 pub mod updates;
@@ -55,6 +56,14 @@ pub enum Page {
     StoreTheme,
     Updates,
     UpdatePackages,
+    /// System › Modules (Modulos).
+    Modules,
+    /// The open module's details and permissions.
+    ModuleInfo,
+    /// A module's own page: module and page index.
+    Module(u8, u8),
+    ModuleStore,
+    ModuleOffer,
     Soon(&'static str),
 }
 impl Page {
@@ -85,6 +94,8 @@ impl Page {
             Self::Store | Self::StoreTheme => "settings.theme_store",
             Self::Updates => "updates.title",
             Self::UpdatePackages => "updates.packages",
+            Self::Modules | Self::ModuleInfo | Self::Module(..) => "settings.modules",
+            Self::ModuleStore | Self::ModuleOffer => "modules.store",
             Self::Soon(key) => key,
         }
     }
@@ -96,6 +107,9 @@ impl Page {
             Self::MangohudItems => &["settings.games", "settings.mangohud_page"],
             Self::AccentColor | Self::Store => &["settings.appearance"],
             Self::StoreTheme => &["settings.appearance", "settings.theme_store"],
+            Self::Modules | Self::ModuleStore => &["settings.system"],
+            Self::ModuleInfo | Self::Module(..) => &["settings.system", "settings.modules"],
+            Self::ModuleOffer => &["settings.system", "modules.store"],
             Self::LauncherControls | Self::Hotkeys => &["settings.controls"],
             Self::ScraperMedia => &["settings.games", "settings.scraper_short"],
             Self::Updates => &["settings.system"],
@@ -244,6 +258,13 @@ pub enum Id {
     UpdateChannel,
     UpdateBoot,
     UpdateNotify,
+    /// System link to the modules list.
+    ModulesLink,
+    /// One module's switch on the modules list.
+    ModuleEntry(u8),
+    ModuleStoreLink,
+    /// One row of the open module page.
+    ModuleRow(u8),
 }
 impl Id {
     fn metadata(self) -> (&'static str, &'static str) {
@@ -363,7 +384,11 @@ impl Id {
             | Self::CheevosPassword
             | Self::CheevosLogout
             | Self::UpdateInstall
-            | Self::UpdateCheck => ("", ""),
+            | Self::UpdateCheck
+            | Self::ModulesLink
+            | Self::ModuleEntry(_)
+            | Self::ModuleStoreLink
+            | Self::ModuleRow(_) => ("", ""),
             Self::LauncherLink | Self::Bind(_) | Self::ButtonsRestore | Self::HotkeysLink => {
                 ("", "")
             }
@@ -545,6 +570,7 @@ const SYSTEM: &[Row] = &[
     row(Id::Governor, "settings.governor", Kind::Value),
     row(Id::Turbo, "settings.turbo", Kind::Toggle),
     row(Id::Update, "settings.update", Kind::Action),
+    row(Id::ModulesLink, "settings.modules", Kind::Action),
 ];
 const REGION: &[Row] = &[
     row(Id::Language, "settings.language", Kind::Value),
@@ -609,6 +635,7 @@ pub enum Effect {
     Appearance,
     Storage(storage::Action),
     Store(store::Action),
+    Module(crate::modules::Request),
 }
 /// Passwords never reach a log through `{:?}`.
 impl std::fmt::Debug for Effect {
@@ -634,6 +661,11 @@ impl std::fmt::Debug for Effect {
             Self::Appearance => write!(f, "Appearance"),
             Self::Storage(action) => write!(f, "Storage({action:?})"),
             Self::Store(action) => write!(f, "Store({action:?})"),
+            // A keyboard row's value may be secret.
+            Self::Module(crate::modules::Request::Set { module, key, .. }) => {
+                write!(f, "Module(Set({module:?}, {key:?}, <hidden>))")
+            }
+            Self::Module(request) => write!(f, "Module({request:?})"),
         }
     }
 }
@@ -699,6 +731,7 @@ pub struct Settings {
     pub games: Games,
     pub storage: storage::Storage,
     pub store: store::Store,
+    pub modules: modules::Modules,
     /// Sliders in flight: last confirmed value and the newest unsent one.
     pub slides: BTreeMap<Id, (String, Option<String>)>,
     /// Appearance page: the choices when it opened, the theme being previewed
@@ -757,6 +790,7 @@ impl Default for Settings {
             games: Games::default(),
             storage: storage::Storage::default(),
             store: store::Store::default(),
+            modules: modules::Modules::default(),
             slides: BTreeMap::new(),
             appearance_saved: Appearance::default(),
             base_theme: Theme::builtin(),
@@ -865,10 +899,14 @@ impl Settings {
                 | Id::MangohudLink
                 | Id::LauncherLink
                 | Id::HotkeysLink
-                | Id::ThemeStore,
+                | Id::ThemeStore
+                | Id::ModulesLink
+                | Id::ModuleStoreLink,
                 _,
             ) => return "›".into(),
             (Id::SecondCard, _) => "settings.eject_link",
+            (Id::ModuleEntry(_), _) => return String::new(),
+            (Id::ModuleRow(_), _) => return self.module_value(id, catalog).unwrap_or_default(),
             (Id::StorageCard, _) => return String::new(),
             (Id::RootPassword, _) => "settings.change_link",
             (Id::KeyboardVariant | Id::MangohudGame, "") => "menu.default",
@@ -937,6 +975,7 @@ impl Settings {
                 "settings.root_shown|password={}",
                 self.storage.password.replace('|', "")
             ),
+            Id::ModuleRow(_) => self.module_subtitle(row.id)?,
             _ => row.subtitle?.into(),
         })
     }
@@ -945,12 +984,18 @@ impl Settings {
         let card = match row.id {
             Id::StorageCard => &self.storage.card,
             Id::SecondCard => &self.storage.second,
+            Id::ModuleEntry(_) | Id::ModuleRow(_) => {
+                return self.module_label(row.id).unwrap_or_default()
+            }
             _ => &None,
         };
         card.as_ref()
             .map_or_else(|| row.label.into(), |card| card.name.clone())
     }
-    pub fn visible_rows(&self) -> Vec<&'static Row> {
+    pub fn visible_rows(&self) -> Vec<Row> {
+        if matches!(self.page(), Page::Modules | Page::Module(..)) {
+            return self.module_rows();
+        }
         self.page()
             .rows()
             .iter()
@@ -971,6 +1016,7 @@ impl Settings {
                 id @ (Id::CheevosAccount | Id::CheevosLogout) => self.cheevos_visible(id),
                 _ => true,
             })
+            .copied()
             .collect()
     }
     /// Rows with at most one choice show their value and accept no input
@@ -982,6 +1028,7 @@ impl Settings {
                 .get(&id)
                 .is_none_or(|choices| choices.len() <= 1),
             Id::StorageCard => true,
+            Id::ModuleRow(_) => self.module_fixed(id),
             _ => false,
         }
     }
@@ -1041,6 +1088,9 @@ impl Settings {
         }
         if self.confirm_forget.is_some() {
             return &[(Key('A'), "settings.forget"), (Key('B'), "hint.cancel")];
+        }
+        if let Some(hints) = self.modules_hints() {
+            return hints;
         }
         match self.page() {
             Page::Updates | Page::UpdatePackages => self.updates_hints(),

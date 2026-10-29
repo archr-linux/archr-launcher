@@ -249,6 +249,7 @@ impl Runtime {
                     install.cancel();
                 }
             }
+            Effect::Module(request) => return Outcome::Module(request),
             Effect::Reboot => return Outcome::Action(SessionAction::Reboot),
             Effect::None => {}
         }

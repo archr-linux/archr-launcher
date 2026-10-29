@@ -1,7 +1,28 @@
 //! START hub navigation, separate from the systems and game list cursors.
 use super::{App, Button, DataSource, Outcome, Screen, SessionAction};
+use crate::modules::{Request, Target};
+
+/// Recent, Games and Tools; module tiles follow.
+const TILES: usize = 3;
+/// Settings, Update and Wi-Fi come before the module shortcuts.
+const BEFORE: usize = 3;
 
 impl App {
+    /// What choosing a module's tile or shortcut asks for.
+    fn module_target(&self, module: usize, target: &Target) -> Outcome {
+        let module = self.modules.modules[module].id.clone();
+        Outcome::Module(match target {
+            Target::Page(page) => Request::Open {
+                module,
+                page: *page,
+            },
+            Target::Action(action) => Request::Invoke {
+                module,
+                action: action.clone(),
+                call: None,
+            },
+        })
+    }
     /// Recent and Tools are offered only when they would list something.
     pub(crate) fn hub_tile_enabled(&self, data: &dyn DataSource, tile: usize) -> bool {
         match tile {
@@ -30,7 +51,7 @@ impl App {
                 let forward = button == Button::R;
                 if row == 0 {
                     // Focus skips tiles that are not offered.
-                    let mut reachable = (0..3).filter(|&t| {
+                    let mut reachable = (0..TILES + self.modules.tiles().len()).filter(|&t| {
                         (t > tile) == forward && t != tile && self.hub_tile_enabled(data, t)
                     });
                     tile = if forward {
@@ -40,10 +61,17 @@ impl App {
                     }
                     .unwrap_or(tile);
                 } else if forward {
-                    shortcut = (shortcut + 1).min(5);
+                    shortcut = (shortcut + 1).min(5 + self.modules.shortcuts().len());
                 } else {
                     shortcut = shortcut.saturating_sub(1);
                 }
+            }
+            Button::A if row == 0 && tile >= TILES => {
+                let tiles = self.modules.tiles();
+                let Some((module, entry)) = tiles.get(tile - TILES) else {
+                    return Outcome::None;
+                };
+                return self.module_target(*module, &entry.target);
             }
             Button::A if row == 0 => {
                 self.screen = Screen::Systems;
@@ -59,6 +87,17 @@ impl App {
                 return Outcome::None;
             }
             Button::A => {
+                let extra = self.modules.shortcuts();
+                if let Some((module, entry)) =
+                    shortcut.checked_sub(BEFORE).and_then(|n| extra.get(n))
+                {
+                    return self.module_target(*module, &entry.target);
+                }
+                let shortcut = if shortcut >= BEFORE {
+                    shortcut - extra.len()
+                } else {
+                    shortcut
+                };
                 return match shortcut {
                     0 => Outcome::Settings,
                     1 => Outcome::Updates,
@@ -67,7 +106,7 @@ impl App {
                     4 => Outcome::Action(SessionAction::Reboot),
                     5 => Outcome::Action(SessionAction::Shutdown),
                     _ => Outcome::None,
-                }
+                };
             }
             _ => {}
         }

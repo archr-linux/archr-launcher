@@ -350,6 +350,31 @@ fn sources(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
 
 /// Config entries and file names that look like catalog keys.
 const CONFIG_KEYS: &[&str] = &[
+    // Module protocol methods and events, store hosts and file names.
+    "action.invoke",
+    "config.get",
+    "config.set",
+    "focus.game",
+    "focus.system",
+    "game.ended",
+    "game.launch",
+    "game.started",
+    "launcher.started",
+    "settings.changed",
+    "settings.set",
+    "ui.notify",
+    "ui.update",
+    "github.com",
+    "launch.before",
+    "lucide.bin",
+    "cpu.svg",
+    "main.sh",
+    "run.entry",
+    "run.runtime",
+    "module.toml",
+    "modules.toml",
+    "reviewed.json",
+    "system.hostname",
     // Theme store hosts and file names.
     "api.github.com",
     "codeload.github.com",

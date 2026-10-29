@@ -343,6 +343,8 @@ pub(crate) struct TextCache<'font, 'texture> {
     entries: VecDeque<Entry<'texture>>,
     badges: VecDeque<(BadgeKey, Texture<'texture>)>,
     icons: HashMap<(Glyph, u32), Texture<'texture>>,
+    /// Modules' own icons, by source hash and size.
+    svgs: HashMap<(u64, u32), Texture<'texture>>,
     pub(crate) icon_loader: icons::IconLoader,
 }
 impl<'font, 'texture> TextCache<'font, 'texture> {
@@ -358,6 +360,7 @@ impl<'font, 'texture> TextCache<'font, 'texture> {
             entries: VecDeque::new(),
             badges: VecDeque::with_capacity(16),
             icons: HashMap::new(),
+            svgs: HashMap::new(),
             icon_loader: prepared.icon_loader,
         };
         for (source, width, style, surface) in prepared.entries {
@@ -467,6 +470,39 @@ impl<'font, 'texture> TextCache<'font, 'texture> {
             return canvas.copy(texture, None, panel);
         }
         canvas.copy_ex(texture, None, panel, angle, None, false, false)
+    }
+    /// A module's Lucide SVG (checked by the host), cached and tinted like
+    /// the icons.
+    pub fn draw_svg(
+        &mut self,
+        canvas: &mut Canvas<Window>,
+        svg: &str,
+        panel: Rect,
+        ink: Rgba,
+    ) -> Result<(), String> {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        svg.hash(&mut hasher);
+        let key = (hasher.finish(), panel.width());
+        if !self.svgs.contains_key(&key) {
+            let Ok(surface) = icons::rasterize(svg, panel.width()) else {
+                return Ok(());
+            };
+            if self.svgs.len() >= 32 {
+                self.svgs.clear();
+            }
+            let mut texture = self
+                .creator
+                .create_texture_from_surface(surface)
+                .map_err(|e| e.to_string())?;
+            texture.set_blend_mode(BlendMode::Blend);
+            texture.set_scale_mode(ScaleMode::Linear);
+            self.svgs.insert(key, texture);
+        }
+        let texture = self.svgs.get_mut(&key).expect("cached icon");
+        texture.set_color_mod(ink.r, ink.g, ink.b);
+        texture.set_alpha_mod(ink.a);
+        canvas.copy(texture, None, panel)
     }
     pub fn measure(&mut self, text: &str, face: Face, size: u16) -> Result<u32, String> {
         self.fonts.measure(text, face, size)

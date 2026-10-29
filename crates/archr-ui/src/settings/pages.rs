@@ -200,6 +200,11 @@ impl Settings {
             Page::Hotkeys => self.hotkeys_input(button),
             Page::Store | Page::StoreTheme => self.store_input(button),
             Page::Updates | Page::UpdatePackages => self.updates_input(button),
+            Page::Modules
+            | Page::ModuleInfo
+            | Page::Module(..)
+            | Page::ModuleStore
+            | Page::ModuleOffer => self.modules_input(button),
             _ => None,
         }
     }
@@ -258,6 +263,7 @@ impl Settings {
                 Effect::None
             }
             Id::CheevosAccount | Id::CheevosPassword => self.cheevos_typed(target, value),
+            Id::ModuleRow(_) => self.module_set(target, value),
             id => {
                 self.pending = Some(id);
                 Effect::Set(id, value)
@@ -339,6 +345,7 @@ impl Settings {
         match id {
             Id::Accent => self.open_custom(),
             Id::ThemeStore => return Some(self.open_store()),
+            Id::ModulesLink => self.open(Page::Modules),
             Id::NetplayLink => self.open(Page::Netplay),
             Id::ScraperLink => self.open(Page::Scraper),
             Id::MangohudLink => self.open(Page::Mangohud),
