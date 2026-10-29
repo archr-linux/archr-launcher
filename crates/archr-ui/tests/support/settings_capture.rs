@@ -116,6 +116,18 @@ fn pages() -> Vec<(&'static str, Settings)> {
     running.scrape.outcome = None;
     running.scrape.done = 140;
     running.scrape.system = "Super Nintendo".into();
+    let mut media = scraper.clone();
+    media.open(Page::ScraperMedia);
+    media.cursor = 2;
+    let mut media_all = media.clone();
+    media_all.values.insert(
+        Id::ScraperMedia,
+        "box,box3d,mix,screenshot,title,wheel,video,manual".into(),
+    );
+    media_all.cursor = 6;
+    let mut scraper_all = scraper.clone();
+    scraper_all.values = media_all.values.clone();
+    scraper_all.cursor = 3;
     use crate::settings::storage::{Card, Confirm};
     let mut storage = ready();
     storage.open(Page::Storage);
@@ -210,6 +222,9 @@ fn pages() -> Vec<(&'static str, Settings)> {
         ("scraper", scraper),
         ("scraper-running", running),
         ("scraper-unavailable", unavailable),
+        ("scraper-media", media),
+        ("scraper-media-all", media_all),
+        ("scraper-all-media", scraper_all),
         ("storage", storage),
         ("storage-internal", storage_internal),
         ("storage-backup", storage_backup),

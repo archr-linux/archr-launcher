@@ -10,8 +10,9 @@ pub(crate) mod games;
 pub(crate) mod information;
 pub use games::{GameCore, GameSystem, Games};
 pub mod network;
-mod pages;
+pub(crate) mod pages;
 use bluetooth::{Action, Device};
+pub use pages::MEDIA;
 pub mod storage;
 pub use information::{InfoCard, InfoDetail, InfoMeter, Information};
 use network::Network;
@@ -30,6 +31,7 @@ pub enum Page {
     Games,
     Netplay,
     Scraper,
+    ScraperMedia,
     Appearance,
     Keyboard,
     Storage,
@@ -49,6 +51,7 @@ impl Page {
             Self::Games => "settings.games",
             Self::Netplay => "settings.netplay",
             Self::Scraper => "settings.scraper",
+            Self::ScraperMedia => "settings.media",
             Self::Appearance => "settings.appearance",
             Self::Keyboard => "settings.keyboard",
             Self::Storage => "settings.storage",
@@ -60,6 +63,7 @@ impl Page {
         match self {
             Self::Wifi | Self::Bluetooth | Self::Services => Some("settings.network"),
             Self::Netplay | Self::Scraper => Some("settings.games"),
+            Self::ScraperMedia => Some("settings.scraper_short"),
             _ => None,
         }
     }
@@ -74,6 +78,7 @@ impl Page {
             Self::Games => pages::GAMES,
             Self::Netplay => pages::NETPLAY,
             Self::Scraper => pages::SCRAPER,
+            Self::ScraperMedia => pages::SCRAPER_MEDIA,
             Self::Appearance => pages::APPEARANCE,
             Self::Storage => storage::STORAGE,
             _ => &[],
@@ -130,6 +135,8 @@ pub enum Id {
     ScraperPassword,
     ScraperSystems,
     ScraperMedia,
+    /// One check box of the Media page: an index into `MEDIA`.
+    MediaKind(u8),
     ScraperMissing,
     ScraperStart,
     Theme,
@@ -193,7 +200,8 @@ impl Id {
             Self::MissingGames => ("netplay.show_missing", "1"),
             Self::ScraperSource => ("", "screenscraper"),
             Self::ScraperSystems => ("launcher.scraper.systems", ""),
-            Self::ScraperMedia => ("launcher.scraper.media", "box"),
+            // Comma-separated `MEDIA` tokens; "none" when nothing is checked.
+            Self::ScraperMedia => ("launcher.scraper.media", "box,screenshot,wheel"),
             Self::ScraperMissing => ("launcher.scraper.only_missing", "1"),
             Self::Theme => ("launcher.theme", "default"),
             Self::Accent => ("launcher.accent", ""),
@@ -214,6 +222,7 @@ impl Id {
             | Self::ScraperAccount
             | Self::ScraperPassword
             | Self::ScraperStart
+            | Self::MediaKind(_)
             | Self::StorageCard
             | Self::Backup
             | Self::RestoreBackup
@@ -257,7 +266,6 @@ impl Id {
             Self::UsbMode => &["disabled", "network", "file_transfer"],
             Self::Relay => &["none", "nyc", "madrid", "montreal", "saopaulo", "custom"],
             Self::ScraperSource => &["screenscraper"],
-            Self::ScraperMedia => &["box", "box,screenshot", "box,screenshot,wheel"],
             Self::Accent => &appearance::ACCENTS,
             Self::Background => &appearance::BACKGROUNDS,
             Self::Font => &appearance::FONTS,
@@ -291,8 +299,14 @@ impl Id {
 pub enum Kind {
     Toggle,
     Value,
-    Slider { min: u8, max: u8, step: u8 },
+    Slider {
+        min: u8,
+        max: u8,
+        step: u8,
+    },
     Action,
+    /// A check box toggled with A.
+    Check,
 }
 #[derive(Clone, Copy)]
 pub struct Row {
@@ -623,9 +637,7 @@ impl Settings {
             (Id::Relay, "saopaulo") => "settings.relay_saopaulo",
             (Id::Relay, "custom") => "settings.relay_custom",
             (Id::ScraperSource, _) => return "ScreenScraper".into(),
-            (Id::ScraperMedia, "box") => "settings.media_box",
-            (Id::ScraperMedia, "box,screenshot") => "settings.media_screen",
-            (Id::ScraperMedia, _) => "settings.media_all",
+            (Id::ScraperMedia, _) => "settings.choose_link",
             (Id::Nickname | Id::NetplayHost | Id::CustomServer, "") => "settings.define",
             (_, "") => "settings.unavailable",
             _ => return value.into(),
@@ -713,6 +725,7 @@ impl Settings {
             | Id::ScraperAccount
             | Id::ScraperSystems
             | Id::ScraperMedia
+            | Id::MediaKind(_)
             | Id::ScraperMissing
             | Id::ScraperStart => {
                 !self.scrape.available
@@ -742,6 +755,9 @@ impl Settings {
                 (Key('Y'), "settings.info_short"),
             ],
             Page::Info => &[(Key('A'), "settings.details"), (Key('B'), "hint.back")],
+            Page::ScraperMedia if !self.disabled(Id::ScraperMedia) => {
+                &[(Key('A'), "settings.mark"), (Key('B'), "hint.back")]
+            }
             Page::InfoDetail(_) => &[
                 (Pair('L', 'R'), "settings.previous_next"),
                 (Key('B'), "hint.back"),

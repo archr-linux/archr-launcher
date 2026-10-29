@@ -2,6 +2,7 @@
 use super::*;
 use archr_scraper::{Credentials, Engine, Job, Media, Options, Stop};
 use archr_ui::settings::network::{parse_scanlist, wpa_valid, Network};
+use archr_ui::settings::MEDIA;
 use std::os::unix::process::CommandExt;
 
 /// wifictl's worst case: scan, connect, hidden-network retry and DHCP wait.
@@ -221,15 +222,7 @@ impl Backend {
             .filter(|s| !s.is_empty())
             .into_iter()
             .collect();
-        options.media = get(Id::ScraperMedia)
-            .split(',')
-            .filter_map(|kind| match kind {
-                "box" => Some(Media::Box2d),
-                "screenshot" => Some(Media::Screenshot),
-                "wheel" => Some(Media::Wheel),
-                _ => None,
-            })
-            .collect();
+        options.media = Media::parse_list(&get(Id::ScraperMedia));
         fs::create_dir_all(&self.paths.cache).map_err(|e| e.to_string())?;
         let systems = crate::worker::definitions(&self.paths)?;
         let touched = systems
@@ -358,6 +351,17 @@ impl Backend {
                         self.save(id, value).map(|_| value.into())
                     } else {
                         Err("settings.invalid_address".into())
+                    }
+                }
+                Id::ScraperMedia => {
+                    let tokens: Vec<_> = value.split(',').collect();
+                    if value == "none"
+                        || Media::parse_list(value).len() == tokens.len()
+                            && tokens.iter().all(|t| MEDIA.iter().any(|m| m.0 == *t))
+                    {
+                        self.save(id, value).map(|_| value.into())
+                    } else {
+                        Err("Invalid option".into())
                     }
                 }
                 Id::ScraperSystems => {
@@ -584,6 +588,30 @@ mod tests {
             assert!(backend.scrape().is_err());
             assert!(!paths.store.join("scraper.toml").exists());
         }
+    }
+    #[test]
+    fn media_choices_are_scraper_kinds_and_only_known_lists_are_saved() {
+        let tokens: Vec<_> = MEDIA.iter().map(|m| m.0).collect();
+        assert_eq!(Media::parse_list(&tokens.join(",")), Media::ALL);
+        let (_root, paths) = fixture("");
+        let backend = Backend::new(paths.clone());
+        for bad in ["box,bogus", "box,box", "Box", ""] {
+            assert!(
+                backend.apply_page(Id::ScraperMedia, bad).unwrap().is_err(),
+                "{bad}"
+            );
+        }
+        for good in ["none", "box,video,manual"] {
+            assert_eq!(
+                backend.apply_page(Id::ScraperMedia, good),
+                Some(Ok(good.into()))
+            );
+        }
+        let saved =
+            SystemCfg::load(&paths.config)
+                .unwrap()
+                .get_setting(Id::ScraperMedia.key(), None, None);
+        assert_eq!(saved.as_deref(), Some("box,video,manual"));
     }
     #[test]
     fn invalid_port_and_nickname_are_not_published() {

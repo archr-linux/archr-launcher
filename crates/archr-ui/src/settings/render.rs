@@ -2,7 +2,11 @@
 use super::*;
 #[path = "render/bluetooth.rs"]
 mod bluetooth;
-use crate::settings::{games::SYSTEM_SECTION, Id, Kind, Page, Row, Settings, CATEGORIES};
+use crate::settings::{
+    games::SYSTEM_SECTION,
+    pages::{MEDIA, MEDIA_SECTION},
+    Id, Kind, Page, Row, Settings, CATEGORIES,
+};
 #[path = "render/appearance.rs"]
 mod appearance;
 #[path = "render/information.rs"]
@@ -49,7 +53,7 @@ fn placements(page: Page, rows: &[Row]) -> Vec<Placement> {
                 Page::Games if row.subtitle.is_some() => 40.,
                 Page::Netplay | Page::Games => 34.,
                 Page::Services => 38.,
-                Page::Storage => 40.,
+                Page::Storage | Page::ScraperMedia => 40.,
                 _ if row.subtitle.is_some() => 46.,
                 _ => 40.,
             };
@@ -656,6 +660,9 @@ impl View<'_, '_, '_> {
                     let name = state.games.fullname();
                     let heading = if section == SYSTEM_SECTION && !name.is_empty() {
                         name.to_owned()
+                    } else if section == MEDIA_SECTION {
+                        let count = state.media_tokens().len();
+                        self.tr(&format!("{section}|count={count}|total={}", MEDIA.len()))
                     } else {
                         self.tr(section)
                     }
@@ -702,8 +709,22 @@ impl View<'_, '_, '_> {
         };
         let face = selection(selected, Face::Regular, Face::Semibold);
         let label = self.tr(&state.label(row));
-        let subtitle = state.subtitle(row).map(|text| self.tr(&text));
         let full = (right - 46.) * 0.48;
+        // Action rows only show a short link on the right: the label may use the rest.
+        let link = match row.kind {
+            Kind::Action => {
+                self.ui
+                    .measure(&state.display_value(row.id, &self.ui.catalog), face, 14.)?
+                    as f32
+                    / self.ui.frame.scale
+            }
+            _ => f32::MAX,
+        };
+        let full = full.max(right - 46. - link - 24.);
+        let subtitle = match row.id {
+            Id::ScraperMedia => Some(self.media_summary(state, full)?),
+            _ => state.subtitle(row).map(|text| self.tr(&text)),
+        };
         let expand = subtitle.is_none()
             && row.kind == Kind::Value
             && self
@@ -751,6 +772,36 @@ impl View<'_, '_, '_> {
         } else {
             self.control(row.id, row.kind, state, selected, control)
         }
+    }
+    /// "Cover · screen · logo", or "3 of 8" when the names do not fit.
+    fn media_summary(&mut self, state: &Settings, width: f32) -> Result<String, String> {
+        let chosen = state.media_tokens();
+        if chosen.is_empty() {
+            return Ok(self.tr("settings.media_none"));
+        }
+        let names: Vec<String> = chosen
+            .iter()
+            .map(|token| self.tr(&format!("media.{token}_short")))
+            .collect();
+        let mut summary = names.join(" · ");
+        if let Some(first) = summary.chars().next() {
+            summary = first
+                .to_uppercase()
+                .chain(summary.chars().skip(1))
+                .collect();
+        }
+        Ok(
+            if self.ui.measure(&summary, Face::Regular, 12.)? as f32 / self.ui.frame.scale <= width
+            {
+                summary
+            } else {
+                self.tr(&format!(
+                    "settings.media_count|count={}|total={}",
+                    chosen.len(),
+                    MEDIA.len()
+                ))
+            },
+        )
     }
     /// Thin usage bar and "35% in use" below the games card row.
     fn card_meter(&mut self, percent: u8, top: f32) -> Result<(), String> {
@@ -808,6 +859,48 @@ impl View<'_, '_, '_> {
                 )?;
             }
             Kind::Value if id == Id::Accent => self.swatches(state, selected, (x, y, w, h))?,
+            Kind::Check => {
+                let Id::MediaKind(n) = id else {
+                    return Ok(());
+                };
+                let (token, _, _, used) = MEDIA[usize::from(n)];
+                let on = state.media_tokens().contains(&token);
+                let (bx, by) = (x + w - 18., y + (h - 18.) / 2.);
+                let rect = self.rect((bx, by, 18., 18.));
+                let radius = self.ui.px(5.) as f32;
+                if on {
+                    // On the highlighted row the box inverts to stay visible.
+                    let (fill, ink) = selection(
+                        selected,
+                        (self.theme.highlight_bg, self.theme.highlight_text),
+                        (self.theme.highlight_text, self.theme.highlight_bg),
+                    );
+                    self.ui.rounded(rect, radius, fill, None)?;
+                    let tick = self.rect((bx + 3., by + 3., 12., 12.));
+                    self.ui.icon(Glyph::Check, tick, ink)?;
+                } else {
+                    // A 1.5px dim ring: the box face drawn over a dim square.
+                    self.ui.rounded(rect, radius, self.theme.dim_text, None)?;
+                    let face = self.rect((bx + 1.5, by + 1.5, 15., 15.));
+                    let fill = selection(selected, self.theme.background, self.theme.highlight_bg);
+                    self.ui.rounded(face, radius - 1., fill, None)?;
+                }
+                if let Some(used) = used {
+                    self.text(
+                        (x, y, w - 28., h),
+                        &self.tr(used),
+                        (
+                            11.,
+                            selection(
+                                selected,
+                                self.theme.dim_text,
+                                self.theme.accent_text_secondary,
+                            ),
+                            Align::Right,
+                        ),
+                    )?;
+                }
+            }
             Kind::Toggle => {
                 let on = state.value(id) == "1";
                 let track = selection(
