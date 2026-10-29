@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Original pixel art for the Retro and Praia themes, drawn in code.
+"""Original pixel art for the Retro and Praia themes, drawn in code. The
+console pictures are illustrations kept as files; only the PICO-8 stand-in
+is drawn here.
 
 Everything is drawn at 1x on small RGBA images and grown by whole multiples
 with nearest neighbour (`grow`). Nothing is traced or copied: consoles are
@@ -530,120 +532,6 @@ GREY = {"hi": rgb("e8e8e4"), "lt": rgb("c9c9c4"), "md": rgb("9a9a98"), "dk": rgb
 G = GREY
 
 
-def pad_controller(img, x, y, body, buttons, w=20, h=9):
-    chunky(img, x, y, w, h, body, 2)
-    rect(img, x + 3, y + 4, 5, 1, G["ink"])
-    rect(img, x + 5, y + 2, 1, 5, G["ink"])
-    for i, c in enumerate(buttons):
-        px(img, x + w - 4 - (i % 2) * 3, y + 3 + (i // 2) * 2, c)
-        px(img, x + w - 3 - (i % 2) * 3, y + 3 + (i // 2) * 2, c)
-
-
-def nes(img):
-    rect(img, 4, 8, 50, 22, G["lt"])
-    rect(img, 4, 8, 50, 2, G["hi"])
-    rect(img, 4, 20, 50, 10, G["dk"])
-    rect(img, 8, 11, 30, 6, G["md"])
-    rect(img, 10, 13, 26, 2, G["dk"])
-    for i in range(4):
-        rect(img, 42, 11 + i * 2, 9, 1, G["dk"])
-    rect(img, 7, 23, 4, 4, G["ink"])
-    rect(img, 13, 23, 4, 4, G["ink"])
-    rect(img, 40, 24, 5, 2, G["red"])
-    rect(img, 47, 24, 5, 2, G["md"])
-    pad_controller(img, 30, 32, G["lt"], [G["red"], G["red"]])
-
-
-def snes(img):
-    chunky(img, 6, 10, 46, 18, G["lt"], 3)
-    rect(img, 8, 10, 42, 2, G["hi"])
-    chunky(img, 16, 6, 26, 6, G["md"], 1)
-    rect(img, 18, 7, 22, 2, G["dk"])
-    rect(img, 10, 18, 7, 3, G["purple"])
-    rect(img, 41, 18, 7, 3, G["lilac"])
-    rect(img, 20, 22, 18, 3, G["md"])
-    pad_controller(img, 4, 31, G["lt"], [G["purple"], G["lilac"], G["lilac"], G["purple"]], 24, 9)
-
-
-def handheld(img, body, screen, x=17, w=24, h=38):
-    chunky(img, x, 2, w, h, body, 2)
-    rect(img, x + 1, 2, w - 2, 1, G["hi"])
-    rect(img, x + 3, 5, w - 6, 15, G["coal"])
-    rect(img, x + 5, 7, w - 10, 11, screen)
-    rect(img, x + 4, 26, 5, 1, G["ink"])
-    rect(img, x + 6, 24, 1, 5, G["ink"])
-    rect(img, x + w - 8, 26, 2, 2, G["red"])
-    rect(img, x + w - 5, 24, 2, 2, G["red"])
-    for i in range(3):
-        rect(img, x + w - 7 + i * 2, 33, 1, 4, G["md"])
-
-
-def gb(img):
-    handheld(img, G["lt"], G["lcd"])
-    rect(img, 24, 10, 10, 2, G["lcd_dk"])
-    rect(img, 26, 13, 6, 3, G["lcd_md"])
-
-
-def gbc(img):
-    handheld(img, G["purple"], G["sky"])
-    rect(img, 22, 13, 14, 4, G["green"])
-    disc(img, 31, 10.5, 1.5, G["yellow"])
-
-
-def gba(img):
-    chunky(img, 3, 10, 52, 24, G["purple"], 5)
-    rect(img, 8, 10, 42, 1, G["lilac"])
-    rect(img, 17, 13, 24, 17, G["coal"])
-    rect(img, 19, 15, 20, 13, G["sky"])
-    rect(img, 19, 24, 20, 4, G["green"])
-    disc(img, 33.5, 18.5, 1.5, G["yellow"])
-    rect(img, 7, 20, 5, 1, G["ink"])
-    rect(img, 9, 18, 1, 5, G["ink"])
-    rect(img, 46, 18, 2, 2, G["lilac"])
-    rect(img, 49, 21, 2, 2, G["lilac"])
-
-
-def genesis(img):
-    chunky(img, 4, 10, 50, 18, G["black"], 3)
-    rect(img, 6, 10, 46, 1, G["coal"])
-    disc(img, 17, 18, 6, G["coal"])
-    disc(img, 17, 18, 4, G["black"])
-    disc(img, 17, 18, 2, G["coal"])
-    rect(img, 28, 13, 20, 4, G["coal"])
-    rect(img, 30, 14, 16, 2, G["ink"])
-    rect(img, 28, 22, 22, 2, G["red"])
-    pad_controller(img, 30, 31, G["black"], [G["coal"], G["coal"], G["red"], G["coal"]], 22, 9)
-
-
-def n64(img):
-    chunky(img, 6, 12, 46, 16, G["coal"], 4)
-    rect(img, 8, 12, 42, 1, G["md"])
-    rect(img, 20, 8, 18, 6, G["dk"])
-    rect(img, 22, 9, 14, 2, G["ink"])
-    for i, c in enumerate([G["red"], G["yellow"], G["green"], G["blue"]]):
-        rect(img, 12 + i * 10, 23, 5, 2, c)
-    # A generic three-grip pad.
-    rect(img, 18, 31, 22, 5, G["md"])
-    rect(img, 18, 35, 4, 5, G["md"])
-    rect(img, 27, 35, 4, 5, G["md"])
-    rect(img, 36, 35, 4, 5, G["md"])
-    px(img, 34, 32, G["yellow"])
-    px(img, 36, 33, G["blue"])
-    px(img, 22, 33, G["ink"])
-
-
-def psx(img):
-    chunky(img, 6, 8, 46, 22, G["lt"], 3)
-    rect(img, 8, 8, 42, 1, G["hi"])
-    disc(img, 22, 18, 8, G["md"])
-    disc(img, 22, 18, 6.5, G["lt"])
-    disc(img, 22, 18, 2, G["md"])
-    rect(img, 36, 12, 4, 3, G["md"])
-    rect(img, 43, 12, 4, 3, G["md"])
-    rect(img, 36, 24, 12, 2, G["dk"])
-    pad_controller(img, 30, 32, G["lt"], [G["teal"], G["red"], G["pink"], G["blue"]], 22, 9)
-
-
 def pico8(img):
     chunky(img, 12, 4, 34, 34, G["black"], 3)
     rect(img, 15, 7, 28, 22, G["ink"])
@@ -658,81 +546,7 @@ def pico8(img):
     rect(img, 17, 32, 6, 2, G["red"])
 
 
-def scummvm(img):
-    rect(img, 6, 4, 46, 30, G["coal"])
-    rect(img, 8, 6, 42, 22, G["sky"])
-    rect(img, 8, 22, 42, 6, G["green"])
-    rect(img, 30, 11, 10, 15, G["brown"])
-    rect(img, 32, 13, 6, 13, G["wood"])
-    px(img, 36, 19, G["yellow"])
-    disc(img, 15, 11, 3, G["yellow"])
-    arrow = ["1", "11", "121", "1221", "12221", "122221", "1221", "1001"]
-    for y, row in enumerate(arrow):
-        for x, bit in enumerate(row):
-            if bit != "0":
-                px(img, 20 + x, 18 + y, G["ink"] if bit == "1" else G["white"])
-    for i in range(5):
-        rect(img, 8 + i * 9, 30, 7, 3, G["md"])
-
-
-def tools(img):
-    for t in range(22):
-        rect(img, 14 + t, 34 - t, 3, 3, G["md"])
-    disc(img, 38, 10, 6, G["md"])
-    disc(img, 39, 9, 3, CLEAR)
-    rect(img, 39, 4, 6, 4, CLEAR)
-    for t in range(18):
-        rect(img, 40 - t, 33 - t, 2, 2, G["yellow"])
-    rect(img, 38, 31, 6, 6, G["red"])
-    disc(img, 15, 13, 7, G["dk"])
-    disc(img, 15, 13, 3, G["lt"])
-    for a in range(8):
-        x = 15 + 8 * math.cos(a * math.pi / 4)
-        y = 13 + 8 * math.sin(a * math.pi / 4)
-        rect(img, round(x) - 1, round(y) - 1, 2, 2, G["dk"])
-
-
-def ports(img):
-    chunky(img, 8, 26, 42, 12, G["black"], 2)
-    rect(img, 10, 26, 38, 1, G["coal"])
-    rect(img, 27, 12, 4, 15, G["md"])
-    disc(img, 29, 9, 6, G["red"])
-    disc(img, 27.5, 7.5, 2, G["white"])
-    rect(img, 37, 30, 4, 4, G["yellow"])
-    rect(img, 43, 30, 4, 4, G["sky"])
-    rect(img, 13, 31, 8, 2, G["coal"])
-
-
-def moonlight(img):
-    rect(img, 8, 10, 40, 26, G["coal"])
-    rect(img, 10, 12, 36, 20, G["ink"])
-    rect(img, 24, 36, 8, 3, G["md"])
-    rect(img, 18, 39, 20, 2, G["md"])
-    disc(img, 22, 21, 7, G["moon"])
-    disc(img, 25.5, 18.5, 6, G["ink"])
-    for x, y in [(36, 15), (40, 22), (33, 27), (14, 14)]:
-        px(img, x, y, G["white"])
-    for i in range(3):
-        rect(img, 40 + i * 4, 6 - i * 2, 2, 2 + i * 2, G["sky"])
-
-
-def music(img):
-    for x in (16, 34):
-        rect(img, x, 8, 3, 22, G["ink"])
-    rect(img, 16, 6, 21, 4, G["ink"])
-    disc(img, 13, 31, 5, G["pink"])
-    disc(img, 31, 31, 5, G["pink"])
-    disc(img, 11.5, 29.5, 1.5, G["white"])
-    disc(img, 29.5, 29.5, 1.5, G["white"])
-    rect(img, 42, 18, 12, 18, G["coal"])
-    disc(img, 48, 23, 3, G["md"])
-    disc(img, 48, 31, 4, G["md"])
-    disc(img, 48, 31, 2, G["ink"])
-
-
-CONSOLES = {"nes": nes, "snes": snes, "gb": gb, "gbc": gbc, "gba": gba, "genesis": genesis,
-            "n64": n64, "psx": psx, "pico-8": pico8, "scummvm": scummvm, "tools": tools,
-            "ports": ports, "moonlight": moonlight, "music": music}
+CONSOLES = {"pico-8": pico8}
 
 
 def console(name, ink=(26, 28, 44, 255)):

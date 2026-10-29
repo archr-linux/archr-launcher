@@ -15,7 +15,6 @@ import pixelart as P
 import sons
 
 B, S = P.BEACH, P.SWEETIE
-CONSOLES = list(P.CONSOLES)
 
 
 def save(img, out, name):
@@ -441,12 +440,13 @@ def build(theme, out, fonts, cc, consoles):
         (out / "fonts").mkdir(exist_ok=True)
         shutil.copy(fonts / name, out / "fonts" / name)
     (out / "systems").mkdir(exist_ok=True)
+    for stale in (out / "systems").iterdir():  # rebuilt whole: no leftovers
+        stale.unlink()
     for picture in sorted(consoles.glob("*.webp")):
         shutil.copy(picture, out / "systems" / picture.name)
-    # No console picture of their own yet: the drawn stand-ins.
-    for name in ["pico-8", "psp"]:
-        if not (out / "systems" / f"{name}.webp").exists():
-            save(P.console(name), out, f"systems/{name}.png")
+    # PICO-8 has no illustration yet: the drawn stand-in (PSP falls back
+    # to the default theme's picture).
+    save(P.console("pico-8"), out, "systems/pico-8.png")
     sons.main(theme, out / "sounds")
     (out / "README.md").write_text(
         README.format(title=title, en=en, pt=pt, fonts=font_note[0], note=font_note[1]), encoding="utf-8")
