@@ -36,10 +36,12 @@ type Handler = dyn Fn(&str) -> Option<(u16, Vec<u8>)> + Send + Sync;
 struct Mock {
     handler: Box<Handler>,
     seen: Mutex<Vec<String>>,
+    limits: Mutex<Vec<(String, u64)>>,
 }
 impl Http for Mock {
-    fn get(&self, url: &str, _limit: u64, _cancel: &AtomicBool) -> Result<Response, NetError> {
+    fn get(&self, url: &str, limit: u64, _cancel: &AtomicBool) -> Result<Response, NetError> {
         self.seen.lock().unwrap().push(url.to_owned());
+        self.limits.lock().unwrap().push((url.to_owned(), limit));
         match (self.handler)(url) {
             Some((status, body)) => Ok(Response { status, body }),
             None => Err(NetError::Failed),
@@ -51,6 +53,7 @@ fn mock(handler: impl Fn(&str) -> Option<(u16, Vec<u8>)> + Send + Sync + 'static
     Arc::new(Mock {
         handler: Box::new(handler),
         seen: Mutex::new(Vec::new()),
+        limits: Mutex::new(Vec::new()),
     })
 }
 
@@ -769,4 +772,188 @@ fn verify_rejects_malformed_success_replies_and_other_accounts() {
         ))
     });
     assert_eq!(engine(other, dir.path()).verify(), Err(Stop::Auth));
+}
+
+// ---- metadata, every media kind and single-game runs ----
+
+fn rich_xml() -> Vec<u8> {
+    "<Data><jeu id=\"5\">\
+<noms><nom region=\"jp\">Kurono</nom><nom region=\"us\">Chrono Trigger</nom></noms>\
+<synopsis><synopsis langue=\"en\">Time travel.</synopsis><synopsis langue=\"pt\">Viagem &amp; tempo.</synopsis></synopsis>\
+<editeur id=\"1\">Square&amp;nbsp;Soft</editeur><developpeur id=\"2\">Square</developpeur>\
+<joueurs>1</joueurs><note>19</note>\
+<dates><date region=\"jp\">1995-03-11</date><date region=\"us\">1995-08</date></dates>\
+<genres><genre id=\"1\" principale=\"1\" langue=\"en\">Role playing</genre>\
+<genre id=\"1\" principale=\"1\" langue=\"pt\">RPG</genre></genres>\
+<medias>\
+<media type=\"box-2D\" region=\"us\" format=\"png\">https://www.screenscraper.fr/m/box2d</media>\
+<media type=\"box-3D\" region=\"us\" format=\"png\">https://www.screenscraper.fr/m/box3d</media>\
+<media type=\"mixrbv2\" region=\"wor\" format=\"png\">https://www.screenscraper.fr/m/mix</media>\
+<media type=\"ss\" region=\"wor\" format=\"png\">https://www.screenscraper.fr/m/ss</media>\
+<media type=\"sstitle\" region=\"wor\" format=\"png\">https://www.screenscraper.fr/m/title</media>\
+<media type=\"wheel-hd\" region=\"wor\" format=\"png\">https://www.screenscraper.fr/m/wheel</media>\
+<media type=\"video-normalized\" format=\"mp4\">https://www.screenscraper.fr/m/video</media>\
+<media type=\"manuel\" region=\"us\" format=\"pdf\">https://www.screenscraper.fr/m/manual</media>\
+</medias></jeu></Data>"
+        .as_bytes()
+        .to_vec()
+}
+
+fn rich(url: &str) -> Option<(u16, Vec<u8>)> {
+    if url.contains("jeuInfos.php") {
+        Some((200, rich_xml()))
+    } else if url.ends_with("/m/video") {
+        Some((200, b"\0\0\0\x18ftypmp42 clip".to_vec()))
+    } else if url.ends_with("/m/manual") {
+        Some((200, b"%PDF-1.4 manual".to_vec()))
+    } else {
+        happy(url)
+    }
+}
+
+fn all_media(lang: &str) -> Options {
+    Options {
+        media: Media::ALL.to_vec(),
+        ..Options::new(lang)
+    }
+}
+
+#[test]
+fn media_setting_lists_parse_in_order_and_ignore_unknown_tokens() {
+    assert_eq!(
+        Media::parse_list("box, video,bogus,box,manual"),
+        [Media::Box2d, Media::Video, Media::Manual]
+    );
+    assert!(Media::parse_list("").is_empty());
+    let tokens: Vec<_> = Media::ALL.iter().map(|m| m.token()).collect();
+    assert_eq!(Media::parse_list(&tokens.join(",")), Media::ALL);
+}
+
+#[test]
+fn every_media_kind_and_the_metadata_land_in_the_gamelist() {
+    let dir = tempfile::tempdir().unwrap();
+    let sys = system(dir.path(), &["Chrono.sfc"]);
+    let http = mock(rich);
+    let (_, report) = finish(
+        &engine(http.clone(), &dir.path().join("c")).start(vec![sys.clone()], all_media("pt-BR")),
+    );
+    assert_eq!((report.stop, report.progress.scraped), (Stop::Completed, 1));
+    for file in [
+        "images/Chrono.png",
+        "box3d/Chrono.png",
+        "mix/Chrono.png",
+        "screenshots/Chrono.png",
+        "titlescreens/Chrono.png",
+        "wheel/Chrono.png",
+        "videos/Chrono.mp4",
+        "manuals/Chrono.pdf",
+    ] {
+        assert!(sys.path.join("media").join(file).is_file(), "{file}");
+    }
+    let xml = fs::read_to_string(sys.path.join("gamelist.xml")).unwrap();
+    for tag in [
+        "<name>Chrono Trigger</name>",
+        "<desc>Viagem &amp; tempo.</desc>",
+        "<releasedate>19950801T000000</releasedate>",
+        "<players>1</players>",
+        "<rating>0.95</rating>",
+        "<genre>RPG</genre>",
+        "<developer>Square</developer>",
+        "<publisher>Square Soft</publisher>",
+        "<thumbnail>./media/images/Chrono.png</thumbnail>",
+        "<image>./media/screenshots/Chrono.png</image>",
+        "<marquee>./media/wheel/Chrono.png</marquee>",
+        "<video>./media/videos/Chrono.mp4</video>",
+        "<manual>./media/manuals/Chrono.pdf</manual>",
+        "<titleshot>./media/titlescreens/Chrono.png</titleshot>",
+        "<boxart>./media/box3d/Chrono.png</boxart>",
+        "<mix>./media/mix/Chrono.png</mix>",
+    ] {
+        assert!(xml.contains(tag), "{tag} missing:\n{xml}");
+    }
+    // The library reads it all back.
+    let game = scan_system(&sys).remove(0);
+    assert_eq!(game.name, "Chrono Trigger");
+    assert_eq!(game.details.genre, "RPG");
+    assert_eq!(game.details.rating, Some(95));
+    assert!(game.details.logo.is_some() && game.details.screenshot.is_some());
+    assert!(game.video.is_some());
+    // Each asset kind is fetched under its own size cap.
+    let limits = http.limits.lock().unwrap();
+    let cap = |end: &str| limits.iter().find(|(u, _)| u.ends_with(end)).unwrap().1;
+    assert_eq!(cap("/m/box2d"), 8 << 20);
+    assert_eq!(cap("/m/video"), 16 << 20);
+    assert_eq!(cap("/m/manual"), 24 << 20);
+
+    // English picks the English text.
+    let dir = tempfile::tempdir().unwrap();
+    let sys = system(dir.path(), &["Chrono.sfc"]);
+    finish(&engine(mock(rich), &dir.path().join("c")).start(vec![sys.clone()], Options::new("en")));
+    let xml = fs::read_to_string(sys.path.join("gamelist.xml")).unwrap();
+    assert!(
+        xml.contains("<desc>Time travel.</desc>") && xml.contains("<genre>Role playing</genre>")
+    );
+}
+
+#[test]
+fn error_text_served_as_video_or_manual_is_not_saved() {
+    let dir = tempfile::tempdir().unwrap();
+    let sys = system(dir.path(), &["Chrono.sfc"]);
+    let http = mock(|url| {
+        if url.ends_with("/m/video") || url.ends_with("/m/manual") {
+            Some((200, b"Erreur : media introuvable".to_vec()))
+        } else {
+            rich(url)
+        }
+    });
+    let mut opts = Options::new("en");
+    opts.media = vec![Media::Video, Media::Manual];
+    let (_, report) = finish(&engine(http, &dir.path().join("c")).start(vec![sys.clone()], opts));
+    assert_eq!(report.progress.failed, 1);
+    assert!(!sys.path.join("media/videos").exists());
+    assert!(!sys.path.join("media/manuals").exists());
+}
+
+#[test]
+fn bulk_runs_keep_user_edits_and_a_forced_single_game_run_replaces_them() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = dir.path().join("cache");
+    let sys = system(dir.path(), &["Chrono.sfc", "Other.sfc"]);
+    fs::write(
+        sys.path.join("gamelist.xml"),
+        "<gameList><game><path>./Chrono.sfc</path><name>Mine</name><favorite>true</favorite></game></gameList>",
+    )
+    .unwrap();
+    let mut opts = Options::new("en");
+    opts.only_missing = false;
+    finish(&engine(mock(rich), &cache).start(vec![sys.clone()], opts));
+    let xml = fs::read_to_string(sys.path.join("gamelist.xml")).unwrap();
+    assert!(xml.contains("<name>Mine</name>") && xml.contains("<desc>Time travel.</desc>"));
+
+    // An interrupted bulk run leaves a journal that the single run must not touch.
+    fs::write(cache.join("scraper-journal.txt"), "pending bulk run\n").unwrap();
+    let http = mock(rich);
+    let only = sys.path.join("Chrono.sfc");
+    let opts = Options {
+        game: Some(only.clone()),
+        force: true,
+        ..Options::new("en")
+    };
+    let (_, report) = finish(&engine(http.clone(), &cache).start(vec![sys.clone()], opts));
+    assert_eq!((report.stop, report.progress.total), (Stop::Completed, 1));
+    assert_eq!(report.progress.scraped, 1);
+    let xml = fs::read_to_string(sys.path.join("gamelist.xml")).unwrap();
+    assert!(xml.contains("<name>Chrono Trigger</name>") && !xml.contains("Mine"));
+    assert!(xml.contains("<favorite>true</favorite>"));
+    // The cover existed already; forced runs fetch it again.
+    assert!(http
+        .seen
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|u| u.ends_with("/m/box2d")));
+    assert_eq!(
+        fs::read_to_string(cache.join("scraper-journal.txt")).unwrap(),
+        "pending bulk run\n"
+    );
 }

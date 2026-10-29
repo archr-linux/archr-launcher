@@ -5,7 +5,7 @@ use crate::{
     http::{trusted, Curl, Http, NetError},
     systems::system_id,
 };
-use archr_index::{clean_name, scan_system, Game, SystemDef};
+use archr_index::{clean_name, scan_system, update_gamelist, Game, GameUpdate, SystemDef};
 use archr_io::atomic_publish;
 use std::{
     collections::HashSet,
@@ -30,6 +30,9 @@ const JOURNAL: &str = "scraper-journal.txt";
 const MAX_THREADS: usize = 4;
 const HASH_LIMIT: u64 = 256 << 20;
 const IMAGE_LIMIT: u64 = 8 << 20;
+/// Normalized preview clips are ~2 MB; manuals are scanned PDFs.
+const VIDEO_LIMIT: u64 = 16 << 20;
+const MANUAL_LIMIT: u64 = 24 << 20;
 /// Box art never needs more than this.
 const MAX_SIDE: u32 = 4096;
 const MAX_PIXELS: u64 = 4 << 20;
@@ -53,8 +56,13 @@ pub fn available() -> bool {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Media {
     Box2d,
+    Box3d,
+    Mix,
     Screenshot,
+    Title,
     Wheel,
+    Video,
+    Manual,
 }
 
 #[derive(Clone, Debug)]
@@ -66,12 +74,17 @@ pub struct Options {
     /// Skip games already finished by an earlier (interrupted) run.
     pub resume: bool,
     pub media: Vec<Media>,
-    /// Launcher language (`pt-BR`, `en`, ...): picks the preferred art region.
+    /// Launcher language (`pt-BR`, `en`, ...): picks the preferred art region
+    /// and the description language.
     pub language: String,
+    /// Only this ROM (a "scrape again" from the game details); no journal.
+    pub game: Option<PathBuf>,
+    /// Fetch every chosen asset and replace gamelist fields the user may have edited.
+    pub force: bool,
 }
 
 impl Options {
-    /// Box art only (the library reads nothing else yet); only games without art; resumable.
+    /// Box art only; only games without art; resumable.
     pub fn new(language: &str) -> Self {
         Self {
             systems: Vec::new(),
@@ -79,6 +92,8 @@ impl Options {
             resume: true,
             media: vec![Media::Box2d],
             language: language.to_owned(),
+            game: None,
+            force: false,
         }
     }
 }
@@ -298,10 +313,16 @@ impl Engine {
                 .store(info.max_requests_per_day - info.requests_today, Relaxed);
         }
 
-        let regions = regions(&options.language);
-        let signature = signature(options, &regions);
+        let prefs = Prefs {
+            regions: regions(&options.language),
+            lang: language(&options.language),
+            force: options.force,
+        };
+        let signature = signature(options, &prefs.regions);
+        // A single-game run never touches an interrupted bulk run's journal.
+        let journaled = options.game.is_none();
         let journal = self.cache.join(JOURNAL);
-        let finished: HashSet<String> = match options.resume {
+        let finished: HashSet<String> = match options.resume && journaled {
             true => fs::read_to_string(&journal)
                 .unwrap_or_default()
                 .lines()
@@ -319,6 +340,9 @@ impl Engine {
                 if cancel.load(Relaxed) {
                     return ended(Stop::Cancelled, progress);
                 }
+                if options.game.as_ref().is_some_and(|only| *only != game.path) {
+                    continue;
+                }
                 let key = format!(
                     "{}\t{}\t{signature}",
                     system.path.display(),
@@ -329,7 +353,7 @@ impl Engine {
                 let done = finished.contains(&format!("{key}\tmiss"))
                     || (finished.contains(&format!("{key}\tfound"))
                         && options.media.iter().all(|&k| present(system, &game, k)));
-                if needed.is_empty() || done {
+                if !options.force && (done || (options.only_missing && needed.is_empty())) {
                     progress.skipped += 1;
                 } else {
                     items.push(Item {
@@ -344,11 +368,15 @@ impl Engine {
         }
         progress.total = items.len();
         let _ = fs::create_dir_all(&self.cache);
-        let journal = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(journal)
-            .ok();
+        let journal = journaled
+            .then(|| {
+                OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(journal)
+                    .ok()
+            })
+            .flatten();
         let shared = Shared {
             progress: Mutex::new(progress),
             journal: Mutex::new(journal),
@@ -364,7 +392,7 @@ impl Engine {
                         let Some(item) = items.get(shared.next.fetch_add(1, Relaxed)) else {
                             break;
                         };
-                        match self.scrape(&run, &regions, item) {
+                        match self.scrape(&run, &prefs, item) {
                             Err(reason) => {
                                 shared.reason.lock().unwrap().get_or_insert(reason);
                                 cancel.store(true, Relaxed);
@@ -385,7 +413,7 @@ impl Engine {
             (None, false) => Stop::Completed,
         };
         // The journal only carries an interrupted job over to the next run.
-        if reason == Stop::Completed {
+        if reason == Stop::Completed && journaled {
             drop(shared.journal.lock().unwrap().take());
             let _ = fs::remove_file(self.cache.join(JOURNAL));
         }
@@ -393,7 +421,7 @@ impl Engine {
     }
 
     /// `Err` is a run-ending condition; per-game problems are `Ok(Failed)`.
-    fn scrape(&self, run: &Run, regions: &[&str], item: &Item) -> Result<Outcome, Stop> {
+    fn scrape(&self, run: &Run, prefs: &Prefs, item: &Item) -> Result<Outcome, Stop> {
         let sys = item.id.to_string();
         let name = item
             .game
@@ -440,24 +468,20 @@ impl Engine {
                 }
             }
         };
-        self.download(run, regions, item, &hit)
+        self.download(run, prefs, item, &hit)
     }
 
-    /// Fetches each needed asset; any failed one makes the game retryable.
-    fn download(
-        &self,
-        run: &Run,
-        regions: &[&str],
-        item: &Item,
-        hit: &Hit,
-    ) -> Result<Outcome, Stop> {
+    /// Fetches each needed asset, then merges the text and the saved paths
+    /// into the system's gamelist; any failure makes the game retryable.
+    fn download(&self, run: &Run, prefs: &Prefs, item: &Item, hit: &Hit) -> Result<Outcome, Stop> {
         let stem = item.game.path.file_stem().unwrap_or_default();
-        let (mut saved, mut failed) = (0, 0);
+        let mut fields = Vec::new();
+        let mut failed = 0;
         for &kind in &item.needed {
-            let Some(url) = pick(hit.medias(), kind.types(), regions) else {
+            let Some(url) = pick(hit.medias(), kind.types(), &prefs.regions) else {
                 continue;
             };
-            let body = match self.call(&url, IMAGE_LIMIT, run) {
+            let body = match self.call(&url, kind.limit(), run) {
                 Ok(body) => body,
                 Err(Call::Stop(stop)) => return Err(stop),
                 Err(_) => {
@@ -465,7 +489,7 @@ impl Engine {
                     continue;
                 }
             };
-            let Some(ext) = image_ext(&body) else {
+            let Some(ext) = kind.validate(&body) else {
                 failed += 1;
                 continue;
             };
@@ -473,14 +497,47 @@ impl Engine {
             file.push(format!(".{ext}"));
             let dest = item.system.path.join("media").join(kind.dir()).join(file);
             match atomic_publish(&dest, false, |f| f.write_all(&body)) {
-                Ok(()) => saved += 1,
+                Ok(()) => fields.push((kind.tag(), dest.to_string_lossy().into_owned())),
                 Err(_) => failed += 1,
             }
         }
-        Ok(match (saved, failed) {
-            (_, 1..) => Outcome::Failed,
-            (0, 0) => Outcome::NotFound,
-            _ => Outcome::Scraped,
+        let meta = hit.meta(&prefs.lang, &prefs.regions);
+        fields.extend(
+            [
+                ("name", meta.name),
+                ("desc", meta.desc),
+                ("releasedate", meta.releasedate),
+                ("players", meta.players),
+                ("rating", meta.rating),
+                ("genre", meta.genre),
+                ("developer", meta.developer),
+                ("publisher", meta.publisher),
+            ]
+            .into_iter()
+            .filter(|(_, value)| !value.is_empty()),
+        );
+        if fields.is_empty() {
+            return Ok(if failed > 0 {
+                Outcome::Failed
+            } else {
+                Outcome::NotFound
+            });
+        }
+        let update = GameUpdate {
+            rom: item.game.path.clone(),
+            fields,
+        };
+        if let Err(error) = update_gamelist(&item.system.path, &[update], prefs.force) {
+            log::warn!(
+                "scraper: cannot update the {} gamelist: {error}",
+                item.system.name
+            );
+            return Ok(Outcome::Failed);
+        }
+        Ok(if failed > 0 {
+            Outcome::Failed
+        } else {
+            Outcome::Scraped
         })
     }
 
@@ -625,28 +682,122 @@ fn signature(options: &Options, regions: &[&str]) -> String {
 }
 
 impl Media {
+    pub const ALL: [Media; 8] = [
+        Media::Box2d,
+        Media::Box3d,
+        Media::Mix,
+        Media::Screenshot,
+        Media::Title,
+        Media::Wheel,
+        Media::Video,
+        Media::Manual,
+    ];
+    /// Name in the comma-separated `launcher.scraper.media` setting.
+    pub const fn token(self) -> &'static str {
+        match self {
+            Media::Box2d => "box",
+            Media::Box3d => "box3d",
+            Media::Mix => "mix",
+            Media::Screenshot => "screenshot",
+            Media::Title => "title",
+            Media::Wheel => "wheel",
+            Media::Video => "video",
+            Media::Manual => "manual",
+        }
+    }
+    /// Known tokens of a setting value, in order, without repeats.
+    pub fn parse_list(value: &str) -> Vec<Media> {
+        let mut kinds: Vec<Media> = Vec::new();
+        for token in value.split(',').map(str::trim) {
+            if let Some(&kind) = Self::ALL.iter().find(|m| m.token() == token) {
+                if !kinds.contains(&kind) {
+                    kinds.push(kind);
+                }
+            }
+        }
+        kinds
+    }
     /// Folder under `<system>/media/`.
     const fn dir(self) -> &'static str {
         match self {
             Media::Box2d => "images",
+            Media::Box3d => "box3d",
+            Media::Mix => "mix",
             Media::Screenshot => "screenshots",
+            Media::Title => "titlescreens",
             Media::Wheel => "wheel",
+            Media::Video => "videos",
+            Media::Manual => "manuals",
+        }
+    }
+    /// The gamelist.xml tag ES uses for this asset.
+    const fn tag(self) -> &'static str {
+        match self {
+            Media::Box2d => "thumbnail",
+            Media::Box3d => "boxart",
+            Media::Mix => "mix",
+            Media::Screenshot => "image",
+            Media::Title => "titleshot",
+            Media::Wheel => "marquee",
+            Media::Video => "video",
+            Media::Manual => "manual",
         }
     }
     /// ScreenScraper media types, best first.
     const fn types(self) -> &'static [&'static str] {
         match self {
             Media::Box2d => &["box-2D"],
+            Media::Box3d => &["box-3D"],
+            Media::Mix => &["mixrbv1", "mixrbv2"],
             Media::Screenshot => &["ss"],
+            Media::Title => &["sstitle"],
             Media::Wheel => &["wheel", "wheel-hd"],
+            Media::Video => &["video-normalized", "video"],
+            Media::Manual => &["manuel"],
+        }
+    }
+    const fn limit(self) -> u64 {
+        match self {
+            Media::Video => VIDEO_LIMIT,
+            Media::Manual => MANUAL_LIMIT,
+            _ => IMAGE_LIMIT,
+        }
+    }
+    const fn exts(self) -> &'static [&'static str] {
+        match self {
+            Media::Video => &["mp4"],
+            Media::Manual => &["pdf"],
+            _ => &["png", "jpg"],
+        }
+    }
+    /// Extension for a complete file of this kind; the service answers errors as text.
+    fn validate(self, body: &[u8]) -> Option<&'static str> {
+        match self {
+            Media::Video => (body.get(4..8) == Some(b"ftyp")).then_some("mp4"),
+            Media::Manual => body.starts_with(b"%PDF-").then_some("pdf"),
+            _ => image_ext(body),
         }
     }
 }
 
+/// Art region order, description language and whether edits may be replaced.
+struct Prefs {
+    regions: Vec<&'static str>,
+    lang: String,
+    force: bool,
+}
+
 fn present(system: &SystemDef, game: &Game, kind: Media) -> bool {
+    let indexed = match kind {
+        Media::Box2d => game.image.is_some(),
+        Media::Screenshot => game.details.screenshot.is_some(),
+        Media::Wheel => game.details.logo.is_some(),
+        Media::Video => game.video.is_some(),
+        _ => false,
+    };
     let stem = game.path.file_stem().unwrap_or_default();
-    kind == Media::Box2d && game.image.is_some()
-        || ["png", "jpg"].iter().any(|ext| {
+    indexed
+        || kind.exts().iter().any(|ext| {
             let mut file = stem.to_os_string();
             file.push(format!(".{ext}"));
             system
@@ -664,7 +815,7 @@ fn needed(options: &Options, system: &SystemDef, game: &Game) -> Vec<Media> {
         .media
         .iter()
         .copied()
-        .filter(|&kind| !(options.only_missing && present(system, game, kind)))
+        .filter(|&kind| options.force || !(options.only_missing && present(system, game, kind)))
         .collect();
     kinds.dedup();
     kinds
@@ -673,7 +824,7 @@ fn needed(options: &Options, system: &SystemDef, game: &Game) -> Vec<Media> {
 /// Extension when `bytes` is a complete PNG/JPEG that decodes. The size is
 /// read from the header first: decoder scratch (progressive JPEG) ignores the
 /// allocation limit. Decodes are serialized so worker threads never stack up
-/// big buffers on a small device. The service answers errors as text with 200.
+/// big buffers on a small device.
 fn image_ext(bytes: &[u8]) -> Option<&'static str> {
     use image::{ImageFormat, ImageReader, Limits};
     static ONE_DECODE: Mutex<()> = Mutex::new(());
@@ -717,6 +868,14 @@ fn rom_hashes(path: &Path, cancel: &AtomicBool) -> Option<crate::hash::Digest> {
     (!sheet && meta.len() > 0)
         .then(|| digest(path, cancel).ok())
         .flatten()
+}
+
+/// Two-letter description language for a launcher language.
+fn language(language: &str) -> String {
+    match language.split(['-', '_']).next().unwrap_or("") {
+        "" => "en".into(),
+        lang => lang.to_ascii_lowercase(),
+    }
 }
 
 /// Preferred art regions for a launcher language, then ES's generic fallbacks.
