@@ -48,6 +48,7 @@ pub const GAMES: &[Row] = &[
 ];
 pub const APPEARANCE: &[Row] = &[
     row(Id::Theme, "settings.theme", Kind::Value),
+    row(Id::ThemeStore, "settings.theme_store", Kind::Action),
     row(Id::View, "settings.view", Kind::Value),
     row(Id::Accent, "settings.accent", Kind::Value),
     row(Id::Background, "settings.background", Kind::Value),
@@ -197,6 +198,7 @@ impl Settings {
             Page::MangohudItems => Some(self.mangohud_items_input(button)),
             Page::LauncherControls => self.launcher_controls_input(button),
             Page::Hotkeys => self.hotkeys_input(button),
+            Page::Store | Page::StoreTheme => self.store_input(button),
             _ => None,
         }
     }
@@ -335,6 +337,7 @@ impl Settings {
     pub(super) fn activate(&mut self, id: Id) -> Option<Effect> {
         match id {
             Id::Accent => self.open_custom(),
+            Id::ThemeStore => return Some(self.open_store()),
             Id::NetplayLink => self.open(Page::Netplay),
             Id::ScraperLink => self.open(Page::Scraper),
             Id::MangohudLink => self.open(Page::Mangohud),

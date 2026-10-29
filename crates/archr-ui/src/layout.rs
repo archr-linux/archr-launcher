@@ -120,7 +120,7 @@ pub struct View {
 }
 
 /// A display name, the same everywhere or per language (`en`, `pt_BR`, ...).
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Names(Vec<(String, String)>);
 impl Names {
     pub fn plain(name: &str) -> Self {
@@ -147,6 +147,15 @@ impl Names {
                 Self::default()
             }
         }
+    }
+    /// Each text at most `limit` characters.
+    pub(crate) fn truncated(self, limit: usize) -> Self {
+        Self(
+            self.0
+                .into_iter()
+                .map(|(language, text)| (language, text.chars().take(limit).collect()))
+                .collect(),
+        )
     }
     /// The name for `language` (`pt_BR` also matches `pt`), then English,
     /// then any; `None` when the theme gave none.

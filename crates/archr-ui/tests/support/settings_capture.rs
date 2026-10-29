@@ -923,3 +923,279 @@ fn capture_achievements() {
         frame(&mut ui, &app, "jogo-sem-formato");
     }
 }
+/// A theme's preview as GitHub would serve it: its own colours, a list and a cover.
+fn store_preview(
+    dir: &std::path::Path,
+    name: &str,
+    colors: ([u8; 3], [u8; 3], [u8; 3]),
+) -> std::path::PathBuf {
+    let (back, ink, accent) = colors;
+    let path = dir.join(format!("{name}.png"));
+    image::RgbaImage::from_fn(640, 480, |x, y| {
+        let row = (y as i32 - 70) / 44;
+        let c = if (412..600).contains(&x) && (80..380).contains(&y) {
+            ink.map(|v| v / 2 + back[0] / 4)
+        } else if (30..380).contains(&x)
+            && (70..334).contains(&(y as i32))
+            && (y as i32 - 70) % 44 < 30
+        {
+            if row == 1 {
+                accent
+            } else {
+                ink.map(|v| (u16::from(v) * 2 / 5 + u16::from(back[0]) * 3 / 5) as u8)
+            }
+        } else if !(44..432).contains(&y) {
+            back.map(|v| v.saturating_add(12))
+        } else {
+            back
+        };
+        image::Rgba([c[0], c[1], c[2], 255])
+    })
+    .save(&path)
+    .unwrap();
+    path
+}
+fn store_pages(dir: &std::path::Path) -> Vec<(&'static str, Settings)> {
+    use crate::settings::store::{Card, Detail, Reply, Tab};
+    let card =
+        |owner: &str, repo: &str, name: &str, stars: u64, preview: Option<std::path::PathBuf>| {
+            Card {
+                owner: owner.into(),
+                repo: repo.into(),
+                name: crate::layout::Names::plain(name),
+                stars,
+                branch: "main".into(),
+                pushed: "2026-10-12".into(),
+                preview,
+            }
+        };
+    let cards = vec![
+        card(
+            "archr-linux",
+            "grafite",
+            "Grafite",
+            312,
+            Some(store_preview(
+                dir,
+                "grafite",
+                ([11, 15, 20], [230, 237, 243], [30, 136, 255]),
+            )),
+        ),
+        card(
+            "archr-linux",
+            "praia",
+            "Praia",
+            260,
+            Some(store_preview(
+                dir,
+                "praia",
+                ([10, 37, 64], [243, 246, 250], [255, 201, 60]),
+            )),
+        ),
+        card(
+            "kaio-dev",
+            "neon-arcade",
+            "Neon Arcade",
+            214,
+            Some(store_preview(
+                dir,
+                "neon",
+                ([18, 0, 34], [245, 230, 255], [255, 46, 151]),
+            )),
+        ),
+        card(
+            "marina-s",
+            "papel",
+            "Papel",
+            98,
+            Some(store_preview(
+                dir,
+                "papel",
+                ([244, 241, 234], [31, 27, 22], [210, 69, 43]),
+            )),
+        ),
+        card(
+            "retrofolks",
+            "game-boy",
+            "Game Boy",
+            77,
+            Some(store_preview(
+                dir,
+                "gb",
+                ([155, 188, 15], [15, 56, 15], [15, 56, 15]),
+            )),
+        ),
+        card("sw-themes", "mono", "Mono", 41, None),
+        card(
+            "ana",
+            "aurora-boreal-extremamente-longa",
+            "Aurora Boreal Extremamente Longa",
+            9,
+            None,
+        ),
+    ];
+    let mut grid = ready();
+    grid.open(Page::Appearance);
+    grid.open(Page::Store);
+    grid.store.fetched = Some(std::time::SystemTime::now());
+    grid.store_reply(Reply::Installed(
+        [
+            ("archr-linux-grafite".to_owned(), "a".to_owned()),
+            ("archr-linux-praia".to_owned(), "b".to_owned()),
+        ]
+        .into_iter()
+        .collect(),
+        cards[..2].to_vec(),
+    ));
+    grid.store.tab = Tab::Popular;
+    grid.store_reply(Reply::Listed {
+        tab: Tab::Popular,
+        cards: cards.clone(),
+        problem: None,
+        fetched: Some(std::time::SystemTime::now()),
+    });
+    grid.cursor = 2;
+    let mut lower = grid.clone();
+    lower.cursor = 6;
+    let mut detail = grid.clone();
+    detail.handle(Button::A);
+    let shots: Vec<_> = (1..=3)
+        .map(|n| {
+            store_preview(
+                dir,
+                &format!("neon-{n}"),
+                ([18 + n * 10, 0, 34], [245, 230, 255], [255, 46, 151]),
+            )
+        })
+        .collect();
+    let mut facts = Detail::describe(
+        cards[2].clone(),
+        "name = \"Neon Arcade\"\ndescription = { en = \"Neon pink over deep purple, a glowing showcase and arcade sounds.\", \
+         pt_BR = \"Rosa neon sobre roxo profundo, vitrine com brilho e sons de fliperama.\", \
+         ru = \"Неоново-розовый на глубоком фиолетовом, витрина с подсветкой и звуки игровых автоматов.\" }\n\
+         author = \"kaio-dev\"\nversion = \"1.2.0\"\nlicense = \"CC BY 4.0\"\n",
+        &[
+            ("theme.toml".into(), 2_000),
+            ("fonts/Neon.ttf".into(), 2_400_000),
+            ("systems/snes.png".into(), 900_000),
+            ("sounds/move.ogg".into(), 300_000),
+        ],
+        "0.1.0",
+    )
+    .unwrap();
+    facts.date = "2026-10-12".into();
+    facts.reference = "v1.2.0".into();
+    facts.tree = "t2".into();
+    facts.images = [cards[2].preview.clone().unwrap()]
+        .into_iter()
+        .chain(shots)
+        .collect();
+    detail.store_reply(Reply::Detail(Ok(Box::new(facts))));
+    let mut loading = grid.clone();
+    loading.handle(Button::A);
+    let mut installing = detail.clone();
+    installing.handle(Button::A);
+    let mut installed = installing.clone();
+    let mut map = installed.store.installed.clone();
+    map.insert("kaio-dev-neon-arcade".into(), "t2".into());
+    installed.store_reply(Reply::Installed(map, cards[..3].to_vec()));
+    installed.store_reply(Reply::Done(Ok("store.installed_ok")));
+    let mut remove = installed.clone();
+    remove.error = None;
+    remove.handle(Button::X);
+    let mut offline = ready();
+    offline.open(Page::Appearance);
+    offline.open(Page::Store);
+    offline.store_reply(Reply::Listed {
+        tab: Tab::Popular,
+        cards: Vec::new(),
+        problem: Some("store.offline"),
+        fetched: None,
+    });
+    let mut limited = offline.clone();
+    limited.store_reply(Reply::Listed {
+        tab: Tab::Popular,
+        cards: Vec::new(),
+        problem: Some("store.rate_limited"),
+        fetched: None,
+    });
+    let mut saved = grid.clone();
+    saved.store.problem = Some("store.rate_limited");
+    let mut mine = installed.clone();
+    mine.handle(Button::B);
+    mine.error = None;
+    mine.handle(Button::L);
+    mine.store.loading = false;
+    vec![
+        ("loja-grade", grid),
+        ("loja-grade-rolada", lower),
+        ("loja-detalhes-carregando", loading),
+        ("loja-detalhes", detail),
+        ("loja-instalando", installing),
+        ("loja-instalado-usar-agora", installed),
+        ("loja-remover", remove),
+        ("loja-instalados", mine),
+        ("loja-sem-rede", offline),
+        ("loja-limite", limited),
+        ("loja-limite-lista-salva", saved),
+    ]
+}
+#[test]
+#[ignore = "manual capture, ARCHR_SETTINGS_CAPTURE_DIR required"]
+fn capture_store() {
+    std::env::set_var("SDL_VIDEODRIVER", "offscreen");
+    let output = std::path::PathBuf::from(
+        std::env::var_os("ARCHR_SETTINGS_CAPTURE_DIR").expect("capture directory"),
+    );
+    let ttf;
+    let creator;
+    let mut ui = Ui::new(640, 480, true).unwrap();
+    ttf = sdl2::ttf::init().unwrap();
+    creator = ui.canvas.texture_creator();
+    let themes = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../themes");
+    let theme = Theme::load(&themes.join("default"));
+    let images = tempfile::tempdir().unwrap();
+    ui.theme_dir = Some(themes.join("default"));
+    ui.configure(&ttf, &creator, &theme, None).unwrap();
+    ui.root = Some(images.path().to_path_buf());
+    let pages = store_pages(images.path());
+    for language in ["pt_BR", "ru", "es", "en"] {
+        ui.catalog = I18n::load(std::path::Path::new("/nonexistent"), Some(language), None);
+        for (name, state) in &pages {
+            // Draw, let the loader decode what the page asked for, draw again.
+            let deadline = Instant::now() + Duration::from_secs(5);
+            ui.switches.clear();
+            for _ in 0..2 {
+                ui.snap_animations();
+                ui.settings_page(state, &theme).unwrap();
+            }
+            loop {
+                ui.snap_animations();
+                ui.canvas.set_draw_color(color(theme.background));
+                ui.canvas.clear();
+                ui.settings_page(state, &theme).unwrap();
+                let wanted = ui.store_wanted.clone();
+                let ready = wanted
+                    .iter()
+                    .all(|p| ui.store_art.as_ref().is_some_and(|a| a.peek(p).is_some()));
+                if ready || Instant::now() > deadline {
+                    break;
+                }
+                ui.tick();
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            let pixels = ui
+                .canvas
+                .read_pixels(None, sdl2::pixels::PixelFormatEnum::RGBA32)
+                .unwrap();
+            image::save_buffer(
+                output.join(format!("{name}-{language}.png")),
+                &pixels,
+                640,
+                480,
+                image::ColorType::Rgba8,
+            )
+            .unwrap();
+        }
+    }
+}

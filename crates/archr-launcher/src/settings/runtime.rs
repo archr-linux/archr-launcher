@@ -155,6 +155,7 @@ impl Runtime {
                 ]))
             }
             Effect::Storage(action) => self.send(Work::Storage(action)),
+            Effect::Store(_) => {}
             Effect::Reboot => return Outcome::Action(SessionAction::Reboot),
             Effect::None => {}
         }
