@@ -226,6 +226,8 @@ fn run(
         .insert(Id::UpdateNotify, saved(Id::UpdateNotify));
     let mut update_check =
         (saved(Id::UpdateBoot) == "1").then(|| Instant::now() + UPDATE_CHECK_DELAY);
+    // An update still running from before (the launcher restarted): its screen.
+    settings.watch_update();
     settings.state.base_theme = base;
     settings.state.base_dir = ui.theme_dir.clone();
     let mut rooms = netplay::Runtime::new(paths.clone());
@@ -352,6 +354,10 @@ fn run(
             if settings.state.updates.checked.is_none() {
                 settings.check_updates();
             }
+        }
+        if settings.take_reattached() {
+            settings.open_updates();
+            dirty = true;
         }
         let updates = if settings.state.value(Id::UpdateNotify) == "1" {
             settings.state.updates.count()

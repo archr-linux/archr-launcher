@@ -32,6 +32,10 @@ pub struct Runtime {
     check: Option<Check>,
     /// A system update runs: nothing closes or powers off meanwhile.
     install: Option<Install>,
+    /// `install` follows a run found going, not one started here.
+    attaching: bool,
+    /// That run was found: the host opens its progress screen.
+    reattached: bool,
 }
 impl Runtime {
     pub fn new(paths: Paths) -> Self {
@@ -50,6 +54,8 @@ impl Runtime {
             closing: false,
             check: None,
             install: None,
+            attaching: false,
+            reattached: false,
         }
     }
     fn send(&mut self, work: Work) {
@@ -105,6 +111,17 @@ impl Runtime {
             self.check = Some(Check::start(self.paths.clone()));
         }
     }
+    /// Follows an update already running (started before this launcher, or
+    /// from a shell); `take_reattached` tells when one was found.
+    pub fn watch_update(&mut self) {
+        if self.install.is_none() {
+            self.install = Some(Install::attach(&self.paths));
+            self.attaching = true;
+        }
+    }
+    pub fn take_reattached(&mut self) -> bool {
+        std::mem::take(&mut self.reattached)
+    }
     /// The START menu's update shortcut.
     pub fn open_updates(&mut self) {
         self.open();
@@ -114,14 +131,23 @@ impl Runtime {
         let mut changed = false;
         if let Some(result) = self.check.as_ref().and_then(Check::poll) {
             self.check = None;
+            // "busy": a run is going (perhaps from a shell): follow it.
+            if result.as_ref().err().is_some_and(|reason| reason == "busy") {
+                self.watch_update();
+            }
             super::updates::checked(&mut self.state.updates, result);
             changed = true;
         }
         if let Some(install) = &self.install {
             let (dirty, ended) = install.poll(&mut self.state.updates);
             changed |= dirty;
+            if self.attaching && self.state.updates.run.is_some() {
+                self.attaching = false;
+                self.reattached = true;
+            }
             if ended {
                 self.install = None;
+                self.attaching = false;
                 // A cancelled download goes back to the page with a note.
                 if matches!(
                     &self.state.updates.run,
@@ -212,17 +238,7 @@ impl Runtime {
             Effect::Storage(action) => self.send(Work::Storage(action)),
             Effect::CheckUpdates => self.check_updates(),
             Effect::Update if self.install.is_none() && self.check.is_none() => {
-                match Install::start(&self.paths) {
-                    Ok(install) => self.install = Some(install),
-                    Err(error) => {
-                        log::warn!("archr-update not started: {error}");
-                        self.state.updates.run = Some(archr_ui::settings::updates::Run::Failed {
-                            reason: "unknown".into(),
-                            line: error,
-                            changed: false,
-                        });
-                    }
-                }
+                self.install = Some(Install::start(&self.paths));
             }
             // A check still running: the page shows it; press again after.
             Effect::Update => self.state.updates.run = None,
