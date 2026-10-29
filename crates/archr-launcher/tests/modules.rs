@@ -825,6 +825,22 @@ fn config_set_writes_only_allowed_keys_and_values_at_a_bounded_rate() {
     let seen = until(&log, "\"id\":\"w6\"");
     assert!(answer(&seen, "w6").contains("\"result\""), "{seen}");
     assert_eq!(inode(), before, "not rewritten");
+    // Unchanged values too wait their second: system.cfg is not read for them.
+    std::thread::sleep(Duration::from_millis(1100));
+    let twice = ["w7", "w8"]
+        .map(|id| {
+            rpc(
+                id,
+                "config.set",
+                r#"{"key":"system.cpugovernor","value":"performance"}"#,
+            )
+        })
+        .concat();
+    fs::write(dir.join("twice.jsonl"), twice).unwrap();
+    probe.invoke("perfil", "twice");
+    let seen = until(&log, "\"id\":\"w8\"");
+    assert!(answer(&seen, "w7").contains("\"result\""), "{seen}");
+    assert!(answer(&seen, "w8").contains("-32003"), "{seen}");
     probe.wait(|_, _| true);
     assert_eq!(probe.configs, 1, "the launcher re-reads system.cfg once");
 }

@@ -285,6 +285,8 @@ struct Host {
     dirty: Option<Instant>,
     published: Instant,
     notified: BTreeMap<String, Instant>,
+    /// Each module's last `config.set`, written or not.
+    config_asked: BTreeMap<String, Instant>,
     /// When each module's `config.set`s were saved, the last hour's.
     written: BTreeMap<String, Vec<Instant>>,
     /// When to look for automatic updates next.
@@ -339,6 +341,7 @@ impl Host {
             published: Instant::now(),
             notified: BTreeMap::new(),
             written: BTreeMap::new(),
+            config_asked: BTreeMap::new(),
             gestures: BTreeMap::new(),
             late: BTreeMap::new(),
             auto_at: Instant::now() + config.delay.max(config.auto_delay),
@@ -1368,21 +1371,26 @@ impl Host {
                 if !manifest::writable(key, value) {
                     return Err((-32602, "value"));
                 }
+                // One request a second, before system.cfg is even read.
+                let now = Instant::now();
+                let last = self.config_asked.insert(id.to_owned(), now);
+                if last.is_some_and(|at| now.duration_since(at) < CONFIG_SET) {
+                    return Err((-32003, "too many requests"));
+                }
                 let (path, lock) = (&self.config.system_cfg, &self.config.lock);
                 let current = archr_config::SystemCfg::load(path)
                     .ok()
                     .and_then(|cfg| cfg.get_setting(key, None, None));
                 if current.as_deref() == Some(value) {
-                    // Nothing to write; it does not count either.
+                    // Nothing to write; it does not count against the hour.
                     return Ok(json!({}));
                 }
                 let times = self.written.entry(id.to_owned()).or_default();
                 times.retain(|at| at.elapsed() < HOUR);
-                let busy = times.last().is_some_and(|at| at.elapsed() < CONFIG_SET);
-                if busy || times.len() >= CONFIG_HOURLY {
+                if times.len() >= CONFIG_HOURLY {
                     return Err((-32003, "too many requests"));
                 }
-                times.push(Instant::now());
+                times.push(now);
                 if let Err(error) = archr_config::SystemCfg::set_and_save(path, lock, key, value) {
                     log::warn!("Module {id}: cannot save {key}: {error}");
                     return Err((-32000, "cannot save"));
