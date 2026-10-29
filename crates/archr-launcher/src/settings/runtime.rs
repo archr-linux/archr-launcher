@@ -253,7 +253,7 @@ impl Runtime {
                     install.cancel();
                 }
             }
-            Effect::RaImport { backup } => self.send(Work::RaImport(backup)),
+            Effect::RaImport { backup, seen } => self.send(Work::RaImport(backup, seen)),
             Effect::Module(request) => return Outcome::Module(request),
             Effect::Reboot => return Outcome::Action(SessionAction::Reboot),
             Effect::None => {}

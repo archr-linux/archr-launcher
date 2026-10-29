@@ -375,7 +375,7 @@ pub(super) enum Work {
     Store(archr_ui::settings::store::Action),
     /// Import from RetroArch: look at the folder, or import (backup first?).
     RaScan,
-    RaImport(bool),
+    RaImport(bool, Box<archr_ui::settings::raimport::Found>),
 }
 /// A storage action's outcome and the page's refreshed facts.
 type StorageReply = (
@@ -544,7 +544,9 @@ impl Worker {
                             Reply::Storage((result, Box::new(backend.storage())))
                         }
                         Work::RaScan => Reply::RaScan(backend.ra_scan()),
-                        Work::RaImport(backup) => Reply::RaImport(backend.ra_import(backup)),
+                        Work::RaImport(backup, seen) => {
+                            Reply::RaImport(backend.ra_import(backup, &seen))
+                        }
                     };
                     if results.send(reply).is_err() {
                         break;

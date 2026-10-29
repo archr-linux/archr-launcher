@@ -20,20 +20,23 @@ impl Backend {
     pub(super) fn ra_scan(&self) -> Found {
         scan(&self.ra_roots()).found
     }
-    /// The backup first when asked (its failure stops everything), then a
-    /// fresh scan applied as a whole.
-    pub(super) fn ra_import(&self, backup: bool) -> Result<String, String> {
+    /// A fresh scan that must match what the user reviewed (`seen`), then
+    /// the backup when asked (its failure stops everything), then the import.
+    pub(super) fn ra_import(&self, backup: bool, seen: &Found) -> Result<String, String> {
+        let roots = self.ra_roots();
+        let plan = scan(&roots);
+        if plan.found != *seen {
+            return Err("raimport.changed".into());
+        }
+        if plan.found.apply.is_empty() {
+            return Err("raimport.nothing".into());
+        }
         if backup {
             self.command_with_timeout("backuptool", &["backup"], BACKUP)
                 .map_err(|error| {
                     log::warn!("Import: backup failed: {error}");
                     "raimport.backup_failed".to_owned()
                 })?;
-        }
-        let roots = self.ra_roots();
-        let plan = scan(&roots);
-        if plan.found.apply.is_empty() {
-            return Err("raimport.nothing".into());
         }
         let count = apply(&plan, &roots)?;
         Ok(format!("raimport.done|count={count}"))
@@ -84,8 +87,12 @@ mod tests {
     fn backs_up_first_and_imports_into_retroarch_cfg() {
         let (root, paths) = fixture("");
         let backend = Backend::new(paths.clone());
-        assert_eq!(backend.ra_scan().settings, 1);
-        assert_eq!(backend.ra_import(true), Ok("raimport.done|count=1".into()));
+        let seen = backend.ra_scan();
+        assert_eq!(seen.settings, 1);
+        assert_eq!(
+            backend.ra_import(true, &seen),
+            Ok("raimport.done|count=1".into())
+        );
         assert_eq!(
             fs::read_to_string(root.path().join("calls")).unwrap(),
             "backup\n"
@@ -96,11 +103,32 @@ mod tests {
     fn a_failed_backup_imports_nothing() {
         let (_root, paths) = fixture("exit 1");
         let backend = Backend::new(paths.clone());
+        let seen = backend.ra_scan();
         assert_eq!(
-            backend.ra_import(true),
+            backend.ra_import(true, &seen),
             Err("raimport.backup_failed".into())
         );
         assert_eq!(saved(&paths), "video_smooth = \"false\"\n");
-        assert_eq!(backend.ra_import(false), Ok("raimport.done|count=1".into()));
+        assert_eq!(
+            backend.ra_import(false, &seen),
+            Ok("raimport.done|count=1".into())
+        );
+    }
+    #[test]
+    fn files_changed_since_the_review_import_nothing() {
+        let (root, paths) = fixture("");
+        let backend = Backend::new(paths.clone());
+        let seen = backend.ra_scan();
+        fs::write(
+            paths.at("/storage/roms/retroarch-import/retroarch.cfg"),
+            "video_smooth = \"true\"\nvideo_scale_integer = \"true\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            backend.ra_import(true, &seen),
+            Err("raimport.changed".into())
+        );
+        assert!(!root.path().join("calls").exists(), "no backup either");
+        assert_eq!(saved(&paths), "video_smooth = \"false\"\n");
     }
 }

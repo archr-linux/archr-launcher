@@ -964,3 +964,4 @@
 "controls.ra_hotkeys_detail" = "Меню, сохранения и перемотка с кнопок устройства"
 "settings.ra_hotkeys_done" = "Горячие клавиши RetroArch сброшены; действуют со следующей игры."
 "settings.ra_hotkeys_failed" = "Раскладка контроллера не найдена; горячие клавиши RetroArch не изменены."
+"raimport.changed" = "Файлы изменились; проверьте ещё раз."

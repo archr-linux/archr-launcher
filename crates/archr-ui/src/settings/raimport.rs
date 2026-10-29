@@ -127,15 +127,11 @@ impl Settings {
                 self.open(Page::RaImportList);
             }
             (Id::RaRun, Button::A) => {
-                if self
-                    .raimport
-                    .found
-                    .as_ref()
-                    .is_some_and(|f| !f.apply.is_empty())
-                {
+                if let Some(seen) = self.raimport.found.clone().filter(|f| !f.apply.is_empty()) {
                     self.raimport.working = true;
                     return Some(Effect::RaImport {
                         backup: self.value(Id::RaBackup) == "1",
+                        seen: Box::new(seen),
                     });
                 }
                 self.fail(None, "raimport.nothing".into());
@@ -249,7 +245,13 @@ mod tests {
         assert_eq!(state.handle(Button::R), Effect::None);
         assert_eq!(state.value(Id::RaBackup), "0");
         at(&mut state, Id::RaRun);
-        assert_eq!(state.handle(Button::A), Effect::RaImport { backup: false });
+        assert_eq!(
+            state.handle(Button::A),
+            Effect::RaImport {
+                backup: false,
+                seen: Box::new(found())
+            }
+        );
         assert!(state.raimport.working);
         assert_eq!(state.handle(Button::A), Effect::None);
         assert!(state.hints().is_empty());

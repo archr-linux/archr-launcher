@@ -684,8 +684,11 @@ pub enum Effect {
     Store(store::Action),
     Module(crate::modules::Request),
     /// Import what roms/retroarch-import/ holds, after a backup if asked.
+    /// `seen` is what the list showed: the host refuses when the folder
+    /// holds something else by now.
     RaImport {
         backup: bool,
+        seen: Box<raimport::Found>,
     },
 }
 /// Passwords never reach a log through `{:?}`.
@@ -718,7 +721,7 @@ impl std::fmt::Debug for Effect {
                 write!(f, "Module(Set({module:?}, {key:?}, <hidden>))")
             }
             Self::Module(request) => write!(f, "Module({request:?})"),
-            Self::RaImport { backup } => write!(f, "RaImport {{ backup: {backup} }}"),
+            Self::RaImport { backup, .. } => write!(f, "RaImport {{ backup: {backup} }}"),
         }
     }
 }
