@@ -47,7 +47,13 @@ impl View<'_, '_, '_> {
         } else if cheevos.user.is_empty() {
             (self.tr("settings.not_signed_in"), String::new())
         } else {
-            (cheevos.user.clone(), String::new())
+            let since = cheevos
+                .profile
+                .as_ref()
+                .filter(|p| !p.since.is_empty())
+                .map(|p| self.tr(&format!("settings.cheevos_since|year={}", p.since)))
+                .unwrap_or_default();
+            (cheevos.user.clone(), since)
         };
         let name_h = if detail.is_empty() { 44. } else { 26. };
         self.text_face(
@@ -63,7 +69,7 @@ impl View<'_, '_, '_> {
                 12.,
             )?;
         }
-        let y = top + 44. + 10.;
+        let mut y = top + 44. + 10.;
         if cheevos.user.is_empty() {
             return self.paragraph((left, y, inner), &self.tr("settings.cheevos_card_note"));
         }
@@ -92,6 +98,14 @@ impl View<'_, '_, '_> {
                 Face::Mono,
             )?;
             self.note((tx + 8., y + 29., tile - 16., 16.), &self.tr(label), 11.)?;
+        }
+        y += 52. + 10.;
+        if let Some(game) = profile.map(|p| &p.last_game).filter(|g| !g.is_empty()) {
+            let line = self.tr(&format!(
+                "settings.cheevos_last_game|game={}",
+                game.replace('|', "")
+            ));
+            self.paragraph((left, y, inner), &line)?;
         }
         Ok(())
     }

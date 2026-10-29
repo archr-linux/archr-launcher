@@ -175,3 +175,37 @@ fn badges_must_be_images_from_the_media_server() {
     assert_eq!(client.badge("../1", false, &NEVER), Err(Error::Service));
     assert_eq!(fake.seen.lock().unwrap().len(), 2);
 }
+
+#[test]
+fn the_profile_summary_is_signed_with_the_users_encoded_key() {
+    let (client, fake) = serve(|_, _| {
+        json(
+            200,
+            r#"{"MemberSince":"2021-03-04 10:00:00","RecentlyPlayed":[{"Title":"Super Mario World"}]}"#,
+        )
+    });
+    let summary = client.summary("douglas", "k&u=x=1 ", &NEVER).unwrap();
+    assert_eq!(summary.since, "2021");
+    assert_eq!(summary.last_game, "Super Mario World");
+    // The key cannot add or replace a query parameter.
+    assert_eq!(
+        fake.seen.lock().unwrap()[0].0,
+        "https://retroachievements.org/API/API_GetUserSummary.php?z=douglas&y=k%26u%3Dx%3D1%20&u=douglas&g=1&a=0"
+    );
+}
+
+#[test]
+fn a_refused_key_is_auth_and_silence_is_network() {
+    let (client, _) = serve(|_, _| json(401, r#"{"message":"Unauthenticated."}"#));
+    assert_eq!(client.summary("douglas", "bad", &NEVER), Err(Error::Auth));
+    let (client, _) = serve(|_, _| Err(NetError::Timeout));
+    assert_eq!(
+        client.summary("douglas", "key", &NEVER),
+        Err(Error::Network)
+    );
+    let (client, _) = serve(|_, _| json(503, "down"));
+    assert_eq!(
+        client.summary("douglas", "key", &NEVER),
+        Err(Error::Service)
+    );
+}

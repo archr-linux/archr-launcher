@@ -231,6 +231,9 @@ pub enum Id {
     CheevosAccount,
     /// Keyboard target only: the password typed for a sign-in.
     CheevosPassword,
+    /// The user's own web API key (keyboard target too), and its removal.
+    CheevosWebKey,
+    CheevosWebKeyRemove,
     CheevosHardcore,
     CheevosVerbose,
     CheevosEncore,
@@ -385,6 +388,8 @@ impl Id {
             | Self::MangohudLink
             | Self::CheevosAccount
             | Self::CheevosPassword
+            | Self::CheevosWebKey
+            | Self::CheevosWebKeyRemove
             | Self::CheevosLogout
             | Self::UpdateInstall
             | Self::UpdateCheck
@@ -625,6 +630,8 @@ pub enum Effect {
     /// RetroAchievements sign-in: user and password.
     CheevosLogin(String, String),
     CheevosLogout,
+    /// Check and save the web API key; empty removes it.
+    CheevosKey(String),
     Scrape,
     CancelScrape,
     CheckUpdates,
@@ -655,6 +662,7 @@ impl std::fmt::Debug for Effect {
             Self::Login(user, _) => write!(f, "Login({user:?}, <hidden>)"),
             Self::CheevosLogin(user, _) => write!(f, "CheevosLogin({user:?}, <hidden>)"),
             Self::CheevosLogout => write!(f, "CheevosLogout"),
+            Self::CheevosKey(_) => write!(f, "CheevosKey(<hidden>)"),
             Self::Scrape => write!(f, "Scrape"),
             Self::CancelScrape => write!(f, "CancelScrape"),
             Self::CheckUpdates => write!(f, "CheckUpdates"),
@@ -881,7 +889,9 @@ impl Settings {
             (Id::IndexNow, _) => "settings.soon",
             (Id::ScraperAccount | Id::CheevosAccount, _) => "settings.sign_in",
             (Id::CheevosSound, "none") => "settings.cheevos_no_sound",
-            (Id::CheevosLogout, _) => return String::new(),
+            (Id::CheevosLogout | Id::CheevosWebKey | Id::CheevosWebKeyRemove, _) => {
+                return String::new()
+            }
             (Id::ScraperStart, _) if self.scrape.running => "settings.cancel_scraping",
             (Id::ScraperStart, _) => return String::new(),
             (Id::GameSystem, _) => return self.games.fullname().to_owned(),
@@ -954,7 +964,15 @@ impl Settings {
             Id::Http if !ip.is_empty() => format!("settings.http_at|ip={ip}"),
             Id::UsbMode if self.usb_busy => "settings.usb_in_use".into(),
             Id::ScraperAccount if self.scrape.verifying => "settings.verifying".into(),
-            Id::CheevosAccount if self.cheevos.verifying => "settings.verifying".into(),
+            Id::CheevosAccount | Id::CheevosWebKey if self.cheevos.verifying => {
+                "settings.verifying".into()
+            }
+            Id::CheevosAccount if self.cheevos.expired => "settings.cheevos_expired".into(),
+            Id::CheevosWebKey if !self.cheevos.web_key => "settings.cheevos_web_key_missing".into(),
+            Id::CheevosWebKey if self.cheevos.key_refused => {
+                "settings.cheevos_web_key_refused".into()
+            }
+            Id::CheevosWebKey => "settings.cheevos_web_key_saved".into(),
             Id::ScraperAccount if self.scrape.user.is_empty() => "settings.not_signed_in".into(),
             Id::ScraperAccount if self.scrape.threads > 0 => format!(
                 "settings.account_threads|user={}|count={}",
@@ -1016,7 +1034,10 @@ impl Settings {
                 Id::SecondCard => self.storage.second.is_some(),
                 Id::UnifiedCard => self.storage.unified.is_some(),
                 id if Games::ROWS.contains(&id) => self.games.shows(id, self),
-                id @ (Id::CheevosAccount | Id::CheevosLogout) => self.cheevos_visible(id),
+                id @ (Id::CheevosAccount
+                | Id::CheevosWebKey
+                | Id::CheevosWebKeyRemove
+                | Id::CheevosLogout) => self.cheevos_visible(id),
                 _ => true,
             })
             .copied()
@@ -1060,6 +1081,8 @@ impl Settings {
             | Id::CheevosRichPresence
             | Id::CheevosScreenshot
             | Id::CheevosSound
+            | Id::CheevosWebKey
+            | Id::CheevosWebKeyRemove
             | Id::CheevosLogout => self.cheevos.verifying,
             // Choices are kept for when the service is reachable; only what
             // talks to ScreenScraper needs the build's developer key.
@@ -1147,7 +1170,10 @@ impl Settings {
                         (HintButton::Start, "settings.sign_in_short"),
                         (Key('B'), "hint.back"),
                     ]
-                } else if self.keyboard_target == Some(Id::RootPassword) {
+                } else if matches!(
+                    self.keyboard_target,
+                    Some(Id::RootPassword | Id::CheevosWebKey)
+                ) {
                     &[
                         (Key('A'), "settings.type"),
                         (Key('Y'), "settings.delete"),

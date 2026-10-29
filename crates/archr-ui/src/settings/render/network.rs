@@ -178,6 +178,7 @@ impl View<'_, '_, '_> {
             Some(Id::Hidden) => self.tr("settings.hidden"),
             Some(Id::ScraperAccount | Id::ScraperPassword) => self.tr("settings.account"),
             Some(Id::CheevosAccount | Id::CheevosPassword) => self.tr("settings.cheevos_account"),
+            Some(Id::CheevosWebKey) => self.tr("settings.cheevos_web_key"),
             Some(Id::RootPassword) => self.tr("settings.root_password"),
             Some(Id::Accent) => self.tr("appearance.hex"),
             Some(id) => Page::Netplay
@@ -208,6 +209,10 @@ impl View<'_, '_, '_> {
             Some(Id::ScraperPassword) => (self.tr("settings.password"), None),
             Some(Id::CheevosAccount) => (self.tr("settings.cheevos_user"), None),
             Some(Id::CheevosPassword) => (self.tr("settings.cheevos_password"), None),
+            Some(Id::CheevosWebKey) => (
+                self.tr("settings.cheevos_web_key_field"),
+                Some("settings.cheevos_web_key_where"),
+            ),
             Some(Id::RootPassword) => (
                 self.tr("settings.new_password"),
                 Some("settings.root_length"),

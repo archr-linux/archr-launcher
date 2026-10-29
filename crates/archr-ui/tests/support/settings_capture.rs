@@ -777,6 +777,7 @@ fn cheevos_pages() -> Vec<(&'static str, Settings)> {
     signed_in.cheevos.profile = Some(crate::settings::cheevos::Profile {
         points: 1240,
         softcore: 87,
+        ..Default::default()
     });
     for id in [Id::CheevosHardcore, Id::CheevosVerbose] {
         signed_in.values.insert(id, "1".into());
@@ -798,7 +799,37 @@ fn cheevos_pages() -> Vec<(&'static str, Settings)> {
     let mut verifying = base.clone();
     verifying.cheevos.verifying = true;
     verifying.cursor = 1;
+    // The web API key row: missing, saved (the card gains its extras),
+    // refused, its keyboard, and a session the service no longer accepts.
+    let mut keyed = signed_in.clone();
+    keyed.cheevos.web_key = true;
+    if let Some(profile) = keyed.cheevos.profile.as_mut() {
+        profile.since = "2021".into();
+        profile.last_game = "Super Mario World".into();
+    }
+    keyed.cursor = 1;
+    let mut refused = signed_in.clone();
+    refused.cheevos.web_key = true;
+    refused.cheevos.key_refused = true;
+    refused.cursor = 1;
+    let mut key_keyboard = signed_in.clone();
+    key_keyboard.cursor = 1;
+    key_keyboard.handle(Button::A);
+    for button in [Button::A; 8] {
+        key_keyboard.handle(button);
+    }
+    let mut expired = keyed.clone();
+    expired.cheevos.expired = true;
     vec![
+        ("conquistas-chave-ausente", {
+            let mut s = signed_in.clone();
+            s.cursor = 1;
+            s
+        }),
+        ("conquistas-chave-informada", keyed),
+        ("conquistas-chave-recusada", refused),
+        ("conquistas-teclado-chave", key_keyboard),
+        ("conquistas-sessao-expirada", expired),
         ("conquistas-deslogado", signed_out),
         ("conquistas-desligado", off),
         ("conquistas-logado", signed_in),
