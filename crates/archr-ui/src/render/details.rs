@@ -489,16 +489,13 @@ impl Ui<'_, '_> {
         area: Rect,
         theme: &Theme,
     ) -> Result<(), String> {
+        // Sized for both of the last button's states (resting, and dots
+        // with "Scraping…"), so a running job never moves the row.
         let labels: Vec<String> = DETAILS_ACTIONS
             .iter()
-            .enumerate()
-            .map(|(n, key)| {
-                self.catalog.text(match n {
-                    2 if app.rescraping => "details.rescraping",
-                    _ => key,
-                })
-            })
+            .map(|key| self.catalog.text(key))
             .collect();
+        let scraping = self.catalog.text("details.rescraping");
         // Shrink text and padding together until the three buttons fit.
         let icon = |n: usize| n == 1;
         let mut size = 14.;
@@ -510,7 +507,12 @@ impl Ui<'_, '_> {
             let mut widths = Vec::new();
             for (n, label) in labels.iter().enumerate() {
                 let extra = if icon(n) { self.px(size + 6.) } else { 0 };
-                widths.push(self.measure(label, Face::Semibold, size)? as i32 + pad * 2 + extra);
+                let mut text = self.measure(label, Face::Semibold, size)? as i32;
+                if n == 2 {
+                    let busy = self.measure(&scraping, Face::Semibold, size)? as i32;
+                    text = text.max(busy + self.px(size * 1.8 + 6.));
+                }
+                widths.push(text + pad * 2 + extra);
             }
             let total: i32 = widths.iter().sum::<i32>() + gap * between;
             // The floor: 10 px on screen and the theme's smallest text.
@@ -567,6 +569,16 @@ impl Ui<'_, '_> {
                 (false, true) => theme.dim_text,
                 (false, false) => theme.text,
             };
+            let face = if focused {
+                Face::Semibold
+            } else {
+                Face::Regular
+            };
+            if n == 2 && app.rescraping {
+                self.scraping(button, (face, size, ink), pad, focused, theme)?;
+                x += widths[n] + gap;
+                continue;
+            }
             let mut text_x = button.x() + pad;
             if icon(n) {
                 let side = self.px(size);
@@ -583,11 +595,6 @@ impl Ui<'_, '_> {
                 )?;
                 text_x += side + self.px(6.);
             }
-            let face = if focused {
-                Face::Semibold
-            } else {
-                Face::Regular
-            };
             let room = (button.right() - text_x - pad.min(text_x - button.x())).max(1) as u32;
             let lines = if self.measure(label, face, size)? > room {
                 self.wrap(label, face, size, room)?
@@ -608,6 +615,58 @@ impl Ui<'_, '_> {
                 )?;
             }
             x += widths[n] + gap;
+        }
+        Ok(())
+    }
+
+    /// "Scrape again" while its job runs: the Wi-Fi search's pulsing dots,
+    /// then "Scraping…" when it fits on one line; the dots alone, centered,
+    /// when it does not. Looping state comes from the clock, never stored.
+    fn scraping(
+        &mut self,
+        button: Rect,
+        (face, size, ink): (Face, f32, Rgba),
+        pad: i32,
+        focused: bool,
+        theme: &Theme,
+    ) -> Result<(), String> {
+        // The dots take 1.8 × the text size, as measured for the row.
+        let (dot, step) = (self.px(size * 0.4).max(2), self.px(size * 0.7));
+        let dots = step * 2 + dot;
+        let text = self.catalog.text("details.rescraping");
+        let lead = self.px(size * 1.8 + 6.);
+        let room = button.width() as i32 - pad * 2 - lead;
+        let shown = self.measure(&text, face, size)? as i32 <= room;
+        let mut left = if shown {
+            button.x() + pad
+        } else {
+            button.x() + (button.width() as i32 - dots) / 2
+        };
+        let mid = button.y() + button.height() as i32 / 2;
+        let secs = self.frame.now.saturating_duration_since(self.born);
+        let fill = if focused {
+            theme.highlight_text
+        } else {
+            theme.highlight_bg
+        };
+        for k in 0..3 {
+            let (alpha, lift) = self.motion.search_dot(secs.as_secs_f32(), k);
+            let at = Rect::new(
+                left + step * k as i32,
+                mid - dot / 2 - self.px(lift),
+                dot as u32,
+                dot as u32,
+            );
+            let fill = Rgba {
+                a: (f32::from(fill.a) * alpha) as u8,
+                ..fill
+            };
+            self.rounded(at, dot as f32 / 2., fill, None)?;
+        }
+        if shown {
+            left += lead;
+            let area = Rect::new(left, button.y(), room.max(1) as u32, button.height());
+            self.label(&text, (face, size, ink), area)?;
         }
         Ok(())
     }
