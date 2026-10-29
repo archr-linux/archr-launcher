@@ -25,6 +25,7 @@ fn metadata_is_imported_once_without_resurrecting_removed_favorites() {
         favorite: true,
         year: None,
         players: None,
+        details: Default::default(),
         last_played: Some(123),
     }];
     let system = system("nes", "/storage/roms/nes");

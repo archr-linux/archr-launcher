@@ -50,6 +50,7 @@ fn games(count: usize) -> Vec<Game> {
             year: None,
             players: None,
             last_played: None,
+            details: Default::default(),
         })
         .collect()
 }

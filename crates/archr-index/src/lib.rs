@@ -3,10 +3,12 @@
 pub mod cache;
 pub mod features;
 mod gamelist;
+mod gamelist_edit;
 pub mod games;
 pub mod systems;
 
-pub use games::{clean_name, scan_system, scan_system_with_mapper, Game};
+pub use gamelist_edit::{update_gamelist, GameUpdate};
+pub use games::{clean_name, scan_system, scan_system_with_mapper, Details, Game};
 
 pub use features::{load_features, Features};
 pub use systems::{load_systems, Core, Emulator, SystemDef};

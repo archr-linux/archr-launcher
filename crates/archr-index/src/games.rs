@@ -22,6 +22,20 @@ pub struct Game {
     pub last_played: Option<u64>,
     pub year: Option<u16>,
     pub players: Option<String>,
+    pub details: Details,
+}
+
+/// Scraped text and art shown on the game details screen (gamelist.xml).
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Details {
+    pub description: String,
+    pub genre: String,
+    pub developer: String,
+    pub publisher: String,
+    /// 0-100, from the gamelist's 0-1 rating.
+    pub rating: Option<u8>,
+    pub screenshot: Option<PathBuf>,
+    pub logo: Option<PathBuf>,
 }
 
 /// Remove balanced region/revision groups, retaining the stem if only tags remain.
@@ -95,13 +109,18 @@ pub fn scan_system_with_mapper(sys: &SystemDef, mapper: &dyn Fn(&Path) -> PathBu
                 .filter(|entry| !entry.name.is_empty())
                 .map(|entry| entry.name.clone())
                 .unwrap_or_else(|| clean_name(&stem.to_string_lossy()));
-            let image = entry
-                .and_then(|entry| {
-                    media
-                        .referenced(&entry.image, mapper)
-                        .or_else(|| media.referenced(&entry.thumbnail, mapper))
-                })
-                .or_else(|| media.image(stem));
+            // ES semantics: <thumbnail> is the box, <image> the main (screen) image.
+            let thumbnail = entry.and_then(|entry| media.referenced(&entry.thumbnail, mapper));
+            let main = entry.and_then(|entry| media.referenced(&entry.image, mapper));
+            let (image, screenshot) = match thumbnail {
+                Some(thumbnail) => (Some(thumbnail), main),
+                None => (main.or_else(|| media.image(stem)), None),
+            };
+            let screenshot =
+                screenshot.or_else(|| media.find("media/screenshots", stem, &[".png", ".jpg"]));
+            let logo = entry
+                .and_then(|entry| media.referenced(&entry.marquee, mapper))
+                .or_else(|| media.find("media/wheel", stem, &[".png", ".jpg"]));
             let video = entry
                 .and_then(|entry| media.referenced(&entry.video, mapper))
                 .or_else(|| media.video(stem));
@@ -114,6 +133,11 @@ pub fn scan_system_with_mapper(sys: &SystemDef, mapper: &dyn Fn(&Path) -> PathBu
                 last_played: entry.and_then(|entry| entry.last_played),
                 year: entry.and_then(|entry| entry.year),
                 players: entry.and_then(|entry| entry.players.clone()),
+                details: Details {
+                    screenshot,
+                    logo,
+                    ..entry.map(|entry| entry.details.clone()).unwrap_or_default()
+                },
             }
         })
         .collect();

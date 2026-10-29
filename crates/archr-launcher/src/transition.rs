@@ -507,6 +507,7 @@ esac
                     favorite: false,
                     year: None,
                     players: None,
+                    details: Default::default(),
                     last_played: None,
                 }],
             )]
