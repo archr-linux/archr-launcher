@@ -205,7 +205,12 @@ fn fingerprint(sys: &SystemDef) -> Option<(u64, u64)> {
     for root in sys.roots() {
         root.hash(&mut hash);
         match fs::metadata(root) {
-            Ok(metadata) if metadata.is_dir() => found = true,
+            // The device tells SD1 alone from the union of both cards
+            // (unified storage), whose folder times may look the same.
+            Ok(metadata) if metadata.is_dir() => {
+                std::os::unix::fs::MetadataExt::dev(&metadata).hash(&mut hash);
+                found = true
+            }
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
                 false.hash(&mut hash);
                 continue;

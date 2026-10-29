@@ -63,6 +63,19 @@ pub fn definitions(paths: &Paths) -> Result<Vec<SystemDef>, String> {
     Ok(systems)
 }
 
+/// What the library follows: the second card's folder, and whether
+/// unified storage joins both cards under /storage/roms (then there is no
+/// second folder, and a pulled card changes /storage/roms itself).
+fn cards(paths: &Paths) -> (Option<PathBuf>, bool) {
+    let unified = fs::read_to_string(paths.at("/proc/mounts")).is_ok_and(|mounts| {
+        mounts.lines().any(|line| {
+            let mut fields = line.split_whitespace().skip(1);
+            fields.next() == Some("/storage/roms") && fields.next() == Some("fuse.mergerfs")
+        })
+    });
+    (second_card(paths), unified)
+}
+
 /// The second card's ROM folder, resolved to its real path for launching.
 pub fn second_card(paths: &Paths) -> Option<PathBuf> {
     fs::canonicalize(paths.at(SECOND_CARD))
@@ -111,8 +124,8 @@ pub fn start(paths: Paths, initial: Vec<SystemDef>) -> Worker {
         } else {
             (initial, None)
         };
-        let mut card = second_card(&paths);
-        attach_card(&mut systems, card.as_deref(), &paths);
+        let mut card = cards(&paths);
+        attach_card(&mut systems, card.0.as_deref(), &paths);
         if let Some(code) = read_last_exit(&paths.run).filter(|code| *code != 0) {
             log::warn!("Game exited with code {code}; log: /var/log/exec.log");
             banner = Some(Message::new("error.game_exit").with("code", code));
@@ -140,13 +153,13 @@ pub fn start(paths: Paths, initial: Vec<SystemDef>) -> Worker {
                 Ok(job) => job,
                 Err(RecvTimeoutError::Disconnected) => break,
                 Err(RecvTimeoutError::Timeout) => {
-                    let now = second_card(&paths);
+                    let now = cards(&paths);
                     if now == card {
                         continue;
                     }
-                    log::info!("Second card: {now:?}");
+                    log::info!("Cards (second folder, unified): {now:?}");
                     card = now;
-                    attach_card(&mut systems, card.as_deref(), &paths);
+                    attach_card(&mut systems, card.0.as_deref(), &paths);
                     loaded.clear();
                     refresh_overview(&paths, &systems, &done);
                     if done.send(Update::Systems(systems.clone())).is_err() {
@@ -364,8 +377,17 @@ mod tests {
         let systems = next(&worker).unwrap();
         assert_eq!(systems[0].external, Some(card.join("snes")));
         assert_eq!(load(&worker), [sd1.join("A.sfc"), card.join("snes/B.sfc")]);
-        // Pulled out: the link goes, and so do its games.
+        // Unified: automount drops the link and joins the cards under
+        // /storage/roms; the library reads that folder alone.
         fs::remove_file(&link).unwrap();
+        fs::create_dir_all(paths.at("/proc")).unwrap();
+        let mounts = paths.at("/proc/mounts");
+        fs::write(&mounts, "archr-roms /storage/roms fuse.mergerfs rw 0 0\n").unwrap();
+        assert_eq!(next(&worker).unwrap()[0].external, None);
+        assert_eq!(load(&worker), [sd1.join("A.sfc")]);
+        // The card pulled while joined: only the union goes, and the
+        // library reloads although no second folder came or went.
+        fs::write(&mounts, "").unwrap();
         assert_eq!(next(&worker).unwrap()[0].external, None);
         assert_eq!(load(&worker), [sd1.join("A.sfc")]);
     }
