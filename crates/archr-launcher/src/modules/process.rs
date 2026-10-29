@@ -3,8 +3,8 @@
 //! for development on a PC only.
 use std::{
     ffi::OsString,
-    io::{BufRead, BufReader, Read, Write},
-    path::PathBuf,
+    io::{self, BufRead, BufReader, Read, Write},
+    path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, Stdio},
     sync::{mpsc, Mutex},
     thread,
@@ -30,6 +30,10 @@ pub struct Plan {
     pub data: PathBuf,
     /// Its settings file, read only.
     pub settings: PathBuf,
+    /// Its secret values, read only; absent without `secret` rows.
+    pub secrets: PathBuf,
+    /// The module's own uid, also its gid.
+    pub uid: u32,
     pub env: Vec<(String, String)>,
     pub net: bool,
     /// Read-only folders granted by `read`.
@@ -44,7 +48,8 @@ pub trait Executor: Send + Sync {
     fn kill(&self, unit: Option<&str>);
 }
 
-/// `systemd-run --pipe` as user `archr-mod`, one transient unit per process.
+/// `systemd-run --pipe` as the module's own user, one transient unit per
+/// process.
 pub struct Systemd {
     pub run: PathBuf,
     pub ctl: PathBuf,
@@ -77,8 +82,6 @@ pub fn sandbox(plan: &Plan) -> Vec<String> {
         "--quiet",
         "--collect",
         "--service-type=exec",
-        "-p User=archr-mod",
-        "-p Group=archr-mod",
         "-p NoNewPrivileges=yes",
         "-p CapabilityBoundingSet=",
         "-p AmbientCapabilities=",
@@ -92,7 +95,11 @@ pub fn sandbox(plan: &Plan) -> Vec<String> {
         "-p ProtectControlGroups=yes",
         "-p ProtectClock=yes",
         "-p ProtectHostname=yes",
+        // Other uids' processes are hidden: with a uid per module, the
+        // other modules' too. systemd 255 has no PrivatePIDs= (257).
         "-p ProtectProc=invisible",
+        // Every uid but root and the module's own is `nobody` inside.
+        "-p PrivateUsers=yes",
         "-p RestrictSUIDSGID=yes",
         "-p LockPersonality=yes",
         "-p RestrictNamespaces=yes",
@@ -110,13 +117,16 @@ pub fn sandbox(plan: &Plan) -> Vec<String> {
     .map(str::to_owned)
     .collect();
     args.push(format!("--unit={}", plan.unit));
+    args.extend(["-p".into(), format!("User={}", plan.uid)]);
+    args.extend(["-p".into(), format!("Group={}", plan.uid)]);
     args.extend(plan.env.iter().map(|(k, v)| format!("--setenv={k}={v}")));
     let mut property = |value: String| args.extend(["-p".to_owned(), value]);
     property(format!("BindReadOnlyPaths={}", plan.dir.display()));
     property(format!("BindPaths={}", plan.data.display()));
     property(format!("BindReadOnlyPaths={}", plan.settings.display()));
+    // "-": a path that does not exist is skipped, not an error.
+    property(format!("BindReadOnlyPaths=-{}", plan.secrets.display()));
     for path in &plan.read {
-        // "-": a folder that does not exist is skipped, not an error.
         property(format!("BindReadOnlyPaths=-{}", path.display()));
     }
     if !plan.net {
@@ -126,6 +136,31 @@ pub fn sandbox(plan: &Plan) -> Vec<String> {
     property(format!("MemoryMax={}M", plan.memory_mb));
     property(format!("WorkingDirectory={}", plan.dir.display()));
     args
+}
+
+/// The module's user and group as nss-systemd drop-ins (`/run/userdb`):
+/// systemd 255 refuses a numeric `User=` that no user database knows.
+pub fn user(userdb: &Path, uid: u32) -> io::Result<()> {
+    let name = format!("archr-mod-{uid}");
+    let user = serde_json::json!({"userName": name, "uid": uid, "gid": uid,
+        "disposition": "system", "homeDirectory": "/", "shell": "/usr/bin/nologin", "locked": true});
+    let group = serde_json::json!({"groupName": name, "gid": uid, "disposition": "system"});
+    for (file, record) in [
+        (format!("{uid}.user"), &user),
+        (format!("{name}.user"), &user),
+        (format!("{uid}.group"), &group),
+        (format!("{name}.group"), &group),
+    ] {
+        let path = userdb.join(file);
+        if !path.is_file() {
+            archr_io::atomic_publish(&path, false, |file| {
+                use std::os::unix::fs::PermissionsExt;
+                file.set_permissions(std::fs::Permissions::from_mode(0o644))?;
+                file.write_all(record.to_string().as_bytes())
+            })?;
+        }
+    }
+    Ok(())
 }
 
 /// No sandbox: the plain process, in its own process group. Only for tests
@@ -268,6 +303,8 @@ mod tests {
             dir: "/storage/.config/archr-launcher/modules/x".into(),
             data: "/storage/.config/archr-launcher/module-data/x".into(),
             settings: "/storage/.config/archr-launcher/module-settings/x.json".into(),
+            secrets: "/storage/.config/archr-launcher/module-settings/x.secret.json".into(),
+            uid: 60642,
             read: vec!["/storage/roms".into()],
             memory_mb: 24,
             env: vec![("HOME".into(), "/data".into())],
@@ -277,18 +314,37 @@ mod tests {
         for expected in [
             "--pipe",
             "--unit=archr-mod-x",
-            "-p User=archr-mod",
+            "-p User=60642",
+            "-p Group=60642",
+            "-p PrivateUsers=yes",
+            "-p ProtectProc=invisible",
             "-p TemporaryFileSystem=/storage:ro",
             "-p BindReadOnlyPaths=/storage/.config/archr-launcher/modules/x",
             "-p BindPaths=/storage/.config/archr-launcher/module-data/x",
             "-p BindReadOnlyPaths=-/storage/roms",
+            "-p BindReadOnlyPaths=-/storage/.config/archr-launcher/module-settings/x.secret.json",
             "-p PrivateNetwork=yes",
             "-p MemoryMax=24M",
             "--setenv=HOME=/data",
         ] {
             assert!(args.contains(expected), "{expected} in {args}");
         }
+        assert!(!args.contains("archr-mod "), "no shared user: {args}");
         let online = sandbox(&Plan { net: true, ..plan }).join(" ");
         assert!(!online.contains("PrivateNetwork") && !online.contains("AF_UNIX"));
+    }
+
+    #[test]
+    fn user_records_name_the_uid_for_systemd() {
+        let dir = tempfile::tempdir().unwrap();
+        user(dir.path(), 60642).unwrap();
+        for file in ["60642.user", "archr-mod-60642.user"] {
+            let record: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(dir.path().join(file)).unwrap()).unwrap();
+            assert_eq!(record["uid"], 60642);
+            assert_eq!(record["userName"], "archr-mod-60642");
+        }
+        let group = std::fs::read_to_string(dir.path().join("60642.group")).unwrap();
+        assert!(group.contains("\"gid\":60642"), "{group}");
     }
 }

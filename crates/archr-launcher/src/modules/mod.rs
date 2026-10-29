@@ -49,8 +49,10 @@ pub struct Config {
     pub executor: Arc<dyn Executor>,
     /// Set when the executor is `Direct`, which tracks its process groups.
     pub direct: Option<Arc<Direct>>,
-    /// `archr-mod`'s uid and gid: data folders are handed to it.
-    pub owner: Option<(u32, u32)>,
+    /// On the device (root): where each module's user record goes
+    /// (`/run/userdb`); its data folder and secrets are handed to its uid.
+    /// `None` on a development PC: everything stays the launcher's.
+    pub userdb: Option<PathBuf>,
     pub language: String,
     pub device: String,
     /// Daemons start this long after the host.
@@ -62,16 +64,16 @@ impl Config {
     pub fn production(paths: &crate::paths::Paths, language: &str) -> Self {
         let dirs = Dirs::new(&paths.store);
         let shop = store::Shop::production(paths.cache.join("store/modules"), dirs.clone());
-        let (executor, direct): (Arc<dyn Executor>, _) = if paths.root.is_some() {
+        let (executor, direct, userdb): (Arc<dyn Executor>, _, _) = if paths.root.is_some() {
             log::warn!("Modules run without a sandbox (fixture root)");
             let direct = Arc::new(Direct::default());
-            (direct.clone(), Some(direct))
+            (direct.clone(), Some(direct), None)
         } else {
             let systemd = process::Systemd {
                 run: "/usr/bin/systemd-run".into(),
                 ctl: "/usr/bin/systemctl".into(),
             };
-            (Arc::new(systemd), None)
+            (Arc::new(systemd), None, Some("/run/userdb".into()))
         };
         Self {
             dirs,
@@ -79,8 +81,7 @@ impl Config {
             system_cfg: paths.config.clone(),
             executor,
             direct,
-            // Looked up on the host thread: the sandbox user and the device.
-            owner: None,
+            userdb,
             language: language.to_owned(),
             device: String::new(),
             delay: Duration::from_secs(2),
@@ -88,17 +89,6 @@ impl Config {
         }
     }
 }
-fn sandbox_user() -> Option<(u32, u32)> {
-    // SAFETY: getpwnam's static result is read at once, on this thread.
-    let entry = unsafe { libc::getpwnam(c"archr-mod".as_ptr()) };
-    if entry.is_null() {
-        log::warn!("User archr-mod is missing: modules cannot start");
-        return None;
-    }
-    // SAFETY: non-null entry from getpwnam.
-    Some(unsafe { ((*entry).pw_uid, (*entry).pw_gid) })
-}
-
 /// What the event loop applies.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Event {
@@ -240,14 +230,12 @@ struct Host {
 
 impl Host {
     fn new(mut config: Config, inbox: mpsc::Sender<Input>, out: mpsc::Sender<Event>) -> Self {
-        if config.direct.is_none() {
-            config.owner = config.owner.or_else(sandbox_user);
-            if config.device.is_empty() {
-                config.device = fs::read_to_string("/etc/hostname")
-                    .unwrap_or_default()
-                    .trim()
-                    .to_owned();
-            }
+        if config.direct.is_none() && config.device.is_empty() {
+            // Read on the host thread.
+            config.device = fs::read_to_string("/etc/hostname")
+                .unwrap_or_default()
+                .trim()
+                .to_owned();
         }
         let store = config.shop.take().map(|shop| {
             let (tx, rx) = mpsc::channel();
@@ -342,15 +330,15 @@ impl Host {
     fn reload(&mut self) {
         self.state = State::load(&self.config.dirs.state);
         self.installed = registry::scan(&self.config.dirs, &self.config.language);
-        let mut changed = false;
+        let before = self.state.clone();
         for installed in &self.installed {
-            if !self.state.modules.contains_key(&installed.id) {
-                // A folder copied by hand: off until the user accepts it.
-                registry::record(&mut self.state, &installed.id);
-                changed = true;
+            // A folder copied by hand: off until the user accepts it.
+            registry::record(&mut self.state, &installed.id);
+            if self.state.uid(&installed.id).is_none() {
+                log::warn!("Module {}: no uid left", installed.id);
             }
         }
-        if changed {
+        if self.state != before {
             self.save_state();
         }
         let old = std::mem::take(&mut self.view.modules);
@@ -576,11 +564,13 @@ impl Host {
             log::warn!("Module {id}: setting {key} refused");
             return;
         }
+        let owner = self.owner(id);
         let Some(module) = self.view.modules.iter_mut().find(|m| m.id == id) else {
             return;
         };
         module.settings.insert(key.to_owned(), value.to_owned());
-        if let Err(error) = registry::save_settings(&self.config.dirs, &manifest, &module.settings)
+        if let Err(error) =
+            registry::save_settings(&self.config.dirs, &manifest, &module.settings, owner)
         {
             log::warn!("Module {id}: cannot save settings: {error}");
         }
@@ -647,6 +637,8 @@ impl Host {
         if data {
             let _ = fs::remove_dir_all(dirs.data_dir(id));
             let _ = fs::remove_file(dirs.settings_file(id));
+            let _ = fs::remove_file(dirs.secrets_file(id));
+            self.state.uids.remove(id);
         }
         self.state.modules.remove(id);
         self.save_state();
@@ -701,7 +693,9 @@ impl Host {
     fn plan(&self, id: &str, unit: String) -> Option<Plan> {
         let (installed, manifest) = self.active(id)?;
         let dirs = &self.config.dirs;
+        let uid = self.state.uids.get(id).copied()?;
         let (data, settings) = (dirs.data_dir(id), dirs.settings_file(id));
+        let secrets = dirs.secrets_file(id);
         let entry = installed.dir.join(&manifest.entry);
         let argv = match manifest.runtime {
             manifest::Runtime::Sh => vec!["/bin/sh".into(), entry.into_os_string()],
@@ -718,6 +712,7 @@ impl Host {
             ("ARCHR_MODULE_DIR", path(&installed.dir)),
             ("ARCHR_MODULE_DATA", path(&data)),
             ("ARCHR_MODULE_SETTINGS", path(&settings)),
+            ("ARCHR_MODULE_SECRETS", path(&secrets)),
             ("ARCHR_LANG", self.config.language.clone()),
             ("ARCHR_DEVICE", self.config.device.clone()),
         ]
@@ -731,6 +726,8 @@ impl Host {
             argv,
             data,
             settings,
+            secrets,
+            uid,
             env,
             net: manifest.permissions.net,
             read: manifest
@@ -743,25 +740,33 @@ impl Host {
             memory_mb: manifest.memory_mb,
         })
     }
-    /// The data folder (the module's own) and the settings file must exist
-    /// before a sandbox can bind them.
+    /// The module's uid when its files are handed to it (on the device).
+    fn owner(&self, id: &str) -> Option<u32> {
+        self.config.userdb.as_ref()?;
+        self.state.uids.get(id).copied()
+    }
+    /// The module's user, its data folder (0700, its own) and its settings
+    /// files must exist before a sandbox can use them.
     fn prepare(&self, id: &str) -> bool {
+        use std::os::unix::fs::{chown, PermissionsExt};
         let dirs = &self.config.dirs;
-        let (Some(installed), Some(module)) = (self.find(id), self.module(id)) else {
+        let (Some(installed), Some(module), Some(&uid)) =
+            (self.find(id), self.module(id), self.state.uids.get(id))
+        else {
             return false;
         };
         let data = dirs.data_dir(id);
-        let mut ok = fs::create_dir_all(&data).is_ok();
-        if let Some((uid, gid)) = self.config.owner {
-            use std::os::unix::fs::PermissionsExt;
-            ok &= std::os::unix::fs::chown(&data, Some(uid), Some(gid)).is_ok()
-                && fs::set_permissions(&data, fs::Permissions::from_mode(0o700)).is_ok();
-        } else if self.config.direct.is_none() {
-            return false;
+        let mut ok = fs::create_dir_all(&data).is_ok()
+            && fs::set_permissions(&data, fs::Permissions::from_mode(0o700)).is_ok();
+        if let Some(userdb) = &self.config.userdb {
+            ok &= process::user(userdb, uid).is_ok() && chown(&data, Some(uid), Some(uid)).is_ok();
         }
         if let Some(manifest) = &installed.manifest {
-            if !dirs.settings_file(id).is_file() {
-                ok &= registry::save_settings(dirs, manifest, &module.settings).is_ok();
+            let missing = !dirs.settings_file(id).is_file()
+                || registry::has_secrets(manifest) && !dirs.secrets_file(id).is_file();
+            if missing {
+                ok &= registry::save_settings(dirs, manifest, &module.settings, self.owner(id))
+                    .is_ok();
             }
         }
         ok

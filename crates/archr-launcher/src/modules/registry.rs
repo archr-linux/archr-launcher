@@ -43,6 +43,10 @@ impl Dirs {
     pub fn settings_file(&self, id: &str) -> PathBuf {
         self.settings.join(format!("{id}.json"))
     }
+    /// The values of `secret` keyboard rows, apart: 0600, the module's own.
+    pub fn secrets_file(&self, id: &str) -> PathBuf {
+        self.settings.join(format!("{id}.secret.json"))
+    }
     pub fn data_dir(&self, id: &str) -> PathBuf {
         self.data.join(id)
     }
@@ -65,12 +69,40 @@ pub struct Record {
     /// SHA-256 of the installed package, for the reviewed badge.
     pub digest: String,
 }
+/// Module uids, which are also their gids: above useradd's UID_MAX (60000)
+/// and systemd-homed's 60001–60513, below DynamicUser's 61184–65519.
+pub const UIDS: std::ops::Range<u32> = 60600..61100;
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct State {
     pub modules: BTreeMap<String, Record>,
+    /// Each module's own uid. Kept when the module is removed with its data
+    /// kept, so the files still belong to it if it comes back.
+    pub uids: BTreeMap<String, u32>,
 }
 impl State {
+    /// The module's uid: the one it has, else the first free one from a
+    /// hash of its id; `None` once the range is full.
+    pub fn uid(&mut self, id: &str) -> Option<u32> {
+        let taken = |uids: &BTreeMap<String, u32>, uid: u32| {
+            !UIDS.contains(&uid) || uids.iter().any(|(k, v)| k != id && *v == uid)
+        };
+        match self.uids.get(id) {
+            Some(&uid) if !taken(&self.uids, uid) => return Some(uid),
+            _ => self.uids.remove(id),
+        };
+        let span = UIDS.end - UIDS.start;
+        // FNV-1a: the same first choice on every build.
+        let hash = id.bytes().fold(0x811c_9dc5_u32, |h, b| {
+            (h ^ u32::from(b)).wrapping_mul(0x0100_0193)
+        });
+        let uid = (0..span)
+            .map(|i| UIDS.start + (hash % span + i) % span)
+            .find(|&uid| !taken(&self.uids, uid))?;
+        self.uids.insert(id.to_owned(), uid);
+        Some(uid)
+    }
     pub fn load(path: &Path) -> Self {
         read_utf8(path, 256 << 10, Symlinks::Reject)
             .ok()
@@ -245,17 +277,18 @@ pub fn permissions(manifest: &Manifest) -> Vec<Permission> {
 
 /// Saved settings, string-typed for the screens; defaults fill the gaps.
 pub fn settings(dirs: &Dirs, manifest: &Manifest) -> BTreeMap<String, String> {
-    let saved: serde_json::Map<String, Json> = read_bytes(
-        &dirs.settings_file(&manifest.id),
-        64 << 10,
-        Symlinks::Reject,
-    )
-    .ok()
-    .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-    .unwrap_or_default();
+    let load = |path: &Path| -> serde_json::Map<String, Json> {
+        read_bytes(path, 64 << 10, Symlinks::Reject)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_default()
+    };
+    let saved = load(&dirs.settings_file(&manifest.id));
+    let secrets = load(&dirs.secrets_file(&manifest.id));
     let mut values = BTreeMap::new();
     for row in manifest.pages.iter().flat_map(|p| &p.rows) {
         let Some(key) = row.kind.key() else { continue };
+        let saved = if secret(&row.kind) { &secrets } else { &saved };
         let value = match saved.get(key) {
             Some(Json::Bool(on)) => if *on { "1" } else { "0" }.to_owned(),
             Some(Json::String(text)) => text.clone(),
@@ -288,19 +321,61 @@ pub fn settings_json(manifest: &Manifest, values: &BTreeMap<String, String>) -> 
     Json::Object(map)
 }
 
-/// Writes the settings file a module reads (0644: the sandbox user reads it).
+fn secret(kind: &RowKind) -> bool {
+    matches!(kind, RowKind::Keyboard { secret: true, .. })
+}
+/// Whether the module has `secret` rows, and so a secrets file.
+pub fn has_secrets(manifest: &Manifest) -> bool {
+    manifest
+        .pages
+        .iter()
+        .flat_map(|p| &p.rows)
+        .any(|r| secret(&r.kind))
+}
+
+/// Writes what a module reads: its settings (0644, the launcher's) and the
+/// `secret` values apart (0600, handed to `owner`, the module's uid).
 pub fn save_settings(
     dirs: &Dirs,
     manifest: &Manifest,
     values: &BTreeMap<String, String>,
+    owner: Option<u32>,
 ) -> io::Result<()> {
-    let text = settings_json(manifest, values).to_string();
-    let path = dirs.settings_file(&manifest.id);
-    atomic_publish(&path, true, |file| {
+    let all = settings_json(manifest, values);
+    let hidden: Vec<&str> = manifest
+        .pages
+        .iter()
+        .flat_map(|p| &p.rows)
+        .filter(|r| secret(&r.kind))
+        .filter_map(|r| r.kind.key())
+        .collect();
+    let part = |secrets: bool| -> Json {
+        let map = all.as_object().into_iter().flatten();
+        map.filter(|(k, _)| hidden.contains(&k.as_str()) == secrets)
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect::<serde_json::Map<_, _>>()
+            .into()
+    };
+    write_json(&dirs.settings_file(&manifest.id), &part(false), 0o644, None)?;
+    let path = dirs.secrets_file(&manifest.id);
+    if hidden.is_empty() {
+        let _ = fs::remove_file(path);
+        return Ok(());
+    }
+    write_json(&path, &part(true), 0o600, owner)
+}
+/// Mode and owner are set before the content is written: a secret is never
+/// readable by anyone else, not even for a moment.
+fn write_json(path: &Path, json: &Json, mode: u32, owner: Option<u32>) -> io::Result<()> {
+    use std::os::unix::fs::{fchown, PermissionsExt};
+    let text = json.to_string();
+    atomic_publish(path, true, |file| {
+        file.set_permissions(fs::Permissions::from_mode(mode))?;
+        if let Some(uid) = owner {
+            fchown(&*file, Some(uid), Some(uid))?;
+        }
         io::Write::write_all(file, text.as_bytes())
-    })?;
-    use std::os::unix::fs::PermissionsExt;
-    fs::set_permissions(&path, fs::Permissions::from_mode(0o644))
+    })
 }
 
 /// One module for the screens, texts resolved.
@@ -434,6 +509,80 @@ pub fn record<'a>(state: &'a mut State, id: &str) -> &'a mut Record {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn uids_stay_put_across_restarts_and_never_collide() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("modules.toml");
+        let mut state = State::default();
+        let alpha = state.uid("alpha").unwrap();
+        let beta = state.uid("beta").unwrap();
+        assert!(UIDS.contains(&alpha) && UIDS.contains(&beta) && alpha != beta);
+        state.save(&path).unwrap();
+        let mut loaded = State::load(&path);
+        assert_eq!(
+            (loaded.uid("alpha"), loaded.uid("beta")),
+            (Some(alpha), Some(beta))
+        );
+        // Someone else already holds alpha's first choice: the next one.
+        let mut taken = State::default();
+        taken.uids.insert("other".into(), alpha);
+        let moved = taken.uid("alpha").unwrap();
+        assert_ne!(moved, alpha);
+        assert_eq!(taken.uid("alpha"), Some(moved));
+        // A duplicate or out-of-range record is given a fresh uid.
+        let mut broken = State::default();
+        broken.uids.insert("a".into(), 61000);
+        broken.uids.insert("b".into(), 61000);
+        broken.uids.insert("c".into(), 1000);
+        let (a, b, c) = (broken.uid("a"), broken.uid("b"), broken.uid("c"));
+        assert!(a != b && UIDS.contains(&c.unwrap()));
+        // The range is finite.
+        let mut full = State::default();
+        for n in 0..UIDS.len() {
+            assert!(full.uid(&format!("m{n}")).is_some());
+        }
+        assert_eq!(full.uid("one-more"), None);
+        let mut seen: Vec<u32> = full.uids.values().copied().collect();
+        seen.sort_unstable();
+        seen.dedup();
+        assert_eq!(seen.len(), UIDS.len());
+    }
+
+    #[test]
+    fn secret_values_go_to_their_own_private_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let dirs = Dirs::new(dir.path());
+        fs::create_dir_all(dirs.module("sec")).unwrap();
+        fs::write(
+            dirs.module("sec").join("module.toml"),
+            "id = \"sec\"\nversion = \"1.0.0\"\napi_version = 1\nname = \"X\"\n\
+             [run]\nruntime = \"sh\"\nentry = \"main.sh\"\nmode = \"oneshot\"\n\
+             [[settings.pages]]\nid = \"p\"\n\
+             [[settings.pages.rows]]\ntype = \"keyboard\"\nkey = \"pin\"\nsecret = true\n\
+             [[settings.pages.rows]]\ntype = \"keyboard\"\nkey = \"name\"\n",
+        )
+        .unwrap();
+        fs::write(dirs.module("sec").join("main.sh"), "").unwrap();
+        fs::create_dir_all(dirs.module("sec").join("locales")).unwrap();
+        fs::write(dirs.module("sec").join("locales/en.toml"), "").unwrap();
+        let (manifest, _) = manifest::check(&dirs.module("sec")).unwrap();
+        let values = BTreeMap::from([("pin".into(), "1234".into()), ("name".into(), "ana".into())]);
+        save_settings(&dirs, &manifest, &values, None).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            fs::read_to_string(dirs.settings_file("sec")).unwrap(),
+            r#"{"name":"ana"}"#
+        );
+        assert_eq!(mode(&dirs.settings_file("sec")), 0o644);
+        assert_eq!(
+            fs::read_to_string(dirs.secrets_file("sec")).unwrap(),
+            r#"{"pin":"1234"}"#
+        );
+        assert_eq!(mode(&dirs.secrets_file("sec")), 0o600);
+        assert_eq!(settings(&dirs, &manifest), values);
+    }
 
     #[test]
     fn texts_come_from_the_module_catalog_with_arguments() {
