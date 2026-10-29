@@ -94,7 +94,11 @@ impl Backend {
             }
             SystemCfg::remove_and_save(&self.paths.config, &self.paths.lock, &key(id))
                 .map_err(|e| e.to_string())?;
-            return Ok(String::new());
+            // A global.* the user set still applies: show it, not the default.
+            return Ok(self
+                .cfg()?
+                .get_setting(id.key(), Some(system), None)
+                .unwrap_or_default());
         }
         let core;
         let entries: Vec<(String, &str)> = match id {
@@ -240,6 +244,14 @@ mod tests {
         let snes = &games(&backend)[0];
         assert!(!snes.saved.contains_key(&Id::Ratio));
         assert!(!snes.saved.contains_key(&Id::Filter));
+    }
+    #[test]
+    fn an_explicit_global_value_shows_instead_of_the_default() {
+        let (_root, backend) = fixture("global.ratio=4/3\nsnes.ratio=16/9\n", None);
+        assert_eq!(games(&backend)[0].saved[&Id::Ratio], "16/9");
+        assert_eq!(backend.apply_game("snes", Id::Ratio, ""), Ok("4/3".into()));
+        assert_eq!(games(&backend)[0].saved[&Id::Ratio], "4/3");
+        assert_eq!(saved(&backend), "global.ratio=4/3\n");
     }
     #[test]
     fn invalid_systems_pairs_and_values_are_not_written() {
