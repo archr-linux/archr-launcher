@@ -107,6 +107,8 @@ pub fn sandbox(plan: &Plan) -> Vec<String> {
         "-p SystemCallFilter=@system-service",
         "-p SystemCallArchitectures=native",
         "-p TemporaryFileSystem=/storage:ro",
+        // The system bus is AF_UNIX too: no module talks to the services.
+        "-p InaccessiblePaths=-/run/dbus",
         "-p MemorySwapMax=0",
         "-p TasksMax=16",
         "-p CPUWeight=20",
@@ -139,7 +141,10 @@ pub fn sandbox(plan: &Plan) -> Vec<String> {
             property(format!("InaccessiblePaths=-{hidden}"));
         }
     }
-    if !plan.net {
+    if plan.net {
+        // The internet, not netlink or raw packets.
+        property("RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6".into());
+    } else {
         property("PrivateNetwork=yes".into());
         property("RestrictAddressFamilies=AF_UNIX".into());
     }
@@ -347,14 +352,16 @@ mod tests {
             ..plan.clone()
         })
         .join(" ");
-        assert!(!online.contains("PrivateNetwork") && !online.contains("AF_UNIX"));
+        assert!(!online.contains("PrivateNetwork"));
+        assert!(online.contains("-p RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6"));
+        assert!(args.contains("-p InaccessiblePaths=-/run/dbus"));
         // Only the folders above a hidden one hide it.
         let bios = sandbox(&Plan {
             read: vec!["/storage/roms/bios".into()],
             ..plan
         })
         .join(" ");
-        assert!(!bios.contains("InaccessiblePaths"), "{bios}");
+        assert!(!bios.contains("InaccessiblePaths=-/storage"), "{bios}");
     }
 
     #[test]
