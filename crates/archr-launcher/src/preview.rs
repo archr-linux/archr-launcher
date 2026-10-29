@@ -8,7 +8,7 @@ use sdl2::{
     video::WindowContext,
 };
 use std::{
-    io::Read,
+    io::{BufRead, Read},
     os::unix::process::CommandExt,
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -22,7 +22,6 @@ use std::{
 
 /// Resting on the game this long starts the video.
 const DELAY: Duration = Duration::from_secs(1);
-const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const FPS: u32 = 25;
 
 /// The clip and the box it fills, in pixels.
@@ -81,7 +80,7 @@ impl Drop for Player {
     }
 }
 
-/// ffmpeg and ffprobe die with the thread that started them, so a launcher
+/// ffmpeg dies with the thread that started them, so a launcher
 /// that exits (a game starting) never leaves one behind.
 fn die_with_parent(command: &mut Command) {
     // SAFETY: prctl is async-signal-safe; nothing is allocated after fork.
@@ -93,20 +92,23 @@ fn die_with_parent(command: &mut Command) {
     }
 }
 
-/// Clip length in seconds, for the progress line.
-fn duration(path: &Path, stop: &AtomicBool) -> Option<f32> {
-    let mut command = Command::new("ffprobe");
-    die_with_parent(&mut command);
-    command
-        .args(["-v", "error", "-protocol_whitelist", "file", "-f", "mp4"])
-        .args(["-show_entries", "format=duration", "-of", "csv=p=0"])
-        .arg(path);
-    let output = process::capture(&mut command, PROBE_TIMEOUT, stop, 256).ok()?;
-    let seconds: f32 = String::from_utf8_lossy(&output.stdout)
-        .trim()
-        .parse()
-        .ok()?;
-    (seconds > 0.).then_some(seconds)
+/// Clip length in seconds, from ffmpeg's own header line
+/// ("  Duration: 00:00:06.00, ..."); later lines are read and dropped so
+/// ffmpeg never blocks on a full pipe.
+fn duration(stderr: impl Read, found: &Mutex<Option<f32>>) {
+    let mut lines = std::io::BufReader::new(stderr).lines();
+    let length = lines.by_ref().map_while(Result::ok).find_map(|line| {
+        let time = line.trim().strip_prefix("Duration: ")?.split(',').next()?;
+        let mut parts = time.split(':').map(str::parse::<f32>);
+        let (h, m, s) = (
+            parts.next()?.ok()?,
+            parts.next()?.ok()?,
+            parts.next()?.ok()?,
+        );
+        Some(h * 3600. + m * 60. + s).filter(|l| *l > 0.)
+    });
+    *found.lock().unwrap_or_else(|e| e.into_inner()) = length;
+    lines.for_each(drop);
 }
 
 fn play(
@@ -116,17 +118,14 @@ fn play(
     stop: &AtomicBool,
     group: &Mutex<i32>,
 ) -> Result<(), String> {
-    let length = duration(path, stop);
-    if stop.load(Ordering::SeqCst) {
-        return Ok(());
-    }
     let filter = format!(
         "fps={FPS},scale={w}:{h}:force_original_aspect_ratio=increase:flags=bilinear,crop={w}:{h}"
     );
     let mut command = Command::new("ffmpeg");
     die_with_parent(&mut command);
     command
-        .args(["-nostdin", "-hide_banner", "-loglevel", "error"])
+        // Info level for the header's duration; -nostats keeps it quiet after.
+        .args(["-nostdin", "-hide_banner", "-nostats", "-loglevel", "info"])
         // Only a local MP4 file: no network or other protocol, no demuxer guessing.
         .args(["-protocol_whitelist", "file", "-f", "mp4"])
         // Real time, in a loop, one decoding thread: the menus stay first.
@@ -137,7 +136,7 @@ fn play(
         .process_group(0)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null());
+        .stderr(Stdio::piped());
     let child = process::spawn(&mut command).map_err(|e| format!("ffmpeg: {e}"))?;
     let mut child = process::Running(child);
     {
@@ -156,6 +155,14 @@ fn play(
     }
     let clear = Clear(group);
     let mut out = child.0.stdout.take().ok_or("ffmpeg: no output")?;
+    let length = Arc::new(Mutex::new(None));
+    if let Some(stderr) = child.0.stderr.take() {
+        let found = length.clone();
+        // Ends with ffmpeg (EOF), so it never outlives the clip.
+        let _ = thread::Builder::new()
+            .name("preview-log".into())
+            .spawn(move || duration(stderr, &found));
+    }
     let mut frame = vec![0; w as usize * h as usize * 3];
     let mut seq = 0u64;
     while !stop.load(Ordering::Relaxed) {
@@ -169,6 +176,7 @@ fn play(
             frame = vec![0; shared.frame.len()];
         }
         shared.seq = seq;
+        let length = *length.lock().unwrap_or_else(|e| e.into_inner());
         shared.progress = length.map_or(0., |l| (at % l) / l);
     }
     drop(clear);
