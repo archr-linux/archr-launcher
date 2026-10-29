@@ -1,6 +1,6 @@
 # Example theme: yellow and navy, the list on the right and the art on the
 # left. Everything not written here comes from the default theme
-# (docs/temas.md). It ships no fonts, so the system ones are used.
+# (docs/temas.md), including its fonts, console pictures and sounds.
 name = { en = "Beach (example)", pt_BR = "Praia (exemplo)", es = "Playa (ejemplo)", ru = "Пляж (пример)" }
 
 background = "#0A2540"

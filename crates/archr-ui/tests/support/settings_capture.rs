@@ -391,7 +391,7 @@ fn capture_network_and_games_pages() {
             },
         );
         let home = Home(systems.to_vec());
-        let app = crate::state::App::new(ui.page_size(&theme));
+        let app = crate::state::App::new(10);
         for (name, accent) in [
             ("light", "#FFE14D"),
             ("dark", "#1B2A6B"),
@@ -579,14 +579,27 @@ fn capture_views() {
     let views = std::env::var("ARCHR_CAPTURE_VIEWS")
         .unwrap_or_else(|_| "default:lista,default:vitrine".into());
     for spec in views.split(',') {
-        let (folder, view) = spec.split_once(':').unwrap();
-        let mut theme = Theme::load(&themes.join(folder));
+        // folder:view, or folder:view:noart for a library without pictures.
+        let mut parts = spec.split(':');
+        let (folder, view) = (parts.next().unwrap(), parts.next().unwrap());
+        let noart = parts.next() == Some("noart");
+        let default = themes.join("default");
+        let mut theme = Theme::load_over(&themes.join(folder), &Theme::load(&default));
         theme.active_view = view.into();
-        ui.theme_dir = Some(themes.join(folder));
+        let empty = output.join("no-art");
+        ui.theme_dir = Some(if noart {
+            empty.clone()
+        } else {
+            themes.join(folder)
+        });
+        ui.default_theme_dir = Some(if noart { empty } else { default });
         ui.configure(&ttf, &creator, &theme, None).unwrap();
+        let view_id = view;
+        let view = &*format!("{view}{}", if noart { "-noart" } else { "" });
         for language in languages.split(',') {
             ui.catalog = I18n::load(std::path::Path::new("/nonexistent"), Some(language), None);
-            let mut app = crate::state::App::new(ui.page_size(&theme));
+            let mut app = crate::state::App::new(10);
+            app.set_view(&theme.view(view_id));
             app.cursor = 1;
             // System art loads on the worker after the first frame.
             let deadline = Instant::now() + Duration::from_secs(3);
@@ -654,7 +667,7 @@ fn capture_views() {
             let mut look = ready();
             look.base_theme = theme.clone();
             look.values.insert(Id::Theme, folder.into());
-            look.values.insert(Id::View, view.into());
+            look.values.insert(Id::View, view_id.into());
             look.theme_names.insert(folder.into(), theme.name.clone());
             look.open(Page::Appearance);
             // On the View row, so the accent dots show unhighlighted.

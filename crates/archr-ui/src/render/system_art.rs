@@ -204,13 +204,20 @@ impl Ui<'_, '_> {
     pub(super) fn ensure_art(&mut self) {
         let Some(creator) = self.creator else { return };
         let base = self.root.clone().unwrap_or_else(|| PathBuf::from("/"));
-        let dirs = [
+        let default = self
+            .default_theme_dir
+            .clone()
+            .unwrap_or_else(|| base.join(crate::theme::DEFAULT_THEME_DIR.trim_start_matches('/')));
+        // A theme without pictures shows the default theme's.
+        let mut dirs: Vec<PathBuf> = [
             Some(base.join("storage/.config/archr-launcher/systems")),
             self.theme_dir.as_ref().map(|dir| dir.join("systems")),
+            Some(default.join("systems")),
         ]
         .into_iter()
         .flatten()
         .collect();
+        dirs.dedup();
         if self.art.as_ref().is_some_and(|art| art.dirs == dirs) {
             return;
         }
@@ -333,7 +340,10 @@ impl Ui<'_, '_> {
             .collect();
         // Nearest last, so the selection's shadow lies over its neighbours.
         tiles.sort_by_key(|tile| std::cmp::Reverse(tile.0.abs_diff(cursor)));
-        self.canvas.set_clip_rect(area);
+        // Kept within the row's width only: the selection's shadow spills
+        // above and below it.
+        self.canvas
+            .set_clip_rect(Rect::new(area.x(), 0, area.width(), self.frame.height));
         for (i, x, side) in tiles {
             let focus = ((side - small) / (big - small).max(1.)).clamp(0., 1.);
             let rect = Rect::new(

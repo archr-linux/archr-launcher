@@ -354,10 +354,20 @@ impl<'a> Shadow<'a> {
         texture.set_scale_mode(ScaleMode::Linear);
         Ok(Self(texture))
     }
-    pub fn draw(&self, canvas: &mut Canvas<Window>, rect: Rect, scale: f32) -> Result<(), String> {
-        let pad = (16. * scale).round() as i32;
-        let corner = (12. * scale).round() as i32;
-        let shift = (8. * scale).round() as i32;
+    /// Under `rect`, whose corners are rounded by `radius`: the shadow grows
+    /// with the radius, so it follows the corners instead of poking out.
+    pub fn draw(
+        &self,
+        canvas: &mut Canvas<Window>,
+        rect: Rect,
+        scale: f32,
+        radius: f32,
+    ) -> Result<(), String> {
+        let fit = rect.width().min(rect.height()) as f32 / 24.;
+        let k = (radius / 12.).max(scale).min(fit);
+        let pad = (16. * k).round() as i32;
+        let corner = (12. * k).round() as i32;
+        let shift = (8. * k).round() as i32;
         let xs = slice_axis(rect.x(), rect.right(), pad, corner, 0);
         let ys = slice_axis(rect.y(), rect.bottom(), pad, corner, shift);
         let src = [0, 28, 36, 64];

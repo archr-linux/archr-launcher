@@ -62,9 +62,13 @@ impl App {
             return Outcome::None;
         };
         let last = moving.rows.len().saturating_sub(1);
+        // A carousel moves the lifted system with ← and → as well.
+        let across = self.systems_nav.axis == crate::layout::Axis::Horizontal;
         let to = match b {
             Button::Up => self.cursor.saturating_sub(1),
             Button::Down => (self.cursor + 1).min(last),
+            Button::L if across => self.cursor.saturating_sub(1),
+            Button::R if across => (self.cursor + 1).min(last),
             Button::A => {
                 let rows = self.moving.take().map(|moving| moving.rows);
                 return Outcome::SetOrder(rows.unwrap_or_default());

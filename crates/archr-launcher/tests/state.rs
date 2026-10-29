@@ -213,7 +213,7 @@ fn page_bounds_cover_overflow_and_zero() {
     let data = FakeData::library();
     for (size, right, left) in [(usize::MAX, 11, 0), (0, 7, 7)] {
         let mut app = in_games("snes", 7);
-        app.page_size = size;
+        app.games_nav.page = size;
         for (button, expected) in [(Button::R, right), (Button::L, left)] {
             assert_eq!(app.handle(button, &data), Outcome::None);
             assert_eq!(app.cursor, expected);
@@ -816,4 +816,87 @@ fn restore_item_exists_only_with_a_custom_order_and_keeps_the_cursor_on_its_row(
     app.handle(Button::Down, &data);
     assert_eq!(app.handle(Button::A, &data), Outcome::SetOrder(Vec::new()));
     assert_eq!((app.screen.clone(), app.cursor), (Screen::Systems, 1));
+}
+
+/// An app following `view` of the builtin theme.
+fn in_view(view: &str) -> App {
+    let mut app = App::new(1);
+    app.set_view(&archr_ui::Theme::builtin().view(view));
+    app
+}
+
+#[test]
+fn the_carousel_steps_one_system_with_left_and_right() {
+    let mut data = FakeData::library();
+    data.collections();
+    let mut app = in_view("vitrine");
+    // The d-pad and the shoulders both send L/R.
+    for (button, cursor) in [
+        (Button::R, 1),
+        (Button::R, 2),
+        (Button::L, 1),
+        (Button::Down, 2),
+        (Button::Up, 1),
+        (Button::R, 2),
+        (Button::R, 3),
+        (Button::R, 3),
+        (Button::L, 2),
+    ] {
+        assert_eq!(app.handle(button, &data), Outcome::None);
+        assert_eq!(app.cursor, cursor, "after {button:?}");
+    }
+    // Its games screen is a vertical list: L/R page through it.
+    app.cursor = 3;
+    app.handle(Button::A, &data);
+    let page = app.games_nav.page;
+    assert!(page > 1);
+    app.handle(Button::R, &data);
+    assert_eq!(app.cursor, page);
+    app.handle(Button::Down, &data);
+    assert_eq!(app.cursor, page + 1);
+    app.handle(Button::L, &data);
+    assert_eq!(app.cursor, 1);
+}
+
+#[test]
+fn a_vertical_list_pages_by_what_its_layout_shows() {
+    let data = FakeData::library();
+    let mut app = in_view("lista");
+    let page = app.games_nav.page;
+    assert!((5..20).contains(&page), "a screenful of games: {page}");
+    app.handle(Button::R, &data);
+    assert_eq!(app.cursor, 1, "two systems: a page reaches the last");
+    app.handle(Button::L, &data);
+    assert_eq!(app.cursor, 0);
+    app.cursor = 1;
+    app.handle(Button::A, &data);
+    app.handle(Button::R, &data);
+    assert_eq!(app.cursor, page.min(11));
+    app.handle(Button::L, &data);
+    assert_eq!(app.cursor, 0);
+}
+
+#[test]
+fn changing_the_view_changes_the_navigation() {
+    let theme = archr_ui::Theme::builtin();
+    let mut app = in_view("lista");
+    let lista = app.systems_nav;
+    app.set_view(&theme.view("vitrine"));
+    assert_ne!(app.systems_nav, lista);
+    app.set_view(&theme.view("lista"));
+    assert_eq!(app.systems_nav, lista);
+}
+
+#[test]
+fn the_carousel_moves_a_lifted_system_with_left_and_right() {
+    let mut data = FakeData::library();
+    data.collections();
+    let mut app = start_move(&data, 1);
+    app.set_view(&archr_ui::Theme::builtin().view("vitrine"));
+    app.handle(Button::R, &data);
+    assert_eq!(app.rows(&data), ["@favorites", "nes", "@recent", "snes"]);
+    app.handle(Button::L, &data);
+    app.handle(Button::L, &data);
+    assert_eq!(app.rows(&data), ["@recent", "@favorites", "nes", "snes"]);
+    assert_eq!(app.cursor, 0);
 }

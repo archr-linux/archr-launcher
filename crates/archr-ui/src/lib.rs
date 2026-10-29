@@ -9,7 +9,7 @@ pub mod layout;
 pub mod sounds;
 pub mod theme;
 
-pub use theme::{resolve_theme, theme_dir, Rect01, Rgba, SystemScreen, Theme};
+pub use theme::{resolve_theme, theme_dir, Rect01, Rgba, SystemScreen, Theme, DEFAULT_THEME_DIR};
 
 pub mod covers;
 

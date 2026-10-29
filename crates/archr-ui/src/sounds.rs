@@ -73,6 +73,10 @@ pub struct Sounds {
 
 impl Sounds {
     pub fn load(dir: &Path) -> Self {
+        Self::load_over(dir, &Self::default())
+    }
+    /// The theme in `dir`; what it neither has nor silences plays `base`'s.
+    pub fn load_over(dir: &Path, base: &Self) -> Self {
         let table = read_utf8(&dir.join("theme.toml"), MAX_THEME_BYTES, Follow)
             .ok()
             .and_then(|source| toml::from_str::<toml::Table>(&source).ok())
@@ -85,12 +89,16 @@ impl Sounds {
             Some(toml::Value::String(path)) => Some(path.clone()),
             _ => None,
         };
-        let mut sounds = Self::default();
+        let mut sounds = Self {
+            events: HashMap::new(),
+            systems: base.systems.clone(),
+        };
         for event in Event::ALL {
             let file = match declared(&table, event.name()) {
                 Some(path) if path.is_empty() => continue,
                 Some(path) => confine(dir, &path),
-                None => by_name(&dir.join("sounds"), event.name()),
+                None => by_name(&dir.join("sounds"), event.name())
+                    .or_else(|| base.events.get(&event).cloned()),
             };
             sounds.events.extend(file.map(|file| (event, file)));
         }
@@ -188,6 +196,23 @@ mod tests {
         (dir, sounds)
     }
 
+    #[test]
+    fn a_theme_plays_the_base_sounds_it_neither_has_nor_silences() {
+        let (_base_dir, base) = theme(&["sounds/move.ogg", "sounds/back.ogg"], "");
+        let dir = TempDir::new().unwrap();
+        fs::create_dir_all(dir.path().join("sounds")).unwrap();
+        fs::write(dir.path().join("sounds/back.wav"), b"RIFF").unwrap();
+        fs::write(dir.path().join("theme.toml"), "[sounds]\nmove = \"\"\n").unwrap();
+        let sounds = Sounds::load_over(dir.path(), &base);
+        assert!(sounds.event(Event::Move).is_none(), "silenced");
+        assert_eq!(
+            sounds.event(Event::Back),
+            Some(dir.path().join("sounds/back.wav").as_path())
+        );
+        fs::write(dir.path().join("theme.toml"), "").unwrap();
+        let sounds = Sounds::load_over(dir.path(), &base);
+        assert_eq!(sounds.event(Event::Move), base.event(Event::Move));
+    }
     #[test]
     fn theme_without_sounds_is_silent() {
         let (_dir, sounds) = theme(&[], "margin = 0.1");

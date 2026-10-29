@@ -48,7 +48,7 @@ fn selection_animation_frame_time() {
     creator = ui.canvas.texture_creator();
     ui.configure(&ttf, &creator, &theme, Some(root.path()))
         .unwrap();
-    let mut app = App::new(ui.page_size(&theme));
+    let mut app = App::new(10);
     ui.draw(&app, &data, &theme, None).unwrap();
     let mut samples = Vec::new();
     for gesture in 0..24 {
