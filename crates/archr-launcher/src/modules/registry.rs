@@ -149,7 +149,7 @@ impl Installed {
             }
         };
         let compatible = manifest.as_ref().is_some_and(|m| {
-            m.api_version == manifest::API_VERSION
+            manifest::api_ok(m.api_version)
                 && !archr_ui::settings::store::newer(&m.min_launcher, env!("CARGO_PKG_VERSION"))
         });
         let file = language.replace('-', "_");
@@ -255,6 +255,35 @@ pub fn permissions(manifest: &Manifest) -> Vec<Permission> {
         list.push(line(
             "modules.perm_config_read",
             &granted.config_read.join(", "),
+            false,
+        ));
+    }
+    if !granted.config_write.is_empty() {
+        // It changes what the user chose.
+        list.push(line(
+            "modules.perm_config_write",
+            &granted.config_write.join(", "),
+            true,
+        ));
+    }
+    if granted.hooks.iter().any(|h| h == "launch") {
+        list.push(line(
+            "modules.perm_hooks_launch",
+            "modules.perm_hooks_launch_detail",
+            false,
+        ));
+    }
+    if granted.system.iter().any(|s| s == "cpu-profile") {
+        list.push(line(
+            "modules.perm_cpu_profile",
+            "modules.perm_cpu_profile_detail",
+            false,
+        ));
+    }
+    if granted.launch {
+        list.push(line(
+            "modules.perm_launch",
+            "modules.perm_launch_detail",
             false,
         ));
     }

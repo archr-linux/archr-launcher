@@ -233,7 +233,7 @@ impl Shop {
         });
         let records = self.records();
         let record = records.modules.get(&manifest.id);
-        let compatible = manifest.api_version == manifest::API_VERSION
+        let compatible = manifest::api_ok(manifest.api_version)
             && !archr_ui::settings::store::newer(&manifest.min_launcher, env!("CARGO_PKG_VERSION"));
         let blocked = match record {
             _ if !compatible => Some("modules.incompatible"),
@@ -250,15 +250,7 @@ impl Shop {
             .filter(|r| r.source == card.source())
             .map(|r| r.version.clone());
         let mut added = manifest.clone();
-        added.permissions.net &= !granted.iter().any(|t| t == "net");
-        added
-            .permissions
-            .read
-            .retain(|a| !granted.contains(&format!("read:{a}")));
-        added
-            .permissions
-            .config_read
-            .retain(|k| !granted.contains(&format!("config_read:{k}")));
+        added.permissions = manifest.permissions.without(&granted);
         let added = if installed.is_some() {
             added.tiles.clear();
             added.shortcuts.clear();
