@@ -484,6 +484,12 @@ fn hotkeys_save_evdev_names_and_restart_a_running_input_service() {
             log.display()
         ),
     );
+    let retroarch = dir.path().join("retroarch.log");
+    script(
+        &dir,
+        "archr-retroarch-hotkeys",
+        &format!("echo \"$*\" >> '{}'", retroarch.display()),
+    );
     let config = || {
         fs::read_to_string(dir.path().join("storage/.config/system/configs/system.cfg")).unwrap()
     };
@@ -508,6 +514,11 @@ fn hotkeys_save_evdev_names_and_restart_a_running_input_service() {
     assert_eq!(
         fs::read_to_string(&log).unwrap().matches("restart").count(),
         5
+    );
+    // RetroArch's hotkeys follow every hotkey change, not inactivity.
+    assert_eq!(
+        fs::read_to_string(&retroarch).unwrap(),
+        "--force\n--force\n--force\n--force\n"
     );
     let state = backend.load().unwrap();
     assert_eq!(state.hotkey_pads(0), ["FN", "R1", "START"]);
