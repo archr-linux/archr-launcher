@@ -1487,6 +1487,8 @@ fn system_title(name: &str, data: &dyn DataSource, catalog: &I18n) -> String {
     }
 }
 
+/// Every unselected row shares one ink, so moving never repaints the rest
+/// of the list.
 fn row_style(
     theme: &Theme,
     i: usize,
@@ -1496,12 +1498,8 @@ fn row_style(
 ) -> (Face, f32, Rgba) {
     let color = if i < collections {
         theme.muted
-    } else if i.abs_diff(cursor) >= 4 {
-        theme.dim_text
-    } else if i.abs_diff(cursor) >= 3 {
-        theme.text_secondary
     } else {
-        theme.text
+        theme.text_secondary
     };
     (
         selection(i == cursor, Face::Regular, Face::Semibold),
