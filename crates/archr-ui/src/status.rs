@@ -259,17 +259,20 @@ pub fn wifi_on(root: &Path) -> bool {
         .flatten()
         .any(|e| read(&e.path(), "type").trim() == "wlan" && read(&e.path(), "soft").trim() == "0")
 }
-fn local_clock(unix: u64, clock_12: bool) -> String {
+/// Broken-down local time of a Unix timestamp.
+pub fn local_time(unix: u64) -> Option<libc::tm> {
     let seconds = unix as libc::time_t;
     let mut local = std::mem::MaybeUninit::<libc::tm>::uninit();
     // SAFETY: both pointers reference correctly aligned live allocations;
     // localtime_r writes a complete tm on success and retains neither pointer.
     let result = unsafe { libc::localtime_r(&seconds, local.as_mut_ptr()) };
-    if result.is_null() {
-        return "--:--".to_owned();
-    }
     // SAFETY: a non-null return confirms the output was initialized.
-    let local = unsafe { local.assume_init() };
+    (!result.is_null()).then(|| unsafe { local.assume_init() })
+}
+pub fn local_clock(unix: u64, clock_12: bool) -> String {
+    let Some(local) = local_time(unix) else {
+        return "--:--".to_owned();
+    };
     if clock_12 {
         let hour = (local.tm_hour + 11) % 12 + 1;
         format!(

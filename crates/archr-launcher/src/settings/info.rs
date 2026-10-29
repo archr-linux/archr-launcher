@@ -12,12 +12,12 @@ use std::{
     os::unix::ffi::OsStrExt,
 };
 
-fn percent(used: u64, total: u64) -> Option<u8> {
+pub(super) fn percent(used: u64, total: u64) -> Option<u8> {
     used.saturating_mul(100)
         .checked_div(total)
         .map(|v| v.min(100) as u8)
 }
-fn bytes(value: u64) -> String {
+pub(super) fn bytes(value: u64) -> String {
     if value >= 1024 * 1024 * 1024 {
         format!("@{:.1} GB", value as f64 / 1073741824.)
     } else {
@@ -102,7 +102,7 @@ pub(super) fn ipv4_interface(preferred: &str) -> Option<(String, String)> {
     }
     first
 }
-fn filesystem_usage(path: &std::path::Path) -> Option<(u64, u64)> {
+pub(super) fn filesystem_usage(path: &std::path::Path) -> Option<(u64, u64)> {
     let path = CString::new(path.as_os_str().as_bytes()).ok()?;
     let mut stat = std::mem::MaybeUninit::<libc::statvfs>::uninit();
     // SAFETY: valid C path and writable output; initialized only on success.
