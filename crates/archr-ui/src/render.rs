@@ -331,8 +331,9 @@ pub struct Ui<'font, 'texture> {
     pub moonlight: Option<crate::moonlight::State>,
     /// Active theme directory; its `systems/` folder holds console images.
     pub theme_dir: Option<PathBuf>,
-    /// Root-mapped installed icon directory (separate from the selected theme).
-    pub system_icons_dir: Option<PathBuf>,
+    /// Root-mapped installed default theme: icons and console images the
+    /// selected theme does not bring come from here.
+    pub default_theme_dir: Option<PathBuf>,
 }
 impl<'font, 'texture> Ui<'font, 'texture> {
     pub fn new(width: u32, height: u32, windowed: bool) -> Result<Self, String> {
@@ -425,7 +426,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             transition: None,
             moonlight: None,
             theme_dir: None,
-            system_icons_dir: None,
+            default_theme_dir: None,
         })
     }
     pub fn configure(
@@ -438,9 +439,10 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         let mut prepared = PreparedText::new(ttf, font_paths(theme, root), self.startup);
         prepared.prepare_icons(
             self.theme_dir.as_deref(),
-            self.system_icons_dir
-                .as_deref()
-                .unwrap_or_else(|| Path::new(crate::icons::DEFAULT_ICONS_DIR)),
+            &self.default_theme_dir.as_ref().map_or_else(
+                || PathBuf::from(crate::icons::DEFAULT_ICONS_DIR),
+                |dir| dir.join("icons"),
+            ),
             [],
         );
         self.configure_prepared(creator, prepared, root)

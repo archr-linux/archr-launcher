@@ -7,6 +7,9 @@ use std::{
 };
 
 const MAX_THEME_BYTES: u64 = 64 * 1024;
+/// The installed default theme: what other themes do not bring (fonts,
+/// console pictures, sounds, icons) comes from here.
+pub const DEFAULT_THEME_DIR: &str = "/usr/share/archr-launcher/themes/default";
 
 /// Renderer-independent color, with straight (unpremultiplied) alpha.
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
@@ -103,7 +106,12 @@ impl Theme {
     /// Apply each TOML key directly over defaults; a malformed field cannot
     /// discard valid neighbours. User themes never inherit from system themes.
     pub fn load(dir: &Path) -> Self {
-        let theme = Self::builtin();
+        Self::load_over(dir, &Self::builtin())
+    }
+    /// The theme in `dir`, taking what it does not say from `base` (the
+    /// installed default theme, whose fonts the builtin cannot know).
+    pub fn load_over(dir: &Path, base: &Self) -> Self {
+        let theme = base.clone();
         let path = dir.join("theme.toml");
         let table = match read_utf8(&path, MAX_THEME_BYTES, Follow)
             .map_err(|e| e.to_string())
@@ -112,7 +120,7 @@ impl Theme {
             Ok(table) => table,
             Err(error) => {
                 log::warn!(
-                    "Cannot load theme {}: {error}; using builtin",
+                    "Cannot load theme {}: {error}; using the default",
                     path.display()
                 );
                 return theme;
@@ -135,7 +143,22 @@ impl Theme {
                     .expect(concat!("invalid builtin theme field: ", stringify!($name)))
             };
         }
-        let font = |name| field::<String>(table, name).and_then(|f| resolve_font(dir?, &f));
+        let font = |name: &str| field::<String>(table, name).and_then(|f| resolve_font(dir?, &f));
+        // Each family (regular with semibold, mono with medium) comes whole
+        // from the theme when it names either face, else from the defaults.
+        let family = |keys: [&'static str; 2], inherited: fn(&Self) -> [Option<PathBuf>; 2]| {
+            if keys.iter().any(|key| table.contains_key(*key)) {
+                keys.map(font)
+            } else {
+                defaults.map_or([None, None], inherited)
+            }
+        };
+        let [font_regular, font_semibold] = family(["font", "font_semibold"], |d| {
+            [d.font.clone(), d.font_semibold.clone()]
+        });
+        let [font_mono, font_mono_medium] = family(["font_mono", "font_mono_medium"], |d| {
+            [d.font_mono.clone(), d.font_mono_medium.clone()]
+        });
         Self {
             background: token!(background, color),
             text: token!(text, color),
@@ -171,10 +194,10 @@ impl Theme {
             details_subtitle: token!(details_subtitle, rectangle),
             details_text: token!(details_text, rectangle),
             details_actions: token!(details_actions, rectangle),
-            font: font("font"),
-            font_semibold: font("font_semibold"),
-            font_mono: font("font_mono"),
-            font_mono_medium: font("font_mono_medium"),
+            font: font_regular,
+            font_semibold,
+            font_mono,
+            font_mono_medium,
             name: Names::parse(table.get("name"), "name"),
             active_view: LISTA.into(),
             views: view_tables(table, defaults),

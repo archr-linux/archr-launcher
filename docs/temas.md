@@ -18,6 +18,10 @@ chave por chave.
 ```
 
 O tema aparece em Configurações › Aparência › Tema assim que a pasta existe.
+Pasta que o tema não traz vem do tema padrão instalado
+(`/usr/share/archr-launcher/themes/default/`): sem `fonts/` e sem chaves de
+fonte, ele usa as fontes do padrão; sem a imagem de um console, a do padrão;
+sem um ícone, o do padrão; sem um som, o do padrão.
 Um exemplo completo e pequeno está em `themes/praia/`.
 
 ## Nome
@@ -65,8 +69,11 @@ font_mono = "fonts/JetBrainsMono-Regular.ttf"
 font_mono_medium = "fonts/JetBrainsMono-Medium.ttf"
 ```
 
-Caminhos relativos à pasta do tema, sem `..`. Sem fontes, o launcher usa as do
-sistema (DejaVu/Liberation).
+Caminhos relativos à pasta do tema, sem `..`. Cada família vem inteira: o tema
+que cita `font` ou `font_semibold` usa as suas (a regular serve de seminegrito
+se faltar a outra); o que não cita nenhuma das duas herda as duas do tema
+padrão. O mesmo vale para `font_mono` e `font_mono_medium`. Uma fonte citada
+que não existe cai nas do sistema (DejaVu/Liberation).
 
 ## Medidas gerais
 
@@ -197,7 +204,7 @@ Qualquer botão encerra a animação em curso; a entrada nunca espera.
 ## Sons
 
 Um tema pode ter sons: de movimentação, de ação e de cada sistema. Tudo é
-dado do tema; nenhum som é exigido, e um tema sem sons fica em silêncio.
+dado do tema; nenhum som é exigido: o que faltar vem do tema padrão.
 
 ### O jeito mais simples
 
@@ -219,7 +226,8 @@ do evento. Não é preciso declarar nada no `theme.toml`.
 | `notice`       | aparece um aviso                              |
 | `favorite`     | marca ou desmarca favorito                    |
 
-Evento sem arquivo fica em silêncio.
+Evento sem arquivo toca o som do tema padrão; para silenciar, use `""` na
+tabela `[sounds]` (abaixo).
 
 ### Sons por sistema
 
@@ -261,9 +269,10 @@ Aparência, em pt-BR e ru, para cada `pasta:visualização`:
 
 ```sh
 ARCHR_SETTINGS_CAPTURE_DIR=/tmp/capturas \
-ARCHR_CAPTURE_VIEWS=default:vitrine,praia:lista \
+ARCHR_CAPTURE_VIEWS=default:vitrine,praia:lista,praia:vitrine:noart \
 cargo test -p archr-ui --lib capture_views -- --ignored
 ```
 
-O tema precisa estar em `themes/` do repositório para esse comando. No
+`:noart` captura como se não houvesse imagem de console nenhuma. O tema
+precisa estar em `themes/` do repositório para esse comando. No
 aparelho, os avisos sobre chaves inválidas ficam no log do launcher.

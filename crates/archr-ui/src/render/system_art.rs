@@ -204,13 +204,20 @@ impl Ui<'_, '_> {
     pub(super) fn ensure_art(&mut self) {
         let Some(creator) = self.creator else { return };
         let base = self.root.clone().unwrap_or_else(|| PathBuf::from("/"));
-        let dirs = [
+        let default = self
+            .default_theme_dir
+            .clone()
+            .unwrap_or_else(|| base.join(crate::theme::DEFAULT_THEME_DIR.trim_start_matches('/')));
+        // A theme without pictures shows the default theme's.
+        let mut dirs: Vec<PathBuf> = [
             Some(base.join("storage/.config/archr-launcher/systems")),
             self.theme_dir.as_ref().map(|dir| dir.join("systems")),
+            Some(default.join("systems")),
         ]
         .into_iter()
         .flatten()
         .collect();
+        dirs.dedup();
         if self.art.as_ref().is_some_and(|art| art.dirs == dirs) {
             return;
         }

@@ -169,6 +169,7 @@ fn run(
     creator = ui.canvas.texture_creator();
     ui.catalog = catalog;
     ui.theme_dir = theme_path;
+    ui.default_theme_dir = Some(paths.at(archr_ui::DEFAULT_THEME_DIR));
     ui.text_scale = look.text_scale();
     ui.set_motion(look.animations);
     ui.start_opening();
@@ -186,7 +187,7 @@ fn run(
     library.start();
     let (sounds_on, sounds_volume) = audio::saved(SystemCfg::load(&paths.config).ok().as_ref());
     let mut audio = Audio::new(
-        theme_sounds(ui.theme_dir.as_deref()),
+        theme_sounds(ui.theme_dir.as_deref(), &paths),
         sounds_on,
         sounds_volume,
     );
@@ -278,7 +279,7 @@ fn run(
             theme = next;
             app.set_view(&theme.view(&theme.active_view));
             ui.theme_dir = settings.state.base_dir.clone();
-            audio.set_sounds(theme_sounds(ui.theme_dir.as_deref()));
+            audio.set_sounds(theme_sounds(ui.theme_dir.as_deref(), &paths));
             ui.text_scale = look.text_scale();
             ui.set_motion(look.animations);
             if reload {
@@ -622,9 +623,14 @@ fn run(
     }
 }
 
-/// The sounds of the theme in `dir`; the builtin theme has none.
-fn theme_sounds(dir: Option<&std::path::Path>) -> Sounds {
-    dir.map(Sounds::load).unwrap_or_default()
+/// The sounds of the theme in `dir`, over the installed default theme's.
+fn theme_sounds(dir: Option<&std::path::Path>, paths: &Paths) -> Sounds {
+    let default = paths.at(archr_ui::DEFAULT_THEME_DIR);
+    let base = Sounds::load(&default);
+    match dir {
+        Some(dir) if dir != default => Sounds::load_over(dir, &base),
+        _ => base,
+    }
 }
 /// Lobby input: closing and refreshing are local; a chosen room becomes a terminal outcome.
 fn lobby_input(
