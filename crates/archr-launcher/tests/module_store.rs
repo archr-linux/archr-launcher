@@ -2,7 +2,7 @@
 //! test ever reaches the network.
 use archr_launcher::modules::{
     registry::{Dirs, Record, State},
-    store::{Shop, HOSTS},
+    store::{same_digest, Shop, HOSTS},
 };
 use archr_scraper::{trusted_on, Http, NetError, Response};
 use archr_ui::modules::{Card, StoreReply, Tab};
@@ -153,6 +153,13 @@ fn reviewed_modules_come_first_and_the_badge_follows_the_digest() {
     };
     assert_eq!(cards.len(), 1);
     assert!(cards[0].reviewed);
+    // The digests travel with the card: the host checks the installed one.
+    assert_eq!(cards[0].digests, [format!("sha256:{}", sha(&tarball))]);
+    assert!(same_digest(
+        &cards[0].digests[0],
+        &sha(&tarball).to_uppercase()
+    ));
+    assert!(!same_digest("sha256:", ""), "nothing is not a match");
     let StoreReply::Listed { cards, .. } = store.list(Tab::All, false) else {
         panic!("not a list");
     };

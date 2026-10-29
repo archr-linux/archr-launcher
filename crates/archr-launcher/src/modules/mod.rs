@@ -148,7 +148,7 @@ enum Input {
         timeout: bool,
         code: Option<i32>,
     },
-    Store(StoreReply, Option<store::Installed>),
+    Store(Box<(StoreReply, Option<store::Installed>)>),
 }
 
 /// The event loop's handle on the host thread.
@@ -519,7 +519,8 @@ impl Host {
                     self.punish(&id, why);
                 }
             }
-            Input::Store(reply, installed) => {
+            Input::Store(answer) => {
+                let (reply, installed) = *answer;
                 if let Some(installed) = installed {
                     self.installed_from_store(installed);
                 }
@@ -713,9 +714,12 @@ impl Host {
             self.spawn_daemon(&installed.id);
         }
     }
-    /// Store cards tell which installed modules are reviewed or outdated.
+    /// Store cards tell which installed modules are reviewed (the digest of
+    /// the installed package is on the reviewed list) or outdated.
     fn store_reply(&mut self, reply: &StoreReply) {
         let cards = match reply {
+            // The Installed tab comes from the disk: it knows neither.
+            StoreReply::Listed { tab, .. } if *tab == archr_ui::modules::Tab::Installed => return,
             StoreReply::Listed { cards, .. } => cards.as_slice(),
             StoreReply::Card(card) => std::slice::from_ref(card),
             _ => return,
@@ -727,7 +731,15 @@ impl Host {
                 .iter_mut()
                 .find(|m| m.source == card.source() && m.id == card.id)
             {
-                module.reviewed = card.reviewed && card.version == module.version;
+                let installed = self
+                    .state
+                    .modules
+                    .get(&module.id)
+                    .map_or("", |r| r.digest.as_str());
+                module.reviewed = card
+                    .digests
+                    .iter()
+                    .any(|d| store::same_digest(d, installed));
                 module.update = archr_ui::settings::store::newer(&card.version, &module.version)
                     .then(|| card.version.clone());
             }

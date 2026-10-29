@@ -278,6 +278,9 @@ pub struct Card {
     pub version: String,
     pub stars: u64,
     pub reviewed: bool,
+    /// Package digests (`sha256:<hex>`) the project reviewed for this
+    /// repository: an installed module is reviewed only if its own matches.
+    pub digests: Vec<String>,
 }
 impl Card {
     pub fn source(&self) -> String {

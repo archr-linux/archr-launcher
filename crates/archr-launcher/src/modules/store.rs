@@ -149,10 +149,18 @@ impl Shop {
         let mut cards: Vec<Card> = repos
             .unwrap_or_default()
             .into_iter()
-            .map(|r| Card {
-                reviewed: reviewed
+            .map(|r| {
+                let source = format!("{}/{}", r.owner, r.repo);
+                let digests: Vec<String> = reviewed
                     .iter()
-                    .any(|(repo, _)| *repo == format!("{}/{}", r.owner, r.repo)),
+                    .filter(|(repo, _)| *repo == source)
+                    .map(|(_, digest)| digest.clone())
+                    .collect();
+                (r, digests)
+            })
+            .map(|(r, digests)| Card {
+                reviewed: !digests.is_empty(),
+                digests,
                 owner: r.owner,
                 repo: r.repo,
                 stars: r.stars,
@@ -267,7 +275,7 @@ impl Shop {
         let reviewed = self
             .reviewed()
             .iter()
-            .any(|(repo, digest)| *repo == card.source() && *digest == package.digest);
+            .any(|(repo, digest)| *repo == card.source() && same_digest(digest, &package.digest));
         Ok(Offer {
             card: Card {
                 id: manifest.id.clone(),
@@ -449,6 +457,12 @@ impl Shop {
     }
 }
 
+/// Two `sha256:<hex>` digests name the same package.
+pub fn same_digest(a: &str, b: &str) -> bool {
+    let hex = |d: &str| d.strip_prefix("sha256:").unwrap_or(d).to_ascii_lowercase();
+    !hex(a).is_empty() && hex(a) == hex(b)
+}
+
 /// The unpacker speaks of themes; the module store has its own words.
 fn module_key(key: &'static str) -> &'static str {
     match key {
@@ -503,7 +517,10 @@ pub(super) fn lane(
                 None => continue,
             },
         };
-        if results.send(Input::Store(reply, installed)).is_err() {
+        if results
+            .send(Input::Store(Box::new((reply, installed))))
+            .is_err()
+        {
             return;
         }
     }

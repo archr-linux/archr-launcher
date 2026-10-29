@@ -1696,6 +1696,7 @@ fn module_pages(dir: &std::path::Path) -> Vec<(&'static str, Settings)> {
                 version: "1.0.2".into(),
                 stars,
                 reviewed,
+                digests: Vec::new(),
             }
         };
     let cards = vec![
