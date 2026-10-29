@@ -98,8 +98,8 @@ fn duration(path: &Path, stop: &AtomicBool) -> Option<f32> {
     let mut command = Command::new("ffprobe");
     die_with_parent(&mut command);
     command
-        .args(["-v", "error", "-show_entries", "format=duration", "-of"])
-        .args(["csv=p=0"])
+        .args(["-v", "error", "-protocol_whitelist", "file", "-f", "mp4"])
+        .args(["-show_entries", "format=duration", "-of", "csv=p=0"])
         .arg(path);
     let output = process::capture(&mut command, PROBE_TIMEOUT, stop, 256).ok()?;
     let seconds: f32 = String::from_utf8_lossy(&output.stdout)
@@ -127,6 +127,8 @@ fn play(
     die_with_parent(&mut command);
     command
         .args(["-nostdin", "-hide_banner", "-loglevel", "error"])
+        // Only a local MP4 file: no network or other protocol, no demuxer guessing.
+        .args(["-protocol_whitelist", "file", "-f", "mp4"])
         // Real time, in a loop, one decoding thread: the menus stay first.
         .args(["-re", "-stream_loop", "-1", "-threads", "1", "-i"])
         .arg(path)
@@ -364,8 +366,17 @@ mod tests {
     #[test]
     fn a_clip_ffmpeg_cannot_read_ends_without_frames() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("Broken.mp4");
-        std::fs::write(&path, b"not a video").unwrap();
+        // A playlist named .mp4 would make ffmpeg fetch its URL: it is read
+        // as MP4 only, and refused.
+        let playlist = b"#EXTM3U\n#EXTINF:1,\nhttp://127.0.0.1:9/clip.ts\n";
+        for (name, bytes) in [("Broken.mp4", &b"not a video"[..]), ("List.mp4", playlist)] {
+            check_no_frames(dir.path(), name, bytes);
+        }
+    }
+
+    fn check_no_frames(dir: &Path, name: &str, bytes: &[u8]) {
+        let path = dir.join(name);
+        std::fs::write(&path, bytes).unwrap();
         let player = Player::start(path, (40, 30));
         let deadline = Instant::now() + Duration::from_secs(10);
         while !player.slot.lock().unwrap().done {
