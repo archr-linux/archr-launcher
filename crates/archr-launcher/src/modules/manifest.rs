@@ -15,6 +15,10 @@ pub const ALIASES: &[(&str, &str)] = &[
     ("bios", "/storage/roms/bios"),
     ("screenshots", "/storage/roms/screenshots"),
 ];
+/// Folders inside the aliases that stay hidden from every module: the
+/// backuptool's archives (system.cfg with passwords and tokens, Wi-Fi with
+/// `--with-wifi`) and archr-bluetooth's (pairing keys).
+pub const HIDDEN: &[&str] = &["/storage/roms/backup", "/storage/roms/backups"];
 /// Settings `config_read` may list. Passwords, tokens and keys never are.
 pub const READABLE: &[&str] = &[
     "system.language",

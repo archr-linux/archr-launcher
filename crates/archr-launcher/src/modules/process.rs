@@ -1,6 +1,7 @@
 //! Starting module processes. `Systemd` sandboxes each one in its own unit
 //! (docs/modulos.md, "Segurança"); `Direct` runs it plainly, for tests and
 //! for development on a PC only.
+use super::manifest::HIDDEN;
 use std::{
     ffi::OsString,
     io::{self, BufRead, BufReader, Read, Write},
@@ -128,6 +129,15 @@ pub fn sandbox(plan: &Plan) -> Vec<String> {
     property(format!("BindReadOnlyPaths=-{}", plan.secrets.display()));
     for path in &plan.read {
         property(format!("BindReadOnlyPaths=-{}", path.display()));
+    }
+    for hidden in HIDDEN {
+        if plan
+            .read
+            .iter()
+            .any(|path| Path::new(hidden).starts_with(path))
+        {
+            property(format!("InaccessiblePaths=-{hidden}"));
+        }
     }
     if !plan.net {
         property("PrivateNetwork=yes".into());
@@ -323,6 +333,8 @@ mod tests {
             "-p BindPaths=/storage/.config/archr-launcher/module-data/x",
             "-p BindReadOnlyPaths=-/storage/roms",
             "-p BindReadOnlyPaths=-/storage/.config/archr-launcher/module-settings/x.secret.json",
+            "-p InaccessiblePaths=-/storage/roms/backup",
+            "-p InaccessiblePaths=-/storage/roms/backups",
             "-p PrivateNetwork=yes",
             "-p MemoryMax=24M",
             "--setenv=HOME=/data",
@@ -330,8 +342,19 @@ mod tests {
             assert!(args.contains(expected), "{expected} in {args}");
         }
         assert!(!args.contains("archr-mod "), "no shared user: {args}");
-        let online = sandbox(&Plan { net: true, ..plan }).join(" ");
+        let online = sandbox(&Plan {
+            net: true,
+            ..plan.clone()
+        })
+        .join(" ");
         assert!(!online.contains("PrivateNetwork") && !online.contains("AF_UNIX"));
+        // Only the folders above a hidden one hide it.
+        let bios = sandbox(&Plan {
+            read: vec!["/storage/roms/bios".into()],
+            ..plan
+        })
+        .join(" ");
+        assert!(!bios.contains("InaccessiblePaths"), "{bios}");
     }
 
     #[test]
