@@ -385,6 +385,7 @@ impl Backend {
                         Err("Invalid option".into())
                     }
                 }
+                Id::MergedStorage => self.unify(value),
                 Id::ScraperSystems => {
                     if value.is_empty() || archr_scraper::system_id(value).is_some() {
                         self.save(id, value).map(|_| value.into())

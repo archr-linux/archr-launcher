@@ -393,6 +393,7 @@ const CONFIG_KEYS: &[&str] = &[
     "audio.volume",
     "controllers.bluetooth.enabled",
     "display.brightness",
+    "fuse.mergerfs",
     "global.netplay",
     "global.netplay.customserver",
     "global.netplay.host",

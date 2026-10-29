@@ -8,6 +8,10 @@ use crate::{
 };
 
 pub const STORAGE: &[Row] = &[
+    // Shown only while unified storage joins the two cards.
+    described(Id::UnifiedCard, "settings.merged", "")
+        .kind(Kind::Action)
+        .under("settings.games_card"),
     described(Id::StorageCard, "settings.card_internal", "")
         .kind(Kind::Action)
         .under("settings.games_card"),
@@ -64,12 +68,12 @@ pub struct Storage {
     pub card: Option<Card>,
     /// The second card (/storage/games-external); only it can be ejected.
     pub second: Option<Card>,
+    /// Both cards as one /storage/roms: their sizes and usage summed.
+    pub unified: Option<Card>,
     /// Subtitle reference naming the newest backup's time, if one exists.
     pub backup: Option<String>,
     /// root.password as setrootpass saved it; shown so it can be used.
     pub password: String,
-    /// The second card's filesystem can hold an overlay (ext4, btrfs).
-    pub merge_supported: bool,
     pub confirm: Option<Confirm>,
     /// Locale key of the running action; input waits for the host's reply.
     pub working: Option<&'static str>,
@@ -110,6 +114,8 @@ impl Action {
 #[derive(Clone, PartialEq, Eq)]
 pub enum Confirm {
     Eject,
+    /// Turning unified storage off.
+    Separate,
     Backup,
     BackupWifi,
     Restore,
@@ -122,6 +128,7 @@ impl std::fmt::Debug for Confirm {
         match self {
             Self::RootPassword(_) => write!(f, "RootPassword(<hidden>)"),
             Self::Eject => write!(f, "Eject"),
+            Self::Separate => write!(f, "Separate"),
             Self::Backup => write!(f, "Backup"),
             Self::BackupWifi => write!(f, "BackupWifi"),
             Self::Restore => write!(f, "Restore"),
@@ -141,6 +148,11 @@ impl Confirm {
                 "settings.eject_question",
                 "settings.eject_explain",
                 &[(Key('A'), "settings.eject"), CANCEL],
+            ),
+            Self::Separate => (
+                "settings.separate_question",
+                "settings.separate_explain",
+                &[(Key('A'), "settings.separate"), CANCEL],
             ),
             Self::Backup => (
                 "settings.backup_question",
@@ -188,6 +200,7 @@ impl Confirm {
         Some(match (self, button) {
             (_, Button::B) => Answer::Cancel,
             (Self::Eject, Button::A) => Answer::Run(Action::Eject),
+            (Self::Separate, Button::A) => Answer::Set(Id::MergedStorage, "0"),
             (Self::Backup, Button::A) => Answer::Run(Action::Backup { wifi: false }),
             (Self::Backup, Button::X) => Answer::Ask(Self::BackupWifi),
             (Self::BackupWifi, Button::A) => Answer::Run(Action::Backup { wifi: true }),
@@ -206,6 +219,7 @@ enum Answer {
     Cancel,
     Ask(Confirm),
     Run(Action),
+    Set(Id, &'static str),
 }
 /// Characters that survive setrootpass, get_setting's unquoted echo, Samba's
 /// `echo -e` and simple-http-server's `-a root:<password>` argument.
@@ -237,6 +251,17 @@ impl Settings {
                 self.storage.working = Some(action.progress());
                 Effect::Storage(action)
             }
+            Some(Answer::Set(id, value)) => {
+                self.pending = Some(id);
+                Effect::Set(id, value.into())
+            }
+        })
+    }
+    /// Turning unified storage off asks first; turning it on does not.
+    pub(super) fn storage_switch(&mut self, id: Id) -> Option<Effect> {
+        (id == Id::MergedStorage && self.value(id) == "1").then(|| {
+            self.storage.confirm = Some(Confirm::Separate);
+            Effect::None
         })
     }
     /// A on a storage row: every action asks before it runs.
@@ -392,6 +417,35 @@ mod tests {
             assert!(state.storage.confirm.is_none());
             assert_eq!(state.hints().len(), 1);
         }
+    }
+    #[test]
+    fn unified_storage_asks_before_separating_and_applies_at_once() {
+        let mut state = storage();
+        at(&mut state, Id::MergedStorage);
+        assert_eq!(
+            state.handle(Button::A),
+            Effect::Set(Id::MergedStorage, "1".into())
+        );
+        state.complete(Id::MergedStorage, Ok("1".into()));
+        assert_eq!(state.reboot_prompt, None, "applied without a reboot");
+        // Off: a question first, for every button that flips it.
+        for button in [Button::A, Button::L, Button::R] {
+            assert_eq!(state.handle(button), Effect::None);
+            assert_eq!(state.storage.confirm, Some(Confirm::Separate));
+            assert_eq!(state.handle(Button::B), Effect::None);
+            assert_eq!(state.value(Id::MergedStorage), "1");
+        }
+        state.handle(Button::A);
+        assert_eq!(
+            state.handle(Button::A),
+            Effect::Set(Id::MergedStorage, "0".into())
+        );
+        assert_eq!(state.pending, Some(Id::MergedStorage));
+        // The union's row is there only while the cards are joined.
+        assert!(!state.visible_rows().iter().any(|r| r.id == Id::UnifiedCard));
+        state.storage.unified = Some(Card::default());
+        assert_eq!(state.visible_rows()[0].id, Id::UnifiedCard);
+        assert!(state.fixed(Id::UnifiedCard));
     }
     #[test]
     fn restore_and_mount_options_ask_to_reboot() {

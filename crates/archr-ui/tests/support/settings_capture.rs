@@ -150,7 +150,6 @@ fn pages() -> Vec<(&'static str, Settings)> {
         percent: 35,
     });
     storage.storage.backup = Some("settings.backup_today|time=14:42".into());
-    storage.storage.merge_supported = true;
     storage.cursor = 1;
     let mut storage_end = storage.clone();
     storage_end.cursor = 7;
@@ -174,8 +173,23 @@ fn pages() -> Vec<(&'static str, Settings)> {
     let mut storage_internal = storage.clone();
     storage_internal.storage.second = None;
     storage_internal.storage.backup = None;
-    storage_internal.storage.merge_supported = false;
     storage_internal.cursor = 0;
+    // Unified storage off (cursor on its switch), on, and the question
+    // before separating the cards.
+    let mut storage_separate_cards = storage.clone();
+    storage_separate_cards.cursor = 3;
+    let mut storage_unified = storage.clone();
+    storage_unified.values.insert(Id::MergedStorage, "1".into());
+    storage_unified.storage.unified = Some(Card {
+        name: "settings.card_unified|first=@64|second=@128 GB|total=@192 GB".into(),
+        detail: "settings.used_total|used=@45.3 GB|total=@144.3 GB".into(),
+        percent: 31,
+    });
+    storage_unified.cursor = 4;
+    let mut storage_unified_top = storage_unified.clone();
+    storage_unified_top.cursor = 0;
+    let mut storage_separate = storage_unified.clone();
+    storage_separate.storage.confirm = Some(Confirm::Separate);
     let mut unavailable = ready();
     unavailable.open(Page::Games);
     unavailable.open(Page::Scraper);
@@ -333,6 +347,10 @@ fn pages() -> Vec<(&'static str, Settings)> {
         ("scraper-all-media", scraper_all),
         ("storage", storage),
         ("storage-internal", storage_internal),
+        ("storage-unified-off", storage_separate_cards),
+        ("storage-unified", storage_unified),
+        ("storage-unified-top", storage_unified_top),
+        ("storage-separate", storage_separate),
         ("storage-errors", storage_errors),
         ("storage-backup", storage_backup),
         ("storage-backup-wifi", storage_wifi),

@@ -207,6 +207,7 @@ pub enum Id {
     TextSize,
     Animations,
     Restore,
+    UnifiedCard,
     StorageCard,
     SecondCard,
     Automount,
@@ -326,6 +327,7 @@ impl Id {
             Self::Animations => ("launcher.animations", "on"),
             // Read by the automount script at boot.
             Self::Automount => ("system.automount", "1"),
+            // automount owns it ("automount unify"), applied at once.
             Self::MergedStorage => ("system.merged.storage", "0"),
             // mangohud_set owns enabled and state, and builds MangoHud.conf
             // from the others. The Games page writes `<system>.<suffix>`.
@@ -373,6 +375,7 @@ impl Id {
             | Self::ScraperPassword
             | Self::ScraperStart
             | Self::MediaKind(_)
+            | Self::UnifiedCard
             | Self::StorageCard
             | Self::SecondCard
             | Self::Backup
@@ -907,7 +910,7 @@ impl Settings {
             (Id::SecondCard, _) => "settings.eject_link",
             (Id::ModuleEntry(_), _) => return String::new(),
             (Id::ModuleRow(_), _) => return self.module_value(id, catalog).unwrap_or_default(),
-            (Id::StorageCard, _) => return String::new(),
+            (Id::StorageCard | Id::UnifiedCard, _) => return String::new(),
             (Id::RootPassword, _) => "settings.change_link",
             (Id::KeyboardVariant | Id::MangohudGame, "") => "menu.default",
             (Id::MangohudGame, "1") => "settings.on",
@@ -958,13 +961,11 @@ impl Settings {
                 self.scrape.user, self.scrape.threads
             ),
             Id::ScraperAccount => self.scrape.user.clone(),
+            Id::UnifiedCard => self.storage.unified.as_ref()?.detail.clone(),
             Id::StorageCard => self.storage.card.as_ref()?.detail.clone(),
             Id::SecondCard => self.storage.second.as_ref()?.detail.clone(),
             Id::UpdateInstall => self.updates.install_note()?.into(),
             Id::Mangohud if !self.mangohud_supported => "settings.mangohud_unsupported".into(),
-            Id::MergedStorage if !self.storage.merge_supported => {
-                "settings.merged_unsupported".into()
-            }
             Id::RestoreBackup => self
                 .storage
                 .backup
@@ -982,6 +983,7 @@ impl Settings {
     /// Row title text, or a catalog reference.
     pub fn label(&self, row: &Row) -> String {
         let card = match row.id {
+            Id::UnifiedCard => &self.storage.unified,
             Id::StorageCard => &self.storage.card,
             Id::SecondCard => &self.storage.second,
             Id::ModuleEntry(_) | Id::ModuleRow(_) => {
@@ -1012,6 +1014,7 @@ impl Settings {
                 }
                 Id::CustomServer => self.value(Id::Relay) == "custom",
                 Id::SecondCard => self.storage.second.is_some(),
+                Id::UnifiedCard => self.storage.unified.is_some(),
                 id if Games::ROWS.contains(&id) => self.games.shows(id, self),
                 id @ (Id::CheevosAccount | Id::CheevosLogout) => self.cheevos_visible(id),
                 _ => true,
@@ -1027,7 +1030,7 @@ impl Settings {
                 .options
                 .get(&id)
                 .is_none_or(|choices| choices.len() <= 1),
-            Id::StorageCard => true,
+            Id::StorageCard | Id::UnifiedCard => true,
             Id::ModuleRow(_) => self.module_fixed(id),
             _ => false,
         }
@@ -1040,7 +1043,6 @@ impl Settings {
             Id::UpdateCheck => self.updates.checking,
             Id::RestoreBackup => self.storage.backup.is_none(),
             Id::ButtonsRestore => self.default_bindings(),
-            Id::MergedStorage => !self.storage.merge_supported,
             Id::MangohudGame
             | Id::Mangohud
             | Id::MangohudShow
@@ -1290,7 +1292,7 @@ impl Settings {
                 self.error = None;
                 self.reboot_prompt = match id {
                     Id::Gpu => Some("settings.reboot_question"),
-                    Id::Automount | Id::MergedStorage => Some("settings.storage_reboot_question"),
+                    Id::Automount => Some("settings.storage_reboot_question"),
                     _ => None,
                 };
                 // Another channel offers other packages.
@@ -1376,6 +1378,9 @@ impl Settings {
                 };
                 if self.disabled(row.id) || self.fixed(row.id) {
                     return Effect::None;
+                }
+                if let Some(effect) = self.storage_switch(row.id) {
+                    return effect;
                 }
                 if button == Button::A {
                     if let Some(effect) = self.activate(row.id) {

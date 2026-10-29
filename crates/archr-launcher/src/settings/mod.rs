@@ -398,6 +398,8 @@ enum Reply {
     Theme(Box<(archr_ui::Theme, Option<std::path::PathBuf>)>),
     Appearance(Result<(), String>),
     Storage(StorageReply),
+    /// The Storage page's facts after unified storage was switched.
+    Facts(Box<archr_ui::settings::storage::Storage>),
     Store(archr_ui::settings::store::Reply),
 }
 /// A radio scan takes ~20 s on the R36S: it runs on its own lane so it never
@@ -485,7 +487,15 @@ impl Worker {
                 while let Ok(work) = requests.recv() {
                     let reply = match work {
                         Work::Load => Reply::Loaded(backend.load().map(Box::new)),
-                        Work::Set(id, value) => Reply::Set(id, backend.apply(id, &value)),
+                        Work::Set(id, value) => {
+                            let reply = Reply::Set(id, backend.apply(id, &value));
+                            if id == Id::MergedStorage {
+                                let _ = results.send(reply);
+                                Reply::Facts(Box::new(backend.storage()))
+                            } else {
+                                reply
+                            }
+                        }
                         Work::Game(system, id, value) => {
                             Reply::Set(id, backend.apply_game(&system, id, &value))
                         }
@@ -619,7 +629,10 @@ impl Worker {
                 if stale {
                     continue;
                 }
-            } else if !matches!(reply, Reply::CheevosProfile(_) | Reply::Store(_)) {
+            } else if !matches!(
+                reply,
+                Reply::CheevosProfile(_) | Reply::Store(_) | Reply::Facts(_)
+            ) {
                 self.pending = self.pending.saturating_sub(1);
             }
             match reply {
@@ -809,6 +822,7 @@ impl Worker {
                         state.cheevos.profile = profile;
                     }
                 }
+                Reply::Facts(facts) => refresh_storage(state, *facts),
                 Reply::Storage((result, facts)) => {
                     refresh_storage(state, *facts);
                     match result {

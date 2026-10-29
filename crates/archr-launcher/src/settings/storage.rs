@@ -8,6 +8,7 @@ use std::time::UNIX_EPOCH;
 /// backuptool zips settings and saves; factoryreset deletes all of /storage.
 const LONG: Duration = Duration::from_secs(15 * 60);
 const EXTERNAL: &str = "/storage/games-external";
+const ROMS: &str = "/storage/roms";
 const BACKUPS: &str = "/storage/roms/backup";
 
 /// The newest backup's time as a catalog reference: "today, 14:42" or a date.
@@ -103,6 +104,49 @@ impl Backend {
         let clock = archr_ui::status::local_clock(unix(newest), clock_12);
         Some(when(&then, &today, clock))
     }
+    /// A card's printed size in whole GB (64, 128): the disk's sectors
+    /// rounded up to a power of two, as cards are sold.
+    fn nominal_gb(&self, mounts: &[(String, String, String)], path: &str) -> Option<u64> {
+        let (device, _, _) = mounts.iter().rev().find(|(_, mount, _)| mount == path)?;
+        let name = std::path::Path::new(device).file_name()?.to_str()?;
+        let disk = match name.rsplit_once('p') {
+            Some((disk, part)) if disk.starts_with("mmcblk") && part.parse::<u8>().is_ok() => disk,
+            _ => name,
+        };
+        let sectors: u64 = self
+            .read(&format!("/sys/class/block/{disk}/size"))
+            .parse()
+            .ok()?;
+        let gb = (sectors * 512).div_ceil(1_000_000_000);
+        (gb > 0).then(|| gb.next_power_of_two())
+    }
+    /// Both cards behind one /storage/roms: printed sizes and usage summed.
+    fn unified(&self, mounts: &[(String, String, String)]) -> Option<Card> {
+        mounts
+            .iter()
+            .rev()
+            .find(|(_, mount, _)| mount == ROMS)
+            .filter(|(_, _, fs)| fs == "fuse.mergerfs")?;
+        let (first, second) = (
+            self.nominal_gb(mounts, "/storage")?,
+            self.nominal_gb(mounts, EXTERNAL)?,
+        );
+        let (used_first, total_first) = filesystem_usage(&self.paths.at("/storage"))?;
+        let (used_second, total_second) = filesystem_usage(&self.paths.at(EXTERNAL))?;
+        let (used, total) = (used_first + used_second, total_first + total_second);
+        Some(Card {
+            name: format!(
+                "settings.card_unified|first=@{first}|second=@{second} GB|total=@{} GB",
+                first + second
+            ),
+            detail: format!(
+                "settings.used_total|used={}|total={}",
+                bytes(used),
+                bytes(total)
+            ),
+            percent: percent(used, total).unwrap_or(0),
+        })
+    }
     pub(super) fn storage(&self) -> Storage {
         let cfg = self.cfg().ok();
         let setting = |key| cfg.as_ref().and_then(|c| c.get_setting(key, None, None));
@@ -110,12 +154,21 @@ impl Backend {
         Storage {
             card: self.card(&mounts, "/storage"),
             second: self.card(&mounts, EXTERNAL),
+            unified: self.unified(&mounts),
             backup: self.latest_backup(setting(Id::ClockFormat.key()).as_deref() == Some("12")),
             password: setting("root.password").unwrap_or_else(|| "archr".into()),
-            // automount's own verdict on the card it last inspected.
-            merge_supported: !self.paths.at("/storage/.ms_unsupported").exists(),
             ..Storage::default()
         }
+    }
+    /// automount owns the switch: it saves it and joins or separates the
+    /// cards at once. Separating never deletes or moves a file.
+    pub(super) fn unify(&self, value: &str) -> Result<String, String> {
+        self.command_with_timeout("automount", &["unify", value], LONG)
+            .map(|_| value.into())
+            .map_err(|error| {
+                log::warn!("Unified storage: {error}");
+                "settings.merged_failed".into()
+            })
     }
     pub(super) fn load_storage(&self, cfg: &SystemCfg, state: &mut Settings) {
         for row in Page::Storage.rows() {
@@ -375,7 +428,39 @@ mod tests {
         assert!(storage
             .backup
             .is_some_and(|b| b.starts_with("settings.backup_today|time=")));
-        assert!(storage.password == "archr" && storage.merge_supported);
+        assert!(storage.password == "archr" && storage.unified.is_none());
+    }
+    #[test]
+    fn unified_storage_sums_both_cards_and_asks_automount() {
+        let union = format!("{CARD}archr-roms /storage/roms fuse.mergerfs rw 0 0\n");
+        let (root, paths) = fixture("", &union);
+        fs::create_dir_all(paths.at("/storage/roms")).unwrap();
+        for (disk, sectors) in [("mmcblk1", 124_735_488u64), ("mmcblk0", 249_737_216)] {
+            fs::create_dir_all(paths.at(&format!("/sys/class/block/{disk}"))).unwrap();
+            fs::write(
+                paths.at(&format!("/sys/class/block/{disk}/size")),
+                sectors.to_string(),
+            )
+            .unwrap();
+        }
+        let backend = Backend::new(paths.clone());
+        let storage = backend.storage();
+        let unified = storage.unified.unwrap();
+        assert_eq!(
+            unified.name,
+            "settings.card_unified|first=@64|second=@128 GB|total=@192 GB"
+        );
+        assert!(unified.detail.starts_with("settings.used_total|used=@"));
+        // Each card is still listed under it.
+        assert!(storage.card.is_some() && storage.second.is_some());
+        // Not joined: no union row.
+        fs::write(paths.at("/proc/mounts"), CARD).unwrap();
+        assert_eq!(backend.storage().unified, None);
+        script(&root, &paths, "automount", "");
+        assert_eq!(backend.unify("0"), Ok("0".into()));
+        script(&root, &paths, "automount", "exit 1");
+        assert_eq!(backend.unify("1"), Err("settings.merged_failed".into()));
+        assert_eq!(calls(&root), "automount unify 0\nautomount unify 1\n");
     }
     #[test]
     fn older_backups_show_their_date() {
