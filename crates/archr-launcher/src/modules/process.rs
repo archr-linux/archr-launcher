@@ -39,6 +39,8 @@ pub struct Plan {
     pub net: bool,
     /// Read-only folders granted by `read`.
     pub read: Vec<PathBuf>,
+    /// The system's resolv.conf, for a `net` module's DNS.
+    pub resolv: String,
     pub memory_mb: u32,
 }
 
@@ -109,6 +111,9 @@ pub fn sandbox(plan: &Plan) -> Vec<String> {
         "-p TemporaryFileSystem=/storage:ro",
         // The system bus is AF_UNIX too: no module talks to the services.
         "-p InaccessiblePaths=-/run/dbus",
+        // userdbd's varlink sockets; the module's own record stays readable
+        // in /run/userdb, which nss-systemd reads directly without them.
+        "-p InaccessiblePaths=-/run/systemd/userdb",
         "-p MemorySwapMax=0",
         "-p TasksMax=16",
         "-p CPUWeight=20",
@@ -142,8 +147,13 @@ pub fn sandbox(plan: &Plan) -> Vec<String> {
         }
     }
     if plan.net {
-        // The internet, not netlink or raw packets.
+        // The internet, not netlink or raw packets, and not the services
+        // listening on this device (RetroArch's command port, sshd...).
         property("RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6".into());
+        property("IPAddressDeny=localhost".into());
+        for stub in loopback_dns(&plan.resolv) {
+            property(format!("IPAddressAllow={stub}"));
+        }
     } else {
         property("PrivateNetwork=yes".into());
         property("RestrictAddressFamilies=AF_UNIX".into());
@@ -151,6 +161,31 @@ pub fn sandbox(plan: &Plan) -> Vec<String> {
     property(format!("MemoryMax={}M", plan.memory_mb));
     property(format!("WorkingDirectory={}", plan.dir.display()));
     args
+}
+
+/// The loopback name servers of a resolv.conf a `net` module may still
+/// reach: systemd-resolved's stubs only, which serve nothing but DNS. Any
+/// other loopback server (127.0.0.1, ::1) shares its address with other
+/// services, so it stays denied and the module has no DNS there.
+pub fn loopback_dns(resolv: &str) -> Vec<&'static str> {
+    const STUBS: [&str; 2] = ["127.0.0.53", "127.0.0.54"];
+    let servers: Vec<&str> = resolv
+        .lines()
+        .filter_map(|l| l.trim().strip_prefix("nameserver"))
+        .map(str::trim)
+        .collect();
+    for server in &servers {
+        let loopback = server
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback());
+        if loopback && !STUBS.contains(server) {
+            log::warn!("Modules with net cannot use the name server {server}");
+        }
+    }
+    STUBS
+        .into_iter()
+        .filter(|stub| servers.contains(stub))
+        .collect()
 }
 
 /// The module's user and group as nss-systemd drop-ins (`/run/userdb`):
@@ -355,6 +390,20 @@ mod tests {
         assert!(!online.contains("PrivateNetwork"));
         assert!(online.contains("-p RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6"));
         assert!(args.contains("-p InaccessiblePaths=-/run/dbus"));
+        assert!(args.contains("-p InaccessiblePaths=-/run/systemd/userdb"));
+        assert!(online.contains("-p IPAddressDeny=localhost"));
+        assert!(
+            !online.contains("IPAddressAllow"),
+            "no loopback DNS: {online}"
+        );
+        assert!(!args.contains("IPAddressDeny"), "PrivateNetwork covers it");
+        let stub = sandbox(&Plan {
+            net: true,
+            resolv: "# resolved\nnameserver 127.0.0.53\noptions edns0\n".into(),
+            ..plan.clone()
+        })
+        .join(" ");
+        assert!(stub.contains("-p IPAddressAllow=127.0.0.53"), "{stub}");
         // Only the folders above a hidden one hide it.
         let bios = sandbox(&Plan {
             read: vec!["/storage/roms/bios".into()],
@@ -362,6 +411,21 @@ mod tests {
         })
         .join(" ");
         assert!(!bios.contains("InaccessiblePaths=-/storage"), "{bios}");
+    }
+
+    #[test]
+    fn only_resolved_stubs_are_reachable_loopback_dns() {
+        assert_eq!(
+            loopback_dns("nameserver 192.168.0.1\nnameserver 1.1.1.1\n"),
+            Vec::<&str>::new()
+        );
+        assert_eq!(loopback_dns("nameserver 127.0.0.53\n"), ["127.0.0.53"]);
+        assert_eq!(
+            loopback_dns("  nameserver   127.0.0.54  \n"),
+            ["127.0.0.54"]
+        );
+        assert!(loopback_dns("nameserver 127.0.0.1\nnameserver ::1\n").is_empty());
+        assert!(loopback_dns("# nameserver 127.0.0.53\n").is_empty());
     }
 
     #[test]

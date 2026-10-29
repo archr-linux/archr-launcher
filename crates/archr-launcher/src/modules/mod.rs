@@ -805,6 +805,16 @@ impl Host {
                 .map(|(_, p)| PathBuf::from(p))
                 .collect(),
             memory_mb: manifest.memory_mb,
+            resolv: if manifest.permissions.net {
+                archr_io::read_utf8(
+                    std::path::Path::new("/etc/resolv.conf"),
+                    64 << 10,
+                    archr_io::Symlinks::Follow,
+                )
+                .unwrap_or_default()
+            } else {
+                String::new()
+            },
         })
     }
     /// The module's uid when its files are handed to it (on the device).
