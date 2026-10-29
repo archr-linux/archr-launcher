@@ -8,6 +8,7 @@ use crate::settings::modules::SECTION;
 const LIST_TOP: f32 = 82.;
 const CARD: f32 = 54.;
 const CARD_GAP: f32 = 6.;
+const EMPTY_NOTE: f32 = 52.;
 /// The permission page: left column, then the list of permissions.
 const LEFT: (f32, f32) = (20., 334.);
 const ASKS: (f32, f32) = (370., 250.);
@@ -50,7 +51,14 @@ impl View<'_, '_, '_> {
     }
     /// The modules list: switches, a rule, the store.
     pub(super) fn modules_list(&mut self, state: &Settings, rows: &[Row]) -> Result<(), String> {
-        let positions = placements(Page::Modules, rows);
+        let mut positions = placements(Page::Modules, rows);
+        let empty = state.modules.view.modules.is_empty();
+        if empty {
+            // The note takes the top; the store row moves below it.
+            for place in &mut positions {
+                place.top += EMPTY_NOTE;
+            }
+        }
         self.rows_at(state, rows, &positions, RIGHT)?;
         if let [.., before, last] = positions.as_slice() {
             let rule = (before.bottom() + last.top) / 2.;
@@ -61,8 +69,13 @@ impl View<'_, '_, '_> {
                 self.theme.border,
             )?;
         }
-        if state.modules.view.modules.is_empty() {
-            self.note((30., 50., 560., 44.), &self.tr("modules.none"), 14.)?;
+        if empty {
+            let top = positions.first().map_or(VIEW_TOP, |p| p.top) - EMPTY_NOTE;
+            self.note(
+                (30., top, 560., EMPTY_NOTE - 8.),
+                &self.tr("modules.none"),
+                14.,
+            )?;
         }
         Ok(())
     }

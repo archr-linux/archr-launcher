@@ -1632,6 +1632,9 @@ fn module_pages(dir: &std::path::Path) -> Vec<(&'static str, Settings)> {
     list.open(Page::System);
     let system = list.clone();
     list.open(Page::Modules);
+    let mut none = ready();
+    none.open(Page::System);
+    none.open(Page::Modules);
     let mut page = list.clone();
     page.open_module_page("bateria-detalhada", 0);
     page.cursor = 2;
@@ -1743,6 +1746,7 @@ fn module_pages(dir: &std::path::Path) -> Vec<(&'static str, Settings)> {
     vec![
         ("sistema", system),
         ("modulos", list),
+        ("modulos-vazio", none),
         ("pagina-modulo", page),
         ("loja-modulos", store),
         ("permissoes", offer),
