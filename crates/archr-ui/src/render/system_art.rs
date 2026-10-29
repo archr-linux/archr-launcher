@@ -21,6 +21,7 @@ const EXTENSIONS: [&str; 3] = ["png", "jpg", "webp"];
 const IMAGE_ALIASES: &[(&str, &str)] = &[
     ("arcade", "mame"),
     ("atomiswave", "dreamcast"),
+    ("coleco", "colecovision"),
     ("cps1", "mame"),
     ("cps2", "mame"),
     ("cps3", "mame"),
@@ -43,6 +44,7 @@ const IMAGE_ALIASES: &[(&str, &str)] = &[
     ("satellaview", "snes"),
     ("segacd", "megacd"),
     ("sfc", "snes"),
+    ("sgfx", "supergrafx"),
     ("snesh", "snes"),
     ("snesmsu1", "snes"),
     ("sufami", "snes"),
@@ -839,6 +841,26 @@ mod tests {
         assert_eq!(found[6], Path::new("/t/sfc.png"));
         assert_eq!(found.last().unwrap(), Path::new("/t/snes.webp"));
         assert_eq!(candidates(&[user], "nes").len(), 3);
+        // Device ROM folders show their console's picture.
+        for (folder, console) in [
+            ("coleco", "colecovision"),
+            ("sgfx", "supergrafx"),
+            ("megadrive", "genesis"),
+            ("segacd", "megacd"),
+            ("sfc", "snes"),
+            ("famicom", "nes"),
+            ("pcenginecd", "pcengine"),
+            ("tg16cd", "tg16"),
+            ("gbah", "gba"),
+            ("gbch", "gbc"),
+            ("gbh", "gb"),
+            ("snesh", "snes"),
+            ("nesh", "nes"),
+            ("genh", "genesis"),
+            ("megadrive-japan", "genesis"),
+        ] {
+            assert_eq!(lookup(IMAGE_ALIASES, folder), Some(console), "{folder}");
+        }
     }
 
     #[test]
