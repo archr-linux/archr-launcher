@@ -114,19 +114,41 @@ impl Ui<'_, '_> {
         let right = self.status_header(theme)?;
         let h = (theme.header_height * self.frame.height as f32).round() as u32;
         let pad = self.px(24.);
+        let gap = self.px(8.);
+        let available = (right - self.px(16.) - pad).max(1);
         let trail = format!("{trail} /");
-        let tw = self
-            .measure(&trail, Face::Regular, 13.)?
-            .min((right - pad).max(1) as u32 / 2);
-        self.label(
-            &trail,
-            (Face::Regular, 13., theme.muted),
-            Rect::new(pad, 0, tw, h),
-        )?;
-        let x = pad + tw as i32 + self.px(8.);
+        // Both shrink together, down to the theme's smallest text.
+        let floor = self.frame.min_size();
+        let (mut small, mut big) = (13., 15.);
+        let tw = loop {
+            let tw = self.measure(&trail, Face::Regular, small)? as i32;
+            let gw = self.measure(game, Face::Semibold, big)? as i32;
+            if tw + gap + gw <= available || small <= floor {
+                break tw;
+            }
+            (small, big) = ((small - 1.).max(floor), (big - 1.).max(floor));
+        };
+        // The trail is never cut: past two thirds of the room it wraps. The
+        // game name, a title, takes what is left.
+        let cap = available * 2 / 3;
+        let lines = if tw > cap {
+            self.wrap(&trail, Face::Regular, small, cap as u32)?
+        } else {
+            vec![trail.clone()]
+        };
+        let tw = tw.min(cap);
+        let step = h as i32 / lines.len() as i32;
+        for (n, line) in lines.iter().enumerate() {
+            self.label(
+                line,
+                (Face::Regular, small, theme.muted),
+                Rect::new(pad, step * n as i32, tw.max(1) as u32, step.max(1) as u32),
+            )?;
+        }
+        let x = pad + tw + gap;
         self.label(
             game,
-            (Face::Semibold, 15., theme.text),
+            (Face::Semibold, big, theme.text),
             Rect::new(x, 0, (right - self.px(16.) - x).max(1) as u32, h),
         )
     }

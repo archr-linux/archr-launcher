@@ -1463,20 +1463,42 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 .last_played
                 .map(|timestamp| self.catalog.relative_time(timestamp, self.frame.unix))
                 .unwrap_or_default();
-            let pw = self.measure(&played, Face::Regular, size)?;
-            let gap = if pw > 0 { self.px(8.) as u32 } else { 0 };
+            // One line, shrinking down to the theme's smallest text; else the
+            // facts on one line and "played" on the next. Nothing is cut.
+            let facts = parts.join(" · ");
+            let (mut size, floor) = (size, self.frame.min_size());
+            let (fw, pw, gap) = loop {
+                let fw = self.measure(&facts, Face::Regular, size)?;
+                let pw = self.measure(&played, Face::Regular, size)?;
+                let gap = if pw > 0 && fw > 0 {
+                    self.px(8.) as u32
+                } else {
+                    0
+                };
+                if fw + gap + pw <= rect.width() || size <= floor {
+                    break (fw, pw, gap);
+                }
+                size = (size - 1.).max(floor);
+            };
             let (y, h) = (rect.y(), rect.height());
-            self.label(
-                &parts.join(" · "),
-                (Face::Regular, size, theme.muted),
-                Rect::new(rect.x(), y, rect.width().saturating_sub(pw + gap).max(1), h),
-            )?;
-            self.label_aligned(
-                &played,
-                (Face::Regular, size, theme.muted),
-                Rect::new(rect.right() - pw as i32, y, pw.max(1), h),
-                Align::Right,
-            )?;
+            let ink = (Face::Regular, size, theme.muted);
+            if fw + gap + pw <= rect.width() {
+                self.label(&facts, ink, Rect::new(rect.x(), y, fw.max(1), h))?;
+                self.label_aligned(
+                    &played,
+                    ink,
+                    Rect::new(rect.right() - pw as i32, y, pw.max(1), h),
+                    Align::Right,
+                )?;
+            } else {
+                let line = (f32::from(self.frame.font_size(size)) * 1.25).round() as i32;
+                let mut lines = self.wrap(&facts, Face::Regular, size, rect.width())?;
+                lines.extend(self.wrap(&played, Face::Regular, size, rect.width())?);
+                for (n, text) in lines.iter().enumerate() {
+                    let at = Rect::new(rect.x(), y + line * n as i32, rect.width(), line as u32);
+                    self.label(text, ink, at)?;
+                }
+            }
         }
         Ok(())
     }
