@@ -425,3 +425,75 @@ fn an_update_that_keeps_failing_gives_way_to_the_previous_version() {
     probe.invoke("lento", "go");
     probe.wait(|v, _| v.busy.is_empty());
 }
+
+/// The two examples of docs/modulos.md pass the checks and run (they need
+/// jq, as on the device).
+#[test]
+fn the_documented_examples_check_and_run() {
+    let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/modules");
+    for id in ["bateria-detalhada", "perfil-cpu"] {
+        let warnings = archr_launcher::modules::check_module(&examples.join(id)).unwrap();
+        assert!(warnings.is_empty(), "{id}: {warnings:?}");
+    }
+    if std::process::Command::new("jq")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        eprintln!("jq missing: the examples were only checked");
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    let base = root.path();
+    for id in ["bateria-detalhada", "perfil-cpu"] {
+        let to = base.join("modules").join(id);
+        for entry in walk(&examples.join(id)) {
+            let target = to.join(entry.strip_prefix(examples.join(id)).unwrap());
+            fs::create_dir_all(target.parent().unwrap()).unwrap();
+            fs::copy(&entry, target).unwrap();
+        }
+    }
+    allow(base, &[("bateria-detalhada", &[]), ("perfil-cpu", &[])]);
+    let mut probe = Probe::new(base);
+    // A PC has no battery: the daemon hides its tile.
+    probe.wait(|v, _| {
+        v.hidden
+            .contains(&("bateria-detalhada".into(), "tile:bateria".into()))
+    });
+    probe.request(Request::Invoke {
+        module: "perfil-cpu".into(),
+        action: "sugerir".into(),
+        call: Some(archr_ui::modules::Call {
+            system: "n64".into(),
+            ..Default::default()
+        }),
+    });
+    probe.wait(|_, n| n.contains(&Notice::Text("n64: maximum performance suggested".into())));
+    probe.request(Request::Set {
+        module: "perfil-cpu".into(),
+        key: "pesados".into(),
+        value: "schedutil".into(),
+    });
+    probe.wait(|v, _| v.modules[1].settings["pesados"] == "schedutil");
+    std::thread::sleep(Duration::from_secs(10));
+    probe.request(Request::Invoke {
+        module: "perfil-cpu".into(),
+        action: "sugerir".into(),
+        call: Some(archr_ui::modules::Call {
+            system: "psp".into(),
+            ..Default::default()
+        }),
+    });
+    probe.wait(|_, n| n.contains(&Notice::Text("psp: balanced profile suggested".into())));
+}
+fn walk(dir: &Path) -> Vec<std::path::PathBuf> {
+    let mut files = Vec::new();
+    for entry in fs::read_dir(dir).unwrap().flatten() {
+        if entry.file_type().unwrap().is_dir() {
+            files.extend(walk(&entry.path()));
+        } else {
+            files.push(entry.path());
+        }
+    }
+    files
+}
