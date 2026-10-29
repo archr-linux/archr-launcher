@@ -273,7 +273,7 @@ impl Ui<'_, '_> {
             }
             self.old_art()?;
         }
-        if let Some((rect, _)) = panel {
+        if let Some((rect, _)) = panel.filter(|_| !self.has_frame("panel")) {
             let pad = self.px(16.);
             self.rounded(
                 Rect::new(
@@ -288,7 +288,11 @@ impl Ui<'_, '_> {
             )?;
         }
         if let Some(info) = layout.info {
-            self.panel_text(&info, name, data, theme)?;
+            // Text straight over the background takes the theme's outline.
+            self.look.outlining = layout.panel.is_none();
+            let drawn = self.panel_text(&info, name, data, theme);
+            self.look.outlining = false;
+            drawn?;
         }
         self.canvas.set_clip_rect(None);
         if let Some(dots) = layout.dots {
@@ -377,6 +381,7 @@ impl Ui<'_, '_> {
                 )?;
                 self.geometry
                     .dashed(&mut self.canvas, rect, radius, theme.highlight_bg)?;
+            } else if i == cursor && self.framed("tile_selected", rect)? {
             } else if i == cursor {
                 self.panel(rect, radius, theme.highlight_bg, theme.highlight_bg)?;
                 let border = self.px(2.);
@@ -387,7 +392,7 @@ impl Ui<'_, '_> {
                     rect.height().saturating_sub(2 * border as u32).max(1),
                 );
                 self.rounded(inner, (radius - border as f32).max(0.), fill, None)?;
-            } else {
+            } else if !self.framed("tile", rect)? {
                 self.rounded(rect, radius, fill, None)?;
             }
             // Neighbours sit back at 70%.

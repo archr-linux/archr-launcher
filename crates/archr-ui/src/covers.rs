@@ -57,6 +57,15 @@ fn thumbnail(
     (width, height): (u32, u32),
     pixel: bool,
 ) -> io::Result<Thumbnail> {
+    if (width, height) == (0, 0) {
+        // Theme images: drawn at their own size, never resized nor cached.
+        let image = decode(source, 4096, 4096)?.to_rgba8();
+        return Ok(Thumbnail {
+            width: image.width(),
+            height: image.height(),
+            rgba: image.into_raw(),
+        });
+    }
     let path = thumbnail_path(cache, source, width, height)?;
     let cached = decode(&path, width, height).ok();
     let image = match cached {
@@ -151,6 +160,7 @@ pub struct CoverCache<'a> {
     stale: HashSet<PathBuf>,
     textures: VecDeque<(PathBuf, Option<Texture<'a>>)>,
     pixel: bool,
+    capacity: usize,
 }
 
 impl<'a> CoverCache<'a> {
@@ -160,10 +170,11 @@ impl<'a> CoverCache<'a> {
         width: u32,
         height: u32,
     ) -> Self {
-        Self::scaled(creator, dir, (width, height), false)
+        Self::scaled(creator, dir, (width.max(1), height.max(1)), false)
     }
     /// With `pixel`, pictures are scaled without smoothing (pixel art); the
-    /// caller gives such a cache its own `dir`.
+    /// caller gives such a cache its own `dir`. A (0, 0) size keeps every
+    /// picture as it is (theme images), and the cache holds 64 of them.
     pub fn scaled(
         creator: &'a TextureCreator<WindowContext>,
         dir: PathBuf,
@@ -182,7 +193,7 @@ impl<'a> CoverCache<'a> {
                     let result = candidates
                         .iter()
                         .find(|path| path.is_file())
-                        .map(|path| thumbnail(&dir, path, (width.max(1), height.max(1)), pixel))
+                        .map(|path| thumbnail(&dir, path, (width, height), pixel))
                         .transpose();
                     if done.send((key.clone(), result)).is_err() {
                         return;
@@ -198,6 +209,7 @@ impl<'a> CoverCache<'a> {
             stale: HashSet::new(),
             textures: VecDeque::new(),
             pixel,
+            capacity: if (width, height) == (0, 0) { 64 } else { 16 },
         }
     }
 
@@ -270,7 +282,7 @@ impl<'a> CoverCache<'a> {
                 }
             };
             self.textures.push_back((path, texture));
-            while self.textures.len() > 16 {
+            while self.textures.len() > self.capacity {
                 self.textures.pop_front();
             }
             changed = true;

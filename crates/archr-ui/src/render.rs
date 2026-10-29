@@ -21,6 +21,7 @@ mod effects;
 pub(crate) use effects::Pop;
 mod hub;
 mod keyboard;
+mod look;
 mod moonlight;
 mod netplay;
 
@@ -45,6 +46,9 @@ struct Frame {
     scale: f32,
     /// User text-size multiplier, applied to every font size.
     text: f32,
+    /// The theme's own multiplier and the grid sizes snap to (0: none).
+    font: f32,
+    grid: f32,
     now: Instant,
     unix: u64,
 }
@@ -55,6 +59,8 @@ impl Frame {
             height,
             scale: height as f32 / 480.,
             text: 1.,
+            font: 1.,
+            grid: 0.,
             now: Instant::now(),
             unix: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -83,7 +89,13 @@ impl Frame {
         Rect::new(x, y, self.px(side) as u32, self.px(side) as u32)
     }
     fn font_size(self, value: f32) -> u16 {
-        self.px(value * self.text).clamp(8, 128) as u16
+        let size = value * self.text * self.font;
+        let size = if self.grid > 0. {
+            (size / self.grid).round().max(1.) * self.grid
+        } else {
+            size
+        };
+        self.px(size).clamp(8, 128) as u16
     }
 }
 fn localized_error(catalog: &I18n, error: String) -> String {
@@ -334,6 +346,7 @@ pub struct Ui<'font, 'texture> {
     /// The list cursor's blink phase as last drawn; None when nothing blinks.
     blink: Option<bool>,
     effects: effects::Effects<'texture>,
+    look: look::Look<'texture>,
     has_presented: bool,
     frame: Frame,
     pub catalog: I18n,
@@ -440,6 +453,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             pixel_art: false,
             blink: None,
             effects: effects::Effects::default(),
+            look: look::Look::default(),
             has_presented: false,
             frame: Frame::new(width, height),
             catalog: I18n::default(),
@@ -550,7 +564,8 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         let blink = self
             .blink
             .is_some_and(|on| on != self.blink_on(Instant::now()));
-        created || art || store || status || blink
+        let look = self.look_tick();
+        created || art || store || status || blink || look
     }
     /// Loads what the theme store page asked for, sized for its largest box.
     fn store_tick(&mut self) -> bool {
@@ -603,15 +618,49 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         panel: Rect,
         align: Align,
     ) -> Result<(), String> {
-        let style = Style {
+        let mut style = Style {
             face,
             size: self.frame.font_size(size),
             color,
         };
+        let outline = self.outline();
         let text_cache = self
             .text
             .as_mut()
             .ok_or_else(|| self.catalog.text("error.font_init"))?;
+        if let Some((ring, width)) = outline {
+            // The text again in the outline color, shifted all around it.
+            let edge = Style {
+                color: Rgba {
+                    a: color.a,
+                    ..ring.color
+                },
+                ..style
+            };
+            for step in 1..=width {
+                for (dx, dy) in [
+                    (-1, -1),
+                    (0, -1),
+                    (1, -1),
+                    (-1, 0),
+                    (1, 0),
+                    (-1, 1),
+                    (0, 1),
+                    (1, 1),
+                ] {
+                    let at = Rect::new(
+                        panel.x() + dx * step,
+                        panel.y() + dy * step,
+                        panel.width(),
+                        panel.height(),
+                    );
+                    text_cache
+                        .draw(&mut self.canvas, text, edge, at, align)
+                        .map_err(|e| localized_error(&self.catalog, e))?;
+                }
+            }
+            style.color = ring.ink.map_or(color, |ink| Rgba { a: color.a, ..ink });
+        }
         text_cache
             .draw(&mut self.canvas, text, style, panel, align)
             .map_err(|e| localized_error(&self.catalog, e))
@@ -648,6 +697,19 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             .rounded(&mut self.canvas, rect, radius, fill, border)
     }
     fn panel(&mut self, rect: Rect, radius: f32, fill: Rgba, border: Rgba) -> Result<(), String> {
+        self.panel_named("panel", rect, radius, (fill, border))
+    }
+    /// A raised box, or the theme's `name` frame over it.
+    fn panel_named(
+        &mut self,
+        name: &str,
+        rect: Rect,
+        radius: f32,
+        (fill, border): (Rgba, Rgba),
+    ) -> Result<(), String> {
+        if self.framed(name, rect)? {
+            return Ok(());
+        }
         if self.shadow.is_none() {
             if let Some(creator) = self.creator {
                 self.shadow = Some(Shadow::new(creator)?);
@@ -726,6 +788,12 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             .style(theme.corners, self.px(theme.border_width).max(1) as u32);
         crate::motion::set_steps(theme.steps);
         (self.shadow_style, self.pixel_art, self.blink) = (theme.shadow, theme.pixel_art, None);
+        (self.frame.font, self.frame.grid) = (theme.font_scale, theme.font_grid);
+        if let Some(text) = &mut self.text {
+            text.set_smoothing(theme.font_smoothing);
+        }
+        let browsing = self.lobby.is_none() && self.moonlight.is_none() && settings.is_none();
+        self.look(theme, browsing);
         if let Some(lobby) = self.lobby.take() {
             let drawn = self.lobby_page(&lobby, theme);
             self.lobby = Some(lobby);
@@ -770,6 +838,8 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                     key.map(|key| (key, self.area(picture.rect)))
                 });
             self.begin_page(games, picture, theme)?;
+            self.backdrop_pictures(theme)?;
+            self.decor(&layout.decor, true)?;
             if let Screen::Achievements { system, game } = backdrop {
                 let name = data
                     .games(system)
@@ -813,6 +883,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                     }
                 }
             }
+            self.decor(&layout.decor, false)?;
             self.end_page(theme)?;
             if matches!(app.screen, Screen::QuickMenu { .. }) {
                 self.menu(app, data, theme)?;
@@ -903,6 +974,19 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         Ok(right)
     }
     fn header(
+        &mut self,
+        screen: &Screen,
+        cursor: usize,
+        data: &dyn DataSource,
+        theme: &Theme,
+        layout: &Layout,
+    ) -> Result<(), String> {
+        self.look.outlining = true;
+        let drawn = self.header_text(screen, cursor, data, theme, layout);
+        self.look.outlining = false;
+        drawn
+    }
+    fn header_text(
         &mut self,
         screen: &Screen,
         cursor: usize,
@@ -1041,7 +1125,21 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         }
         self.list.held = lifted.then_some((cursor, collections));
         let offset = self.list.scroll.value(now);
+        self.framed("list", area)?;
         self.canvas.set_clip_rect(area);
+        // Visit only potentially visible rows, even in a ten-thousand-game list.
+        let first = ((offset - separator - extra).max(0.) / (row + gap)).floor() as usize;
+        let last = ((offset + available) / (row + gap)).ceil() as usize + 1;
+        let (swap_row, swap) = (self.list.swap_row, self.list.swap.value(now));
+        let glide = |i: usize| if i == swap_row { swap } else { 0. };
+        if !lifted && self.has_frame("row") {
+            let own = self.has_frame("selected");
+            for i in (first..len.min(last)).filter(|&i| !(own && i == cursor)) {
+                let y = top + (y_of(i) + glide(i) - offset).round() as i32;
+                let rh = if i == cursor { selected } else { row }.max(1.) as u32;
+                self.framed("row", Rect::new(margin, y, list_width, rh))?;
+            }
+        }
         // A lifted row sits slightly right of the list, in an outline.
         let lift = if lifted { self.px(6.) } else { 0 };
         let radius = l.radius * height as f32;
@@ -1062,7 +1160,9 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 .dashed(&mut self.canvas, pill, radius, theme.highlight_bg)?;
         } else if len > 0 && pill {
             let pill = Rect::new(margin, mark_y, list_width, selected.max(1.) as u32);
-            self.rounded(pill, radius, theme.highlight_bg, None)?;
+            if !self.framed("selected", pill)? {
+                self.rounded(pill, radius, theme.highlight_bg, None)?;
+            }
         } else if len > 0 {
             let h = (selected * 0.55).round().max(1.) as u32;
             let bar = Rect::new(
@@ -1088,16 +1188,8 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         // On a pill the selection's ink is the accent's; beside a bar it stays plain.
         let on_pill = pill || lifted;
         let inset = if pill { self.px(14.) } else { 0 };
-        // Visit only potentially visible rows, even in a ten-thousand-game list.
-        let first = ((offset - separator - extra).max(0.) / (row + gap)).floor() as usize;
-        let last = ((offset + available) / (row + gap)).ceil() as usize + 1;
         for i in first..len.min(last) {
-            let glide = if i == self.list.swap_row {
-                self.list.swap.value(now)
-            } else {
-                0.
-            };
-            let y = top + (y_of(i) + glide - offset).round() as i32;
+            let y = top + (y_of(i) + glide(i) - offset).round() as i32;
             let rh = if i == cursor { selected } else { row }.max(1.) as u32;
             if y + rh as i32 <= top || y >= bottom {
                 continue;
@@ -1260,11 +1352,11 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         let Frame { height, now, .. } = self.frame;
         if let Some(panel) = layout.panel {
             let rect = self.area(panel.rect);
-            self.panel(
+            self.panel_named(
+                "art",
                 rect,
                 panel.radius * height as f32,
-                theme.surface,
-                theme.border,
+                (theme.surface, theme.border),
             )?;
         }
         let game = data.games(system).get(cursor);
@@ -1373,9 +1465,23 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         theme: &Theme,
         layout: &Layout,
     ) -> Result<(), String> {
-        let Frame { width, height, .. } = self.frame;
+        let height = self.frame.height;
         let h = (theme.footer_height * height as f32).round().max(1.) as u32;
         let y = height as i32 - h as i32;
+        self.look.outlining = true;
+        let drawn = self.footer_hints(app, data, theme, layout, (y, h));
+        self.look.outlining = false;
+        drawn
+    }
+    fn footer_hints(
+        &mut self,
+        app: &App,
+        data: &dyn DataSource,
+        theme: &Theme,
+        layout: &Layout,
+        (y, h): (i32, u32),
+    ) -> Result<(), String> {
+        let width = self.frame.width;
         if layout.divider {
             self.divider(0, y, width, theme.border)?;
         }
@@ -1507,6 +1613,18 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                     y + (h as i32 - self.px(20.)) / 2,
                     20.,
                 );
+                if self.framed("badge", badge)? {
+                    let outlining = std::mem::replace(&mut self.look.outlining, false);
+                    let letter = if button == '↕' { '↓' } else { button };
+                    self.label_aligned(
+                        &letter.to_string(),
+                        (Face::Semibold, 12., theme.text),
+                        badge,
+                        Align::Center,
+                    )?;
+                    self.look.outlining = outlining;
+                    continue;
+                }
                 let size = self.px(11.).clamp(8, 128) as u16;
                 self.text
                     .as_mut()

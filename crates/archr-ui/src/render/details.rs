@@ -103,7 +103,10 @@ impl Ui<'_, '_> {
         theme: &Theme,
     ) -> Result<(), String> {
         let trail = system_title(system, data, &self.catalog);
-        self.crumbs(&trail, game, theme)
+        self.look.outlining = true;
+        let drawn = self.crumbs(&trail, game, theme);
+        self.look.outlining = false;
+        drawn
     }
 
     /// "Trail /" in muted 13 px, then the current place in 15 px semibold.
@@ -145,7 +148,19 @@ impl Ui<'_, '_> {
         // Screen shot (a still even when a preview video exists), else the cover.
         let shot = rect(theme.details_shot);
         let radius = self.px(12.) as f32;
-        self.panel(shot, radius, theme.surface, theme.border)?;
+        self.panel_named("art", shot, radius, (theme.surface, theme.border))?;
+        // A themed frame dresses the facts, and the column from the title to
+        // the buttons; without one they sit on the background.
+        self.framed("panel", rect(theme.details_info))?;
+        let column = [
+            theme.details_title,
+            theme.details_subtitle,
+            theme.details_text,
+            theme.details_actions,
+        ]
+        .map(rect);
+        let union = column.iter().skip(1).fold(column[0], |a, b| a.union(*b));
+        self.framed("panel", union)?;
         if let Some(texture) = art.shot.or(art.cover) {
             let inner = Rect::new(
                 shot.x() + 1,
@@ -405,9 +420,12 @@ impl Ui<'_, '_> {
             let focused = n == app.details_focus;
             let button = Rect::new(x, area.y(), widths[n] as u32, area.height());
             if focused {
-                self.rounded(button, self.px(10.) as f32, theme.highlight_bg, None)?;
+                if !self.framed("button_selected", button)? {
+                    self.rounded(button, self.px(10.) as f32, theme.highlight_bg, None)?;
+                }
             } else {
-                self.panel(button, self.px(10.) as f32, theme.surface, theme.border)?;
+                let colors = (theme.surface, theme.border);
+                self.panel_named("button", button, self.px(10.) as f32, colors)?;
             }
             let disabled = n == 2 && (!app.can_rescrape || app.rescraping);
             let ink = match (focused, disabled) {

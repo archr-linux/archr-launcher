@@ -11,7 +11,8 @@ pub mod sounds;
 pub mod theme;
 
 pub use theme::{
-    resolve_theme, theme_dir, Rect01, Rgba, ShadowStyle, SystemScreen, Theme, DEFAULT_THEME_DIR,
+    resolve_theme, theme_dir, Frame9, Outline, Rect01, Rgba, ShadowStyle, SystemScreen, Theme,
+    DEFAULT_THEME_DIR,
 };
 
 pub mod covers;

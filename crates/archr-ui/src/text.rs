@@ -344,6 +344,8 @@ pub(crate) struct TextCache<'font, 'texture> {
     badges: VecDeque<(BadgeKey, Texture<'texture>)>,
     icons: HashMap<(Glyph, u32), Texture<'texture>>,
     pub(crate) icon_loader: icons::IconLoader,
+    /// Anti-aliased glyphs (true), or hard-edged ones for pixel fonts.
+    smooth: bool,
 }
 impl<'font, 'texture> TextCache<'font, 'texture> {
     pub fn from_prepared(
@@ -359,6 +361,7 @@ impl<'font, 'texture> TextCache<'font, 'texture> {
             badges: VecDeque::with_capacity(16),
             icons: HashMap::new(),
             icon_loader: prepared.icon_loader,
+            smooth: true,
         };
         for (source, width, style, surface) in prepared.entries {
             let texture = creator
@@ -389,6 +392,13 @@ impl<'font, 'texture> TextCache<'font, 'texture> {
     }
     fn font(&mut self, face: Face, size: u16) -> Result<&Font<'font, 'static>, String> {
         self.fonts.font(face, size)
+    }
+    /// Smooth or hard-edged glyphs from now on; cached text is redrawn.
+    pub fn set_smoothing(&mut self, smooth: bool) {
+        if self.smooth != smooth {
+            self.smooth = smooth;
+            self.entries.clear();
+        }
     }
     fn badge(&mut self, key: BadgeKey) -> Result<&Texture<'texture>, String> {
         if let Some(index) = self.badges.iter().position(|(k, _)| *k == key) {
@@ -502,11 +512,14 @@ impl<'font, 'texture> TextCache<'font, 'texture> {
                 style.face,
                 style.size
             );
-            let surface = self
-                .font(style.face, style.size)?
-                .render(&text)
-                .blended(color(style.color))
-                .map_err(|e| e.to_string())?;
+            let smooth = self.smooth;
+            let render = self.font(style.face, style.size)?.render(&text);
+            let surface = if smooth {
+                render.blended(color(style.color))
+            } else {
+                render.solid(color(style.color))
+            }
+            .map_err(|e| e.to_string())?;
             self.first_rasterization
                 .phase_once("first text rasterization");
             let texture = self

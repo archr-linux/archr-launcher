@@ -75,6 +75,18 @@ se faltar a outra); o que não cita nenhuma das duas herda as duas do tema
 padrão. O mesmo vale para `font_mono` e `font_mono_medium`. Uma fonte citada
 que não existe cai nas do sistema (DejaVu/Liberation).
 
+### Tamanho e nitidez do texto
+
+```toml
+font_scale = 1.4        # 0,5 a 2: multiplica todo tamanho de texto (com o do usuário)
+font_grid = 8           # 0 a 32 px: tamanhos ficam no múltiplo mais próximo (0 = livre)
+font_smoothing = false  # sem suavização: letras de borda dura, para fontes pixel
+```
+
+`font_grid` serve a fontes desenhadas numa grade (Press Start 2P fica nítida
+em múltiplos de 8 px). Vale também nas Configurações, onde o tema só muda
+cores, fontes e ícones.
+
 ## Medidas gerais
 
 Frações da tela: alturas, raios e tamanhos de fonte são frações da **altura**
@@ -119,6 +131,81 @@ art_scaling = "pixel"
 easing = "steps"
 ```
 
+## Imagens do tema
+
+Nas telas de sistemas, jogos e detalhes (nunca nas Configurações) o tema pode
+trocar caixas lisas por imagens. Tudo é opcional; o que não existe é desenhado
+como antes. As imagens ficam na pasta do tema (`.png`, `.jpg`) e carregam fora
+da thread de desenho: no primeiro quadro pode aparecer a caixa lisa.
+
+### Fundo
+
+```toml
+background_image = "images/fundo.png"   # cobre a tela inteira, cortado no centro
+```
+
+Com `art_scaling = "pixel"` a imagem é ampliada sem suavizar (desenhe-a em
+320×240 para pixels 2×2).
+
+### Molduras (9-slice)
+
+```toml
+[frames.row]
+image = "frames/linha.png"
+slice = [6, 5, 6, 7]   # px da imagem mantidos inteiros: esquerda, topo, direita, base (ou um número)
+scale = 2              # px de tela (referência 480) por px da imagem; 0,25 a 8
+pad = 0                # quanto a moldura passa da caixa, em px de referência (ou [e, t, d, b])
+tile = false           # true: bordas e meio se repetem em vez de esticar
+```
+
+Os cantos ficam inteiros, as bordas e o meio esticam (ou se repetem com
+`tile`). Caixas que aceitam moldura:
+
+| nome | onde |
+|---|---|
+| `header`, `footer` | faixa do cabeçalho e do rodapé (altura de `header_height`/`footer_height`) |
+| `list` | atrás da lista (`list`), use `pad` para a moldura sobrar |
+| `row`, `selected` | cada linha da lista e a linha escolhida (no lugar da faixa colorida) |
+| `panel` | painel do sistema, menus e, nos detalhes, a tabela e a coluna do título aos botões |
+| `art` | moldura da capa e da tela do jogo nos detalhes |
+| `button`, `button_selected` | botões dos detalhes |
+| `badge` | botões A/B/X/Y do rodapé (a letra vem na cor `text`) |
+| `tile`, `tile_selected` | blocos da visualização em blocos (`mark = "tile"`) |
+
+O texto sobre as molduras usa as cores de sempre: `text_secondary` nas
+linhas, `accent_text` na escolhida, `text` e `muted` nos painéis.
+
+### Contorno do texto
+
+```toml
+text_outline = { color = "#3F2214", width = 2, ink = "#FFFFFF" }
+```
+
+Vale para o texto desenhado direto sobre o fundo: cabeçalho, dicas do rodapé
+e o nome do sistema quando a visualização não tem painel (`panel = false`).
+`width` vai de 0 a 4 px de referência; `ink` (opcional) troca a cor desse
+texto, para letras claras com contorno escuro sobre um fundo de imagem.
+
+### Decorações
+
+Cada tela de cada visualização pode ter imagens soltas, paradas ou animadas:
+
+```toml
+[view.lista.systems]
+decor = [
+  { image = "decor/palmeira.png", x = 0.88, y = 0.02, scale = 2 },
+  { image = "decor/onda.png", x = 0.0, y = 0.82, scale = 2, layer = "back" },
+  { image = "decor/caranguejo.png", x = 0.02, y = 0.8, scale = 2, frames = 2, fps = 2 },
+]
+```
+
+`x`, `y`: canto superior esquerdo em frações da tela. `scale`: px de
+referência por px da imagem. `frames`: quadros lado a lado na imagem,
+trocados `fps` vezes por segundo (parados com Animações desligadas).
+`layer = "back"` desenha atrás da lista e dos painéis; o padrão é na frente.
+A lista substitui a herdada; `decor = []` limpa. A tela de detalhes usa as
+decorações da tela de jogos.
+
 ## Visualizações
 
 Uma visualização posiciona os elementos das telas de sistemas (`systems`) e de
@@ -151,6 +238,7 @@ Elementos de cada tela (`[view.<id>.systems]` ou `[view.<id>.games]`):
 | `info` | nome do sistema e detalhes | `x y w h`, `title`, `meta` (tamanhos), `align` (`left`/`center`/`right`), `valign` (`top`/`bottom`), `details` (`stacked`: fabricante, nome, contagem; `inline`: nome e "213 jogos · Nintendo · 1990") |
 | `meta` | ano, jogadores e "jogado há" sob a capa | `x y w h`, `size` |
 | `dots` | pontos de posição entre sistemas | `x y w h` |
+| `decor` | imagens soltas (ver [Decorações](#decorações)) | lista de `{ image, x, y, scale, frames, fps, layer }` |
 
 Valores de `list`:
 

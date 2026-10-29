@@ -339,6 +339,81 @@ pub(crate) fn crop(texture: (u32, u32), (width, height): (u32, u32)) -> [f32; 4]
     }
 }
 pub(crate) const WHOLE: [f32; 4] = [0., 0., 1., 1.];
+
+/// One axis of a nine-slice: (source start, source length, screen start,
+/// screen length) for the near edge, the middle (split into repeats when
+/// `tile`) and the far edge.
+fn slice_spans(
+    n: u32,
+    (near, far): (u32, u32),
+    k: u32,
+    (start, length): (i32, u32),
+    tile: bool,
+) -> Vec<(u32, u32, i32, u32)> {
+    let (near, far) = (near.min(n), far.min(n - near.min(n)));
+    let middle = n - near - far;
+    // Edges keep their size; on a box too small for both they shrink alike.
+    let (mut a, mut b) = (near * k, far * k);
+    if a + b > length {
+        a = length * near / (near + far).max(1);
+        b = length - a;
+    }
+    let inside = length - a - b;
+    let mut spans = vec![(0, near, start, a)];
+    if middle > 0 && inside > 0 {
+        let step = if tile { middle * k } else { inside };
+        let mut at = 0;
+        while at < inside {
+            let part = step.min(inside - at);
+            let source = if tile {
+                part.div_ceil(k).min(middle)
+            } else {
+                middle
+            };
+            spans.push((near, source, start + (a + at) as i32, part));
+            at += part;
+        }
+    }
+    spans.push((n - far, far, start + (length - b) as i32, b));
+    spans.retain(|&(_, source, _, screen)| source > 0 && screen > 0);
+    spans
+}
+/// (source, screen) rectangles that draw a `size` picture as a nine-slice
+/// frame over `dst`: `slice` (left, top, right, bottom) picture pixels at the
+/// edges stay whole at `k` screen pixels each; the rest stretches or repeats.
+pub(crate) fn nine_slice(
+    size: (u32, u32),
+    slice: [u32; 4],
+    k: u32,
+    dst: Rect,
+    tile: bool,
+) -> Vec<(Rect, Rect)> {
+    let k = k.max(1);
+    let xs = slice_spans(
+        size.0,
+        (slice[0], slice[2]),
+        k,
+        (dst.x(), dst.width()),
+        tile,
+    );
+    let ys = slice_spans(
+        size.1,
+        (slice[1], slice[3]),
+        k,
+        (dst.y(), dst.height()),
+        tile,
+    );
+    let mut parts = Vec::with_capacity(xs.len() * ys.len());
+    for &(sy, sh, dy, dh) in &ys {
+        for &(sx, sw, dx, dw) in &xs {
+            parts.push((
+                Rect::new(sx as i32, sy as i32, sw, sh),
+                Rect::new(dx, dy, dw, dh),
+            ));
+        }
+    }
+    parts
+}
 pub(crate) struct Shadow<'a>(Texture<'a>);
 impl<'a> Shadow<'a> {
     pub fn new(creator: &'a TextureCreator<WindowContext>) -> Result<Self, String> {
@@ -408,6 +483,28 @@ impl<'a> Shadow<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn nine_slices_keep_corners_whole_and_cover_the_box_exactly() {
+        let dst = Rect::new(10, 20, 100, 50);
+        let parts = nine_slice((12, 12), [4; 4], 2, dst, false);
+        assert_eq!(parts.len(), 9);
+        assert_eq!(parts[0], (Rect::new(0, 0, 4, 4), Rect::new(10, 20, 8, 8)));
+        assert_eq!(parts[4], (Rect::new(4, 4, 4, 4), Rect::new(18, 28, 84, 34)));
+        assert_eq!(parts[8], (Rect::new(8, 8, 4, 4), Rect::new(102, 62, 8, 8)));
+        let area: u32 = parts.iter().map(|(_, d)| d.width() * d.height()).sum();
+        assert_eq!(area, 100 * 50, "no gaps, no overlaps");
+        // Repeating: the 84 px middle takes ten whole 8 px copies and a 4 px rest.
+        let tiled = nine_slice((12, 12), [4; 4], 2, dst, true);
+        let row: Vec<_> = tiled.iter().filter(|(_, d)| d.y() == 20).collect();
+        assert_eq!(row.len(), 2 + 11);
+        assert_eq!(row[11], &(Rect::new(4, 0, 2, 4), Rect::new(98, 20, 4, 8)));
+        let area: u32 = tiled.iter().map(|(_, d)| d.width() * d.height()).sum();
+        assert_eq!(area, 100 * 50);
+        // A box smaller than both edges shrinks them alike; no slice stretches all.
+        let tiny = nine_slice((12, 12), [4; 4], 2, Rect::new(0, 0, 10, 10), false);
+        assert_eq!(tiny.len(), 4);
+        assert_eq!(nine_slice((12, 12), [0; 4], 2, dst, false).len(), 1);
+    }
     #[test]
     fn borders_take_the_theme_width_and_square_corners_stay_square() {
         let ink = |r| Rgba {

@@ -585,3 +585,49 @@ fn style_keys_inherit_and_reject_bad_values_one_by_one() {
     bad.margin = builtin.margin;
     assert_eq!(bad, builtin);
 }
+
+#[test]
+fn pictures_frames_and_text_keys_parse_inherit_and_drop_bad_entries() {
+    let builtin = Theme::builtin();
+    assert_eq!((builtin.font_scale, builtin.font_grid), (1.0, 0.0));
+    assert!(builtin.font_smoothing && builtin.text_outline.is_none());
+    assert!(builtin.frames.is_empty() && builtin.background_image.is_none());
+    let dir = TempDir::new().unwrap();
+    fs::create_dir_all(dir.path().join("frames")).unwrap();
+    for file in ["frames/row.png", "sea.png"] {
+        fs::write(dir.path().join(file), b"png").unwrap();
+    }
+    write_theme(
+        dir.path(),
+        "font_scale = 1.5\nfont_grid = 8\nfont_smoothing = false\n\
+         text_outline = { color = '#3F2214', width = 2, ink = '#FFFFFF' }\n\
+         background_image = 'sea.png'\n\
+         [frames.row]\nimage = 'frames/row.png'\nslice = [4, 3, 4, 5]\nscale = 2\npad = 2\ntile = true\n\
+         [frames.selected]\nimage = 'frames/missing.png'\n\
+         [frames.panel]\nimage = '../sea.png'\n\
+         [frames.window]\nimage = 'sea.png'\n",
+    );
+    let theme = Theme::load(dir.path());
+    assert_eq!((theme.font_scale, theme.font_grid), (1.5, 8.0));
+    assert!(!theme.font_smoothing);
+    let outline = theme.text_outline.unwrap();
+    assert_eq!((outline.width, outline.ink.map(|c| c.r)), (2.0, Some(255)));
+    assert!(theme
+        .background_image
+        .as_ref()
+        .unwrap()
+        .ends_with("sea.png"));
+    assert_eq!(
+        theme.frames.len(),
+        1,
+        "missing, escaping and unknown frames are dropped"
+    );
+    let row = theme.frame("row").unwrap();
+    assert_eq!(
+        (row.slice, row.scale, row.pad, row.tile),
+        ([4, 3, 4, 5], 2.0, [2.0; 4], true)
+    );
+    let bad =
+        load("font_scale = 3\nfont_grid = -1\nfont_smoothing = 'no'\ntext_outline = { width = 2 }");
+    assert_eq!(bad, builtin);
+}

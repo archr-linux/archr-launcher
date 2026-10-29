@@ -100,6 +100,21 @@ pub struct Meta {
     pub rect: Rect01,
     pub size: f32,
 }
+/// A theme picture placed on a screen: still, or a strip of frames side by
+/// side that plays `fps` times a second.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Decor {
+    /// Path inside the theme folder.
+    pub image: String,
+    pub x: f32,
+    pub y: f32,
+    /// Reference pixels (480 high) per image pixel.
+    pub scale: f32,
+    pub frames: u32,
+    pub fps: f32,
+    /// Behind the list and panels instead of over them.
+    pub back: bool,
+}
 #[derive(Clone, Debug, PartialEq)]
 pub struct Layout {
     pub header: Header,
@@ -113,6 +128,7 @@ pub struct Layout {
     pub info: Option<Info>,
     pub meta: Option<Meta>,
     pub dots: Option<Rect01>,
+    pub decor: Vec<Decor>,
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct View {
@@ -222,6 +238,7 @@ impl View {
             info: None,
             meta: None,
             dots: None,
+            decor: Vec::new(),
         };
         let cover = t.cover;
         Self {
@@ -314,7 +331,7 @@ impl Layout {
             at,
             &[
                 "header", "status", "divider", "summary", "list", "panel", "art", "backdrop",
-                "info", "meta", "dots",
+                "info", "meta", "dots", "decor",
             ],
         );
         let r = Reader { table: t, at };
@@ -368,7 +385,51 @@ impl Layout {
             m.size = r.number("size", m.size, 0.01, 0.3);
         });
         element(t, at, "dots", &mut self.dots, |d, r| *d = r.rect(*d));
+        match t.get("decor") {
+            None => {}
+            Some(Value::Array(items)) => {
+                self.decor = items
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(n, item)| decor(item, &format!("{at}.decor[{n}]")))
+                    .collect();
+            }
+            Some(_) => log::warn!("Theme {at}.decor must be a list of tables; ignored"),
+        }
     }
+}
+
+/// One `decor` entry; None (with a warning) when its image path is unsafe.
+fn decor(item: &Value, at: &str) -> Option<Decor> {
+    let Some(t) = item.as_table() else {
+        log::warn!("Theme {at} must be a table; ignored");
+        return None;
+    };
+    known(
+        t,
+        at,
+        &["image", "x", "y", "scale", "frames", "fps", "layer"],
+    );
+    let image = t.get("image").and_then(Value::as_str).filter(|path| {
+        !path.is_empty()
+            && std::path::Path::new(path)
+                .components()
+                .all(|c| matches!(c, std::path::Component::Normal(_)))
+    });
+    let Some(image) = image else {
+        log::warn!("Theme {at}.image must be a path inside the theme; ignored");
+        return None;
+    };
+    let r = Reader { table: t, at };
+    Some(Decor {
+        image: image.to_owned(),
+        x: r.number("x", 0., 0., 1.),
+        y: r.number("y", 0., 0., 1.),
+        scale: r.number("scale", 1., 0.25, 8.),
+        frames: r.number("frames", 1., 1., 64.) as u32,
+        fps: r.number("fps", 0., 0., 30.),
+        back: r.pick("layer", false, &[("front", false), ("back", true)]),
+    })
 }
 
 impl List {
@@ -652,6 +713,35 @@ mod tests {
             ">>>>"
         );
         assert_eq!(view("[games.list]\ncursor = 1").games.list.cursor, "");
+    }
+    #[test]
+    fn decor_lists_replace_the_inherited_one_and_skip_bad_entries() {
+        let v = view(
+            "[systems]\ndecor = [{ image = 'decor/palm.png', x = 0.9, y = 0.1, scale = 2, frames = 4, fps = 6, layer = 'back' },\
+             { image = '../x.png' }, { x = 1 }, { image = 'shell.png', x = 7 }]",
+        );
+        let d = &v.systems.decor;
+        assert_eq!(d.len(), 2);
+        assert_eq!(
+            (
+                d[0].image.as_str(),
+                d[0].x,
+                d[0].scale,
+                d[0].frames,
+                d[0].fps,
+                d[0].back
+            ),
+            ("decor/palm.png", 0.9, 2., 4, 6., true)
+        );
+        assert_eq!(
+            (d[1].x, d[1].frames, d[1].back),
+            (1., 1, false),
+            "kept on screen"
+        );
+        assert!(v.games.decor.is_empty());
+        let mut cleared = v.clone();
+        cleared.overlay(&toml::from_str("[systems]\ndecor = []").unwrap(), "t");
+        assert!(cleared.systems.decor.is_empty());
     }
     #[test]
     fn tiles_are_horizontal() {
