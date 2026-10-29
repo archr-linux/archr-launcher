@@ -285,7 +285,13 @@ impl Shop {
         let (added, kept) = if installed.is_some() {
             let new = manifest.permissions.without(&granted);
             let kept = manifest.permissions.only(&granted);
-            (access(new), access(kept))
+            let mut added = access(new);
+            // New places on the screen and a process that stays open are
+            // new too: the user sees them, and an update on its own never
+            // brings them.
+            let old = registry::Installed::read(&self.dirs.module(&manifest.id), "en").manifest;
+            added.extend(new_surface(&manifest, old.as_ref()));
+            (added, access(kept))
         } else {
             (Vec::new(), Vec::new())
         };
@@ -518,6 +524,60 @@ impl Shop {
 pub fn same_digest(a: &str, b: &str) -> bool {
     let hex = |d: &str| d.strip_prefix("sha256:").unwrap_or(d).to_ascii_lowercase();
     !hex(a).is_empty() && hex(a) == hex(b)
+}
+
+/// What `new` shows or keeps running that `old` did not: one line per kind,
+/// as the permission page names it. Without the old manifest, all of it.
+fn new_surface(new: &Manifest, old: Option<&Manifest>) -> Vec<archr_ui::modules::Permission> {
+    let ids = |list: &[archr_ui::modules::Entry]| -> Vec<String> {
+        list.iter().map(|e| e.id.clone()).collect()
+    };
+    let grows = |new: Vec<String>, old: Option<Vec<String>>| {
+        let old = old.unwrap_or_default();
+        new.iter().any(|id| !old.contains(id))
+    };
+    let kinds = [
+        (
+            "modules.perm_tile",
+            grows(ids(&new.tiles), old.map(|o| ids(&o.tiles))),
+        ),
+        (
+            "modules.perm_shortcut",
+            grows(ids(&new.shortcuts), old.map(|o| ids(&o.shortcuts))),
+        ),
+        (
+            "modules.perm_widget",
+            grows(ids(&new.widgets), old.map(|o| ids(&o.widgets))),
+        ),
+        (
+            "modules.perm_quick",
+            grows(
+                new.quick.iter().map(|q| q.id.clone()).collect(),
+                old.map(|o| o.quick.iter().map(|q| q.id.clone()).collect()),
+            ),
+        ),
+        (
+            "modules.perm_page",
+            grows(
+                new.pages.iter().map(|p| p.id.clone()).collect(),
+                old.map(|o| o.pages.iter().map(|p| p.id.clone()).collect()),
+            ),
+        ),
+        (
+            "modules.perm_daemon",
+            new.mode == manifest::Mode::Daemon
+                && old.is_none_or(|o| o.mode != manifest::Mode::Daemon),
+        ),
+    ];
+    kinds
+        .into_iter()
+        .filter(|(_, new)| *new)
+        .map(|(key, _)| archr_ui::modules::Permission {
+            key,
+            detail: String::new(),
+            sensitive: false,
+        })
+        .collect()
 }
 
 /// The unpacker speaks of themes; the module store has its own words.

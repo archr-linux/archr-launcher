@@ -446,6 +446,24 @@ fn automatic_updates_leave_switched_off_and_failed_modules_alone() {
 }
 
 #[test]
+fn a_new_surface_or_a_process_that_stays_open_is_asked_for() {
+    let oneshot = MANIFEST.replace("mode = \"daemon\"", "mode = \"oneshot\"");
+    let root = tempfile::tempdir().unwrap();
+    installed_bateria(root.path());
+    // As if 1.0.0 had been a one-shot.
+    fs::write(root.path().join("modules/bateria/module.toml"), &oneshot).unwrap();
+    let newer = MANIFEST.replace("1.0.0", "1.1.0").replace(
+        "[[start.tiles]]",
+        "[[start.widgets]]\nid = \"w\"\naction = \"refresh\"\n[[start.tiles]]",
+    );
+    let offer = shop(root.path(), &release_1_1(&newer, true))
+        .offer(&card())
+        .unwrap();
+    let added: Vec<&str> = offer.added.iter().map(|p| p.key).collect();
+    assert_eq!(added, ["modules.perm_widget", "modules.perm_daemon"]);
+}
+
+#[test]
 fn a_rolled_back_package_is_never_taken_again_on_its_own() {
     let newer = MANIFEST.replace("1.0.0", "1.1.0");
     let root = tempfile::tempdir().unwrap();
@@ -469,9 +487,12 @@ fn automatic_updates_take_only_reviewed_versions_that_ask_for_nothing_new() {
         "[[start.tiles]]",
         "[permissions]\nnet = true\n[[start.tiles]]",
     );
+    // A new place on the screen, or staying open, is new as well.
+    let tile = format!("{newer}[[start.tiles]]\nid = \"c\"\naction = \"refresh\"\n");
     for (manifest, reviewed, updated) in [
         (&newer, false, false),
         (&asks, true, false),
+        (&tile, true, false),
         (&newer, true, true),
     ] {
         let root = tempfile::tempdir().unwrap();
