@@ -223,7 +223,11 @@ segredos (só leitura); `/run/dbus` e os sockets do userdbd
 sistema); com `net`, só sockets `AF_UNIX`, `AF_INET` e `AF_INET6` e nada em
 `localhost` (`IPAddressDeny=localhost`), exceto o stub de DNS do
 systemd-resolved (`127.0.0.53`/`.54`) quando o `resolv.conf` aponta para ele;
-um `resolv.conf` com `127.0.0.1` ou `::1` deixa o módulo sem DNS;
+um `resolv.conf` com `127.0.0.1` ou `::1` deixa o módulo sem DNS; e nenhum
+endereço do próprio aparelho (o IP do Wi-Fi ou do cabo USB, mesmo depois de um
+DHCP novo): o `archr-modules-firewall` da imagem recusa destino local para os
+uids 60600–61099, e o launcher só dá rede a um módulo depois de ver
+`/run/archr/modules-firewall`;
 `MemoryMax`, `TasksMax=16`,
 `CPUWeight=20`, `Nice=10`. Para ver a saída de erro no aparelho:
 `journalctl -u 'archr-mod-<id>*'`.

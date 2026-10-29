@@ -62,6 +62,19 @@ liberado: o módulo fica sem DNS e o launcher registra no log. A alternativa
 completa para esse caso é o proxy de rede da fase 3 (o módulo fala só com um
 socket do launcher, que resolve nomes por ele).
 
+**[feito]** O IP da LAN do próprio aparelho: `IPAddressDeny=localhost` não o
+cobre, e a lista de endereços locais muda com o DHCP (um daemon vive mais que
+um lease). A regra fica no kernel, por tipo de endereço e não por lista: o
+serviço `archr-modules-firewall` (distribuição, ramo `feat/modulos-firewall`)
+põe os uids 60600–61099 numa cadeia que recusa `addrtype --dst-type LOCAL`
+(IPv4 e IPv6), menos o stub do resolved na porta 53, usando o
+`iptables-legacy` que já vem com o connman (o nftables não está na imagem e o
+kernel não tem `NFT_FIB`; o legado só precisou do `xt_owner` como módulo). O
+launcher só dá rede a um módulo depois de ver `/run/archr/modules-firewall`,
+que o serviço cria quando todas as regras entraram; sem ele, o módulo roda com
+`PrivateNetwork`. Alternativa descartada: `IPAddressDeny=` com os endereços
+locais lidos no spawn, que fica velha no primeiro DHCP novo.
+
 **[feito]** `InaccessiblePaths=-/run/systemd/userdb`: os sockets varlink do
 userdbd. O systemd 255 resolve `User=` antes de montar o namespace
 (`exec-invoke.c`: `get_fixed_user` antes de `apply_mount_namespace`), e o
@@ -407,7 +420,9 @@ em vez de cortar com "+N".
 
 - Decisão do dono: índice assinado (chave e dependência); ações de `system`
   da fase 3; proposta de mover os saves.
-- Distribuição: merge de `feat/runemu-governor` (3.3).
+- Distribuição: merge de `feat/runemu-governor` (3.3) e de
+  `feat/modulos-firewall` (rede local fechada aos módulos; precisa recompilar
+  o kernel por causa do `xt_owner`).
 - Teste no aparelho: `write` com ACL (3.5); DNS de um módulo com `net` e
   `IPAddressDeny=localhost`; `/run/dbus` e `/run/systemd/userdb` escondidos
   sem efeito colateral.

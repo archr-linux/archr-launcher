@@ -73,6 +73,7 @@ fn start_with(
         device: "test".into(),
         delay: Duration::ZERO,
         auto_delay: Duration::ZERO,
+        firewall: None,
         shop: None,
     })
 }
@@ -1029,4 +1030,60 @@ fn widgets_bars_and_lists_reach_the_screens_and_items_answer_with_their_index() 
         "\"action\":\"abrir\"",
     );
     assert!(seen.contains(r#""context":{"item":1}"#), "{seen}");
+}
+
+#[test]
+fn no_module_gets_the_network_before_the_modules_firewall_is_up() {
+    let root = tempfile::tempdir().unwrap();
+    let base = root.path();
+    let tile = "[permissions]\nnet = true\n[[start.tiles]]\nid = \"t\"\nlabel = \"@name\"\naction = \"ask\"\n";
+    module(base, "rede", "daemon", tile, DAEMON);
+    allow(base, &[("rede", &["net"])]);
+    let marker = base.join("run/modules-firewall");
+    let sandboxes = Arc::new(Sandboxes::default());
+    let mut probe = Probe {
+        modules: Modules::start(Config {
+            dirs: Dirs::new(base),
+            run: base.join("run"),
+            system_cfg: base.join("system.cfg"),
+            lock: base.join("system.cfg.lock"),
+            executor: sandboxes.clone(),
+            direct: None,
+            userdb: None,
+            language: "en".into(),
+            device: "test".into(),
+            delay: Duration::ZERO,
+            auto_delay: Duration::ZERO,
+            firewall: Some(marker.clone()),
+            shop: None,
+        }),
+        view: Arc::default(),
+        notices: Vec::new(),
+        launches: Vec::new(),
+        configs: 0,
+    };
+    probe.wait(|v, _| value(v, "rede", "tile:t").is_some());
+    assert!(
+        sandboxes.args("rede").contains("PrivateNetwork=yes"),
+        "no firewall yet"
+    );
+    // The firewall came up: the next run has the internet.
+    fs::create_dir_all(marker.parent().unwrap()).unwrap();
+    fs::write(&marker, "").unwrap();
+    probe.request(Request::Enable {
+        module: "rede".into(),
+        on: false,
+        grant: false,
+    });
+    probe.request(Request::Enable {
+        module: "rede".into(),
+        on: true,
+        grant: false,
+    });
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while sandboxes.args("rede").contains("PrivateNetwork") {
+        assert!(Instant::now() < deadline, "{}", sandboxes.args("rede"));
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(sandboxes.args("rede").contains("IPAddressDeny=localhost"));
 }

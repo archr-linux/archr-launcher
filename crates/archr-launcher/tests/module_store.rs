@@ -533,6 +533,7 @@ fn host(
         device: "test".into(),
         delay: std::time::Duration::ZERO,
         auto_delay,
+        firewall: None,
         shop: Some(shop(root, fake)),
     })
 }

@@ -77,6 +77,10 @@ pub struct Config {
     pub delay: Duration,
     /// The first look for automatic updates, this long after the host.
     pub auto_delay: Duration,
+    /// On the device: the file archr-modules-firewall leaves once module
+    /// uids cannot reach this device's own addresses. Without it no module
+    /// gets the network.
+    pub firewall: Option<PathBuf>,
     pub shop: Option<store::Shop>,
 }
 impl Config {
@@ -95,6 +99,10 @@ impl Config {
             };
             (Arc::new(systemd), None, Some("/run/userdb".into()))
         };
+        let firewall = paths
+            .root
+            .is_none()
+            .then(|| PathBuf::from("/run/archr/modules-firewall"));
         Self {
             dirs,
             run: paths.run.clone(),
@@ -107,6 +115,7 @@ impl Config {
             device: String::new(),
             delay: Duration::from_secs(2),
             auto_delay: AUTO_FIRST,
+            firewall,
             shop: Some(shop),
         }
     }
@@ -873,7 +882,7 @@ impl Host {
             secrets,
             uid,
             env,
-            net: manifest.permissions.net,
+            net: manifest.permissions.net && self.firewall_ready(id),
             read: manifest
                 .permissions
                 .read
@@ -893,6 +902,19 @@ impl Host {
                 String::new()
             },
         })
+    }
+    /// The device's own addresses are closed to module uids (or there is
+    /// no such guard to wait for, off the device).
+    fn firewall_ready(&self, id: &str) -> bool {
+        let ready = self
+            .config
+            .firewall
+            .as_ref()
+            .is_none_or(|marker| marker.exists());
+        if !ready {
+            log::warn!("Module {id} runs without network: the modules firewall is not up");
+        }
+        ready
     }
     /// The module's uid when its files are handed to it (on the device).
     fn owner(&self, id: &str) -> Option<u32> {
