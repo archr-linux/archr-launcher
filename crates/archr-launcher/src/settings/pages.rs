@@ -32,7 +32,42 @@ pub(super) fn usb_error(error: &str) -> String {
         "settings.usb_busy".into()
     }
 }
-pub(super) fn scrape_outcome(stop: Stop) -> &'static str {
+/// A scraping job from the saved options. `only` names one system and ROM:
+/// a forced "scrape again" of that game. Blocking file reads: worker only.
+pub(crate) fn start_scrape(
+    paths: &crate::paths::Paths,
+    only: Option<(&str, std::path::PathBuf)>,
+) -> Result<(Job, Vec<String>), String> {
+    let cfg = SystemCfg::load(&paths.config).map_err(|e| e.to_string())?;
+    let get = |id: Id| {
+        cfg.get_setting(id.key(), None, None)
+            .unwrap_or_else(|| id.default_value().into())
+    };
+    let engine = Engine::production(paths.cache.clone(), Credentials::load(&paths.store))
+        .ok_or("settings.scraper_unavailable")?;
+    let mut options = Options::new(&get(Id::Language));
+    options.only_missing = get(Id::ScraperMissing) == "1";
+    options.media = Media::parse_list(&get(Id::ScraperMedia));
+    options.systems = Some(get(Id::ScraperSystems))
+        .filter(|s| !s.is_empty())
+        .into_iter()
+        .collect();
+    if let Some((system, rom)) = only {
+        options.systems = vec![system.to_owned()];
+        options.game = Some(rom);
+        options.force = true;
+    }
+    fs::create_dir_all(&paths.cache).map_err(|e| e.to_string())?;
+    let systems = crate::worker::definitions(paths)?;
+    let touched = systems
+        .iter()
+        .filter(|s| options.systems.is_empty() || options.systems.contains(&s.name))
+        .filter(|s| archr_scraper::system_id(&s.name).is_some())
+        .map(|s| s.name.clone())
+        .collect();
+    Ok((engine.start(systems, options), touched))
+}
+pub(crate) fn scrape_outcome(stop: Stop) -> &'static str {
     match stop {
         Stop::Completed => "settings.scrape_done",
         Stop::Cancelled => "settings.scrape_cancelled",
@@ -206,32 +241,7 @@ impl Backend {
     /// Starts the engine's own background job from the saved options; also
     /// names the systems whose art may change.
     pub(super) fn scrape(&self) -> Result<(Job, Vec<String>), String> {
-        let cfg = self.cfg()?;
-        let get = |id: Id| {
-            cfg.get_setting(id.key(), None, None)
-                .unwrap_or_else(|| id.default_value().into())
-        };
-        let engine = Engine::production(
-            self.paths.cache.clone(),
-            Credentials::load(&self.paths.store),
-        )
-        .ok_or("settings.scraper_unavailable")?;
-        let mut options = Options::new(&get(Id::Language));
-        options.only_missing = get(Id::ScraperMissing) == "1";
-        options.systems = Some(get(Id::ScraperSystems))
-            .filter(|s| !s.is_empty())
-            .into_iter()
-            .collect();
-        options.media = Media::parse_list(&get(Id::ScraperMedia));
-        fs::create_dir_all(&self.paths.cache).map_err(|e| e.to_string())?;
-        let systems = crate::worker::definitions(&self.paths)?;
-        let touched = systems
-            .iter()
-            .filter(|s| options.systems.is_empty() || options.systems.contains(&s.name))
-            .filter(|s| archr_scraper::system_id(&s.name).is_some())
-            .map(|s| s.name.clone())
-            .collect();
-        Ok((engine.start(systems, options), touched))
+        start_scrape(&self.paths, None)
     }
     pub(super) fn apply_page(&self, id: Id, value: &str) -> Option<Result<String, String>> {
         if !matches!(

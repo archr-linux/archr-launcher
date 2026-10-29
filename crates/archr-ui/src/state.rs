@@ -33,7 +33,15 @@ pub enum Screen {
     QuickMenu {
         game: Option<(String, usize)>,
     },
+    /// Scraped text and art of one game, by real system and index.
+    Details {
+        system: String,
+        game: usize,
+    },
 }
+
+/// Buttons of the details screen, left to right.
+pub const DETAILS_ACTIONS: [&str; 3] = ["hint.play", "hint.favorite", "details.rescrape"];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SessionAction {
@@ -61,6 +69,11 @@ pub enum Outcome {
         system: String,
         game: usize,
     },
+    /// Scrape this one game again, replacing what an earlier scrape wrote.
+    Rescrape {
+        system: String,
+        game: usize,
+    },
     SetCore {
         system: String,
         game: usize,
@@ -74,6 +87,7 @@ pub enum Outcome {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum QuickItem {
+    Details,
     Settings,
     Netplay,
     Core,
@@ -121,6 +135,15 @@ pub struct App {
     pub page_size: usize,
     /// `global.netplay` is on: the quick menu offers the lobby.
     pub netplay: bool,
+    /// Details screen: focused button and description scroll, in lines.
+    pub details_focus: usize,
+    pub details_scroll: usize,
+    /// Lines the description can scroll, reported by the renderer.
+    pub details_overflow: usize,
+    /// The host can scrape a single game now (credential present, no run going).
+    pub can_rescrape: bool,
+    /// A single-game scrape is running.
+    pub rescraping: bool,
     history: Vec<(Screen, usize)>,
     moving: Option<order::Moving>,
     selected_core: Option<(String, String)>,
@@ -133,6 +156,11 @@ impl App {
             cursor: 0,
             page_size,
             netplay: false,
+            details_focus: 0,
+            details_scroll: 0,
+            details_overflow: 0,
+            can_rescrape: false,
+            rescraping: false,
             history: Vec::new(),
             moving: None,
             selected_core: None,
@@ -151,11 +179,16 @@ impl App {
 
     pub fn quick_menu_items(&self, data: &dyn DataSource) -> &'static [QuickItem] {
         use QuickItem::*;
-        const GAME: &[QuickItem] = &[Core, Suspend, Reboot, Shutdown];
+        let from_details = matches!(self.history.last(), Some((Screen::Details { .. }, _)));
         match &self.screen {
             Screen::QuickMenu {
                 game: Some((system, _)),
-            } => &GAME[usize::from(data.cores(system).len() <= 1)..],
+            } => match (from_details, data.cores(system).len() > 1) {
+                (false, true) => &[Core, Details, Suspend, Reboot, Shutdown],
+                (false, false) => &[Details, Suspend, Reboot, Shutdown],
+                (true, true) => &[Core, Suspend, Reboot, Shutdown],
+                (true, false) => &[Suspend, Reboot, Shutdown],
+            },
             Screen::QuickMenu { game: None } => {
                 match (self.netplay, data.system_order().is_empty()) {
                     (false, true) => &[Settings, Move, Suspend, Reboot, Shutdown],
@@ -198,8 +231,11 @@ impl App {
         if matches!(self.screen, Screen::StartHub { .. }) {
             return self.handle_hub(b, data);
         }
+        if let Screen::Details { system, game } = self.screen.clone() {
+            return self.handle_details(b, system, game, data);
+        }
         let len = match &self.screen {
-            Screen::StartHub { .. } => unreachable!(),
+            Screen::StartHub { .. } | Screen::Details { .. } => unreachable!(),
             Screen::Systems => Self::system_rows(data).len(),
             Screen::Games { system } => data.games(system).len(),
             Screen::QuickMenu { .. } => self.quick_menu_items(data).len(),
@@ -238,7 +274,7 @@ impl App {
                 Button::Y => self.enter(Screen::QuickMenu { game: None }),
                 _ => {}
             },
-            Screen::StartHub { .. } => unreachable!(),
+            Screen::StartHub { .. } | Screen::Details { .. } => unreachable!(),
             Screen::Games { system } => match b {
                 Button::B => self.back(),
                 Button::A | Button::X | Button::Y => {
@@ -266,6 +302,14 @@ impl App {
                 let items = self.quick_menu_items(data);
                 match (b, items.get(self.cursor)) {
                     (Button::B, _) => self.back(),
+                    (Button::A, Some(QuickItem::Details)) => {
+                        self.back();
+                        if let Some((system, game)) = game {
+                            self.enter(Screen::Details { system, game });
+                            self.details_focus = 0;
+                            self.details_scroll = 0;
+                        }
+                    }
                     (Button::A, Some(QuickItem::Settings)) => {
                         self.back();
                         return Outcome::Settings;
@@ -299,6 +343,62 @@ impl App {
                     _ => {}
                 }
             }
+        }
+        Outcome::None
+    }
+
+    /// The details game moved (its system was re-read and re-sorted): follow
+    /// it, and the list cursor below it when that list is the same system.
+    pub fn retarget_details(&mut self, index: usize) {
+        let mut system = None;
+        for screen in
+            std::iter::once(&mut self.screen).chain(self.history.iter_mut().map(|(s, _)| s))
+        {
+            if let Screen::Details { system: name, game } = screen {
+                *game = index;
+                system = Some(name.clone());
+            }
+        }
+        for (screen, cursor) in &mut self.history {
+            if matches!(screen, Screen::Games { system: name } if Some(&*name) == system.as_ref()) {
+                *cursor = index;
+            }
+        }
+    }
+
+    fn handle_details(
+        &mut self,
+        b: Button,
+        system: String,
+        game: usize,
+        data: &dyn DataSource,
+    ) -> Outcome {
+        let last = DETAILS_ACTIONS.len() - 1;
+        match b {
+            Button::B => self.back(),
+            Button::Up => self.details_scroll = self.details_scroll.saturating_sub(1),
+            Button::Down => {
+                self.details_scroll = (self.details_scroll + 1).min(self.details_overflow)
+            }
+            Button::L => self.details_focus = self.details_focus.saturating_sub(1),
+            Button::R => self.details_focus = (self.details_focus + 1).min(last),
+            Button::Y => {
+                self.selected_core = data.current_core(&system, game);
+                self.enter(Screen::QuickMenu {
+                    game: Some((system, game)),
+                });
+            }
+            Button::A => {
+                return match self.details_focus {
+                    0 => Outcome::Launch { system, game },
+                    1 => Outcome::ToggleFavorite { system, game },
+                    _ if self.can_rescrape && !self.rescraping => {
+                        Outcome::Rescrape { system, game }
+                    }
+                    _ => Outcome::None,
+                }
+            }
+            _ => {}
         }
         Outcome::None
     }

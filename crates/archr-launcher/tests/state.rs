@@ -384,6 +384,7 @@ fn quick_menu_collection_uses_real_game_and_restores_collection_cursor() {
         app.quick_menu_items(&data),
         [
             QuickItem::Core,
+            QuickItem::Details,
             QuickItem::Suspend,
             QuickItem::Reboot,
             QuickItem::Shutdown
@@ -411,10 +412,11 @@ fn quick_menu_tools_and_ports_hide_core_but_keep_all_session_actions() {
         .insert("ports".into(), vec![pair("portmaster", "portmaster")]);
     for system in [None, Some("snes"), Some("tools"), Some("ports")] {
         let mut app = system.map_or_else(|| App::new(5), |s| in_games(s, 0));
+        // Game menus also open the details; only snes has a core choice.
         let core_rows = if system.is_none() {
             2
         } else {
-            usize::from(system == Some("snes"))
+            1 + usize::from(system == Some("snes"))
         };
         app.handle(Button::Y, &data);
         assert_eq!(
@@ -447,6 +449,106 @@ fn quick_menu_up_down_clamp() {
     for _ in 0..10 {
         app.handle(Button::Down, &data);
     }
+    assert_eq!(app.cursor, 4);
+}
+
+fn open_details(data: &FakeData, system: &str, game: usize) -> App {
+    let mut app = in_games(system, game);
+    app.handle(Button::Y, data);
+    app.cursor = app
+        .quick_menu_items(data)
+        .iter()
+        .position(|item| *item == QuickItem::Details)
+        .unwrap();
+    app.handle(Button::A, data);
+    app
+}
+
+#[test]
+fn details_open_from_the_game_menu_and_go_back_to_the_list() {
+    let data = FakeData::library();
+    let mut app = open_details(&data, "snes", 7);
+    assert_eq!(
+        app.screen,
+        Screen::Details {
+            system: "snes".into(),
+            game: 7
+        }
+    );
+    // The menu over the details offers no second "Details".
+    app.handle(Button::Y, &data);
+    assert!(!app.quick_menu_items(&data).contains(&QuickItem::Details));
+    app.handle(Button::B, &data);
+    assert!(matches!(app.screen, Screen::Details { .. }));
+    app.handle(Button::B, &data);
+    assert_eq!(
+        app.screen,
+        Screen::Games {
+            system: "snes".into()
+        }
+    );
+    assert_eq!(app.cursor, 7);
+}
+
+#[test]
+fn details_buttons_play_favorite_and_scrape_again_only_when_allowed() {
+    let data = FakeData::library();
+    let mut app = open_details(&data, "snes", 7);
+    let game = || ("snes".to_owned(), 7);
+    assert_eq!(
+        app.handle(Button::A, &data),
+        Outcome::Launch {
+            system: game().0,
+            game: game().1
+        }
+    );
+    app.handle(Button::R, &data);
+    assert_eq!(
+        app.handle(Button::A, &data),
+        Outcome::ToggleFavorite {
+            system: game().0,
+            game: game().1
+        }
+    );
+    app.handle(Button::R, &data);
+    app.handle(Button::R, &data);
+    assert_eq!(app.details_focus, 2);
+    assert_eq!(app.handle(Button::A, &data), Outcome::None);
+    app.can_rescrape = true;
+    assert_eq!(
+        app.handle(Button::A, &data),
+        Outcome::Rescrape {
+            system: game().0,
+            game: game().1
+        }
+    );
+    app.rescraping = true;
+    assert_eq!(app.handle(Button::A, &data), Outcome::None);
+}
+
+#[test]
+fn details_text_scrolls_within_the_reported_overflow() {
+    let data = FakeData::library();
+    let mut app = open_details(&data, "snes", 7);
+    app.handle(Button::Down, &data);
+    assert_eq!(app.details_scroll, 0, "nothing to scroll");
+    app.details_overflow = 2;
+    for _ in 0..5 {
+        app.handle(Button::Down, &data);
+    }
+    assert_eq!(app.details_scroll, 2);
+    app.handle(Button::Up, &data);
+    assert_eq!(app.details_scroll, 1);
+    // A re-sorted system moves the game: the screen and the list follow it.
+    app.retarget_details(3);
+    assert_eq!(
+        app.screen,
+        Screen::Details {
+            system: "snes".into(),
+            game: 3
+        }
+    );
+    app.handle(Button::B, &data);
     assert_eq!(app.cursor, 3);
 }
 

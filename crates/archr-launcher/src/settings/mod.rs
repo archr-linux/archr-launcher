@@ -3,6 +3,7 @@ mod bluetooth;
 mod games;
 mod info;
 mod pages;
+pub(crate) use pages::{scrape_outcome, start_scrape};
 mod runtime;
 mod storage;
 use crate::paths::Paths;
