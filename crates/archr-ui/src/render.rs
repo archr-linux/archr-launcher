@@ -604,6 +604,19 @@ impl<'font, 'texture> Ui<'font, 'texture> {
     fn px(&self, value: f32) -> i32 {
         self.frame.px(value)
     }
+    /// Corners, borders, shadows and motion: the theme's, or the default
+    /// in Settings, where the theme only colors, fonts and icons.
+    fn finish(&mut self, theme: &Theme, settings: bool) {
+        if settings {
+            self.geometry.style(1., self.px(1.) as u32);
+            self.shadow_style = ShadowStyle::Soft;
+        } else {
+            let border = self.px(theme.border_width).max(1) as u32;
+            self.geometry.style(theme.corners, border);
+            self.shadow_style = theme.shadow;
+        }
+        crate::motion::set_steps(!settings && theme.steps);
+    }
     /// Whether a blinking cursor shows at `now`: half a second on, half off;
     /// steady when animations are off.
     fn blink_on(&self, now: Instant) -> bool {
@@ -797,10 +810,8 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         self.canvas.set_draw_color(color(theme.background));
         self.canvas.clear();
         self.store_wanted.clear();
-        self.geometry
-            .style(theme.corners, self.px(theme.border_width).max(1) as u32);
-        crate::motion::set_steps(theme.steps);
-        (self.shadow_style, self.pixel_art, self.blink) = (theme.shadow, theme.pixel_art, None);
+        self.finish(theme, settings.is_some());
+        (self.pixel_art, self.blink) = (theme.pixel_art, None);
         (self.frame.font, self.frame.grid, self.frame.min) =
             (theme.font_scale, theme.font_grid, theme.font_min);
         if let Some(text) = &mut self.text {

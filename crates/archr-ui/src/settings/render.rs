@@ -204,6 +204,7 @@ impl Ui<'_, '_> {
         }
     }
     pub(super) fn settings_page(&mut self, state: &Settings, theme: &Theme) -> Result<(), String> {
+        self.finish(theme, true);
         self.store_wanted.clear();
         if state.page().rows().is_empty() {
             self.settings_scroll.page = None;
