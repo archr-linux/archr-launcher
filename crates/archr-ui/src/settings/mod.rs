@@ -138,6 +138,7 @@ pub enum Id {
     ScraperMissing,
     ScraperStart,
     Theme,
+    View,
     Accent,
     Background,
     Font,
@@ -201,6 +202,7 @@ impl Id {
             Self::ScraperMedia => ("launcher.scraper.media", "box"),
             Self::ScraperMissing => ("launcher.scraper.only_missing", "1"),
             Self::Theme => ("launcher.theme", "default"),
+            Self::View => ("launcher.view", crate::layout::LISTA),
             Self::Accent => ("launcher.accent", ""),
             Self::Background => ("launcher.background", ""),
             Self::Font => ("launcher.font", ""),
@@ -577,6 +579,11 @@ impl Settings {
             (Id::Suspend, "freeze") => "settings.suspend_freeze",
             (Id::Suspend, "standby") => "settings.suspend_standby",
             (Id::Theme, "default") => "appearance.theme_default",
+            (Id::View, view) => {
+                let views = self.base_theme.views();
+                let (id, names) = views.iter().find(|(id, _)| id == view).unwrap_or(&views[0]);
+                return names.get(catalog.language()).unwrap_or(id).to_owned();
+            }
             (Id::Background, "") => return self.display_value(Id::Theme, catalog),
             (Id::Background, "black") => "appearance.bg_black",
             (Id::Background, "slate") => "appearance.bg_slate",
@@ -1028,6 +1035,9 @@ impl Settings {
                         let options = match self.options.get(&row.id).filter(|v| !v.is_empty()) {
                             Some(options) => options.clone(),
                             None if row.id == Id::Accent => self.accent_choices(),
+                            None if row.id == Id::View => {
+                                self.base_theme.views().into_iter().map(|v| v.0).collect()
+                            }
                             None => row.id.choices().iter().map(|v| (*v).into()).collect(),
                         };
                         if options.is_empty() {
@@ -1185,7 +1195,7 @@ mod appearance_tests {
     #[test]
     fn choices_are_a_draft_until_the_page_is_left() {
         let mut state = page();
-        state.cursor = 1;
+        state.cursor = 2;
         assert_eq!(state.handle(Button::R), Effect::None);
         assert_eq!(state.value(Id::Accent), "teal");
         assert_eq!(state.pending, None);
@@ -1196,7 +1206,7 @@ mod appearance_tests {
     #[test]
     fn leaving_unchanged_or_restored_saves_nothing() {
         let mut state = page();
-        state.cursor = 4;
+        state.cursor = 5;
         state.handle(Button::R);
         state.handle(Button::L);
         assert_eq!(state.handle(Button::B), Effect::None);
@@ -1206,13 +1216,13 @@ mod appearance_tests {
     fn theme_changes_ask_the_host_to_load_the_preview() {
         let mut state = page();
         assert_eq!(state.handle(Button::R), Effect::Theme("night".into()));
-        state.cursor = 6;
+        state.cursor = 7;
         assert_eq!(state.handle(Button::A), Effect::Theme("default".into()));
         assert_eq!(state.value(Id::Theme), "default");
     }
     fn custom_dot() -> Settings {
         let mut state = page();
-        state.cursor = 1;
+        state.cursor = 2;
         state.handle(Button::L);
         assert!(state.accent_is_custom());
         state
@@ -1285,7 +1295,7 @@ mod appearance_tests {
         ] {
             state.values.insert(id, value.into());
         }
-        state.cursor = 6;
+        state.cursor = 7;
         assert_eq!(state.handle(Button::A), Effect::None);
         assert_eq!(
             state.appearance(),
@@ -1293,9 +1303,38 @@ mod appearance_tests {
                 text_size: "normal".into(),
                 theme: "default".into(),
                 animations: true,
+                view: "lista".into(),
                 ..Appearance::default()
             }
         );
+    }
+    #[test]
+    fn the_view_row_offers_the_previewed_theme_views_by_name() {
+        let mut state = page();
+        state.cursor = 1;
+        let catalog = crate::i18n::I18n::load(std::path::Path::new("/none"), Some("pt_BR"), None);
+        assert_eq!(state.display_value(Id::View, &catalog), "Lista");
+        assert_eq!(state.handle(Button::R), Effect::None);
+        assert_eq!(state.value(Id::View), "vitrine");
+        assert_eq!(state.display_value(Id::View, &catalog), "Vitrine");
+        state.handle(Button::R);
+        assert_eq!(state.value(Id::View), "lista");
+        state.handle(Button::L);
+        assert_eq!(state.handle(Button::B), Effect::Appearance);
+        let look = state.appearance();
+        assert_eq!(look.view, "vitrine");
+        let theme = look.apply(&state.base_theme);
+        assert_eq!(theme.active_view, "vitrine");
+        assert_eq!(
+            theme.view(&theme.active_view).games.list.mark,
+            crate::layout::Mark::Bar
+        );
+        // A theme without that view keeps the value and draws the classic one.
+        let mut gone = state.clone();
+        gone.values.insert(Id::View, "grade".into());
+        assert_eq!(gone.display_value(Id::View, &catalog), "Lista");
+        let theme = gone.appearance().apply(&gone.base_theme);
+        assert_eq!(theme.view(&theme.active_view).id, "lista");
     }
 }
 #[cfg(test)]

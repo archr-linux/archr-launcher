@@ -373,6 +373,7 @@ const CONFIG_KEYS: &[&str] = &[
     "launcher.scraper.systems",
     "launcher.text_size",
     "launcher.theme",
+    "launcher.view",
     "moonlight.cfg",
     "moonlight.height",
     "moonlight.hosts",

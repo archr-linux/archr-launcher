@@ -185,11 +185,12 @@ fn run(
     let mut rooms = netplay::Runtime::new(paths.clone());
     let mut was_browsing = true;
     let mut moonlight = archr_launcher::moonlight::Runtime::new(paths.clone(), (width, height));
+    let mut cover_box = cover_size(&theme, (width, height));
     let mut covers = CoverCache::new(
         &creator,
         paths.cache.join("thumbs"),
-        (theme.cover.w * width as f32).round().max(1.) as u32,
-        (theme.cover.h * height as f32).round().max(1.) as u32,
+        cover_box.0,
+        cover_box.1,
     );
     let mut controllers = Controllers::new_traced(&ui.sdl, trace)?;
     let mut events = ui.sdl.event_pump()?;
@@ -244,6 +245,16 @@ fn run(
             ui.animations = look.animations;
             if reload {
                 ui.configure(&ttf, &creator, &theme, paths.root.as_deref())?;
+            }
+            // Another view may show covers at another size.
+            if cover_size(&theme, (width, height)) != cover_box {
+                cover_box = cover_size(&theme, (width, height));
+                covers = CoverCache::new(
+                    &creator,
+                    paths.cache.join("thumbs"),
+                    cover_box.0,
+                    cover_box.1,
+                );
             }
             dirty = true;
         }
@@ -503,6 +514,15 @@ fn lobby_input(
         _ => {}
     }
     Outcome::None
+}
+/// Pixel size of the games screen's cover in the active view.
+fn cover_size(theme: &archr_ui::Theme, (width, height): (u32, u32)) -> (u32, u32) {
+    let view = theme.view(&theme.active_view);
+    let rect = view.games.art.map_or(theme.cover, |art| art.rect);
+    (
+        (rect.w * width as f32).round().max(1.) as u32,
+        (rect.h * height as f32).round().max(1.) as u32,
+    )
 }
 fn cover_paths(app: &App, data: &dyn DataSource) -> (Option<PathBuf>, Vec<PathBuf>) {
     let (screen, cursor) = app.backdrop();

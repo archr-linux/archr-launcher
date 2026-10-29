@@ -45,6 +45,7 @@ pub const GAMES: &[Row] = &[
 ];
 pub const APPEARANCE: &[Row] = &[
     row(Id::Theme, "settings.theme", Kind::Value),
+    row(Id::View, "settings.view", Kind::Value),
     row(Id::Accent, "settings.accent", Kind::Value),
     row(Id::Background, "settings.background", Kind::Value),
     row(Id::Font, "settings.font", Kind::Value),
@@ -254,6 +255,7 @@ impl Settings {
             font: text(Id::Font),
             text_size: text(Id::TextSize),
             animations: self.value(Id::Animations) == "1",
+            view: text(Id::View),
         }
     }
     /// B saves the draft only when something changed.
@@ -281,6 +283,7 @@ impl Settings {
                 let theme = self.value(Id::Theme) != Id::Theme.default_value();
                 for id in [
                     Id::Theme,
+                    Id::View,
                     Id::Accent,
                     Id::Background,
                     Id::Font,

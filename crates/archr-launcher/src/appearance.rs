@@ -48,5 +48,6 @@ pub fn saved(cfg: Option<&SystemCfg>) -> Appearance {
         font: get(Id::Font),
         text_size: get(Id::TextSize),
         animations: get(Id::Animations) == "1",
+        view: get(Id::View),
     }
 }

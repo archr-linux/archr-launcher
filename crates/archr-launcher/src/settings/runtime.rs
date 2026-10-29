@@ -121,6 +121,7 @@ impl Runtime {
                 let look = self.state.appearance();
                 self.send(Work::Appearance(vec![
                     (Id::Theme, look.theme),
+                    (Id::View, look.view),
                     (Id::Accent, look.accent),
                     (Id::Background, look.background),
                     (Id::Font, look.font),
