@@ -923,7 +923,7 @@
 "raimport.found" = "Encontrado no cartão"
 "raimport.import" = "Importar"
 "raimport.config" = "retroarch.cfg"
-"raimport.config_detail" = "Escala inteira, atalhos, overlay, latência…"
+"raimport.config_detail" = "Escala inteira, overlay, latência e mais"
 "raimport.overrides" = "Substituições de núcleo e jogo"
 "raimport.overrides_detail" = "A pasta config/ de cada núcleo"
 "raimport.shaders" = "Shaders e remapeamentos"

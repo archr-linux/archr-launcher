@@ -923,7 +923,7 @@
 "raimport.found" = "Found on the card"
 "raimport.import" = "Import"
 "raimport.config" = "retroarch.cfg"
-"raimport.config_detail" = "Integer scale, hotkeys, overlay, latency…"
+"raimport.config_detail" = "Integer scale, overlay, latency and more"
 "raimport.overrides" = "Core and game overrides"
 "raimport.overrides_detail" = "The config/ folder of each core"
 "raimport.shaders" = "Shaders and remaps"

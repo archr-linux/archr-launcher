@@ -923,7 +923,7 @@
 "raimport.found" = "Найдено на карте"
 "raimport.import" = "Импорт"
 "raimport.config" = "retroarch.cfg"
-"raimport.config_detail" = "Масштаб, горячие клавиши, оверлей…"
+"raimport.config_detail" = "Масштаб, оверлей, задержка и другое"
 "raimport.overrides" = "Настройки ядер и игр"
 "raimport.overrides_detail" = "Папка config/ каждого ядра"
 "raimport.shaders" = "Шейдеры и переназначения"
