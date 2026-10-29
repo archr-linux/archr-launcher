@@ -1,7 +1,11 @@
 //! Netplay lobby host: the RetroArch room list plus LAN discovery, matched against the
 //! local library the way EmulationStation's GuiNetPlay did. One short-lived thread per
 //! refresh; the UI thread only polls for the result.
-use crate::{handoff::is_ip, paths::Paths, worker::definitions};
+use crate::{
+    handoff::{is_ip, is_session},
+    paths::Paths,
+    worker::definitions,
+};
 use archr_config::SystemCfg;
 use archr_index::{cache, clean_name, SystemDef};
 use archr_ui::netplay::{Group, Join, Lobby, Rom, Room};
@@ -12,8 +16,9 @@ use std::{
     io::{Read, Seek, SeekFrom},
     net::UdpSocket,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::Command,
     sync::{
+        atomic::AtomicBool,
         mpsc::{channel, Receiver},
         Arc, Mutex,
     },
@@ -226,7 +231,7 @@ pub fn resolve(
     };
     let dialable = is_ip(dial_ip)
         && dial_port != 0
-        && session.bytes().all(|b| b.is_ascii_alphanumeric())
+        && is_session(session)
         && (entry.relay.is_none() || !session.is_empty());
     let (rom, join) = match found {
         None => (
@@ -430,7 +435,8 @@ fn discover(port: u16) -> Vec<Entry> {
 }
 
 fn download(paths: &Paths, url: &str) -> Result<String, String> {
-    let output = Command::new(paths.at("/usr/bin/curl"))
+    let mut command = Command::new(paths.at("/usr/bin/curl"));
+    command
         .args(["-fsS", "--connect-timeout", "5", "--max-time", "12"])
         .args([
             "--max-filesize",
@@ -439,10 +445,15 @@ fn download(paths: &Paths, url: &str) -> Result<String, String> {
             "=http,https",
             "--",
             url,
-        ])
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|error| format!("curl: {error}"))?;
+        ]);
+    // The shared runner retries a briefly busy executable and bounds time and output.
+    let output = crate::process::capture(
+        &mut command,
+        Duration::from_secs(15),
+        &AtomicBool::new(false),
+        4 << 20,
+    )
+    .map_err(|error| format!("curl: {error}"))?;
     if !output.status.success() {
         return Err(format!(
             "curl: {}",

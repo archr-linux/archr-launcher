@@ -65,6 +65,11 @@ pub fn is_ip(text: &str) -> bool {
     text.parse::<std::net::IpAddr>().is_ok()
 }
 
+/// A relay session id the join line accepts; empty means a direct room.
+pub(crate) fn is_session(text: &str) -> bool {
+    text.len() <= 64 && text.bytes().all(|b| b.is_ascii_alphanumeric())
+}
+
 /// RetroArch nickname rule, shared with the settings page that saves it.
 pub(crate) const NICK_MAX: usize = 32;
 pub(crate) fn nick_char(c: char) -> bool {
@@ -91,8 +96,7 @@ pub fn netplay_command(
 ) -> io::Result<String> {
     let (system, core, emulator, controllers) = game;
     let (ip, port, nick, session) = peer;
-    let session_ok = session.len() <= 64 && session.bytes().all(|b| b.is_ascii_alphanumeric());
-    if !is_ip(ip) || port == 0 || !session_ok {
+    if !is_ip(ip) || port == 0 || !is_session(session) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "invalid netplay address",
