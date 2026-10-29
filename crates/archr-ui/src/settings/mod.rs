@@ -8,6 +8,7 @@ use std::time::Instant;
 pub mod bluetooth;
 pub(crate) mod games;
 pub(crate) mod information;
+pub mod mangohud;
 pub use games::{GameCore, GameSystem, Games};
 pub mod network;
 mod pages;
@@ -33,6 +34,8 @@ pub enum Page {
     Appearance,
     Keyboard,
     Storage,
+    Mangohud,
+    MangohudItems,
     Soon(&'static str),
 }
 impl Page {
@@ -52,15 +55,18 @@ impl Page {
             Self::Appearance => "settings.appearance",
             Self::Keyboard => "settings.keyboard",
             Self::Storage => "settings.storage",
+            Self::Mangohud => "settings.mangohud_page",
+            Self::MangohudItems => "settings.mangohud_items",
             Self::Soon(key) => key,
         }
     }
     /// Breadcrumb parents between "Settings" and the page itself.
-    pub fn parent(self) -> Option<&'static str> {
+    pub fn parent(self) -> &'static [&'static str] {
         match self {
-            Self::Wifi | Self::Bluetooth | Self::Services => Some("settings.network"),
-            Self::Netplay | Self::Scraper => Some("settings.games"),
-            _ => None,
+            Self::Wifi | Self::Bluetooth | Self::Services => &["settings.network"],
+            Self::Netplay | Self::Scraper | Self::Mangohud => &["settings.games"],
+            Self::MangohudItems => &["settings.games", "settings.mangohud_page"],
+            _ => &[],
         }
     }
     pub fn rows(self) -> &'static [Row] {
@@ -76,6 +82,7 @@ impl Page {
             Self::Scraper => pages::SCRAPER,
             Self::Appearance => pages::APPEARANCE,
             Self::Storage => storage::STORAGE,
+            Self::Mangohud => mangohud::MANGOHUD,
             _ => &[],
         }
     }
@@ -146,6 +153,17 @@ pub enum Id {
     RestoreBackup,
     RootPassword,
     FactoryReset,
+    MangohudLink,
+    /// Per-system override on the Games page.
+    MangohudGame,
+    Mangohud,
+    MangohudShow,
+    MangohudLayout,
+    MangohudItems,
+    MangohudPosition,
+    MangohudSize,
+    MangohudAlpha,
+    MangohudFps,
 }
 impl Id {
     fn metadata(self) -> (&'static str, &'static str) {
@@ -204,6 +222,17 @@ impl Id {
             // Read by the automount script at boot.
             Self::Automount => ("system.automount", "1"),
             Self::MergedStorage => ("system.merged.storage", "0"),
+            // mangohud_set owns enabled and state, and builds MangoHud.conf
+            // from the others. The Games page writes `<system>.<suffix>`.
+            Self::MangohudGame => ("archr.mangohud.enabled", ""),
+            Self::Mangohud => ("archr.mangohud.enabled", "0"),
+            Self::MangohudShow => ("archr.mangohud.state", "0"),
+            Self::MangohudLayout => ("archr.mangohud.layout", "compact"),
+            Self::MangohudItems => ("archr.mangohud.items", ""),
+            Self::MangohudPosition => ("archr.mangohud.position", "top-left"),
+            Self::MangohudSize => ("archr.mangohud.font_size", "24"),
+            Self::MangohudAlpha => ("archr.mangohud.alpha", "50"),
+            Self::MangohudFps => ("archr.mangohud.fps_limit", "0"),
             Self::Update
             | Self::Restore
             | Self::Hidden
@@ -218,7 +247,8 @@ impl Id {
             | Self::Backup
             | Self::RestoreBackup
             | Self::RootPassword
-            | Self::FactoryReset => ("", ""),
+            | Self::FactoryReset
+            | Self::MangohudLink => ("", ""),
         }
     }
     pub fn key(self) -> &'static str {
@@ -248,7 +278,15 @@ impl Id {
             | Self::Autosave
             | Self::StateSlot
             | Self::Automount
-            | Self::MergedStorage => &["0", "1"],
+            | Self::MergedStorage
+            | Self::Mangohud
+            | Self::MangohudShow => &["0", "1"],
+            Self::MangohudGame => &["", "1", "0"],
+            Self::MangohudLayout => &mangohud::LAYOUTS,
+            Self::MangohudPosition => &mangohud::POSITIONS,
+            Self::MangohudSize => &["18", "24", "30"],
+            Self::MangohudAlpha => &["0", "25", "50", "75", "100"],
+            Self::MangohudFps => &["0", "30", "60"],
             // setsettings.sh CORE_RATIOS names; "core" lets the core decide.
             Self::Ratio => &["core", "4/3", "3/2", "16/9", "8/7", "squarepixel", "full"],
             Self::ClockFormat => &["24", "12"],
@@ -504,6 +542,10 @@ pub struct Settings {
     pub base_theme: Theme,
     pub base_dir: Option<std::path::PathBuf>,
     pub applied: Option<Appearance>,
+    /// The GPU driver in use can run the overlay (075-mangohud-supported).
+    pub mangohud_supported: bool,
+    /// Layout and items when the items page opened, to save or restore.
+    pub mangohud_saved: (String, String),
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -544,6 +586,8 @@ impl Default for Settings {
             base_theme: Theme::builtin(),
             base_dir: None,
             applied: None,
+            mangohud_supported: false,
+            mangohud_saved: Default::default(),
         }
     }
 }
@@ -599,7 +643,8 @@ impl Settings {
                 | Id::ScraperLink
                 | Id::Backup
                 | Id::RestoreBackup
-                | Id::FactoryReset,
+                | Id::FactoryReset
+                | Id::MangohudLink,
                 _,
             ) => return "›".into(),
             (Id::StorageCard, _) if self.storage.card.as_ref().is_some_and(|c| c.external) => {
@@ -607,7 +652,18 @@ impl Settings {
             }
             (Id::StorageCard, _) => return String::new(),
             (Id::RootPassword, _) => "settings.change_link",
-            (Id::KeyboardVariant, "") => "menu.default",
+            (Id::KeyboardVariant | Id::MangohudGame, "") => "menu.default",
+            (Id::MangohudGame, "1") => "settings.on",
+            (Id::MangohudGame, _) => "settings.off",
+            (
+                Id::MangohudLayout
+                | Id::MangohudItems
+                | Id::MangohudPosition
+                | Id::MangohudSize
+                | Id::MangohudAlpha
+                | Id::MangohudFps,
+                _,
+            ) => return self.mangohud_value(id, catalog),
             (Id::ScraperSystems, "") => "settings.all",
             (Id::ClockFormat, "24") => "settings.clock_24",
             (Id::ClockFormat, "12") => "settings.clock_12",
@@ -647,6 +703,7 @@ impl Settings {
             ),
             Id::ScraperAccount => self.scrape.user.clone(),
             Id::StorageCard => self.storage.card.as_ref()?.detail.clone(),
+            Id::Mangohud if !self.mangohud_supported => "settings.mangohud_unsupported".into(),
             Id::MergedStorage if !self.storage.merge_supported => {
                 "settings.merged_unsupported".into()
             }
@@ -709,6 +766,15 @@ impl Settings {
             Id::IndexNow => true,
             Id::RestoreBackup => self.storage.backup.is_none(),
             Id::MergedStorage => !self.storage.merge_supported,
+            Id::MangohudGame
+            | Id::Mangohud
+            | Id::MangohudShow
+            | Id::MangohudLayout
+            | Id::MangohudItems
+            | Id::MangohudPosition
+            | Id::MangohudSize
+            | Id::MangohudAlpha
+            | Id::MangohudFps => !self.mangohud_supported,
             Id::ScraperSource
             | Id::ScraperAccount
             | Id::ScraperSystems
@@ -742,6 +808,7 @@ impl Settings {
                 (Key('Y'), "settings.info_short"),
             ],
             Page::Info => &[(Key('A'), "settings.details"), (Key('B'), "hint.back")],
+            Page::MangohudItems => &[(Key('A'), "mangohud.mark"), (Key('B'), "hint.back")],
             Page::InfoDetail(_) => &[
                 (Pair('L', 'R'), "settings.previous_next"),
                 (Key('B'), "hint.back"),
@@ -862,6 +929,9 @@ impl Settings {
         if page == Page::Appearance {
             self.appearance_saved = self.appearance();
         }
+        if page == Page::MangohudItems {
+            self.mangohud_saved = self.mangohud_draft();
+        }
     }
     fn back(&mut self) -> Effect {
         if self.stack.len() == 1 {
@@ -896,7 +966,12 @@ impl Settings {
                     _ => None,
                 };
             }
-            Err(error) => self.fail(Some(id), error),
+            Err(error) => {
+                if id == Id::MangohudItems {
+                    self.restore_mangohud();
+                }
+                self.fail(Some(id), error)
+            }
         }
     }
     /// A slider reply: returns the newest value still to apply, if any.

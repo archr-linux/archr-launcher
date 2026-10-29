@@ -350,6 +350,14 @@ fn sources(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
 
 /// Config entries and file names that look like catalog keys.
 const CONFIG_KEYS: &[&str] = &[
+    "archr.mangohud.alpha",
+    "archr.mangohud.enabled",
+    "archr.mangohud.font_size",
+    "archr.mangohud.fps_limit",
+    "archr.mangohud.items",
+    "archr.mangohud.layout",
+    "archr.mangohud.position",
+    "archr.mangohud.state",
     "audio.device",
     "audio.volume",
     "controllers.bluetooth.enabled",

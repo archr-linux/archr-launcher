@@ -39,9 +39,11 @@ pub const GAMES: &[Row] = &[
     )
     .kind(Kind::Toggle),
     row(Id::StateSlot, "settings.state_slot", Kind::Value),
+    row(Id::MangohudGame, "settings.mangohud", Kind::Value),
     row(Id::GameSystem, "settings.other_system", Kind::Action).under("settings.other"),
     row(Id::NetplayLink, "settings.netplay", Kind::Action),
     row(Id::ScraperLink, "settings.scraper", Kind::Action),
+    row(Id::MangohudLink, "settings.mangohud_link", Kind::Action),
 ];
 pub const APPEARANCE: &[Row] = &[
     row(Id::Theme, "settings.theme", Kind::Value),
@@ -134,6 +136,7 @@ impl Settings {
             Page::Wifi => self.wifi_input(button),
             Page::Bluetooth => self.bt_input(button),
             Page::Games => self.games_input(button),
+            Page::MangohudItems => Some(self.mangohud_items_input(button)),
             _ => None,
         }
     }
@@ -265,6 +268,8 @@ impl Settings {
         match id {
             Id::NetplayLink => self.open(Page::Netplay),
             Id::ScraperLink => self.open(Page::Scraper),
+            Id::MangohudLink => self.open(Page::Mangohud),
+            Id::MangohudItems => self.open(Page::MangohudItems),
             Id::ScraperAccount => {
                 let user = self.scrape.user.clone();
                 self.open_keyboard(Id::ScraperAccount, Mode::Text, user);

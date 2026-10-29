@@ -190,6 +190,47 @@ fn pages() -> Vec<(&'static str, Settings)> {
     sound.handle(Button::R);
     sound.handle(Button::R);
     assert!(!sound.slides.is_empty() && sound.pending.is_none());
+    let mut mangohud = ready();
+    mangohud.mangohud_supported = true;
+    mangohud.values.insert(Id::Mangohud, "1".into());
+    mangohud.open(Page::Games);
+    mangohud.open(Page::Mangohud);
+    mangohud.cursor = 2;
+    let mut mangohud_items = mangohud.clone();
+    mangohud_items
+        .values
+        .insert(Id::MangohudLayout, "detailed".into());
+    mangohud_items.open(Page::MangohudItems);
+    mangohud_items.cursor = 6;
+    let mut mangohud_wide = mangohud.clone();
+    for (id, value) in [
+        (Id::MangohudLayout, "horizontal"),
+        (Id::MangohudPosition, "bottom-center"),
+        (Id::MangohudSize, "30"),
+        (Id::MangohudAlpha, "100"),
+        (Id::MangohudFps, "60"),
+    ] {
+        mangohud_wide.values.insert(id, value.into());
+    }
+    mangohud_wide.cursor = 4;
+    let mut mangohud_custom = mangohud.clone();
+    for (id, value) in [
+        (Id::MangohudLayout, "custom"),
+        (Id::MangohudItems, "fps,frametime,ram,battery,time,game"),
+        (Id::MangohudPosition, "top-right"),
+        (Id::MangohudSize, "18"),
+        (Id::MangohudAlpha, "0"),
+    ] {
+        mangohud_custom.values.insert(id, value.into());
+    }
+    mangohud_custom.cursor = 3;
+    let mut mangohud_off = mangohud.clone();
+    mangohud_off.mangohud_supported = false;
+    mangohud_off.values.insert(Id::Mangohud, "0".into());
+    mangohud_off.cursor = 0;
+    let mut games_mangohud = games.clone();
+    games_mangohud.mangohud_supported = true;
+    games_mangohud.cursor = 6;
     vec![
         // First, so the list snaps to its scrolled end.
         ("storage-end", storage_end),
@@ -217,6 +258,12 @@ fn pages() -> Vec<(&'static str, Settings)> {
         ("storage-reset-final", storage_reset),
         ("storage-working", storage_working),
         ("storage-password", storage_password),
+        ("mangohud", mangohud),
+        ("mangohud-items", mangohud_items),
+        ("mangohud-wide", mangohud_wide),
+        ("mangohud-custom", mangohud_custom),
+        ("mangohud-unsupported", mangohud_off),
+        ("games-mangohud", games_mangohud),
     ]
 }
 #[test]
