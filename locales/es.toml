@@ -90,7 +90,7 @@
 "settings.volume" = "Volumen"
 "settings.brightness" = "Brillo"
 "settings.sounds" = "Sonidos del tema"
-"settings.sounds_subtitle" = "Navegar, abrir, volver y el sonido de cada sistema"
+"settings.sounds_subtitle" = "Navegar, abrir, volver, sonido de sistemas"
 "settings.sounds_volume" = "Volumen de los sonidos"
 "settings.audio" = "Salida de audio"
 "settings.gpu" = "Controlador GPU"
