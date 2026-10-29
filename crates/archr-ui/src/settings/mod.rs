@@ -220,6 +220,8 @@ pub enum Id {
     Font,
     TextSize,
     Animations,
+    /// Details screen: the scraped video plays, muted, over the screen shot.
+    PreviewVideo,
     Restore,
     UnifiedCard,
     StorageCard,
@@ -356,6 +358,7 @@ impl Id {
             Self::Font => ("launcher.font", ""),
             Self::TextSize => ("launcher.text_size", "normal"),
             Self::Animations => ("launcher.animations", "on"),
+            Self::PreviewVideo => ("launcher.preview_video", "1"),
             // Read by the automount script at boot.
             Self::Automount => ("system.automount", "1"),
             // automount owns it ("automount unify"), applied at once.
@@ -464,6 +467,7 @@ impl Id {
             | Self::OnlyRelay
             | Self::MissingGames
             | Self::ScraperMissing
+            | Self::PreviewVideo
             | Self::Autosave
             | Self::Automount
             | Self::MergedStorage

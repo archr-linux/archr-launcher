@@ -42,6 +42,11 @@ impl SystemCfg {
             .map(String::from)
     }
 
+    /// The game's own entry only, without the system's or global fallback.
+    pub fn get_game(&self, system: &str, rom: &str, key: &str) -> Option<String> {
+        self.entry(&rom_key(system, rom, key)).map(String::from)
+    }
+
     /// Shell `get_setting` precedence, ignoring empty values. Fully qualified
     /// keys also work without a system argument (e.g. `audio.volume`).
     pub fn get_setting(

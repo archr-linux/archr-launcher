@@ -9,6 +9,9 @@ pub struct Art<'a, 't> {
     pub cover: Option<&'a Texture<'t>>,
     pub shot: Option<&'a Texture<'t>>,
     pub logo: Option<&'a Texture<'t>>,
+    /// The playing preview video's frame, already the shot box's size, and
+    /// how far through the clip it is (0..1).
+    pub video: Option<(&'a Texture<'t>, f32)>,
     /// Achievement badges decoded so far, by file.
     pub badges: Option<&'a crate::covers::CoverCache<'t>>,
 }
@@ -36,6 +39,52 @@ fn fit(texture: &Texture<'_>, rect: Rect, left: bool) -> Rect {
 }
 
 impl Ui<'_, '_> {
+    /// Over a playing preview: a "Preview" tag and a thin progress line.
+    fn preview_marks(&mut self, inner: Rect, progress: f32, theme: &Theme) -> Result<(), String> {
+        let edge = self.px(10.);
+        let text = self.catalog.text("details.preview");
+        let (icon, gap, pad) = (self.px(12.), self.px(6.), self.px(8.));
+        let tw = self.measure(&text, Face::Regular, 11.)? as i32;
+        let tag = Rect::new(
+            inner.x() + edge,
+            inner.y() + edge,
+            (pad * 2 + icon + gap + tw) as u32,
+            self.px(20.) as u32,
+        );
+        let veil = Rgba {
+            a: 184,
+            ..theme.background
+        };
+        self.rounded(tag, tag.height() as f32 / 2., veil, None)?;
+        let middle = tag.y() + (tag.height() as i32 - icon) / 2;
+        let glyph = Rect::new(tag.x() + pad, middle, icon as u32, icon as u32);
+        self.icon(Glyph::Play, glyph, theme.text)?;
+        self.label(
+            &text,
+            (Face::Regular, 11., theme.text),
+            Rect::new(glyph.right() + gap, tag.y(), tw.max(1) as u32, tag.height()),
+        )?;
+        let bar = self.px(3.);
+        let track = Rect::new(
+            inner.x() + edge,
+            inner.bottom() - edge - bar,
+            inner.width().saturating_sub(2 * edge as u32).max(1),
+            bar as u32,
+        );
+        let white = Rgba {
+            r: 255,
+            g: 255,
+            b: 255,
+            a: 64,
+        };
+        self.rounded(track, 2., white, None)?;
+        let done = (track.width() as f32 * progress.clamp(0., 1.)).round() as u32;
+        if done > 0 {
+            let fill = Rect::new(track.x(), track.y(), done.max(bar as u32), track.height());
+            self.rounded(fill, 2., theme.highlight_bg, None)?;
+        }
+        Ok(())
+    }
     /// Word wrap at measured boundaries; a word wider than the line breaks by character.
     pub(super) fn wrap(
         &mut self,
@@ -167,7 +216,7 @@ impl Ui<'_, '_> {
         let Frame { width, height, .. } = self.frame;
         let rect = |r| pixels(r, width, height);
 
-        // Screen shot (a still even when a preview video exists), else the cover.
+        // The preview video while it plays, else the screen shot, else the cover.
         let shot = rect(theme.details_shot);
         let radius = self.px(12.) as f32;
         self.panel_named("art", shot, radius, (theme.surface, theme.border))?;
@@ -183,13 +232,23 @@ impl Ui<'_, '_> {
         .map(rect);
         let union = column.iter().skip(1).fold(column[0], |a, b| a.union(*b));
         self.framed("panel", union)?;
-        if let Some(texture) = art.shot.or(art.cover) {
-            let inner = Rect::new(
-                shot.x() + 1,
-                shot.y() + 1,
-                shot.width().saturating_sub(2).max(1),
-                shot.height().saturating_sub(2).max(1),
-            );
+        let inner = Rect::new(
+            shot.x() + 1,
+            shot.y() + 1,
+            shot.width().saturating_sub(2).max(1),
+            shot.height().saturating_sub(2).max(1),
+        );
+        if let Some((frame, progress)) = art.video {
+            self.geometry.cover(
+                &mut self.canvas,
+                frame,
+                inner,
+                (radius - 1.).max(0.),
+                255,
+                WHOLE,
+            )?;
+            self.preview_marks(inner, progress, theme)?;
+        } else if let Some(texture) = art.shot.or(art.cover) {
             let dst = fit(texture, inner, false);
             self.geometry.cover(
                 &mut self.canvas,

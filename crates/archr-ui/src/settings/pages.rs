@@ -58,7 +58,14 @@ pub const GAMES: &[Row] = &[
     .kind(Kind::Toggle),
     row(Id::StateSlot, "settings.state_slot", Kind::Value),
     row(Id::MangohudGame, "settings.mangohud", Kind::Value),
-    row(Id::NetplayLink, "settings.netplay", Kind::Action).under("settings.other"),
+    described(
+        Id::PreviewVideo,
+        "settings.preview_video",
+        "settings.preview_video_detail",
+    )
+    .kind(Kind::Toggle)
+    .under("settings.other"),
+    row(Id::NetplayLink, "settings.netplay", Kind::Action),
     row(Id::ScraperLink, "settings.scraper", Kind::Action),
     row(Id::MangohudLink, "settings.mangohud_link", Kind::Action),
 ];
@@ -121,7 +128,12 @@ pub const MEDIA: [(&str, &str, &str, Option<&str>); 8] = [
         "media.logo_detail",
         Some("media.used_details_logo"),
     ),
-    ("video", "media.video", "media.video_detail", None),
+    (
+        "video",
+        "media.video",
+        "media.video_detail",
+        Some("media.used_details"),
+    ),
     ("manual", "media.manual", "media.manual_detail", None),
 ];
 const fn media(n: u8) -> Row {

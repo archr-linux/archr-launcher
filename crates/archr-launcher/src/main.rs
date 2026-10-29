@@ -10,6 +10,7 @@ use archr_launcher::{
     modules::{self, Modules, Notice},
     netplay,
     paths::Paths,
+    preview::Preview,
     rescrape::Rescrape,
     state::{App, DataSource, Outcome, Screen},
     wifi,
@@ -114,7 +115,7 @@ fn run(
             catalog,
             mut library,
             prepared,
-            (netplay_on, cheevos_on),
+            (netplay_on, cheevos_on, mangohud_on),
         ),
     ) = std::thread::scope(|scope| {
         let (sized, size) = std::sync::mpsc::sync_channel(1);
@@ -166,6 +167,7 @@ fn run(
             let netplay_on = setting("netplay").is_some_and(|value| value == "1");
             let cheevos_on = setting(Id::Cheevos.key()).is_some_and(|value| value == "1")
                 && setting(archr_launcher::settings::CHEEVOS_TOKEN).is_some();
+            let mangohud_on = archr_launcher::settings::mangohud_supported(paths);
             Ok((
                 theme,
                 (base, look),
@@ -173,7 +175,7 @@ fn run(
                 catalog,
                 library,
                 prepared,
-                (netplay_on, cheevos_on),
+                (netplay_on, cheevos_on, mangohud_on),
             ))
         });
         let sdl = sdl2::init()?;
@@ -207,6 +209,7 @@ fn run(
     app.set_view(&theme.view(&theme.active_view));
     app.netplay = netplay_on;
     app.cheevos = cheevos_on;
+    app.mangohud = mangohud_on;
     ui.banner = library.banner.take().map(|m| m.render(&ui.catalog));
     ui.draw(&app, &library, &theme, None)?;
     eprintln!(
@@ -235,10 +238,10 @@ fn run(
             .and_then(|cfg| cfg.get_setting(id.key(), None, None))
             .unwrap_or_else(|| id.default_value().into())
     };
-    settings
-        .state
-        .values
-        .insert(Id::UpdateNotify, saved(Id::UpdateNotify));
+    // Read before Settings first opens: the details screen needs them now.
+    for id in [Id::UpdateNotify, Id::PreviewVideo] {
+        settings.state.values.insert(id, saved(id));
+    }
     let mut update_check =
         (saved(Id::UpdateBoot) == "1").then(|| Instant::now() + UPDATE_CHECK_DELAY);
     // An update still running from before (the launcher restarted): its screen.
@@ -267,6 +270,7 @@ fn run(
     // Achievement badges, at the list icon's size.
     let side = (36. * height as f32 / 480.).round().max(1.) as u32;
     let mut badges = CoverCache::new(&creator, paths.cache.join("thumbs"), side, side);
+    let mut preview = Preview::new(&creator);
     let mut cheevos: Option<Lookup> = None;
     let mut rescrape: Option<Rescrape> = None;
     // The ROM on the details screen, followed across re-reads of its system.
@@ -501,6 +505,7 @@ fn run(
         if !settings.state.loading {
             app.cheevos =
                 settings.state.value(Id::Cheevos) == "1" && !settings.state.cheevos.user.is_empty();
+            app.mangohud = settings.state.mangohud_supported;
         }
         app.rescraping = rescrape.is_some();
         app.can_rescrape = archr_scraper::available() && !settings.state.scrape.running;
@@ -534,12 +539,33 @@ fn run(
         logos.request(logo.as_slice());
         badges.request(&badge_paths(&app));
         dirty |= covers.poll() | shots.poll() | logos.poll() | badges.poll();
+        let video = match &app.screen {
+            Screen::Details { system, game }
+                if !settings.active && settings.state.value(Id::PreviewVideo) == "1" =>
+            {
+                let path = library
+                    .games(system)
+                    .get(*game)
+                    .and_then(|g| g.video.clone());
+                // The art box inside its 1px frame.
+                let (w, h) = sized(theme.details_shot);
+                path.map(|path| {
+                    (
+                        path,
+                        (w.saturating_sub(2).max(1), h.saturating_sub(2).max(1)),
+                    )
+                })
+            }
+            _ => None,
+        };
+        dirty |= preview.poll(video, Instant::now());
         if dirty {
             ui.moonlight = moonlight.active.then(|| moonlight.state.clone());
             let art = Art {
                 cover: selected.as_ref().and_then(|path| covers.get(path)),
                 shot: shot.as_ref().and_then(|path| shots.get(path)),
                 logo: logo.as_ref().and_then(|path| logos.get(path)),
+                video: preview.frame(),
                 badges: Some(&badges),
             };
             ui.draw_with_settings(
@@ -586,7 +612,10 @@ fn run(
             0
         } else {
             let now = Instant::now();
-            repeat.wait_ms(now).min(audio.wait_ms(now))
+            repeat
+                .wait_ms(now)
+                .min(audio.wait_ms(now))
+                .min(preview.wait_ms(now))
         }) {
             match event {
                 Event::Quit { .. } => close_requested = true,
@@ -769,6 +798,10 @@ fn run(
                 Some(Outcome::Netplay(_) | Outcome::MoonlightStream(_)) => Some((String::new(), 0)),
                 _ => None,
             };
+            // No preview outlives the launcher's screen.
+            if close_requested || outcome.as_ref().is_some_and(transition::is_terminal) {
+                preview.stop();
+            }
             if let Some((system, index)) = &game {
                 let key = library.game_key(system, *index).unwrap_or_default();
                 let name = library.games(system).get(*index).map(|g| g.name.clone());

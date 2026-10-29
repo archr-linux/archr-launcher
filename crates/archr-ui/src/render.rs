@@ -1829,12 +1829,23 @@ impl<'font, 'texture> Ui<'font, 'texture> {
     ) -> Result<(), String> {
         let Frame { height, now, .. } = self.frame;
         let items = app.quick_menu_items(data);
+        // Rows with a value are taller: the core's, and MangoHud's subtitle.
+        let extra = |item: &QuickItem| match item {
+            QuickItem::Core => 4.,
+            QuickItem::Mangohud => 6.,
+            _ => 0.,
+        };
         let has_core = matches!(items.first(), Some(QuickItem::Core));
         let has_divider = items.contains(&QuickItem::Reboot);
         let panel_h = 80.
             + 42. * items.len() as f32
             + if has_divider { 10. } else { 0. }
-            + if has_core { 2. } else { 0. };
+            + if has_core { 2. } else { 0. }
+            + if items.contains(&QuickItem::Mangohud) {
+                6.
+            } else {
+                0.
+            };
         // Optical centering: the approved modal sits 20px above center.
         let panel = self.modal(theme, (340., 32., panel_h, -self.px(20.)))?;
         let (title, subtitle) = if let Screen::QuickMenu {
@@ -1872,13 +1883,15 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             .iter()
             .position(|item| *item == QuickItem::Reboot)
             .unwrap_or(usize::MAX);
-        let core_extra = if has_core { self.px(4.) } else { 0 };
         let separator = self.px(10.);
-        let offset = |index: usize| {
-            index as i32 * row
-                + if index > 0 { core_extra } else { 0 }
-                + if index >= divider_index { separator } else { 0 }
-        };
+        let offsets: Vec<i32> = (0..items.len().max(1))
+            .map(|index| {
+                index as i32 * row
+                    + self.px(items[..index].iter().map(extra).sum())
+                    + if index >= divider_index { separator } else { 0 }
+            })
+            .collect();
+        let offset = |index: usize| offsets[index.min(offsets.len() - 1)];
         let target = offset(app.cursor) as f32;
         self.menu_pill.retarget(target, now);
         if !self.menu_open {
@@ -1889,11 +1902,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             panel.x() + self.px(12.),
             top + self.menu_pill.value(now).round() as i32,
             panel.width().saturating_sub(self.px(24.) as u32).max(1),
-            self.px(if has_core && app.cursor == 0 {
-                44.
-            } else {
-                40.
-            }) as u32,
+            self.px(40. + items.get(app.cursor).map_or(0., extra)) as u32,
         );
         self.rounded(
             pill,
@@ -1903,7 +1912,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         )?;
         for (index, item) in items.iter().enumerate() {
             let y = top + offset(index);
-            let item_height = self.px(if has_core && index == 0 { 44. } else { 40. }) as u32;
+            let item_height = self.px(40. + extra(item)) as u32;
             if index == divider_index {
                 self.divider(x, y - self.px(6.), content_w, theme.border)?;
             }
@@ -1925,6 +1934,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 QuickItem::Settings => "settings.title",
                 QuickItem::Netplay => "netplay.menu",
                 QuickItem::Core => "menu.core",
+                QuickItem::Mangohud => "menu.mangohud",
                 QuickItem::Move => "menu.move",
                 QuickItem::RestoreOrder => "menu.restore_order",
                 QuickItem::Suspend => "menu.suspend",
@@ -1934,29 +1944,92 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             let label = self.catalog.text(label);
             let label = label.as_str();
             let face = selection(selected, Face::Regular, Face::Semibold);
-            let mut label_width = content_w;
-            if let QuickItem::Core = item {
-                let (_, core) = app.selected_core();
-                let default_core = self.catalog.text("menu.default");
-                let core = if core.is_empty() { &default_core } else { core };
-                let space = self.px(8.);
-                let end = panel.right() - self.px(24.);
-                let cc = selection(selected, theme.muted, theme.accent_text_secondary);
-                let mut right = end;
-                for (text, style, cap, align) in [
-                    ("R", (Face::Mono, 12., cc), u32::MAX, Align::Left),
-                    (core, (Face::Regular, 15., c), content_w / 2, Align::Right),
-                    ("L", (Face::Mono, 12., cc), u32::MAX, Align::Left),
-                ] {
-                    right = self.packed_label(text, style, (right, y, item_height), cap, align)?
-                        - space;
+            let value = match item {
+                QuickItem::Core => Some(app.selected_core().1),
+                QuickItem::Mangohud => Some(app.selected_mangohud().0),
+                _ => None,
+            };
+            let Some(value) = value else {
+                self.label(
+                    label,
+                    (face, 15., c),
+                    Rect::new(x, y, content_w, item_height),
+                )?;
+                continue;
+            };
+            let value = match (item, value) {
+                (QuickItem::Core, "") => self.catalog.text("menu.default"),
+                (QuickItem::Mangohud, "") => self.catalog.text("menu.as_system"),
+                (QuickItem::Mangohud, "1") => self.catalog.text("settings.on"),
+                (QuickItem::Mangohud, _) => self.catalog.text("settings.off"),
+                (_, value) => value.to_owned(),
+            };
+            // MangoHud says whose choice this is: the game's, over the system's.
+            let detail = (*item == QuickItem::Mangohud).then(|| {
+                let system = if app.selected_mangohud().1 == "1" {
+                    "settings.on"
+                } else {
+                    "settings.off"
+                };
+                let system = self.catalog.text(system);
+                self.catalog
+                    .format("menu.mangohud_detail", &[("system", &system)])
+            });
+            // ‹ value ›, as the left and right buttons step it; beside both
+            // lines, or on the first when the detail needs the whole row.
+            let space = self.px(8.);
+            let end = panel.right() - self.px(24.);
+            let arrows =
+                self.measure("‹", Face::Regular, 12.)? + self.measure("›", Face::Regular, 12.)?;
+            let block = arrows + self.measure(&value, Face::Regular, 15.)?.min(content_w / 2);
+            let beside = content_w.saturating_sub(block + 3 * space as u32).max(1);
+            let floor = self.frame.min_size();
+            let mut band = (y, item_height);
+            let mut detail_size = (11.5, beside);
+            if let Some(detail) = &detail {
+                band = (y + self.px(5.), self.px(19.) as u32);
+                detail_size = match self.shrink(detail, Face::Regular, 11.5, floor, beside)? {
+                    Some(size) => (size, beside),
+                    None => {
+                        let size = self.shrink(detail, Face::Regular, 11.5, floor, content_w)?;
+                        (size.unwrap_or(floor), content_w)
+                    }
+                };
+                if detail_size.1 == beside {
+                    band = (y, item_height);
                 }
-                label_width = content_w.saturating_sub((end - right) as u32).max(1);
             }
+            let cc = selection(selected, theme.dim_text, theme.accent_text_secondary);
+            let mut right = end;
+            for (text, style, cap, align) in [
+                ("›", (Face::Regular, 12., cc), u32::MAX, Align::Left),
+                (
+                    value.as_str(),
+                    (Face::Regular, 15., c),
+                    content_w / 2,
+                    Align::Right,
+                ),
+                ("‹", (Face::Regular, 12., cc), u32::MAX, Align::Left),
+            ] {
+                right =
+                    self.packed_label(text, style, (right, band.0, band.1), cap, align)? - space;
+            }
+            let label_width = content_w.saturating_sub((end - right) as u32).max(1);
+            let Some(detail) = detail else {
+                self.label(
+                    label,
+                    (face, 15., c),
+                    Rect::new(x, y, label_width, item_height),
+                )?;
+                continue;
+            };
+            let sc = selection(selected, theme.muted, theme.accent_text_secondary);
+            let top = Rect::new(x, y + self.px(5.), label_width, self.px(19.) as u32);
+            self.label(label, (face, 15., c), top)?;
             self.label(
-                label,
-                (face, 15., c),
-                Rect::new(x, y, label_width, item_height),
+                &detail,
+                (Face::Regular, detail_size.0, sc),
+                Rect::new(x, y + self.px(25.), detail_size.1, self.px(15.) as u32),
             )?;
         }
         Ok(())

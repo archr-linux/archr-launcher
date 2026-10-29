@@ -9,7 +9,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-struct Running(Child);
+/// A child in its own process group, killed with its group and reaped on drop.
+pub(crate) struct Running(pub(crate) Child);
 impl Drop for Running {
     fn drop(&mut self) {
         // SAFETY: callers create a new child process group, whose id is its PID.
