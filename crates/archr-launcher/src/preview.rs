@@ -166,8 +166,29 @@ fn play(
     let mut frame = vec![0; w as usize * h as usize * 3];
     let mut seq = 0u64;
     while !stop.load(Ordering::Relaxed) {
-        out.read_exact(&mut frame)
-            .map_err(|e| format!("ffmpeg: {e}"))?;
+        if let Err(error) = out.read_exact(&mut frame) {
+            // Leaving the screen kills ffmpeg mid-frame: not a failure.
+            if stop.load(Ordering::SeqCst) {
+                break;
+            }
+            // Wait for its exit without reaping, so a drop meanwhile still
+            // reaches the group; then clear it and reap for the status.
+            // SAFETY: plain syscall on our own unreaped child.
+            unsafe {
+                let mut info: libc::siginfo_t = std::mem::zeroed();
+                libc::waitid(
+                    libc::P_PID,
+                    child.0.id(),
+                    &mut info,
+                    libc::WEXITED | libc::WNOWAIT,
+                );
+            }
+            drop(clear);
+            return Err(match child.0.wait() {
+                Ok(status) => format!("ffmpeg ended after {seq} frames ({status})"),
+                Err(_) => format!("ffmpeg: {error}"),
+            });
+        }
         seq += 1;
         let at = seq as f32 / FPS as f32;
         let mut shared = slot.lock().unwrap_or_else(|e| e.into_inner());
@@ -333,6 +354,51 @@ mod tests {
             assert!(Instant::now() < deadline, "reader kept running");
             thread::sleep(Duration::from_millis(20));
         }
+    }
+
+    /// Plays `clip` on a helper thread until frames flow, then hands
+    /// over ffmpeg's group and the stop flag.
+    fn playing(clip: PathBuf) -> (thread::JoinHandle<Result<(), String>>, i32, Arc<AtomicBool>) {
+        let slot = Arc::new(Mutex::new(Slot::default()));
+        let (stop, group) = (Arc::new(AtomicBool::new(false)), Group::default());
+        let (s, st, g) = (slot.clone(), stop.clone(), group.clone());
+        let reader = thread::spawn(move || play(&clip, (40, 30), &s, &st, &g));
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while slot.lock().unwrap().seq < 3 {
+            assert!(Instant::now() < deadline, "no frames");
+            thread::sleep(Duration::from_millis(20));
+        }
+        let pgid = *group.lock().unwrap();
+        (reader, pgid, stop)
+    }
+
+    #[test]
+    fn leaving_the_screen_is_not_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let Some(path) = clip(dir.path()) else {
+            eprintln!("ffmpeg missing: preview test skipped");
+            return;
+        };
+        // What Player's drop does: stop, then kill the group mid-frame.
+        let (reader, pgid, stop) = playing(path);
+        stop.store(true, Ordering::SeqCst);
+        // SAFETY: the group is live; the reader has not reaped it.
+        unsafe { libc::kill(-pgid, libc::SIGKILL) };
+        assert_eq!(reader.join().unwrap(), Ok(()));
+    }
+
+    #[test]
+    fn ffmpeg_dying_mid_clip_says_how() {
+        let dir = tempfile::tempdir().unwrap();
+        let Some(path) = clip(dir.path()) else {
+            eprintln!("ffmpeg missing: preview test skipped");
+            return;
+        };
+        let (reader, pgid, _stop) = playing(path);
+        // SAFETY: as above.
+        unsafe { libc::kill(-pgid, libc::SIGKILL) };
+        let error = reader.join().unwrap().unwrap_err();
+        assert!(error.contains("signal: 9"), "{error}");
     }
 
     #[test]
