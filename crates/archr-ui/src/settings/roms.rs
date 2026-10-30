@@ -114,6 +114,14 @@ impl Check {
     }
 }
 
+/// `RENAME=<path>\t<new name>` lines of the check: what the move renames.
+pub fn renames(text: &str) -> Vec<(String, String)> {
+    text.lines()
+        .filter_map(|line| line.strip_prefix("RENAME=")?.rsplit_once('\t'))
+        .map(|(path, name)| (path.to_owned(), name.to_owned()))
+        .collect()
+}
+
 /// What the page shows beyond the status.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Scan {
@@ -361,6 +369,13 @@ mod tests {
             }
         );
         assert_eq!(check.minutes(), 8);
+        assert_eq!(
+            renames("RENAMES=2\nRENAME=snes/A:B.sfc\tA_B.sfc\nRENAME=gba/Pokémon.gba\tPokémon (2).gba\n"),
+            [
+                ("snes/A:B.sfc".to_owned(), "A_B.sfc".to_owned()),
+                ("gba/Pokémon.gba".into(), "Pokémon (2).gba".into()),
+            ]
+        );
         let low = Check::parse("LAYOUT=ext4\nPOWER=low\nRESULT=low-power\n").unwrap();
         assert!(!low.power && !low.ok() && low.files == 0);
         assert_eq!(Check::parse("usage: archr-roms-migrate"), None);

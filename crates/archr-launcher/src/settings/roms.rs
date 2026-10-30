@@ -3,12 +3,9 @@
 //! move; it runs at boot, before the launcher (archr-roms-migrate.target).
 use super::*;
 use archr_ui::i18n::Message;
-use archr_ui::settings::roms::{Check, Scan, Status};
-use std::collections::HashSet;
-use std::path::Path;
+use archr_ui::settings::roms::{renames, Check, Scan, Status};
 
 const SCRIPT: &str = "archr-roms-migrate";
-const ROMS: &str = "/storage/roms";
 /// The script's own marker (ext4) and log.
 const MARK: &str = "/storage/.roms-migrate";
 const LOG: &str = "/storage/.cache/roms-migrate.log";
@@ -54,15 +51,15 @@ impl Backend {
     /// the names changed (from the log) on a moved one, and the battery.
     pub(super) fn roms_scan(&self) -> (Status, Scan) {
         let status = self.roms_status();
-        let check = status
+        // The script's own preview, with the renames it would make.
+        let out = status
             .ext4()
             .then(|| self.migrate(&["check"], CHECK_TIME))
             .and_then(|result| result.map_err(|e| log::warn!("{e}")).ok())
-            .and_then(|(_, out)| Check::parse(&out));
-        let names = if status.ext4() {
-            to_rename(&self.paths.at(ROMS))
-        } else {
-            renamed(&self.read_log())
+            .map(|(_, out)| out);
+        let (check, names) = match out {
+            Some(out) => (Check::parse(&out), renames(&out)),
+            None => (None, renamed(&self.read_log())),
         };
         let root = self.paths.root.clone().unwrap_or_else(|| "/".into());
         let battery = archr_ui::status::read_battery(&root).map(|b| (b.percent, b.charging));
@@ -124,55 +121,6 @@ impl Backend {
 use archr_ui::settings::storage::Action;
 use std::io::Write;
 
-/// "name (2).ext", as the script numbers a name already taken.
-fn numbered(name: &str, n: usize) -> String {
-    match name.rsplit_once('.') {
-        Some((stem, ext)) if !stem.is_empty() => format!("{stem} ({n}).{ext}"),
-        _ => format!("{name} ({n})"),
-    }
-}
-/// Every entry under `roms` an exFAT card refuses (a forbidden character, a
-/// trailing dot or space, a name that differs from a sibling only in case),
-/// with the name it gets; as archr-roms-migrate renames them.
-fn to_rename(roms: &Path) -> Vec<(String, String)> {
-    let mut found = Vec::new();
-    let mut dirs = vec![roms.to_owned()];
-    while let Some(dir) = dirs.pop() {
-        let Ok(entries) = fs::read_dir(&dir) else {
-            continue;
-        };
-        let mut names: Vec<(String, bool)> = entries
-            .filter_map(Result::ok)
-            .map(|e| {
-                let folder = e.file_type().is_ok_and(|t| t.is_dir());
-                (e.file_name().to_string_lossy().into_owned(), folder)
-            })
-            .collect();
-        names.sort();
-        let mut taken = HashSet::new();
-        for (name, folder) in names {
-            let safe = archr_io::exfat_name(&name);
-            let mut new = safe.clone();
-            for n in 2.. {
-                if !taken.contains(&new.to_lowercase()) {
-                    break;
-                }
-                new = numbered(&safe, n);
-            }
-            taken.insert(new.to_lowercase());
-            let path = dir.join(&name);
-            if new != name && found.len() < LIST {
-                let shown = path.strip_prefix(roms).unwrap_or(&path);
-                found.push((shown.to_string_lossy().into_owned(), new));
-            }
-            if folder {
-                dirs.push(path);
-            }
-        }
-    }
-    found.sort();
-    found
-}
 /// The log of the last move: from its last "Armed:" line.
 fn last_run(log: &str) -> &str {
     log.rfind(" Armed: ").map_or(log, |at| &log[at..])
@@ -271,21 +219,13 @@ mod tests {
     }
 
     #[test]
-    fn an_old_card_gets_the_preview_and_the_names_exfat_refuses() {
+    fn an_old_card_gets_the_scripts_preview_and_renames() {
         let (_root, paths) = fixture(
             "case $1 in status) echo LAYOUT=ext4 ;; \
-             check) printf 'LAYOUT=ext4\\nROMS_FILES=3\\nROMS_MIB=900\\nRENAMES=3\\nPOWER=low\\nRESULT=low-power\\n'; exit 1 ;; esac",
+             check) printf 'LAYOUT=ext4\\nROMS_FILES=3\\nROMS_MIB=900\\nRENAMES=2\\nPOWER=low\\n\
+             RENAME=snes/Zelda: Link.sfc\\tZelda_ Link.sfc\\nRENAME=gba/Pokémon.gba\\tPokémon (2).gba\\n\
+             RESULT=low-power\\n'; exit 1 ;; esac",
         );
-        for file in [
-            "snes/Zelda: Link.sfc",
-            "snes/zelda.sfc",
-            "snes/Zelda.sfc",
-            "gba/Dots..gba",
-        ] {
-            let path = paths.at(&format!("/storage/roms/{file}"));
-            fs::create_dir_all(path.parent().unwrap()).unwrap();
-            fs::write(path, "").unwrap();
-        }
         let (status, scan) = Backend::new(paths).roms_scan();
         assert!(status.ext4());
         let check = scan.check.unwrap();
@@ -293,7 +233,6 @@ mod tests {
             (check.files, check.power, check.result.as_str()),
             (3, false, "low-power")
         );
-        // "Dots..gba" ends in a letter: it stays.
         assert_eq!(
             scan.names,
             [
@@ -301,7 +240,7 @@ mod tests {
                     "snes/Zelda: Link.sfc".to_owned(),
                     "Zelda_ Link.sfc".to_owned()
                 ),
-                ("snes/zelda.sfc".into(), "zelda (2).sfc".into()),
+                ("gba/Pokémon.gba".into(), "Pokémon (2).gba".into()),
             ]
         );
     }
