@@ -58,8 +58,23 @@ impl Player {
         let spawned = thread::Builder::new()
             .name("preview".into())
             .spawn(move || {
-                if let Err(error) = play(&path, size, &shared, &cancel, &pgid) {
+                let frames = || shared.lock().unwrap_or_else(|e| e.into_inner()).seq;
+                loop {
+                    let before = frames();
+                    let Err(error) = play(&path, size, &shared, &cancel, &pgid) else {
+                        break;
+                    };
                     log::warn!("Preview {}: {error}", path.display());
+                    // ffmpeg died after a second or more of video: play the
+                    // clip again after the usual pause. A clip that fails
+                    // sooner is given up, so a broken one never loops.
+                    if frames() < before + u64::from(FPS) {
+                        break;
+                    }
+                    thread::sleep(DELAY);
+                    if cancel.load(Ordering::SeqCst) {
+                        break;
+                    }
                 }
                 shared.lock().unwrap_or_else(|e| e.into_inner()).done = true;
             });
@@ -164,10 +179,32 @@ fn play(
             .spawn(move || duration(stderr, &found));
     }
     let mut frame = vec![0; w as usize * h as usize * 3];
+    // Frames of this run; the slot counts every run's.
     let mut seq = 0u64;
     while !stop.load(Ordering::Relaxed) {
-        out.read_exact(&mut frame)
-            .map_err(|e| format!("ffmpeg: {e}"))?;
+        if let Err(error) = out.read_exact(&mut frame) {
+            // Leaving the screen kills ffmpeg mid-frame: not a failure.
+            if stop.load(Ordering::SeqCst) {
+                break;
+            }
+            // Wait for its exit without reaping, so a drop meanwhile still
+            // reaches the group; then clear it and reap for the status.
+            // SAFETY: plain syscall on our own unreaped child.
+            unsafe {
+                let mut info: libc::siginfo_t = std::mem::zeroed();
+                libc::waitid(
+                    libc::P_PID,
+                    child.0.id(),
+                    &mut info,
+                    libc::WEXITED | libc::WNOWAIT,
+                );
+            }
+            drop(clear);
+            return Err(match child.0.wait() {
+                Ok(status) => format!("ffmpeg ended after {seq} frames ({status})"),
+                Err(_) => format!("ffmpeg: {error}"),
+            });
+        }
         seq += 1;
         let at = seq as f32 / FPS as f32;
         let mut shared = slot.lock().unwrap_or_else(|e| e.into_inner());
@@ -175,7 +212,7 @@ fn play(
         if frame.len() != shared.frame.len() {
             frame = vec![0; shared.frame.len()];
         }
-        shared.seq = seq;
+        shared.seq += 1;
         let length = *length.lock().unwrap_or_else(|e| e.into_inner());
         shared.progress = length.map_or(0., |l| (at % l) / l);
     }
@@ -333,6 +370,82 @@ mod tests {
             assert!(Instant::now() < deadline, "reader kept running");
             thread::sleep(Duration::from_millis(20));
         }
+    }
+
+    /// Plays `clip` on a helper thread until frames flow, then hands
+    /// over ffmpeg's group and the stop flag.
+    fn playing(clip: PathBuf) -> (thread::JoinHandle<Result<(), String>>, i32, Arc<AtomicBool>) {
+        let slot = Arc::new(Mutex::new(Slot::default()));
+        let (stop, group) = (Arc::new(AtomicBool::new(false)), Group::default());
+        let (s, st, g) = (slot.clone(), stop.clone(), group.clone());
+        let reader = thread::spawn(move || play(&clip, (40, 30), &s, &st, &g));
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while slot.lock().unwrap().seq < 3 {
+            assert!(Instant::now() < deadline, "no frames");
+            thread::sleep(Duration::from_millis(20));
+        }
+        let pgid = *group.lock().unwrap();
+        (reader, pgid, stop)
+    }
+
+    #[test]
+    fn leaving_the_screen_is_not_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let Some(path) = clip(dir.path()) else {
+            eprintln!("ffmpeg missing: preview test skipped");
+            return;
+        };
+        // What Player's drop does: stop, then kill the group mid-frame.
+        let (reader, pgid, stop) = playing(path);
+        stop.store(true, Ordering::SeqCst);
+        // SAFETY: the group is live; the reader has not reaped it.
+        unsafe { libc::kill(-pgid, libc::SIGKILL) };
+        assert_eq!(reader.join().unwrap(), Ok(()));
+    }
+
+    #[test]
+    fn ffmpeg_dying_mid_clip_says_how() {
+        let dir = tempfile::tempdir().unwrap();
+        let Some(path) = clip(dir.path()) else {
+            eprintln!("ffmpeg missing: preview test skipped");
+            return;
+        };
+        let (reader, pgid, _stop) = playing(path);
+        // SAFETY: as above.
+        unsafe { libc::kill(-pgid, libc::SIGKILL) };
+        let error = reader.join().unwrap().unwrap_err();
+        assert!(error.contains("signal: 9"), "{error}");
+    }
+
+    #[test]
+    fn a_clip_whose_ffmpeg_dies_mid_play_plays_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let Some(path) = clip(dir.path()) else {
+            eprintln!("ffmpeg missing: preview test skipped");
+            return;
+        };
+        let player = Player::start(path, (40, 30));
+        let wait = |what: &str, done: &dyn Fn(&Slot, i32) -> bool| {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            loop {
+                let group = *player.group.lock().unwrap();
+                let slot = player.slot.lock().unwrap();
+                assert!(!slot.done, "gave up while {what}");
+                if done(&slot, group) {
+                    return (slot.seq, group);
+                }
+                drop(slot);
+                assert!(Instant::now() < deadline, "{what}");
+                thread::sleep(Duration::from_millis(20));
+            }
+        };
+        let (seen, first) = wait("playing", &|s, g| s.seq > u64::from(FPS) && g > 0);
+        // SAFETY: the group is live; the reader has not reaped it.
+        unsafe { libc::kill(-first, libc::SIGKILL) };
+        let (_, second) = wait("restarting", &|s, g| {
+            s.seq > seen + 3 && g > 0 && g != first
+        });
+        assert_ne!(second, first);
     }
 
     #[test]
