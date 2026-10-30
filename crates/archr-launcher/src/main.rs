@@ -1,4 +1,5 @@
 //! SDL integration. Disk scanning and locked config updates run in workers.
+mod fb;
 mod roms_move;
 mod script;
 mod transition;

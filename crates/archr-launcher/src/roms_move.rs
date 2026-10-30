@@ -1,8 +1,9 @@
 //! `--roms-migrate-screen`: the screen of the maintenance boot that moves
 //! the ROMs to the exFAT partition (archr-roms-migrate.target). No
-//! compositor: SDL draws on KMSDRM. It only shows what archr-roms-migrate
-//! writes; the migration never waits for it, and when it fails the
-//! migration goes on, on the text console.
+//! compositor and no GPU: SDL's software renderer draws each frame and it is
+//! copied to the console's framebuffer (fb.rs). It only shows what
+//! archr-roms-migrate writes; the migration never waits for it, and when it
+//! fails the migration goes on, on the text console.
 //!
 //! STORAGE is unmounted while it shrinks, and a file kept open there would
 //! stop that: system.cfg is read once at start, everything else comes from
@@ -11,7 +12,7 @@ use archr_config::SystemCfg;
 use archr_launcher::paths::Paths;
 use archr_ui::{
     i18n::I18n,
-    render::{MoveStage, RomsMove, Ui},
+    render::{MoveStage, RomsMove, Ui, DOT_STEP},
     startup::StartupTrace,
     Theme, DEFAULT_THEME_DIR,
 };
@@ -20,11 +21,8 @@ use std::{path::Path, sync::mpsc, time::Duration};
 
 /// archr-roms-migrate's progress file.
 pub const PROGRESS: &str = "/run/archr/roms-migrate/progress";
-/// How often the file is read, and the frame time (the dots move). Mesa
-/// draws in software here (no GPU module in this boot): 10 frames a second
-/// keep the dots smooth; on an R36S that is about half of one core.
+/// How often the file is read.
 const READ_EVERY: Duration = Duration::from_millis(500);
-const FRAME_MS: u32 = 100;
 /// A capture (ARCHR_LAUNCHER_SCREENSHOT) is taken this far in, once the
 /// progress and the battery have been read.
 const CAPTURE_AFTER: Duration = Duration::from_millis(1500);
@@ -102,19 +100,22 @@ pub fn run(paths: &Paths, file: &Path, windowed: bool) -> Result<(), String> {
         Theme::builtin()
     };
     theme.font = theme.font.as_deref().map(|font| paths.remap(font));
+    let mut screen = match windowed {
+        true => None,
+        false => Some(crate::fb::Framebuffer::open()?),
+    };
+    let size = screen.as_ref().map_or((640, 480), |fb| fb.size());
+    if screen.is_some() {
+        // Software rendering into memory; fb.rs shows it.
+        sdl2::hint::set_with_priority("SDL_VIDEODRIVER", "dummy", &sdl2::hint::Hint::Override);
+    }
     let progress = watch(file);
     let ttf = sdl2::ttf::init().map_err(|error| error.to_string())?;
     let sdl = sdl2::init()?;
     let video = sdl.video()?;
-    let size = if windowed {
-        (640, 480)
-    } else {
-        let mode = video.desktop_display_mode(0)?;
-        (mode.w.max(1) as u32, mode.h.max(1) as u32)
-    };
     // Declared first: the textures it makes must outlive the Ui.
     let creator;
-    let mut ui = Ui::with_video(sdl, video, size, windowed, StartupTrace::default())?;
+    let mut ui = Ui::with_video(sdl, video, size, true, StartupTrace::default())?;
     creator = ui.canvas.texture_creator();
     ui.catalog = catalog;
     ui.default_theme_dir = Some(default);
@@ -123,9 +124,10 @@ pub fn run(paths: &Paths, file: &Path, windowed: bool) -> Result<(), String> {
     let began = std::time::Instant::now();
     let mut events = ui.sdl.event_pump()?;
     let mut view = RomsMove::default();
-    loop {
+    // One frame per step of the dots, then sleep: nothing spins between them.
+    for step in 0.. {
         // SDL turns SIGTERM and SIGINT into Quit.
-        if let Some(Event::Quit { .. }) = events.wait_event_timeout(FRAME_MS) {
+        if events.poll_iter().any(|e| matches!(e, Event::Quit { .. })) {
             return Ok(());
         }
         while let Ok(next) = progress.try_recv() {
@@ -135,11 +137,20 @@ pub fn run(paths: &Paths, file: &Path, windowed: bool) -> Result<(), String> {
         if shot {
             ui.screenshot = capture.clone().map(Into::into);
         }
-        ui.draw_roms_move(&view, &theme)?;
+        ui.draw_roms_move(&view, step, &theme)?;
+        if let Some(fb) = &mut screen {
+            let pixels = ui
+                .canvas
+                .read_pixels(None, sdl2::pixels::PixelFormatEnum::ARGB8888)?;
+            fb.show(&pixels, size.0 as usize * 4);
+        }
         if shot {
             return Ok(());
         }
+        let next = DOT_STEP * (step + 1);
+        std::thread::sleep(next.saturating_sub(began.elapsed()));
     }
+    Ok(())
 }
 
 #[cfg(test)]

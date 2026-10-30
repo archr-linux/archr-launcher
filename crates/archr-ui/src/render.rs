@@ -25,7 +25,7 @@ mod look;
 mod moonlight;
 mod netplay;
 mod roms_move;
-pub use roms_move::{MoveStage, RomsMove};
+pub use roms_move::{MoveStage, RomsMove, DOT_STEP};
 mod saves;
 
 use sdl2::{

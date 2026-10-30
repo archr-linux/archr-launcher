@@ -25,6 +25,9 @@ pub struct RomsMove {
     pub left: Option<u64>,
 }
 
+/// The dots move in steps this long, four to a pulse: each step is a frame.
+pub const DOT_STEP: std::time::Duration = std::time::Duration::from_millis(300);
+
 /// The bar and the line under it.
 const BAR: f32 = 420.;
 const GAP: f32 = 14.;
@@ -34,8 +37,14 @@ fn line(size: f32) -> f32 {
 }
 
 impl Ui<'_, '_> {
-    /// One frame of the screen; the battery comes from the status worker.
-    pub fn draw_roms_move(&mut self, view: &RomsMove, theme: &Theme) -> Result<(), String> {
+    /// One frame of the screen at dot step `step`; the battery comes from
+    /// the status worker.
+    pub fn draw_roms_move(
+        &mut self,
+        view: &RomsMove,
+        step: u32,
+        theme: &Theme,
+    ) -> Result<(), String> {
         self.frame = Frame::from_size(self.canvas.output_size()?);
         (self.frame.font, self.frame.grid, self.frame.min) =
             (theme.font_scale, theme.font_grid, theme.font_min);
@@ -45,7 +54,7 @@ impl Ui<'_, '_> {
         self.finish(theme, true);
         self.canvas.set_draw_color(color(theme.background));
         self.canvas.clear();
-        self.roms_move(view, theme)?;
+        self.roms_move(view, step, theme)?;
         self.capture()?;
         self.canvas.present();
         if let Some(status) = &mut self.status {
@@ -53,7 +62,7 @@ impl Ui<'_, '_> {
         }
         Ok(())
     }
-    fn roms_move(&mut self, view: &RomsMove, theme: &Theme) -> Result<(), String> {
+    fn roms_move(&mut self, view: &RomsMove, step: u32, theme: &Theme) -> Result<(), String> {
         let Frame { width, height, .. } = self.frame;
         let wide = width.saturating_sub(self.px(40.) as u32).max(1);
         let title = self.catalog.text("roms_move.title");
@@ -144,13 +153,9 @@ impl Ui<'_, '_> {
         y += row_h as i32 + self.px(GAP + 6.);
         // Three dots that pulse in turn: it is working, even between updates.
         let dot = self.px(8.);
-        let step = dot + self.px(6.);
-        let secs = self
-            .frame
-            .now
-            .saturating_duration_since(self.born)
-            .as_secs_f32();
-        let mut x = center - (step * 2 + dot) / 2;
+        let pitch = dot + self.px(6.);
+        let secs = (DOT_STEP * step).as_secs_f32();
+        let mut x = center - (pitch * 2 + dot) / 2;
         for k in 0..3 {
             let (alpha, _) = self.motion.search_dot(secs, k);
             let ink = Rgba {
@@ -159,7 +164,7 @@ impl Ui<'_, '_> {
             };
             let at = Rect::new(x, y, dot as u32, dot as u32);
             self.rounded(at, dot as f32 / 2., ink, None)?;
-            x += step;
+            x += pitch;
         }
         y += dot + self.px(GAP + 10.);
         for text in &footer {
