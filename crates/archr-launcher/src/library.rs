@@ -353,15 +353,9 @@ impl Library {
                 }) {
                     command.push_str(&format!(" --governor={governor}"));
                 }
-                // Loading a state rewrites the cartridge save when the game
-                // closes: the one there now is kept as .bak first, or the
-                // game does not start.
+                // The saves worker backed up the cartridge save already.
                 if let Some(entry) = entry {
                     if self.current_core(&system, game).is_some() {
-                        crate::saves::back_up(&entry.backup).map_err(|error| {
-                            log::warn!("Cannot back up the cartridge save: {error}");
-                            "error.save_backup".to_owned()
-                        })?;
                         command.push(' ');
                         command.push_str(&crate::handoff::quote(&entry.argument));
                     }

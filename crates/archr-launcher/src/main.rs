@@ -583,6 +583,10 @@ fn run(
                 ui.banner = Some(ui.catalog.text(key));
                 banner_timer.restart(severity, Instant::now());
             }
+            if let (Some(entry), Some((system, game))) = (done.play, done.progress.game.clone()) {
+                library.entry = Some(entry);
+                deferred = Some(Outcome::Launch { system, game });
+            }
             app.set_progress(done.progress, &library);
             dirty = true;
         }
@@ -816,11 +820,15 @@ fn run(
                     game,
                     state,
                 } => {
+                    // The worker backs up the cartridge save; the launch
+                    // follows its answer.
                     let save = app.progress.saves.iter().find(|save| save.path == state);
-                    library.entry = save
-                        .zip(library.progress_game(&system, game))
-                        .and_then(|(save, game)| Entry::of(save, &game));
-                    Outcome::Launch { system, game }
+                    if let Some(game) = library.progress_game(&system, game) {
+                        if let Some(entry) = save.and_then(|save| Entry::of(save, &game)) {
+                            progress.start(Task::Play(entry), game);
+                        }
+                    }
+                    Outcome::None
                 }
                 requested => requested,
             };

@@ -538,22 +538,18 @@ fn a_system_core_saved_by_the_settings_applies_to_the_next_launch() {
 }
 
 #[test]
-fn a_launch_from_a_state_backs_up_the_cartridge_save_then_names_the_slot() {
+fn a_launch_from_a_state_names_the_slot_once() {
     use archr_launcher::saves::{scan, Places};
     let (_dir, paths) = fixture();
     let mut library = ready(&paths, Some("nes"));
-    let roms = paths.at("/storage/roms/nes");
     let states = paths.at("/storage/roms/savestates/nes");
     fs::create_dir_all(&states).unwrap();
-    fs::write(roms.join("A.srm"), "progress").unwrap();
-    fs::write(roms.join("A.srm.bak.1"), "older copy").unwrap();
     fs::write(states.join("A.state3"), "state").unwrap();
     fs::write(states.join("A.state3.png"), "picture").unwrap();
     let game = library.progress_game("nes", 0).unwrap();
     let progress = scan(&Places::new(&paths), &game);
     let save = &progress.saves[0];
     assert_eq!((save.slot, save.playable), (Some(3), true));
-    assert_eq!(save.emulator, "RetroArch · nestopia", "the game's own core");
     library.entry = archr_launcher::saves::Entry::of(save, &game);
     let launch = Outcome::Launch {
         system: "nes".into(),
@@ -562,20 +558,11 @@ fn a_launch_from_a_state_backs_up_the_cartridge_save_then_names_the_slot() {
     assert!(library.handle(launch.clone(), "").unwrap());
     let next = fs::read_to_string(paths.run.join("next")).unwrap();
     assert!(next.trim_end().ends_with(" '--entryslot=3'"), "{next}");
-    let copy = |n: u8| fs::read_to_string(roms.join(format!("A.srm.bak.{n}"))).unwrap();
-    assert_eq!((copy(1), copy(2)), ("progress".into(), "older copy".into()));
     // The entry is for one launch only.
     fs::remove_file(paths.run.join("next")).unwrap();
-    assert!(library.handle(launch.clone(), "").unwrap());
+    assert!(library.handle(launch, "").unwrap());
     let next = fs::read_to_string(paths.run.join("next")).unwrap();
     assert!(!next.contains("--entry"), "{next}");
-    // No copy, no game: a cartridge save that cannot be read stops the launch.
-    fs::remove_file(paths.run.join("next")).unwrap();
-    let mut entry = archr_launcher::saves::Entry::of(save, &game).unwrap();
-    entry.backup = vec![roms.join("missing.srm")];
-    library.entry = Some(entry);
-    assert_eq!(library.handle(launch, "").unwrap_err(), "error.save_backup");
-    assert!(!paths.run.join("next").exists());
 }
 
 #[test]

@@ -368,6 +368,8 @@ pub enum Task {
     Scan,
     Delete(Vec<PathBuf>),
     UseShot(PathBuf),
+    /// Back up the cartridge save, then hand the launch back.
+    Play(Entry),
 }
 
 /// What a task left: the game's progress, read again, and a notice.
@@ -376,6 +378,8 @@ pub struct Done {
     pub notice: Option<&'static str>,
     /// The gamelist or the media changed: the system needs reading again.
     pub reload: Option<String>,
+    /// The cartridge save is backed up: the game may start from the state.
+    pub play: Option<Entry>,
 }
 
 /// Runs one task at a time per request; only the newest answer is kept.
@@ -401,6 +405,7 @@ impl Worker {
         thread::spawn(move || {
             let mut notice = None;
             let mut reload = None;
+            let mut play = None;
             match task {
                 Task::Scan => {}
                 Task::Delete(paths) => {
@@ -411,6 +416,15 @@ impl Worker {
                         }
                     }
                 }
+                // Loading a state rewrites the cartridge save when the game
+                // closes: without a copy of it, the game does not start.
+                Task::Play(entry) => match back_up(&entry.backup) {
+                    Ok(()) => play = Some(entry),
+                    Err(error) => {
+                        log::warn!("Cannot back up the cartridge save: {error}");
+                        notice = Some("error.save_backup");
+                    }
+                },
                 Task::UseShot(shot) => match use_shot(&game, &shot) {
                     Ok(()) => {
                         notice = Some("shots.used");
@@ -429,6 +443,7 @@ impl Worker {
                     progress,
                     notice,
                     reload,
+                    play,
                 },
             ));
         });
@@ -438,7 +453,11 @@ impl Worker {
         let mut answer = None;
         while let Ok((id, done)) = self.done.try_recv() {
             // A task's side effects stand; an older scan's list does not.
-            if id == self.latest || done.reload.is_some() || done.notice.is_some() {
+            if id == self.latest
+                || done.reload.is_some()
+                || done.notice.is_some()
+                || done.play.is_some()
+            {
                 answer = Some(done);
             }
         }
@@ -595,6 +614,45 @@ mod tests {
             entry.argument,
             format!("--entrystate={}", save.path.display())
         );
+    }
+
+    #[test]
+    fn the_launch_waits_for_the_backup_on_the_worker() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::new(Some(dir.path().to_owned()));
+        let game = game(&paths, "snes", "Mario.sfc", ("retroarch", "snes9x"));
+        let srm = cartridge(&game.rom);
+        fs::write(&srm, "progress").unwrap();
+        let mut worker = Worker::new(&paths);
+        let mut wait = |entry: Entry| {
+            worker.start(Task::Play(entry), game.clone());
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            loop {
+                if let Some(done) = worker.poll() {
+                    return done;
+                }
+                assert!(std::time::Instant::now() < deadline);
+                thread::sleep(std::time::Duration::from_millis(5));
+            }
+        };
+        let entry = Entry {
+            system: "snes".into(),
+            rom: game.rom.clone(),
+            argument: "--entryslot=1".into(),
+            backup: vec![srm.clone()],
+        };
+        let done = wait(entry.clone());
+        assert_eq!(done.play, Some(entry.clone()));
+        assert_eq!(
+            fs::read_to_string(backup_name(&srm, 1)).unwrap(),
+            "progress"
+        );
+        let missing = Entry {
+            backup: vec![dir.path().join("none.srm")],
+            ..entry
+        };
+        let done = wait(missing);
+        assert_eq!((done.play, done.notice), (None, Some("error.save_backup")));
     }
 
     #[test]
