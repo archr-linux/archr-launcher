@@ -8,7 +8,8 @@
 # ~/.archr/archr-modules-ed25519.pem (mode 600, never committed or
 # uploaded). The signature is checked against keys/archr-modules-ed25519.pub
 # before it is kept. Publish both files as assets of a new release of
-# archr-linux/archr-modules; raise "serial" in reviewed.json every time.
+# archr-linux/archr-modules; raise "serial" in reviewed.json every time and
+# set "expires" (e.g. 90 days ahead: date -d +90days +%s).
 set -eu
 list="${1:?usage: tools/sign-reviewed reviewed.json [private-key.pem]}"
 key="${2:-${HOME}/.archr/archr-modules-ed25519.pem}"
@@ -19,10 +20,15 @@ case "$(stat -c %a "${key}")" in
   600 | 400) ;;
   *) echo "sign-reviewed: ${key} must be mode 600" >&2; exit 1 ;;
 esac
-# The list must be JSON with a numeric serial: the launcher refuses one
-# older than the last it saw.
-jq -e '(.serial | type == "number") and (.modules | type == "array")' "${list}" >/dev/null ||
-  { echo "sign-reviewed: ${list} needs a numeric \"serial\" and a \"modules\" list" >&2; exit 1; }
+# The list must be JSON with a whole serial above 0 (the launcher refuses
+# one older than the last it saw) and an "expires" date, in seconds since
+# 1970, still ahead (the launcher refuses a list past it).
+now=$(date +%s)
+jq -e --argjson now "${now}" '
+  (.serial | type == "number" and . == floor and . > 0) and
+  (.expires | type == "number" and . == floor and . > $now) and
+  (.modules | type == "array")' "${list}" >/dev/null ||
+  { echo "sign-reviewed: ${list} needs a whole \"serial\" > 0, an \"expires\" (seconds since 1970) ahead and a \"modules\" list" >&2; exit 1; }
 tmp=$(mktemp -d)
 trap 'rm -rf "${tmp}"' EXIT
 openssl pkeyutl -sign -rawin -inkey "${key}" -in "${list}" -out "${tmp}/sig"

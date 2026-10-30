@@ -1043,3 +1043,4 @@
 "modules.perm_screenshot_detail" = "Никогда при открытой клавиатуре; сохраняются в screenshots"
 "modules.did_wifi" = "{name} включил или выключил Wi-Fi"
 "modules.did_screenshot" = "{name} сделал снимок экрана"
+"modules.review_expired" = "Срок списка проверенных истёк: ни у одного модуля нет знака и автообновления"

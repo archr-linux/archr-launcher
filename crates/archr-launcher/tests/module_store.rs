@@ -120,7 +120,7 @@ fn publish(fake: &Fake, manifest: &str, tarball: &[u8], digest: &str, reviewed: 
         tarball.to_vec(),
     );
     let list = format!(
-        r#"{{"serial":3,"modules":[{{"repo":"kaio-dev/archr-bateria","digest":"sha256:{reviewed}"}}]}}"#
+        r#"{{"serial":3,"expires":4102444800,"modules":[{{"repo":"kaio-dev/archr-bateria","digest":"sha256:{reviewed}"}}]}}"#
     );
     review(fake, list.as_bytes(), &sign(list.as_bytes()));
 }
@@ -675,7 +675,7 @@ fn only_a_list_signed_by_the_archr_key_and_not_older_gives_badges() {
     let tarball = Tarball::module(MANIFEST).bytes();
     let digest = sha(&tarball);
     let body = format!(
-        r#"{{"serial":3,"modules":[{{"repo":"kaio-dev/archr-bateria","digest":"sha256:{digest}"}}]}}"#
+        r#"{{"serial":3,"expires":4102444800,"modules":[{{"repo":"kaio-dev/archr-bateria","digest":"sha256:{digest}"}}]}}"#
     );
     let stranger = {
         use ed25519_dalek::Signer;
@@ -718,4 +718,73 @@ fn only_a_list_signed_by_the_archr_key_and_not_older_gives_badges() {
         panic!("not a list");
     };
     assert_eq!(problem, Some("modules.review_old"));
+    // The recorded serial wiped: this build's minimum still holds.
+    use archr_launcher::modules::store::MIN_SERIAL;
+    fs::remove_file(root.path().join("modules-reviewed.serial")).unwrap();
+    fs::remove_dir_all(root.path().join("cache")).unwrap();
+    let zero = body.replace("\"serial\":3", &format!("\"serial\":{}", MIN_SERIAL - 1));
+    review(&fake, zero.as_bytes(), &sign(zero.as_bytes()));
+    let problem = |root: &Path| match shop(root, &fake).list(Tab::All, false) {
+        StoreReply::Listed { problem, .. } => problem,
+        _ => panic!("not a list"),
+    };
+    assert_eq!(problem(root.path()), Some("modules.review_old"));
+}
+
+#[test]
+fn an_expired_list_or_one_with_another_lists_signature_reviews_nothing() {
+    let tarball = Tarball::module(MANIFEST).bytes();
+    let digest = sha(&tarball);
+    let list = |serial: u64, expires: u64| {
+        format!(
+            r#"{{"serial":{serial},"expires":{expires},"modules":[{{"repo":"kaio-dev/archr-bateria","digest":"sha256:{digest}"}}]}}"#
+        )
+    };
+    let listed = |root: &Path, fake: &Fake| match shop(root, fake).list(Tab::All, false) {
+        StoreReply::Listed { problem, cards, .. } => (problem, cards.iter().any(|c| c.reviewed)),
+        _ => panic!("not a list"),
+    };
+    // Signed, but past its date (or with none).
+    for body in [list(3, 1000), r#"{"serial":3,"modules":[]}"#.to_owned()] {
+        let root = tempfile::tempdir().unwrap();
+        let fake = Fake::default();
+        publish(&fake, MANIFEST, &tarball, &digest, &digest);
+        review(&fake, body.as_bytes(), &sign(body.as_bytes()));
+        assert_eq!(
+            listed(root.path(), &fake),
+            (Some("modules.review_expired"), false)
+        );
+        assert!(!shop(root.path(), &fake).offer(&card()).unwrap().reviewed);
+    }
+    // A new list next to the signature of the previous one (an asset
+    // replaced alone, or a cache that kept the old .sig): refused.
+    let root = tempfile::tempdir().unwrap();
+    let fake = Fake::default();
+    publish(&fake, MANIFEST, &tarball, &digest, &digest);
+    let (old, new) = (list(3, 4_102_444_800), list(4, 4_102_444_800));
+    review(&fake, old.as_bytes(), &sign(old.as_bytes()));
+    assert_eq!(listed(root.path(), &fake), (None, true));
+    review(&fake, new.as_bytes(), &sign(old.as_bytes()));
+    // The list is fetched again; the old signature stays.
+    for entry in walk_files(&root.path().join("cache")) {
+        if entry.file_name().is_some_and(|n| n == "reviewed.json") {
+            fs::remove_file(entry).unwrap();
+        }
+    }
+    assert_eq!(
+        listed(root.path(), &fake),
+        (Some("modules.review_unsigned"), false)
+    );
+}
+fn walk_files(dir: &Path) -> Vec<std::path::PathBuf> {
+    let mut found = Vec::new();
+    for entry in fs::read_dir(dir).into_iter().flatten().flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            found.extend(walk_files(&path));
+        } else {
+            found.push(path);
+        }
+    }
+    found
 }

@@ -507,19 +507,25 @@ revisado; publicar outro pacote tira o selo até nova revisão.
 A lista é **assinada**: `reviewed.json` vem com `reviewed.json.sig` (a
 assinatura Ed25519 do arquivo inteiro, 64 bytes em 128 dígitos hex numa linha).
 O launcher só aceita a lista com assinatura válida da chave do projeto
-(`keys/archr-modules-ed25519.pub`, embutida em `REVIEW_KEY`) e com `serial`
-maior ou igual ao último que viu (guardado em `modules-reviewed.serial`); sem
-isso, nenhum módulo tem selo nem se atualiza sozinho, e a Loja diz por quê.
+(`keys/archr-modules-ed25519.pub`, embutida em `REVIEW_KEY`), com `expires`
+(segundos desde 1970) ainda no futuro e com `serial` maior ou igual ao último
+que viu (guardado em `modules-reviewed.serial`) e ao `MIN_SERIAL` do build
+(que vale mesmo num aparelho novo ou com esse arquivo apagado); sem isso,
+nenhum módulo tem selo nem se atualiza sozinho, e a Loja diz por quê. A
+assinatura cobre o arquivo inteiro: um `.sig` de outra lista é recusado.
 
 ```json
-{"serial": 4, "modules": [{"repo": "dono/repo", "digest": "sha256:<hex>"}]}
+{"serial": 4, "expires": 1785000000, "modules": [{"repo": "dono/repo", "digest": "sha256:<hex>"}]}
 ```
 
 Publicar uma revisão (só o mantenedor, com a chave privada fora do
 repositório, em `~/.archr/archr-modules-ed25519.pem`, modo 600):
 
 1. acrescente (ou tire, para revogar) a entrada com `repo` e o `digest` que o
-   GitHub publica para o `.tar.gz` revisado, e **aumente `serial`**;
+   GitHub publica para o `.tar.gz` revisado, **aumente `serial`** (inteiro
+   > 0) e ponha `expires` à frente (ex.: `date -d +90days +%s`); republique
+   antes de vencer, senão os selos somem; a cada versão do launcher, suba
+   `MIN_SERIAL` para o serial publicado;
 2. `tools/sign-reviewed reviewed.json` (confere o JSON, assina, verifica a
    assinatura contra a chave pública e grava `reviewed.json.sig`);
 3. publique os dois arquivos como assets de uma release nova de

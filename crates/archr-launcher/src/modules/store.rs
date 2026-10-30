@@ -38,6 +38,10 @@ pub const REVIEW_KEY: [u8; 32] = [
     0x63, 0x11, 0xf1, 0x62, 0x70, 0x1d, 0x99, 0x47, 0x1e, 0xa8, 0x8a, 0xc1, 0xd8, 0x43, 0x5f, 0xfc,
     0x7d, 0xd6, 0x40, 0x9c, 0x06, 0xd2, 0xc5, 0x94, 0xfd, 0x0a, 0x0e, 0xf1, 0x6d, 0x71, 0x3a, 0x71,
 ];
+/// The oldest reviewed list this build accepts, even with nothing recorded
+/// (a new device, a wiped `modules-reviewed.serial`): raise it at release
+/// time to the serial then published.
+pub const MIN_SERIAL: u64 = 1;
 /// `reviewed.json.sig`: the Ed25519 signature of the whole `reviewed.json`,
 /// 64 bytes as 128 hex digits (one line; spaces and line ends ignored).
 pub fn signed(body: &[u8], signature: &[u8], key: &[u8; 32]) -> bool {
@@ -172,23 +176,36 @@ impl Shop {
             return Err("modules.review_unsigned");
         }
         let json: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
-        // A list older than one already seen could bring back a revoked
-        // review.
+        // A list past its date, or older than one already seen (or than this
+        // build knew), could bring back a revoked review.
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        if json["expires"]
+            .as_u64()
+            .is_none_or(|expires| expires <= now)
+        {
+            log::warn!("The reviewed list has expired: no module is reviewed");
+            return Err("modules.review_expired");
+        }
         let serial = json["serial"].as_u64().unwrap_or(0);
         let path = self.dirs.state.with_file_name("modules-reviewed.serial");
         let seen = read_bytes(&path, 64, Symlinks::Reject)
             .ok()
             .and_then(|b| String::from_utf8(b).ok())
             .and_then(|t| t.trim().parse::<u64>().ok())
-            .unwrap_or(0);
+            .unwrap_or(0)
+            .max(MIN_SERIAL);
         if serial < seen {
             log::warn!("The reviewed list {serial} is older than {seen}: ignored");
             return Err("modules.review_old");
         }
         if serial > seen {
-            let _ = archr_io::atomic_publish(&path, false, |file| {
+            if let Err(error) = archr_io::atomic_publish(&path, false, |file| {
                 std::io::Write::write_all(file, serial.to_string().as_bytes())
-            });
+            }) {
+                log::warn!("Cannot record the reviewed list's serial {serial}: {error}");
+            }
         }
         Ok(json["modules"]
             .as_array()

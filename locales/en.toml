@@ -1043,3 +1043,4 @@
 "modules.perm_screenshot_detail" = "Never with a keyboard open; saved in screenshots"
 "modules.did_wifi" = "{name} turned the Wi-Fi on or off"
 "modules.did_screenshot" = "{name} took a screenshot"
+"modules.review_expired" = "The reviewed list has expired: no module shows the badge or updates on its own"

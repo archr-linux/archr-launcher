@@ -1043,3 +1043,4 @@
 "modules.perm_screenshot_detail" = "Nunca com um teclado aberto; ficam em screenshots"
 "modules.did_wifi" = "{name} ligou ou desligou o Wi-Fi"
 "modules.did_screenshot" = "{name} tirou uma captura de tela"
+"modules.review_expired" = "A lista de revisados venceu: nenhum módulo tem selo nem se atualiza sozinho"
