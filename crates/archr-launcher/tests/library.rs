@@ -546,7 +546,7 @@ fn a_launch_from_a_state_backs_up_the_cartridge_save_then_names_the_slot() {
     let states = paths.at("/storage/roms/savestates/nes");
     fs::create_dir_all(&states).unwrap();
     fs::write(roms.join("A.srm"), "progress").unwrap();
-    fs::write(roms.join("A.srm.bak"), "older copy").unwrap();
+    fs::write(roms.join("A.srm.bak.1"), "older copy").unwrap();
     fs::write(states.join("A.state3"), "state").unwrap();
     fs::write(states.join("A.state3.png"), "picture").unwrap();
     let game = library.progress_game("nes", 0).unwrap();
@@ -562,10 +562,8 @@ fn a_launch_from_a_state_backs_up_the_cartridge_save_then_names_the_slot() {
     assert!(library.handle(launch.clone(), "").unwrap());
     let next = fs::read_to_string(paths.run.join("next")).unwrap();
     assert!(next.trim_end().ends_with(" '--entryslot=3'"), "{next}");
-    assert_eq!(
-        fs::read_to_string(roms.join("A.srm.bak")).unwrap(),
-        "progress"
-    );
+    let copy = |n: u8| fs::read_to_string(roms.join(format!("A.srm.bak.{n}"))).unwrap();
+    assert_eq!((copy(1), copy(2)), ("progress".into(), "older copy".into()));
     // The entry is for one launch only.
     fs::remove_file(paths.run.join("next")).unwrap();
     assert!(library.handle(launch.clone(), "").unwrap());

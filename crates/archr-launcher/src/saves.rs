@@ -295,15 +295,34 @@ impl Entry {
     }
 }
 
-/// `<file>.bak`, replacing the copy before it, written whole or not at all.
+/// Cartridge copies kept beside each save, newest first: `.bak.1`..`.bak.3`.
+const BACKUPS: usize = 3;
+
+fn backup_name(file: &Path, n: usize) -> PathBuf {
+    let mut name = file.as_os_str().to_owned();
+    name.push(format!(".bak.{n}"));
+    name.into()
+}
+
+/// Keeps the cartridge save before a launch from a state: written whole as
+/// `.bak.1`, the older copies moved down to `.bak.3`. An empty save, or one
+/// equal to the newest copy (two launches in a row), leaves them as they
+/// are, so a copy is never replaced by the same or by nothing.
 pub fn back_up(files: &[PathBuf]) -> io::Result<()> {
     for file in files {
-        let mut name = file.as_os_str().to_owned();
-        name.push(".bak");
-        let mut source = fs::File::open(file)?;
-        atomic_publish(Path::new(&name), true, |out| {
-            io::copy(&mut source, out).map(drop)
-        })?;
+        let bytes = fs::read(file)?;
+        if bytes.is_empty() || fs::read(backup_name(file, 1)).is_ok_and(|last| last == bytes) {
+            continue;
+        }
+        let fresh = backup_name(file, 0);
+        atomic_publish(&fresh, true, |out| io::Write::write_all(out, &bytes))?;
+        for n in (1..BACKUPS).rev() {
+            match fs::rename(backup_name(file, n), backup_name(file, n + 1)) {
+                Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error),
+                _ => {}
+            }
+        }
+        fs::rename(&fresh, backup_name(file, 1))?;
     }
     Ok(())
 }
@@ -562,17 +581,36 @@ mod tests {
     }
 
     #[test]
-    fn backups_replace_the_last_copy_and_deletes_stay_in_place() {
+    fn backups_keep_three_copies_and_never_lose_one() {
         let dir = tempfile::tempdir().unwrap();
         let paths = Paths::new(Some(dir.path().to_owned()));
         let srm = dir.path().join("Game.srm");
-        fs::write(&srm, "new").unwrap();
-        fs::write(dir.path().join("Game.srm.bak"), "old").unwrap();
+        let read = |n: usize| fs::read_to_string(backup_name(&srm, n)).ok();
+        fs::write(&srm, "one").unwrap();
         back_up(std::slice::from_ref(&srm)).unwrap();
+        // Two "play from here" in a row: the second keeps the copy.
+        back_up(std::slice::from_ref(&srm)).unwrap();
+        assert_eq!((read(1), read(2)), (Some("one".into()), None));
+        for text in ["two", "three", "four"] {
+            fs::write(&srm, text).unwrap();
+            back_up(std::slice::from_ref(&srm)).unwrap();
+        }
         assert_eq!(
-            fs::read_to_string(dir.path().join("Game.srm.bak")).unwrap(),
-            "new"
+            [read(1), read(2), read(3), read(4)],
+            [
+                Some("four".into()),
+                Some("three".into()),
+                Some("two".into()),
+                None
+            ]
         );
+        // An emptied save is never copied over the good ones.
+        fs::write(&srm, "").unwrap();
+        back_up(std::slice::from_ref(&srm)).unwrap();
+        assert_eq!(read(1), Some("four".into()));
+        assert!(!backup_name(&srm, 0).exists(), "no temporary left");
+        // No save at all: the launch stops.
+        assert!(back_up(&[dir.path().join("none.srm")]).is_err());
         let places = Places::new(&paths);
         assert!(places.holds(&paths.at("/storage/roms/savestates/snes/A.state")));
         assert!(places.holds(&paths.at("/storage/roms/screenshots/A-261028-201500.png")));
