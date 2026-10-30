@@ -383,6 +383,16 @@ nas notas, `dim` no tempo relativo, `danger` no botão Apagar da confirmação.
 A captura aberta ocupa a tela inteira, com o nome do jogo no alto e os botões
 no rodapé; as confirmações (Jogar daqui e Apagar) são janelas centradas.
 
+## Movendo as ROMs
+
+A tela que aparece no boot de manutenção que move as ROMs para a partição
+exFAT (`archr-launcher --roms-migrate-screen`) usa sempre o tema padrão
+instalado, nunca o tema escolhido: nesse boot a partição STORAGE, onde ficam
+os temas do usuário, é desmontada para encolher, e uma fonte aberta ali a
+impediria. Como as Configurações, o layout é fixo. Cores do padrão: `accent`
+no ícone, na barra e nos pontos, `border` no trilho, `text` no título,
+`muted` no aviso, `text_secondary` na linha do andamento e `dim` no rodapé.
+
 ## Animações
 
 Aparência › Animações (`launcher.animations`): **Ligadas** (`on`), **Reduzidas**

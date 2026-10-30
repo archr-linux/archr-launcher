@@ -1,4 +1,6 @@
 //! SDL integration. Disk scanning and locked config updates run in workers.
+mod fb;
+mod roms_move;
 mod script;
 mod transition;
 use archr_config::SystemCfg;
@@ -70,15 +72,19 @@ fn run(
     #[cfg(test)] mut observe: impl FnMut(&App, &Library, Option<&Outcome>),
 ) -> Result<(), String> {
     let mut windowed = false;
+    let mut roms_screen = false;
     let mut script_source = None;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--windowed" => windowed = true,
+            "--roms-migrate-screen" => roms_screen = true,
             "--script" => {
                 script_source = Some(args.next().ok_or("--script requires a button sequence")?)
             }
             "--help" => {
-                println!("archr-launcher [--windowed] [--check-module <dir>]");
+                println!(
+                    "archr-launcher [--windowed] [--check-module <dir>] [--roms-migrate-screen]"
+                );
                 return Ok(());
             }
             "--check-module" => {
@@ -103,6 +109,9 @@ fn run(
         .map(script::Script::parse)
         .transpose()?;
     let paths = Paths::new(std::env::var_os("ARCHR_LAUNCHER_ROOT").map(PathBuf::from));
+    if roms_screen {
+        return roms_move::run(&paths, &paths.at(roms_move::PROGRESS), windowed);
+    }
     startup_phase!(trace, "args/paths");
     // SDL_ttf's global FreeType library is initialized before the worker and
     // remains alive until every handed-over font is dropped. Only the worker

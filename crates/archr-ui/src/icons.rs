@@ -41,6 +41,7 @@ glyphs! {
     BatteryCharging => "battery-charging",
     Controls => "gamepad", Play => "play", Sound => "volume-2",
     Globe => "globe", Palette => "palette", Trophy => "trophy", Storage => "hard-drive",
+    StorageIn => "hard-drive-download",
     ChevronLeft => "chevron-left", ChevronRight => "chevron-right",
     ArrowUpDown => "arrow-up-down", ChevronsUpDown => "chevrons-up-down",
     Shift => "arrow-big-up", Backspace => "delete", Eye => "eye", EyeOff => "eye-off",
@@ -220,7 +221,7 @@ mod tests {
                 | Glyph::SignalMedium
                 | Glyph::SignalHigh
                 | Glyph::Alert => 1,
-                Glyph::Controls | Glyph::Games | Glyph::Storage => 2,
+                Glyph::Controls | Glyph::Games | Glyph::Storage | Glyph::StorageIn => 2,
                 _ => 0,
             };
             assert_eq!(
