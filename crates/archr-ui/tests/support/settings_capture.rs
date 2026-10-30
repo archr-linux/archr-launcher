@@ -264,6 +264,52 @@ fn pages() -> Vec<(&'static str, Settings)> {
         ]),
     });
     raimport.cursor = 5;
+    use crate::settings::roms::{Check, Scan, Status};
+    let mut storage_roms = ready();
+    storage_roms.open(Page::Storage);
+    storage_roms.storage.card = Some(crate::settings::storage::Card {
+        name: "settings.card_internal".into(),
+        detail: "settings.card_parts|system=@6.4 GB|roms=@13.2 GB".into(),
+        percent: 32,
+    });
+    storage_roms.storage.roms = Status::parse("LAYOUT=exfat\nROMS_FS=errors\n");
+    storage_roms.cursor = 1;
+    let mut roms = ready();
+    roms.open(Page::Storage);
+    roms.open(Page::Roms);
+    roms.storage.roms = Status::parse("LAYOUT=ext4\n");
+    roms.roms.scan = Some(Scan {
+        check: Check::parse(
+            "ROMS_FILES=1507\nROMS_MIB=7987\nSTORAGE_AFTER_MIB=8192\nROMS_PART_MIB=21504\n\
+             RENAMES=3\nPOWER=ok\nRESULT=ok\n",
+        ),
+        names: vec![
+            (
+                "snes/Zelda: A Link to the Past.sfc".into(),
+                "Zelda_ A Link to the Past.sfc".into(),
+            ),
+            ("gba/Mario & Luigi?.gba".into(), "Mario & Luigi_.gba".into()),
+            (
+                "n64/mario kart 64.z64".into(),
+                "mario kart 64 (2).z64".into(),
+            ),
+        ],
+        battery: Some((87, true)),
+    });
+    roms.cursor = 3;
+    let mut roms_list = roms.clone();
+    roms_list.cursor = 1;
+    roms_list.handle(Button::A);
+    assert_eq!(roms_list.page(), Page::RomsList);
+    let mut roms_confirm = roms.clone();
+    roms_confirm.handle(Button::A);
+    let mut roms_armed = roms.clone();
+    roms_armed.storage.roms = Status::parse("LAYOUT=migrating\nSTATE=armed\n");
+    roms_armed.cursor = 0;
+    let mut roms_exfat = roms.clone();
+    roms_exfat.storage.roms =
+        Status::parse("LAYOUT=exfat\nROMS_FS=repaired\nNOT_MIGRATED=/storage/roms-not-migrated\n");
+    roms_exfat.cursor = 0;
     let mut raimport_list = raimport.clone();
     raimport_list.cursor = 3;
     raimport_list.handle(Button::A);
@@ -434,6 +480,12 @@ fn pages() -> Vec<(&'static str, Settings)> {
         ("controls-hotkeys-conflict", hotkey_conflict),
         ("raimport", raimport),
         ("raimport-list", raimport_list),
+        ("storage-roms", storage_roms),
+        ("roms", roms),
+        ("roms-list", roms_list),
+        ("roms-confirm", roms_confirm),
+        ("roms-armed", roms_armed),
+        ("roms-exfat", roms_exfat),
     ]
 }
 #[test]

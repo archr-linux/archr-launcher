@@ -9,6 +9,8 @@ use std::time::UNIX_EPOCH;
 const LONG: Duration = Duration::from_secs(15 * 60);
 const EXTERNAL: &str = "/storage/games-external";
 const ROMS: &str = "/storage/roms";
+/// automount binds the system card's roms here under unified storage.
+const SD1_ROMS: &str = "/run/archr/sd1-roms";
 const BACKUPS: &str = "/storage/roms/backup";
 
 /// The newest backup's time as a catalog reference: "today, 14:42" or a date.
@@ -56,11 +58,33 @@ impl Backend {
                     .replace('|', "")
             })
     }
+    /// The ROMs partition (exFAT) of the system card: on /storage/roms, or
+    /// under unified storage the branch bound from it.
+    fn roms_partition(&self, mounts: &[(String, String, String)]) -> Option<(u64, u64)> {
+        mounts
+            .iter()
+            .find(|(_, mount, fs)| fs == "exfat" && (mount == ROMS || mount == SD1_ROMS))
+            .and_then(|(_, mount, _)| filesystem_usage(&self.paths.at(mount)))
+    }
     /// The card mounted at `path` (the system card at /storage, the second
-    /// card at games-external), with its usage.
+    /// card at games-external), with its usage. The system card with a ROMs
+    /// partition shows what is free on each: neither can use the other's.
     fn card(&self, mounts: &[(String, String, String)], path: &str) -> Option<Card> {
         let (device, _, fs) = mounts.iter().rev().find(|(_, mount, _)| mount == path)?;
         let (used, total) = filesystem_usage(&self.paths.at(path))?;
+        if let Some((roms_used, roms_total)) =
+            self.roms_partition(mounts).filter(|_| path == "/storage")
+        {
+            return Some(Card {
+                name: "settings.card_internal".into(),
+                detail: format!(
+                    "settings.card_parts|system={}|roms={}",
+                    bytes(total.saturating_sub(used)),
+                    bytes(roms_total.saturating_sub(roms_used))
+                ),
+                percent: percent(used + roms_used, total + roms_total).unwrap_or(0),
+            });
+        }
         let name = match (path == EXTERNAL, self.label(device)) {
             (true, Some(label)) => format!("settings.card_external|label={label}"),
             (true, None) => "settings.card_microsd".into(),
@@ -132,6 +156,8 @@ impl Backend {
             self.nominal_gb(mounts, EXTERNAL)?,
         );
         let (used_first, total_first) = filesystem_usage(&self.paths.at("/storage"))?;
+        let (used_roms, total_roms) = self.roms_partition(mounts).unwrap_or_default();
+        let (used_first, total_first) = (used_first + used_roms, total_first + total_roms);
         let (used_second, total_second) = filesystem_usage(&self.paths.at(EXTERNAL))?;
         let (used, total) = (used_first + used_second, total_first + total_second);
         Some(Card {
@@ -157,6 +183,7 @@ impl Backend {
             unified: self.unified(&mounts),
             backup: self.latest_backup(setting(Id::ClockFormat.key()).as_deref() == Some("12")),
             password: setting("root.password").unwrap_or_else(|| "archr".into()),
+            roms: self.roms_status(),
             ..Storage::default()
         }
     }
@@ -191,6 +218,9 @@ impl Backend {
         };
         match action {
             Action::Eject => self.eject().map(|()| "settings.eject_done"),
+            Action::RomsStart { .. } | Action::RomsCancel | Action::RomsRetry => {
+                self.run_roms(action)
+            }
             Action::Backup { wifi } => {
                 script(
                     &[&["backup"], flag(*wifi)].concat(),
@@ -325,6 +355,25 @@ mod tests {
             Err("settings.eject_none".into())
         );
         assert_eq!(backend.storage().second, None);
+    }
+    #[test]
+    fn the_system_card_shows_what_is_free_on_each_partition() {
+        let mounts = format!("{CARD}/dev/mmcblk1p4 /storage/roms exfat rw 0 0\n");
+        let (_root, paths) = fixture("", &mounts);
+        fs::create_dir_all(paths.at(ROMS)).unwrap();
+        let card = Backend::new(paths.clone()).storage().card.unwrap();
+        assert_eq!(card.name, "settings.card_internal");
+        assert!(card.detail.starts_with("settings.card_parts|system=@"));
+        assert!(card.detail.contains("|roms=@"));
+        // Under unified storage the partition is the union's branch.
+        let union = format!(
+            "{CARD}/dev/mmcblk1p4 /run/archr/sd1-roms exfat rw 0 0\n\
+             archr-roms /storage/roms fuse.mergerfs rw 0 0\n"
+        );
+        fs::write(paths.at("/proc/mounts"), union).unwrap();
+        fs::create_dir_all(paths.at(SD1_ROMS)).unwrap();
+        let storage = Backend::new(paths).storage();
+        assert!(storage.card.unwrap().detail.contains("|roms=@"));
     }
     #[test]
     fn a_card_with_errors_shows_the_warning() {

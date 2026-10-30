@@ -230,6 +230,7 @@ impl Settings {
             Page::Store | Page::StoreTheme => self.store_input(button),
             Page::Updates | Page::UpdatePackages => self.updates_input(button),
             Page::RaImport | Page::RaImportList => self.raimport_input(button),
+            Page::RomsList => self.roms_list_input(button),
             Page::Modules
             | Page::ModuleInfo
             | Page::Module(..)

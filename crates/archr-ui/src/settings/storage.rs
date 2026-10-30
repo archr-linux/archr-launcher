@@ -17,6 +17,8 @@ pub const STORAGE: &[Row] = &[
         .under("settings.games_card"),
     // Shown only while a second card is mounted.
     described(Id::SecondCard, "settings.card_microsd", "").kind(Kind::Action),
+    // Shown only where the card can have, or has, the ROMs partition.
+    described(Id::RomsLink, "roms.title", "").kind(Kind::Action),
     described(
         Id::Automount,
         "settings.automount",
@@ -74,6 +76,8 @@ pub struct Storage {
     pub backup: Option<String>,
     /// root.password as setrootpass saved it; shown so it can be used.
     pub password: String,
+    /// The ROMs partition: moved to it, being moved, or not yet.
+    pub roms: super::roms::Status,
     pub confirm: Option<Confirm>,
     /// Locale key of the running action; input waits for the host's reply.
     pub working: Option<&'static str>,
@@ -82,10 +86,22 @@ pub struct Storage {
 #[derive(Clone, PartialEq, Eq)]
 pub enum Action {
     Eject,
-    Backup { wifi: bool },
-    Restore { wifi: bool },
+    Backup {
+        wifi: bool,
+    },
+    Restore {
+        wifi: bool,
+    },
     RootPassword(String),
     FactoryReset,
+    /// archr-roms-migrate: arm the move for the next boot, disarm it, or
+    /// copy again after it stalled.
+    /// `files`: the previewed count, for the notice after the move.
+    RomsStart {
+        files: u64,
+    },
+    RomsCancel,
+    RomsRetry,
 }
 impl std::fmt::Debug for Action {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -95,6 +111,9 @@ impl std::fmt::Debug for Action {
             Self::Restore { wifi } => write!(f, "Restore {{ wifi: {wifi} }}"),
             Self::RootPassword(_) => write!(f, "RootPassword(<hidden>)"),
             Self::FactoryReset => write!(f, "FactoryReset"),
+            Self::RomsStart { files } => write!(f, "RomsStart {{ files: {files} }}"),
+            Self::RomsCancel => write!(f, "RomsCancel"),
+            Self::RomsRetry => write!(f, "RomsRetry"),
         }
     }
 }
@@ -107,6 +126,8 @@ impl Action {
             Self::Restore { .. } => "settings.restoring",
             Self::RootPassword(_) => "settings.saving_password",
             Self::FactoryReset => "settings.resetting",
+            Self::RomsStart { .. } | Self::RomsRetry => "roms.arming",
+            Self::RomsCancel => "roms.cancelling",
         }
     }
 }
@@ -122,6 +143,8 @@ pub enum Confirm {
     RootPassword(String),
     Reset,
     ResetFinal,
+    /// Moving the ROMs to the exFAT partition: restarts the device.
+    RomsMove,
 }
 impl std::fmt::Debug for Confirm {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -134,6 +157,7 @@ impl std::fmt::Debug for Confirm {
             Self::Restore => write!(f, "Restore"),
             Self::Reset => write!(f, "Reset"),
             Self::ResetFinal => write!(f, "ResetFinal"),
+            Self::RomsMove => write!(f, "RomsMove"),
         }
     }
 }
@@ -193,6 +217,11 @@ impl Confirm {
                 "settings.reset_final_explain",
                 &[(Key('X'), "settings.erase"), CANCEL],
             ),
+            Self::RomsMove => (
+                "roms.move_question",
+                "roms.move_explain",
+                &[(Key('A'), "roms.move_short"), CANCEL],
+            ),
         }
     }
     /// The answer to a button; None leaves the question up.
@@ -211,6 +240,7 @@ impl Confirm {
             }
             (Self::Reset, Button::A) => Answer::Ask(Self::ResetFinal),
             (Self::ResetFinal, Button::X) => Answer::Run(Action::FactoryReset),
+            (Self::RomsMove, Button::A) => Answer::Run(Action::RomsStart { files: 0 }),
             _ => return None,
         })
     }
@@ -247,6 +277,10 @@ impl Settings {
                 self.storage.confirm = Some(next);
                 Effect::None
             }
+            Some(Answer::Run(Action::RomsStart { .. })) => {
+                let files = self.roms_files();
+                self.roms_run(Action::RomsStart { files })
+            }
             Some(Answer::Run(action)) => {
                 self.storage.working = Some(action.progress());
                 Effect::Storage(action)
@@ -266,6 +300,9 @@ impl Settings {
     }
     /// A on a storage row: every action asks before it runs.
     pub(super) fn storage_activate(&mut self, id: Id) -> Option<Effect> {
+        if id.roms() {
+            return self.roms_activate(id);
+        }
         self.storage.confirm = Some(match id {
             Id::SecondCard if self.storage.second.is_some() => Confirm::Eject,
             Id::Backup => Confirm::Backup,

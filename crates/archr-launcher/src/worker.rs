@@ -138,6 +138,10 @@ pub fn start(paths: Paths, initial: Vec<SystemDef>) -> Worker {
             log::warn!("Game exited with code {code}; log: /var/log/exec.log");
             banner = Some(Message::new("error.game_exit").with("code", code));
         }
+        // A ROMs move the launcher armed ran at boot, before it: say how it went.
+        if banner.is_none() {
+            banner = crate::settings::migration_notice(&paths);
+        }
         match fs::remove_file(paths.run.join("last-exit")) {
             Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
                 eprintln!("last-exit: {error}")
