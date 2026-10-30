@@ -693,7 +693,7 @@ mod tests {
             "progress"
         );
         let missing = Entry {
-            backup: vec![dir.path().join("none.srm")],
+            backup: vec![dir.path().join("Missing.srm")],
             ..entry
         };
         let done = wait(missing);
@@ -730,7 +730,7 @@ mod tests {
         assert_eq!(read(1), Some("four".into()));
         assert!(!backup_name(&srm, 0).exists(), "no temporary left");
         // No save at all: the launch stops.
-        assert!(back_up(&[dir.path().join("none.srm")]).is_err());
+        assert!(back_up(&[dir.path().join("Missing.srm")]).is_err());
         let places = Places::new(&paths);
         for inside in [
             "/storage/roms/savestates/snes/A.state",
