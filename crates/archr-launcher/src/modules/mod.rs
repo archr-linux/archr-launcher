@@ -165,11 +165,12 @@ enum Input {
     Language(String),
     Focus(&'static str, Json),
     GameStarted(Json),
-    /// Something private is on the screen (a keyboard is open).
+    /// Settings are open: something private may be on the screen.
     Private(bool),
-    /// A `system.call` ended: module, request id, success.
+    /// A `system.call` ended: module, its process then, request id, success.
     System {
         id: String,
+        generation: u64,
         request: Json,
         name: &'static str,
         ok: bool,
@@ -236,8 +237,8 @@ impl Modules {
             let _ = self.tx.send(Input::Focus(event, data));
         }
     }
-    /// Whether something private is on the screen (a keyboard is open);
-    /// sent only when it changes.
+    /// Whether Settings are open (passwords, keys, the network): no module
+    /// screenshot then. Sent only when it changes.
     pub fn private(&mut self, private: bool) {
         if self.private != private {
             self.private = private;
@@ -317,7 +318,11 @@ struct Host {
     config_asked: BTreeMap<String, Instant>,
     /// Each module's last `system.call` of each action.
     system_at: BTreeMap<(String, &'static str), Instant>,
-    /// A keyboard is open: no screenshot.
+    /// The same, for all modules together.
+    system_all: BTreeMap<&'static str, Instant>,
+    /// Actions running now: one at a time each.
+    system_running: BTreeSet<&'static str>,
+    /// Settings are open: no screenshot.
     private: bool,
     /// When each module's `config.set`s were saved, the last hour's.
     written: BTreeMap<String, Vec<Instant>>,
@@ -375,6 +380,8 @@ impl Host {
             written: BTreeMap::new(),
             config_asked: BTreeMap::new(),
             system_at: BTreeMap::new(),
+            system_all: BTreeMap::new(),
+            system_running: BTreeSet::new(),
             private: false,
             gestures: BTreeMap::new(),
             late: BTreeMap::new(),
@@ -549,10 +556,12 @@ impl Host {
             Input::Private(private) => self.private = private,
             Input::System {
                 id,
+                generation,
                 request,
                 name,
                 ok,
             } => {
+                self.system_running.remove(name);
                 let reply = if ok {
                     json!({"jsonrpc": "2.0", "id": request, "result": {}})
                 } else {
@@ -560,7 +569,13 @@ impl Host {
                     json!({"jsonrpc": "2.0", "id": request,
                         "error": {"code": -32000, "message": "failed"}})
                 };
-                if self.daemons.contains_key(&id) {
+                // Only to the process that asked: a restarted one never
+                // gets its predecessor's answer.
+                if self
+                    .daemons
+                    .get(&id)
+                    .is_some_and(|d| d.generation == generation)
+                {
                     self.send(&id, &reply);
                 }
                 // The user sees who cut the Wi-Fi or took the picture.
@@ -1582,11 +1597,12 @@ impl Host {
     // ---- system actions ----
 
     /// `system.call {name, value}`: one of the module's `system` actions,
-    /// run through the script that owns it, in a worker, with a time limit;
-    /// the answer comes when it ends. Values are checked here, the rate is
-    /// bounded per module and action, and nothing runs while a game has the
-    /// screen (no module runs then) or, for a screenshot, while something
-    /// private is shown.
+    /// run through the code that owns it (the scripts, and the launcher's
+    /// own Wi-Fi switch), in a worker, with a time limit; the answer comes
+    /// when it ends. Values are checked here; the rate is bounded per module
+    /// and for all modules together; one call per action at a time; nothing
+    /// runs while a game has the screen (no module runs then) and no
+    /// screenshot while Settings are open.
     fn system_call(
         &mut self,
         id: &str,
@@ -1616,79 +1632,112 @@ impl Host {
                 .filter(|v| (min..=100).contains(v))
                 .ok_or((-32602, "value"))
         };
-        let (every, commands): (u64, Vec<Vec<String>>) = match name {
+        // Seconds between two calls of one module, and of all modules.
+        let (each, all, work) = match name {
             // Never dark enough to look like the device is off.
             "brightness" => {
                 let v = percent(10)?.to_string();
-                (
-                    1,
-                    vec![
-                        s(&["brightness", "set", &v]),
-                        s(&["archr-osd", "send", "brightness", &v]),
-                    ],
-                )
+                let run = vec![
+                    s(&["brightness", "set", &v]),
+                    s(&["archr-osd", "send", "brightness", &v]),
+                ];
+                (1, 1, Work::Run(run))
             }
             "volume" => {
                 let v = percent(0)?.to_string();
-                (
-                    1,
-                    vec![s(&["volume", &v]), s(&["archr-osd", "send", "volume", &v])],
-                )
+                let run = vec![s(&["volume", &v]), s(&["archr-osd", "send", "volume", &v])];
+                (1, 1, Work::Run(run))
             }
             "wifi" => {
                 let on = params["value"].as_bool().ok_or((-32602, "value"))?;
-                (
-                    60,
-                    vec![s(&["wifictl", if on { "enable" } else { "disable" }])],
-                )
+                (60, 60, Work::Wifi(on))
             }
             _ => {
                 if self.private {
-                    return Err((-32001, "something private is on the screen"));
+                    return Err((-32001, "not while Settings are open"));
                 }
-                (10, vec![s(&["archr-screenshot"])])
+                // The user's switch for screenshots, read before the script.
+                let enabled = archr_config::SystemCfg::load(&self.config.system_cfg)
+                    .ok()
+                    .and_then(|cfg| cfg.get_setting("archr.screenshot.enabled", None, None))
+                    .is_some_and(|v| v == "1");
+                if !enabled {
+                    return Err((-32005, "screenshots are off in the user's settings"));
+                }
+                (10, 10, Work::Run(vec![s(&["archr-screenshot"])]))
             }
         };
-        let key = (id.to_owned(), name);
+        if self.system_running.contains(name) {
+            return Err((-32003, "already running"));
+        }
         let now = Instant::now();
-        if self
-            .system_at
-            .get(&key)
-            .is_some_and(|at| now.duration_since(*at) < Duration::from_secs(every))
-        {
+        let soon = |at: Option<&Instant>, every: u64| {
+            at.is_some_and(|at| now.duration_since(*at) < Duration::from_secs(every))
+        };
+        let key = (id.to_owned(), name);
+        if soon(self.system_at.get(&key), each) || soon(self.system_all.get(name), all) {
             return Err((-32003, "too many requests"));
         }
-        self.system_at.insert(key, now);
-        log::info!("Module {id} asks the system for {name}");
-        let (bin, inbox) = (self.config.bin.clone(), self.inbox.clone());
+        let generation = self.daemons.get(id).map_or(0, |d| d.generation);
         let (id, request) = (id.to_owned(), request.clone());
-        thread::spawn(move || {
-            let run = |argv: &[String]| {
-                let mut command = std::process::Command::new(bin.join(&argv[0]));
-                command.args(&argv[1..]).stdin(std::process::Stdio::null());
-                std::os::unix::process::CommandExt::process_group(&mut command, 0);
-                crate::process::capture(
-                    &mut command,
-                    SYSTEM_TIMEOUT,
-                    &std::sync::atomic::AtomicBool::new(false),
-                    4096,
-                )
-                .is_ok_and(|out| out.status.success())
-            };
-            // The first command does the work; the OSD after it only shows it.
-            let ok = run(&commands[0]);
-            if ok {
-                for extra in &commands[1..] {
-                    run(extra);
+        let inbox = self.inbox.clone();
+        let done = {
+            let (id, inbox) = (id.clone(), inbox.clone());
+            move |ok: bool| {
+                let _ = inbox.send(Input::System {
+                    id,
+                    generation,
+                    request,
+                    name,
+                    ok,
+                });
+            }
+        };
+        match work {
+            // The launcher's own switch: wifi.enabled, the lock against the
+            // user's press, the connection after enabling.
+            Work::Wifi(on) => {
+                let tool = (
+                    self.config.bin.join("wifictl"),
+                    self.config.system_cfg.clone(),
+                    self.config.lock.clone(),
+                );
+                match crate::wifi::switch(tool, on, done) {
+                    Ok(true) => {}
+                    Ok(false) => return Err((-32003, "the Wi-Fi is switching already")),
+                    Err(_) => return Err((-32000, "failed")),
                 }
             }
-            let _ = inbox.send(Input::System {
-                id,
-                request,
-                name,
-                ok,
-            });
-        });
+            Work::Run(commands) => {
+                let bin = self.config.bin.clone();
+                thread::spawn(move || {
+                    let run = |argv: &[String]| {
+                        let mut command = std::process::Command::new(bin.join(&argv[0]));
+                        command.args(&argv[1..]).stdin(std::process::Stdio::null());
+                        std::os::unix::process::CommandExt::process_group(&mut command, 0);
+                        crate::process::capture(
+                            &mut command,
+                            SYSTEM_TIMEOUT,
+                            &std::sync::atomic::AtomicBool::new(false),
+                            4096,
+                        )
+                        .is_ok_and(|out| out.status.success())
+                    };
+                    // The first command does the work; the OSD only shows it.
+                    let ok = run(&commands[0]);
+                    if ok {
+                        for extra in &commands[1..] {
+                            run(extra);
+                        }
+                    }
+                    done(ok);
+                });
+            }
+        }
+        log::info!("Module {id} asks the system for {name}");
+        self.system_at.insert((id, name), now);
+        self.system_all.insert(name, now);
+        self.system_running.insert(name);
         Ok(())
     }
 
@@ -1937,6 +1986,11 @@ impl Host {
     }
 }
 
+/// What a `system.call` does.
+enum Work {
+    Run(Vec<Vec<String>>),
+    Wifi(bool),
+}
 fn s(words: &[&str]) -> Vec<String> {
     words.iter().map(|w| (*w).to_owned()).collect()
 }

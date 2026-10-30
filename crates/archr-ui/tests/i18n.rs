@@ -389,6 +389,7 @@ const CONFIG_KEYS: &[&str] = &[
     "raw.githubusercontent.com",
     "archr.mangohud.alpha",
     "archr.mangohud.enabled",
+    "archr.screenshot.enabled",
     "archr.mangohud.font_size",
     "archr.mangohud.fps_limit",
     "archr.mangohud.items",

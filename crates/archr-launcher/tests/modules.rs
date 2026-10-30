@@ -1117,7 +1117,8 @@ fn until_all(log: &Path, ids: &[&str]) -> String {
     seen
 }
 /// Fake system scripts in `<base>/bin`: each logs its name and arguments;
-/// `wifictl` fails when `<base>/bin/fail` exists.
+/// `wifictl` fails when `<base>/bin/fail` exists, and any script waits the
+/// seconds in `<base>/bin/<name>.slow` first.
 fn system_bin(base: &Path) {
     let bin = base.join("bin");
     fs::create_dir_all(&bin).unwrap();
@@ -1129,18 +1130,30 @@ fn system_bin(base: &Path) {
         "archr-osd",
     ] {
         let script = format!(
-            "#!/bin/sh\necho \"{name} $*\" >> \"{log}\"\n[ \"{name}\" = wifictl ] && [ -e \"{fail}\" ] && exit 1\nexit 0\n",
+            "#!/bin/sh
+[ -e \"{bin}/{name}.slow\" ] && sleep \"$(cat \"{bin}/{name}.slow\")\"
+\
+             echo \"{name} $*\" >> \"{log}\"
+\
+             [ \"{name}\" = wifictl ] && [ -e \"{bin}/fail\" ] && exit 1
+exit 0
+",
+            bin = bin.display(),
             log = base.join("system.log").display(),
-            fail = bin.join("fail").display(),
         );
         let path = bin.join(name);
         fs::write(&path, script).unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
     }
+    fs::write(base.join("system.cfg"), "archr.screenshot.enabled=1\n").unwrap();
 }
+/// The launcher's Wi-Fi switch is one for the whole process: tests that
+/// use it take turns.
+static WIFI: Mutex<()> = Mutex::new(());
 
 #[test]
-fn system_calls_run_only_granted_checked_actions_through_their_scripts() {
+fn system_calls_run_only_granted_checked_actions_through_their_owners() {
+    let _wifi = WIFI.lock().unwrap_or_else(|e| e.into_inner());
     let root = tempfile::tempdir().unwrap();
     let base = root.path();
     system_bin(base);
@@ -1172,23 +1185,13 @@ fn system_calls_run_only_granted_checked_actions_through_their_scripts() {
     probe.invoke("painel", "go");
     let log = base.join("module-data/painel/seen.log");
     let seen = until_all(&log, &["b1", "b2", "b3", "v1", "v2", "w1", "w2", "x1"]);
-    assert!(answer(&seen, "b1").contains("\"result\""), "{seen}");
-    assert!(
-        answer(&seen, "b2").contains("-32003"),
-        "one a second: {seen}"
-    );
-    assert!(
-        answer(&seen, "b3").contains("-32602"),
-        "never darker than 10 %: {seen}"
-    );
-    assert!(answer(&seen, "v1").contains("-32602"), "{seen}");
-    assert!(answer(&seen, "v2").contains("\"result\""), "{seen}");
-    assert!(answer(&seen, "w1").contains("\"result\""), "{seen}");
-    assert!(
-        answer(&seen, "w2").contains("-32003"),
-        "one a minute: {seen}"
-    );
-    assert!(answer(&seen, "x1").contains("-32602"), "{seen}");
+    let ok = |id: &str| answer(&seen, id).contains("\"result\"");
+    let refused = |id: &str, code: &str| answer(&seen, id).contains(code);
+    assert!(ok("b1") && ok("v2") && ok("w1"), "{seen}");
+    assert!(refused("b2", "-32003"), "one a second: {seen}");
+    assert!(refused("b3", "-32602"), "never darker than 10 %: {seen}");
+    assert!(refused("v1", "-32602") && refused("x1", "-32602"), "{seen}");
+    assert!(refused("w2", "-32003"), "one a minute: {seen}");
     let ran = fs::read_to_string(base.join("system.log")).unwrap();
     for expected in [
         "brightness set 40",
@@ -1200,36 +1203,33 @@ fn system_calls_run_only_granted_checked_actions_through_their_scripts() {
         assert!(ran.lines().any(|l| l == expected), "{expected}: {ran}");
     }
     assert_eq!(ran.lines().count(), 5, "nothing else ran: {ran}");
-    // The user is told who turned the Wi-Fi off.
+    // Through the launcher's own switch: the setting is the user's record.
+    let cfg = fs::read_to_string(base.join("system.cfg")).unwrap();
+    assert!(cfg.contains("wifi.enabled=0"), "{cfg}");
     probe.wait(|_, n| n.contains(&Notice::System("Test painel".into(), "modules.did_wifi")));
-    // No screenshot while a keyboard is open; one once it is closed.
+    // No screenshot with any Settings page open; one once they are closed.
+    let shot = |probe: &Probe, id: &str| {
+        fs::write(dir.join("shot.jsonl"), call(id, r#"{"name":"screenshot"}"#)).unwrap();
+        std::thread::sleep(Duration::from_millis(100));
+        probe.invoke("painel", "shot");
+        until(&log, &format!("\"id\":\"{id}\""))
+    };
     probe.modules.private(true);
-    fs::write(
-        dir.join("shot.jsonl"),
-        call("s1", r#"{"name":"screenshot"}"#),
-    )
-    .unwrap();
-    std::thread::sleep(Duration::from_millis(100));
-    probe.invoke("painel", "shot");
-    let seen = until(&log, "\"id\":\"s1\"");
-    assert!(answer(&seen, "s1").contains("-32001"), "{seen}");
+    assert!(answer(&shot(&probe, "s1"), "s1").contains("-32001"));
     probe.modules.private(false);
-    fs::write(
-        dir.join("shot.jsonl"),
-        call("s2", r#"{"name":"screenshot"}"#),
-    )
-    .unwrap();
-    std::thread::sleep(Duration::from_millis(100));
-    probe.invoke("painel", "shot");
-    let seen = until(&log, "\"id\":\"s2\"");
-    assert!(answer(&seen, "s2").contains("\"result\""), "{seen}");
+    assert!(answer(&shot(&probe, "s2"), "s2").contains("\"result\""));
     assert!(fs::read_to_string(base.join("system.log"))
         .unwrap()
         .contains("archr-screenshot"));
+    // Screenshots switched off by the user: a reason of its own.
+    std::thread::sleep(Duration::from_millis(10_100));
+    fs::write(base.join("system.cfg"), "archr.screenshot.enabled=0\n").unwrap();
+    assert!(answer(&shot(&probe, "s3"), "s3").contains("-32005"));
 }
 
 #[test]
 fn system_calls_need_the_permission_and_report_a_failing_script() {
+    let _wifi = WIFI.lock().unwrap_or_else(|e| e.into_inner());
     let root = tempfile::tempdir().unwrap();
     let base = root.path();
     system_bin(base);
@@ -1261,4 +1261,131 @@ fn system_calls_need_the_permission_and_report_a_failing_script() {
         "nothing happened: {:?}",
         probe.notices
     );
+}
+
+#[test]
+fn the_user_and_a_module_never_switch_the_wifi_at_once() {
+    let _wifi = WIFI.lock().unwrap_or_else(|e| e.into_inner());
+    let root = tempfile::tempdir().unwrap();
+    let base = root.path();
+    system_bin(base);
+    fs::write(base.join("bin/wifictl.slow"), "1").unwrap();
+    let dir = api_2(base, "rede", "system = [\"wifi\"]", &["system:wifi"]);
+    fs::write(
+        dir.join("go.jsonl"),
+        rpc("w1", "system.call", r#"{"name":"wifi","value":false}"#),
+    )
+    .unwrap();
+    let probe = Probe::new(base);
+    ready(base, &["rede"]);
+    // The user's press is running when the module asks.
+    let (tx, rx) = std::sync::mpsc::channel();
+    let tool = (
+        base.join("bin/wifictl"),
+        base.join("system.cfg"),
+        base.join("system.cfg.lock"),
+    );
+    assert!(archr_launcher::wifi::switch(tool, true, move |ok| {
+        let _ = tx.send(ok);
+    })
+    .unwrap());
+    probe.invoke("rede", "go");
+    let seen = until(&base.join("module-data/rede/seen.log"), "\"id\":\"w1\"");
+    assert!(
+        answer(&seen, "w1").contains("-32003"),
+        "the switch is busy: {seen}"
+    );
+    assert!(rx.recv_timeout(Duration::from_secs(10)).unwrap());
+    let cfg = fs::read_to_string(base.join("system.cfg")).unwrap();
+    assert!(
+        cfg.contains("wifi.enabled=1"),
+        "the user's choice stands: {cfg}"
+    );
+}
+
+#[test]
+fn one_call_per_action_at_a_time_and_a_shared_limit_for_all_modules() {
+    let root = tempfile::tempdir().unwrap();
+    let base = root.path();
+    system_bin(base);
+    fs::write(base.join("bin/volume.slow"), "1").unwrap();
+    let grant = ["system:volume"];
+    let a = api_2(base, "a-som", "system = [\"volume\"]", &grant);
+    let b = api_2(base, "b-som", "system = [\"volume\"]", &grant);
+    fs::write(
+        a.join("go.jsonl"),
+        rpc("a1", "system.call", r#"{"name":"volume","value":30}"#),
+    )
+    .unwrap();
+    fs::write(
+        b.join("go.jsonl"),
+        rpc("b1", "system.call", r#"{"name":"volume","value":90}"#),
+    )
+    .unwrap();
+    let probe = Probe::new(base);
+    ready(base, &["a-som", "b-som"]);
+    probe.invoke("a-som", "go");
+    std::thread::sleep(Duration::from_millis(200));
+    probe.invoke("b-som", "go");
+    let seen = until(&base.join("module-data/b-som/seen.log"), "\"id\":\"b1\"");
+    assert!(answer(&seen, "b1").contains("-32003"), "{seen}");
+    let seen = until(&base.join("module-data/a-som/seen.log"), "\"id\":\"a1\"");
+    assert!(answer(&seen, "a1").contains("\"result\""), "{seen}");
+    let ran = fs::read_to_string(base.join("system.log")).unwrap();
+    assert!(!ran.contains("volume 90"), "{ran}");
+}
+
+#[test]
+fn an_answer_never_reaches_a_restarted_process() {
+    let root = tempfile::tempdir().unwrap();
+    let base = root.path();
+    system_bin(base);
+    fs::write(base.join("bin/brightness.slow"), "2").unwrap();
+    // The first process asks and leaves at once; the next only listens.
+    let script = r#"#!/bin/bash
+while IFS= read -r line; do
+    printf '%s\n' "$line" >> "$HOME/seen.log"
+    id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+    case "$line" in
+    *'"method":"initialize"'*)
+        printf '{"jsonrpc":"2.0","id":%s,"result":{"ready":true}}\n' "$id"
+        if [ ! -e "$HOME/asked" ]; then
+            : > "$HOME/asked"
+            printf '%s\n' '{"jsonrpc":"2.0","id":"l1","method":"system.call","params":{"name":"brightness","value":50}}'
+            sleep 0.3
+            exit 0
+        fi ;;
+    esac
+done
+"#;
+    module(
+        base,
+        "brilho",
+        "daemon",
+        "[permissions]\nsystem = [\"brightness\"]\n",
+        script,
+    );
+    let toml = base.join("modules/brilho/module.toml");
+    let text = fs::read_to_string(&toml)
+        .unwrap()
+        .replace("api_version = 1", "api_version = 2");
+    fs::write(&toml, text).unwrap();
+    allow(base, &[("brilho", &["system:brightness"])]);
+    let _probe = Probe::new(base);
+    let log = base.join("module-data/brilho/seen.log");
+    // The second process starts, then the slow answer comes.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while fs::read_to_string(&log)
+        .unwrap_or_default()
+        .matches("initialize")
+        .count()
+        < 2
+    {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    until(&base.join("system.log"), "brightness set 50");
+    std::thread::sleep(Duration::from_millis(500));
+    let seen = fs::read_to_string(&log).unwrap();
+    assert!(!seen.contains("\"id\":\"l1\""), "{seen}");
 }
