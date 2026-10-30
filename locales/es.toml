@@ -1157,3 +1157,5 @@
 "roms.moved_left" = "ROMs movidas. Carpetas que quedaron en el sistema: {kept}; mira Almacenamiento › ROMs en el PC."
 "error.roms_not_moved" = "Las ROMs no se movieron; nada cambió en la tarjeta."
 "error.roms_stalled" = "El traslado de las ROMs se detuvo. Inténtalo de nuevo en Almacenamiento › ROMs en el PC."
+"roms.alert_readonly" = "Partición de ROMs en solo lectura: no se guardan partidas ni capturas"
+"roms.alert_failed" = "La partición de ROMs no se montó: mira Almacenamiento"

@@ -49,6 +49,10 @@ Sem `name`, a Aparência mostra o nome da pasta. Idiomas: `en`, `pt_BR`, `es`,
 | `success`, `warning`, `danger` | estados positivos, de atenção e de falha |
 | `scrim` | véu atrás de avisos e menus |
 
+O aviso de partição das ROMs com erro (só leitura ou não montada) fica no
+rodapé das listas de sistemas e de jogos, no lugar do resumo, com o ícone
+`icons/triangle-alert.svg` e a cor `warning`; o layout não muda.
+
 ### Aparência por cima do tema
 
 Em Aparência, a **1ª bolinha** da Cor de destaque é o `accent` do tema ativo,

@@ -1157,3 +1157,5 @@
 "roms.moved_left" = "ROMs moved. Folders kept on the system: {kept}; see Storage › ROMs on the PC."
 "error.roms_not_moved" = "The ROMs were not moved; nothing changed on the card."
 "error.roms_stalled" = "Moving the ROMs stopped. Try again in Storage › ROMs on the PC."
+"roms.alert_readonly" = "ROMs partition is read-only: saves and screenshots are not written"
+"roms.alert_failed" = "The ROMs partition did not mount: see Storage"

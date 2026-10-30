@@ -822,6 +822,21 @@ fn capture_views() {
                 }
                 save(&mut ui, format!("{label}-{view}-{name}-{language}.png"));
             }
+            // The ROMs partition went read-only: the footer says so.
+            if let Some(status) = &mut ui.status {
+                status.roms = Some("roms.alert_readonly");
+            }
+            for _ in 0..2 {
+                ui.snap_animations();
+                ui.draw(&app, &shelf, &theme, Some(&cover)).unwrap();
+            }
+            save(
+                &mut ui,
+                format!("{label}-{view}-games-alert-{language}.png"),
+            );
+            if let Some(status) = &mut ui.status {
+                status.roms = None;
+            }
             ui.snap_animations();
             ui.draw(&app, &shelf, &theme, Some(&cover)).unwrap();
             app.cursor = 4;
