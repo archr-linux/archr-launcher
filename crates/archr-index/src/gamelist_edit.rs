@@ -4,6 +4,7 @@
 //! unknown tags, attributes, folders and comments. Only indentation between
 //! elements is normalized. A gamelist that does not parse is never replaced.
 use std::{
+    collections::HashMap,
     fs, io,
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
@@ -104,6 +105,50 @@ pub fn update_gamelist(
         let _ = file.set_permissions(fs::Permissions::from_mode(mode));
         file.write_all(text.as_bytes())
     })
+}
+
+/// A media path as ownership compares it: spelling normalized, and case
+/// ignored, as exFAT ignores it.
+pub fn media_key(path: &Path) -> String {
+    game_path_key(path)
+        .unwrap_or_else(|| path.to_owned())
+        .to_string_lossy()
+        .to_lowercase()
+}
+
+/// Which game each media file of a gamelist belongs to.
+#[derive(Debug, Default)]
+pub struct MediaOwners(HashMap<String, Option<PathBuf>>);
+impl MediaOwners {
+    /// Every path tag of every game; an unreadable gamelist owns nothing.
+    pub fn read(system_dir: &Path) -> Self {
+        let Some(doc) = read_bytes(&system_dir.join("gamelist.xml"), LIMIT, Follow)
+            .ok()
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+            .and_then(|source| Doc::parse(&source))
+        else {
+            return Self::default();
+        };
+        let mut owners = HashMap::new();
+        for item in &doc.items {
+            let Item::Game(game) = item else { continue };
+            let rom = game.path(system_dir);
+            for child in &game.children {
+                if !PATH_TAGS.contains(&child.tag.as_str()) {
+                    continue;
+                }
+                if let Some(media) = resolve_path(system_dir, child.text.trim()) {
+                    owners.insert(media_key(&media), rom.clone());
+                }
+            }
+        }
+        Self(owners)
+    }
+    /// Some(true): `rom`'s own file; Some(false): another game's; None: nobody's.
+    pub fn owned_by(&self, media: &Path, rom: &Path) -> Option<bool> {
+        let owner = self.0.get(&media_key(media))?;
+        Some(owner.is_some() && *owner == game_path_key(rom))
+    }
 }
 
 /// `./...` for files inside the system folder, as ES writes them.

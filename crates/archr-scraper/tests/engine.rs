@@ -234,6 +234,33 @@ fn media_names_suit_an_exfat_card_and_never_take_another_games_file() {
 }
 
 #[test]
+fn a_name_another_games_record_cites_is_taken_even_without_its_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let sys = system(
+        &dir.path().join("roms"),
+        &["Zelda: Link.sfc", "Zelda_ Link.sfc"],
+    );
+    // "Zelda_ Link" owns its cover by record; the file is gone for now.
+    fs::write(
+        sys.path.join("gamelist.xml"),
+        "<gameList><game><path>./Zelda_ Link.sfc</path>\
+         <thumbnail>./media/images/Zelda_ Link.png</thumbnail></game></gameList>",
+    )
+    .unwrap();
+    let job = engine(mock(happy), &dir.path().join("cache")).start(
+        vec![sys.clone()],
+        Options {
+            media: vec![Media::Box2d],
+            game: Some(sys.path.join("Zelda: Link.sfc")),
+            ..Options::new("en")
+        },
+    );
+    assert_eq!(finish(&job).1.progress.scraped, 1);
+    assert!(sys.path.join("media/images/Zelda_ Link (2).png").is_file());
+    assert!(!sys.path.join("media/images/Zelda_ Link.png").exists());
+}
+
+#[test]
 fn falls_back_to_name_search_and_reports_misses() {
     let dir = tempfile::tempdir().unwrap();
     let sys = system(dir.path(), &["Hit (Europe).sfc", "Miss.sfc"]);

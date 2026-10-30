@@ -5,7 +5,9 @@ use crate::{
     http::{encode, trusted, Curl, Http, NetError, SCREENSCRAPER},
     systems::system_id,
 };
-use archr_index::{clean_name, scan_system, update_gamelist, Game, GameUpdate, SystemDef};
+use archr_index::{
+    clean_name, media_key, scan_system, update_gamelist, Game, GameUpdate, MediaOwners, SystemDef,
+};
 use archr_io::atomic_publish;
 use std::{
     collections::HashSet,
@@ -337,6 +339,7 @@ impl Engine {
             let Some(id) = system_id(&system.name).filter(|_| wanted) else {
                 continue;
             };
+            let mut owners: std::collections::HashMap<PathBuf, MediaOwners> = Default::default();
             for game in scan_system(system) {
                 if cancel.load(Relaxed) {
                     return ended(Stop::Cancelled, progress);
@@ -349,11 +352,18 @@ impl Engine {
                     system.path.display(),
                     game.path.display()
                 );
-                let needed = needed(options, system, &game);
+                let root = system.root_of(&game.path).to_owned();
+                let owners = owners
+                    .entry(root.clone())
+                    .or_insert_with(|| MediaOwners::read(&root));
+                let needed = needed(options, system, &game, owners);
                 // A journaled game counts as done only while its assets exist.
                 let done = finished.contains(&format!("{key}\tmiss"))
                     || (finished.contains(&format!("{key}\tfound"))
-                        && options.media.iter().all(|&k| present(system, &game, k)));
+                        && options
+                            .media
+                            .iter()
+                            .all(|&k| present(system, &game, k, owners)));
                 if !options.force && (done || (options.only_missing && needed.is_empty())) {
                     progress.skipped += 1;
                 } else {
@@ -475,7 +485,6 @@ impl Engine {
     /// Fetches each needed asset, then merges the text and the saved paths
     /// into the system's gamelist; any failure makes the game retryable.
     fn download(&self, run: &Run, prefs: &Prefs, item: &Item, hit: &Hit) -> Result<Outcome, Stop> {
-        let stem = item.game.path.file_stem().unwrap_or_default();
         let mut fields = Vec::new();
         let mut failed = 0;
         for &kind in &item.needed {
@@ -500,7 +509,13 @@ impl Engine {
                 .root_of(&item.game.path)
                 .join("media")
                 .join(kind.dir());
-            let dest = media_file(&dir, stem, ext, indexed(&item.game, kind));
+            let dest = media_file(
+                &dir,
+                &item.game,
+                ext,
+                indexed(&item.game, kind),
+                &HashSet::new(),
+            );
             match atomic_publish(&dest, false, |f| f.write_all(&body)) {
                 Ok(()) => fields.push((kind.tag(), dest.to_string_lossy().into_owned())),
                 Err(_) => failed += 1,
@@ -805,63 +820,67 @@ fn indexed(game: &Game, kind: Media) -> Option<&Path> {
     }
 }
 
-fn present(system: &SystemDef, game: &Game, kind: Media) -> bool {
+/// Its file for `kind` exists: indexed, or under its name and no other game's.
+fn present(system: &SystemDef, game: &Game, kind: Media, owners: &MediaOwners) -> bool {
     let stem = archr_io::exfat_name(&game.path.file_stem().unwrap_or_default().to_string_lossy());
     let dir = system.root_of(&game.path).join("media").join(kind.dir());
     indexed(game, kind).is_some()
-        || kind
-            .exts()
-            .iter()
-            .any(|ext| dir.join(format!("{stem}.{ext}")).is_file())
+        || kind.exts().iter().any(|ext| {
+            let file = dir.join(format!("{stem}.{ext}"));
+            file.is_file() && owners.owned_by(&file, &game.path) != Some(false)
+        })
 }
 
 /// Where a game's media goes: its ROM's name as an exFAT card accepts it
-/// (the ROMs partition is exFAT), and never a file another game owns. exFAT
-/// ignores case, so "MARIO.png" is taken for "Mario"; a name the sanitizing
-/// changed ("A:B" and "A?B" are both "A_B") may be another game's too. Such
-/// names get " (2)", " (3)"; the gamelist records the one chosen.
-fn media_file(dir: &Path, stem: &std::ffi::OsStr, ext: &str, own: Option<&Path>) -> PathBuf {
-    let raw = stem.to_string_lossy();
-    let base = archr_io::exfat_name(&raw);
-    let taken: Vec<String> = fs::read_dir(dir)
+/// (the ROMs partition is exFAT), and only a name that is its own or free.
+/// Its own: the file the index gives it, or the gamelist says is its.
+/// Taken: a file another game's record names, any file of that name when
+/// case is ignored (exFAT ignores it: "MARIO.png" is taken for "Mario"),
+/// or a name another download chose and has not recorded yet (`claims`).
+/// "A:B" and "A?B" both sanitize to "A_B": the second gets " (2)".
+fn media_file(
+    dir: &Path,
+    game: &Game,
+    ext: &str,
+    own: Option<&Path>,
+    claims: &HashSet<String>,
+) -> PathBuf {
+    let base = archr_io::exfat_name(&game.path.file_stem().unwrap_or_default().to_string_lossy());
+    let owners = MediaOwners::read(dir.parent().and_then(Path::parent).unwrap_or(dir));
+    let present: HashSet<String> = fs::read_dir(dir)
         .map(|entries| {
             entries
                 .filter_map(Result::ok)
-                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .map(|e| e.file_name().to_string_lossy().to_lowercase())
                 .collect()
         })
         .unwrap_or_default();
-    // Its own file under its unchanged name may be replaced.
-    let mine = |n: usize, name: &str, t: &str| n == 1 && base == raw && t == name;
+    let own = own.map(media_key);
     (1..)
-        .map(|n| {
-            (
-                n,
-                if n == 1 {
-                    format!("{base}.{ext}")
-                } else {
-                    format!("{base} ({n}).{ext}")
-                },
-            )
+        .map(|n| match n {
+            1 => dir.join(format!("{base}.{ext}")),
+            n => dir.join(format!("{base} ({n}).{ext}")),
         })
-        .find(|(n, name)| {
-            let lower = name.to_lowercase();
-            own == Some(dir.join(name).as_path())
-                || taken
-                    .iter()
-                    .all(|t| t.to_lowercase() != lower || mine(*n, name, t))
+        .find(|path| {
+            let mine = owners.owned_by(path, &game.path);
+            let name = path.file_name().unwrap_or_default().to_string_lossy();
+            own.as_deref() == Some(media_key(path).as_str())
+                || mine == Some(true)
+                || (mine.is_none()
+                    && !claims.contains(&media_key(path))
+                    && !present.contains(&name.to_lowercase()))
         })
-        .map(|(_, name)| dir.join(name))
         .expect("a free name")
 }
 
-/// Requested assets still missing for `game` (all of them unless `only_missing`).
-fn needed(options: &Options, system: &SystemDef, game: &Game) -> Vec<Media> {
+fn needed(options: &Options, system: &SystemDef, game: &Game, owners: &MediaOwners) -> Vec<Media> {
     let mut kinds: Vec<Media> = options
         .media
         .iter()
         .copied()
-        .filter(|&kind| options.force || !(options.only_missing && present(system, game, kind)))
+        .filter(|&kind| {
+            options.force || !(options.only_missing && present(system, game, kind, owners))
+        })
         .collect();
     kinds.dedup();
     kinds
