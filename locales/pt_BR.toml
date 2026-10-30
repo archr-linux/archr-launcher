@@ -1154,6 +1154,7 @@
 "roms.list_empty" = "Nenhum nome a ajustar."
 "roms.becomes" = "vira"
 "roms.moved" = "ROMs movidas para o cartão. Arquivos: {files}; nomes ajustados: {renamed}."
+"roms.moved_short" = "ROMs movidas para o cartão. Nomes ajustados: {renamed}."
 "roms.moved_left" = "ROMs movidas. Pastas que ficaram no sistema: {kept}; veja Armazenamento › ROMs no PC."
 "error.roms_not_moved" = "As ROMs não foram movidas; nada mudou no cartão."
 "error.roms_stalled" = "A cópia das ROMs parou. Tente de novo em Armazenamento › ROMs no PC."

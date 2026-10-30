@@ -1154,6 +1154,7 @@
 "roms.list_empty" = "Исправлять нечего."
 "roms.becomes" = "станет"
 "roms.moved" = "ROM перенесены на карту. Файлов: {files}; исправлено имён: {renamed}."
+"roms.moved_short" = "ROM перенесены на карту. Исправлено имён: {renamed}."
 "roms.moved_left" = "ROM перенесены; папок осталось в системе: {kept}. См. Хранилище › ROM на ПК."
 "error.roms_not_moved" = "ROM не перенесены; на карте ничего не изменилось."
 "error.roms_stalled" = "Перенос ROM остановился. Повторите в Хранилище › ROM на ПК."

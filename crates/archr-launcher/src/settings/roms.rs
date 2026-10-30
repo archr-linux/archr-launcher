@@ -111,7 +111,17 @@ impl Backend {
                 _ => Err("roms.cancel_failed".into()),
             },
             Action::RomsRetry => match run(&["retry"], Duration::from_secs(20)) {
-                Ok((true, _)) => Ok("roms.retry_reboot_question"),
+                Ok((true, _)) => {
+                    // The news after the boot needs the marker, kept or made.
+                    let marker = archr_io::read_utf8(&armed, 4096, archr_io::Symlinks::Follow)
+                        .unwrap_or_else(|_| "FILES=0\n".into());
+                    if let Err(error) =
+                        archr_io::atomic_publish(&armed, true, |f| f.write_all(marker.as_bytes()))
+                    {
+                        log::warn!("{}: {error}", armed.display());
+                    }
+                    Ok("roms.retry_reboot_question")
+                }
                 _ => Err("roms.retry_failed".into()),
             },
             _ => unreachable!("storage actions run in storage.rs"),
@@ -164,19 +174,31 @@ fn notice(run: &str, marker: &str) -> Message {
         .rev()
         .find_map(|line| line.split_once(" Done: ")?.1.split_once(" entries, "));
     let Some((_, kept)) = done else {
-        return Message::new("error.roms_not_moved");
+        // Given up before anything changed: say why when the reason is known.
+        let why = run
+            .lines()
+            .rev()
+            .find_map(|line| line.split_once(" Not migrating: "))
+            .map_or("", |(_, why)| why);
+        return Message::new(if why.starts_with("no-space") {
+            "roms.no_space"
+        } else if why.starts_with("Battery under") {
+            "roms.low_power"
+        } else {
+            "error.roms_not_moved"
+        });
     };
     let kept = kept.split(' ').next().unwrap_or("0");
     if kept != "0" {
         return Message::new("roms.moved_left").with("kept", kept);
     }
-    let files = marker
-        .lines()
-        .find_map(|l| l.strip_prefix("FILES="))
-        .unwrap_or("0");
-    Message::new("roms.moved")
-        .with("files", files)
-        .with("renamed", renamed(run).len())
+    let renamed = renamed(run).len();
+    match marker.lines().find_map(|l| l.strip_prefix("FILES=")) {
+        Some(files) if files != "0" => Message::new("roms.moved")
+            .with("files", files)
+            .with("renamed", renamed),
+        _ => Message::new("roms.moved_short").with("renamed", renamed),
+    }
 }
 
 #[cfg(test)]
@@ -288,6 +310,16 @@ mod tests {
             Backend::new(paths).run_roms(&Action::RomsRetry),
             Err("roms.retry_failed".into())
         );
+        // A retry leaves a marker for the news after the boot.
+        let (_root, paths) = fixture("");
+        assert_eq!(
+            Backend::new(paths.clone()).run_roms(&Action::RomsRetry),
+            Ok("roms.retry_reboot_question")
+        );
+        assert_eq!(
+            fs::read_to_string(paths.cache.join(ARMED)).unwrap(),
+            "FILES=0\n"
+        );
     }
     #[test]
     fn the_notice_after_the_move_tells_once_how_it_went() {
@@ -321,7 +353,26 @@ mod tests {
         .unwrap();
         assert_eq!(
             migration_notice(&paths).map(render).as_deref(),
-            Some("error.roms_not_moved")
+            Some("roms.no_space")
+        );
+        for (why, key) in [
+            ("Battery under 50% and no charger.", "roms.low_power"),
+            ("STORAGE is busy.", "error.roms_not_moved"),
+        ] {
+            fs::write(&armed, "FILES=9\n").unwrap();
+            fs::write(
+                paths.at(LOG),
+                format!("1 2 Armed: x\n1 2 Not migrating: {why}\n"),
+            )
+            .unwrap();
+            assert_eq!(migration_notice(&paths).map(render).as_deref(), Some(key));
+        }
+        // Armed elsewhere (a retry without the launcher's count): no file count.
+        fs::write(&armed, "FILES=0\n").unwrap();
+        fs::write(paths.at(LOG), LOG_DONE).unwrap();
+        assert_eq!(
+            migration_notice(&paths).map(render).as_deref(),
+            Some("roms.moved_short|renamed=2")
         );
         fs::write(&armed, "FILES=9\n").unwrap();
         fs::write(paths.at(MARK), "STATE=stalled\nTRIES=3\n").unwrap();

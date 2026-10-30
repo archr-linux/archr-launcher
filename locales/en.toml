@@ -1154,6 +1154,7 @@
 "roms.list_empty" = "No name to change."
 "roms.becomes" = "becomes"
 "roms.moved" = "ROMs moved to the card. Files: {files}; names changed: {renamed}."
+"roms.moved_short" = "ROMs moved to the card. Names changed: {renamed}."
 "roms.moved_left" = "ROMs moved. Folders kept on the system: {kept}; see Storage › ROMs on the PC."
 "error.roms_not_moved" = "The ROMs were not moved; nothing changed on the card."
 "error.roms_stalled" = "Moving the ROMs stopped. Try again in Storage › ROMs on the PC."

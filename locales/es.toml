@@ -1154,6 +1154,7 @@
 "roms.list_empty" = "Ningún nombre a ajustar."
 "roms.becomes" = "pasa a"
 "roms.moved" = "ROMs movidas a la tarjeta. Archivos: {files}; nombres ajustados: {renamed}."
+"roms.moved_short" = "ROMs movidas a la tarjeta. Nombres ajustados: {renamed}."
 "roms.moved_left" = "ROMs movidas. Carpetas que quedaron en el sistema: {kept}; mira Almacenamiento › ROMs en el PC."
 "error.roms_not_moved" = "Las ROMs no se movieron; nada cambió en la tarjeta."
 "error.roms_stalled" = "El traslado de las ROMs se detuvo. Inténtalo de nuevo en Almacenamiento › ROMs en el PC."
