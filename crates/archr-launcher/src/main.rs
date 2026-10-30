@@ -474,8 +474,9 @@ fn run(
             browsing.then_some(selected_system.as_deref()).flatten(),
             Instant::now(),
         );
-        // No module screenshot while a keyboard (a password, a key) is open.
-        modules.private(settings.active && settings.state.keyboard.is_some());
+        // No module screenshot while any Settings page is open (passwords,
+        // keys, the network).
+        modules.private(settings.active);
         // What the user rests on, for modules (debounced by the host).
         let focus = match &app.screen {
             _ if settings.active => None,

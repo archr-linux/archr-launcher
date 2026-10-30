@@ -285,6 +285,8 @@ pub fn permissions(manifest: &Manifest) -> Vec<Permission> {
             false,
         ));
     }
+    // A screenshot it can also read could leave with the module.
+    let reads_shots = granted.read.iter().any(|a| a == "screenshots");
     for (system, key, detail, sensitive) in [
         (
             "cpu-profile",
@@ -315,7 +317,7 @@ pub fn permissions(manifest: &Manifest) -> Vec<Permission> {
             "screenshot",
             "modules.perm_screenshot",
             "modules.perm_screenshot_detail",
-            false,
+            reads_shots,
         ),
     ] {
         if granted.system.iter().any(|s| s == system) {
@@ -661,6 +663,23 @@ mod tests {
         );
         assert_eq!(mode(&dirs.secrets_file("sec")), 0o600);
         assert_eq!(settings(&dirs, &manifest), values);
+    }
+
+    #[test]
+    fn screenshots_are_amber_when_the_module_can_also_read_them() {
+        let base = "id = \"x-y\"\nversion = \"1.0.0\"\napi_version = 2\n\
+            [run]\nruntime = \"sh\"\nentry = \"main.sh\"\nmode = \"oneshot\"\n\
+            [permissions]\nsystem = [\"screenshot\"]\n";
+        let shot = |source: &str| {
+            let (manifest, _) = manifest::parse(source).unwrap();
+            permissions(&manifest)
+                .into_iter()
+                .find(|p| p.key == "modules.perm_screenshot")
+                .unwrap()
+                .sensitive
+        };
+        assert!(!shot(base));
+        assert!(shot(&format!("{base}read = [\"screenshots\"]\n")));
     }
 
     #[test]
