@@ -480,18 +480,7 @@ impl Id {
     }
     /// A row of ROMs on the PC, or the Storage link to it.
     pub fn roms(self) -> bool {
-        matches!(
-            self,
-            Self::RomsLink
-                | Self::RomsNow
-                | Self::RomsCard
-                | Self::RomsNames
-                | Self::RomsPower
-                | Self::RomsMove
-                | Self::RomsCancel
-                | Self::RomsRetry
-                | Self::RomsLeft
-        )
+        self == Self::RomsLink || roms::ROWS.iter().any(|row| row.id == self)
     }
     pub fn default_value(self) -> &'static str {
         self.metadata().1

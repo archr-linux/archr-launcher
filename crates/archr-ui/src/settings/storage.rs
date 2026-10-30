@@ -144,7 +144,9 @@ pub enum Confirm {
     Reset,
     ResetFinal,
     /// Moving the ROMs to the exFAT partition: restarts the device.
-    RomsMove,
+    RomsMove {
+        files: u64,
+    },
 }
 impl std::fmt::Debug for Confirm {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -157,7 +159,7 @@ impl std::fmt::Debug for Confirm {
             Self::Restore => write!(f, "Restore"),
             Self::Reset => write!(f, "Reset"),
             Self::ResetFinal => write!(f, "ResetFinal"),
-            Self::RomsMove => write!(f, "RomsMove"),
+            Self::RomsMove { files } => write!(f, "RomsMove {{ files: {files} }}"),
         }
     }
 }
@@ -217,7 +219,7 @@ impl Confirm {
                 "settings.reset_final_explain",
                 &[(Key('X'), "settings.erase"), CANCEL],
             ),
-            Self::RomsMove => (
+            Self::RomsMove { .. } => (
                 "roms.move_question",
                 "roms.move_explain",
                 &[(Key('A'), "roms.move_short"), CANCEL],
@@ -240,7 +242,7 @@ impl Confirm {
             }
             (Self::Reset, Button::A) => Answer::Ask(Self::ResetFinal),
             (Self::ResetFinal, Button::X) => Answer::Run(Action::FactoryReset),
-            (Self::RomsMove, Button::A) => Answer::Run(Action::RomsStart { files: 0 }),
+            (Self::RomsMove { files }, Button::A) => Answer::Run(Action::RomsStart { files }),
             _ => return None,
         })
     }
@@ -276,10 +278,6 @@ impl Settings {
             Some(Answer::Ask(next)) => {
                 self.storage.confirm = Some(next);
                 Effect::None
-            }
-            Some(Answer::Run(Action::RomsStart { .. })) => {
-                let files = self.roms_files();
-                self.roms_run(Action::RomsStart { files })
             }
             Some(Answer::Run(action)) => {
                 self.storage.working = Some(action.progress());
@@ -327,6 +325,8 @@ impl Settings {
     /// Settles a storage action. Ok carries a message key or a reboot question.
     pub fn storage_done(&mut self, result: Result<&'static str, String>) {
         self.storage.working = None;
+        // ROMs on the PC looks again at what the action changed.
+        self.roms.scan = None;
         match result {
             Ok(key) if key.ends_with("_reboot_question") => self.reboot_prompt = Some(key),
             Ok(key) => self.fail(None, key.into()),

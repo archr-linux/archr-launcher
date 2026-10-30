@@ -84,8 +84,6 @@ pub struct Check {
     /// The system partition and the ROMs partition after the move.
     pub storage_mib: u64,
     pub part_mib: u64,
-    pub renames: u64,
-    pub symlinks: u64,
     pub power: bool,
     /// ok, no-space, low-power, busy, unsupported, armed or already.
     pub result: String,
@@ -99,8 +97,6 @@ impl Check {
             roms_mib: number("ROMS_MIB"),
             storage_mib: number("STORAGE_AFTER_MIB"),
             part_mib: number("ROMS_PART_MIB"),
-            renames: number("RENAMES"),
-            symlinks: number("SYMLINKS"),
             power: field(text, "POWER") != Some("low"),
             result: field(text, "RESULT")?.to_owned(),
         })
@@ -158,9 +154,6 @@ impl Settings {
     }
     fn roms_check(&self) -> Option<&Check> {
         self.roms.scan.as_ref()?.check.as_ref()
-    }
-    pub(super) fn roms_files(&self) -> u64 {
-        self.roms_check().map_or(0, |c| c.files)
     }
     fn roms_names(&self) -> usize {
         self.roms.scan.as_ref().map_or(0, |s| s.names.len())
@@ -285,7 +278,10 @@ impl Settings {
             Id::RomsMove if self.storage.roms.armed() => {
                 self.reboot_prompt = Some("roms.now_reboot_question");
             }
-            Id::RomsMove => self.storage.confirm = Some(storage::Confirm::RomsMove),
+            Id::RomsMove => {
+                let files = self.roms_check().map_or(0, |c| c.files);
+                self.storage.confirm = Some(storage::Confirm::RomsMove { files });
+            }
             Id::RomsCancel => return Some(self.roms_run(storage::Action::RomsCancel)),
             Id::RomsRetry => return Some(self.roms_run(storage::Action::RomsRetry)),
             _ => return None,
@@ -294,7 +290,6 @@ impl Settings {
     }
     /// Runs an action of the page; the page looks again once it is done.
     pub(super) fn roms_run(&mut self, action: storage::Action) -> Effect {
-        self.roms.scan = None;
         self.storage.working = Some(action.progress());
         Effect::Storage(action)
     }
@@ -362,8 +357,6 @@ mod tests {
                 roms_mib: 7987,
                 storage_mib: 10124,
                 part_mib: 21504,
-                renames: 3,
-                symlinks: 1,
                 power: true,
                 result: "ok".into(),
             }
@@ -422,14 +415,18 @@ mod tests {
         // Move: a question first, then the host arms it.
         state.cursor = 3;
         assert_eq!(state.handle(Button::A), Effect::None);
-        assert_eq!(state.storage.confirm, Some(Confirm::RomsMove));
+        assert_eq!(
+            state.storage.confirm,
+            Some(Confirm::RomsMove { files: 1507 })
+        );
         assert_eq!(
             state.handle(Button::A),
             Effect::Storage(Action::RomsStart { files: 1507 })
         );
-        assert!(state.storage.working.is_some() && state.roms.scan.is_none());
+        assert!(state.storage.working.is_some());
         // Armed: the host asks to restart now.
         state.storage_done(Ok("roms.start_reboot_question"));
+        assert!(state.roms_wants_scan(), "it looks again");
         assert_eq!(state.reboot_prompt, Some("roms.start_reboot_question"));
         assert_eq!(state.handle(Button::A), Effect::Reboot);
     }

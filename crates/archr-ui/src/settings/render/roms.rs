@@ -117,12 +117,7 @@ impl View<'_, '_, '_> {
     }
     /// Each name exFAT refuses (or the log says was changed) and the new one.
     pub(super) fn roms_list(&mut self, state: &Settings) -> Result<(), String> {
-        let names = state
-            .roms
-            .scan
-            .as_ref()
-            .map(|s| s.names.clone())
-            .unwrap_or_default();
+        let names = state.roms.scan.as_ref().map_or(&[][..], |s| &s.names[..]);
         if names.is_empty() {
             return self.text(
                 (40., VIEW_TOP + 20., 560., 60.),
