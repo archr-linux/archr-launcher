@@ -73,6 +73,7 @@ impl Runtime {
             self.state.storage.working = None;
             self.state.raimport.working = false;
             self.state.raimport.scanning = false;
+            self.state.roms.scanning = false;
             self.state.loading = false;
         }
     }
@@ -313,6 +314,11 @@ impl Runtime {
         {
             self.state.raimport.scanning = true;
             self.send(Work::RaScan);
+            dirty = true;
+        }
+        if self.active && !self.closing && self.state.roms_wants_scan() {
+            self.state.roms.scanning = true;
+            self.send(Work::Roms);
             dirty = true;
         }
         let now = Instant::now();

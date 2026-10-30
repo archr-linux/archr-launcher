@@ -1661,6 +1661,15 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             _ => &[('A', "hint.choose"), ('B', "hint.close")],
         };
         let left = self.hints(hint_keys, theme, width, y, h)?;
+        // A ROMs partition that cannot be written stays in sight on both
+        // lists until it is fixed (Storage tells more).
+        let alert = self.status.as_ref().and_then(|s| s.roms).filter(|_| {
+            moving.is_none() && matches!(app.screen, Screen::Systems | Screen::Games { .. })
+        });
+        if let Some(key) = alert {
+            let text = self.catalog.text(key);
+            return self.footer_alert(&text, theme, (y, h), left);
+        }
         if matches!(app.screen, Screen::Systems) && (layout.summary || moving.is_some()) {
             let width = (left - self.px(40.)).max(1) as u32;
             let (text, size, ink) = match moving {
@@ -1687,6 +1696,58 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 &text,
                 (Face::Regular, size, ink),
                 Rect::new(self.px(24.), y, (left - self.px(40.)).max(1) as u32, h),
+            )?;
+        }
+        Ok(())
+    }
+    /// A warning icon and text left of the hints: one line, smaller if it
+    /// must, else two; never cut.
+    fn footer_alert(
+        &mut self,
+        text: &str,
+        theme: &Theme,
+        (y, h): (i32, u32),
+        left: i32,
+    ) -> Result<(), String> {
+        let icon = self.px(16.);
+        let x = self.px(24.);
+        self.icon(
+            Glyph::Alert,
+            Rect::new(x, y + (h as i32 - icon) / 2, icon as u32, icon as u32),
+            theme.warning,
+        )?;
+        let start = x + icon + self.px(8.);
+        let width = (left - self.px(16.) - start).max(1) as u32;
+        // Greedy lines, smaller until two fit; three at the smallest size.
+        let floor = self.frame.min_size().max(12.);
+        let mut size = 13.;
+        let lines = loop {
+            let mut lines: Vec<String> = vec![String::new()];
+            for word in text.split(' ') {
+                let line = lines.last_mut().expect("a line");
+                let joined = if line.is_empty() {
+                    word.to_owned()
+                } else {
+                    format!("{line} {word}")
+                };
+                if line.is_empty() || self.measure(&joined, Face::Regular, size)? <= width {
+                    *line = joined;
+                } else {
+                    lines.push(word.to_owned());
+                }
+            }
+            if lines.len() <= 2 || size <= floor {
+                break lines;
+            }
+            size -= 0.5;
+        };
+        let step = self.px(size + 4.);
+        let top = y + (h as i32 - step * lines.len() as i32) / 2;
+        for (n, line) in lines.iter().enumerate() {
+            self.label(
+                line,
+                (Face::Regular, size, theme.warning),
+                Rect::new(start, top + step * n as i32, width, step as u32),
             )?;
         }
         Ok(())

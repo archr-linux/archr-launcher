@@ -177,3 +177,17 @@ fn private_files_are_0600_in_new_folders_and_removal_tolerates_missing() {
     assert!(!path.exists());
     archr_io::remove_durable(&path).unwrap();
 }
+#[test]
+fn exfat_names_follow_the_migration_rule() {
+    for (name, safe) in [
+        ("Zelda: A Link to the Past", "Zelda_ A Link to the Past"),
+        ("What?\"*<>|\\", "What_______"),
+        ("tab\there\u{7f}", "tab_here_"),
+        ("Dots... ", "Dots"),
+        (". .", "_"),
+        ("", "_"),
+        ("Pokémon (Rev 1)", "Pokémon (Rev 1)"),
+    ] {
+        assert_eq!(archr_io::exfat_name(name), safe, "{name:?}");
+    }
+}

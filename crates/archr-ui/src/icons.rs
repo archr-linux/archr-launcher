@@ -46,7 +46,7 @@ glyphs! {
     Shift => "arrow-big-up", Backspace => "delete", Eye => "eye", EyeOff => "eye-off",
     Signal => "signal", SignalLow => "signal-low", SignalMedium => "signal-medium",
     SignalHigh => "signal-high", Puzzle => "puzzle", ShieldCheck => "shield-check",
-    Trash => "trash-2", Image => "image",
+    Trash => "trash-2", Image => "image", Alert => "triangle-alert",
 }
 
 #[link(name = "SDL2_image")]
@@ -218,7 +218,8 @@ mod tests {
                 | Glyph::Signal
                 | Glyph::SignalLow
                 | Glyph::SignalMedium
-                | Glyph::SignalHigh => 1,
+                | Glyph::SignalHigh
+                | Glyph::Alert => 1,
                 Glyph::Controls | Glyph::Games | Glyph::Storage => 2,
                 _ => 0,
             };

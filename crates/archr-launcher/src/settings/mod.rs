@@ -9,7 +9,9 @@ mod mangohud;
 pub use mangohud::supported as mangohud_supported;
 mod pages;
 mod raimport;
+mod roms;
 pub(crate) use pages::{scrape_outcome, start_scrape};
+pub use roms::migration_notice;
 mod runtime;
 mod storage;
 mod updates;
@@ -379,6 +381,8 @@ pub(super) enum Work {
     /// Import from RetroArch: look at the folder, or import (backup first?).
     RaScan,
     RaImport(bool, Box<archr_ui::settings::raimport::Found>),
+    /// ROMs on the PC: the state, the preview and the names.
+    Roms,
 }
 /// A storage action's outcome and the page's refreshed facts.
 type StorageReply = (
@@ -413,6 +417,12 @@ enum Reply {
     Store(archr_ui::settings::store::Reply),
     RaScan(archr_ui::settings::raimport::Found),
     RaImport(Result<String, String>),
+    Roms(
+        Box<(
+            archr_ui::settings::roms::Status,
+            archr_ui::settings::roms::Scan,
+        )>,
+    ),
 }
 /// A radio scan takes ~20 s on the R36S: it runs on its own lane so it never
 /// delays the Wi-Fi switch or any other action.
@@ -549,6 +559,7 @@ impl Worker {
                             Reply::Storage((result, Box::new(backend.storage())))
                         }
                         Work::RaScan => Reply::RaScan(backend.ra_scan()),
+                        Work::Roms => Reply::Roms(Box::new(backend.roms_scan())),
                         Work::RaImport(backup, seen) => {
                             Reply::RaImport(backend.ra_import(backup, &seen))
                         }
@@ -750,6 +761,12 @@ impl Worker {
                     state.raimport.found = Some(found);
                 }
                 Reply::RaImport(result) => state.raimport_done(result),
+                Reply::Roms(facts) => {
+                    let (status, scan) = *facts;
+                    state.storage.roms = status;
+                    state.roms.scanning = false;
+                    state.roms.scan = Some(scan);
+                }
                 Reply::Appearance(result) => {
                     state.pending = None;
                     match result {

@@ -22,6 +22,7 @@ use bluetooth::{Action, Device};
 pub use pages::MEDIA;
 pub mod modules;
 pub mod raimport;
+pub mod roms;
 pub mod storage;
 pub mod store;
 pub mod updates;
@@ -68,6 +69,9 @@ pub enum Page {
     /// System › Import from RetroArch, and its list of what applies.
     RaImport,
     RaImportList,
+    /// Storage › ROMs on the PC, and its list of names.
+    Roms,
+    RomsList,
     Soon(&'static str),
 }
 impl Page {
@@ -102,6 +106,8 @@ impl Page {
             Self::ModuleStore | Self::ModuleOffer => "modules.store",
             Self::RaImport => "raimport.title",
             Self::RaImportList => "raimport.list_title",
+            Self::Roms => "roms.title",
+            Self::RomsList => "roms.list_title",
             Self::Soon(key) => key,
         }
     }
@@ -115,6 +121,8 @@ impl Page {
             Self::StoreTheme => &["settings.appearance", "settings.theme_store"],
             Self::Modules | Self::ModuleStore | Self::RaImport => &["settings.system"],
             Self::RaImportList => &["settings.system", "raimport.title"],
+            Self::Roms => &["settings.storage"],
+            Self::RomsList => &["settings.storage", "roms.title"],
             Self::ModuleInfo | Self::Module(..) => &["settings.system", "settings.modules"],
             Self::ModuleOffer => &["settings.system", "modules.store"],
             Self::LauncherControls | Self::Hotkeys => &["settings.controls"],
@@ -145,6 +153,7 @@ impl Page {
             Self::Hotkeys => hotkeys::HOTKEYS_PAGE,
             Self::Updates => updates::UPDATES,
             Self::RaImport => raimport::ROWS,
+            Self::Roms => roms::ROWS,
             _ => &[],
         }
     }
@@ -300,6 +309,16 @@ pub enum Id {
     RaRun,
     /// Hotkeys page: write RetroArch's hotkeys again from the built-in pad.
     RaHotkeys,
+    /// Storage link to ROMs on the PC, and that page's rows.
+    RomsLink,
+    RomsNow,
+    RomsCard,
+    RomsNames,
+    RomsPower,
+    RomsMove,
+    RomsCancel,
+    RomsRetry,
+    RomsLeft,
 }
 impl Id {
     fn metadata(self) -> (&'static str, &'static str) {
@@ -445,10 +464,23 @@ impl Id {
             | Self::RaPreview
             | Self::RaRun
             | Self::RaHotkeys => ("", ""),
+            Self::RomsLink
+            | Self::RomsNow
+            | Self::RomsCard
+            | Self::RomsNames
+            | Self::RomsPower
+            | Self::RomsMove
+            | Self::RomsCancel
+            | Self::RomsRetry
+            | Self::RomsLeft => ("", ""),
         }
     }
     pub fn key(self) -> &'static str {
         self.metadata().0
+    }
+    /// A row of ROMs on the PC, or the Storage link to it.
+    pub fn roms(self) -> bool {
+        self == Self::RomsLink || roms::ROWS.iter().any(|row| row.id == self)
     }
     pub fn default_value(self) -> &'static str {
         self.metadata().1
@@ -830,6 +862,7 @@ pub struct Settings {
     custom_kept: Custom,
     pub updates: updates::Updates,
     pub raimport: raimport::RaImport,
+    pub roms: roms::Roms,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -882,11 +915,15 @@ impl Default for Settings {
             custom_kept: Custom::default(),
             updates: updates::Updates::default(),
             raimport: raimport::RaImport::default(),
+            roms: roms::Roms::default(),
         }
     }
 }
 impl Settings {
     pub fn display_value(&self, id: Id, catalog: &crate::i18n::I18n) -> String {
+        if id.roms() {
+            return information::value(catalog, &self.roms_value(id));
+        }
         let value = self.value(id);
         if let Some(label) = self.labels.get(&(id, value.to_owned())) {
             return label.clone();
@@ -1046,6 +1083,12 @@ impl Settings {
     }
     /// Subtitle text, or a `key|name=value` catalog reference.
     pub fn subtitle(&self, row: &Row) -> Option<String> {
+        if row.id.roms() {
+            return self
+                .roms_subtitle(row.id)
+                .or_else(|| row.subtitle.map(Into::into))
+                .filter(|s| !s.is_empty());
+        }
         let ip = &self.access_ip;
         Some(match row.id {
             Id::Ssh if !ip.is_empty() => format!("settings.ssh_at|ip={ip}"),
@@ -1111,6 +1154,7 @@ impl Settings {
             Id::ModuleEntry(_) | Id::ModuleRow(_) | Id::ModuleItem(..) => {
                 return self.module_label(row.id).unwrap_or_default()
             }
+            id if id.roms() => return self.roms_label(id).unwrap_or(row.label).into(),
             _ => &None,
         };
         card.as_ref()
@@ -1138,6 +1182,8 @@ impl Settings {
                 Id::UsbCompat | Id::UsbAddress | Id::UsbState => self.usb_network(),
                 Id::SecondCard => self.storage.second.is_some(),
                 Id::UnifiedCard => self.storage.unified.is_some(),
+                Id::RomsLink => self.storage.roms.shown(),
+                id if id.roms() => self.roms_visible(id),
                 id if Games::ROWS.contains(&id) => self.games.shows(id, self),
                 id @ (Id::CheevosAccount
                 | Id::CheevosWebKey
@@ -1162,6 +1208,7 @@ impl Settings {
                 .get(&id)
                 .is_none_or(|choices| choices.len() <= 1),
             Id::StorageCard | Id::UnifiedCard | Id::UsbAddress | Id::UsbState => true,
+            Id::RomsNow | Id::RomsCard | Id::RomsPower | Id::RomsLeft => true,
             Id::ModuleRow(_) | Id::ModuleItem(..) => self.module_fixed(id),
             _ => false,
         }
@@ -1173,6 +1220,7 @@ impl Settings {
             Id::UpdateInstall => self.updates.count() == 0 || self.updates.checking,
             Id::UpdateCheck => self.updates.checking,
             Id::RestoreBackup => self.storage.backup.is_none(),
+            Id::RomsMove | Id::RomsNames => self.roms_disabled(id),
             Id::ButtonsRestore => self.default_bindings(),
             Id::MangohudGame
             | Id::Mangohud
@@ -1230,6 +1278,7 @@ impl Settings {
         match self.page() {
             Page::Updates | Page::UpdatePackages => self.updates_hints(),
             Page::RaImport | Page::RaImportList => self.raimport_hints(),
+            Page::RomsList => BACK,
             Page::Root => &[
                 (Key('A'), "hint.open"),
                 (Key('B'), "hint.back"),

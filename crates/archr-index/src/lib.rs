@@ -7,7 +7,7 @@ mod gamelist_edit;
 pub mod games;
 pub mod systems;
 
-pub use gamelist_edit::{update_gamelist, GameUpdate};
+pub use gamelist_edit::{media_key, update_gamelist, GameUpdate, MediaOwners};
 pub use games::{clean_name, scan_system, scan_system_with_mapper, Details, Game};
 
 pub use features::{load_features, Features};

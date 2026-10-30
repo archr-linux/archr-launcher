@@ -77,6 +77,7 @@ impl BatterySource {
 struct Snapshot {
     battery: Option<Battery>,
     wifi: bool,
+    roms: Option<&'static str>,
 }
 enum Signal {
     Refresh,
@@ -120,6 +121,7 @@ impl Worker {
                     }
                     if now >= next_wifi {
                         next.wifi = wifi_on(&path);
+                        next.roms = roms_fault(&path);
                         next_wifi = now + REFRESH;
                     }
                     // Publish only real changes; the render thread redraws on them.
@@ -158,6 +160,8 @@ impl Drop for Worker {
 pub struct Status {
     pub battery: Option<Battery>,
     pub wifi: bool,
+    /// The ROMs partition cannot be written: the catalog key that says why.
+    pub roms: Option<&'static str>,
     pub clock: String,
     path: PathBuf,
     worker: Option<Worker>,
@@ -171,6 +175,7 @@ impl Status {
         let mut status = Self {
             battery: None,
             wifi: false,
+            roms: None,
             clock: String::new(),
             path,
             worker: None,
@@ -236,10 +241,16 @@ impl Status {
     }
     fn update(&mut self, unix: u64, snapshot: Option<Snapshot>) -> bool {
         let mut changed = false;
-        if let Some(Snapshot { battery, wifi }) = snapshot {
-            changed = self.battery != battery || self.wifi != wifi;
+        if let Some(Snapshot {
+            battery,
+            wifi,
+            roms,
+        }) = snapshot
+        {
+            changed = self.battery != battery || self.wifi != wifi || self.roms != roms;
             self.battery = battery;
             self.wifi = wifi;
+            self.roms = roms;
         }
         if unix / 60 != self.minute {
             self.minute = unix / 60;
@@ -249,6 +260,31 @@ impl Status {
         }
         changed
     }
+}
+/// The ROMs partition (exFAT) as the boot left it (/run/archr/roms-fs:
+/// errors mount it read-only, failed leaves it out), or remounted read-only
+/// later by an I/O error (on /storage/roms, or on the branch automount binds
+/// it to under unified storage).
+pub fn roms_fault(root: &Path) -> Option<&'static str> {
+    let read = |path: &str| {
+        archr_io::read_utf8(&root.join(path), 64 * 1024, archr_io::Symlinks::Follow)
+            .unwrap_or_default()
+    };
+    match read("run/archr/roms-fs").trim() {
+        "failed" => return Some("roms.alert_failed"),
+        "errors" => return Some("roms.alert_readonly"),
+        _ => {}
+    }
+    read("proc/mounts")
+        .lines()
+        .map(|line| line.split_whitespace().collect::<Vec<_>>())
+        .any(|f| {
+            f.len() > 3
+                && matches!(f[1], "/storage/roms" | "/run/archr/sd1-roms")
+                && f[2] == "exfat"
+                && f[3].split(',').any(|o| o == "ro")
+        })
+        .then_some("roms.alert_readonly")
 }
 /// Radio state is the wlan rfkill soft block, which `wifictl` flips at once; link
 /// flags would lag behind it and depend on the interface name.
@@ -339,6 +375,7 @@ mod tests {
             let snapshot = Snapshot {
                 battery: percent.map(|percent| Battery { percent, charging }),
                 wifi,
+                roms: None,
             };
             assert_eq!(status.update(unix + 60, Some(snapshot)), changed);
             assert!(
@@ -355,6 +392,37 @@ mod tests {
         fs::write(dir.join("soft"), format!("{soft}\n")).unwrap();
     }
 
+    #[test]
+    fn the_roms_partition_warns_when_read_only_or_missing() {
+        let root = tempfile::tempdir().unwrap();
+        let write = |path: &str, text: &str| {
+            let path = root.path().join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        };
+        assert_eq!(roms_fault(root.path()), None);
+        write("run/archr/roms-fs", "repaired\n");
+        write(
+            "proc/mounts",
+            "/dev/mmcblk0p4 /storage/roms exfat rw,noatime 0 0\n",
+        );
+        assert_eq!(roms_fault(root.path()), None);
+        // An I/O error remounted it read-only after the boot.
+        write(
+            "proc/mounts",
+            "/dev/mmcblk0p4 /storage/roms exfat ro,noatime 0 0\n",
+        );
+        assert_eq!(roms_fault(root.path()), Some("roms.alert_readonly"));
+        // Unified storage: the union is on top, the partition is its branch.
+        write(
+            "proc/mounts",
+            "/dev/mmcblk0p4 /run/archr/sd1-roms exfat ro,noatime 0 0\n\
+             archr-roms /storage/roms fuse.mergerfs rw 0 0\n",
+        );
+        assert_eq!(roms_fault(root.path()), Some("roms.alert_readonly"));
+        write("run/archr/roms-fs", "failed\n");
+        assert_eq!(roms_fault(root.path()), Some("roms.alert_failed"));
+    }
     #[test]
     fn wifi_follows_the_wlan_soft_block_under_the_root() {
         let root = tempfile::tempdir().unwrap();

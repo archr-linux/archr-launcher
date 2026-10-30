@@ -172,6 +172,138 @@ fn scrapes_missing_art_into_the_media_layout_the_library_reads() {
 }
 
 #[test]
+fn media_names_suit_an_exfat_card_and_never_take_another_games_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let sys = system(
+        &dir.path().join("roms"),
+        &[
+            "Zelda: Link.sfc",
+            "Zelda? Link.sfc",
+            "mario.sfc",
+            "Dots..sfc",
+        ],
+    );
+    // Another game's cover, the same name but for case.
+    fs::create_dir_all(sys.path.join("media/images")).unwrap();
+    fs::write(sys.path.join("media/images/MARIO.png"), png(1, 1)).unwrap();
+    let options = || Options {
+        media: vec![Media::Box2d],
+        ..Options::new("en")
+    };
+    let job = engine(mock(happy), &dir.path().join("cache")).start(vec![sys.clone()], options());
+    assert_eq!(finish(&job).1.progress.scraped, 4);
+    let mut names: Vec<String> = fs::read_dir(sys.path.join("media/images"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    assert_eq!(
+        names,
+        [
+            "Dots.png",
+            "MARIO.png",
+            "Zelda_ Link (2).png",
+            "Zelda_ Link.png",
+            "mario (2).png"
+        ]
+    );
+    // The gamelist gives each game its own file, and a new run keeps them.
+    let covers = |sys: &SystemDef| {
+        let mut covers: Vec<_> = scan_system(sys)
+            .into_iter()
+            .map(|g| g.image.unwrap().file_name().unwrap().to_owned())
+            .collect();
+        covers.sort();
+        covers
+    };
+    let before = covers(&sys);
+    assert_eq!(before.len(), 4);
+    let job = engine(mock(happy), &dir.path().join("cache")).start(
+        vec![sys.clone()],
+        Options {
+            force: true,
+            ..options()
+        },
+    );
+    finish(&job);
+    assert_eq!(covers(&sys), before);
+    assert_eq!(
+        fs::read_dir(sys.path.join("media/images")).unwrap().count(),
+        5
+    );
+}
+
+#[test]
+fn a_name_another_games_record_cites_is_taken_even_without_its_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let sys = system(
+        &dir.path().join("roms"),
+        &["Zelda: Link.sfc", "Zelda_ Link.sfc"],
+    );
+    // "Zelda_ Link" owns its cover by record; the file is gone for now.
+    fs::write(
+        sys.path.join("gamelist.xml"),
+        "<gameList><game><path>./Zelda_ Link.sfc</path>\
+         <thumbnail>./media/images/Zelda_ Link.png</thumbnail></game></gameList>",
+    )
+    .unwrap();
+    let job = engine(mock(happy), &dir.path().join("cache")).start(
+        vec![sys.clone()],
+        Options {
+            media: vec![Media::Box2d],
+            game: Some(sys.path.join("Zelda: Link.sfc")),
+            ..Options::new("en")
+        },
+    );
+    assert_eq!(finish(&job).1.progress.scraped, 1);
+    assert!(sys.path.join("media/images/Zelda_ Link (2).png").is_file());
+    assert!(!sys.path.join("media/images/Zelda_ Link.png").exists());
+}
+
+#[test]
+fn parallel_downloads_never_choose_the_same_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let roms = [
+        "A:B.sfc", "A?B.sfc", "A*B.sfc", "A|B.sfc", "A<B.sfc", "A>B.sfc",
+    ];
+    let sys = system(&dir.path().join("roms"), &roms);
+    let handler = |url: &str| {
+        if url.contains("ssuserInfos.php") {
+            Some((
+                200,
+                String::from_utf8(user_xml())
+                    .unwrap()
+                    .replace("<maxthreads>1", "<maxthreads>4")
+                    .into_bytes(),
+            ))
+        } else if url.contains("/m/") {
+            // Slow art: the downloads overlap between choice and record.
+            std::thread::sleep(Duration::from_millis(30));
+            happy(url)
+        } else {
+            happy(url)
+        }
+    };
+    let job = engine(mock(handler), &dir.path().join("cache")).start(
+        vec![sys.clone()],
+        Options {
+            media: vec![Media::Box2d],
+            ..Options::new("en")
+        },
+    );
+    assert_eq!(finish(&job).1.progress.scraped, roms.len());
+    assert_eq!(
+        fs::read_dir(sys.path.join("media/images")).unwrap().count(),
+        roms.len()
+    );
+    let covers: std::collections::HashSet<_> = scan_system(&sys)
+        .into_iter()
+        .map(|g| g.image.unwrap())
+        .collect();
+    assert_eq!(covers.len(), roms.len(), "each game its own cover");
+}
+
+#[test]
 fn falls_back_to_name_search_and_reports_misses() {
     let dir = tempfile::tempdir().unwrap();
     let sys = system(dir.path(), &["Hit (Europe).sfc", "Miss.sfc"]);
