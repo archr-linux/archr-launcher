@@ -774,6 +774,43 @@ impl App {
         }
     }
 
+    /// Saves and Screenshots: the pictures on the page, and the large one
+    /// (the selected state's, or the screenshot shown and its neighbours).
+    pub fn progress_paths(&self) -> (Vec<PathBuf>, Vec<PathBuf>) {
+        let (saves, shots, at) = (&self.progress.saves, &self.progress.shots, self.cursor);
+        let page = |size: usize, len: usize| {
+            let size = size.max(1);
+            let first = (at / size * size).min(len);
+            first..(first + size).min(len)
+        };
+        let picture = |save: &Save| save.picture.clone();
+        match self.backdrop().0 {
+            Screen::Saves { .. } => (
+                saves[page(self.saves_page, saves.len())]
+                    .iter()
+                    .filter_map(picture)
+                    .collect(),
+                saves.get(at).and_then(picture).into_iter().collect(),
+            ),
+            Screen::Shots { .. } => (
+                shots[page(self.shots_page, shots.len())]
+                    .iter()
+                    .map(|s| s.path.clone())
+                    .collect(),
+                Vec::new(),
+            ),
+            Screen::Shot { .. } => (
+                shots.get(at).map(|s| s.path.clone()).into_iter().collect(),
+                [Some(at), at.checked_add(1), at.checked_sub(1)]
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|n| shots.get(n).map(|s| s.path.clone()))
+                    .collect(),
+            ),
+            _ => Default::default(),
+        }
+    }
+
     /// A RetroArch state cannot start the game in hardcore mode or netplay.
     pub fn can_play(&self, save: &Save) -> bool {
         save.playable && (save.kind != Kind::RetroArch || self.progress.blocked.is_none())

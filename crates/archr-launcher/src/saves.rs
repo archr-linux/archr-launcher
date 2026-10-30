@@ -136,32 +136,18 @@ fn mupen_slot(name: &str) -> Option<(u16, &str)> {
     (md5.len() == 8 && md5.bytes().all(|b| b.is_ascii_hexdigit())).then_some((slot, base))
 }
 
-/// `<rom>-AAMMDD-HHMMSS.png`: the local time in the name.
-fn shot_time(name: &str, stem: &str) -> Option<u64> {
+/// `<rom>-AAMMDD-HHMMSS.png`, as RetroArch and the shortcut name captures.
+fn is_shot(name: &str, stem: &str) -> bool {
     let rest = name
-        .strip_prefix(stem)?
-        .strip_prefix('-')?
-        .strip_suffix(".png")?;
-    let (date, time) = rest.split_once('-')?;
-    if date.len() != 6
-        || time.len() != 6
-        || !(date.to_owned() + time).bytes().all(|b| b.is_ascii_digit())
-    {
-        return None;
-    }
-    let n = |s: &str, at: usize| s[at..at + 2].parse::<i32>().unwrap_or(0);
-    // SAFETY: a zeroed tm is a valid input; mktime reads and normalizes it.
-    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
-    tm.tm_year = 100 + n(date, 0);
-    tm.tm_mon = n(date, 2) - 1;
-    tm.tm_mday = n(date, 4);
-    tm.tm_hour = n(time, 0);
-    tm.tm_min = n(time, 2);
-    tm.tm_sec = n(time, 4);
-    tm.tm_isdst = -1;
-    // SAFETY: tm is a live, initialized struct; mktime keeps no pointer.
-    let unix = unsafe { libc::mktime(&mut tm) };
-    u64::try_from(unix).ok()
+        .strip_prefix(stem)
+        .and_then(|r| r.strip_prefix('-'))
+        .and_then(|r| r.strip_suffix(".png"));
+    rest.and_then(|r| r.split_once('-'))
+        .is_some_and(|(date, time)| {
+            date.len() == 6
+                && time.len() == 6
+                && (date.to_owned() + time).bytes().all(|b| b.is_ascii_digit())
+        })
 }
 
 /// Width and height from a PNG header.
@@ -173,11 +159,10 @@ fn png_size(path: &Path) -> Option<(u32, u32)> {
     (head[..8] == *b"\x89PNG\r\n\x1a\n" && head[12..16] == *b"IHDR").then(|| (be(16), be(20)))
 }
 
-/// The same bytes (the details picture is a copy of a screenshot).
-fn same_file(a: &Path, b: &Path, len: u64) -> bool {
-    len < 16 << 20
-        && fs::metadata(b).is_ok_and(|m| m.len() == len)
-        && matches!((fs::read(a), fs::read(b)), (Ok(x), Ok(y)) if x == y)
+/// The details picture copied from this screenshot: "use in details"
+/// gives the copy the capture's time, so size and time tell it.
+fn same_file(details: &Path, shot: &fs::Metadata) -> bool {
+    fs::metadata(details).is_ok_and(|m| m.len() == shot.len() && seconds(&m) == seconds(shot))
 }
 
 /// Everything the card holds for the game, newest first.
@@ -264,20 +249,17 @@ pub fn scan(places: &Places, game: &Game) -> Progress {
     let mut shots = Vec::new();
     for entry in fs::read_dir(&places.shots).into_iter().flatten().flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
-        let Some(named) = stems.iter().find_map(|stem| shot_time(&name, stem)) else {
+        if !stems.iter().any(|stem| is_shot(&name, stem)) {
             continue;
-        };
+        }
         let Some(meta) = entry.metadata().ok().filter(fs::Metadata::is_file) else {
             continue;
         };
         let path = entry.path();
         shots.push(Shot {
             size: png_size(&path),
-            details: game
-                .details
-                .as_deref()
-                .is_some_and(|d| same_file(d, &path, meta.len())),
-            taken: if named > 0 { named } else { seconds(&meta) },
+            details: game.details.as_deref().is_some_and(|d| same_file(d, &meta)),
+            taken: seconds(&meta),
             bytes: meta.len(),
             path,
         });
@@ -378,7 +360,11 @@ fn use_shot(game: &Game, shot: &Path) -> io::Result<()> {
     name.push(".png");
     let target = game.root.join("media/screenshots").join(name);
     let mut source = fs::File::open(shot)?;
-    atomic_publish(&target, true, |out| io::copy(&mut source, out).map(drop))?;
+    let time = source.metadata()?.modified()?;
+    atomic_publish(&target, true, |out| {
+        io::copy(&mut source, out)?;
+        out.set_modified(time)
+    })?;
     if game.details.as_ref().is_some_and(|d| *d != target) {
         let update = GameUpdate {
             rom: game.rom.clone(),
@@ -515,14 +501,14 @@ mod tests {
         );
         assert_eq!(mupen_slot("Super Mario 64-635A42C5.eep"), None);
         assert_eq!(mupen_slot("Readme.st1"), None);
-        assert!(shot_time("Mario-261028-201500.png", "Mario").is_some());
+        assert!(is_shot("Mario-261028-201500.png", "Mario"));
         for other in [
             "Mario World-261028-201500.png",
             "Mario-2610-201500.png",
             "Mario-261028-201500.jpg",
             "2026-10-28-201500.png",
         ] {
-            assert_eq!(shot_time(other, "Mario"), None, "{other}");
+            assert!(!is_shot(other, "Mario"), "{other}");
         }
         assert_eq!(
             stems(Path::new("/r/a:b?.sfc")),
@@ -578,10 +564,14 @@ mod tests {
         ] {
             fs::write(shots.join(name), name).unwrap();
         }
-        let details = game.root.join("media/screenshots/Mario.png");
-        fs::create_dir_all(details.parent().unwrap()).unwrap();
-        fs::write(&details, "Mario-261028-201500.png").unwrap();
-        game.details = Some(details);
+        let earlier = fs::File::options()
+            .write(true)
+            .open(shots.join("Mario-261028-201500.png"))
+            .unwrap();
+        earlier.set_modified(old).unwrap();
+        // "Use in details" on the older one: its copy keeps its time.
+        use_shot(&game, &shots.join("Mario-261028-201500.png")).unwrap();
+        game.details = Some(game.root.join("media/screenshots/Mario.png"));
 
         let progress = scan(&places, &game);
         assert_eq!(progress.game, Some(("snes".into(), 0)));

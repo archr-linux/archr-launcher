@@ -610,7 +610,7 @@ fn run(
         shots.request(shot.as_slice());
         logos.request(logo.as_slice());
         badges.request(&badge_paths(&app));
-        let (small, large) = progress_art(&app);
+        let (small, large) = app.progress_paths();
         thumbs.request(&small);
         pictures.request(&large);
         dirty |= covers.poll()
@@ -986,53 +986,6 @@ fn details_art(app: &App, data: &dyn DataSource) -> (Option<PathBuf>, Option<Pat
 }
 
 /// Badges of the achievements on the page the list shows.
-/// Saves and Screenshots: the pictures on the page, and the large one (the
-/// selected state's, or the screenshot shown, then its neighbours).
-fn progress_art(app: &App) -> (Vec<PathBuf>, Vec<PathBuf>) {
-    let saves = &app.progress.saves;
-    let shots = &app.progress.shots;
-    // The page holding the cursor, within `len` items.
-    let page = |size: usize, len: usize| {
-        let first = (app.cursor / size.max(1) * size.max(1)).min(len);
-        first..(first + size.max(1)).min(len)
-    };
-    match app.backdrop().0 {
-        Screen::Saves { .. } => (
-            saves[page(app.saves_page, saves.len())]
-                .iter()
-                .filter_map(|save| save.picture.clone())
-                .collect(),
-            saves
-                .get(app.cursor)
-                .and_then(|save| save.picture.clone())
-                .into_iter()
-                .collect(),
-        ),
-        Screen::Shots { .. } => (
-            shots[page(app.shots_page, shots.len())]
-                .iter()
-                .map(|s| s.path.clone())
-                .collect(),
-            Vec::new(),
-        ),
-        Screen::Shot { .. } => {
-            let around = [
-                Some(app.cursor),
-                app.cursor.checked_add(1),
-                app.cursor.checked_sub(1),
-            ];
-            let large = around
-                .into_iter()
-                .flatten()
-                .filter_map(|n| shots.get(n).map(|s| s.path.clone()))
-                .collect();
-            let small = shots.get(app.cursor).map(|s| s.path.clone());
-            (small.into_iter().collect(), large)
-        }
-        _ => (Vec::new(), Vec::new()),
-    }
-}
-
 fn badge_paths(app: &App) -> Vec<PathBuf> {
     if !matches!(app.screen, Screen::Achievements { .. }) {
         return Vec::new();
