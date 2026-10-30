@@ -24,6 +24,8 @@ pub struct Library {
     pub write_failed: bool,
     /// The CPU governor a module chose for the next launch only.
     pub governor: Option<String>,
+    /// The save state the next launch starts from.
+    pub entry: Option<crate::saves::Entry>,
     moonlight_available: bool,
     overview: Overview,
     definitions: Vec<SystemDef>,
@@ -95,6 +97,7 @@ impl Library {
             pending_writes: 0,
             write_failed: false,
             governor: None,
+            entry: None,
             overview,
             definitions,
             games: HashMap::new(),
@@ -344,6 +347,19 @@ impl Library {
                 }) {
                     command.push_str(&format!(" --governor={governor}"));
                 }
+                // Loading a state rewrites the cartridge save when the game
+                // closes: the one there now is kept as .bak first, or the
+                // game does not start.
+                if let Some(entry) = self.entry.take() {
+                    if self.current_core(&system, game).is_some() {
+                        crate::saves::back_up(&entry.backup).map_err(|error| {
+                            log::warn!("Cannot back up the cartridge save: {error}");
+                            "error.save_backup".to_owned()
+                        })?;
+                        command.push(' ');
+                        command.push_str(&crate::handoff::quote(&entry.argument));
+                    }
+                }
                 let key = self.game_key(&system, game).ok_or("error.game_missing")?;
                 if !self.is_tools(&system) {
                     self.store.push_recent(&key);
@@ -381,7 +397,11 @@ impl Library {
                 }
                 self.queue_store();
             }
-            Outcome::Action(_) | Outcome::ToggleWifi => return Err("error.operation".to_owned()),
+            Outcome::Action(_)
+            | Outcome::ToggleWifi
+            | Outcome::PlayFrom { .. }
+            | Outcome::Delete { .. }
+            | Outcome::UseShot { .. } => return Err("error.operation".to_owned()),
         }
         Ok(false)
     }
@@ -434,6 +454,18 @@ impl Library {
             .as_ref()
             .ok_or("error.persistence")?
             .flush(self.store.clone())
+    }
+    /// What the Saves and Screenshots screens need to know about a game.
+    pub fn progress_game(&self, system: &str, index: usize) -> Option<crate::saves::Game> {
+        let game = self.games(system).get(index)?;
+        Some(crate::saves::Game {
+            system: system.to_owned(),
+            index,
+            rom: game.path.clone(),
+            emulator: self.current_core(system, index),
+            details: game.details.screenshot.clone(),
+            root: self.definition(system)?.root_of(&game.path).to_owned(),
+        })
     }
     fn definition(&self, name: &str) -> Option<&SystemDef> {
         self.definitions.iter().find(|system| system.name == name)

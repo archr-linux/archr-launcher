@@ -986,3 +986,176 @@ fn mangohud_row_steps_through_the_systems_choices_for_this_game() {
     }
     assert_eq!(app.handle(Button::A, &data), Outcome::None);
 }
+
+mod progress {
+    use super::*;
+    use archr_ui::saves::{Blocked, Kind, Progress, Save, Shot};
+
+    fn save(slot: Option<u16>, kind: Kind) -> Save {
+        Save {
+            path: format!(
+                "/s/Game 7.state{}",
+                slot.map_or(".auto".into(), |n| n.to_string())
+            )
+            .into(),
+            picture: None,
+            slot,
+            saved: 100,
+            bytes: 1,
+            kind,
+            emulator: "RetroArch".into(),
+            playable: true,
+            backup: Vec::new(),
+        }
+    }
+    fn shot(n: u64) -> Shot {
+        Shot {
+            path: format!("/shots/Game 7-2610{n:02}-000000.png").into(),
+            taken: n,
+            bytes: 1,
+            size: None,
+            details: n == 1,
+        }
+    }
+    fn found(saves: usize, shots: u64) -> Progress {
+        Progress {
+            game: Some(("snes".into(), 7)),
+            saves: (0..saves as u16)
+                .map(|n| save(Some(n), Kind::RetroArch))
+                .collect(),
+            shots: (0..shots).map(shot).collect(),
+        }
+    }
+    /// The game menu of snes game 7, after the host answered.
+    fn menu(data: &FakeData, progress: Progress) -> App {
+        let mut app = in_games("snes", 7);
+        app.handle(Button::Y, data);
+        assert_eq!(app.scan, Some(("snes".into(), 7)), "the host is asked");
+        app.set_progress(progress, data);
+        app
+    }
+
+    #[test]
+    fn the_game_menu_offers_saves_and_screenshots_only_when_there_are_some() {
+        let data = FakeData::library();
+        let app = menu(&data, found(2, 3));
+        let items = app.quick_menu_items(&data);
+        assert_eq!(
+            &items[..4],
+            [
+                QuickItem::Core,
+                QuickItem::Details,
+                QuickItem::Saves,
+                QuickItem::Shots
+            ]
+        );
+        let app = menu(&data, found(0, 0));
+        assert!(!app.quick_menu_items(&data).contains(&QuickItem::Saves));
+        // Another game's answer shows nothing here.
+        let mut other = found(2, 2);
+        other.game = Some(("snes".into(), 6));
+        let app = menu(&data, other);
+        assert!(!app.quick_menu_items(&data).contains(&QuickItem::Shots));
+    }
+
+    #[test]
+    fn the_selected_row_stays_put_when_the_rows_arrive() {
+        let data = FakeData::library();
+        let mut app = in_games("snes", 7);
+        app.handle(Button::Y, &data);
+        app.handle(Button::Down, &data);
+        assert_eq!(app.quick_menu_items(&data)[app.cursor], QuickItem::Details);
+        app.handle(Button::Down, &data);
+        let before = app.quick_menu_items(&data)[app.cursor];
+        app.set_progress(found(1, 1), &data);
+        assert_eq!(app.quick_menu_items(&data)[app.cursor], before);
+    }
+
+    #[test]
+    fn playing_from_a_state_asks_first_and_deleting_starts_on_cancel() {
+        let data = FakeData::library();
+        let mut app = menu(&data, found(3, 0));
+        app.cursor = 2;
+        app.handle(Button::A, &data);
+        assert_eq!(
+            app.screen,
+            Screen::Saves {
+                system: "snes".into(),
+                game: 7
+            }
+        );
+        app.handle(Button::Down, &data);
+        assert_eq!(app.handle(Button::A, &data), Outcome::None, "a question");
+        assert!(app.confirm.as_ref().is_some_and(|c| c.on_action));
+        assert_eq!(
+            app.handle(Button::A, &data),
+            Outcome::PlayFrom {
+                system: "snes".into(),
+                game: 7,
+                state: "/s/Game 7.state1".into(),
+            }
+        );
+        // Delete: Cancel has the focus; A there only closes the question.
+        app.handle(Button::X, &data);
+        assert!(app.confirm.as_ref().is_some_and(|c| !c.on_action));
+        assert_eq!(app.handle(Button::A, &data), Outcome::None);
+        assert!(app.confirm.is_none());
+        app.handle(Button::X, &data);
+        app.handle(Button::R, &data);
+        assert!(matches!(
+            app.handle(Button::A, &data),
+            Outcome::Delete { paths, .. } if paths == [std::path::PathBuf::from("/s/Game 7.state1")]
+        ));
+        // Nothing left: the screen closes.
+        app.set_progress(found(0, 0), &data);
+        assert_eq!(
+            app.screen,
+            Screen::Games {
+                system: "snes".into()
+            }
+        );
+    }
+
+    #[test]
+    fn hardcore_and_netplay_keep_retroarch_states_from_starting_the_game() {
+        let data = FakeData::library();
+        for blocked in [Blocked::Hardcore, Blocked::Netplay] {
+            let mut app = menu(&data, found(1, 0));
+            app.blocked = Some(blocked);
+            app.cursor = 2;
+            app.handle(Button::A, &data);
+            app.handle(Button::A, &data);
+            assert!(app.confirm.is_none(), "{blocked:?}");
+            assert!(!app.can_play(&app.progress.saves[0]));
+            // A standalone emulator's state is not RetroArch's to refuse.
+            assert!(app.can_play(&save(Some(1), Kind::Standalone)));
+        }
+    }
+
+    #[test]
+    fn the_grid_moves_by_rows_and_opens_one_screenshot() {
+        let data = FakeData::library();
+        let mut app = menu(&data, found(0, 6));
+        app.shots_columns = 4;
+        app.cursor = 2;
+        app.handle(Button::A, &data);
+        app.handle(Button::R, &data);
+        app.handle(Button::Down, &data);
+        assert_eq!(app.cursor, 5, "the next row, clamped to the last");
+        app.handle(Button::Down, &data);
+        assert_eq!(app.cursor, 5);
+        app.handle(Button::Up, &data);
+        assert_eq!(app.cursor, 1);
+        app.handle(Button::A, &data);
+        assert!(matches!(app.screen, Screen::Shot { .. }));
+        // Shot 1 is already the details picture; shot 2 is not.
+        assert_eq!(app.handle(Button::Y, &data), Outcome::None);
+        app.handle(Button::R, &data);
+        assert!(
+            matches!(app.handle(Button::Y, &data), Outcome::UseShot { path, .. } if path.ends_with("Game 7-261002-000000.png"))
+        );
+        app.handle(Button::B, &data);
+        assert!(matches!(app.screen, Screen::Shots { .. }));
+        assert_eq!(app.cursor, 2, "back on the picture last shown");
+    }
+}

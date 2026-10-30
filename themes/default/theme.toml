@@ -72,6 +72,11 @@ start_widgets = { x = 0.153125, y = 0.454166667, w = 0.69375, h = 0.216666667 }
 # Game achievements (RA-jogo): progress over a 604px column, list of 50px rows below.
 achievements_progress = { x = 0.025, y = 0.108333333, w = 0.94375, h = 0.0625 }
 achievements_list = { x = 0.025, y = 0.183333333, w = 0.94375, h = 0.7125 }
+# Game saves (Saves): list 312px at 12,48 with 62px rows, state card 282px beside it.
+saves_list = { x = 0.01875, y = 0.1, w = 0.4875, h = 0.783333333 }
+saves_card = { x = 0.53125, y = 0.1, w = 0.440625, h = 0.783333333 }
+# Game screenshots (Screenshots): grid 588px at 26,52, cells about 138x104px.
+shots_grid = { x = 0.040625, y = 0.108333333, w = 0.91875, h = 0.791666667 }
 
 # Sounds: the files in sounds/ named after each event play without any
 # declaration. A [sounds] table is only needed to rename or silence one

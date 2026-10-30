@@ -134,6 +134,7 @@ fn details_render_in_every_locale_with_and_without_art_and_text() {
                 logo: rich.then_some(&logo),
                 badges: None,
                 video: None,
+                ..Art::default()
             };
             ui.draw_with_settings(&app, &data, &theme, art, None)
                 .unwrap();
@@ -180,6 +181,7 @@ fn capture_details() {
                 logo: rich.then_some(&logo),
                 badges: None,
                 video: None,
+                ..Art::default()
             };
             ui.draw_with_settings(&app, &data, &theme, art, None)
                 .unwrap();
@@ -212,6 +214,7 @@ fn scraping_again_animates_the_button_unless_motion_is_off(
         logo: None,
         badges: None,
         video: None,
+        ..Art::default()
     };
     let data = data(true);
     let mut app = open(&data);
@@ -252,6 +255,7 @@ fn capture_scraping_again() {
         logo: None,
         badges: None,
         video: None,
+        ..Art::default()
     };
     let data = data(true);
     for language in ["pt_BR", "ru"] {

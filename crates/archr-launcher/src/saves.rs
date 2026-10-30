@@ -1,0 +1,587 @@
+//! A game's save states and screenshots on the card: found, deleted and
+//! backed up off the draw thread. Where emulators keep them is decided in
+//! `Places` and `cartridge` only, so moving them is a change here.
+use crate::paths::Paths;
+use archr_index::{update_gamelist, GameUpdate};
+use archr_io::{atomic_publish, remove_durable};
+use archr_ui::saves::{Kind, Progress, Save, Shot};
+use std::{
+    fs, io,
+    path::{Path, PathBuf},
+    sync::mpsc::{channel, Receiver, Sender},
+    thread,
+    time::UNIX_EPOCH,
+};
+
+/// Where the emulators keep progress today (all on the ROMs card, which a
+/// PC can read: plain files, no links).
+#[derive(Clone)]
+pub struct Places {
+    /// RetroArch states and their pictures: `<states>/<system>/`
+    /// (setsettings.sh sets savestate_directory per system).
+    states: PathBuf,
+    /// RetroArch's captures and the screenshot shortcut's, every game.
+    shots: PathBuf,
+    /// mupen64plus-arch: SaveStatePath and SaveSRAMPath (mupen64plus.cfg).
+    mupen: PathBuf,
+    /// Where the hashes the achievements already computed are kept.
+    hashes: PathBuf,
+}
+impl Places {
+    pub fn new(paths: &Paths) -> Self {
+        Self {
+            states: paths.at("/storage/roms/savestates"),
+            shots: paths.at("/storage/roms/screenshots"),
+            mupen: paths.at("/storage/roms/n64"),
+            hashes: paths.cache.join("cheevos"),
+        }
+    }
+    /// Deleting is only ever done inside these folders.
+    fn holds(&self, path: &Path) -> bool {
+        [&self.states, &self.shots, &self.mupen]
+            .iter()
+            .any(|dir| path.starts_with(dir))
+            && !path
+                .components()
+                .any(|c| matches!(c, std::path::Component::ParentDir))
+    }
+}
+
+/// RetroArch writes the cartridge save beside the ROM
+/// (savefiles_in_content_dir).
+fn cartridge(rom: &Path) -> PathBuf {
+    rom.with_extension("srm")
+}
+
+/// What the scan needs to know about the game.
+#[derive(Clone, Debug)]
+pub struct Game {
+    pub system: String,
+    pub index: usize,
+    pub rom: PathBuf,
+    /// The emulator and core a launch would use now.
+    pub emulator: Option<(String, String)>,
+    /// The picture the details screen shows, and the folder holding the
+    /// system's gamelist and media.
+    pub details: Option<PathBuf>,
+    pub root: PathBuf,
+}
+
+/// The ROM file name without its last extension, as RetroArch names states
+/// and captures; the second form is the one the screenshot shortcut writes
+/// when the name has characters a FAT card refuses.
+fn stems(rom: &Path) -> Vec<String> {
+    let stem = rom
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let plain: String = stem
+        .chars()
+        .map(|c| if ":?*\"<>|\\".contains(c) { '_' } else { c })
+        .collect();
+    let mut stems = vec![stem];
+    if plain != stems[0] {
+        stems.push(plain);
+    }
+    stems
+}
+
+fn seconds(meta: &fs::Metadata) -> u64 {
+    meta.modified()
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_secs())
+}
+
+/// `.state` is slot 0, `.stateN` slot N, `.state.auto` the automatic one.
+fn retroarch_slot(name: &str, stem: &str) -> Option<Option<u16>> {
+    match name.strip_prefix(stem)?.strip_prefix(".state")? {
+        "" => Some(Some(0)),
+        ".auto" => Some(None),
+        n if (1..=3).contains(&n.len()) && n.bytes().all(|b| b.is_ascii_digit()) => {
+            n.parse().ok().map(Some)
+        }
+        _ => None,
+    }
+}
+
+/// mupen64plus names states `<good name>-<MD5 8>.st<N>`: the slot and the
+/// name without `.st<N>`.
+fn mupen_slot(name: &str) -> Option<(u16, &str)> {
+    let (base, n) = name.rsplit_once(".st")?;
+    let slot = n
+        .parse()
+        .ok()
+        .filter(|_| n.bytes().all(|b| b.is_ascii_digit()))?;
+    let (_, md5) = base.rsplit_once('-')?;
+    (md5.len() == 8 && md5.bytes().all(|b| b.is_ascii_hexdigit())).then_some((slot, base))
+}
+
+/// `<rom>-AAMMDD-HHMMSS.png`: the local time in the name.
+fn shot_time(name: &str, stem: &str) -> Option<u64> {
+    let rest = name
+        .strip_prefix(stem)?
+        .strip_prefix('-')?
+        .strip_suffix(".png")?;
+    let (date, time) = rest.split_once('-')?;
+    if date.len() != 6
+        || time.len() != 6
+        || !(date.to_owned() + time).bytes().all(|b| b.is_ascii_digit())
+    {
+        return None;
+    }
+    let n = |s: &str, at: usize| s[at..at + 2].parse::<i32>().unwrap_or(0);
+    // SAFETY: a zeroed tm is a valid input; mktime reads and normalizes it.
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    tm.tm_year = 100 + n(date, 0);
+    tm.tm_mon = n(date, 2) - 1;
+    tm.tm_mday = n(date, 4);
+    tm.tm_hour = n(time, 0);
+    tm.tm_min = n(time, 2);
+    tm.tm_sec = n(time, 4);
+    tm.tm_isdst = -1;
+    // SAFETY: tm is a live, initialized struct; mktime keeps no pointer.
+    let unix = unsafe { libc::mktime(&mut tm) };
+    u64::try_from(unix).ok()
+}
+
+/// Width and height from a PNG header.
+fn png_size(path: &Path) -> Option<(u32, u32)> {
+    use io::Read;
+    let mut head = [0u8; 24];
+    fs::File::open(path).ok()?.read_exact(&mut head).ok()?;
+    let be = |at: usize| u32::from_be_bytes([head[at], head[at + 1], head[at + 2], head[at + 3]]);
+    (head[..8] == *b"\x89PNG\r\n\x1a\n" && head[12..16] == *b"IHDR").then(|| (be(16), be(20)))
+}
+
+/// The same bytes (the details picture is a copy of a screenshot).
+fn same_file(a: &Path, b: &Path, len: u64) -> bool {
+    len < 16 << 20
+        && fs::metadata(b).is_ok_and(|m| m.len() == len)
+        && matches!((fs::read(a), fs::read(b)), (Ok(x), Ok(y)) if x == y)
+}
+
+/// Everything the card holds for the game, newest first.
+pub fn scan(places: &Places, game: &Game) -> Progress {
+    let stems = stems(&game.rom);
+    let (emulator, core) = game.emulator.clone().unwrap_or_default();
+    let retroarch = emulator == "retroarch";
+    let mut saves = Vec::new();
+
+    let dir = places.states.join(game.system.to_ascii_lowercase());
+    let srm = Some(cartridge(&game.rom)).filter(|p| p.is_file());
+    for entry in fs::read_dir(&dir).into_iter().flatten().flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let Some(slot) = retroarch_slot(&name, &stems[0]) else {
+            continue;
+        };
+        let Some(meta) = entry.metadata().ok().filter(fs::Metadata::is_file) else {
+            continue;
+        };
+        let picture = dir.join(format!("{name}.png"));
+        saves.push(Save {
+            path: entry.path(),
+            picture: picture.is_file().then_some(picture),
+            slot,
+            saved: seconds(&meta),
+            bytes: meta.len(),
+            kind: Kind::RetroArch,
+            emulator: if retroarch && !core.is_empty() {
+                format!("RetroArch · {core}")
+            } else {
+                "RetroArch".into()
+            },
+            playable: retroarch,
+            backup: srm.clone().into_iter().collect(),
+        });
+    }
+
+    // mupen64plus-arch: matched by the ROM's MD5 in the file name, worked
+    // out only when such files exist.
+    if game.system.eq_ignore_ascii_case("n64") {
+        let names: Vec<_> = fs::read_dir(&places.mupen)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        let md5 = names
+            .iter()
+            .any(|n| mupen_slot(n).is_some())
+            .then(|| crate::cheevos::cached_hash(&places.hashes, "n64", &game.rom))
+            .flatten()
+            .map(|h| h[..8].to_ascii_uppercase());
+        for name in names.iter().filter(|_| md5.is_some()) {
+            let Some((slot, base)) = mupen_slot(name) else {
+                continue;
+            };
+            if !base
+                .to_ascii_uppercase()
+                .ends_with(md5.as_deref().unwrap_or_default())
+            {
+                continue;
+            }
+            let path = places.mupen.join(name);
+            let Some(meta) = fs::metadata(&path).ok().filter(fs::Metadata::is_file) else {
+                continue;
+            };
+            let backup = ["eep", "sra", "fla", "mpk"]
+                .iter()
+                .map(|ext| places.mupen.join(format!("{base}.{ext}")))
+                .filter(|p| p.is_file())
+                .collect();
+            saves.push(Save {
+                path,
+                picture: None,
+                slot: Some(slot),
+                saved: seconds(&meta),
+                bytes: meta.len(),
+                kind: Kind::Standalone,
+                emulator: "Mupen64Plus".into(),
+                playable: emulator == "mupen64plus",
+                backup,
+            });
+        }
+    }
+    saves.sort_by_key(|s| std::cmp::Reverse(s.saved));
+
+    let mut shots = Vec::new();
+    for entry in fs::read_dir(&places.shots).into_iter().flatten().flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let Some(named) = stems.iter().find_map(|stem| shot_time(&name, stem)) else {
+            continue;
+        };
+        let Some(meta) = entry.metadata().ok().filter(fs::Metadata::is_file) else {
+            continue;
+        };
+        let path = entry.path();
+        shots.push(Shot {
+            size: png_size(&path),
+            details: game
+                .details
+                .as_deref()
+                .is_some_and(|d| same_file(d, &path, meta.len())),
+            taken: if named > 0 { named } else { seconds(&meta) },
+            bytes: meta.len(),
+            path,
+        });
+    }
+    shots.sort_by_key(|s| std::cmp::Reverse(s.taken));
+    Progress {
+        game: Some((game.system.clone(), game.index)),
+        saves,
+        shots,
+    }
+}
+
+/// A launch from a state: runemu.sh's argument and the cartridge saves to
+/// back up first.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Entry {
+    pub argument: String,
+    pub backup: Vec<PathBuf>,
+}
+impl Entry {
+    pub fn of(save: &Save) -> Option<Self> {
+        let argument = match (save.kind, save.slot) {
+            (Kind::RetroArch, Some(n)) => format!("--entryslot={n}"),
+            (Kind::RetroArch, None) => "--entryslot=auto".into(),
+            (Kind::Standalone, _) => format!("--entrystate={}", save.path.to_str()?),
+        };
+        Some(Self {
+            argument,
+            backup: save.backup.clone(),
+        })
+    }
+}
+
+/// `<file>.bak`, replacing the copy before it, written whole or not at all.
+pub fn back_up(files: &[PathBuf]) -> io::Result<()> {
+    for file in files {
+        let mut name = file.as_os_str().to_owned();
+        name.push(".bak");
+        let mut source = fs::File::open(file)?;
+        atomic_publish(Path::new(&name), true, |out| {
+            io::copy(&mut source, out).map(drop)
+        })?;
+    }
+    Ok(())
+}
+
+/// The screenshot becomes the details picture: copied to the system's
+/// `media/screenshots/<rom>.png`, which the details screen reads, and named
+/// in the gamelist when the gamelist pointed the screen elsewhere.
+fn use_shot(game: &Game, shot: &Path) -> io::Result<()> {
+    let stem = game.rom.file_stem().unwrap_or_default();
+    let mut name = stem.to_owned();
+    name.push(".png");
+    let target = game.root.join("media/screenshots").join(name);
+    let mut source = fs::File::open(shot)?;
+    atomic_publish(&target, true, |out| io::copy(&mut source, out).map(drop))?;
+    if game.details.as_ref().is_some_and(|d| *d != target) {
+        let update = GameUpdate {
+            rom: game.rom.clone(),
+            fields: vec![("image", target.display().to_string())],
+        };
+        update_gamelist(&game.root, &[update], true)?;
+    }
+    Ok(())
+}
+
+pub enum Task {
+    Scan,
+    Delete(Vec<PathBuf>),
+    UseShot(PathBuf),
+}
+
+/// What a task left: the game's progress, read again, and a notice.
+pub struct Done {
+    pub progress: Progress,
+    pub notice: Option<&'static str>,
+    /// The gamelist or the media changed: the system needs reading again.
+    pub reload: Option<String>,
+}
+
+/// Runs one task at a time per request; only the newest answer is kept.
+pub struct Worker {
+    places: Places,
+    send: Sender<(u64, Done)>,
+    done: Receiver<(u64, Done)>,
+    latest: u64,
+}
+impl Worker {
+    pub fn new(paths: &Paths) -> Self {
+        let (send, done) = channel();
+        Self {
+            places: Places::new(paths),
+            send,
+            done,
+            latest: 0,
+        }
+    }
+    pub fn start(&mut self, task: Task, game: Game) {
+        self.latest += 1;
+        let (id, places, send) = (self.latest, self.places.clone(), self.send.clone());
+        thread::spawn(move || {
+            let mut notice = None;
+            let mut reload = None;
+            match task {
+                Task::Scan => {}
+                Task::Delete(paths) => {
+                    for path in paths.iter().filter(|p| places.holds(p)) {
+                        if let Err(error) = remove_durable(path) {
+                            log::warn!("Cannot delete {}: {error}", path.display());
+                            notice = Some("error.operation");
+                        }
+                    }
+                }
+                Task::UseShot(shot) => match use_shot(&game, &shot) {
+                    Ok(()) => {
+                        notice = Some("shots.used");
+                        reload = Some(game.system.clone());
+                    }
+                    Err(error) => {
+                        log::warn!("Cannot use {} on the details: {error}", shot.display());
+                        notice = Some("error.operation");
+                    }
+                },
+            }
+            let progress = scan(&places, &game);
+            let _ = send.send((
+                id,
+                Done {
+                    progress,
+                    notice,
+                    reload,
+                },
+            ));
+        });
+    }
+    /// The newest task's answer, once; never blocks.
+    pub fn poll(&mut self) -> Option<Done> {
+        let mut answer = None;
+        while let Ok((id, done)) = self.done.try_recv() {
+            // A task's side effects stand; an older scan's list does not.
+            if id == self.latest || done.reload.is_some() || done.notice.is_some() {
+                answer = Some(done);
+            }
+        }
+        answer
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn names_match_their_rom_only() {
+        assert_eq!(retroarch_slot("Mario.state", "Mario"), Some(Some(0)));
+        assert_eq!(retroarch_slot("Mario.state3", "Mario"), Some(Some(3)));
+        assert_eq!(retroarch_slot("Mario.state999", "Mario"), Some(Some(999)));
+        assert_eq!(retroarch_slot("Mario.state.auto", "Mario"), Some(None));
+        for other in [
+            "Mario.state3.png",
+            "Mario.state1.entry",
+            "Mario.state1000",
+            "Mario World.state",
+            "Mario.srm",
+        ] {
+            assert_eq!(retroarch_slot(other, "Mario"), None, "{other}");
+        }
+        assert_eq!(
+            mupen_slot("Super Mario 64 (U) [!]-635A42C5.st1"),
+            Some((1, "Super Mario 64 (U) [!]-635A42C5"))
+        );
+        assert_eq!(mupen_slot("Super Mario 64-635A42C5.eep"), None);
+        assert_eq!(mupen_slot("Readme.st1"), None);
+        assert!(shot_time("Mario-261028-201500.png", "Mario").is_some());
+        for other in [
+            "Mario World-261028-201500.png",
+            "Mario-2610-201500.png",
+            "Mario-261028-201500.jpg",
+            "2026-10-28-201500.png",
+        ] {
+            assert_eq!(shot_time(other, "Mario"), None, "{other}");
+        }
+        assert_eq!(
+            stems(Path::new("/r/a:b?.sfc")),
+            vec!["a:b?".to_owned(), "a_b_".to_owned()]
+        );
+    }
+
+    fn game(paths: &Paths, system: &str, rom: &str, emulator: (&str, &str)) -> Game {
+        let root = paths.at(&format!("/storage/roms/{system}"));
+        fs::create_dir_all(&root).unwrap();
+        Game {
+            system: system.into(),
+            index: 0,
+            rom: root.join(rom),
+            emulator: Some((emulator.0.into(), emulator.1.into())),
+            details: None,
+            root,
+        }
+    }
+
+    #[test]
+    fn states_and_screenshots_of_the_game_newest_first() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::new(Some(dir.path().to_owned()));
+        let places = Places::new(&paths);
+        let mut game = game(&paths, "snes", "Mario.sfc", ("retroarch", "snes9x"));
+        fs::write(&game.rom, "rom").unwrap();
+        let states = paths.at("/storage/roms/savestates/snes");
+        let shots = paths.at("/storage/roms/screenshots");
+        fs::create_dir_all(&states).unwrap();
+        fs::create_dir_all(&shots).unwrap();
+        for name in [
+            "Mario.state",
+            "Mario.state2",
+            "Mario.state.auto",
+            "Mario World.state1",
+        ] {
+            fs::write(states.join(name), name).unwrap();
+        }
+        fs::write(states.join("Mario.state2.png"), "png").unwrap();
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+        fs::File::options()
+            .write(true)
+            .open(states.join("Mario.state"))
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+        for name in [
+            "Mario-261028-201500.png",
+            "Mario-261029-080000.png",
+            "Mario World-261028-201500.png",
+            "2026-10-28-201500.png",
+        ] {
+            fs::write(shots.join(name), name).unwrap();
+        }
+        let details = game.root.join("media/screenshots/Mario.png");
+        fs::create_dir_all(details.parent().unwrap()).unwrap();
+        fs::write(&details, "Mario-261028-201500.png").unwrap();
+        game.details = Some(details);
+
+        let progress = scan(&places, &game);
+        assert_eq!(progress.game, Some(("snes".into(), 0)));
+        let slots: Vec<_> = progress.saves.iter().map(|s| s.slot).collect();
+        assert_eq!(slots.len(), 3, "not Mario World's");
+        assert_eq!(slots.last(), Some(&Some(0)), "the oldest last");
+        let two = progress.saves.iter().find(|s| s.slot == Some(2)).unwrap();
+        assert_eq!(two.picture, Some(states.join("Mario.state2.png")));
+        assert!(two.backup.is_empty(), "no cartridge save yet");
+        let names: Vec<_> = progress
+            .shots
+            .iter()
+            .map(|s| s.path.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            names,
+            ["Mario-261029-080000.png", "Mario-261028-201500.png"]
+        );
+        assert!(progress.shots[1].details && !progress.shots[0].details);
+
+        // Another emulator: listed, deletable, not playable.
+        game.emulator = Some(("mupen64plus".into(), "mupen64plus-arch".into()));
+        assert!(scan(&places, &game).saves.iter().all(|s| !s.playable));
+    }
+
+    #[test]
+    fn mupen_states_are_matched_by_the_rom_md5() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::new(Some(dir.path().to_owned()));
+        let places = Places::new(&paths);
+        let game = game(
+            &paths,
+            "n64",
+            "Mario 64.z64",
+            ("mupen64plus", "mupen64plus-arch"),
+        );
+        let rom = [0x80u8, 0x37, 0x12, 0x40, 1, 2, 3, 4];
+        fs::write(&game.rom, rom).unwrap();
+        let md5 = archr_cheevos::rom_hash("n64", &game.rom).unwrap().unwrap();
+        let tag = md5[..8].to_ascii_uppercase();
+        let n64 = paths.at("/storage/roms/n64");
+        fs::write(n64.join(format!("SUPER MARIO 64-{tag}.st1")), "s").unwrap();
+        fs::write(n64.join(format!("SUPER MARIO 64-{tag}.eep")), "e").unwrap();
+        fs::write(n64.join("OTHER-0123ABCD.st0"), "s").unwrap();
+        let progress = scan(&places, &game);
+        assert_eq!(progress.saves.len(), 1);
+        let save = &progress.saves[0];
+        assert_eq!(
+            (save.slot, save.kind, save.playable),
+            (Some(1), Kind::Standalone, true)
+        );
+        assert_eq!(save.backup, [n64.join(format!("SUPER MARIO 64-{tag}.eep"))]);
+        let entry = Entry::of(save).unwrap();
+        assert_eq!(
+            entry.argument,
+            format!("--entrystate={}", save.path.display())
+        );
+    }
+
+    #[test]
+    fn backups_replace_the_last_copy_and_deletes_stay_in_place() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::new(Some(dir.path().to_owned()));
+        let srm = dir.path().join("Game.srm");
+        fs::write(&srm, "new").unwrap();
+        fs::write(dir.path().join("Game.srm.bak"), "old").unwrap();
+        back_up(std::slice::from_ref(&srm)).unwrap();
+        assert_eq!(
+            fs::read_to_string(dir.path().join("Game.srm.bak")).unwrap(),
+            "new"
+        );
+        let places = Places::new(&paths);
+        assert!(places.holds(&paths.at("/storage/roms/savestates/snes/A.state")));
+        assert!(places.holds(&paths.at("/storage/roms/screenshots/A-261028-201500.png")));
+        for outside in [
+            srm.clone(),
+            paths.at("/storage/roms/snes/A.srm"),
+            paths.at("/storage/roms/screenshots/../snes/A.srm"),
+        ] {
+            assert!(!places.holds(&outside), "{}", outside.display());
+        }
+    }
+}

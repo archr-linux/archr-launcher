@@ -2,7 +2,9 @@
 
 use crate::layout::{Axis, Layout, View};
 use crate::modules::{Call, Context};
+use crate::saves::{Action, Blocked, Confirm, Kind, Progress, Save};
 use archr_index::{cache::SystemEntry, Game};
+use std::path::PathBuf;
 mod hub;
 mod order;
 
@@ -42,6 +44,21 @@ pub enum Screen {
     },
     /// The game's RetroAchievements (`App::sheet`), by real system and index.
     Achievements {
+        system: String,
+        game: usize,
+    },
+    /// The game's save states (`App::progress`); the cursor is the state.
+    Saves {
+        system: String,
+        game: usize,
+    },
+    /// The game's screenshots in a grid; the cursor is the picture.
+    Shots {
+        system: String,
+        game: usize,
+    },
+    /// One screenshot over the whole screen.
+    Shot {
         system: String,
         game: usize,
     },
@@ -88,6 +105,25 @@ pub enum Outcome {
         system: String,
         game: usize,
     },
+    /// Launch the game from this save state.
+    PlayFrom {
+        system: String,
+        game: usize,
+        state: PathBuf,
+    },
+    /// Delete these files (a state and its picture, or a screenshot), then
+    /// look at the game's progress again.
+    Delete {
+        system: String,
+        game: usize,
+        paths: Vec<PathBuf>,
+    },
+    /// Make this screenshot the one the details screen shows.
+    UseShot {
+        system: String,
+        game: usize,
+        path: PathBuf,
+    },
     SetCore {
         system: String,
         game: usize,
@@ -110,6 +146,10 @@ pub enum Outcome {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum QuickItem {
     Details,
+    /// The game's save states, when it has any.
+    Saves,
+    /// The game's screenshots, when it has any.
+    Shots,
     Achievements,
     Settings,
     Netplay,
@@ -231,6 +271,18 @@ pub struct App {
     pub modules: std::sync::Arc<crate::modules::View>,
     /// The focused module widget of the Start menu (its row is 2).
     pub hub_widget: usize,
+    /// The game menu's game's states and screenshots, filled by the host.
+    pub progress: Progress,
+    /// A game whose progress the host should look at now (it takes it).
+    pub scan: Option<(String, usize)>,
+    /// Why RetroArch cannot start from a state now (hardcore, netplay).
+    pub blocked: Option<Blocked>,
+    /// The open question on the Saves or Screenshots screens.
+    pub confirm: Option<Confirm>,
+    /// States per page and the screenshot grid, reported by the renderer.
+    pub saves_page: usize,
+    pub shots_columns: usize,
+    pub shots_page: usize,
     history: Vec<(Screen, usize)>,
     moving: Option<order::Moving>,
     selected_core: Option<(String, String)>,
@@ -262,6 +314,13 @@ impl App {
             selected_mangohud: Default::default(),
             modules: std::sync::Arc::default(),
             hub_widget: 0,
+            progress: Progress::default(),
+            scan: None,
+            blocked: None,
+            confirm: None,
+            saves_page: 1,
+            shots_columns: 1,
+            shots_page: 1,
         }
     }
 
@@ -286,7 +345,7 @@ impl App {
     fn game_menu_items(
         &self,
         data: &dyn DataSource,
-        system: &str,
+        (system, game): (&str, usize),
         from_details: bool,
     ) -> Vec<QuickItem> {
         use QuickItem::*;
@@ -296,6 +355,15 @@ impl App {
         }
         if !from_details {
             items.push(Details);
+        }
+        // Only what the host found for this game, once it looked.
+        if self.progress.game.as_ref().map(|(s, g)| (s.as_str(), *g)) == Some((system, game)) {
+            if !self.progress.saves.is_empty() {
+                items.push(Saves);
+            }
+            if !self.progress.shots.is_empty() {
+                items.push(Shots);
+            }
         }
         if self.cheevos {
             items.push(Achievements);
@@ -312,8 +380,8 @@ impl App {
         let from_details = matches!(self.history.last(), Some((Screen::Details { .. }, _)));
         match &self.screen {
             Screen::QuickMenu {
-                game: Some((system, _)),
-            } => self.game_menu_items(data, system, from_details),
+                game: Some((system, game)),
+            } => self.game_menu_items(data, (system, *game), from_details),
             Screen::QuickMenu { game: None } => {
                 let items: &[QuickItem] = match (self.netplay, data.system_order().is_empty()) {
                     (false, true) => &[Settings, Move, Suspend, Reboot, Shutdown],
@@ -399,8 +467,19 @@ impl App {
             self.handle_achievements(b);
             return Outcome::None;
         }
+        if let Screen::Saves { system, game }
+        | Screen::Shots { system, game }
+        | Screen::Shot { system, game } = self.screen.clone()
+        {
+            return self.handle_progress(b, system, game);
+        }
         let len = match &self.screen {
-            Screen::StartHub { .. } | Screen::Details { .. } | Screen::Achievements { .. } => {
+            Screen::StartHub { .. }
+            | Screen::Details { .. }
+            | Screen::Achievements { .. }
+            | Screen::Saves { .. }
+            | Screen::Shots { .. }
+            | Screen::Shot { .. } => {
                 unreachable!()
             }
             Screen::Systems => Self::system_rows(data).len(),
@@ -447,7 +526,12 @@ impl App {
                 Button::Y => self.enter(Screen::QuickMenu { game: None }),
                 _ => {}
             },
-            Screen::StartHub { .. } | Screen::Details { .. } | Screen::Achievements { .. } => {
+            Screen::StartHub { .. }
+            | Screen::Details { .. }
+            | Screen::Achievements { .. }
+            | Screen::Saves { .. }
+            | Screen::Shots { .. }
+            | Screen::Shot { .. } => {
                 unreachable!()
             }
             Screen::Games { system } => match b {
@@ -462,16 +546,7 @@ impl App {
                     match b {
                         Button::A => return Outcome::Launch { system, game },
                         Button::X => return Outcome::ToggleFavorite { system, game },
-                        Button::Y => {
-                            if self.game_menu_items(data, &system, false).is_empty() {
-                                return Outcome::None;
-                            }
-                            self.selected_core = data.current_core(&system, game);
-                            self.selected_mangohud = data.mangohud(&system, game);
-                            self.enter(Screen::QuickMenu {
-                                game: Some((system, game)),
-                            });
-                        }
+                        Button::Y => self.open_game_menu(system, game, false, data),
                         _ => unreachable!(),
                     }
                 }
@@ -487,6 +562,17 @@ impl App {
                             self.enter(Screen::Details { system, game });
                             self.details_focus = 0;
                             self.details_scroll = 0;
+                        }
+                    }
+                    (Button::A, Some(item @ (QuickItem::Saves | QuickItem::Shots))) => {
+                        let item = *item;
+                        self.back();
+                        if let Some((system, game)) = game {
+                            self.enter(if item == QuickItem::Saves {
+                                Screen::Saves { system, game }
+                            } else {
+                                Screen::Shots { system, game }
+                            });
                         }
                     }
                     (Button::A, Some(QuickItem::Achievements)) => {
@@ -605,16 +691,7 @@ impl App {
             }
             Button::L => self.details_focus = self.details_focus.saturating_sub(1),
             Button::R => self.details_focus = (self.details_focus + 1).min(last),
-            Button::Y => {
-                if self.game_menu_items(data, &system, true).is_empty() {
-                    return Outcome::None;
-                }
-                self.selected_core = data.current_core(&system, game);
-                self.selected_mangohud = data.mangohud(&system, game);
-                self.enter(Screen::QuickMenu {
-                    game: Some((system, game)),
-                });
-            }
+            Button::Y => self.open_game_menu(system, game, true, data),
             Button::A => {
                 return match self.details_focus {
                     0 => Outcome::Launch { system, game },
@@ -628,6 +705,202 @@ impl App {
             _ => {}
         }
         Outcome::None
+    }
+
+    /// The game menu, after the host is asked to look at the game's states
+    /// and screenshots again; its rows follow when the answer comes.
+    fn open_game_menu(
+        &mut self,
+        system: String,
+        game: usize,
+        from_details: bool,
+        data: &dyn DataSource,
+    ) {
+        if self.progress.game != Some((system.clone(), game)) {
+            self.progress = Progress::default();
+        }
+        self.scan = Some((system.clone(), game));
+        if self
+            .game_menu_items(data, (&system, game), from_details)
+            .is_empty()
+        {
+            return;
+        }
+        self.selected_core = data.current_core(&system, game);
+        self.selected_mangohud = data.mangohud(&system, game);
+        self.enter(Screen::QuickMenu {
+            game: Some((system, game)),
+        });
+    }
+
+    /// The host's answer: the open menu keeps its selected row, a list its
+    /// place, and a screen left with nothing to show closes.
+    pub fn set_progress(&mut self, progress: Progress, data: &dyn DataSource) {
+        let selected = self.quick_menu_items(data).get(self.cursor).copied();
+        self.progress = progress;
+        match &self.screen {
+            Screen::QuickMenu { .. } => {
+                let items = self.quick_menu_items(data);
+                if let Some(at) = selected.and_then(|s| items.iter().position(|i| *i == s)) {
+                    self.cursor = at;
+                }
+                self.cursor = self.cursor.min(items.len().saturating_sub(1));
+            }
+            Screen::Saves { .. } | Screen::Shots { .. } | Screen::Shot { .. } => {
+                let len = if matches!(self.screen, Screen::Saves { .. }) {
+                    self.progress.saves.len()
+                } else {
+                    self.progress.shots.len()
+                };
+                if len == 0 {
+                    self.confirm = None;
+                    self.back();
+                    if matches!(self.screen, Screen::Shots { .. }) {
+                        self.back();
+                    }
+                } else {
+                    self.cursor = self.cursor.min(len - 1);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// A RetroArch state cannot start the game in hardcore mode or netplay.
+    pub fn can_play(&self, save: &Save) -> bool {
+        save.playable && (save.kind != Kind::RetroArch || self.blocked.is_none())
+    }
+
+    /// Saves, Screenshots and one screenshot; an open question first.
+    fn handle_progress(&mut self, b: Button, system: String, game: usize) -> Outcome {
+        if let Some(confirm) = &mut self.confirm {
+            match b {
+                Button::L | Button::R | Button::Up | Button::Down => {
+                    confirm.on_action = !confirm.on_action
+                }
+                Button::B => self.confirm = None,
+                Button::A => {
+                    let confirm = self.confirm.take().expect("open question");
+                    if confirm.on_action {
+                        return self.answer(confirm, system, game);
+                    }
+                }
+                _ => {}
+            }
+            return Outcome::None;
+        }
+        let saves = matches!(self.screen, Screen::Saves { .. });
+        let len = if saves {
+            self.progress.saves.len()
+        } else {
+            self.progress.shots.len()
+        };
+        let last = len.saturating_sub(1);
+        let ask = |action, index, on_action| {
+            Some(Confirm {
+                action,
+                index,
+                on_action,
+            })
+        };
+        match (&self.screen, b) {
+            (_, Button::B) if matches!(self.screen, Screen::Shot { .. }) => {
+                // Back in the grid on the picture last shown.
+                let at = self.cursor;
+                self.back();
+                self.cursor = at;
+            }
+            (_, Button::B) => self.back(),
+            (Screen::Saves { .. }, Button::Up) => self.cursor = self.cursor.saturating_sub(1),
+            (Screen::Saves { .. }, Button::Down) => self.cursor = (self.cursor + 1).min(last),
+            (Screen::Saves { .. }, Button::L) => {
+                self.cursor = self.cursor.saturating_sub(self.saves_page.max(1))
+            }
+            (Screen::Saves { .. }, Button::R) => {
+                self.cursor = (self.cursor + self.saves_page.max(1)).min(last)
+            }
+            (Screen::Saves { .. }, Button::A) => {
+                if self
+                    .progress
+                    .saves
+                    .get(self.cursor)
+                    .is_some_and(|save| self.can_play(save))
+                {
+                    self.confirm = ask(Action::Play, self.cursor, true);
+                }
+            }
+            (Screen::Saves { .. }, Button::X) if len > 0 => {
+                self.confirm = ask(Action::DeleteSave, self.cursor, false)
+            }
+            (Screen::Shots { .. }, Button::Up) => {
+                let columns = self.shots_columns.max(1);
+                if self.cursor >= columns {
+                    self.cursor -= columns;
+                }
+            }
+            (Screen::Shots { .. }, Button::Down) => {
+                let columns = self.shots_columns.max(1);
+                if self.cursor / columns < last / columns {
+                    self.cursor = (self.cursor + columns).min(last);
+                }
+            }
+            (Screen::Shots { .. } | Screen::Shot { .. }, Button::L) => {
+                self.cursor = self.cursor.saturating_sub(1)
+            }
+            (Screen::Shots { .. } | Screen::Shot { .. }, Button::R) => {
+                self.cursor = (self.cursor + 1).min(last)
+            }
+            (Screen::Shots { .. }, Button::A) if len > 0 => {
+                let at = self.cursor;
+                self.enter(Screen::Shot { system, game });
+                self.cursor = at;
+            }
+            (Screen::Shots { .. } | Screen::Shot { .. }, Button::X) if len > 0 => {
+                self.confirm = ask(Action::DeleteShot, self.cursor, false)
+            }
+            (Screen::Shot { .. }, Button::Y) => {
+                if let Some(shot) = self.progress.shots.get(self.cursor).filter(|s| !s.details) {
+                    return Outcome::UseShot {
+                        system,
+                        game,
+                        path: shot.path.clone(),
+                    };
+                }
+            }
+            _ => {}
+        }
+        Outcome::None
+    }
+
+    fn answer(&mut self, confirm: Confirm, system: String, game: usize) -> Outcome {
+        match confirm.action {
+            Action::Play => match self.progress.saves.get(confirm.index) {
+                Some(save) => Outcome::PlayFrom {
+                    system,
+                    game,
+                    state: save.path.clone(),
+                },
+                None => Outcome::None,
+            },
+            Action::DeleteSave => match self.progress.saves.get(confirm.index) {
+                Some(save) => Outcome::Delete {
+                    system,
+                    game,
+                    paths: std::iter::once(save.path.clone())
+                        .chain(save.picture.clone())
+                        .collect(),
+                },
+                None => Outcome::None,
+            },
+            Action::DeleteShot => match self.progress.shots.get(confirm.index) {
+                Some(shot) => Outcome::Delete {
+                    system,
+                    game,
+                    paths: vec![shot.path.clone()],
+                },
+                None => Outcome::None,
+            },
+        }
     }
 
     /// The list moves by one with ↑ ↓ and by a page with L R; B goes back.

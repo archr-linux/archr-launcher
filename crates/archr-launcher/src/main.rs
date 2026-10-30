@@ -13,6 +13,7 @@ use archr_launcher::{
     paths::Paths,
     preview::Preview,
     rescrape::Rescrape,
+    saves::{Entry, Task},
     state::{App, DataSource, Outcome, Screen},
     wifi,
 };
@@ -23,6 +24,7 @@ use archr_ui::{
     input::{button_event, Repeat},
     netplay::{Effect, Lobby},
     render::{prepare_first_frame, Art, Ui},
+    saves::Blocked,
     settings::Id,
     sounds::{Event as Sound, Sounds},
     startup::StartupTrace,
@@ -243,7 +245,12 @@ fn run(
             .unwrap_or_else(|| id.default_value().into())
     };
     // Read before Settings first opens: the details screen needs them now.
-    for id in [Id::UpdateNotify, Id::PreviewVideo] {
+    for id in [
+        Id::UpdateNotify,
+        Id::PreviewVideo,
+        Id::Cheevos,
+        Id::CheevosHardcore,
+    ] {
         settings.state.values.insert(id, saved(id));
     }
     let mut update_check =
@@ -274,6 +281,11 @@ fn run(
     // Achievement badges, at the list icon's size.
     let side = (36. * height as f32 / 480.).round().max(1.) as u32;
     let mut badges = CoverCache::new(&creator, paths.cache.join("thumbs"), side, side);
+    // Saves and Screenshots: list and grid pictures, and the large one.
+    let cell = |w: f32| (w * height as f32 / 480.).round().max(1.) as u32;
+    let mut thumbs = CoverCache::new(&creator, paths.cache.join("thumbs"), cell(138.), cell(104.));
+    let mut pictures = CoverCache::new(&creator, paths.cache.join("thumbs"), width, height);
+    let mut progress = archr_launcher::saves::Worker::new(&paths);
     let mut preview = Preview::new(&creator);
     let mut cheevos: Option<Lookup> = None;
     let mut rescrape: Option<Rescrape> = None;
@@ -545,6 +557,35 @@ fn run(
                 settings.state.value(Id::Cheevos) == "1" && !settings.state.cheevos.user.is_empty();
             app.mangohud = settings.state.mangohud_supported;
         }
+        // Starting from a state: RetroArch refuses it in hardcore mode and
+        // netplay.
+        app.blocked = if app.netplay {
+            Some(Blocked::Netplay)
+        } else if settings.state.value(Id::Cheevos) == "1"
+            && settings.state.value(Id::CheevosHardcore) == "1"
+        {
+            Some(Blocked::Hardcore)
+        } else {
+            None
+        };
+        if let Some((system, game)) = app.scan.take() {
+            if let Some(game) = library.progress_game(&system, game) {
+                progress.start(Task::Scan, game);
+            }
+        }
+        if let Some(done) = progress.poll() {
+            if let Some(system) = done.reload {
+                library.reload(&[system]);
+                shots.clear();
+            }
+            if let Some(key) = done.notice {
+                let severity = Severity::of(key);
+                ui.banner = Some(ui.catalog.text(key));
+                banner_timer.restart(severity, Instant::now());
+            }
+            app.set_progress(done.progress, &library);
+            dirty = true;
+        }
         app.rescraping = rescrape.is_some();
         app.can_rescrape = archr_scraper::available() && !settings.state.scrape.running;
         if let Some(banner) = library.banner.take() {
@@ -576,7 +617,15 @@ fn run(
         shots.request(shot.as_slice());
         logos.request(logo.as_slice());
         badges.request(&badge_paths(&app));
-        dirty |= covers.poll() | shots.poll() | logos.poll() | badges.poll();
+        let (small, large) = progress_art(&app);
+        thumbs.request(&small);
+        pictures.request(&large);
+        dirty |= covers.poll()
+            | shots.poll()
+            | logos.poll()
+            | badges.poll()
+            | thumbs.poll()
+            | pictures.poll();
         let video = match &app.screen {
             Screen::Details { system, game }
                 if !settings.active && settings.state.value(Id::PreviewVideo) == "1" =>
@@ -605,6 +654,8 @@ fn run(
                 logo: logo.as_ref().and_then(|path| logos.get(path)),
                 video: preview.frame(),
                 badges: Some(&badges),
+                thumbs: Some(&thumbs),
+                picture: large.first().and_then(|path| pictures.peek(path)),
             };
             ui.draw_with_settings(
                 &app,
@@ -615,6 +666,8 @@ fn run(
             )?;
             app.details_overflow = ui.details_overflow;
             app.sheet_page = ui.achievements_page;
+            app.saves_page = ui.saves_page;
+            (app.shots_columns, app.shots_page) = ui.shots_grid;
             dirty = false;
         }
         #[cfg(test)]
@@ -756,6 +809,23 @@ fn run(
             } else {
                 requested
             };
+            // A launch from a save state: the entry rides with the launch.
+            let requested = match requested {
+                Outcome::PlayFrom {
+                    system,
+                    game,
+                    state,
+                } => {
+                    library.entry = app
+                        .progress
+                        .saves
+                        .iter()
+                        .find(|save| save.path == state)
+                        .and_then(Entry::of);
+                    Outcome::Launch { system, game }
+                }
+                requested => requested,
+            };
             let requested = if requested == Outcome::OpenNetplay {
                 ui.lobby = Some(Lobby::default());
                 rooms.refresh();
@@ -768,6 +838,21 @@ fn run(
                     .games(system)
                     .get(*game)
                     .map(|rom| Lookup::start(paths.clone(), system.clone(), rom.path.clone()));
+                outcome = Some(Outcome::None);
+            } else if let Outcome::Delete {
+                system,
+                game,
+                paths,
+            } = &requested
+            {
+                if let Some(game) = library.progress_game(system, *game) {
+                    progress.start(Task::Delete(paths.clone()), game);
+                }
+                outcome = Some(Outcome::None);
+            } else if let Outcome::UseShot { system, game, path } = &requested {
+                if let Some(game) = library.progress_game(system, *game) {
+                    progress.start(Task::UseShot(path.clone()), game);
+                }
                 outcome = Some(Outcome::None);
             } else if let Outcome::Rescrape { system, game } = &requested {
                 if let Some(rom) = library
@@ -906,6 +991,53 @@ fn details_art(app: &App, data: &dyn DataSource) -> (Option<PathBuf>, Option<Pat
 }
 
 /// Badges of the achievements on the page the list shows.
+/// Saves and Screenshots: the pictures on the page, and the large one (the
+/// selected state's, or the screenshot shown, then its neighbours).
+fn progress_art(app: &App) -> (Vec<PathBuf>, Vec<PathBuf>) {
+    let saves = &app.progress.saves;
+    let shots = &app.progress.shots;
+    // The page holding the cursor, within `len` items.
+    let page = |size: usize, len: usize| {
+        let first = (app.cursor / size.max(1) * size.max(1)).min(len);
+        first..(first + size.max(1)).min(len)
+    };
+    match app.backdrop().0 {
+        Screen::Saves { .. } => (
+            saves[page(app.saves_page, saves.len())]
+                .iter()
+                .filter_map(|save| save.picture.clone())
+                .collect(),
+            saves
+                .get(app.cursor)
+                .and_then(|save| save.picture.clone())
+                .into_iter()
+                .collect(),
+        ),
+        Screen::Shots { .. } => (
+            shots[page(app.shots_page, shots.len())]
+                .iter()
+                .map(|s| s.path.clone())
+                .collect(),
+            Vec::new(),
+        ),
+        Screen::Shot { .. } => {
+            let around = [
+                Some(app.cursor),
+                app.cursor.checked_add(1),
+                app.cursor.checked_sub(1),
+            ];
+            let large = around
+                .into_iter()
+                .flatten()
+                .filter_map(|n| shots.get(n).map(|s| s.path.clone()))
+                .collect();
+            let small = shots.get(app.cursor).map(|s| s.path.clone());
+            (small.into_iter().collect(), large)
+        }
+        _ => (Vec::new(), Vec::new()),
+    }
+}
+
 fn badge_paths(app: &App) -> Vec<PathBuf> {
     if !matches!(app.screen, Screen::Achievements { .. }) {
         return Vec::new();

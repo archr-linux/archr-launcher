@@ -283,9 +283,10 @@ pub fn browse(
 ) -> Option<Event> {
     match outcome {
         Outcome::None => {}
-        Outcome::Launch { .. } | Outcome::Netplay(_) | Outcome::MoonlightStream(_) => {
-            return Some(Event::Launch)
-        }
+        Outcome::Launch { .. }
+        | Outcome::PlayFrom { .. }
+        | Outcome::Netplay(_)
+        | Outcome::MoonlightStream(_) => return Some(Event::Launch),
         Outcome::ToggleFavorite { .. } => return Some(Event::Favorite),
         _ => return Some(Event::Select),
     }

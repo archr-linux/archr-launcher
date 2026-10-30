@@ -181,6 +181,10 @@ impl Status {
         status.poll(now);
         status
     }
+    /// The clock reads 12-hour (AM/PM).
+    pub fn clock_12(&self) -> bool {
+        self.clock_12
+    }
     /// Call only after the first frame has been presented. Starting is idempotent.
     pub fn start(&mut self) {
         if self.started {

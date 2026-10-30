@@ -46,6 +46,7 @@ glyphs! {
     Shift => "arrow-big-up", Backspace => "delete", Eye => "eye", EyeOff => "eye-off",
     Signal => "signal", SignalLow => "signal-low", SignalMedium => "signal-medium",
     SignalHigh => "signal-high", Puzzle => "puzzle", ShieldCheck => "shield-check",
+    Trash => "trash-2", Image => "image",
 }
 
 #[link(name = "SDL2_image")]
