@@ -278,17 +278,22 @@ pub fn scan(places: &Places, game: &Game) -> Progress {
 /// back up first.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Entry {
+    /// The game it belongs to: a launch of another game ignores it.
+    pub system: String,
+    pub rom: PathBuf,
     pub argument: String,
     pub backup: Vec<PathBuf>,
 }
 impl Entry {
-    pub fn of(save: &Save) -> Option<Self> {
+    pub fn of(save: &Save, game: &Game) -> Option<Self> {
         let argument = match (save.kind, save.slot) {
             (Kind::RetroArch, Some(n)) => format!("--entryslot={n}"),
             (Kind::RetroArch, None) => "--entryslot=auto".into(),
             (Kind::Standalone, _) => format!("--entrystate={}", save.path.to_str()?),
         };
         Some(Self {
+            system: game.system.clone(),
+            rom: game.rom.clone(),
             argument,
             backup: save.backup.clone(),
         })
@@ -573,7 +578,7 @@ mod tests {
             (Some(1), Kind::Standalone, true)
         );
         assert_eq!(save.backup, [n64.join(format!("SUPER MARIO 64-{tag}.eep"))]);
-        let entry = Entry::of(save).unwrap();
+        let entry = Entry::of(save, &game).unwrap();
         assert_eq!(
             entry.argument,
             format!("--entrystate={}", save.path.display())

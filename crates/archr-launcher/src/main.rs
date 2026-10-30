@@ -816,12 +816,10 @@ fn run(
                     game,
                     state,
                 } => {
-                    library.entry = app
-                        .progress
-                        .saves
-                        .iter()
-                        .find(|save| save.path == state)
-                        .and_then(Entry::of);
+                    let save = app.progress.saves.iter().find(|save| save.path == state);
+                    library.entry = save
+                        .zip(library.progress_game(&system, game))
+                        .and_then(|(save, game)| Entry::of(save, &game));
                     Outcome::Launch { system, game }
                 }
                 requested => requested,

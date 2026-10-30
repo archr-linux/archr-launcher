@@ -338,6 +338,12 @@ impl Library {
             }
             Outcome::Launch { system, game } => {
                 let governor = self.governor.take();
+                // The state is for this launch of this game only: taken
+                // first, so no failure below leaves it for another.
+                let entry = self.entry.take().filter(|entry| {
+                    entry.system == system
+                        && self.games(&system).get(game).map(|g| &g.path) == Some(&entry.rom)
+                });
                 let mut command = self.launch_command(&system, game, controllers)?;
                 // runemu.sh runs the governor as a function name: only the
                 // known ones, and only on its own command line.
@@ -350,7 +356,7 @@ impl Library {
                 // Loading a state rewrites the cartridge save when the game
                 // closes: the one there now is kept as .bak first, or the
                 // game does not start.
-                if let Some(entry) = self.entry.take() {
+                if let Some(entry) = entry {
                     if self.current_core(&system, game).is_some() {
                         crate::saves::back_up(&entry.backup).map_err(|error| {
                             log::warn!("Cannot back up the cartridge save: {error}");

@@ -554,7 +554,7 @@ fn a_launch_from_a_state_backs_up_the_cartridge_save_then_names_the_slot() {
     let save = &progress.saves[0];
     assert_eq!((save.slot, save.playable), (Some(3), true));
     assert_eq!(save.emulator, "RetroArch · nestopia", "the game's own core");
-    library.entry = archr_launcher::saves::Entry::of(save);
+    library.entry = archr_launcher::saves::Entry::of(save, &game);
     let launch = Outcome::Launch {
         system: "nes".into(),
         game: 0,
@@ -571,9 +571,35 @@ fn a_launch_from_a_state_backs_up_the_cartridge_save_then_names_the_slot() {
     assert!(!next.contains("--entry"), "{next}");
     // No copy, no game: a cartridge save that cannot be read stops the launch.
     fs::remove_file(paths.run.join("next")).unwrap();
-    let mut entry = archr_launcher::saves::Entry::of(save).unwrap();
+    let mut entry = archr_launcher::saves::Entry::of(save, &game).unwrap();
     entry.backup = vec![roms.join("missing.srm")];
     library.entry = Some(entry);
     assert_eq!(library.handle(launch, "").unwrap_err(), "error.save_backup");
     assert!(!paths.run.join("next").exists());
+}
+
+#[test]
+fn a_state_never_reaches_another_game_or_outlives_a_failed_launch() {
+    let (_dir, paths) = fixture();
+    let mut library = ready(&paths, Some("nes"));
+    let entry = archr_launcher::saves::Entry {
+        system: "nes".into(),
+        rom: paths.at("/storage/roms/nes/Other.nes"),
+        argument: "--entryslot=3".into(),
+        backup: Vec::new(),
+    };
+    let launch = |game| Outcome::Launch {
+        system: "nes".into(),
+        game,
+    };
+    // A launch that fails before its command is built still drops it.
+    library.entry = Some(entry.clone());
+    assert!(library.handle(launch(9), "").is_err());
+    assert!(library.entry.is_none());
+    // Another game's state is not passed on.
+    library.entry = Some(entry);
+    assert!(library.handle(launch(0), "").unwrap());
+    let next = fs::read_to_string(paths.run.join("next")).unwrap();
+    assert!(!next.contains("--entry"), "{next}");
+    assert!(library.entry.is_none());
 }
