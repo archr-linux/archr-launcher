@@ -100,12 +100,7 @@ pub fn run(paths: &Paths, file: &Path, windowed: bool) -> Result<(), String> {
         Theme::builtin()
     };
     theme.font = theme.font.as_deref().map(|font| paths.remap(font));
-    let mut screen = match windowed {
-        true => None,
-        false => Some(crate::fb::Framebuffer::open()?),
-    };
-    let size = screen.as_ref().map_or((640, 480), |fb| fb.size());
-    if screen.is_some() {
+    if !windowed {
         // Software rendering into memory; fb.rs shows it.
         sdl2::hint::set_with_priority("SDL_VIDEODRIVER", "dummy", &sdl2::hint::Hint::Override);
     }
@@ -113,6 +108,13 @@ pub fn run(paths: &Paths, file: &Path, windowed: bool) -> Result<(), String> {
     let ttf = sdl2::ttf::init().map_err(|error| error.to_string())?;
     let sdl = sdl2::init()?;
     let video = sdl.video()?;
+    // Once SDL turns SIGTERM into Quit, so the console always gets its text
+    // mode back from the drop.
+    let mut screen = match windowed {
+        true => None,
+        false => Some(crate::fb::Framebuffer::open()?),
+    };
+    let size = screen.as_ref().map_or((640, 480), |fb| fb.size());
     // Declared first: the textures it makes must outlive the Ui.
     let creator;
     let mut ui = Ui::with_video(sdl, video, size, true, StartupTrace::default())?;
@@ -142,7 +144,8 @@ pub fn run(paths: &Paths, file: &Path, windowed: bool) -> Result<(), String> {
             let pixels = ui
                 .canvas
                 .read_pixels(None, sdl2::pixels::PixelFormatEnum::ARGB8888)?;
-            fb.show(&pixels, size.0 as usize * 4);
+            fb.show(&pixels, size.0 as usize * 4)
+                .map_err(|e| format!("/dev/fb0: {e}"))?;
         }
         if shot {
             return Ok(());
