@@ -261,6 +261,49 @@ fn a_name_another_games_record_cites_is_taken_even_without_its_file() {
 }
 
 #[test]
+fn parallel_downloads_never_choose_the_same_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let roms = [
+        "A:B.sfc", "A?B.sfc", "A*B.sfc", "A|B.sfc", "A<B.sfc", "A>B.sfc",
+    ];
+    let sys = system(&dir.path().join("roms"), &roms);
+    let handler = |url: &str| {
+        if url.contains("ssuserInfos.php") {
+            Some((
+                200,
+                String::from_utf8(user_xml())
+                    .unwrap()
+                    .replace("<maxthreads>1", "<maxthreads>4")
+                    .into_bytes(),
+            ))
+        } else if url.contains("/m/") {
+            // Slow art: the downloads overlap between choice and record.
+            std::thread::sleep(Duration::from_millis(30));
+            happy(url)
+        } else {
+            happy(url)
+        }
+    };
+    let job = engine(mock(handler), &dir.path().join("cache")).start(
+        vec![sys.clone()],
+        Options {
+            media: vec![Media::Box2d],
+            ..Options::new("en")
+        },
+    );
+    assert_eq!(finish(&job).1.progress.scraped, roms.len());
+    assert_eq!(
+        fs::read_dir(sys.path.join("media/images")).unwrap().count(),
+        roms.len()
+    );
+    let covers: std::collections::HashSet<_> = scan_system(&sys)
+        .into_iter()
+        .map(|g| g.image.unwrap())
+        .collect();
+    assert_eq!(covers.len(), roms.len(), "each game its own cover");
+}
+
+#[test]
 fn falls_back_to_name_search_and_reports_misses() {
     let dir = tempfile::tempdir().unwrap();
     let sys = system(dir.path(), &["Hit (Europe).sfc", "Miss.sfc"]);

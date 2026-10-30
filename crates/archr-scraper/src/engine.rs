@@ -485,6 +485,7 @@ impl Engine {
     /// Fetches each needed asset, then merges the text and the saved paths
     /// into the system's gamelist; any failure makes the game retryable.
     fn download(&self, run: &Run, prefs: &Prefs, item: &Item, hit: &Hit) -> Result<Outcome, Stop> {
+        let mut held = Vec::new();
         let mut fields = Vec::new();
         let mut failed = 0;
         for &kind in &item.needed {
@@ -509,13 +510,15 @@ impl Engine {
                 .root_of(&item.game.path)
                 .join("media")
                 .join(kind.dir());
-            let dest = media_file(
-                &dir,
-                &item.game,
-                ext,
-                indexed(&item.game, kind),
-                &HashSet::new(),
-            );
+            // Chosen and claimed in one step; the claim lasts until the
+            // gamelist records it, so a parallel download never picks it.
+            let dest = {
+                let mut claims = run.claims.lock().unwrap();
+                let dest = media_file(&dir, &item.game, ext, indexed(&item.game, kind), &claims);
+                claims.insert(media_key(&dest));
+                dest
+            };
+            held.push(Claim(&run.claims, media_key(&dest)));
             match atomic_publish(&dest, false, |f| f.write_all(&body)) {
                 Ok(()) => fields.push((kind.tag(), dest.to_string_lossy().into_owned())),
                 Err(_) => failed += 1,
@@ -648,6 +651,17 @@ impl Shared {
 }
 
 /// Per-run request state shared by the worker threads.
+/// A media name a download holds until its gamelist records it.
+struct Claim<'a>(&'a Mutex<HashSet<String>>, String);
+impl Drop for Claim<'_> {
+    fn drop(&mut self) {
+        self.0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&self.1);
+    }
+}
+
 struct Run<'a> {
     cancel: &'a AtomicBool,
     /// Shared gap between requests (the account's per-minute limit, if known).
@@ -656,6 +670,8 @@ struct Run<'a> {
     budget: AtomicI64,
     network: AtomicU32,
     next_slot: Mutex<Instant>,
+    /// Media names chosen by downloads whose gamelist is not written yet.
+    claims: Mutex<HashSet<String>>,
 }
 
 impl<'a> Run<'a> {
@@ -666,6 +682,7 @@ impl<'a> Run<'a> {
             budget: AtomicI64::new(i64::MAX),
             network: AtomicU32::new(0),
             next_slot: Mutex::new(Instant::now()),
+            claims: Mutex::new(HashSet::new()),
         }
     }
 
