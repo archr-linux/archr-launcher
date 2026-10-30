@@ -15,8 +15,8 @@ const LOG: &str = "/storage/.cache/roms-migrate.log";
 /// The launcher's: a move it armed, and how many files it previewed.
 const ARMED: &str = "roms-migrate";
 /// The check walks every ROM.
-const CHECK_TIME: Duration = Duration::from_secs(120);
-/// Names listed at most.
+const CHECK_TIME: Duration = Duration::from_secs(300);
+/// Names listed at most, as the script lists them.
 const LIST: usize = 500;
 
 impl Backend {
