@@ -1024,6 +1024,7 @@ mod progress {
                 .map(|n| save(Some(n), Kind::RetroArch))
                 .collect(),
             shots: (0..shots).map(shot).collect(),
+            blocked: None,
         }
     }
     /// The game menu of snes game 7, after the host answered.
@@ -1148,7 +1149,7 @@ mod progress {
         let data = FakeData::library();
         for blocked in [Blocked::Hardcore, Blocked::Netplay] {
             let mut app = menu(&data, found(1, 0));
-            app.blocked = Some(blocked);
+            app.progress.blocked = Some(blocked);
             app.cursor = 2;
             app.handle(Button::A, &data);
             app.handle(Button::A, &data);

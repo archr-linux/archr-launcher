@@ -22,7 +22,7 @@ pub struct Save {
     pub saved: u64,
     pub bytes: u64,
     pub kind: Kind,
-    /// "RetroArch · snes9x", "Mupen64Plus".
+    /// "RetroArch", "Mupen64Plus".
     pub emulator: String,
     /// The game's emulator now can start from this state.
     pub playable: bool,
@@ -50,6 +50,9 @@ pub struct Progress {
     pub game: Option<(String, usize)>,
     pub saves: Vec<Save>,
     pub shots: Vec<Shot>,
+    /// Why RetroArch cannot start this game from a state (its own,
+    /// its system's or the global setting, as a launch resolves it).
+    pub blocked: Option<Blocked>,
 }
 
 /// Why a RetroArch state cannot start the game now.

@@ -283,10 +283,10 @@ impl Ui<'_, '_> {
             }
             let note = match (save.kind, save.slot) {
                 _ if !save.playable => self.catalog.text("saves.note_other"),
-                (Kind::RetroArch, _) if app.blocked == Some(Blocked::Hardcore) => {
+                (Kind::RetroArch, _) if app.progress.blocked == Some(Blocked::Hardcore) => {
                     self.catalog.text("saves.note_hardcore")
                 }
-                (Kind::RetroArch, _) if app.blocked == Some(Blocked::Netplay) => {
+                (Kind::RetroArch, _) if app.progress.blocked == Some(Blocked::Netplay) => {
                     self.catalog.text("saves.note_netplay")
                 }
                 (Kind::RetroArch, Some(n)) => self

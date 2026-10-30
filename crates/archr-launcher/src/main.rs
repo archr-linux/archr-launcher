@@ -24,7 +24,6 @@ use archr_ui::{
     input::{button_event, Repeat},
     netplay::{Effect, Lobby},
     render::{prepare_first_frame, Art, Ui},
-    saves::Blocked,
     settings::Id,
     sounds::{Event as Sound, Sounds},
     startup::StartupTrace,
@@ -245,12 +244,7 @@ fn run(
             .unwrap_or_else(|| id.default_value().into())
     };
     // Read before Settings first opens: the details screen needs them now.
-    for id in [
-        Id::UpdateNotify,
-        Id::PreviewVideo,
-        Id::Cheevos,
-        Id::CheevosHardcore,
-    ] {
+    for id in [Id::UpdateNotify, Id::PreviewVideo] {
         settings.state.values.insert(id, saved(id));
     }
     let mut update_check =
@@ -557,17 +551,6 @@ fn run(
                 settings.state.value(Id::Cheevos) == "1" && !settings.state.cheevos.user.is_empty();
             app.mangohud = settings.state.mangohud_supported;
         }
-        // Starting from a state: RetroArch refuses it in hardcore mode and
-        // netplay.
-        app.blocked = if app.netplay {
-            Some(Blocked::Netplay)
-        } else if settings.state.value(Id::Cheevos) == "1"
-            && settings.state.value(Id::CheevosHardcore) == "1"
-        {
-            Some(Blocked::Hardcore)
-        } else {
-            None
-        };
         if let Some((system, game)) = app.scan.take() {
             if let Some(game) = library.progress_game(&system, game) {
                 progress.start(Task::Scan, game);

@@ -2,9 +2,10 @@
 //! backed up off the draw thread. Where emulators keep them is decided in
 //! `Places` and `cartridge` only, so moving them is a change here.
 use crate::paths::Paths;
+use archr_config::SystemCfg;
 use archr_index::{update_gamelist, GameUpdate};
 use archr_io::{atomic_publish, remove_durable};
-use archr_ui::saves::{Kind, Progress, Save, Shot};
+use archr_ui::saves::{Blocked, Kind, Progress, Save, Shot};
 use std::{
     fs, io,
     path::{Path, PathBuf},
@@ -26,6 +27,8 @@ pub struct Places {
     mupen: PathBuf,
     /// Where the hashes the achievements already computed are kept.
     hashes: PathBuf,
+    /// system.cfg, read for the game's hardcore and netplay settings.
+    config: PathBuf,
 }
 impl Places {
     pub fn new(paths: &Paths) -> Self {
@@ -34,6 +37,7 @@ impl Places {
             shots: paths.at("/storage/roms/screenshots"),
             mupen: paths.at("/storage/roms/n64"),
             hashes: paths.cache.join("cheevos"),
+            config: paths.config.clone(),
         }
     }
     /// What this screen may delete: a state or its picture straight in a
@@ -280,6 +284,27 @@ pub fn scan(places: &Places, game: &Game) -> Progress {
         game: Some((game.system.clone(), game.index)),
         saves,
         shots,
+        blocked: blocked(places, game),
+    }
+}
+
+/// RetroArch refuses a state in netplay and in RetroAchievements hardcore
+/// mode; each setting resolves per game, then system, then globally, as
+/// setsettings.sh reads them for the launch.
+fn blocked(places: &Places, game: &Game) -> Option<Blocked> {
+    let cfg = SystemCfg::load(&places.config).ok()?;
+    let rom = game.rom.file_name()?.to_str()?;
+    let on = |key| {
+        cfg.get_setting(key, Some(&game.system), Some(rom))
+            .as_deref()
+            == Some("1")
+    };
+    if on("netplay") {
+        Some(Blocked::Netplay)
+    } else if on("retroachievements") && on("retroachievements.hardcore") {
+        Some(Blocked::Hardcore)
+    } else {
+        None
     }
 }
 
@@ -577,6 +602,36 @@ mod tests {
         // Another emulator: listed, deletable, not playable.
         game.emulator = Some(("mupen64plus".into(), "mupen64plus-arch".into()));
         assert!(scan(&places, &game).saves.iter().all(|s| !s.playable));
+    }
+
+    #[test]
+    fn hardcore_and_netplay_resolve_per_game_then_system_then_globally() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::new(Some(dir.path().to_owned()));
+        let places = Places::new(&paths);
+        fs::create_dir_all(paths.config.parent().unwrap()).unwrap();
+        let mario = game(&paths, "snes", "Mario.sfc", ("retroarch", "snes9x"));
+        let zelda = game(&paths, "snes", "Zelda.sfc", ("retroarch", "snes9x"));
+        let nes = game(&paths, "nes", "Zelda.nes", ("retroarch", "fceumm"));
+        let mut check = |cfg: &str, want: [Option<Blocked>; 3]| {
+            fs::write(&paths.config, cfg).unwrap();
+            let got = [&mario, &zelda, &nes].map(|g| scan(&places, g).blocked);
+            assert_eq!(got, want, "{cfg}");
+        };
+        check("global.retroachievements=1\n", [None; 3]);
+        check(
+            "global.retroachievements=1\nsnes[\"Mario.sfc\"].retroachievements.hardcore=1\n",
+            [Some(Blocked::Hardcore), None, None],
+        );
+        check(
+            "global.retroachievements=1\nsnes.retroachievements.hardcore=1\n",
+            [Some(Blocked::Hardcore), Some(Blocked::Hardcore), None],
+        );
+        check(
+            "global.retroachievements=1\nglobal.retroachievements.hardcore=1\nsnes.retroachievements=0\n",
+            [None, None, Some(Blocked::Hardcore)],
+        );
+        check("global.netplay=1\n", [Some(Blocked::Netplay); 3]);
     }
 
     #[test]

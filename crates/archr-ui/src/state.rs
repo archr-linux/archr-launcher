@@ -2,7 +2,7 @@
 
 use crate::layout::{Axis, Layout, View};
 use crate::modules::{Call, Context};
-use crate::saves::{Action, Blocked, Confirm, Kind, Progress, Save};
+use crate::saves::{Action, Confirm, Kind, Progress, Save};
 use archr_index::{cache::SystemEntry, Game};
 use std::path::PathBuf;
 mod hub;
@@ -275,8 +275,6 @@ pub struct App {
     pub progress: Progress,
     /// A game whose progress the host should look at now (it takes it).
     pub scan: Option<(String, usize)>,
-    /// Why RetroArch cannot start from a state now (hardcore, netplay).
-    pub blocked: Option<Blocked>,
     /// The open question on the Saves or Screenshots screens.
     pub confirm: Option<Confirm>,
     /// States per page and the screenshot grid, reported by the renderer.
@@ -316,7 +314,6 @@ impl App {
             hub_widget: 0,
             progress: Progress::default(),
             scan: None,
-            blocked: None,
             confirm: None,
             saves_page: 1,
             shots_columns: 1,
@@ -779,7 +776,7 @@ impl App {
 
     /// A RetroArch state cannot start the game in hardcore mode or netplay.
     pub fn can_play(&self, save: &Save) -> bool {
-        save.playable && (save.kind != Kind::RetroArch || self.blocked.is_none())
+        save.playable && (save.kind != Kind::RetroArch || self.progress.blocked.is_none())
     }
 
     /// Saves, Screenshots and one screenshot; an open question first.
