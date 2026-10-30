@@ -1117,6 +1117,33 @@ mod progress {
     }
 
     #[test]
+    fn a_question_stays_on_its_file_and_other_games_answers_are_dropped() {
+        let data = FakeData::library();
+        let mut app = menu(&data, found(3, 0));
+        app.cursor = 2;
+        app.handle(Button::A, &data);
+        app.handle(Button::Down, &data);
+        app.handle(Button::X, &data);
+        // The list changes under the question (slot 0 went away).
+        let mut fewer = found(3, 0);
+        fewer.saves.remove(0);
+        app.set_progress(fewer, &data);
+        let mut late = found(0, 0);
+        late.game = Some(("snes".into(), 6));
+        app.set_progress(late, &data);
+        assert_eq!(
+            app.progress.saves.len(),
+            2,
+            "another game's answer is dropped"
+        );
+        app.handle(Button::R, &data);
+        assert!(matches!(
+            app.handle(Button::A, &data),
+            Outcome::Delete { paths, .. } if paths == [std::path::PathBuf::from("/s/Game 7.state1")]
+        ));
+    }
+
+    #[test]
     fn hardcore_and_netplay_keep_retroarch_states_from_starting_the_game() {
         let data = FakeData::library();
         for blocked in [Blocked::Hardcore, Blocked::Netplay] {

@@ -64,7 +64,7 @@ pub enum Blocked {
 pub struct Confirm {
     pub action: Action,
     /// The state or the picture it is about.
-    pub index: usize,
+    pub path: PathBuf,
     /// The action's button has the focus (else Cancel).
     pub on_action: bool,
 }

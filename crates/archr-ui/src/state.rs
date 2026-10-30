@@ -736,6 +736,17 @@ impl App {
     /// The host's answer: the open menu keeps its selected row, a list its
     /// place, and a screen left with nothing to show closes.
     pub fn set_progress(&mut self, progress: Progress, data: &dyn DataSource) {
+        // Only the game on screen: a slow answer for another one is dropped.
+        let shown = match &self.screen {
+            Screen::QuickMenu { game: Some(game) } => Some(game.clone()),
+            Screen::Saves { system, game }
+            | Screen::Shots { system, game }
+            | Screen::Shot { system, game } => Some((system.clone(), *game)),
+            _ => None,
+        };
+        if shown.is_none() || shown != progress.game {
+            return;
+        }
         let selected = self.quick_menu_items(data).get(self.cursor).copied();
         self.progress = progress;
         match &self.screen {
@@ -796,10 +807,15 @@ impl App {
             self.progress.shots.len()
         };
         let last = len.saturating_sub(1);
-        let ask = |action, index, on_action| {
-            Some(Confirm {
+        // The question names its file: a list that changes meanwhile never
+        // turns it into a question about another one.
+        let at = self.cursor;
+        let save = self.progress.saves.get(at).map(|s| s.path.clone());
+        let shot = self.progress.shots.get(at).map(|s| s.path.clone());
+        let ask = |action, path: Option<PathBuf>, on_action| {
+            path.map(|path| Confirm {
                 action,
-                index,
+                path,
                 on_action,
             })
         };
@@ -826,11 +842,11 @@ impl App {
                     .get(self.cursor)
                     .is_some_and(|save| self.can_play(save))
                 {
-                    self.confirm = ask(Action::Play, self.cursor, true);
+                    self.confirm = ask(Action::Play, save, true);
                 }
             }
             (Screen::Saves { .. }, Button::X) if len > 0 => {
-                self.confirm = ask(Action::DeleteSave, self.cursor, false)
+                self.confirm = ask(Action::DeleteSave, save, false)
             }
             (Screen::Shots { .. }, Button::Up) => {
                 let columns = self.shots_columns.max(1);
@@ -856,7 +872,7 @@ impl App {
                 self.cursor = at;
             }
             (Screen::Shots { .. } | Screen::Shot { .. }, Button::X) if len > 0 => {
-                self.confirm = ask(Action::DeleteShot, self.cursor, false)
+                self.confirm = ask(Action::DeleteShot, shot, false)
             }
             (Screen::Shot { .. }, Button::Y) => {
                 if let Some(shot) = self.progress.shots.get(self.cursor).filter(|s| !s.details) {
@@ -874,7 +890,7 @@ impl App {
 
     fn answer(&mut self, confirm: Confirm, system: String, game: usize) -> Outcome {
         match confirm.action {
-            Action::Play => match self.progress.saves.get(confirm.index) {
+            Action::Play => match self.progress.saves.iter().find(|s| s.path == confirm.path) {
                 Some(save) => Outcome::PlayFrom {
                     system,
                     game,
@@ -882,7 +898,8 @@ impl App {
                 },
                 None => Outcome::None,
             },
-            Action::DeleteSave => match self.progress.saves.get(confirm.index) {
+            Action::DeleteSave => match self.progress.saves.iter().find(|s| s.path == confirm.path)
+            {
                 Some(save) => Outcome::Delete {
                     system,
                     game,
@@ -892,7 +909,8 @@ impl App {
                 },
                 None => Outcome::None,
             },
-            Action::DeleteShot => match self.progress.shots.get(confirm.index) {
+            Action::DeleteShot => match self.progress.shots.iter().find(|s| s.path == confirm.path)
+            {
                 Some(shot) => Outcome::Delete {
                     system,
                     game,

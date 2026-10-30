@@ -577,8 +577,8 @@ impl Ui<'_, '_> {
             return Ok(());
         };
         let progress = &app.progress;
-        let save = progress.saves.get(confirm.index);
-        let shot = progress.shots.get(confirm.index);
+        let save = progress.saves.iter().find(|s| s.path == confirm.path);
+        let shot = progress.shots.iter().find(|s| s.path == confirm.path);
         let (question, detail, picture, taken) = match (confirm.action, save, shot) {
             (Action::Play, Some(save), _) => {
                 let question = match save.slot {
