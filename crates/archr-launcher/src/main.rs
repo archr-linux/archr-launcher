@@ -43,6 +43,9 @@ const APP_ID: &str = "archr-launcher";
 /// "Check at startup" waits this long, so it never slows the first screens.
 const UPDATE_CHECK_DELAY: Duration = Duration::from_secs(20);
 
+/// runemu.sh's record of the running game (ROM path, then its PID).
+const CURRENT_GAME: &str = "/run/archr/current-game";
+
 fn main() {
     let began = Instant::now();
     // SDL reads this once at video init; set it while still single-threaded.
@@ -126,6 +129,9 @@ fn run(
         let worker = scope.spawn(move || -> Result<_, String> {
             let config = SystemCfg::load(&paths.config).ok();
             startup_phase!(trace, "system.cfg read");
+            // The launcher has the screen again: no game is running, so
+            // the screenshot shortcut's game record goes.
+            let _ = std::fs::remove_file(paths.at(CURRENT_GAME));
             let language = config
                 .as_ref()
                 .and_then(|cfg| cfg.get_local("system", None, "language"));

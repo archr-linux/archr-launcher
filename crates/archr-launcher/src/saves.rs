@@ -613,7 +613,7 @@ mod tests {
         let mario = game(&paths, "snes", "Mario.sfc", ("retroarch", "snes9x"));
         let zelda = game(&paths, "snes", "Zelda.sfc", ("retroarch", "snes9x"));
         let nes = game(&paths, "nes", "Zelda.nes", ("retroarch", "fceumm"));
-        let mut check = |cfg: &str, want: [Option<Blocked>; 3]| {
+        let check = |cfg: &str, want: [Option<Blocked>; 3]| {
             fs::write(&paths.config, cfg).unwrap();
             let got = [&mario, &zelda, &nes].map(|g| scan(&places, g).blocked);
             assert_eq!(got, want, "{cfg}");
