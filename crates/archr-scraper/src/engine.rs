@@ -494,15 +494,13 @@ impl Engine {
                 failed += 1;
                 continue;
             };
-            let mut file = stem.to_os_string();
-            file.push(format!(".{ext}"));
             // Media and gamelist go to the card holding the ROM.
-            let dest = item
+            let dir = item
                 .system
                 .root_of(&item.game.path)
                 .join("media")
-                .join(kind.dir())
-                .join(file);
+                .join(kind.dir());
+            let dest = media_file(&dir, stem, ext, indexed(&item.game, kind));
             match atomic_publish(&dest, false, |f| f.write_all(&body)) {
                 Ok(()) => fields.push((kind.tag(), dest.to_string_lossy().into_owned())),
                 Err(_) => failed += 1,
@@ -796,26 +794,65 @@ struct Prefs {
     force: bool,
 }
 
+/// The file the gamelist already gives `game` for this kind, if the index keeps it.
+fn indexed(game: &Game, kind: Media) -> Option<&Path> {
+    match kind {
+        Media::Box2d => game.image.as_deref(),
+        Media::Screenshot => game.details.screenshot.as_deref(),
+        Media::Wheel => game.details.logo.as_deref(),
+        Media::Video => game.video.as_deref(),
+        _ => None,
+    }
+}
+
 fn present(system: &SystemDef, game: &Game, kind: Media) -> bool {
-    let indexed = match kind {
-        Media::Box2d => game.image.is_some(),
-        Media::Screenshot => game.details.screenshot.is_some(),
-        Media::Wheel => game.details.logo.is_some(),
-        Media::Video => game.video.is_some(),
-        _ => false,
-    };
-    let stem = game.path.file_stem().unwrap_or_default();
-    indexed
-        || kind.exts().iter().any(|ext| {
-            let mut file = stem.to_os_string();
-            file.push(format!(".{ext}"));
-            system
-                .root_of(&game.path)
-                .join("media")
-                .join(kind.dir())
-                .join(file)
-                .is_file()
+    let stem = archr_io::exfat_name(&game.path.file_stem().unwrap_or_default().to_string_lossy());
+    let dir = system.root_of(&game.path).join("media").join(kind.dir());
+    indexed(game, kind).is_some()
+        || kind
+            .exts()
+            .iter()
+            .any(|ext| dir.join(format!("{stem}.{ext}")).is_file())
+}
+
+/// Where a game's media goes: its ROM's name as an exFAT card accepts it
+/// (the ROMs partition is exFAT), and never a file another game owns. exFAT
+/// ignores case, so "MARIO.png" is taken for "Mario"; a name the sanitizing
+/// changed ("A:B" and "A?B" are both "A_B") may be another game's too. Such
+/// names get " (2)", " (3)"; the gamelist records the one chosen.
+fn media_file(dir: &Path, stem: &std::ffi::OsStr, ext: &str, own: Option<&Path>) -> PathBuf {
+    let raw = stem.to_string_lossy();
+    let base = archr_io::exfat_name(&raw);
+    let taken: Vec<String> = fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .filter_map(Result::ok)
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect()
         })
+        .unwrap_or_default();
+    // Its own file under its unchanged name may be replaced.
+    let mine = |n: usize, name: &str, t: &str| n == 1 && base == raw && t == name;
+    (1..)
+        .map(|n| {
+            (
+                n,
+                if n == 1 {
+                    format!("{base}.{ext}")
+                } else {
+                    format!("{base} ({n}).{ext}")
+                },
+            )
+        })
+        .find(|(n, name)| {
+            let lower = name.to_lowercase();
+            own == Some(dir.join(name).as_path())
+                || taken
+                    .iter()
+                    .all(|t| t.to_lowercase() != lower || mine(*n, name, t))
+        })
+        .map(|(_, name)| dir.join(name))
+        .expect("a free name")
 }
 
 /// Requested assets still missing for `game` (all of them unless `only_missing`).

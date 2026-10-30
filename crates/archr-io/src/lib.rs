@@ -51,6 +51,29 @@ pub fn read_utf8(path: &Path, limit: u64, symlinks: Symlinks) -> io::Result<Stri
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
 }
 
+/// A name an exFAT (or FAT) card accepts, by archr-roms-migrate's rule:
+/// `" * : < > ? \ |` and control characters become `_`, trailing dots and
+/// spaces go, and nothing left is `_`.
+pub fn exfat_name(name: &str) -> String {
+    let mut name: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_control() || "\"*:<>?\\|".contains(c) {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect();
+    while name.ends_with(['.', ' ']) {
+        name.pop();
+    }
+    if name.is_empty() {
+        name.push('_');
+    }
+    name
+}
+
 /// Publish only a complete, synced temporary file. Durable data also syncs the
 /// parent directory after rename; disposable caches and /run can skip that sync.
 /// A directory-sync error is reported, but the rename has already happened.
