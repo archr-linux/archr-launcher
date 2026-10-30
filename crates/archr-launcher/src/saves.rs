@@ -85,7 +85,10 @@ pub struct Game {
 
 /// The ROM file name without its last extension, as RetroArch names states
 /// and captures; the second form is the one the screenshot shortcut writes
-/// when the name has characters a FAT card refuses.
+/// when the name has characters a FAT card refuses. Two ROMs that differ
+/// only in those characters ("A:B", "A?B") share that form, so the
+/// shortcut's captures of either show under both; no file is lost, the
+/// time is in each name.
 fn stems(rom: &Path) -> Vec<String> {
     let stem = rom
         .file_stem()
