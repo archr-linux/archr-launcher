@@ -36,14 +36,26 @@ impl Places {
             hashes: paths.cache.join("cheevos"),
         }
     }
-    /// Deleting is only ever done inside these folders.
+    /// What this screen may delete: a state or its picture straight in a
+    /// system's states folder, a mupen64plus state, a capture. Never a ROM,
+    /// a cartridge save or anything in a deeper folder.
     fn holds(&self, path: &Path) -> bool {
-        [&self.states, &self.shots, &self.mupen]
-            .iter()
-            .any(|dir| path.starts_with(dir))
-            && !path
-                .components()
-                .any(|c| matches!(c, std::path::Component::ParentDir))
+        let (Some(dir), Some(name)) = (path.parent(), path.file_name()) else {
+            return false;
+        };
+        let name = name.to_string_lossy();
+        let state = |name: &str| {
+            name.rsplit_once(".state").is_some_and(|(stem, slot)| {
+                !stem.is_empty() && retroarch_slot(&format!("x.state{slot}"), "x").is_some()
+            })
+        };
+        if dir.parent() == Some(&*self.states) {
+            state(&name) || name.strip_suffix(".png").is_some_and(state)
+        } else if dir == self.mupen {
+            mupen_slot(&name).is_some()
+        } else {
+            dir == self.shots && name.ends_with(".png")
+        }
     }
 }
 
@@ -617,12 +629,26 @@ mod tests {
         // No save at all: the launch stops.
         assert!(back_up(&[dir.path().join("none.srm")]).is_err());
         let places = Places::new(&paths);
-        assert!(places.holds(&paths.at("/storage/roms/savestates/snes/A.state")));
-        assert!(places.holds(&paths.at("/storage/roms/screenshots/A-261028-201500.png")));
+        for inside in [
+            "/storage/roms/savestates/snes/A.state",
+            "/storage/roms/savestates/snes/A.state12",
+            "/storage/roms/savestates/snes/A.state.auto.png",
+            "/storage/roms/n64/MARIO-635A42C5.st1",
+            "/storage/roms/screenshots/A-261028-201500.png",
+        ] {
+            assert!(places.holds(&paths.at(inside)), "{inside}");
+        }
         for outside in [
             srm.clone(),
             paths.at("/storage/roms/snes/A.srm"),
             paths.at("/storage/roms/screenshots/../snes/A.srm"),
+            paths.at("/storage/roms/savestates/snes/A.srm"),
+            paths.at("/storage/roms/savestates/snes/A.sfc"),
+            paths.at("/storage/roms/savestates/snes/deeper/A.state"),
+            paths.at("/storage/roms/savestates/A.state"),
+            paths.at("/storage/roms/n64/Mario.z64"),
+            paths.at("/storage/roms/n64/MARIO-635A42C5.eep"),
+            paths.at("/storage/roms/screenshots/A.sfc"),
         ] {
             assert!(!places.holds(&outside), "{}", outside.display());
         }
