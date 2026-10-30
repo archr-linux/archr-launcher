@@ -176,7 +176,7 @@ fn same_file(a: &Path, b: &Path, len: u64) -> bool {
 /// Everything the card holds for the game, newest first.
 pub fn scan(places: &Places, game: &Game) -> Progress {
     let stems = stems(&game.rom);
-    let (emulator, core) = game.emulator.clone().unwrap_or_default();
+    let (emulator, _) = game.emulator.clone().unwrap_or_default();
     let retroarch = emulator == "retroarch";
     let mut saves = Vec::new();
 
@@ -198,11 +198,8 @@ pub fn scan(places: &Places, game: &Game) -> Progress {
             saved: seconds(&meta),
             bytes: meta.len(),
             kind: Kind::RetroArch,
-            emulator: if retroarch && !core.is_empty() {
-                format!("RetroArch · {core}")
-            } else {
-                "RetroArch".into()
-            },
+            // The state does not say which core wrote it.
+            emulator: "RetroArch".into(),
             playable: retroarch,
             backup: srm.clone().into_iter().collect(),
         });
