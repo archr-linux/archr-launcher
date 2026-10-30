@@ -64,7 +64,7 @@ fn plain(text: &str) -> String {
 }
 
 /// The game hash, remembered per path, size and modification time.
-fn cached_hash(dir: &Path, system: &str, rom: &Path) -> Option<String> {
+pub(crate) fn cached_hash(dir: &Path, system: &str, rom: &Path) -> Option<String> {
     let meta = fs::metadata(rom).ok()?;
     let mtime = meta
         .modified()

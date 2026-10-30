@@ -24,6 +24,8 @@ pub struct Library {
     pub write_failed: bool,
     /// The CPU governor a module chose for the next launch only.
     pub governor: Option<String>,
+    /// The save state the next launch starts from.
+    pub entry: Option<crate::saves::Entry>,
     moonlight_available: bool,
     overview: Overview,
     definitions: Vec<SystemDef>,
@@ -95,6 +97,7 @@ impl Library {
             pending_writes: 0,
             write_failed: false,
             governor: None,
+            entry: None,
             overview,
             definitions,
             games: HashMap::new(),
@@ -335,6 +338,12 @@ impl Library {
             }
             Outcome::Launch { system, game } => {
                 let governor = self.governor.take();
+                // The state is for this launch of this game only: taken
+                // first, so no failure below leaves it for another.
+                let entry = self.entry.take().filter(|entry| {
+                    entry.system == system
+                        && self.games(&system).get(game).map(|g| &g.path) == Some(&entry.rom)
+                });
                 let mut command = self.launch_command(&system, game, controllers)?;
                 // runemu.sh runs the governor as a function name: only the
                 // known ones, and only on its own command line.
@@ -343,6 +352,13 @@ impl Library {
                         && self.current_core(&system, game).is_some()
                 }) {
                     command.push_str(&format!(" --governor={governor}"));
+                }
+                // The saves worker backed up the cartridge save already.
+                if let Some(entry) = entry {
+                    if self.current_core(&system, game).is_some() {
+                        command.push(' ');
+                        command.push_str(&crate::handoff::quote(&entry.argument));
+                    }
                 }
                 let key = self.game_key(&system, game).ok_or("error.game_missing")?;
                 if !self.is_tools(&system) {
@@ -381,7 +397,11 @@ impl Library {
                 }
                 self.queue_store();
             }
-            Outcome::Action(_) | Outcome::ToggleWifi => return Err("error.operation".to_owned()),
+            Outcome::Action(_)
+            | Outcome::ToggleWifi
+            | Outcome::PlayFrom { .. }
+            | Outcome::Delete { .. }
+            | Outcome::UseShot { .. } => return Err("error.operation".to_owned()),
         }
         Ok(false)
     }
@@ -434,6 +454,18 @@ impl Library {
             .as_ref()
             .ok_or("error.persistence")?
             .flush(self.store.clone())
+    }
+    /// What the Saves and Screenshots screens need to know about a game.
+    pub fn progress_game(&self, system: &str, index: usize) -> Option<crate::saves::Game> {
+        let game = self.games(system).get(index)?;
+        Some(crate::saves::Game {
+            system: system.to_owned(),
+            index,
+            rom: game.path.clone(),
+            emulator: self.current_core(system, index),
+            details: game.details.screenshot.clone(),
+            root: self.definition(system)?.root_of(&game.path).to_owned(),
+        })
     }
     fn definition(&self, name: &str) -> Option<&SystemDef> {
         self.definitions.iter().find(|system| system.name == name)

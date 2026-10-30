@@ -86,3 +86,26 @@ fn check_startup(definitions: &str, themed: bool) {
         }
     }
 }
+
+#[test]
+fn the_launcher_forgets_the_running_game_when_it_starts() {
+    let root = tempfile::tempdir().unwrap();
+    let config = root.path().join("storage/.config/archr");
+    std::fs::create_dir_all(&config).unwrap();
+    std::fs::write(config.join("systems.cfg"), "<systemList></systemList>").unwrap();
+    let record = root.path().join("run/archr/current-game");
+    std::fs::create_dir_all(record.parent().unwrap()).unwrap();
+    std::fs::write(&record, "/storage/roms/snes/Mario.sfc\n4242\n").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_archr-launcher"))
+        .env("ARCHR_LAUNCHER_ROOT", root.path())
+        .env("SDL_VIDEODRIVER", "offscreen")
+        .args(["--windowed", "--script", "QUIT"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!record.exists());
+}

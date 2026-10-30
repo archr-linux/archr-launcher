@@ -24,6 +24,7 @@ mod keyboard;
 mod look;
 mod moonlight;
 mod netplay;
+mod saves;
 
 use sdl2::{
     rect::Rect,
@@ -343,6 +344,10 @@ pub struct Ui<'font, 'texture> {
     pub details_overflow: usize,
     /// Achievements that fit one page of the list, for the host's paging.
     pub achievements_page: usize,
+    /// States per page of the Saves list, and the Screenshots grid's
+    /// columns and pictures per page, for the host's paging.
+    pub saves_page: usize,
+    pub shots_grid: (usize, usize),
     /// The active view and the theme it was resolved from.
     view: Option<(Theme, View)>,
     animating: bool,
@@ -456,6 +461,8 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             details_wrap: details::Wrapped::default(),
             details_overflow: 0,
             achievements_page: 1,
+            saves_page: 1,
+            shots_grid: (1, 1),
             view: None,
             animating: false,
             born: Instant::now(),
@@ -898,11 +905,23 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 });
             self.begin_page(games, picture, theme)?;
             self.backdrop_pictures(theme)?;
-            // The Start menu is a fixed composition: no decorations over it.
+            // The Start menu, Saves and Screenshots are fixed compositions:
+            // no decorations over them.
             let hub = matches!(app.screen, Screen::StartHub { .. });
-            let decor = if hub { &[][..] } else { &layout.decor[..] };
+            let bare = hub
+                || matches!(
+                    backdrop,
+                    Screen::Saves { .. } | Screen::Shots { .. } | Screen::Shot { .. }
+                );
+            let decor = if bare { &[][..] } else { &layout.decor[..] };
             self.decor(theme, decor, true)?;
-            if let Screen::Achievements { system, game } = backdrop {
+            if let Screen::Saves { system, game } = backdrop {
+                self.saves(app, (system, *game), data, theme, art)?;
+            } else if let Screen::Shots { system, game } = backdrop {
+                self.shots(app, (system, *game), data, theme, art)?;
+            } else if let Screen::Shot { system, game } = backdrop {
+                self.shot(app, (system, *game), data, theme, art)?;
+            } else if let Screen::Achievements { system, game } = backdrop {
                 let name = data
                     .games(system)
                     .get(*game)
@@ -953,6 +972,12 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             }
             self.decor(theme, decor, false)?;
             self.end_page(theme)?;
+            if let Screen::Saves { system, game }
+            | Screen::Shots { system, game }
+            | Screen::Shot { system, game } = &app.screen
+            {
+                self.progress_question(app, (system, *game), data, theme, art)?;
+            }
             if matches!(app.screen, Screen::QuickMenu { .. }) {
                 self.menu(app, data, theme)?;
             } else {
@@ -1934,6 +1959,8 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                     continue;
                 }
                 QuickItem::Details => "menu.details",
+                QuickItem::Saves => "menu.saves",
+                QuickItem::Shots => "menu.shots",
                 QuickItem::Achievements => "menu.achievements",
                 QuickItem::Settings => "settings.title",
                 QuickItem::Netplay => "netplay.menu",
@@ -1948,6 +1975,34 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             let label = self.catalog.text(label);
             let label = label.as_str();
             let face = selection(selected, Face::Regular, Face::Semibold);
+            // Saves and Screenshots: how many (and when), then ›; the count
+            // alone when the whole value leaves the label no room.
+            if let Some((full, short)) = self.progress_value(app, *item) {
+                let sc = selection(selected, theme.muted, theme.accent_text_secondary);
+                let end = panel.right() - self.px(24.);
+                let arrow = (Face::Regular, 16., sc);
+                let right =
+                    self.packed_label("›", arrow, (end, y, item_height), u32::MAX, Align::Left)?
+                        - self.px(8.);
+                let label_w = self.measure(label, face, 15.)? as i32;
+                let room = right - x - label_w - self.px(12.);
+                let value = if self.measure(&full, Face::Regular, 13.)? as i32 <= room {
+                    full
+                } else {
+                    short
+                };
+                let style = (Face::Regular, 13., sc);
+                let right = self.packed_label(
+                    &value,
+                    style,
+                    (right, y, item_height),
+                    u32::MAX,
+                    Align::Left,
+                )?;
+                let width = (right - x - self.px(8.)).max(1) as u32;
+                self.label(label, (face, 15., c), Rect::new(x, y, width, item_height))?;
+                continue;
+            }
             let value = match item {
                 QuickItem::Core => Some(app.selected_core().1),
                 QuickItem::Mangohud => Some(app.selected_mangohud().0),

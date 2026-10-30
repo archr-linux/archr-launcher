@@ -14,6 +14,10 @@ pub struct Art<'a, 't> {
     pub video: Option<(&'a Texture<'t>, f32)>,
     /// Achievement badges decoded so far, by file.
     pub badges: Option<&'a crate::covers::CoverCache<'t>>,
+    /// Save-state pictures and screenshots, small, by file.
+    pub thumbs: Option<&'a crate::covers::CoverCache<'t>>,
+    /// The selected state's picture, or the screenshot on the whole screen.
+    pub picture: Option<&'a Texture<'t>>,
 }
 
 /// Wrapped description lines, kept until the text, width or size changes.
@@ -24,7 +28,7 @@ pub(super) struct Wrapped {
 }
 
 /// `texture` scaled to fit inside `rect`, centered (or left-aligned).
-fn fit(texture: &Texture<'_>, rect: Rect, left: bool) -> Rect {
+pub(super) fn fit(texture: &Texture<'_>, rect: Rect, left: bool) -> Rect {
     let size = texture.query();
     let scale = (rect.width() as f32 / size.width.max(1) as f32)
         .min(rect.height() as f32 / size.height.max(1) as f32);

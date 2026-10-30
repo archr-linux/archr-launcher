@@ -137,6 +137,11 @@ pub struct Theme {
     /// Achievements screen: progress bar and counts, and the list.
     pub achievements_progress: Rect01,
     pub achievements_list: Rect01,
+    /// Saves screen: the list of states and the selected state's card.
+    pub saves_list: Rect01,
+    pub saves_card: Rect01,
+    /// Screenshots screen: the grid of pictures.
+    pub shots_grid: Rect01,
     /// Style (docs/temas.md, Estilo): every corner radius times `corners`
     /// (0 = square), panel borders `border_width` reference pixels thick,
     /// the shadow under panels, console pictures scaled without smoothing
@@ -289,6 +294,9 @@ impl Theme {
             start_widgets: token!(start_widgets, rectangle),
             achievements_progress: token!(achievements_progress, rectangle),
             achievements_list: token!(achievements_list, rectangle),
+            saves_list: token!(saves_list, rectangle),
+            saves_card: token!(saves_card, rectangle),
+            shots_grid: token!(shots_grid, rectangle),
             corners: token!(corners, unit),
             border_width: token!(border_width, border_width),
             shadow: token!(shadow, shadow),
@@ -408,6 +416,9 @@ pub const KNOWN_KEYS: &[&str] = &[
     "start_widgets",
     "achievements_progress",
     "achievements_list",
+    "saves_list",
+    "saves_card",
+    "shots_grid",
     "corners",
     "border_width",
     "shadow",

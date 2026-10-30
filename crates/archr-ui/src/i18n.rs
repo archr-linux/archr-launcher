@@ -138,6 +138,16 @@ impl I18n {
             .unwrap_or(2.);
         self.plural("metadata.players", n, &[("count", players)])
     }
+    /// "48,2 MB": one decimal, the locale's decimal mark and unit.
+    pub fn size(&self, bytes: u64) -> String {
+        let (value, key) = match bytes {
+            0..1_048_576 => (bytes as f64 / 1024., "updates.kb"),
+            1_048_576..1_073_741_824 => (bytes as f64 / 1_048_576., "updates.mb"),
+            _ => (bytes as f64 / 1_073_741_824., "updates.gb"),
+        };
+        let number = format!("{value:.1}").replace('.', &self.text("details.decimal"));
+        self.format(key, &[("value", &number)])
+    }
     /// Calendar-free relative age: months are 30 days, years 365 days.
     /// Future timestamps are clamped to now (RTC/network clock correction).
     pub fn relative_time(&self, timestamp: u64, now: u64) -> String {

@@ -13,6 +13,7 @@ use archr_launcher::{
     paths::Paths,
     preview::Preview,
     rescrape::Rescrape,
+    saves::{Entry, Task},
     state::{App, DataSource, Outcome, Screen},
     wifi,
 };
@@ -41,6 +42,9 @@ use std::{
 const APP_ID: &str = "archr-launcher";
 /// "Check at startup" waits this long, so it never slows the first screens.
 const UPDATE_CHECK_DELAY: Duration = Duration::from_secs(20);
+
+/// runemu.sh's record of the running game (ROM path, then its PID).
+const CURRENT_GAME: &str = "/run/archr/current-game";
 
 fn main() {
     let began = Instant::now();
@@ -125,6 +129,9 @@ fn run(
         let worker = scope.spawn(move || -> Result<_, String> {
             let config = SystemCfg::load(&paths.config).ok();
             startup_phase!(trace, "system.cfg read");
+            // The launcher has the screen again: no game is running, so
+            // the screenshot shortcut's game record goes.
+            let _ = std::fs::remove_file(paths.at(CURRENT_GAME));
             let language = config
                 .as_ref()
                 .and_then(|cfg| cfg.get_local("system", None, "language"));
@@ -274,6 +281,11 @@ fn run(
     // Achievement badges, at the list icon's size.
     let side = (36. * height as f32 / 480.).round().max(1.) as u32;
     let mut badges = CoverCache::new(&creator, paths.cache.join("thumbs"), side, side);
+    // Saves and Screenshots: list and grid pictures, and the large one.
+    let cell = |w: f32| (w * height as f32 / 480.).round().max(1.) as u32;
+    let mut thumbs = CoverCache::new(&creator, paths.cache.join("thumbs"), cell(138.), cell(104.));
+    let mut pictures = CoverCache::new(&creator, paths.cache.join("thumbs"), width, height);
+    let mut progress = archr_launcher::saves::Worker::new(&paths);
     let mut preview = Preview::new(&creator);
     let mut cheevos: Option<Lookup> = None;
     let mut rescrape: Option<Rescrape> = None;
@@ -545,6 +557,28 @@ fn run(
                 settings.state.value(Id::Cheevos) == "1" && !settings.state.cheevos.user.is_empty();
             app.mangohud = settings.state.mangohud_supported;
         }
+        if let Some((system, game)) = app.scan.take() {
+            if let Some(game) = library.progress_game(&system, game) {
+                progress.start(Task::Scan, game);
+            }
+        }
+        if let Some(done) = progress.poll() {
+            if let Some(system) = done.reload {
+                library.reload(&[system]);
+                shots.clear();
+            }
+            if let Some(key) = done.notice {
+                let severity = Severity::of(key);
+                ui.banner = Some(ui.catalog.text(key));
+                banner_timer.restart(severity, Instant::now());
+            }
+            if let (Some(entry), Some((system, game))) = (done.play, done.progress.game.clone()) {
+                library.entry = Some(entry);
+                deferred = Some(Outcome::Launch { system, game });
+            }
+            app.set_progress(done.progress, &library);
+            dirty = true;
+        }
         app.rescraping = rescrape.is_some();
         app.can_rescrape = archr_scraper::available() && !settings.state.scrape.running;
         if let Some(banner) = library.banner.take() {
@@ -576,7 +610,15 @@ fn run(
         shots.request(shot.as_slice());
         logos.request(logo.as_slice());
         badges.request(&badge_paths(&app));
-        dirty |= covers.poll() | shots.poll() | logos.poll() | badges.poll();
+        let (small, large) = app.progress_paths();
+        thumbs.request(&small);
+        pictures.request(&large);
+        dirty |= covers.poll()
+            | shots.poll()
+            | logos.poll()
+            | badges.poll()
+            | thumbs.poll()
+            | pictures.poll();
         let video = match &app.screen {
             Screen::Details { system, game }
                 if !settings.active && settings.state.value(Id::PreviewVideo) == "1" =>
@@ -605,6 +647,8 @@ fn run(
                 logo: logo.as_ref().and_then(|path| logos.get(path)),
                 video: preview.frame(),
                 badges: Some(&badges),
+                thumbs: Some(&thumbs),
+                picture: large.first().and_then(|path| pictures.peek(path)),
             };
             ui.draw_with_settings(
                 &app,
@@ -615,6 +659,8 @@ fn run(
             )?;
             app.details_overflow = ui.details_overflow;
             app.sheet_page = ui.achievements_page;
+            app.saves_page = ui.saves_page;
+            (app.shots_columns, app.shots_page) = ui.shots_grid;
             dirty = false;
         }
         #[cfg(test)]
@@ -756,6 +802,25 @@ fn run(
             } else {
                 requested
             };
+            // A launch from a save state: the entry rides with the launch.
+            let requested = match requested {
+                Outcome::PlayFrom {
+                    system,
+                    game,
+                    state,
+                } => {
+                    // The worker backs up the cartridge save; the launch
+                    // follows its answer.
+                    let save = app.progress.saves.iter().find(|save| save.path == state);
+                    if let Some(game) = library.progress_game(&system, game) {
+                        if let Some(entry) = save.and_then(|save| Entry::of(save, &game)) {
+                            progress.start(Task::Play(entry), game);
+                        }
+                    }
+                    Outcome::None
+                }
+                requested => requested,
+            };
             let requested = if requested == Outcome::OpenNetplay {
                 ui.lobby = Some(Lobby::default());
                 rooms.refresh();
@@ -768,6 +833,21 @@ fn run(
                     .games(system)
                     .get(*game)
                     .map(|rom| Lookup::start(paths.clone(), system.clone(), rom.path.clone()));
+                outcome = Some(Outcome::None);
+            } else if let Outcome::Delete {
+                system,
+                game,
+                paths,
+            } = &requested
+            {
+                if let Some(game) = library.progress_game(system, *game) {
+                    progress.start(Task::Delete(paths.clone()), game);
+                }
+                outcome = Some(Outcome::None);
+            } else if let Outcome::UseShot { system, game, path } = &requested {
+                if let Some(game) = library.progress_game(system, *game) {
+                    progress.start(Task::UseShot(path.clone()), game);
+                }
                 outcome = Some(Outcome::None);
             } else if let Outcome::Rescrape { system, game } = &requested {
                 if let Some(rom) = library

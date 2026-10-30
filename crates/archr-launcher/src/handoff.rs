@@ -256,7 +256,7 @@ pub(crate) fn assignment(name: &str, value: &str) -> String {
     }
 }
 
-fn quote(argument: &str) -> String {
+pub(crate) fn quote(argument: &str) -> String {
     format!("'{}'", argument.replace('\'', "'\\''"))
 }
 

@@ -375,6 +375,8 @@ const CONFIG_KEYS: &[&str] = &[
     "module.toml",
     "modules.toml",
     "reviewed.json",
+    // system.cfg keys the saves scan resolves per game.
+    "retroachievements.hardcore",
     "reviewed.json.sig",
     "system.hostname",
     // RetroArch file names read by the importer.

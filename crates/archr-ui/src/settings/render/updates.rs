@@ -18,15 +18,8 @@ const WIDE: f32 = 560.;
 const STEP: f32 = 45.;
 
 impl View<'_, '_, '_> {
-    /// "48,2 MB": one decimal, the locale's decimal mark and unit.
     fn size(&self, bytes: u64) -> String {
-        let (value, key) = match bytes {
-            0..1_048_576 => (bytes as f64 / 1024., "updates.kb"),
-            1_048_576..1_073_741_824 => (bytes as f64 / 1_048_576., "updates.mb"),
-            _ => (bytes as f64 / 1_073_741_824., "updates.gb"),
-        };
-        let number = format!("{value:.1}").replace('.', &self.ui.catalog.text("details.decimal"));
-        self.ui.catalog.format(key, &[("value", &number)])
+        self.ui.catalog.size(bytes)
     }
     fn tinted(&self, ink: Rgba) -> Rgba {
         mix(self.theme.background, ink, 0.18)

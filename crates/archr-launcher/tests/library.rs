@@ -536,3 +536,57 @@ fn a_system_core_saved_by_the_settings_applies_to_the_next_launch() {
         l.current_core("nes", 0) == Some(("retroarch".into(), "nestopia".into()))
     });
 }
+
+#[test]
+fn a_launch_from_a_state_names_the_slot_once() {
+    use archr_launcher::saves::{scan, Places};
+    let (_dir, paths) = fixture();
+    let mut library = ready(&paths, Some("nes"));
+    let states = paths.at("/storage/roms/savestates/nes");
+    fs::create_dir_all(&states).unwrap();
+    fs::write(states.join("A.state3"), "state").unwrap();
+    fs::write(states.join("A.state3.png"), "picture").unwrap();
+    let game = library.progress_game("nes", 0).unwrap();
+    let progress = scan(&Places::new(&paths), &game);
+    let save = &progress.saves[0];
+    assert_eq!((save.slot, save.playable), (Some(3), true));
+    library.entry = archr_launcher::saves::Entry::of(save, &game);
+    let launch = Outcome::Launch {
+        system: "nes".into(),
+        game: 0,
+    };
+    assert!(library.handle(launch.clone(), "").unwrap());
+    let next = fs::read_to_string(paths.run.join("next")).unwrap();
+    assert!(next.trim_end().ends_with(" '--entryslot=3'"), "{next}");
+    // The entry is for one launch only.
+    fs::remove_file(paths.run.join("next")).unwrap();
+    assert!(library.handle(launch, "").unwrap());
+    let next = fs::read_to_string(paths.run.join("next")).unwrap();
+    assert!(!next.contains("--entry"), "{next}");
+}
+
+#[test]
+fn a_state_never_reaches_another_game_or_outlives_a_failed_launch() {
+    let (_dir, paths) = fixture();
+    let mut library = ready(&paths, Some("nes"));
+    let entry = archr_launcher::saves::Entry {
+        system: "nes".into(),
+        rom: paths.at("/storage/roms/nes/Other.nes"),
+        argument: "--entryslot=3".into(),
+        backup: Vec::new(),
+    };
+    let launch = |game| Outcome::Launch {
+        system: "nes".into(),
+        game,
+    };
+    // A launch that fails before its command is built still drops it.
+    library.entry = Some(entry.clone());
+    assert!(library.handle(launch(9), "").is_err());
+    assert!(library.entry.is_none());
+    // Another game's state is not passed on.
+    library.entry = Some(entry);
+    assert!(library.handle(launch(0), "").unwrap());
+    let next = fs::read_to_string(paths.run.join("next")).unwrap();
+    assert!(!next.contains("--entry"), "{next}");
+    assert!(library.entry.is_none());
+}

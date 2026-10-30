@@ -352,6 +352,33 @@ de conquista bloqueada sem imagem, `muted` nas descrições e nos pontos.
 Conquistas bloqueadas aparecem esmaecidas. Títulos e descrições vêm do
 RetroAchievements: o título encolhe até 12 px e a descrição quebra em duas
 linhas menores antes de ser cortada.
+## Saves e capturas do jogo
+
+As telas Saves e Screenshots (Y › Saves ou Y › Screenshots, na lista de
+jogos, quando o jogo tem saves ou capturas) também seguem retângulos do
+`theme.toml`, no topo do arquivo, com a mesma regra dos `details_*`: frações
+da tela, herança do tema padrão e volta ao padrão quando o valor é inválido.
+
+| chave | conteúdo |
+|---|---|
+| `saves_list` | lista dos saves (slots e o automático), linhas de 62 px (referência 480 px) com 4 px entre elas, miniatura 64×48 à esquerda; L R vira a página |
+| `saves_card` | o save selecionado: a imagem em 4:3 na largura do retângulo, depois Salvo em, Emulador e Tamanho, e a nota sobre o que acontece ao jogar |
+| `shots_grid` | grade das capturas: cabem tantas colunas de cerca de 138 px (com 12 px entre elas) quantas a largura deixar, esticadas para preencher; as linhas seguem a altura |
+
+O padrão (maquetes Saves e Screenshots):
+
+```toml
+saves_list = { x = 0.01875, y = 0.1, w = 0.4875, h = 0.783333333 }
+saves_card = { x = 0.53125, y = 0.1, w = 0.440625, h = 0.783333333 }
+shots_grid = { x = 0.040625, y = 0.108333333, w = 0.91875, h = 0.791666667 }
+```
+
+As cores vêm das chaves gerais: `accent` na linha e na captura
+selecionadas, `surface` e `border` na moldura da imagem, `muted` nas datas e
+nas notas, `dim` no tempo relativo, `danger` no botão Apagar da confirmação.
+A captura aberta ocupa a tela inteira, com o nome do jogo no alto e os botões
+no rodapé; as confirmações (Jogar daqui e Apagar) são janelas centradas.
+
 ## Animações
 
 Aparência › Animações (`launcher.animations`): **Ligadas** (`on`), **Reduzidas**
