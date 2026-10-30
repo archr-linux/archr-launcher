@@ -24,6 +24,8 @@ mod keyboard;
 mod look;
 mod moonlight;
 mod netplay;
+mod roms_move;
+pub use roms_move::{MoveStage, RomsMove};
 mod saves;
 
 use sdl2::{
@@ -844,9 +846,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
     ) -> Result<(), String> {
         self.frame = Frame::from_size(self.canvas.output_size()?);
         self.frame.text = self.text_scale;
-        let Frame {
-            width, height, now, ..
-        } = self.frame;
+        let now = self.frame.now;
         self.canvas.set_draw_color(color(theme.background));
         self.canvas.clear();
         self.store_wanted.clear();
@@ -1002,14 +1002,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         }
         self.settle_entrances();
         self.animating |= self.effects.active(now);
-        // Explicit debug readback; normal rendering does no disk I/O.
-        if let Some(path) = self.screenshot.take() {
-            let rgba = self
-                .canvas
-                .read_pixels(None, sdl2::pixels::PixelFormatEnum::RGBA32)?;
-            image::save_buffer(path, &rgba, width, height, image::ColorType::Rgba8)
-                .map_err(|e| e.to_string())?;
-        }
+        self.capture()?;
         startup_phase!(self.startup, "first frame draw");
         self.canvas.present();
         self.has_presented = true;
@@ -1023,6 +1016,18 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             status.start();
         }
         Ok(())
+    }
+    /// Explicit debug readback; normal rendering does no disk I/O.
+    fn capture(&mut self) -> Result<(), String> {
+        let Some(path) = self.screenshot.take() else {
+            return Ok(());
+        };
+        let Frame { width, height, .. } = self.frame;
+        let rgba = self
+            .canvas
+            .read_pixels(None, sdl2::pixels::PixelFormatEnum::RGBA32)?;
+        image::save_buffer(path, &rgba, width, height, image::ColorType::Rgba8)
+            .map_err(|e| e.to_string())
     }
     fn status_header(&mut self, theme: &Theme) -> Result<i32, String> {
         let Frame { width, height, .. } = self.frame;

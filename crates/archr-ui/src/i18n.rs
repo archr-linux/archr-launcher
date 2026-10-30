@@ -140,13 +140,20 @@ impl I18n {
     }
     /// "48,2 MB": one decimal, the locale's decimal mark and unit.
     pub fn size(&self, bytes: u64) -> String {
-        let (value, key) = match bytes {
-            0..1_048_576 => (bytes as f64 / 1024., "updates.kb"),
-            1_048_576..1_073_741_824 => (bytes as f64 / 1_048_576., "updates.mb"),
-            _ => (bytes as f64 / 1_073_741_824., "updates.gb"),
+        self.sizes(bytes, bytes).1
+    }
+    /// "4,8" and "7,8 GB": `part` as a bare number in the unit of `whole`.
+    pub fn sizes(&self, part: u64, whole: u64) -> (String, String) {
+        let (unit, key) = match whole {
+            0..1_048_576 => (1024., "updates.kb"),
+            1_048_576..1_073_741_824 => (1_048_576., "updates.mb"),
+            _ => (1_073_741_824., "updates.gb"),
         };
-        let number = format!("{value:.1}").replace('.', &self.text("details.decimal"));
-        self.format(key, &[("value", &number)])
+        let number = |bytes: u64| {
+            format!("{:.1}", bytes as f64 / unit).replace('.', &self.text("details.decimal"))
+        };
+        let whole = self.format(key, &[("value", &number(whole))]);
+        (number(part), whole)
     }
     /// Calendar-free relative age: months are 30 days, years 365 days.
     /// Future timestamps are clamped to now (RTC/network clock correction).
