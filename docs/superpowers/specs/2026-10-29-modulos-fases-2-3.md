@@ -174,7 +174,7 @@ Ameaça: módulo que vê cada jogo aberto (privacidade). Os eventos
 texto de consentimento deixa explícito. Com `net` junto, o consentimento já
 mostra "Rede" em âmbar.
 
-### 3.3 `system` [feito: `cpu-profile`; resto aguarda]
+### 3.3 `system` [feito: `cpu-profile`, `brightness`, `volume`, `wifi`, `screenshot`]
 
 Lista fechada de capacidades de sistema, cada uma uma operação que **o
 launcher** executa com argumentos que ele mesmo monta; o módulo nunca escolhe
@@ -322,7 +322,7 @@ falha.
   release **atual** tiver um digest da lista; um repositório revisado no
   passado com release nova não revisada sai da aba Revisados. A comparação ignora maiúsculas e o prefixo `sha256:`.
 
-### 4.2 Índice assinado [aguarda aprovação do dono]
+### 4.2 Índice assinado [feito: Ed25519, `reviewed.json.sig` em hex, `serial`; ver docs/modulos.md]
 
 Ameaça que sobra: quem toma a conta `archr-linux` no GitHub publica um
 `reviewed.json` com qualquer digest. TLS não ajuda (o servidor é o legítimo).

@@ -1917,6 +1917,40 @@ fn module_pages(dir: &std::path::Path) -> Vec<(&'static str, Settings)> {
             ..Offer::default()
         })),
     ));
+    let mut actions = api2.clone();
+    actions.modules.offer = None;
+    actions.module_store_reply(StoreReply::Offer(
+        "nuvem-dev/archr-backup".into(),
+        Ok(Box::new(Offer {
+            card: Card {
+                name: "Painel rápido".into(),
+                description: "Brilho, volume, Wi-Fi e captura de tela num bloco do Start.".into(),
+                icon: "sun".into(),
+                ..cards[1].clone()
+            },
+            version: "1.0.0".into(),
+            author: "archr-linux".into(),
+            license: "MIT".into(),
+            size: 12 * 1024,
+            reviewed: true,
+            permissions: vec![
+                permission("modules.perm_wifi", "modules.perm_wifi_detail", true),
+                permission(
+                    "modules.perm_brightness",
+                    "modules.perm_brightness_detail",
+                    false,
+                ),
+                permission("modules.perm_volume", "modules.perm_volume_detail", false),
+                permission(
+                    "modules.perm_screenshot",
+                    "modules.perm_screenshot_detail",
+                    false,
+                ),
+                permission("modules.perm_tile", "", false),
+            ],
+            ..Offer::default()
+        })),
+    ));
     let mut update = api2.clone();
     update.modules.offer = None;
     update.module_store_reply(StoreReply::Offer(
@@ -1950,6 +1984,7 @@ fn module_pages(dir: &std::path::Path) -> Vec<(&'static str, Settings)> {
     vec![
         ("sistema", system),
         ("loja-modulo-fase2", api2),
+        ("loja-modulo-sistema", actions),
         ("loja-modulo-atualizacao", update),
         ("modulos-auto", auto),
         ("modulo-detalhes", details),
