@@ -49,6 +49,8 @@ const LATE: u32 = 3;
 /// `game.launch` is honoured this long after the user chose one of the
 /// module's actions, once.
 const GESTURE: Duration = Duration::from_secs(5);
+/// A system script gets this long.
+const SYSTEM_TIMEOUT: Duration = Duration::from_secs(15);
 /// One `config.set` per module in this time, and at most `CONFIG_HOURLY`
 /// writes in the last hour.
 const CONFIG_SET: Duration = Duration::from_secs(1);
@@ -81,6 +83,9 @@ pub struct Config {
     /// uids cannot reach this device's own addresses. Without it no module
     /// gets the network.
     pub firewall: Option<PathBuf>,
+    /// The system's scripts (`/usr/bin`): brightness, volume, wifictl,
+    /// archr-screenshot and archr-osd, for `system.call`.
+    pub bin: PathBuf,
     pub shop: Option<store::Shop>,
 }
 impl Config {
@@ -116,6 +121,7 @@ impl Config {
             delay: Duration::from_secs(2),
             auto_delay: AUTO_FIRST,
             firewall,
+            bin: paths.at("/usr/bin"),
             shop: Some(shop),
         }
     }
@@ -138,6 +144,9 @@ pub enum Event {
 pub enum Notice {
     /// The module with this name was switched off after failing.
     Disabled(String),
+    /// A module turned the Wi-Fi on or off, or took a screenshot: its name
+    /// and the locale key that says which.
+    System(String, &'static str),
     /// Its update failed and the previous version is back.
     RolledBack(String),
     /// Another daemon would pass the limit.
@@ -156,6 +165,15 @@ enum Input {
     Language(String),
     Focus(&'static str, Json),
     GameStarted(Json),
+    /// Something private is on the screen (a keyboard is open).
+    Private(bool),
+    /// A `system.call` ended: module, request id, success.
+    System {
+        id: String,
+        request: Json,
+        name: &'static str,
+        ok: bool,
+    },
     /// `launch.before` to the modules with the hook; the governor comes back.
     Before(Json, Governor),
     Stop(mpsc::Sender<()>),
@@ -178,6 +196,7 @@ enum Input {
 /// The event loop's handle on the host thread.
 pub struct Modules {
     tx: mpsc::Sender<Input>,
+    private: bool,
     rx: mpsc::Receiver<Event>,
     focus: Option<Json>,
 }
@@ -194,6 +213,7 @@ impl Modules {
             tx,
             rx,
             focus: None,
+            private: false,
         }
     }
     pub fn request(&self, request: Request) {
@@ -214,6 +234,14 @@ impl Modules {
         if self.focus.as_ref() != Some(&data) {
             self.focus = Some(data.clone());
             let _ = self.tx.send(Input::Focus(event, data));
+        }
+    }
+    /// Whether something private is on the screen (a keyboard is open);
+    /// sent only when it changes.
+    pub fn private(&mut self, private: bool) {
+        if self.private != private {
+            self.private = private;
+            let _ = self.tx.send(Input::Private(private));
         }
     }
     pub fn poll(&self) -> Vec<Event> {
@@ -287,6 +315,10 @@ struct Host {
     notified: BTreeMap<String, Instant>,
     /// Each module's last `config.set`, written or not.
     config_asked: BTreeMap<String, Instant>,
+    /// Each module's last `system.call` of each action.
+    system_at: BTreeMap<(String, &'static str), Instant>,
+    /// A keyboard is open: no screenshot.
+    private: bool,
     /// When each module's `config.set`s were saved, the last hour's.
     written: BTreeMap<String, Vec<Instant>>,
     /// When to look for automatic updates next.
@@ -342,6 +374,8 @@ impl Host {
             notified: BTreeMap::new(),
             written: BTreeMap::new(),
             config_asked: BTreeMap::new(),
+            system_at: BTreeMap::new(),
+            private: false,
             gestures: BTreeMap::new(),
             late: BTreeMap::new(),
             auto_at: Instant::now() + config.delay.max(config.auto_delay),
@@ -512,6 +546,35 @@ impl Host {
                 self.deliver("game.started", &json!({"game": game}));
             }
             Input::Before(game, reply) => self.before(&game, reply),
+            Input::Private(private) => self.private = private,
+            Input::System {
+                id,
+                request,
+                name,
+                ok,
+            } => {
+                let reply = if ok {
+                    json!({"jsonrpc": "2.0", "id": request, "result": {}})
+                } else {
+                    log::warn!("Module {id}: the system could not do {name}");
+                    json!({"jsonrpc": "2.0", "id": request,
+                        "error": {"code": -32000, "message": "failed"}})
+                };
+                if self.daemons.contains_key(&id) {
+                    self.send(&id, &reply);
+                }
+                // The user sees who cut the Wi-Fi or took the picture.
+                let said = match name {
+                    "wifi" => Some("modules.did_wifi"),
+                    "screenshot" => Some("modules.did_screenshot"),
+                    _ => None,
+                };
+                if let (true, Some(key)) = (ok, said) {
+                    let _ = self
+                        .out
+                        .send(Event::Notice(Notice::System(self.name(&id), key)));
+                }
+            }
             Input::Stop(ack) => {
                 self.stop();
                 let _ = ack.send(());
@@ -1033,7 +1096,7 @@ impl Host {
             "settings": settings,
             "permissions": permissions,
             "capabilities": ["ui.update", "ui.notify", "settings.set", "config.get",
-                "config.set", "game.launch", "launch.before", "log"],
+                "config.set", "game.launch", "launch.before", "system.call", "log"],
         });
         self.send(
             id,
@@ -1192,6 +1255,13 @@ impl Host {
         let params = &message["params"];
         match (message["method"].as_str(), message.get("id")) {
             (Some(method), None) => self.notification(id, method, params),
+            (Some("system.call"), Some(request)) if !oneshot => {
+                if let Err((code, text)) = self.system_call(id, request, params) {
+                    let reply = json!({"jsonrpc": "2.0", "id": request,
+                        "error": {"code": code, "message": text}});
+                    self.send(id, &reply);
+                }
+            }
             (Some(method), Some(request)) if !oneshot => {
                 let reply = match self.call(id, method, params) {
                     Ok(result) => json!({"jsonrpc": "2.0", "id": request, "result": result}),
@@ -1509,6 +1579,119 @@ impl Host {
         }
     }
 
+    // ---- system actions ----
+
+    /// `system.call {name, value}`: one of the module's `system` actions,
+    /// run through the script that owns it, in a worker, with a time limit;
+    /// the answer comes when it ends. Values are checked here, the rate is
+    /// bounded per module and action, and nothing runs while a game has the
+    /// screen (no module runs then) or, for a screenshot, while something
+    /// private is shown.
+    fn system_call(
+        &mut self,
+        id: &str,
+        request: &Json,
+        params: &Json,
+    ) -> Result<(), (i64, &'static str)> {
+        let manifest = self
+            .find(id)
+            .and_then(|i| i.manifest.clone())
+            .ok_or((-32004, "not found"))?;
+        let name = match params["name"].as_str() {
+            Some("brightness") => "brightness",
+            Some("volume") => "volume",
+            Some("wifi") => "wifi",
+            Some("screenshot") => "screenshot",
+            _ => return Err((-32602, "name")),
+        };
+        if !manifest.permissions.system.iter().any(|s| s == name) {
+            return Err((-32001, "permission denied"));
+        }
+        if self.stopped {
+            return Err((-32001, "not while a game runs"));
+        }
+        let percent = |min: u64| {
+            params["value"]
+                .as_u64()
+                .filter(|v| (min..=100).contains(v))
+                .ok_or((-32602, "value"))
+        };
+        let (every, commands): (u64, Vec<Vec<String>>) = match name {
+            // Never dark enough to look like the device is off.
+            "brightness" => {
+                let v = percent(10)?.to_string();
+                (
+                    1,
+                    vec![
+                        s(&["brightness", "set", &v]),
+                        s(&["archr-osd", "send", "brightness", &v]),
+                    ],
+                )
+            }
+            "volume" => {
+                let v = percent(0)?.to_string();
+                (
+                    1,
+                    vec![s(&["volume", &v]), s(&["archr-osd", "send", "volume", &v])],
+                )
+            }
+            "wifi" => {
+                let on = params["value"].as_bool().ok_or((-32602, "value"))?;
+                (
+                    60,
+                    vec![s(&["wifictl", if on { "enable" } else { "disable" }])],
+                )
+            }
+            _ => {
+                if self.private {
+                    return Err((-32001, "something private is on the screen"));
+                }
+                (10, vec![s(&["archr-screenshot"])])
+            }
+        };
+        let key = (id.to_owned(), name);
+        let now = Instant::now();
+        if self
+            .system_at
+            .get(&key)
+            .is_some_and(|at| now.duration_since(*at) < Duration::from_secs(every))
+        {
+            return Err((-32003, "too many requests"));
+        }
+        self.system_at.insert(key, now);
+        log::info!("Module {id} asks the system for {name}");
+        let (bin, inbox) = (self.config.bin.clone(), self.inbox.clone());
+        let (id, request) = (id.to_owned(), request.clone());
+        thread::spawn(move || {
+            let run = |argv: &[String]| {
+                let mut command = std::process::Command::new(bin.join(&argv[0]));
+                command.args(&argv[1..]).stdin(std::process::Stdio::null());
+                std::os::unix::process::CommandExt::process_group(&mut command, 0);
+                crate::process::capture(
+                    &mut command,
+                    SYSTEM_TIMEOUT,
+                    &std::sync::atomic::AtomicBool::new(false),
+                    4096,
+                )
+                .is_ok_and(|out| out.status.success())
+            };
+            // The first command does the work; the OSD after it only shows it.
+            let ok = run(&commands[0]);
+            if ok {
+                for extra in &commands[1..] {
+                    run(extra);
+                }
+            }
+            let _ = inbox.send(Input::System {
+                id,
+                request,
+                name,
+                ok,
+            });
+        });
+        Ok(())
+    }
+
     // ---- launch hook ----
 
     /// `launch.before` to every ready daemon granted the launch hook.
@@ -1754,6 +1937,9 @@ impl Host {
     }
 }
 
+fn s(words: &[&str]) -> Vec<String> {
+    words.iter().map(|w| (*w).to_owned()).collect()
+}
 fn event(name: &str, data: &Json) -> Json {
     json!({"jsonrpc": "2.0", "method": "event", "params": {"name": name, "data": data}})
 }

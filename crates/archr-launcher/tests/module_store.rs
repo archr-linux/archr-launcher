@@ -555,6 +555,7 @@ fn host(
         delay: std::time::Duration::ZERO,
         auto_delay,
         firewall: None,
+        bin: std::path::PathBuf::from("/nonexistent"),
         shop: Some(shop(root, fake)),
     })
 }

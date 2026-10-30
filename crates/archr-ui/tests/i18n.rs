@@ -362,6 +362,7 @@ const CONFIG_KEYS: &[&str] = &[
     "launcher.started",
     "settings.changed",
     "settings.set",
+    "system.call",
     "ui.notify",
     "ui.update",
     "github.com",

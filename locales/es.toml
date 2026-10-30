@@ -1033,3 +1033,13 @@
 "modules.update_asks" = { one = "Esta actualización pide {count} permiso nuevo. Sin él, la versión {version} sigue instalada y funcionando.", other = "Esta actualización pide {count} permisos nuevos. Sin ellos, la versión {version} sigue instalada y funcionando." }
 "modules.review_unsigned" = "La lista de revisados no tiene la firma de ArchR: ningún módulo tiene sello ni se actualiza solo"
 "modules.review_old" = "La lista de revisados es más antigua que la última vista: ningún módulo tiene sello ni se actualiza solo"
+"modules.perm_brightness" = "Cambia el brillo de la pantalla"
+"modules.perm_brightness_detail" = "Nunca por debajo del 10 %; el indicador lo muestra"
+"modules.perm_volume" = "Cambia el volumen"
+"modules.perm_volume_detail" = "El indicador muestra cada cambio"
+"modules.perm_wifi" = "Enciende y apaga el Wi-Fi"
+"modules.perm_wifi_detail" = "Puede cortar tu conexión; como mucho una vez por minuto"
+"modules.perm_screenshot" = "Hace capturas de la pantalla del launcher"
+"modules.perm_screenshot_detail" = "Nunca con un teclado abierto; se guardan en screenshots"
+"modules.did_wifi" = "{name} encendió o apagó el Wi-Fi"
+"modules.did_screenshot" = "{name} hizo una captura de pantalla"

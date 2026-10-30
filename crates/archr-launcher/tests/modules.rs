@@ -74,6 +74,7 @@ fn start_with(
         delay: Duration::ZERO,
         auto_delay: Duration::ZERO,
         firewall: None,
+        bin: base.join("bin"),
         shop: None,
     })
 }
@@ -1073,6 +1074,7 @@ fn no_module_gets_the_network_before_the_modules_firewall_is_up() {
             delay: Duration::ZERO,
             auto_delay: Duration::ZERO,
             firewall: Some(marker.clone()),
+            bin: base.join("bin"),
             shop: None,
         }),
         view: Arc::default(),
@@ -1104,4 +1106,159 @@ fn no_module_gets_the_network_before_the_modules_firewall_is_up() {
         std::thread::sleep(Duration::from_millis(20));
     }
     assert!(sandboxes.args("rede").contains("IPAddressDeny=localhost"));
+}
+
+/// The log once it holds the answers to all these requests.
+fn until_all(log: &Path, ids: &[&str]) -> String {
+    let mut seen = String::new();
+    for id in ids {
+        seen = until(log, &format!("\"id\":\"{id}\""));
+    }
+    seen
+}
+/// Fake system scripts in `<base>/bin`: each logs its name and arguments;
+/// `wifictl` fails when `<base>/bin/fail` exists.
+fn system_bin(base: &Path) {
+    let bin = base.join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    for name in [
+        "brightness",
+        "volume",
+        "wifictl",
+        "archr-screenshot",
+        "archr-osd",
+    ] {
+        let script = format!(
+            "#!/bin/sh\necho \"{name} $*\" >> \"{log}\"\n[ \"{name}\" = wifictl ] && [ -e \"{fail}\" ] && exit 1\nexit 0\n",
+            log = base.join("system.log").display(),
+            fail = bin.join("fail").display(),
+        );
+        let path = bin.join(name);
+        fs::write(&path, script).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+}
+
+#[test]
+fn system_calls_run_only_granted_checked_actions_through_their_scripts() {
+    let root = tempfile::tempdir().unwrap();
+    let base = root.path();
+    system_bin(base);
+    let dir = api_2(
+        base,
+        "painel",
+        "system = [\"brightness\", \"volume\", \"wifi\", \"screenshot\"]",
+        &[
+            "system:brightness",
+            "system:volume",
+            "system:wifi",
+            "system:screenshot",
+        ],
+    );
+    let call = |id: &str, params: &str| rpc(id, "system.call", params);
+    let lines = [
+        call("b1", r#"{"name":"brightness","value":40}"#),
+        call("b2", r#"{"name":"brightness","value":50}"#),
+        call("b3", r#"{"name":"brightness","value":3}"#),
+        call("v1", r#"{"name":"volume","value":"80; reboot"}"#),
+        call("v2", r#"{"name":"volume","value":0}"#),
+        call("w1", r#"{"name":"wifi","value":false}"#),
+        call("w2", r#"{"name":"wifi","value":true}"#),
+        call("x1", r#"{"name":"reboot"}"#),
+    ];
+    fs::write(dir.join("go.jsonl"), lines.concat()).unwrap();
+    let mut probe = Probe::new(base);
+    ready(base, &["painel"]);
+    probe.invoke("painel", "go");
+    let log = base.join("module-data/painel/seen.log");
+    let seen = until_all(&log, &["b1", "b2", "b3", "v1", "v2", "w1", "w2", "x1"]);
+    assert!(answer(&seen, "b1").contains("\"result\""), "{seen}");
+    assert!(
+        answer(&seen, "b2").contains("-32003"),
+        "one a second: {seen}"
+    );
+    assert!(
+        answer(&seen, "b3").contains("-32602"),
+        "never darker than 10 %: {seen}"
+    );
+    assert!(answer(&seen, "v1").contains("-32602"), "{seen}");
+    assert!(answer(&seen, "v2").contains("\"result\""), "{seen}");
+    assert!(answer(&seen, "w1").contains("\"result\""), "{seen}");
+    assert!(
+        answer(&seen, "w2").contains("-32003"),
+        "one a minute: {seen}"
+    );
+    assert!(answer(&seen, "x1").contains("-32602"), "{seen}");
+    let ran = fs::read_to_string(base.join("system.log")).unwrap();
+    for expected in [
+        "brightness set 40",
+        "archr-osd send brightness 40",
+        "volume 0",
+        "archr-osd send volume 0",
+        "wifictl disable",
+    ] {
+        assert!(ran.lines().any(|l| l == expected), "{expected}: {ran}");
+    }
+    assert_eq!(ran.lines().count(), 5, "nothing else ran: {ran}");
+    // The user is told who turned the Wi-Fi off.
+    probe.wait(|_, n| n.contains(&Notice::System("Test painel".into(), "modules.did_wifi")));
+    // No screenshot while a keyboard is open; one once it is closed.
+    probe.modules.private(true);
+    fs::write(
+        dir.join("shot.jsonl"),
+        call("s1", r#"{"name":"screenshot"}"#),
+    )
+    .unwrap();
+    std::thread::sleep(Duration::from_millis(100));
+    probe.invoke("painel", "shot");
+    let seen = until(&log, "\"id\":\"s1\"");
+    assert!(answer(&seen, "s1").contains("-32001"), "{seen}");
+    probe.modules.private(false);
+    fs::write(
+        dir.join("shot.jsonl"),
+        call("s2", r#"{"name":"screenshot"}"#),
+    )
+    .unwrap();
+    std::thread::sleep(Duration::from_millis(100));
+    probe.invoke("painel", "shot");
+    let seen = until(&log, "\"id\":\"s2\"");
+    assert!(answer(&seen, "s2").contains("\"result\""), "{seen}");
+    assert!(fs::read_to_string(base.join("system.log"))
+        .unwrap()
+        .contains("archr-screenshot"));
+}
+
+#[test]
+fn system_calls_need_the_permission_and_report_a_failing_script() {
+    let root = tempfile::tempdir().unwrap();
+    let base = root.path();
+    system_bin(base);
+    fs::write(base.join("bin/fail"), "").unwrap();
+    let dir = api_2(base, "rede", "system = [\"wifi\"]", &["system:wifi"]);
+    let lines = [
+        rpc("w1", "system.call", r#"{"name":"wifi","value":true}"#),
+        rpc("b1", "system.call", r#"{"name":"brightness","value":50}"#),
+    ];
+    fs::write(dir.join("go.jsonl"), lines.concat()).unwrap();
+    let mut probe = Probe::new(base);
+    ready(base, &["rede"]);
+    probe.invoke("rede", "go");
+    let log = base.join("module-data/rede/seen.log");
+    let seen = until_all(&log, &["w1", "b1"]);
+    assert!(
+        answer(&seen, "w1").contains("-32000"),
+        "the script failed: {seen}"
+    );
+    assert!(
+        answer(&seen, "b1").contains("-32001"),
+        "not granted: {seen}"
+    );
+    let ran = fs::read_to_string(base.join("system.log")).unwrap();
+    assert_eq!(ran.trim(), "wifictl enable");
+    probe.wait(|_, _| true);
+    assert!(
+        probe.notices.is_empty(),
+        "nothing happened: {:?}",
+        probe.notices
+    );
 }

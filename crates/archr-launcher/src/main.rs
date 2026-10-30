@@ -411,13 +411,16 @@ fn run(
                 }
                 modules::Event::Notice(notice) => {
                     let severity = match notice {
-                        Notice::Updated(..) | Notice::Text(_) => Severity::Info,
+                        Notice::Updated(..) | Notice::Text(_) | Notice::System(..) => {
+                            Severity::Info
+                        }
                         _ => Severity::Error,
                     };
                     let (key, name) = match notice {
                         Notice::Disabled(name) => ("modules.disabled_notice", name),
                         Notice::RolledBack(name) => ("modules.rolled_back", name),
                         Notice::TooMany(name) => ("modules.too_many", name),
+                        Notice::System(name, key) => (key, name),
                         Notice::Updated(name, version) => {
                             let text = ui.catalog.format(
                                 "modules.auto_updated",
@@ -471,6 +474,8 @@ fn run(
             browsing.then_some(selected_system.as_deref()).flatten(),
             Instant::now(),
         );
+        // No module screenshot while a keyboard (a password, a key) is open.
+        modules.private(settings.active && settings.state.keyboard.is_some());
         // What the user rests on, for modules (debounced by the host).
         let focus = match &app.screen {
             _ if settings.active => None,

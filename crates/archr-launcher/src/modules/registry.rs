@@ -285,12 +285,42 @@ pub fn permissions(manifest: &Manifest) -> Vec<Permission> {
             false,
         ));
     }
-    if granted.system.iter().any(|s| s == "cpu-profile") {
-        list.push(line(
+    for (system, key, detail, sensitive) in [
+        (
+            "cpu-profile",
             "modules.perm_cpu_profile",
             "modules.perm_cpu_profile_detail",
             false,
-        ));
+        ),
+        (
+            "brightness",
+            "modules.perm_brightness",
+            "modules.perm_brightness_detail",
+            false,
+        ),
+        (
+            "volume",
+            "modules.perm_volume",
+            "modules.perm_volume_detail",
+            false,
+        ),
+        // It can cut the user's connection.
+        (
+            "wifi",
+            "modules.perm_wifi",
+            "modules.perm_wifi_detail",
+            true,
+        ),
+        (
+            "screenshot",
+            "modules.perm_screenshot",
+            "modules.perm_screenshot_detail",
+            false,
+        ),
+    ] {
+        if granted.system.iter().any(|s| s == system) {
+            list.push(line(key, detail, sensitive));
+        }
     }
     if granted.launch {
         list.push(line(

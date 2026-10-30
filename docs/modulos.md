@@ -174,6 +174,10 @@ usuário do próprio módulo. O valor também chega no `initialize` e no
 | `config_write = [...]` | `config.set` só das chaves listadas, valores conferidos (API 2) | "Muda ajustes" (âmbar) |
 | `hooks = ["launch"]` | recebe `launch.before` antes de cada jogo (API 2) | "Vê cada jogo que você abre" |
 | `system = ["cpu-profile"]` | em `launch.before`, pode escolher o governador daquela abertura (API 2) | "Escolhe o perfil de CPU de um jogo" |
+| `system = ["brightness"]` | `system.call` muda o brilho, 10–100 % (API 2) | "Muda o brilho da tela" |
+| `system = ["volume"]` | `system.call` muda o volume, 0–100 % (API 2) | "Muda o volume" |
+| `system = ["wifi"]` | `system.call` liga ou desliga o Wi-Fi (API 2) | "Liga e desliga o Wi-Fi" (âmbar) |
+| `system = ["screenshot"]` | `system.call` tira uma captura da tela do launcher (API 2) | "Tira capturas da tela do launcher" |
 | `launch = true` | `game.launch` logo após o usuário escolher uma ação do módulo (API 2) | "Abre jogos" |
 
 As permissões em âmbar aparecem primeiro na lista.
@@ -314,6 +318,24 @@ só para quem assinou em `[[hooks]]`:
 | `config.get` | pedido | `{key}`, só com `config_read` → `{value}` (`null` se ausente) |
 | `config.set` | pedido | `{key, value}`, só com `config_write` e valor aceito → `{}`; valor igual ao atual não grava nem conta; 1 por segundo e 10 por hora (`-32003`) |
 | `game.launch` | pedido | `{system, game_key}`, só com `launch` → `{}` |
+| `system.call` | pedido | `{name, value?}`, só com a ação em `system` → `{}` quando o script terminou bem, `-32000` se falhou |
+
+`system.call`, ações e valores (lista fechada; o launcher chama o script dono
+de cada uma, com tempo limite de 15 s, nunca um comando do módulo):
+
+| `name` | `value` | o que roda | limite |
+|---|---|---|---|
+| `brightness` | inteiro 10–100 | `brightness set <v>` e o indicador (`archr-osd send brightness <v>`) | 1 por segundo |
+| `volume` | inteiro 0–100 | `volume <v>` e o indicador (`archr-osd send volume <v>`) | 1 por segundo |
+| `wifi` | `true`/`false` | `wifictl enable` / `wifictl disable`; aviso na faixa | 1 por minuto |
+| `screenshot` | — | `archr-screenshot` (respeita `archr.screenshot.enabled`); aviso na faixa; recusado (`-32001`) com um teclado aberto | 1 a cada 10 s |
+
+Nada disso roda durante um jogo: nenhum módulo roda enquanto o jogo tem a
+tela, então não há como pedir (o brilho e o volume do jogo continuam nas
+teclas do aparelho e no indicador, como sempre). O brilho nunca fica abaixo de
+10 % para a tela não parecer desligada; o indicador mostra cada mudança de
+brilho e de volume, e a faixa diz qual módulo mexeu no Wi-Fi ou tirou a
+captura.
 
 `game.launch` só vale até **5 s depois de o usuário escolher uma ação do
 módulo** (bloco, atalho, item do Y, linha de ação), uma vez por escolha, e só
