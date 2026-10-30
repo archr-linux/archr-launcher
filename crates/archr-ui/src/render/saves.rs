@@ -494,12 +494,14 @@ impl Ui<'_, '_> {
         let Some(shot) = shots.get(app.cursor) else {
             return Ok(());
         };
-        let shade = Rgba {
-            a: 217,
-            ..theme.background
+        // A plate under the title and date: readable over any picture.
+        let plate = Rgba {
+            a: (f32::from(theme.scrim.a) * 1.2).round().min(255.) as u8,
+            ..theme.scrim
         };
-        let top = Rect::new(0, 0, width, self.px(72.) as u32);
-        self.veil(top, shade, Rgba { a: 0, ..shade })?;
+        self.canvas.set_draw_color(color(plate));
+        self.canvas
+            .fill_rect(Rect::new(0, 0, width, self.px(58.) as u32))?;
         let name = data.games(system).get(game).map_or("", |g| g.name.as_str());
         let counter = format!("{} / {}", app.cursor + 1, shots.len());
         let cw = self.measure(&counter, Face::Mono, 12.)? + self.px(20.) as u32;
