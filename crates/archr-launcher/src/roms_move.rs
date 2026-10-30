@@ -57,6 +57,9 @@ pub fn parse(text: &str) -> RomsMove {
             _ => {}
         }
     }
+    // Never more than all of it, whatever the file says.
+    view.bytes.0 = view.bytes.0.min(view.bytes.1);
+    view.entry.0 = view.entry.0.min(view.entry.1);
     view
 }
 
@@ -69,10 +72,10 @@ fn watch(file: &Path) -> mpsc::Receiver<RomsMove> {
         .spawn(move || {
             let mut last = None;
             loop {
-                let text = archr_io::read_utf8(&file, 4096, archr_io::Symlinks::Follow)
-                    .unwrap_or_default();
-                let view = parse(&text);
-                if last.as_ref() != Some(&view) {
+                // Gone at the end of a move: the last view stays.
+                let view = archr_io::read_utf8(&file, 4096, archr_io::Symlinks::Follow)
+                    .map(|text| parse(&text));
+                if let Some(view) = view.ok().filter(|view| last.as_ref() != Some(view)) {
                     if send.send(view.clone()).is_err() {
                         return;
                     }
@@ -178,6 +181,8 @@ mod tests {
     #[test]
     fn a_missing_or_torn_file_is_the_preparing_screen() {
         assert_eq!(parse(""), RomsMove::default());
+        let past = parse("PROGRESS=56/55\nBYTES=9000000000/8375186227\n");
+        assert_eq!((past.entry.0, past.bytes.0), (55, 8375186227));
         let torn = parse("STAGE=copying\nPROGRESS=3/\nBYTES=12");
         assert_eq!(torn.stage, MoveStage::Copying);
         assert_eq!((torn.entry.0, torn.entry.1, torn.bytes), (0, 0, (0, 0)));
