@@ -1,11 +1,7 @@
 //! Storage page: both cards, mount options, backup, root password and reset.
 //! Every action that changes data asks first; the host runs it off SDL's thread.
 use super::{described, Effect, Id, Kind, Row, Settings};
-use crate::{
-    keyboard::{Keyboard, Mode},
-    state::Button,
-    HintButton,
-};
+use crate::{state::Button, HintButton};
 
 pub const STORAGE: &[Row] = &[
     // Shown only while unified storage joins the two cards.
@@ -37,12 +33,6 @@ pub const STORAGE: &[Row] = &[
         Id::RestoreBackup,
         "settings.restore_backup",
         "settings.restore_none",
-    )
-    .kind(Kind::Action),
-    described(
-        Id::RootPassword,
-        "settings.root_password",
-        "settings.root_shown",
     )
     .kind(Kind::Action),
     described(
@@ -271,14 +261,6 @@ impl Settings {
             Id::Backup => Confirm::Backup,
             Id::RestoreBackup => Confirm::Restore,
             Id::FactoryReset => Confirm::Reset,
-            Id::RootPassword => {
-                let mut keyboard = Keyboard::new(Mode::Secret, String::new());
-                keyboard.max = 64;
-                self.keyboard = Some(keyboard);
-                self.keyboard_target = Some(id);
-                self.open(super::Page::Keyboard);
-                return Some(Effect::None);
-            }
             _ => return None,
         });
         Some(Effect::None)
@@ -368,25 +350,7 @@ mod tests {
         );
     }
     #[test]
-    fn root_password_is_validated_confirmed_and_never_debug_printed() {
-        let mut state = storage();
-        at(&mut state, Id::RootPassword);
-        state.handle(Button::A);
-        assert_eq!(state.page(), Page::Keyboard);
-        assert_eq!(state.keyboard.as_ref().unwrap().mode, Mode::Secret);
-        state.handle(Button::A);
-        assert_eq!(state.handle(Button::Start), Effect::None);
-        assert_eq!(state.page(), Page::Keyboard, "too short stays");
-        assert!(state.error.is_some());
-        for _ in 0..3 {
-            state.handle(Button::A);
-        }
-        assert_eq!(state.handle(Button::Start), Effect::None);
-        assert_eq!(state.page(), Page::Storage);
-        let effect = state.handle(Button::A);
-        assert_eq!(effect, Effect::Storage(Action::RootPassword("qqqq".into())));
-        assert!(!format!("{effect:?}").contains("qqqq"));
-        assert!(state.storage.confirm.is_none());
+    fn root_password_charset_is_checked() {
         for bad in [
             "abc",
             "has space",

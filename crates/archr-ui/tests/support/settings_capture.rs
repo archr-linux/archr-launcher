@@ -80,21 +80,21 @@ fn pages() -> Vec<(&'static str, Settings)> {
     ] {
         services.values.insert(id, value.into());
     }
-    services.cursor = 1;
+    services.cursor = 2;
     // Config-usb: the console on the PC's internet, Wi-Fi held off.
     let mut usb_internet = services.clone();
     usb_internet.values.insert(Id::UsbMode, "internet".into());
     usb_internet.usb =
         crate::settings::network::Usb::parse("link=online\naddress=192.168.137.42\nwifi=held\n");
-    usb_internet.cursor = 4;
+    usb_internet.cursor = 5;
     let mut usb_fallback = usb_internet.clone();
     usb_fallback.usb =
         crate::settings::network::Usb::parse("link=fallback\naddress=169.254.170.2\nwifi=held\n");
-    usb_fallback.cursor = 7;
+    usb_fallback.cursor = 8;
     let mut usb_rndis = services.clone();
     usb_rndis.values.insert(Id::UsbCompat, "1".into());
     usb_rndis.usb = crate::settings::network::Usb::parse("link=local\naddress=169.254.170.2\n");
-    usb_rndis.cursor = 5;
+    usb_rndis.cursor = 6;
     let mut region = ready();
     region.open(Page::Region);
     region.values.insert(Id::Language, "pt_BR".into());
@@ -166,7 +166,7 @@ fn pages() -> Vec<(&'static str, Settings)> {
     storage.storage.backup = Some("settings.backup_today|time=14:42".into());
     storage.cursor = 1;
     let mut storage_end = storage.clone();
-    storage_end.cursor = 7;
+    storage_end.cursor = 6;
     storage_end.storage.password = "Pl4yR00m".into();
     let mut storage_wifi = storage.clone();
     storage_wifi.storage.confirm = Some(Confirm::BackupWifi);
@@ -176,12 +176,14 @@ fn pages() -> Vec<(&'static str, Settings)> {
     storage_reset.storage.confirm = Some(Confirm::ResetFinal);
     let mut storage_working = storage.clone();
     storage_working.storage.working = Some("settings.backing_up");
-    let mut storage_password = storage.clone();
-    storage_password.cursor = 6;
-    storage_password.handle(Button::A);
+    let mut services_password = services.clone();
+    services_password.cursor = 1;
+    services_password.handle(Button::A);
     for button in [Button::A; 6] {
-        storage_password.handle(button);
+        services_password.handle(button);
     }
+    let mut services_confirm = services_password.clone();
+    services_confirm.handle(Button::Start);
     let mut storage_errors = storage.clone();
     storage_errors.storage.second.as_mut().unwrap().detail = "settings.card_errors".into();
     let mut storage_internal = storage.clone();
@@ -411,7 +413,8 @@ fn pages() -> Vec<(&'static str, Settings)> {
         ("storage-backup-wifi", storage_wifi),
         ("storage-reset-final", storage_reset),
         ("storage-working", storage_working),
-        ("storage-password", storage_password),
+        ("services-password", services_password),
+        ("services-password-confirm", services_confirm),
         ("appearance-custom", appearance),
         ("custom", custom),
         ("custom-value", custom_value),

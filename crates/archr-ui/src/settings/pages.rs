@@ -14,6 +14,12 @@ pub const SERVICES: &[Row] = &[
     described(Id::Ssh, "settings.ssh", "settings.ssh_detail")
         .kind(Kind::Toggle)
         .under("settings.access"),
+    described(
+        Id::RootPassword,
+        "settings.root_password",
+        "settings.root_shown",
+    )
+    .kind(Kind::Action),
     described(Id::Samba, "settings.samba", "settings.samba_detail").kind(Kind::Toggle),
     described(Id::Http, "settings.http", "settings.http_detail").kind(Kind::Toggle),
     described(
@@ -176,7 +182,7 @@ impl Settings {
         keyboard.max = match id {
             Id::Hidden => 32, // IEEE 802.11 SSID
             Id::CheevosAccount => 32,
-            Id::CheevosWebKey => 64,
+            Id::CheevosWebKey | Id::RootPassword => 64,
             Id::WifiSwitch => 64, // WPA passphrase or hex key
             Id::Nickname => 32,   // RetroArch nickname
             Id::NetplayHost | Id::CustomServer => 253,
@@ -456,6 +462,7 @@ impl Settings {
             | Id::CheevosWebKey
             | Id::CheevosWebKeyRemove
             | Id::CheevosLogout) => return self.cheevos_activate(id),
+            Id::RootPassword => self.open_keyboard(Id::RootPassword, Mode::Secret, String::new()),
             id => return self.storage_activate(id),
         }
         Some(Effect::None)
@@ -482,6 +489,37 @@ mod tests {
         };
         state.open(Page::Wifi);
         state
+    }
+    #[test]
+    fn root_password_is_confirmed_from_services_and_never_debug_printed() {
+        use crate::{keyboard::Mode, settings::storage::Action};
+        let mut state = Settings {
+            loading: false,
+            ..Default::default()
+        };
+        state.open(Page::Services);
+        state.cursor = state
+            .visible_rows()
+            .iter()
+            .position(|r| r.id == Id::RootPassword)
+            .unwrap();
+        assert_eq!(state.cursor, 1, "right below SSH");
+        state.handle(Button::A);
+        assert_eq!(state.page(), Page::Keyboard);
+        assert_eq!(state.keyboard.as_ref().unwrap().mode, Mode::Secret);
+        state.handle(Button::A);
+        assert_eq!(state.handle(Button::Start), Effect::None);
+        assert_eq!(state.page(), Page::Keyboard, "too short stays");
+        assert!(state.error.is_some());
+        for _ in 0..3 {
+            state.handle(Button::A);
+        }
+        assert_eq!(state.handle(Button::Start), Effect::None);
+        assert_eq!(state.page(), Page::Services);
+        let effect = state.handle(Button::A);
+        assert_eq!(effect, Effect::Storage(Action::RootPassword("qqqq".into())));
+        assert!(!format!("{effect:?}").contains("qqqq"));
+        assert!(state.storage.confirm.is_none());
     }
     #[test]
     fn password_entry_connects_and_blocks_input_until_the_reply() {
