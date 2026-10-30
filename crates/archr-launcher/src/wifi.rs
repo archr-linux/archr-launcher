@@ -39,11 +39,30 @@ pub fn toggle(
     enable: bool,
     refreshed: Option<impl FnOnce() + Send + 'static>,
 ) -> io::Result<()> {
+    let tool = (
+        paths.at("/usr/bin/wifictl"),
+        paths.config.clone(),
+        paths.lock.clone(),
+    );
+    switch(tool, enable, move |_| {
+        if let Some(refreshed) = refreshed {
+            refreshed();
+        }
+    })
+    .map(drop)
+}
+
+/// The same switch for anyone else (a module): `wifictl`, system.cfg and
+/// its lock. `false` when a switch already runs (the user's or another's):
+/// nothing starts. `finished` gets whether wifictl succeeded.
+pub fn switch(
+    (program, config, lock): (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf),
+    enable: bool,
+    finished: impl FnOnce(bool) + Send + 'static,
+) -> io::Result<bool> {
     if BUSY.swap(true, Ordering::AcqRel) {
-        return Ok(());
+        return Ok(false);
     }
-    let program = paths.at("/usr/bin/wifictl");
-    let (config, lock) = (paths.config.clone(), paths.lock.clone());
     thread::Builder::new()
         .name("launcher-wifi".into())
         .spawn(move || {
@@ -57,9 +76,7 @@ pub fn toggle(
             } else {
                 log::warn!("wifictl {arg} failed");
             }
-            if let Some(refreshed) = refreshed {
-                refreshed();
-            }
+            finished(done);
             BUSY.store(false, Ordering::Release);
             if done && enable {
                 if let Ok(mut connect) = start(&program, "connect") {
@@ -67,7 +84,7 @@ pub fn toggle(
                 }
             }
         })
-        .map(drop)
+        .map(|_| true)
         .inspect_err(|_| BUSY.store(false, Ordering::Release))
 }
 

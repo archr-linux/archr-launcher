@@ -1031,3 +1031,16 @@
 "modules.auto_updated" = "{name} was updated to {version}"
 "modules.days_ago" = { one = "{count} day ago", other = "{count} days ago" }
 "modules.update_asks" = { one = "This update asks for {count} new permission. Without it, version {version} stays installed and working.", other = "This update asks for {count} new permissions. Without them, version {version} stays installed and working." }
+"modules.review_unsigned" = "The reviewed list is not signed by ArchR: no module shows the badge or updates on its own"
+"modules.review_old" = "The reviewed list is older than the last one seen: no module shows the badge or updates on its own"
+"modules.perm_brightness" = "Changes the screen brightness"
+"modules.perm_brightness_detail" = "Never below 10 %; the indicator shows it"
+"modules.perm_volume" = "Changes the volume"
+"modules.perm_volume_detail" = "The indicator shows each change"
+"modules.perm_wifi" = "Turns the Wi-Fi on and off"
+"modules.perm_wifi_detail" = "Can cut your connection; at most once a minute"
+"modules.perm_screenshot" = "Takes screenshots of the launcher"
+"modules.perm_screenshot_detail" = "Never with a keyboard open; saved in screenshots"
+"modules.did_wifi" = "{name} turned the Wi-Fi on or off"
+"modules.did_screenshot" = "{name} took a screenshot"
+"modules.review_expired" = "The reviewed list has expired: no module shows the badge or updates on its own"

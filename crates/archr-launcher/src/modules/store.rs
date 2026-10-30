@@ -31,6 +31,44 @@ pub const HOSTS: &[&str] = &[
 ];
 /// The project's repository whose latest release carries `reviewed.json`.
 pub const REVIEWED: &str = "archr-linux/archr-modules";
+/// The Ed25519 public key that signs the reviewed list
+/// (keys/archr-modules-ed25519.pub; tools/sign-reviewed signs with its
+/// private half, which never leaves the maintainer's machine).
+pub const REVIEW_KEY: [u8; 32] = [
+    0x63, 0x11, 0xf1, 0x62, 0x70, 0x1d, 0x99, 0x47, 0x1e, 0xa8, 0x8a, 0xc1, 0xd8, 0x43, 0x5f, 0xfc,
+    0x7d, 0xd6, 0x40, 0x9c, 0x06, 0xd2, 0xc5, 0x94, 0xfd, 0x0a, 0x0e, 0xf1, 0x6d, 0x71, 0x3a, 0x71,
+];
+/// The oldest reviewed list this build accepts, even with nothing recorded
+/// (a new device, a wiped `modules-reviewed.serial`): raise it at release
+/// time to the serial then published.
+pub const MIN_SERIAL: u64 = 1;
+/// `reviewed.json.sig`: the Ed25519 signature of the whole `reviewed.json`,
+/// 64 bytes as 128 hex digits (one line; spaces and line ends ignored).
+pub fn signed(body: &[u8], signature: &[u8], key: &[u8; 32]) -> bool {
+    let text: Vec<u8> = signature
+        .iter()
+        .copied()
+        .filter(|b| !b.is_ascii_whitespace())
+        .collect();
+    if text.len() != 128 || body.is_empty() {
+        return false;
+    }
+    let mut raw = [0u8; 64];
+    for (n, pair) in text.chunks(2).enumerate() {
+        let Some(byte) = std::str::from_utf8(pair)
+            .ok()
+            .and_then(|h| u8::from_str_radix(h, 16).ok())
+        else {
+            return false;
+        };
+        raw[n] = byte;
+    }
+    let Ok(key) = ed25519_dalek::VerifyingKey::from_bytes(key) else {
+        return false;
+    };
+    key.verify_strict(body, &ed25519_dalek::Signature::from_bytes(&raw))
+        .is_ok()
+}
 const TARBALL_LIMIT: u64 = 8 << 20;
 const EXTRACTED_LIMIT: u64 = 16 << 20;
 const ENTRIES: usize = 500;
@@ -57,13 +95,20 @@ struct Asset {
 pub struct Shop {
     github: GitHub,
     dirs: Dirs,
+    review_key: [u8; 32],
 }
 impl Shop {
     pub fn new(http: Box<dyn Http>, cache: PathBuf, dirs: Dirs) -> Self {
         Self {
             github: GitHub::new(http, cache),
             dirs,
+            review_key: REVIEW_KEY,
         }
+    }
+    /// Another public key for the reviewed list: for tests only.
+    pub fn with_review_key(mut self, key: [u8; 32]) -> Self {
+        self.review_key = key;
+        self
     }
     pub fn production(cache: PathBuf, dirs: Dirs) -> Self {
         Self::new(GitHub::curl(&cache, HOSTS), cache, dirs)
@@ -102,24 +147,67 @@ impl Shop {
         Ok((tag.to_owned(), assets))
     }
     /// The reviewed list: repository and package digest of each reviewed
-    /// release. Unreachable, nothing is reviewed.
-    fn reviewed(&self) -> Vec<(String, String)> {
+    /// release, from `reviewed.json` signed by the project's key
+    /// (`reviewed.json.sig`). Unreachable: nothing is reviewed. Unsigned,
+    /// badly signed or older than one already seen: nothing is reviewed
+    /// either, and the key says why.
+    fn reviewed(&self) -> Result<Vec<(String, String)>, &'static str> {
         let (owner, repo) = REVIEWED.split_once('/').expect("owner/repo");
-        let Some(asset) = self
-            .release(owner, repo)
-            .ok()
-            .and_then(|(_, mut assets)| assets.remove("reviewed.json"))
-        else {
-            return Vec::new();
+        let Ok((_, mut assets)) = self.release(owner, repo) else {
+            return Ok(Vec::new());
         };
-        let body = self
-            .github
-            .saved(&asset.url, "reviewed.json", false)
-            .0
-            .map(|(body, _)| body)
+        let Some(list) = assets.remove("reviewed.json") else {
+            return Ok(Vec::new());
+        };
+        let fetch = |asset: &Asset, name: &str| {
+            self.github
+                .saved(&asset.url, name, false)
+                .0
+                .map(|(body, _)| body)
+                .unwrap_or_default()
+        };
+        let body = fetch(&list, "reviewed.json");
+        let signature = assets
+            .remove("reviewed.json.sig")
+            .map(|asset| fetch(&asset, "reviewed.json.sig"))
             .unwrap_or_default();
+        if !signed(&body, &signature, &self.review_key) {
+            log::warn!("The reviewed list is not signed by the ArchR key: no module is reviewed");
+            return Err("modules.review_unsigned");
+        }
         let json: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
-        json["modules"]
+        // A list past its date, or older than one already seen (or than this
+        // build knew), could bring back a revoked review.
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        if json["expires"]
+            .as_u64()
+            .is_none_or(|expires| expires <= now)
+        {
+            log::warn!("The reviewed list has expired: no module is reviewed");
+            return Err("modules.review_expired");
+        }
+        let serial = json["serial"].as_u64().unwrap_or(0);
+        let path = self.dirs.state.with_file_name("modules-reviewed.serial");
+        let seen = read_bytes(&path, 64, Symlinks::Reject)
+            .ok()
+            .and_then(|b| String::from_utf8(b).ok())
+            .and_then(|t| t.trim().parse::<u64>().ok())
+            .unwrap_or(0)
+            .max(MIN_SERIAL);
+        if serial < seen {
+            log::warn!("The reviewed list {serial} is older than {seen}: ignored");
+            return Err("modules.review_old");
+        }
+        if serial > seen {
+            if let Err(error) = archr_io::atomic_publish(&path, false, |file| {
+                std::io::Write::write_all(file, serial.to_string().as_bytes())
+            }) {
+                log::warn!("Cannot record the reviewed list's serial {serial}: {error}");
+            }
+        }
+        Ok(json["modules"]
             .as_array()
             .into_iter()
             .flatten()
@@ -129,7 +217,7 @@ impl Shop {
                     m["digest"].as_str()?.to_owned(),
                 ))
             })
-            .collect()
+            .collect())
     }
     /// A `.tar.gz` of the latest release carries one of `digests`. Asked
     /// only for repositories on the reviewed list (saved for an hour).
@@ -154,7 +242,11 @@ impl Shop {
             };
         }
         let (repos, problem, _) = self.github.search(TOPIC, "stars", refresh);
-        let reviewed = self.reviewed();
+        let (reviewed, unsigned) = match self.reviewed() {
+            Ok(list) => (list, None),
+            Err(key) => (Vec::new(), Some(key)),
+        };
+        let problem = problem.or(unsigned);
         let mut cards: Vec<Card> = repos
             .unwrap_or_default()
             .into_iter()
@@ -297,6 +389,7 @@ impl Shop {
         };
         let reviewed = self
             .reviewed()
+            .unwrap_or_default()
             .iter()
             .any(|(repo, digest)| *repo == card.source() && same_digest(digest, &package.digest));
         Ok(Offer {

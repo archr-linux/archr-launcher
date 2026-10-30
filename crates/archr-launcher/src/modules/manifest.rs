@@ -43,8 +43,9 @@ pub const GOVERNORS: &[&str] = &["performance", "ondemand", "schedutil", "powers
 /// Hooks a module may ask for: `launch` answers `launch.before`.
 pub const HOOKS: &[&str] = &["launch"];
 /// System capabilities, a closed list: `cpu-profile` picks the governor of
-/// one launch from `launch.before`.
-pub const SYSTEM: &[&str] = &["cpu-profile"];
+/// one launch from `launch.before`; the rest are `system.call` actions that
+/// the launcher runs through the script that owns each one.
+pub const SYSTEM: &[&str] = &["cpu-profile", "brightness", "volume", "wifi", "screenshot"];
 /// The events this launcher delivers.
 pub const EVENTS: &[&str] = &[
     "launcher.started",
@@ -935,6 +936,7 @@ id = "jogos"
             ("config_write", "\"system.timezone\""),
             ("hooks", "\"input\""),
             ("system", "\"reboot\""),
+            ("system", "\"wifictl connect\""),
         ] {
             let bad = two.replace("launch = true", &format!("launch = true\n{key}_x = 0"));
             assert!(parse(&bad).is_err(), "unknown key");

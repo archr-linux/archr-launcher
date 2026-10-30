@@ -174,6 +174,10 @@ usuário do próprio módulo. O valor também chega no `initialize` e no
 | `config_write = [...]` | `config.set` só das chaves listadas, valores conferidos (API 2) | "Muda ajustes" (âmbar) |
 | `hooks = ["launch"]` | recebe `launch.before` antes de cada jogo (API 2) | "Vê cada jogo que você abre" |
 | `system = ["cpu-profile"]` | em `launch.before`, pode escolher o governador daquela abertura (API 2) | "Escolhe o perfil de CPU de um jogo" |
+| `system = ["brightness"]` | `system.call` muda o brilho, 10–100 % (API 2) | "Muda o brilho da tela" |
+| `system = ["volume"]` | `system.call` muda o volume, 0–100 % (API 2) | "Muda o volume" |
+| `system = ["wifi"]` | `system.call` liga ou desliga o Wi-Fi (API 2) | "Liga e desliga o Wi-Fi" (âmbar) |
+| `system = ["screenshot"]` | `system.call` tira uma captura da tela do launcher (API 2) | "Tira capturas da tela do launcher" |
 | `launch = true` | `game.launch` logo após o usuário escolher uma ação do módulo (API 2) | "Abre jogos" |
 
 As permissões em âmbar aparecem primeiro na lista.
@@ -314,6 +318,24 @@ só para quem assinou em `[[hooks]]`:
 | `config.get` | pedido | `{key}`, só com `config_read` → `{value}` (`null` se ausente) |
 | `config.set` | pedido | `{key, value}`, só com `config_write` e valor aceito → `{}`; valor igual ao atual não grava nem conta; 1 por segundo e 10 por hora (`-32003`) |
 | `game.launch` | pedido | `{system, game_key}`, só com `launch` → `{}` |
+| `system.call` | pedido | `{name, value?}`, só com a ação em `system` → `{}` quando o script terminou bem, `-32000` se falhou |
+
+`system.call`, ações e valores (lista fechada; o launcher chama o script dono
+de cada uma, com tempo limite de 15 s, nunca um comando do módulo):
+
+| `name` | `value` | o que roda | limite |
+|---|---|---|---|
+| `brightness` | inteiro 10–100 | `brightness set <v>` e o indicador (`archr-osd send brightness <v>`) | 1 por segundo |
+| `volume` | inteiro 0–100 | `volume <v>` e o indicador (`archr-osd send volume <v>`) | 1 por segundo |
+| `wifi` | `true`/`false` | `wifictl enable` / `wifictl disable`; aviso na faixa | 1 por minuto |
+| `screenshot` | — | `archr-screenshot` (respeita `archr.screenshot.enabled`); aviso na faixa; recusado (`-32001`) com um teclado aberto | 1 a cada 10 s |
+
+Nada disso roda durante um jogo: nenhum módulo roda enquanto o jogo tem a
+tela, então não há como pedir (o brilho e o volume do jogo continuam nas
+teclas do aparelho e no indicador, como sempre). O brilho nunca fica abaixo de
+10 % para a tela não parecer desligada; o indicador mostra cada mudança de
+brilho e de volume, e a faixa diz qual módulo mexeu no Wi-Fi ou tirou a
+captura.
 
 `game.launch` só vale até **5 s depois de o usuário escolher uma ação do
 módulo** (bloco, atalho, item do Y, linha de ação), uma vez por escolha, e só
@@ -480,7 +502,37 @@ A Loja lista todo repositório público, não arquivado, com o tópico
 **`archr-launcher-module`**. Os revisados pelo projeto ganham o selo
 **Revisado pelo ArchR** e vêm primeiro: a lista é o `reviewed.json` da última
 release de `archr-linux/archr-modules`, com repositório e digest do pacote
-revisado; publicar outro pacote tira o selo até nova revisão. Um módulo
+revisado; publicar outro pacote tira o selo até nova revisão.
+
+A lista é **assinada**: `reviewed.json` vem com `reviewed.json.sig` (a
+assinatura Ed25519 do arquivo inteiro, 64 bytes em 128 dígitos hex numa linha).
+O launcher só aceita a lista com assinatura válida da chave do projeto
+(`keys/archr-modules-ed25519.pub`, embutida em `REVIEW_KEY`), com `expires`
+(segundos desde 1970) ainda no futuro e com `serial` maior ou igual ao último
+que viu (guardado em `modules-reviewed.serial`) e ao `MIN_SERIAL` do build
+(que vale mesmo num aparelho novo ou com esse arquivo apagado); sem isso,
+nenhum módulo tem selo nem se atualiza sozinho, e a Loja diz por quê. A
+assinatura cobre o arquivo inteiro: um `.sig` de outra lista é recusado.
+
+```json
+{"serial": 4, "expires": 1785000000, "modules": [{"repo": "dono/repo", "digest": "sha256:<hex>"}]}
+```
+
+Publicar uma revisão (só o mantenedor, com a chave privada fora do
+repositório, em `~/.archr/archr-modules-ed25519.pem`, modo 600):
+
+1. acrescente (ou tire, para revogar) a entrada com `repo` e o `digest` que o
+   GitHub publica para o `.tar.gz` revisado, **aumente `serial`** (inteiro
+   > 0) e ponha `expires` à frente (ex.: `date -d +90days +%s`); republique
+   antes de vencer, senão os selos somem; a cada versão do launcher, suba
+   `MIN_SERIAL` para o serial publicado;
+2. `tools/sign-reviewed reviewed.json` (confere o JSON, assina, verifica a
+   assinatura contra a chave pública e grava `reviewed.json.sig`);
+3. publique os dois arquivos como assets de uma release nova de
+   `archr-linux/archr-modules`.
+
+A chave privada nunca vai para o GitHub, para o aparelho nem para o
+repositório; quem tomar a conta `archr-linux` não consegue dar selo. Um módulo
 instalado só mostra o selo se o digest do pacote que está no aparelho estiver
 na lista.
 
@@ -508,7 +560,8 @@ uma vez por dia, 2 min depois do início e nunca durante um jogo, o launcher
 instala sozinho a versão nova de um módulo da Loja só se o pacote dela estiver
 na lista revisada (pelo digest) e ela não pedir nada novo (permissão, bloco,
 atalho, widget, item, página ou passar a ficar aberta); nunca um módulo
-desligado ou com falha, nem um pacote que já falhou e voltou atrás; senão
+desligado ou com falha, nem um pacote que já falhou e voltou atrás, nem sem
+uma lista revisada assinada; senão
 fica "→ x.y.z disponível". Mesmas checagens da instalação à mão; aviso na
 faixa ("X foi atualizado para 1.2.0") e "atualizado sozinho" na lista por uma
 semana. Detalhes (Y na lista) mostram o digest do pacote, se ele confere com a
