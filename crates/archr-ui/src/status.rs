@@ -263,7 +263,8 @@ impl Status {
 }
 /// The ROMs partition (exFAT) as the boot left it (/run/archr/roms-fs:
 /// errors mount it read-only, failed leaves it out), or remounted read-only
-/// later by an I/O error.
+/// later by an I/O error (on /storage/roms, or on the branch automount binds
+/// it to under unified storage).
 pub fn roms_fault(root: &Path) -> Option<&'static str> {
     let read = |path: &str| {
         archr_io::read_utf8(&root.join(path), 64 * 1024, archr_io::Symlinks::Follow)
@@ -279,7 +280,7 @@ pub fn roms_fault(root: &Path) -> Option<&'static str> {
         .map(|line| line.split_whitespace().collect::<Vec<_>>())
         .any(|f| {
             f.len() > 3
-                && f[1] == "/storage/roms"
+                && matches!(f[1], "/storage/roms" | "/run/archr/sd1-roms")
                 && f[2] == "exfat"
                 && f[3].split(',').any(|o| o == "ro")
         })
@@ -410,6 +411,13 @@ mod tests {
         write(
             "proc/mounts",
             "/dev/mmcblk0p4 /storage/roms exfat ro,noatime 0 0\n",
+        );
+        assert_eq!(roms_fault(root.path()), Some("roms.alert_readonly"));
+        // Unified storage: the union is on top, the partition is its branch.
+        write(
+            "proc/mounts",
+            "/dev/mmcblk0p4 /run/archr/sd1-roms exfat ro,noatime 0 0\n\
+             archr-roms /storage/roms fuse.mergerfs rw 0 0\n",
         );
         assert_eq!(roms_fault(root.path()), Some("roms.alert_readonly"));
         write("run/archr/roms-fs", "failed\n");
