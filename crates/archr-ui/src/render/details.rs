@@ -18,6 +18,8 @@ pub struct Art<'a, 't> {
     pub thumbs: Option<&'a crate::covers::CoverCache<'t>>,
     /// The selected state's picture, or the screenshot on the whole screen.
     pub picture: Option<&'a Texture<'t>>,
+    /// Large pictures by file: the switcher's and the resume screen's.
+    pub pictures: Option<&'a crate::covers::CoverCache<'t>>,
 }
 
 /// Wrapped description lines, kept until the text, width or size changes.

@@ -2325,3 +2325,186 @@ fn capture_dongle_and_saves() {
         save(&mut ui, format!("convert-game-{language}.png"));
     }
 }
+
+/// A game screen like the mockups' (sky, sun, hills, ground), to a file.
+fn scene(
+    path: &std::path::Path,
+    (top, bottom, hill, ground): ([u8; 3], [u8; 3], [u8; 3], [u8; 3]),
+) {
+    image::RgbaImage::from_fn(640, 480, |x, y| {
+        let (fx, fy) = (x as f32, y as f32);
+        let t = fy / 480.;
+        let mix = |a: u8, b: u8| (f32::from(a) + (f32::from(b) - f32::from(a)) * t) as u8;
+        let c = if (fx - 448.).hypot(fy - 106.) < 38. {
+            [245, 240, 192]
+        } else if fy > 365. {
+            if (x / 62) % 2 == 0 {
+                ground
+            } else {
+                ground.map(|v| v.saturating_sub(18))
+            }
+        } else if (fx - 96.).hypot(fy - 330.) < 150. || (fx - 344.).hypot(fy - 330.) < 100. {
+            hill
+        } else {
+            [
+                mix(top[0], bottom[0]),
+                mix(top[1], bottom[1]),
+                mix(top[2], bottom[2]),
+            ]
+        };
+        image::Rgba([c[0], c[1], c[2], 255])
+    })
+    .save(path)
+    .unwrap();
+}
+
+#[test]
+#[ignore = "manual capture, ARCHR_RESUME_CAPTURE_DIR required"]
+fn capture_resume() {
+    std::env::set_var("SDL_VIDEODRIVER", "offscreen");
+    let output = std::path::PathBuf::from(
+        std::env::var_os("ARCHR_RESUME_CAPTURE_DIR").expect("capture directory"),
+    );
+    let ttf;
+    let creator;
+    let mut ui = Ui::new(640, 480, true).unwrap();
+    ttf = sdl2::ttf::init().unwrap();
+    creator = ui.canvas.texture_creator();
+    let themes = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../themes");
+    let theme = Theme::load(&themes.join("default"));
+    ui.theme_dir = Some(themes.join("default"));
+    ui.configure(&ttf, &creator, &theme, None).unwrap();
+    let mut status =
+        crate::status::Status::new(Some(std::path::Path::new("/nonexistent")), Instant::now());
+    status.clock = "14:32".into();
+    status.wifi = true;
+    status.battery = Some(crate::status::Battery {
+        percent: 87,
+        charging: false,
+    });
+    ui.status = Some(status);
+    let save = |ui: &mut Ui, name: String| {
+        let pixels = ui
+            .canvas
+            .read_pixels(None, sdl2::pixels::PixelFormatEnum::RGBA32)
+            .unwrap();
+        image::save_buffer(
+            output.join(name),
+            &pixels,
+            640,
+            480,
+            image::ColorType::Rgba8,
+        )
+        .unwrap();
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let pictures: Vec<_> = [
+        (
+            [92, 148, 252],
+            [156, 196, 255],
+            [63, 163, 77],
+            [200, 116, 58],
+        ),
+        (
+            [29, 59, 110],
+            [77, 138, 208],
+            [46, 110, 142],
+            [216, 192, 112],
+        ),
+        ([43, 26, 74], [208, 96, 106], [90, 58, 106], [58, 42, 64]),
+        ([14, 42, 26], [46, 122, 74], [30, 90, 52], [74, 58, 34]),
+    ]
+    .iter()
+    .enumerate()
+    .map(|(n, colors)| {
+        let path = dir.path().join(format!("{n}.png"));
+        scene(&path, *colors);
+        path
+    })
+    .collect();
+    let mut cache = crate::covers::CoverCache::new(&creator, dir.path().join("thumbs"), 640, 480);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while pictures.iter().any(|p| cache.peek(p).is_none()) && Instant::now() < deadline {
+        cache.request(&pictures);
+        cache.poll();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let shelf = Shelf::new();
+    let recent = |n: usize, picture: Option<usize>, entry: bool, ago: u64| crate::resume::Recent {
+        system: "snes".into(),
+        game: n,
+        name: shelf.games[n].name.clone(),
+        picture: picture.map(|p| pictures[p].clone()),
+        left: Some(now - ago),
+        entry: entry.then(|| "--entryslot=auto".into()),
+    };
+    let mut resume = Settings::default();
+    resume.loading = false;
+    resume.open(Page::Resume);
+    let mut power = Settings::default();
+    power.loading = false;
+    power.open(Page::Power);
+    power.values.insert(Id::Idle, "5".into());
+    power.values.insert(Id::IdleGame, "15".into());
+    power.values.insert(Id::Suspend, "off".into());
+    for language in ["pt_BR", "ru"] {
+        ui.catalog = I18n::load(std::path::Path::new("/nonexistent"), Some(language), None);
+        for (name, state) in [("config-retomar", &resume), ("config-energia", &power)] {
+            ui.switches.clear();
+            for _ in 0..2 {
+                ui.snap_animations();
+                ui.canvas.set_draw_color(color(theme.background));
+                ui.canvas.clear();
+                ui.settings_page(state, &theme).unwrap();
+            }
+            save(&mut ui, format!("{name}-{language}.png"));
+        }
+        let art = crate::render::Art {
+            pictures: Some(&cache),
+            ..Default::default()
+        };
+        let mut app = crate::state::App::new(1);
+        app.screen = crate::state::Screen::Switcher;
+        app.switcher = vec![
+            recent(4, Some(0), true, 7200),
+            recent(0, Some(1), true, 20),
+            recent(7, Some(2), false, 86_400 * 3),
+            recent(2, None, false, 86_400 * 9),
+            recent(5, Some(3), true, 86_400 * 12),
+            recent(8, None, false, 86_400 * 20),
+        ];
+        app.cursor = 1;
+        let frame = |ui: &mut Ui, app: &crate::state::App, name: &str| {
+            for _ in 0..2 {
+                ui.snap_animations();
+                ui.draw_with_settings(app, &shelf, &theme, art, None)
+                    .unwrap();
+            }
+            save(ui, format!("{name}-{language}.png"));
+        };
+        frame(&mut ui, &app, "alternador");
+        app.cursor = 2;
+        frame(&mut ui, &app, "alternador-sem-retomar");
+        app.switcher.clear();
+        frame(&mut ui, &app, "alternador-vazio");
+        app.screen = crate::state::Screen::Resume;
+        app.boot = Some(crate::resume::Boot {
+            game: recent(0, Some(1), true, 86_400),
+            ready: true,
+            power_off: true,
+            progress: 0.6,
+        });
+        frame(&mut ui, &app, "retomar-boot");
+        app.boot = Some(crate::resume::Boot {
+            game: recent(7, None, false, 600),
+            ready: true,
+            power_off: true,
+            progress: 0.2,
+        });
+        frame(&mut ui, &app, "retomar-boot-sem-estado");
+    }
+}

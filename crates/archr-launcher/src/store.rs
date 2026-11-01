@@ -85,6 +85,12 @@ impl Store {
         self.recent.truncate(MAX_RECENT);
     }
 
+    /// Off the recent games (the switcher's "remove"), until played again.
+    pub fn forget_recent(&mut self, key: &str) {
+        self.imported_times.remove(key);
+        self.recent.retain(|recent| recent != key);
+    }
+
     /// Convert only absolute paths below their configured system directory.
     /// Unknown systems/paths stay intact; no filesystem or symlink resolution.
     pub fn migrate(&mut self, systems: &[SystemDef]) -> bool {

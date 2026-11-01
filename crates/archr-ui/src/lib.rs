@@ -27,6 +27,7 @@ pub mod controllers;
 pub mod netplay;
 
 pub mod render;
+pub mod resume;
 pub mod saves;
 
 mod badges;
