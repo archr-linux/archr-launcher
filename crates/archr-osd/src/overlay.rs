@@ -1,6 +1,6 @@
 //! The wlr-layer-shell surface: mapped only while the pill is visible.
 use crate::pill::{self, Geometry, Painter, Timeline};
-use crate::proto::Message;
+use crate::proto::{Icon, Message};
 use smithay_client_toolkit::reexports::client::{
     globals::GlobalList,
     protocol::{wl_output, wl_shm, wl_surface},
@@ -29,6 +29,8 @@ struct Shown {
     timeline: Timeline,
     shown_at: Instant,
     changed_at: Instant,
+    /// What the last committed frame shows: icon, fill edge and opacity.
+    drawn: Option<(Icon, u32, u8)>,
 }
 
 pub struct Overlay {
@@ -101,13 +103,14 @@ impl Overlay {
             timeline: Timeline::new(message.icon, message.level),
             shown_at: now,
             changed_at: now,
+            drawn: None,
         });
     }
 
     /// Draws the current frame or unmaps a finished pill; returns how long
     /// the event loop may sleep (None: until the next message).
     pub fn tick(&mut self) -> Option<Duration> {
-        let shown = self.shown.as_ref()?;
+        let shown = self.shown.as_mut()?;
         let now = Instant::now();
         let (since_shown, since_change) = (now - shown.shown_at, now - shown.changed_at);
         let Some(next) = pill::next_frame(since_shown, since_change) else {
@@ -119,11 +122,20 @@ impl Overlay {
         }
         let painter = self.painter.as_ref()?;
         let g = painter.geometry;
-        let frame = painter.paint(
-            shown.timeline.icon,
+        let (level, opacity) = (
             shown.timeline.level(since_change),
             pill::opacity(since_shown, since_change),
         );
+        // The fill moves by whole pixels: most frames of a glide repeat the last one.
+        let look = (
+            shown.timeline.icon,
+            g.fill_top(level) as u32,
+            (opacity * 255.0) as u8,
+        );
+        if shown.drawn == Some(look) {
+            return Some(next);
+        }
+        let frame = painter.paint(look.0, level, opacity);
         let stride = g.width as i32 * 4;
         let pool = match &mut self.pool {
             Some(pool) => pool,
@@ -149,6 +161,7 @@ impl Overlay {
         surface.damage_buffer(0, 0, g.width as i32, g.height as i32);
         if buffer.attach_to(surface).is_ok() {
             shown.layer.commit();
+            shown.drawn = Some(look);
         }
         Some(next)
     }

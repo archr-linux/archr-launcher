@@ -56,12 +56,13 @@ impl Geometry {
     }
 }
 
-/// Everything that does not change between frames, built once per geometry.
+/// Everything that does not change between frames, built once per geometry:
+/// for each icon the pill empty (light icon) and full (dark icon). A frame is
+/// the empty one above the fill's edge and the full one below it, so drawing
+/// it is a copy of rows, cheap enough for every frame of a held button.
 pub struct Painter {
     pub geometry: Geometry,
-    shadow: sk::Pixmap,
-    pill: sk::Mask,
-    icons: Vec<(Icon, sk::Pixmap, sk::Pixmap)>,
+    layers: Vec<(Icon, sk::Pixmap, sk::Pixmap)>,
 }
 
 impl Painter {
@@ -75,68 +76,28 @@ impl Painter {
             true,
             sk::Transform::identity(),
         );
-        let icons = Icon::ALL
+        let shadow = shadow(&geometry, &path, &pill);
+        let layers = Icon::ALL
             .iter()
             .map(|&icon| {
-                let raster = |color| rasterize(icon.svg(), color, geometry.icon_size);
-                (icon, raster(ICON_DARK), raster(ICON_LIGHT))
+                let layer = |full| layer(&geometry, &path, &pill, &shadow, icon, full);
+                (icon, layer(false), layer(true))
             })
             .collect();
-        Self {
-            shadow: shadow(&geometry, &path, &pill),
-            geometry,
-            pill,
-            icons,
-        }
+        Self { geometry, layers }
     }
 
     /// One frame: `level` 0..=1, `opacity` 0..=1.
     pub fn paint(&self, icon: Icon, level: f32, opacity: f32) -> sk::Pixmap {
         let g = &self.geometry;
-        let mut out = sk::Pixmap::new(g.width, g.height).expect("surface size");
-        let identity = sk::Transform::identity();
-        let plain = sk::PixmapPaint::default();
-        out.draw_pixmap(0, 0, self.shadow.as_ref(), &plain, identity, None);
-
-        let mut paint = sk::Paint {
-            anti_alias: true,
-            ..Default::default()
-        };
-        paint.set_color_rgba8(BACKGROUND[0], BACKGROUND[1], BACKGROUND[2], BACKGROUND[3]);
-        let path = rounded_rect(g.pill, g.radius);
-        out.fill_path(&path, &paint, sk::FillRule::Winding, identity, None);
-
-        let (x, _, w, _) = g.pill;
-        let top = g.fill_top(level);
-        let bottom = (g.height as f32).min(g.pill.1 + g.pill.3 + 1.0);
-        paint.set_color_rgba8(FILL[0], FILL[1], FILL[2], 255);
-        if let Some(rect) = sk::Rect::from_ltrb(x, top, x + w, bottom) {
-            out.fill_rect(rect, &paint, identity, Some(&self.pill));
-        }
-
-        // Dark where the icon sits on the fill, light where it sits on the
-        // background, so the glyph stays legible at any level.
-        if let Some((_, dark, light)) = self.icons.iter().find(|(i, _, _)| *i == icon) {
-            let (ix, iy) = g.icon_origin();
-            for (pixmap, above) in [(light, true), (dark, false)] {
-                let mut clip = sk::Mask::new(g.width, g.height).expect("clip size");
-                let rect = if above {
-                    sk::Rect::from_ltrb(0.0, 0.0, g.width as f32, top)
-                } else {
-                    sk::Rect::from_ltrb(0.0, top, g.width as f32, g.height as f32)
-                };
-                if let Some(rect) = rect {
-                    clip.fill_path(
-                        &sk::PathBuilder::from_rect(rect),
-                        sk::FillRule::Winding,
-                        true,
-                        identity,
-                    );
-                    out.draw_pixmap(ix, iy, pixmap.as_ref(), &plain, identity, Some(&clip));
-                }
-            }
-        }
-
+        let (_, empty, full) = self
+            .layers
+            .iter()
+            .find(|(i, _, _)| *i == icon)
+            .expect("every icon has layers");
+        let mut out = empty.clone();
+        let edge = (g.fill_top(level) as usize * g.width as usize * 4).min(out.data().len());
+        out.data_mut()[edge..].copy_from_slice(&full.data()[edge..]);
         if opacity < 1.0 {
             let a = (opacity.clamp(0.0, 1.0) * 256.0) as u16;
             for byte in out.data_mut() {
@@ -145,6 +106,50 @@ impl Painter {
         }
         out
     }
+}
+
+/// Shadow, pill and icon; `full`: the pill filled, the icon dark on it.
+fn layer(
+    g: &Geometry,
+    path: &sk::Path,
+    pill: &sk::Mask,
+    shadow: &sk::Pixmap,
+    icon: Icon,
+    full: bool,
+) -> sk::Pixmap {
+    let mut out = shadow.clone();
+    let identity = sk::Transform::identity();
+    let mut paint = sk::Paint {
+        anti_alias: true,
+        ..Default::default()
+    };
+    paint.set_color_rgba8(BACKGROUND[0], BACKGROUND[1], BACKGROUND[2], BACKGROUND[3]);
+    out.fill_path(path, &paint, sk::FillRule::Winding, identity, None);
+    if full {
+        let (x, y, w, _) = g.pill;
+        let bottom = (g.height as f32).min(g.pill.1 + g.pill.3 + 1.0);
+        paint.set_color_rgba8(FILL[0], FILL[1], FILL[2], 255);
+        if let Some(rect) = sk::Rect::from_ltrb(x, y, x + w, bottom) {
+            out.fill_rect(rect, &paint, identity, Some(pill));
+        }
+    }
+    // Dark where the icon sits on the fill, light where it sits on the
+    // background, so the glyph stays legible at any level.
+    let glyph = rasterize(
+        icon.svg(),
+        if full { ICON_DARK } else { ICON_LIGHT },
+        g.icon_size,
+    );
+    let (ix, iy) = g.icon_origin();
+    out.draw_pixmap(
+        ix,
+        iy,
+        glyph.as_ref(),
+        &sk::PixmapPaint::default(),
+        identity,
+        None,
+    );
+    out
 }
 
 fn rounded_rect((x, y, w, h): (f32, f32, f32, f32), r: f32) -> sk::Path {
@@ -222,17 +227,23 @@ fn rasterize(svg: &str, color: &str, size: u32) -> sk::Pixmap {
     pixmap
 }
 
-pub const TWEEN: Duration = Duration::from_millis(120);
+/// How long the level glides after its last change; it is still by then.
+pub const TWEEN: Duration = Duration::from_millis(200);
+/// Stiffness of the glide (1/s): a critically damped spring.
+const SPRING: f32 = 40.0;
 pub const FADE_IN: Duration = Duration::from_millis(120);
 pub const HOLD: Duration = Duration::from_millis(1500);
 pub const FADE_OUT: Duration = Duration::from_millis(300);
 
 /// Timing of one appearance: everything is a function of the elapsed times,
-/// so a frame can be produced for any instant.
+/// so a frame can be produced for any instant. The level follows its target
+/// as a critically damped spring that keeps its speed when the target moves:
+/// a held button's stream of small steps becomes one even glide.
 #[derive(Clone, Copy, Debug)]
 pub struct Timeline {
     pub icon: Icon,
     from: f32,
+    velocity: f32,
     target: f32,
 }
 
@@ -242,21 +253,35 @@ impl Timeline {
         Self {
             icon,
             from: level,
+            velocity: 0.0,
             target: level,
         }
     }
 
     /// A new value arriving `since_change` after the previous one.
     pub fn retarget(&mut self, icon: Icon, level: u8, since_change: Duration) {
-        self.from = self.level(since_change);
+        (self.from, self.velocity) = self.state(since_change);
         self.target = level as f32 / 100.0;
         self.icon = icon;
     }
 
+    /// Level and its speed per second.
+    fn state(&self, since_change: Duration) -> (f32, f32) {
+        if since_change >= TWEEN {
+            return (self.target, 0.0);
+        }
+        let t = since_change.as_secs_f32();
+        let a = self.from - self.target;
+        let b = self.velocity + SPRING * a;
+        let decay = (-SPRING * t).exp();
+        (
+            self.target + (a + b * t) * decay,
+            (b - SPRING * (a + b * t)) * decay,
+        )
+    }
+
     pub fn level(&self, since_change: Duration) -> f32 {
-        let t = (since_change.as_secs_f32() / TWEEN.as_secs_f32()).min(1.0);
-        let eased = 1.0 - (1.0 - t) * (1.0 - t);
-        self.from + (self.target - self.from) * eased
+        self.state(since_change).0.clamp(0.0, 1.0)
     }
 }
 
@@ -356,7 +381,14 @@ mod tests {
         assert_eq!(t.level(ms(0)), 0.6);
         t.retarget(Icon::Volume1, 40, ms(500));
         assert_eq!(t.level(ms(0)), 0.6);
-        assert!((t.level(ms(60)) - 0.45).abs() < 0.01);
+        let mut last = 0.6;
+        for step in 1..20 {
+            let level = t.level(ms(step * 10));
+            assert!(level <= last && level >= 0.4, "{step}: {level}");
+            last = level;
+        }
+        assert!((t.level(ms(60)) - 0.46).abs() < 0.01);
+        assert!((t.level(TWEEN - ms(1)) - 0.4).abs() < 0.002);
         assert_eq!(t.level(TWEEN), 0.4);
         assert_eq!(t.icon, Icon::Volume1);
 
@@ -365,6 +397,27 @@ mod tests {
         assert_eq!(opacity(ms(5000), HOLD), 1.0);
         assert!((opacity(ms(5000), HOLD + ms(150)) - 0.5).abs() < 0.01);
         assert_eq!(opacity(ms(5000), HOLD + FADE_OUT), 0.0);
+    }
+
+    #[test]
+    fn a_stream_of_steps_glides_without_jumps() {
+        // A held button: +1 every 40 ms. The pill never jumps or turns back
+        // and trails the newest level by a steady few percent.
+        let ms = Duration::from_millis;
+        let mut t = Timeline::new(Icon::Volume1, 20);
+        let mut last = 0.2;
+        for step in 1..=30u8 {
+            t.retarget(Icon::Volume1, 20 + step, ms(40));
+            for frame in 0..=40 {
+                let level = t.level(ms(frame));
+                assert!(
+                    level >= last - 1e-6 && level - last < 0.006,
+                    "{step}/{frame}: {level}"
+                );
+                last = level;
+            }
+        }
+        assert!((0.5 - last) < 0.04 && last < 0.5, "{last}");
     }
 
     #[test]
