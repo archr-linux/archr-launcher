@@ -770,6 +770,7 @@ fn run(
             } else if moonlight.active {
                 moonlight.handle(button)
             } else if settings.active {
+                settings.state.held = repeat.repeats();
                 settings.handle(button)
             } else {
                 app.handle(button, &library)

@@ -626,9 +626,20 @@ const fn slider(id: Id, label: &'static str, min: u8) -> Row {
         Kind::Slider {
             min,
             max: 100,
-            step: 5,
+            step: 2,
         },
     )
+}
+/// The volume and brightness step for a press (`repeats` 0) or a repeat of
+/// a held L/R (every 80 ms from 300 ms): 2 % a press, then 25 %/s, 50 %/s
+/// past 950 ms and 75 %/s past 1550 ms, the speeds archr-levels gives the
+/// hardware buttons.
+pub fn level_step(repeats: u32) -> u8 {
+    match repeats {
+        0..=9 => 2,
+        10..=16 => 4,
+        _ => 6,
+    }
 }
 const fn described(id: Id, label: &'static str, subtitle: &'static str) -> Row {
     Row {
@@ -843,6 +854,8 @@ pub struct Settings {
     pub modules: modules::Modules,
     /// Sliders in flight: last confirmed value and the newest unsent one.
     pub slides: BTreeMap<Id, (String, Option<String>)>,
+    /// Repeats of the held button behind the next press (0: a fresh press).
+    pub held: u32,
     /// Appearance page: the choices when it opened, the theme being previewed
     /// and the choices the host just saved (taken by the host to apply them).
     pub appearance_saved: Appearance,
@@ -913,6 +926,7 @@ impl Default for Settings {
             mangohud_saved: Default::default(),
             capture: None,
             custom_kept: Custom::default(),
+            held: 0,
             updates: updates::Updates::default(),
             raimport: raimport::RaImport::default(),
             roms: roms::Roms::default(),
@@ -1586,6 +1600,11 @@ impl Settings {
                         }
                     }
                     Kind::Slider { min, max, step } if button != Button::A => {
+                        let step = if matches!(row.id, Id::Volume | Id::Brightness) {
+                            level_step(self.held)
+                        } else {
+                            step
+                        };
                         let old = row
                             .id
                             .normalize(old)
@@ -1735,21 +1754,48 @@ mod tests {
         state.open(Page::Sound);
         assert_eq!(
             state.handle(Button::R),
-            Effect::Set(Id::Volume, "65".into())
+            Effect::Set(Id::Volume, "62".into())
         );
         assert_eq!(state.pending, None);
-        assert_eq!(state.value(Id::Volume), "65");
+        assert_eq!(state.value(Id::Volume), "62");
         assert_eq!(state.handle(Button::R), Effect::None);
         assert_eq!(state.handle(Button::R), Effect::None);
-        assert_eq!(state.value(Id::Volume), "75");
-        assert_eq!(state.settle(Id::Volume, Ok("65".into())), Some("75".into()));
-        assert_eq!(state.value(Id::Volume), "75");
-        assert_eq!(state.settle(Id::Volume, Ok("75".into())), None);
+        assert_eq!(state.value(Id::Volume), "66");
+        assert_eq!(state.settle(Id::Volume, Ok("62".into())), Some("66".into()));
+        assert_eq!(state.value(Id::Volume), "66");
+        assert_eq!(state.settle(Id::Volume, Ok("66".into())), None);
         assert!(state.slides.is_empty());
         state.handle(Button::R);
-        assert_eq!(state.settle(Id::Volume, Err("pactl".into())), None);
-        assert_eq!(state.value(Id::Volume), "75");
-        assert_eq!(state.error, Some((Some(Id::Volume), "pactl".into())));
+        assert_eq!(state.settle(Id::Volume, Err("archr-levels".into())), None);
+        assert_eq!(state.value(Id::Volume), "66");
+        assert_eq!(state.error, Some((Some(Id::Volume), "archr-levels".into())));
+    }
+    #[test]
+    fn held_level_sliders_speed_up_like_the_hardware_buttons() {
+        let mut state = Settings {
+            loading: false,
+            ..Default::default()
+        };
+        state.open(Page::Sound);
+        state.values.insert(Id::Brightness, "10".into());
+        state.cursor = 1;
+        // Press, then repeats every 80 ms from 300 ms: 25, 50, then 75 %/s.
+        let mut levels = Vec::new();
+        for repeats in 0..20 {
+            state.held = repeats;
+            state.handle(Button::R);
+            levels.push(state.value(Id::Brightness).parse::<u8>().unwrap());
+        }
+        assert_eq!(&levels[..3], [12, 14, 16]);
+        assert_eq!(levels[9] - levels[8], 2);
+        assert_eq!(levels[10] - levels[9], 4);
+        assert_eq!(levels[17] - levels[16], 6);
+        // The sounds slider keeps its own coarse step.
+        state.values.insert(Id::SoundsVolume, "50".into());
+        state.cursor = 4;
+        state.held = 20;
+        state.handle(Button::R);
+        assert_eq!(state.value(Id::SoundsVolume), "60");
     }
 }
 #[cfg(test)]

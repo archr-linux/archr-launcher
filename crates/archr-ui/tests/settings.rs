@@ -23,11 +23,11 @@ fn sliders_clamp_and_coalesce_while_a_value_is_applied() {
     s.open(Page::Sound);
     s.values.insert(Id::Volume, "100".into());
     assert_eq!(s.handle(Button::R), Effect::None);
-    assert_eq!(s.handle(Button::L), Effect::Set(Id::Volume, "95".into()));
+    assert_eq!(s.handle(Button::L), Effect::Set(Id::Volume, "98".into()));
     // Shown at once; the next press waits for the reply, then only the latest applies.
     assert_eq!(s.handle(Button::L), Effect::None);
-    assert_eq!(s.value(Id::Volume), "90");
-    assert_eq!(s.settle(Id::Volume, Ok("95".into())), Some("90".into()));
+    assert_eq!(s.value(Id::Volume), "96");
+    assert_eq!(s.settle(Id::Volume, Ok("98".into())), Some("96".into()));
 }
 
 #[test]
@@ -48,10 +48,10 @@ fn system_info_shortcut_and_gpu_reboot_confirmation() {
 #[test]
 fn malformed_negative_and_extreme_slider_values_are_normalized_before_stepping() {
     for (stored, normalized, right) in [
-        ("oops", "60", "65"),
-        ("--1", "60", "65"),
-        ("+-1", "60", "65"),
-        ("-200", "0", "5"),
+        ("oops", "60", "62"),
+        ("--1", "60", "62"),
+        ("+-1", "60", "62"),
+        ("-200", "0", "2"),
         ("32767", "100", "100"),
         ("999999999999999999999999999999999999999999", "100", "100"),
     ] {

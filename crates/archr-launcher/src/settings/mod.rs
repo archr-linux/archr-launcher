@@ -43,20 +43,12 @@ impl Backend {
             .trim()
             .to_owned()
     }
-    fn backlight(&self) -> Result<std::path::PathBuf, String> {
-        fs::read_dir(self.paths.at("/sys/class/backlight"))
-            .map_err(|e| e.to_string())?
-            .filter_map(Result::ok)
-            .map(|e| e.path())
-            .min()
-            .ok_or_else(|| "No backlight available".into())
-    }
-    fn number(path: &std::path::Path) -> Result<u64, String> {
-        archr_io::read_utf8(path, 4096, archr_io::Symlinks::Follow)
-            .map_err(|e| e.to_string())?
-            .trim()
-            .parse()
-            .map_err(|e: std::num::ParseIntError| e.to_string())
+    fn level_kind(id: Id) -> &'static str {
+        if id == Id::Volume {
+            "volume"
+        } else {
+            "brightness"
+        }
     }
     fn cfg(&self) -> Result<SystemCfg, String> {
         SystemCfg::load(&self.paths.config).map_err(|e| e.to_string())
@@ -134,27 +126,10 @@ impl Backend {
         self.load_mangohud(&cfg, &mut state);
         self.load_cheevos(&cfg, &mut state);
         self.load_controls(&cfg, &mut state);
-        if let Ok(output) = self.command("pactl", &["get-sink-volume", "@DEFAULT_SINK@"]) {
-            if let Some(volume) = output
-                .split_whitespace()
-                .find_map(|token| token.strip_suffix('%')?.parse::<u8>().ok())
-                .filter(|v| *v <= 100)
-            {
-                state.values.insert(Id::Volume, volume.to_string());
-            }
-        }
-        if let Ok(panel) = self.backlight() {
-            let number = |name| Self::number(&panel.join(name)).ok();
-            if let (Some(raw), Some(max)) = (number("brightness"), number("max_brightness")) {
-                if let Some(percent) = raw
-                    .saturating_mul(100)
-                    .saturating_add(max / 2)
-                    .checked_div(max)
-                {
-                    state
-                        .values
-                        .insert(Id::Brightness, percent.clamp(5, 100).to_string());
-                }
+        // The live levels, on archr-levels' perceptual scale (it owns both keys).
+        for id in [Id::Volume, Id::Brightness] {
+            if let Ok(level) = self.command("archr-levels", &[Self::level_kind(id)]) {
+                state.values.insert(id, id.normalize(&level));
             }
         }
         let mut errors = Vec::new();
@@ -274,6 +249,12 @@ impl Backend {
         if !valid {
             return Err("Invalid setting value".into());
         }
+        // archr-levels applies at once and saves the level once it settles.
+        if matches!(id, Id::Volume | Id::Brightness) {
+            return self
+                .command("archr-levels", &[Self::level_kind(id), value])
+                .map(|level| id.normalize(&level));
+        }
         // Legacy scripts own these keys. Never pre-save, restore or write twice.
         let script = match id {
             Id::Suspend => Some(("suspendmode", value)),
@@ -297,24 +278,6 @@ impl Backend {
         }
         // Runtime-only operations must succeed before the single atomic publish.
         match id {
-            Id::Volume => {
-                self.command(
-                    "pactl",
-                    &[
-                        "--",
-                        "set-sink-volume",
-                        "@DEFAULT_SINK@",
-                        &format!("{value}%"),
-                    ],
-                )?;
-            }
-            Id::Brightness => {
-                let panel = self.backlight()?;
-                let max = Self::number(&panel.join("max_brightness"))?;
-                let raw = max.saturating_mul(value.parse().expect("validated percent")) / 100;
-                fs::write(panel.join("brightness"), raw.max(1).to_string())
-                    .map_err(|e| format!("brightness: {e}"))?;
-            }
             Id::Audio => {
                 self.command("set-audio", &["set", value])?;
             }
