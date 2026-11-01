@@ -16,6 +16,7 @@ pub use theme::{
     DEFAULT_THEME_DIR,
 };
 
+pub mod convert;
 pub mod covers;
 
 pub mod input;

@@ -36,6 +36,9 @@ pub struct Runtime {
     attaching: bool,
     /// That run was found: the host opens its progress screen.
     reattached: bool,
+    /// A Games page emulator or core change: the system and its pair before.
+    switch: Option<(String, (String, String))>,
+    convert: crate::convert::Runner,
 }
 impl Runtime {
     pub fn new(paths: Paths) -> Self {
@@ -56,6 +59,8 @@ impl Runtime {
             install: None,
             attaching: false,
             reattached: false,
+            switch: None,
+            convert: Default::default(),
         }
     }
     fn send(&mut self, work: Work) {
@@ -107,6 +112,7 @@ impl Runtime {
             || self.state.store.working.is_some()
             || self.state.raimport.working
             || !self.state.slides.is_empty()
+            || self.state.converting
             || self.install.is_some()
     }
     /// archr-update check in the background (also the one at startup).
@@ -218,6 +224,10 @@ impl Runtime {
             Effect::Close => self.active = false,
             Effect::Set(id, value) if Games::ROWS.contains(&id) => {
                 let system = self.state.games.name().to_owned();
+                if matches!(id, Id::Emulator | Id::Core) {
+                    let pair = |id| self.state.value(id).to_owned();
+                    self.switch = Some((system.clone(), (pair(Id::Emulator), pair(Id::Core))));
+                }
                 self.send(Work::Game(system, id, value));
             }
             Effect::Set(id, value) => self.send(Work::Set(id, value)),
@@ -268,6 +278,7 @@ impl Runtime {
             }
             Effect::RaImport { backup, seen } => self.send(Work::RaImport(backup, seen)),
             Effect::Adapters(forget) => self.send(Work::Adapters(forget)),
+            Effect::Convert(offer) => self.convert.run(&self.paths, *offer),
             Effect::Module(request) => return Outcome::Module(request),
             Effect::Reboot => return Outcome::Action(SessionAction::Reboot),
             Effect::None => {}
@@ -303,6 +314,40 @@ impl Runtime {
         changed
     }
 
+    /// After an emulator change: offer to take the saves along; then the
+    /// conversion's answer.
+    fn poll_convert(&mut self) -> bool {
+        if self.state.pending.is_none() {
+            if let Some((system, before)) = self.switch.take() {
+                let after = (
+                    self.state.value(Id::Emulator).to_owned(),
+                    self.state.value(Id::Core).to_owned(),
+                );
+                if after != before && system == self.state.games.name() {
+                    self.convert.plan(&self.paths, system, None, before, after);
+                }
+            }
+        }
+        match self.convert.poll() {
+            Some(crate::convert::Event::Offer(offer)) => {
+                self.state.convert = offer.filter(|_| self.active).map(|o| *o);
+                true
+            }
+            Some(crate::convert::Event::Done(result)) => {
+                self.state.converting = false;
+                let message = match result {
+                    Ok(count) => format!("convert.done|count={count}"),
+                    Err(error) => {
+                        log::warn!("Save conversion failed: {error}");
+                        "convert.failed".into()
+                    }
+                };
+                self.state.fail(None, message);
+                true
+            }
+            None => false,
+        }
+    }
     /// Systems to reload once a scraping run has ended.
     pub fn take_scraped(&mut self) -> Option<Vec<String>> {
         self.scraped.take()
@@ -319,6 +364,7 @@ impl Runtime {
         self.launch_saved |= writing.is_some() && self.state.pending.is_none();
         dirty |= self.poll_scrape();
         dirty |= self.poll_updates();
+        dirty |= self.poll_convert();
         // Nothing known yet about an open import page: look.
         if self.active
             && !self.closing

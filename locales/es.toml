@@ -1215,3 +1215,13 @@
 "usb.advice_no_driver" = "Esta imagen no trae driver para este chip. Los adaptadores con {chips} funcionan sin configurar nada."
 "usb.advice_firmware" = "El driver {driver} está en la imagen, pero falta el firmware {file}. Los adaptadores con {chips} funcionan sin configurar nada."
 "usb.advice_not_bound" = "El driver {driver} no se activó con este adaptador. Desconéctalo y conéctalo de nuevo; los adaptadores con {chips} funcionan sin configurar nada."
+"convert.title" = "¿Llevar las partidas de {from} a {to}?"
+"convert.title_game" = "¿Llevar la partida de este juego de {from} a {to}?"
+"convert.detail" = "Solo la partida del cartucho cambia de formato. Los originales se guardan en {keep}."
+"convert.states" = "Los estados guardados (save states) no pasan de un emulador a otro: guarda en el juego antes de cambiar."
+"convert.go" = "Convertir"
+"convert.later" = "Ahora no"
+"convert.working" = "Convirtiendo partidas…"
+"convert.wait" = "No apagues el equipo."
+"convert.failed" = "No se pudieron convertir las partidas; los originales están intactos."
+"convert.done" = { one = "{count} partida convertida", other = "{count} partidas convertidas" }

@@ -401,7 +401,8 @@ impl Library {
             | Outcome::ToggleWifi
             | Outcome::PlayFrom { .. }
             | Outcome::Delete { .. }
-            | Outcome::UseShot { .. } => return Err("error.operation".to_owned()),
+            | Outcome::UseShot { .. }
+            | Outcome::Convert(_) => return Err("error.operation".to_owned()),
         }
         Ok(false)
     }

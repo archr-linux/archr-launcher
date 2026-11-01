@@ -1215,3 +1215,13 @@
 "usb.advice_no_driver" = "Esta imagem não traz driver para este chip. Adaptadores com {chips} funcionam sem configurar nada."
 "usb.advice_firmware" = "O driver {driver} está na imagem, mas falta o firmware {file}. Adaptadores com {chips} funcionam sem configurar nada."
 "usb.advice_not_bound" = "O driver {driver} não ligou neste adaptador. Desconecte e conecte de novo; adaptadores com {chips} funcionam sem configurar nada."
+"convert.title" = "Levar os saves do {from} para o {to}?"
+"convert.title_game" = "Levar o save deste jogo do {from} para o {to}?"
+"convert.detail" = "Só o save do cartucho muda de formato. Os originais ficam guardados em {keep}."
+"convert.states" = "Estados salvos (save states) não passam de um emulador para outro: salve no jogo antes de trocar."
+"convert.go" = "Converter"
+"convert.later" = "Agora não"
+"convert.working" = "Convertendo saves…"
+"convert.wait" = "Não desligue o aparelho."
+"convert.failed" = "Não deu para converter os saves; os originais estão intactos."
+"convert.done" = { one = "{count} save convertido", other = "{count} saves convertidos" }

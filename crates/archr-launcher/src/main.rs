@@ -312,6 +312,9 @@ fn run(
     let mut dirty = false;
     let mut deferred = None;
     let mut closing = false;
+    // A game menu core change: the game and its pair before, until the menu closes.
+    let mut core_change: Option<(String, usize, (String, String))> = None;
+    let mut converter = archr_launcher::convert::Runner::default();
     let mut usb_seq = 0;
     loop {
         // A successful power request owns the screen until the OS stops us.
@@ -617,6 +620,39 @@ fn run(
             usb_seq = ui.usb_seq();
             settings.usb_changed();
         }
+        // The game menu closed on another core: offer to take the save along.
+        if !matches!(app.screen, Screen::QuickMenu { .. }) {
+            if let Some((system, game, before)) = core_change.take() {
+                let after = library.current_core(&system, game);
+                let rom = library.games(&system).get(game).map(|g| g.path.clone());
+                if let (Some(after), Some(rom)) = (after.filter(|a| *a != before), rom) {
+                    converter.plan(&paths, system, Some(rom), before, after);
+                }
+            }
+        }
+        match converter.poll() {
+            Some(archr_launcher::convert::Event::Offer(offer)) => {
+                app.convert = offer.filter(|_| !settings.active).map(|o| *o);
+                dirty = true;
+            }
+            Some(archr_launcher::convert::Event::Done(result)) => {
+                let (text, severity) = match result {
+                    Ok(n) => (
+                        ui.catalog
+                            .plural("convert.done", n as f64, &[("count", &n.to_string())]),
+                        Severity::Info,
+                    ),
+                    Err(error) => {
+                        log::warn!("Save conversion failed: {error}");
+                        (ui.catalog.text("convert.failed"), Severity::Error)
+                    }
+                };
+                ui.banner = Some(text);
+                banner_timer.restart(severity, Instant::now());
+                dirty = true;
+            }
+            None => {}
+        }
         if let Screen::Games { system } = &app.screen {
             library.ensure(system);
             ui.loading = library.loading(system);
@@ -853,6 +889,20 @@ fn run(
                             progress.start(Task::Play(entry), game);
                         }
                     }
+                    Outcome::None
+                }
+                requested => requested,
+            };
+            if let Outcome::SetCore { system, game, .. } = &requested {
+                if core_change.is_none() {
+                    core_change = library
+                        .current_core(system, *game)
+                        .map(|pair| (system.clone(), *game, pair));
+                }
+            }
+            let requested = match requested {
+                Outcome::Convert(offer) => {
+                    converter.run(&paths, *offer);
                     Outcome::None
                 }
                 requested => requested,

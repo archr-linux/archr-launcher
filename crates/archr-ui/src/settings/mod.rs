@@ -750,6 +750,8 @@ pub enum Effect {
     },
     /// Read the USB adapters again, after forgetting this one if given.
     Adapters(Option<String>),
+    /// Take the saves along to the emulator just chosen.
+    Convert(Box<crate::convert::Offer>),
 }
 /// Passwords never reach a log through `{:?}`.
 impl std::fmt::Debug for Effect {
@@ -783,6 +785,7 @@ impl std::fmt::Debug for Effect {
             Self::Module(request) => write!(f, "Module({request:?})"),
             Self::RaImport { backup, .. } => write!(f, "RaImport {{ backup: {backup} }}"),
             Self::Adapters(id) => write!(f, "Adapters({id:?})"),
+            Self::Convert(offer) => write!(f, "Convert({:?} -> {:?})", offer.from, offer.to),
         }
     }
 }
@@ -875,6 +878,9 @@ pub struct Settings {
     /// Network › USB adapters, once read; the details of the one selected.
     pub adapters: Option<crate::usb::Adapters>,
     pub usb_details: bool,
+    /// Take the saves along (Converter-save), and while converting.
+    pub convert: Option<crate::convert::Offer>,
+    pub converting: bool,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -930,6 +936,8 @@ impl Default for Settings {
             roms: roms::Roms::default(),
             adapters: None,
             usb_details: false,
+            convert: None,
+            converting: false,
         }
     }
 }
@@ -1277,7 +1285,11 @@ impl Settings {
     pub fn hints(&self) -> &'static [(HintButton, &'static str)] {
         use HintButton::{Key, Pair};
         const BACK: &[(HintButton, &str)] = &[(Key('B'), "hint.back")];
-        if self.connecting.is_some() || self.storage.working.is_some() {
+        if self.connecting.is_some()
+            || self.storage.working.is_some()
+            || self.convert.is_some()
+            || self.converting
+        {
             return &[];
         }
         if let Some(confirm) = &self.storage.confirm {
@@ -1549,8 +1561,21 @@ impl Settings {
             };
         }
         // Presses go to an open prompt (`captured`), never here.
-        if self.capturing() {
+        if self.capturing() || self.converting {
             return Effect::None;
+        }
+        if let Some(offer) = &mut self.convert {
+            return match offer.handle(button) {
+                Some(crate::convert::Answer::Convert) => {
+                    self.converting = true;
+                    Effect::Convert(Box::new(self.convert.take().expect("offer")))
+                }
+                Some(crate::convert::Answer::Later) => {
+                    self.convert = None;
+                    Effect::None
+                }
+                None => Effect::None,
+            };
         }
         // Any navigation input dismisses the last message.
         self.error = None;

@@ -729,6 +729,7 @@ impl View<'_, '_, '_> {
                 "modules.",
                 "raimport.",
                 "roms.",
+                "convert.",
                 "usb.",
             ]
             .iter()
@@ -812,6 +813,9 @@ impl View<'_, '_, '_> {
         };
         if let Some(status) = status {
             self.note((24., footer, (left - 36.).max(60.), 48.), &status, 13.)?;
+        }
+        if let Some(offer) = &state.convert {
+            return self.ui.convert_question(offer, self.theme);
         }
         use crate::HintButton::Key;
         type Hints = &'static [(crate::HintButton, &'static str)];
@@ -907,6 +911,12 @@ impl View<'_, '_, '_> {
                 ))
             } else if let Some(key) = state.storage.working {
                 Some((self.tr(key), Some(self.tr("settings.wait_storage")), None))
+            } else if state.converting {
+                Some((
+                    self.tr("convert.working"),
+                    Some(self.tr("convert.wait")),
+                    None,
+                ))
             } else if let Some(adapter) = state.usb_adapter().filter(|_| state.usb_details) {
                 let chips = state
                     .adapters

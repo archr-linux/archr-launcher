@@ -2169,8 +2169,8 @@ fn capture_modules() {
     }
 }
 
-/// Network › USB adapters and the announcement card (Rede-adaptadores,
-/// Dongle-aviso).
+/// Network › USB adapters, the announcement card and the save conversion
+/// dialog (Rede-adaptadores, Dongle-aviso, Converter-save).
 #[test]
 #[ignore = "manual capture, ARCHR_SETTINGS_CAPTURE_DIR required"]
 fn capture_dongle_and_saves() {
@@ -2206,6 +2206,45 @@ fn capture_dongle_and_saves() {
     wifi.open(Page::Wifi);
     wifi.networks = vec![network("Casa_5G", "psk", 92, true)];
     wifi.cursor = wifi.wifi_rows() - 1;
+    let mut games = ready();
+    games.games.replace(vec![crate::settings::GameSystem {
+        name: "nds".into(),
+        fullname: "Nintendo DS".into(),
+        cores: vec![
+            crate::settings::GameCore {
+                emulator: "drastic".into(),
+                core: "drastic-arch".into(),
+                default: true,
+                options: Vec::new(),
+            },
+            crate::settings::GameCore {
+                emulator: "melonds".into(),
+                core: "melonds-sa".into(),
+                default: false,
+                options: Vec::new(),
+            },
+        ],
+        saved: [(Id::Emulator, "melonds".to_owned())].into_iter().collect(),
+    }]);
+    games.sync_games();
+    games.open(Page::Games);
+    games.cursor = 1;
+    let offer = crate::convert::Offer {
+        system: "nds".into(),
+        from_name: "DraStic".into(),
+        to_name: "melonDS".into(),
+        from_ext: ".dsv".into(),
+        to_ext: ".sav".into(),
+        count: 12,
+        keep: "roms/nds/.antes-melonds".into(),
+        ..Default::default()
+    };
+    games.convert = Some(offer.clone());
+    let mut later = games.clone();
+    later.convert.as_mut().unwrap().on_convert = false;
+    let mut converting = ready();
+    converting.open(Page::Games);
+    converting.converting = true;
     let save = |ui: &mut Ui, name: String| {
         let pixels = ui
             .canvas
@@ -2230,6 +2269,9 @@ fn capture_dongle_and_saves() {
             ("usb-adapters-seen", &usb_seen),
             ("usb-details", &usb_details),
             ("wifi-usb-row", &wifi),
+            ("convert-settings", &games),
+            ("convert-later", &later),
+            ("convert-working", &converting),
         ] {
             for _ in 0..2 {
                 ui.canvas.set_draw_color(color(theme.background));
@@ -2258,5 +2300,15 @@ fn capture_dongle_and_saves() {
             save(&mut ui, format!("{name}-{language}.png"));
         }
         ui.dongle = None;
+        app.convert = Some(crate::convert::Offer {
+            rom: Some("Mario Kart DS.nds".into()),
+            count: 1,
+            ..offer.clone()
+        });
+        for _ in 0..2 {
+            ui.snap_animations();
+            ui.draw(&app, &shelf, &theme, None).unwrap();
+        }
+        save(&mut ui, format!("convert-game-{language}.png"));
     }
 }

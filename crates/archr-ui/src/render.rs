@@ -29,6 +29,7 @@ pub use roms_move::{MoveStage, RomsMove, DOT_STEP};
 mod saves;
 mod usb;
 pub(crate) use usb::tone as usb_tone;
+mod convert;
 
 use sdl2::{
     rect::Rect,
@@ -994,6 +995,9 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 self.menu(app, data, theme)?;
             } else {
                 self.menu_open = false;
+            }
+            if let Some(offer) = &app.convert {
+                self.convert_question(offer, theme)?;
             }
             self.animating = self.list.scroll.active(now)
                 || self.list.pill.active(now)
