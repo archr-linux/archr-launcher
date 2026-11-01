@@ -48,6 +48,8 @@ glyphs! {
     Signal => "signal", SignalLow => "signal-low", SignalMedium => "signal-medium",
     SignalHigh => "signal-high", Puzzle => "puzzle", ShieldCheck => "shield-check",
     Trash => "trash-2", Image => "image", Alert => "triangle-alert",
+    Usb => "usb",
+    CircleCheck => "circle-check",
 }
 
 #[link(name = "SDL2_image")]

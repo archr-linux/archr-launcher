@@ -127,6 +127,18 @@ impl Runtime {
     pub fn take_reattached(&mut self) -> bool {
         std::mem::take(&mut self.reattached)
     }
+    /// From the USB adapter announcement: Network › USB adapters.
+    pub fn open_usb(&mut self) {
+        self.open();
+        let effect = self.state.open_usb();
+        self.apply(effect);
+    }
+    /// archr-usb-advisor wrote again: an open adapters page reads it.
+    pub fn usb_changed(&mut self) {
+        if self.active && self.state.page() == Page::UsbAdapters {
+            self.send(Work::Adapters(None));
+        }
+    }
     /// The START menu's update shortcut.
     pub fn open_updates(&mut self) {
         self.open();
@@ -255,6 +267,7 @@ impl Runtime {
                 }
             }
             Effect::RaImport { backup, seen } => self.send(Work::RaImport(backup, seen)),
+            Effect::Adapters(forget) => self.send(Work::Adapters(forget)),
             Effect::Module(request) => return Outcome::Module(request),
             Effect::Reboot => return Outcome::Action(SessionAction::Reboot),
             Effect::None => {}

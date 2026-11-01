@@ -312,6 +312,7 @@ fn run(
     let mut dirty = false;
     let mut deferred = None;
     let mut closing = false;
+    let mut usb_seq = 0;
     loop {
         // A successful power request owns the screen until the OS stops us.
         // Store is already flushed; no more input, scans, scripts or handoffs.
@@ -604,6 +605,18 @@ fn run(
             ui.banner = None;
             dirty = true;
         }
+        if ui
+            .dongle
+            .as_ref()
+            .is_some_and(|c| c.expired(Instant::now()))
+        {
+            ui.dongle = None;
+            dirty = true;
+        }
+        if ui.usb_seq() != usb_seq {
+            usb_seq = ui.usb_seq();
+            settings.usb_changed();
+        }
         if let Screen::Games { system } = &app.screen {
             library.ensure(system);
             ui.loading = library.loading(system);
@@ -740,6 +753,20 @@ fn run(
                         button = Some(mapped);
                     }
                 }
+            }
+        }
+        // The adapter card takes Y (its page) and B (close); any other press
+        // closes it and still does its own work.
+        if let Some(pressed) = button.filter(|_| ui.dongle.is_some()) {
+            ui.dongle = None;
+            dirty = true;
+            match pressed {
+                archr_launcher::state::Button::Y => {
+                    settings.open_usb();
+                    button = None;
+                }
+                archr_launcher::state::Button::B => button = None,
+                _ => {}
             }
         }
         let mut outcome = None;

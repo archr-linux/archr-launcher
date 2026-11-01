@@ -27,6 +27,8 @@ mod netplay;
 mod roms_move;
 pub use roms_move::{MoveStage, RomsMove, DOT_STEP};
 mod saves;
+mod usb;
+pub(crate) use usb::tone as usb_tone;
 
 use sdl2::{
     rect::Rect,
@@ -372,6 +374,8 @@ pub struct Ui<'font, 'texture> {
     pub catalog: I18n,
     pub loading: bool,
     pub banner: Option<String>,
+    /// A USB adapter just plugged (Dongle-aviso), over any screen.
+    pub dongle: Option<crate::usb::Card>,
     pub screenshot: Option<PathBuf>,
     /// Open Netplay lobby; it replaces the browsing screens while present.
     pub lobby: Option<crate::netplay::Lobby>,
@@ -481,6 +485,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             catalog: I18n::default(),
             loading: false,
             banner: None,
+            dongle: None,
             screenshot: None,
             transition: None,
             moonlight: None,
@@ -581,6 +586,10 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         self.animating
     }
     /// Timer work, separate from rendering; sysfs refresh is rate limited.
+    /// The USB advice's sequence, to notice that it changed.
+    pub fn usb_seq(&self) -> u64 {
+        self.status.as_ref().map_or(0, Status::usb_seq)
+    }
     pub fn tick(&mut self) -> bool {
         // Artwork loading starts after the first frame, never before it.
         let created = self.art.is_none() && self.creator.is_some();
@@ -588,6 +597,9 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         let art = self.art.as_mut().is_some_and(SystemArt::tick);
         let store = self.store_tick();
         let status = self.status.as_mut().is_some_and(|s| s.poll(Instant::now()));
+        if let Some(card) = self.status.as_mut().and_then(Status::take_announcement) {
+            self.dongle = Some(card);
+        }
         let blink = self
             .blink
             .is_some_and(|on| on != self.blink_on(Instant::now()));
@@ -992,6 +1004,9 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 || (app.rescraping
                     && matches!(backdrop, Screen::Details { .. })
                     && self.motion != Motion::Off);
+        }
+        if let Some(card) = self.dongle.clone().filter(|_| self.transition.is_none()) {
+            self.dongle_card(&card, theme)?;
         }
         // The launch overlay is the last frame before a handoff: never mid-fade.
         if let Some(message) = self.transition.clone() {

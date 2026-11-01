@@ -26,6 +26,7 @@ pub mod roms;
 pub mod storage;
 pub mod store;
 pub mod updates;
+mod usb;
 pub use information::{InfoCard, InfoDetail, InfoMeter, Information};
 use network::Network;
 
@@ -72,6 +73,8 @@ pub enum Page {
     /// Storage › ROMs on the PC, and its list of names.
     Roms,
     RomsList,
+    /// Network › USB adapters.
+    UsbAdapters,
     Soon(&'static str),
 }
 impl Page {
@@ -108,13 +111,16 @@ impl Page {
             Self::RaImportList => "raimport.list_title",
             Self::Roms => "roms.title",
             Self::RomsList => "roms.list_title",
+            Self::UsbAdapters => "usb.title",
             Self::Soon(key) => key,
         }
     }
     /// Breadcrumb parents between "Settings" and the page itself.
     pub fn parent(self) -> &'static [&'static str] {
         match self {
-            Self::Wifi | Self::Bluetooth | Self::Services => &["settings.network"],
+            Self::Wifi | Self::Bluetooth | Self::Services | Self::UsbAdapters => {
+                &["settings.network"]
+            }
             Self::Netplay | Self::Scraper | Self::Mangohud => &["settings.games"],
             Self::MangohudItems => &["settings.games", "settings.mangohud_page"],
             Self::AccentColor | Self::Store => &["settings.appearance"],
@@ -742,6 +748,8 @@ pub enum Effect {
         backup: bool,
         seen: Box<raimport::Found>,
     },
+    /// Read the USB adapters again, after forgetting this one if given.
+    Adapters(Option<String>),
 }
 /// Passwords never reach a log through `{:?}`.
 impl std::fmt::Debug for Effect {
@@ -774,6 +782,7 @@ impl std::fmt::Debug for Effect {
             }
             Self::Module(request) => write!(f, "Module({request:?})"),
             Self::RaImport { backup, .. } => write!(f, "RaImport {{ backup: {backup} }}"),
+            Self::Adapters(id) => write!(f, "Adapters({id:?})"),
         }
     }
 }
@@ -863,6 +872,9 @@ pub struct Settings {
     pub updates: updates::Updates,
     pub raimport: raimport::RaImport,
     pub roms: roms::Roms,
+    /// Network › USB adapters, once read; the details of the one selected.
+    pub adapters: Option<crate::usb::Adapters>,
+    pub usb_details: bool,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -916,6 +928,8 @@ impl Default for Settings {
             updates: updates::Updates::default(),
             raimport: raimport::RaImport::default(),
             roms: roms::Roms::default(),
+            adapters: None,
+            usb_details: false,
         }
     }
 }
@@ -1279,6 +1293,7 @@ impl Settings {
             Page::Updates | Page::UpdatePackages => self.updates_hints(),
             Page::RaImport | Page::RaImportList => self.raimport_hints(),
             Page::RomsList => BACK,
+            Page::UsbAdapters => self.usb_hints(),
             Page::Root => &[
                 (Key('A'), "hint.open"),
                 (Key('B'), "hint.back"),

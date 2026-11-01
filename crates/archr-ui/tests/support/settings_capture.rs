@@ -2168,3 +2168,95 @@ fn capture_modules() {
         hub.screen = screen;
     }
 }
+
+/// Network › USB adapters and the announcement card (Rede-adaptadores,
+/// Dongle-aviso).
+#[test]
+#[ignore = "manual capture, ARCHR_SETTINGS_CAPTURE_DIR required"]
+fn capture_dongle_and_saves() {
+    std::env::set_var("SDL_VIDEODRIVER", "offscreen");
+    let output = std::path::PathBuf::from(
+        std::env::var_os("ARCHR_SETTINGS_CAPTURE_DIR").expect("capture directory"),
+    );
+    let ttf;
+    let creator;
+    let mut ui = Ui::new(640, 480, true).unwrap();
+    ttf = sdl2::ttf::init().unwrap();
+    creator = ui.canvas.texture_creator();
+    let theme = Theme::load(
+        &std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../themes/default"),
+    );
+    ui.configure(&ttf, &creator, &theme, None).unwrap();
+    let advice = "seq\t3\nadded\t0bda:b733\n\
+        dev\t0bda:b733\tRealtek RTL8733BU\twifi+bt\t2.4+5\t-\t-\t-\t-\tno_driver\n";
+    let seen = "dev\t2604:0013\tAIC8800DC (Tenda AX300)\twifi\t2.4\taic8800_fdrv_usb\taic8800_fdrv_usb\twlan0\t-\tworks\n\
+        dev\t0e8d:7663\tMediaTek MT7663U\twifi\t2.4+5\tmt7663u\tmt7663u\t-\tmediatek/mt7663pr2h.bin\tfirmware\n\
+        dev\t1286:2043\tMarvell 88W8797\twifi\t2.4+5\tmwifiex_usb\tmwifiex_usb\t-\tmrvl/usb8797_uapsta.bin\tfirmware\n";
+    let table =
+        "date\t2026-10-30\nchip\tRTL8821CU\twifi\t2.4+5\nchip\tRTL8812BU / 8822BU\twifi\t2.4+5\n\
+        chip\tRTL8188FTV / 8188EUS\twifi\t2.4\nchip\tMT7601U\twifi\t2.4\nchip\tRTL8761B\tbt\tbt\n";
+    let mut usb = ready();
+    let _ = usb.open_usb();
+    usb.adapters = Some(crate::usb::Adapters::new(advice, seen, table));
+    let mut usb_seen = usb.clone();
+    usb_seen.cursor = 2;
+    let mut usb_details = usb.clone();
+    usb_details.usb_details = true;
+    let mut wifi = ready();
+    wifi.open(Page::Wifi);
+    wifi.networks = vec![network("Casa_5G", "psk", 92, true)];
+    wifi.cursor = wifi.wifi_rows() - 1;
+    let save = |ui: &mut Ui, name: String| {
+        let pixels = ui
+            .canvas
+            .read_pixels(None, sdl2::pixels::PixelFormatEnum::RGBA32)
+            .unwrap();
+        image::save_buffer(
+            output.join(name),
+            &pixels,
+            640,
+            480,
+            image::ColorType::Rgba8,
+        )
+        .unwrap();
+    };
+    let shelf = Shelf::new();
+    let languages =
+        std::env::var("ARCHR_SETTINGS_CAPTURE_LANGUAGES").unwrap_or_else(|_| "pt_BR,ru".into());
+    for language in languages.split(',') {
+        ui.catalog = I18n::load(std::path::Path::new("/nonexistent"), Some(language), None);
+        for (name, state) in [
+            ("usb-adapters", &usb),
+            ("usb-adapters-seen", &usb_seen),
+            ("usb-details", &usb_details),
+            ("wifi-usb-row", &wifi),
+        ] {
+            for _ in 0..2 {
+                ui.canvas.set_draw_color(color(theme.background));
+                ui.canvas.clear();
+                ui.settings_page(state, &theme).unwrap();
+                ui.snap_animations();
+            }
+            save(&mut ui, format!("{name}-{language}.png"));
+        }
+        let advice = crate::usb::Advice::parse(advice);
+        let mut app = crate::state::App::new(10);
+        app.cursor = 1;
+        for (name, adapter) in [
+            ("dongle-card", advice.now[0].clone()),
+            ("dongle-card-works", crate::usb::parse_seen(seen)[0].clone()),
+        ] {
+            ui.dongle = Some(crate::usb::Card {
+                adapter,
+                chips: crate::usb::Table::parse(table).chips,
+                since: Instant::now(),
+            });
+            for _ in 0..2 {
+                ui.snap_animations();
+                ui.draw(&app, &shelf, &theme, None).unwrap();
+            }
+            save(&mut ui, format!("{name}-{language}.png"));
+        }
+        ui.dongle = None;
+    }
+}

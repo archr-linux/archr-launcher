@@ -1,6 +1,8 @@
 //! Cached status: only the status worker touches sysfs. It starts after
 //! present; the render thread consumes a typed snapshot without waiting.
 //! Battery is re-read every 2 s, the radio every 30 s; only changes publish.
+//! The USB adapter advice is looked at with the battery and read again only
+//! when the file changed.
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -78,13 +80,19 @@ struct Snapshot {
     battery: Option<Battery>,
     wifi: bool,
     roms: Option<&'static str>,
+    /// The USB advice's sequence: it changed when this does.
+    usb: u64,
 }
 enum Signal {
     Refresh,
     Stop,
 }
+/// The USB advice as last read, the chips that work in this image and the
+/// last announcement shown before this launcher started.
+type UsbShared = Arc<Mutex<(Option<crate::usb::Advice>, Vec<crate::usb::Chip>, u64)>>;
 struct Worker {
     value: Arc<Mutex<Snapshot>>,
+    usb: UsbShared,
     stop: mpsc::Sender<Signal>,
     clock_12: Arc<AtomicBool>,
 }
@@ -95,6 +103,8 @@ impl Worker {
         let (stop, stopped) = mpsc::channel();
         let clock_12 = Arc::new(AtomicBool::new(false));
         let worker_clock = clock_12.clone();
+        let usb: UsbShared = Arc::default();
+        let usb_published = usb.clone();
         thread::Builder::new()
             .name("launcher-status".into())
             .spawn(move || {
@@ -110,6 +120,20 @@ impl Worker {
                         .any(|line| line.trim() == "launcher.clock.format=12"),
                     Ordering::Release,
                 );
+                let read = |name: &str| {
+                    archr_io::read_utf8(
+                        &path.join(name.trim_start_matches('/')),
+                        256 * 1024,
+                        archr_io::Symlinks::Follow,
+                    )
+                    .unwrap_or_default()
+                };
+                {
+                    let chips = crate::usb::Table::parse(&read(crate::usb::TABLE)).chips;
+                    let acked = read(crate::usb::ACK).trim().parse().unwrap_or(0);
+                    *usb_published.lock().expect("usb advice") = (None, chips, acked);
+                }
+                let mut usb_stamp = None;
                 let mut source = BatterySource::new(path.clone(), Instant::now());
                 let mut snapshot = Snapshot::default();
                 let mut next_wifi = Instant::now();
@@ -118,6 +142,14 @@ impl Worker {
                     let mut next = snapshot;
                     if let Some(battery) = source.poll(now) {
                         next.battery = battery;
+                        let advice = path.join(crate::usb::ADVICE.trim_start_matches('/'));
+                        let stamp = fs::metadata(&advice).and_then(|m| m.modified()).ok();
+                        if stamp != usb_stamp {
+                            usb_stamp = stamp;
+                            let parsed = crate::usb::Advice::parse(&read(crate::usb::ADVICE));
+                            next.usb = parsed.seq;
+                            usb_published.lock().expect("usb advice").0 = Some(parsed);
+                        }
                     }
                     if now >= next_wifi {
                         next.wifi = wifi_on(&path);
@@ -139,6 +171,7 @@ impl Worker {
             })?;
         Ok(Self {
             value,
+            usb,
             stop,
             clock_12,
         })
@@ -163,6 +196,11 @@ pub struct Status {
     /// The ROMs partition cannot be written: the catalog key that says why.
     pub roms: Option<&'static str>,
     pub clock: String,
+    /// What archr-usb-advisor says is plugged, and the chips that work here.
+    pub usb: Option<crate::usb::Advice>,
+    pub usb_chips: Vec<crate::usb::Chip>,
+    usb_seq: u64,
+    usb_acked: u64,
     path: PathBuf,
     worker: Option<Worker>,
     started: bool,
@@ -177,6 +215,10 @@ impl Status {
             wifi: false,
             roms: None,
             clock: String::new(),
+            usb: None,
+            usb_chips: Vec::new(),
+            usb_seq: 0,
+            usb_acked: 0,
             path,
             worker: None,
             started: false,
@@ -185,6 +227,30 @@ impl Status {
         };
         status.poll(now);
         status
+    }
+    /// The adapter just plugged, once: its card is shown and the
+    /// announcement acknowledged on disk, so a restart does not repeat it.
+    pub fn take_announcement(&mut self) -> Option<crate::usb::Card> {
+        let advice = self.usb.as_ref()?;
+        let adapter = advice.announce(self.usb_acked)?.clone();
+        self.usb_acked = advice.seq;
+        let (path, seq) = (
+            self.path.join(crate::usb::ACK.trim_start_matches('/')),
+            advice.seq,
+        );
+        // Off the draw thread; a lost write only repeats the card once.
+        let _ = thread::Builder::new()
+            .name("launcher-usb-ack".into())
+            .spawn(move || fs::write(path, format!("{seq}\n")));
+        Some(crate::usb::Card {
+            adapter,
+            chips: self.usb_chips.clone(),
+            since: Instant::now(),
+        })
+    }
+    /// Bumped by every new USB advice.
+    pub fn usb_seq(&self) -> u64 {
+        self.usb_seq
     }
     /// The clock reads 12-hour (AM/PM).
     pub fn clock_12(&self) -> bool {
@@ -245,9 +311,19 @@ impl Status {
             battery,
             wifi,
             roms,
+            usb,
         }) = snapshot
         {
             changed = self.battery != battery || self.wifi != wifi || self.roms != roms;
+            if usb != self.usb_seq {
+                self.usb_seq = usb;
+                changed = true;
+                if let Some(shared) = self.worker.as_ref().and_then(|w| w.usb.lock().ok()) {
+                    let acked = self.usb_acked.max(shared.2);
+                    (self.usb, self.usb_chips) = (shared.0.clone(), shared.1.clone());
+                    self.usb_acked = acked;
+                }
+            }
             self.battery = battery;
             self.wifi = wifi;
             self.roms = roms;
@@ -376,6 +452,7 @@ mod tests {
                 battery: percent.map(|percent| Battery { percent, charging }),
                 wifi,
                 roms: None,
+                usb: 0,
             };
             assert_eq!(status.update(unix + 60, Some(snapshot)), changed);
             assert!(

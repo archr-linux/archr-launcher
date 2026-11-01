@@ -117,6 +117,25 @@ impl Backend {
             ))
         }
     }
+    /// What archr-usb-advisor wrote: plugged now, seen before, the table.
+    fn adapters(&self, forget: Option<String>) -> Result<Box<archr_ui::usb::Adapters>, String> {
+        // Reading never fails: missing files are an empty page.
+        let forgot = forget.map(|id| self.command("archr-usb-advisor", &["forget", &id]));
+        let read = |path: &str| {
+            archr_io::read_utf8(&self.paths.at(path), 1 << 20, archr_io::Symlinks::Follow)
+                .unwrap_or_default()
+        };
+        let adapters = archr_ui::usb::Adapters::new(
+            &read(archr_ui::usb::ADVICE),
+            &read(archr_ui::usb::SEEN),
+            &read(archr_ui::usb::TABLE),
+        );
+        // A failed forget leaves the adapter listed: the page shows that.
+        if let Some(Err(error)) = forgot {
+            log::warn!("Cannot forget the adapter: {error}");
+        }
+        Ok(Box::new(adapters))
+    }
     pub fn load(&self) -> Result<Settings, String> {
         let cfg = self.cfg()?;
         let mut state = Settings::default();
@@ -383,6 +402,8 @@ pub(super) enum Work {
     RaImport(bool, Box<archr_ui::settings::raimport::Found>),
     /// ROMs on the PC: the state, the preview and the names.
     Roms,
+    /// Network › USB adapters, after forgetting this one if given.
+    Adapters(Option<String>),
 }
 /// A storage action's outcome and the page's refreshed facts.
 type StorageReply = (
@@ -417,6 +438,7 @@ enum Reply {
     Store(archr_ui::settings::store::Reply),
     RaScan(archr_ui::settings::raimport::Found),
     RaImport(Result<String, String>),
+    Adapters(Result<Box<archr_ui::usb::Adapters>, String>),
     Roms(
         Box<(
             archr_ui::settings::roms::Status,
@@ -560,6 +582,7 @@ impl Worker {
                         }
                         Work::RaScan => Reply::RaScan(backend.ra_scan()),
                         Work::Roms => Reply::Roms(Box::new(backend.roms_scan())),
+                        Work::Adapters(forget) => Reply::Adapters(backend.adapters(forget)),
                         Work::RaImport(backup, seen) => {
                             Reply::RaImport(backend.ra_import(backup, &seen))
                         }
@@ -761,6 +784,16 @@ impl Worker {
                     state.raimport.found = Some(found);
                 }
                 Reply::RaImport(result) => state.raimport_done(result),
+                Reply::Adapters(Ok(adapters)) => {
+                    let len = adapters.len();
+                    state.adapters = Some(*adapters);
+                    state.cursor = state.cursor.min(len.saturating_sub(1));
+                }
+                Reply::Adapters(Err(error)) => {
+                    log::warn!("USB adapters: {error}");
+                    state.adapters = Some(Default::default());
+                    state.fail(None, error);
+                }
                 Reply::Roms(facts) => {
                     let (status, scan) = *facts;
                     state.storage.roms = status;

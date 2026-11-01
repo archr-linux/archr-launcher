@@ -203,9 +203,10 @@ impl Settings {
             .flatten()
             .and_then(|n| self.networks.get(n))
     }
-    /// Rows after the networks: hidden network, network services, Bluetooth.
+    /// Rows after the networks: hidden network, network services,
+    /// Bluetooth and USB adapters.
     pub fn wifi_rows(&self) -> usize {
-        self.networks.len() + 4
+        self.networks.len() + 5
     }
     pub(super) fn page_input(&mut self, button: Button) -> Option<Effect> {
         if self.connecting.is_some() {
@@ -237,6 +238,7 @@ impl Settings {
             Page::Updates | Page::UpdatePackages => self.updates_input(button),
             Page::RaImport | Page::RaImportList => self.raimport_input(button),
             Page::RomsList => self.roms_list_input(button),
+            Page::UsbAdapters => self.usb_input(button),
             Page::Modules
             | Page::ModuleInfo
             | Page::Module(..)
@@ -311,7 +313,7 @@ impl Settings {
     }
     fn wifi_input(&mut self, button: Button) -> Option<Effect> {
         let last = self.wifi_rows() - 1;
-        let (bluetooth, services, hidden) = (last, last - 1, last - 2);
+        let (usb, bluetooth, services, hidden) = (last, last - 1, last - 2, last - 3);
         match button {
             Button::Up => self.cursor = self.cursor.saturating_sub(1),
             Button::Down => self.cursor = (self.cursor + 1).min(last),
@@ -323,6 +325,7 @@ impl Settings {
                 }
             }
             Button::Y if self.value(Id::WifiSwitch) == "1" => return Some(Effect::Scan),
+            Button::A if self.cursor == usb => return Some(self.open_usb_page()),
             Button::A if self.cursor == bluetooth => self.open(Page::Bluetooth),
             Button::A if self.cursor == services => self.open(Page::Services),
             Button::A if self.cursor == hidden => {
@@ -547,7 +550,7 @@ mod tests {
     #[test]
     fn open_hidden_network_confirms_an_empty_password_with_start() {
         let mut state = wifi();
-        state.cursor = state.wifi_rows() - 3;
+        state.cursor = state.wifi_rows() - 4;
         state.handle(Button::A);
         state.handle(Button::A);
         assert_eq!(state.handle(Button::Start), Effect::None);
@@ -575,7 +578,11 @@ mod tests {
     #[test]
     fn wifi_routes_to_services_and_bluetooth_and_back() {
         let mut state = wifi();
-        for (offset, page) in [(2, Page::Services), (1, Page::Bluetooth)] {
+        for (offset, page) in [
+            (3, Page::Services),
+            (2, Page::Bluetooth),
+            (1, Page::UsbAdapters),
+        ] {
             state.cursor = state.wifi_rows() - offset;
             state.handle(Button::A);
             assert_eq!(state.page(), page);

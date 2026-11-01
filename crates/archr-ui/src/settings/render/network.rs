@@ -168,8 +168,9 @@ impl View<'_, '_, '_> {
         let Some(network) = state.networks.get(n - 1) else {
             let last = state.wifi_rows() - 1;
             let key = match last - n {
-                0 => "settings.bluetooth",
-                1 => "settings.services",
+                0 => "usb.title",
+                1 => "settings.bluetooth",
+                2 => "settings.services",
                 _ => "settings.hidden",
             };
             let ink = selection(selected, self.theme.muted, self.theme.highlight_text);
@@ -179,7 +180,7 @@ impl View<'_, '_, '_> {
                 (15., ink, Align::Left),
                 face,
             )?;
-            if n + 2 > last {
+            if n + 3 > last {
                 self.ui.icon(
                     Glyph::ChevronRight,
                     self.rect((596., y + (h - 14.) / 2., 14., 14.)),
