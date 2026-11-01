@@ -5,6 +5,8 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+ab_glyph = "0.2"
+toml = "0.8"
 libc = "0.2"
 resvg = { version = "0.45", default-features = false }
 smithay-client-toolkit = { version = "0.19", default-features = false }

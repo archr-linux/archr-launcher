@@ -1,8 +1,12 @@
-//! archr-osd: the volume/brightness pill drawn over everything, games included.
+//! archr-osd: the volume/brightness pill and the battery card, drawn over
+//! everything, games included.
 //!
 //!   archr-osd                      run the overlay (from the sway session)
 //!   archr-osd send volume 60 [muted]
 //!   archr-osd send brightness 40   exit 1 when no overlay is listening
+//!   archr-osd send battery-low 10
+//!   archr-osd send battery 3 LEFT TOTAL game|menu
+mod card;
 mod overlay;
 mod pill;
 mod proto;
@@ -39,7 +43,7 @@ fn main() -> ExitCode {
 }
 
 fn send(text: &str) -> Result<(), String> {
-    proto::parse(text).ok_or_else(|| format!("malformed message {text:?}"))?;
+    proto::parse_notice(text).ok_or_else(|| format!("malformed message {text:?}"))?;
     let path = socket_path();
     let socket = UnixDatagram::unbound().map_err(|e| e.to_string())?;
     socket
@@ -64,15 +68,19 @@ fn bind() -> Result<UnixDatagram, String> {
     Ok(socket)
 }
 
-/// The latest well-formed message waiting on the socket, if any.
-fn drain(socket: &UnixDatagram) -> Option<proto::Message> {
+/// The latest well-formed pill and card messages waiting on the socket.
+fn drain(socket: &UnixDatagram) -> (Option<proto::Message>, Option<proto::Battery>) {
     let mut buf = [0u8; 64];
-    let mut latest = None;
+    let (mut pill, mut card) = (None, None);
     while let Ok(n) = socket.recv(&mut buf) {
         let text = std::str::from_utf8(&buf[..n]).unwrap_or("");
-        latest = proto::parse(text).or(latest);
+        match proto::parse_notice(text) {
+            Some(proto::Notice::Level(m)) => pill = Some(m),
+            Some(proto::Notice::Battery(b)) => card = Some(b),
+            None => {}
+        }
     }
-    latest
+    (pill, card)
 }
 
 fn serve() -> Result<(), String> {
@@ -113,8 +121,12 @@ fn serve() -> Result<(), String> {
             .dispatch_pending(&mut overlay)
             .map_err(|e| e.to_string())?;
         if ready > 0 && fds[1].revents != 0 {
-            if let Some(message) = drain(&socket) {
+            let (pill, card) = drain(&socket);
+            if let Some(message) = pill {
                 overlay.show(message, &qh);
+            }
+            if let Some(battery) = card {
+                overlay.show_card(battery, &qh);
             }
         }
         sleep = overlay.tick();
@@ -129,7 +141,7 @@ mod tests {
     fn drain_keeps_the_latest_valid_message() {
         let (a, b) = UnixDatagram::pair().unwrap();
         b.set_nonblocking(true).unwrap();
-        assert_eq!(drain(&b), None);
+        assert_eq!(drain(&b), (None, None));
         for text in [
             "volume 10",
             "garbage",
@@ -140,7 +152,9 @@ mod tests {
             a.send(text.as_bytes()).unwrap();
         }
         a.send(&[0xff, 0xfe]).unwrap();
-        assert_eq!(drain(&b), proto::parse("brightness 40"));
-        assert_eq!(drain(&b), None);
+        assert_eq!(drain(&b), (proto::parse("brightness 40"), None));
+        assert_eq!(drain(&b), (None, None));
+        a.send(b"battery 3 2 8 game").unwrap();
+        assert!(matches!(drain(&b), (None, Some(c)) if c.level == 3));
     }
 }
