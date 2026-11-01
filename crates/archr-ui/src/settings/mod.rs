@@ -5,11 +5,13 @@ use crate::{
 };
 use std::collections::BTreeMap;
 use std::time::Instant;
+pub mod bios;
 pub mod bluetooth;
 pub mod cheevos;
 mod controls;
 pub use controls::Capture;
 mod custom;
+pub mod diag;
 pub(crate) mod games;
 pub(crate) mod information;
 pub use custom::Custom;
@@ -75,6 +77,10 @@ pub enum Page {
     RomsList,
     /// Network › USB adapters.
     UsbAdapters,
+    /// System › Diagnostics: debug mode, crashes kept and the report.
+    Diagnostics,
+    /// Games › BIOS: the check per system and the free BIOS.
+    Bios,
     Soon(&'static str),
 }
 impl Page {
@@ -112,6 +118,8 @@ impl Page {
             Self::Roms => "roms.title",
             Self::RomsList => "roms.list_title",
             Self::UsbAdapters => "usb.title",
+            Self::Diagnostics => "diag.title",
+            Self::Bios => "bios.title",
             Self::Soon(key) => key,
         }
     }
@@ -125,7 +133,10 @@ impl Page {
             Self::MangohudItems => &["settings.games", "settings.mangohud_page"],
             Self::AccentColor | Self::Store => &["settings.appearance"],
             Self::StoreTheme => &["settings.appearance", "settings.theme_store"],
-            Self::Modules | Self::ModuleStore | Self::RaImport => &["settings.system"],
+            Self::Modules | Self::ModuleStore | Self::RaImport | Self::Diagnostics => {
+                &["settings.system"]
+            }
+            Self::Bios => &["settings.games"],
             Self::RaImportList => &["settings.system", "raimport.title"],
             Self::Roms => &["settings.storage"],
             Self::RomsList => &["settings.storage", "roms.title"],
@@ -160,6 +171,7 @@ impl Page {
             Self::Updates => updates::UPDATES,
             Self::RaImport => raimport::ROWS,
             Self::Roms => roms::ROWS,
+            Self::Diagnostics => diag::ROWS,
             _ => &[],
         }
     }
@@ -325,6 +337,15 @@ pub enum Id {
     RomsCancel,
     RomsRetry,
     RomsLeft,
+    /// System link to Diagnostics, and that page's rows.
+    DiagLink,
+    /// archr-debug owns system.loglevel: "1" while it is verbose.
+    DebugMode,
+    Crashes,
+    ReportNow,
+    ReportLast,
+    /// Games link to the BIOS page.
+    BiosLink,
 }
 impl Id {
     fn metadata(self) -> (&'static str, &'static str) {
@@ -479,6 +500,12 @@ impl Id {
             | Self::RomsCancel
             | Self::RomsRetry
             | Self::RomsLeft => ("", ""),
+            Self::DebugMode => ("", "0"),
+            Self::DiagLink
+            | Self::Crashes
+            | Self::ReportNow
+            | Self::ReportLast
+            | Self::BiosLink => ("", ""),
         }
     }
     pub fn key(self) -> &'static str {
@@ -525,7 +552,8 @@ impl Id {
             | Self::CheevosScreenshot
             | Self::UpdateBoot
             | Self::UpdateNotify
-            | Self::ModulesAuto => &["0", "1"],
+            | Self::ModulesAuto
+            | Self::DebugMode => &["0", "1"],
             Self::UpdateChannel => &["stable", "next", "dev"],
             Self::MangohudGame => &["", "1", "0"],
             Self::Filter | Self::StateSlot => &["", "0", "1"],
@@ -674,6 +702,7 @@ const SYSTEM: &[Row] = &[
     row(Id::Update, "settings.update", Kind::Action),
     row(Id::ModulesLink, "settings.modules", Kind::Action),
     row(Id::RaImportLink, "raimport.title", Kind::Action),
+    row(Id::DiagLink, "diag.title", Kind::Action),
 ];
 const REGION: &[Row] = &[
     row(Id::Language, "settings.language", Kind::Value),
@@ -754,6 +783,10 @@ pub enum Effect {
     Adapters(Option<String>),
     /// Take the saves along to the emulator just chosen.
     Convert(Box<crate::convert::Offer>),
+    /// Write a diagnostic report (archr-report).
+    Report,
+    /// Install a free BIOS: "psx" or "msx" (archr-bios-livres).
+    BiosInstall(String),
 }
 /// A level slider held on L/R: a press starts the hold (up?), its repeats
 /// renew it, and the host releases it when the button comes up.
@@ -797,6 +830,8 @@ impl std::fmt::Debug for Effect {
             Self::RaImport { backup, .. } => write!(f, "RaImport {{ backup: {backup} }}"),
             Self::Adapters(id) => write!(f, "Adapters({id:?})"),
             Self::Convert(offer) => write!(f, "Convert({:?} -> {:?})", offer.from, offer.to),
+            Self::Report => write!(f, "Report"),
+            Self::BiosInstall(free) => write!(f, "BiosInstall({free:?})"),
         }
     }
 }
@@ -895,6 +930,8 @@ pub struct Settings {
     /// Take the saves along (Converter-save), and while converting.
     pub convert: Option<crate::convert::Offer>,
     pub converting: bool,
+    pub diag: diag::Diag,
+    pub bios: bios::Bios,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -953,6 +990,8 @@ impl Default for Settings {
             usb_details: false,
             convert: None,
             converting: false,
+            diag: diag::Diag::default(),
+            bios: bios::Bios::default(),
         }
     }
 }
@@ -960,6 +999,13 @@ impl Settings {
     pub fn display_value(&self, id: Id, catalog: &crate::i18n::I18n) -> String {
         if id.roms() {
             return information::value(catalog, &self.roms_value(id));
+        }
+        if matches!(
+            id,
+            Id::Crashes | Id::ReportNow | Id::ReportLast | Id::DiagLink
+        ) {
+            let now = std::time::SystemTime::now();
+            return information::value(catalog, &self.diag_value(id, now));
         }
         let value = self.value(id);
         if let Some(label) = self.labels.get(&(id, value.to_owned())) {
@@ -1066,7 +1112,8 @@ impl Settings {
                 | Id::ModuleStoreLink
                 | Id::RaImportLink
                 | Id::RaPreview
-                | Id::RaRun,
+                | Id::RaRun
+                | Id::BiosLink,
                 _,
             ) => return "›".into(),
             (Id::SecondCard, _) => "settings.eject_link",
@@ -1179,6 +1226,9 @@ impl Settings {
                 self.storage.password.replace('|', "")
             ),
             Id::ModuleRow(_) | Id::ModuleItem(..) => self.module_subtitle(row.id)?,
+            Id::ReportNow | Id::ReportLast => self
+                .diag_subtitle(row.id)
+                .or(row.subtitle.map(Into::into))?,
             _ => row.subtitle?.into(),
         })
     }
@@ -1220,6 +1270,7 @@ impl Settings {
                 Id::SecondCard => self.storage.second.is_some(),
                 Id::UnifiedCard => self.storage.unified.is_some(),
                 Id::RomsLink => self.storage.roms.shown(),
+                Id::ReportLast => self.diag_visible(row.id),
                 id if id.roms() => self.roms_visible(id),
                 id if Games::ROWS.contains(&id) => self.games.shows(id, self),
                 id @ (Id::CheevosAccount
@@ -1246,6 +1297,7 @@ impl Settings {
                 .is_none_or(|choices| choices.len() <= 1),
             Id::StorageCard | Id::UnifiedCard | Id::UsbAddress | Id::UsbState => true,
             Id::RomsNow | Id::RomsCard | Id::RomsPower | Id::RomsLeft => true,
+            Id::Crashes | Id::ReportLast => true,
             Id::ModuleRow(_) | Id::ModuleItem(..) => self.module_fixed(id),
             _ => false,
         }
@@ -1254,6 +1306,7 @@ impl Settings {
     pub fn disabled(&self, id: Id) -> bool {
         match id {
             Id::IndexNow => true,
+            Id::ReportNow => self.diag.running,
             Id::UpdateInstall => self.updates.count() == 0 || self.updates.checking,
             Id::UpdateCheck => self.updates.checking,
             Id::RestoreBackup => self.storage.backup.is_none(),
@@ -1321,6 +1374,7 @@ impl Settings {
             Page::RaImport | Page::RaImportList => self.raimport_hints(),
             Page::RomsList => BACK,
             Page::UsbAdapters => self.usb_hints(),
+            Page::Bios => self.bios_hints(),
             Page::Root => &[
                 (Key('A'), "hint.open"),
                 (Key('B'), "hint.back"),

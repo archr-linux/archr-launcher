@@ -113,6 +113,7 @@ dependencies = [
  "quick-xml 0.37.5",
  "sdl2",
  "serde",
+ "serde_json",
  "tempfile",
  "toml",
 ]

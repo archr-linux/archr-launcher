@@ -2435,6 +2435,12 @@ pub fn prepare_first_frame<'font>(
         Glyph::SignalHigh,
         Glyph::Lock,
         Glyph::Check,
+        Glyph::CircleX,
+        Glyph::CircleCheck,
+        Glyph::CircleDashed,
+        Glyph::CircleAlert,
+        Glyph::FolderOpen,
+        Glyph::Download,
     ]);
     Ok(prepared)
 }
