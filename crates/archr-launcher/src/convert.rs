@@ -637,7 +637,8 @@ mod tests {
                 .unwrap()
                 .flatten()
                 .map(|e| e.path())
-                .find(|p| p.extension().is_some_and(|x| x == ext))
+                .filter(|p| p.extension().is_some_and(|x| x == ext))
+                .find(|p| ext != "srm" || fs::metadata(p).is_ok_and(|m| m.len() == N64_SRM as u64))
         };
         let (Some(zip), Some(srm), Some(eep), Some(ini)) =
             (file("zip"), file("srm"), file("eep"), file("ini"))
