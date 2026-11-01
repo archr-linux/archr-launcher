@@ -50,6 +50,8 @@ glyphs! {
     Trash => "trash-2", Image => "image", Alert => "triangle-alert",
     Usb => "usb", ArrowLeftRight => "arrow-left-right", ArrowRight => "arrow-right",
     CircleCheck => "circle-check",
+    CircleX => "circle-x", CircleDashed => "circle-dashed", CircleAlert => "circle-alert",
+    FolderOpen => "folder-open",
 }
 
 #[link(name = "SDL2_image")]
@@ -222,7 +224,8 @@ mod tests {
                 | Glyph::SignalLow
                 | Glyph::SignalMedium
                 | Glyph::SignalHigh
-                | Glyph::Alert => 1,
+                | Glyph::Alert
+                | Glyph::CircleAlert => 1,
                 Glyph::Controls | Glyph::Games | Glyph::Storage | Glyph::StorageIn => 2,
                 _ => 0,
             };
