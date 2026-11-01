@@ -594,8 +594,9 @@ mod tests {
         .is_none());
     }
     /// Real saves, when a folder of them is given: ARCHR_REAL_SAVES holds
-    /// a DraStic .dsv, a Mupen64Plus-Next .srm and the standalone .eep of
-    /// the same game (Super Mario 64), as copied from a device.
+    /// a DraStic .dsv, a PCSX ReARMed card, a Mupen64Plus-Next .srm and
+    /// the standalone .eep of the same game (Super Mario 64), its zipped ROM
+    /// and the device's mupen64plus.ini, as copied from a device.
     #[test]
     fn real_saves_convert_both_ways() {
         let Some(dir) = std::env::var_os("ARCHR_REAL_SAVES").map(PathBuf::from) else {
@@ -608,6 +609,10 @@ mod tests {
                 Some("dsv") => {
                     let raw = dsv_to_raw(&bytes).expect("a DraStic footer");
                     assert_eq!(raw_to_dsv(&raw), bytes, "{}", path.display());
+                }
+                Some("srm") if bytes.len() == CARD => {
+                    let card = convert(Format::PsxSrm, Format::Mcd, &bytes).expect("a card");
+                    assert_eq!(convert(Format::Mcd, Format::PsxSrm, &card).unwrap(), bytes);
                 }
                 Some("srm") if bytes.len() == N64_SRM => {
                     let eep = srm_to_eep(&bytes).expect("EEPROM only");
@@ -624,6 +629,48 @@ mod tests {
                 }
                 _ => {}
             }
+        }
+        // Both ways through the whole path: the ROM's MD5 and good name
+        // find the standalone's own file name.
+        let file = |ext: &str| {
+            fs::read_dir(&dir)
+                .unwrap()
+                .flatten()
+                .map(|e| e.path())
+                .find(|p| p.extension().is_some_and(|x| x == ext))
+        };
+        let (Some(zip), Some(srm), Some(eep), Some(ini)) =
+            (file("zip"), file("srm"), file("eep"), file("ini"))
+        else {
+            return;
+        };
+        for (from, to, keep) in [
+            (
+                pair("retroarch", "mupen64plus_next"),
+                pair("mupen64plus", "mupen64plus-arch"),
+                &srm,
+            ),
+            (
+                pair("mupen64plus", "mupen64plus-arch"),
+                pair("retroarch", "mupen64plus_next"),
+                &eep,
+            ),
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let n64 = root.path().join("n64");
+            fs::create_dir_all(&n64).unwrap();
+            fs::copy(&zip, n64.join(zip.file_name().unwrap())).unwrap();
+            fs::copy(keep, n64.join(keep.file_name().unwrap())).unwrap();
+            let game = Some(n64.join(zip.file_name().unwrap()));
+            let offer = offer(root.path(), &ini, "n64", game, from, to).expect("an offer");
+            assert_eq!(run(root.path(), &offer, &ini), Ok(1));
+            let made = if keep == &srm { &eep } else { &srm };
+            assert_eq!(
+                fs::read(n64.join(made.file_name().unwrap())).unwrap(),
+                fs::read(made).unwrap(),
+                "{}",
+                made.display()
+            );
         }
     }
 }
