@@ -71,6 +71,7 @@ pub const GAMES: &[Row] = &[
     )
     .kind(Kind::Toggle)
     .under("settings.other"),
+    row(Id::ResumeLink, "settings.resume", Kind::Action),
     row(Id::NetplayLink, "settings.netplay", Kind::Action),
     row(Id::ScraperLink, "settings.scraper", Kind::Action),
     row(Id::MangohudLink, "settings.mangohud_link", Kind::Action),
@@ -400,6 +401,8 @@ impl Settings {
             Id::MangohudLink => self.open(Page::Mangohud),
             Id::LauncherLink => self.open(Page::LauncherControls),
             Id::HotkeysLink => self.open(Page::Hotkeys),
+            Id::ResumeLink => self.open(Page::Resume),
+            Id::PowerLink => self.open(Page::Power),
             Id::MangohudItems => self.open(Page::MangohudItems),
             Id::Update => self.open(Page::Updates),
             Id::UpdateInstall => return Some(self.start_update()),

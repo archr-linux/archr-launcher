@@ -350,6 +350,18 @@ fn sources(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
 
 /// Config entries and file names that look like catalog keys.
 const CONFIG_KEYS: &[&str] = &[
+    // Resume and switch, Power (Config-retomar, Config-energia).
+    "hotkey.switcher",
+    "hotkey.switcher.enabled",
+    "launcher.resume",
+    "launcher.resume.standalone",
+    "launcher.resume.wait",
+    "launcher.switcher.count",
+    "power.battery.critical",
+    "power.battery.low",
+    "system.cfg",
+    "system.shutdown_delay",
+    "system.shutdown_delay_running_game",
     // Module protocol methods and events, store hosts and file names.
     "action.invoke",
     "config.get",

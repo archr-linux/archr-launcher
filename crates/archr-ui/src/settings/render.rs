@@ -98,6 +98,7 @@ fn placements(page: Page, rows: &[Row]) -> Vec<Placement> {
                 top += SECTION_HEIGHT;
             }
             let height = match page {
+                Page::Resume | Page::Power => 38.,
                 Page::Games if row.subtitle.is_some() => 40.,
                 Page::Netplay | Page::Games => 34.,
                 Page::Services => 38.,
@@ -794,6 +795,10 @@ impl View<'_, '_, '_> {
                 })
         } else if state.page() == Page::Bios {
             Some(self.tr("bios.footer"))
+        } else if state.page() == Page::Resume {
+            Some(self.tr("resume.note"))
+        } else if state.page() == Page::Power {
+            Some(self.tr("power.note"))
         } else if state.capturing() && state.page() == Page::LauncherControls {
             Some(self.tr(&format!(
                 "controls.press_hint|button={}",
@@ -1139,6 +1144,15 @@ impl View<'_, '_, '_> {
                     .measure(&state.display_value(row.id, &self.ui.catalog), face, 14.)?
                     as f32
                     / self.ui.frame.scale
+            }
+            // Resume and Power: short choices between arrows leave the
+            // long descriptions their room (Config-retomar, Config-energia).
+            Kind::Value if matches!(state.page(), Page::Resume | Page::Power) => {
+                self.ui
+                    .measure(&state.display_value(row.id, &self.ui.catalog), face, 14.)?
+                    as f32
+                    / self.ui.frame.scale
+                    + 36.
             }
             _ if reading(row.id) => {
                 self.ui.measure(

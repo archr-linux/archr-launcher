@@ -24,6 +24,7 @@ use bluetooth::{Action, Device};
 pub use pages::MEDIA;
 pub mod modules;
 pub mod raimport;
+pub(crate) mod resume;
 pub mod roms;
 pub mod storage;
 pub mod store;
@@ -81,6 +82,10 @@ pub enum Page {
     Diagnostics,
     /// Games › BIOS: the check per system and the free BIOS.
     Bios,
+    /// Games › Resume and switch (Config-retomar).
+    Resume,
+    /// System › Power (Config-energia).
+    Power,
     Soon(&'static str),
 }
 impl Page {
@@ -120,6 +125,8 @@ impl Page {
             Self::UsbAdapters => "usb.title",
             Self::Diagnostics => "diag.title",
             Self::Bios => "bios.title",
+            Self::Resume => "settings.resume",
+            Self::Power => "settings.power",
             Self::Soon(key) => key,
         }
     }
@@ -129,7 +136,7 @@ impl Page {
             Self::Wifi | Self::Bluetooth | Self::Services | Self::UsbAdapters => {
                 &["settings.network"]
             }
-            Self::Netplay | Self::Scraper | Self::Mangohud => &["settings.games"],
+            Self::Netplay | Self::Scraper | Self::Mangohud | Self::Resume => &["settings.games"],
             Self::MangohudItems => &["settings.games", "settings.mangohud_page"],
             Self::AccentColor | Self::Store => &["settings.appearance"],
             Self::StoreTheme => &["settings.appearance", "settings.theme_store"],
@@ -144,7 +151,7 @@ impl Page {
             Self::ModuleOffer => &["settings.system", "modules.store"],
             Self::LauncherControls | Self::Hotkeys => &["settings.controls"],
             Self::ScraperMedia => &["settings.games", "settings.scraper_short"],
-            Self::Updates => &["settings.system"],
+            Self::Updates | Self::Power => &["settings.system"],
             Self::UpdatePackages => &["settings.system", "updates.title"],
             _ => &[],
         }
@@ -172,6 +179,8 @@ impl Page {
             Self::RaImport => raimport::ROWS,
             Self::Roms => roms::ROWS,
             Self::Diagnostics => diag::ROWS,
+            Self::Resume => resume::RESUME,
+            Self::Power => resume::POWER,
             _ => &[],
         }
     }
@@ -346,6 +355,21 @@ pub enum Id {
     ReportLast,
     /// Games link to the BIOS page.
     BiosLink,
+    /// Games link to Resume and switch, and that page's rows.
+    ResumeLink,
+    ResumeBoot,
+    ResumeWait,
+    /// `hotkey.switcher.enabled` and `hotkey.switcher`, read by input_sense.
+    SwitcherOn,
+    SwitcherKey,
+    SwitcherCount,
+    ResumeStandalone,
+    /// System link to Power, and its own rows (with Idle, IdleGame, Suspend).
+    PowerLink,
+    BatteryCritical,
+    BatteryLow,
+    /// `system.shutdown_delay`, and the running game's copy of it.
+    ShutdownDelay,
 }
 impl Id {
     fn metadata(self) -> (&'static str, &'static str) {
@@ -484,6 +508,19 @@ impl Id {
                 ("", "")
             }
             Self::RaBackup => ("", "1"),
+            // The launcher reads these; archr-game-save-exit records what
+            // it resumes. input_sense reads the shortcut at start.
+            Self::ResumeBoot => ("launcher.resume", "last"),
+            Self::ResumeWait => ("launcher.resume.wait", "3"),
+            Self::SwitcherOn => ("hotkey.switcher.enabled", "1"),
+            Self::SwitcherKey => ("hotkey.switcher", "BTN_TR"),
+            Self::SwitcherCount => ("launcher.switcher.count", "8"),
+            Self::ResumeStandalone => ("launcher.resume.standalone", "start"),
+            // archr-battery-guard reads these; archr-fake-suspend the delay.
+            Self::BatteryCritical => ("power.battery.critical", "3"),
+            Self::BatteryLow => ("power.battery.low", "10"),
+            Self::ShutdownDelay => ("system.shutdown_delay", "900"),
+            Self::ResumeLink | Self::PowerLink => ("", ""),
             Self::RaImportLink
             | Self::RaConfig
             | Self::RaOverrides
@@ -524,6 +561,14 @@ impl Id {
             Self::HotkeyModifier => &hotkeys::MODIFIERS,
             Self::Language => &["en_US", "pt_BR", "es_ES", "ru_RU"],
             Self::Idle | Self::IdleGame => &["0", "1", "2", "5", "10", "15", "30"],
+            Self::ResumeBoot => &["off", "last"],
+            Self::ResumeWait => &["3", "5", "10"],
+            Self::SwitcherKey => &resume::SHORTCUTS,
+            Self::SwitcherCount => &["4", "6", "8", "10"],
+            Self::ResumeStandalone => &["start", "skip"],
+            Self::BatteryCritical => &["0", "2", "3", "5", "8"],
+            Self::BatteryLow => &["0", "5", "10", "15", "20"],
+            Self::ShutdownDelay => &["300", "900", "1800", "3600"],
             Self::Governor => &["ondemand", "performance", "schedutil", "powersave"],
             Self::Sounds
             | Self::Turbo
@@ -553,7 +598,8 @@ impl Id {
             | Self::UpdateBoot
             | Self::UpdateNotify
             | Self::ModulesAuto
-            | Self::DebugMode => &["0", "1"],
+            | Self::DebugMode
+            | Self::SwitcherOn => &["0", "1"],
             Self::UpdateChannel => &["stable", "next", "dev"],
             Self::MangohudGame => &["", "1", "0"],
             Self::Filter | Self::StateSlot => &["", "0", "1"],
@@ -687,16 +733,10 @@ const SOUND: &[Row] = &[
             step: 10,
         },
     ),
-    described(Id::Idle, "settings.idle", "settings.idle_subtitle"),
-    described(
-        Id::IdleGame,
-        "settings.idle_game",
-        "settings.idle_game_subtitle",
-    ),
 ];
 const SYSTEM: &[Row] = &[
     described(Id::Gpu, "settings.gpu", "settings.reboot_required"),
-    row(Id::Suspend, "settings.suspend", Kind::Value),
+    row(Id::PowerLink, "settings.power", Kind::Action),
     row(Id::Governor, "settings.governor", Kind::Value),
     row(Id::Turbo, "settings.turbo", Kind::Toggle),
     row(Id::Update, "settings.update", Kind::Action),
@@ -1035,6 +1075,17 @@ impl Settings {
             (Id::Idle | Id::IdleGame, v) => {
                 return catalog.format("settings.minutes", &[("count", v)])
             }
+            (
+                Id::ResumeBoot
+                | Id::ResumeWait
+                | Id::SwitcherKey
+                | Id::SwitcherCount
+                | Id::ResumeStandalone
+                | Id::BatteryCritical
+                | Id::BatteryLow
+                | Id::ShutdownDelay,
+                v,
+            ) => return resume::value(catalog, id, v),
             (Id::Suspend, "off") => "settings.off",
             (Id::Suspend, "default") => "menu.default",
             (Id::Suspend, "mem") => "settings.suspend_mem",
@@ -1113,7 +1164,9 @@ impl Settings {
                 | Id::RaImportLink
                 | Id::RaPreview
                 | Id::RaRun
-                | Id::BiosLink,
+                | Id::BiosLink
+                | Id::ResumeLink
+                | Id::PowerLink,
                 _,
             ) => return "›".into(),
             (Id::SecondCard, _) => "settings.eject_link",

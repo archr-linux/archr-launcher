@@ -305,6 +305,13 @@ impl Backend {
                 | Id::UpdateBoot
                 | Id::UpdateNotify
                 | Id::ModulesAuto
+                | Id::ResumeBoot
+                | Id::ResumeWait
+                | Id::SwitcherCount
+                | Id::ResumeStandalone
+                | Id::BatteryCritical
+                | Id::BatteryLow
+                | Id::ShutdownDelay
         ) {
             return None;
         }
@@ -414,6 +421,18 @@ impl Backend {
                     }
                 }
                 Id::MergedStorage => self.unify(value),
+                // One row for both of archr-fake-suspend's delays: with a
+                // game the game is saved before the power off.
+                Id::ShutdownDelay => SystemCfg::set_many_and_save(
+                    &self.paths.config,
+                    &self.paths.lock,
+                    &[
+                        (id.key(), value),
+                        ("system.shutdown_delay_running_game", value),
+                    ],
+                )
+                .map(|()| value.into())
+                .map_err(|e| e.to_string()),
                 Id::ScraperSystems => {
                     if value.is_empty() || archr_scraper::system_id(value).is_some() {
                         self.save(id, value).map(|_| value.into())

@@ -150,10 +150,16 @@ impl Backend {
     pub fn load(&self) -> Result<Settings, String> {
         let cfg = self.cfg()?;
         let mut state = Settings::default();
-        let ids = [Page::Sound, Page::System, Page::Region]
-            .iter()
-            .flat_map(|page| page.rows().iter().map(|row| row.id))
-            .chain([Id::Buttons, Id::ModulesAuto]);
+        let ids = [
+            Page::Sound,
+            Page::System,
+            Page::Region,
+            Page::Resume,
+            Page::Power,
+        ]
+        .iter()
+        .flat_map(|page| page.rows().iter().map(|row| row.id))
+        .chain([Id::Buttons, Id::ModulesAuto]);
         for id in ids {
             if let Some(value) = cfg.get_setting(id.key(), None, None) {
                 state.values.insert(id, id.normalize(&value));

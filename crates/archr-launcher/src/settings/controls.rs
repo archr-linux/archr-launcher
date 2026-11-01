@@ -90,12 +90,18 @@ impl Backend {
                 ]
             }
             Id::HotkeyOn(_) if matches!(value, "0" | "1") => vec![(id.key(), value.into())],
-            Id::Idle | Id::IdleGame if id.choices().contains(&value) => {
+            Id::Idle | Id::IdleGame | Id::SwitcherOn | Id::SwitcherKey
+                if id.choices().contains(&value) =>
+            {
                 vec![(id.key(), value.into())]
             }
-            Id::HotkeyModifier | Id::Hotkey(_) | Id::HotkeyOn(_) | Id::Idle | Id::IdleGame => {
-                return Some(Err("Invalid setting value".into()))
-            }
+            Id::HotkeyModifier
+            | Id::Hotkey(_)
+            | Id::HotkeyOn(_)
+            | Id::Idle
+            | Id::IdleGame
+            | Id::SwitcherOn
+            | Id::SwitcherKey => return Some(Err("Invalid setting value".into())),
             _ => return None,
         };
         let entries: Vec<(&str, &str)> = entries.iter().map(|(k, v)| (*k, v.as_str())).collect();
