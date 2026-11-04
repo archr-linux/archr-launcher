@@ -205,7 +205,7 @@ impl View<'_, '_, '_> {
             .divider(left, top, self.ui.px(w) as u32, theme.border)
     }
     /// Up to three cards over the rows: name, big value, a line under it.
-    fn stat_cards(&mut self, cards: &[Item]) -> Result<(), String> {
+    fn stat_cards(&mut self, cards: &[&Item]) -> Result<(), String> {
         let theme = self.theme;
         let (top, height) = CARDS;
         let gap = 10.;

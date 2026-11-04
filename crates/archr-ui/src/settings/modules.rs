@@ -78,27 +78,32 @@ impl Modules {
     fn page_rows(&self, page: Page) -> &[crate::modules::Row] {
         self.declared(page).map_or(&[], |page| &page.rows)
     }
-    /// The items of the open page's first row of this kind.
+    /// The items of every row of this kind on the open page, in order:
+    /// what the cards, the heading and the facts draw.
     pub fn page_items(
         &self,
         page: Page,
         kind: impl Fn(&RowKind) -> bool,
-    ) -> &[crate::modules::Item] {
-        let id = self.page_rows(page).iter().find_map(|r| match &r.kind {
-            RowKind::Stats { id } | RowKind::Header { id } | RowKind::Facts { id }
-                if kind(&r.kind) =>
-            {
-                Some(id.as_str())
-            }
-            _ => None,
-        });
-        id.map_or(&[], |id| self.row_items(page, id))
+    ) -> Vec<&crate::modules::Item> {
+        self.page_rows(page)
+            .iter()
+            .filter_map(|r| match &r.kind {
+                RowKind::Stats { id } | RowKind::Header { id } | RowKind::Facts { id }
+                    if kind(&r.kind) =>
+                {
+                    Some(id.as_str())
+                }
+                _ => None,
+            })
+            .flat_map(|id| self.row_items(page, id))
+            .collect()
     }
     /// A detail page's heading, once the module sent it for the open item.
     pub fn detail_header(&self, page: Page) -> Option<&crate::modules::Item> {
         let header = self
             .page_items(page, |k| matches!(k, RowKind::Header { .. }))
-            .first()?;
+            .first()
+            .copied()?;
         self.item
             .as_ref()
             .is_none_or(|i| *i == header.id)
@@ -1180,6 +1185,50 @@ mod tests {
         assert_eq!(state.handle(Button::A), invoke("maximo", "zelda"));
         state.handle(Button::B);
         assert_eq!(state.page(), Page::Module(0, 0));
+    }
+
+    #[test]
+    fn a_detail_page_draws_the_items_of_every_facts_row() {
+        let mut view = (*view()).clone();
+        let row = |kind| ModuleRow {
+            label: String::new(),
+            subtitle: None,
+            section: None,
+            kind,
+            default: String::new(),
+        };
+        view.modules[0].pages[0].rows = vec![
+            row(RowKind::Header {
+                id: "cabeca".into(),
+            }),
+            row(RowKind::Facts { id: "teto".into() }),
+            row(RowKind::Facts {
+                id: "bateria".into(),
+            }),
+        ];
+        let items = |n: usize| -> Vec<crate::modules::Item> {
+            (0..n)
+                .map(|i| crate::modules::Item {
+                    title: format!("f{i}"),
+                    ..Default::default()
+                })
+                .collect()
+        };
+        for (target, n) in [("row:cabeca", 1), ("row:teto", 3), ("row:bateria", 2)] {
+            view.items
+                .insert(("bateria".into(), target.into()), items(n));
+        }
+        let mut state = settings();
+        state.set_modules(Arc::new(view));
+        state.open_module_page("bateria", 0);
+        let facts = state
+            .modules
+            .page_items(state.page(), |k| matches!(k, RowKind::Facts { .. }));
+        assert_eq!(facts.len(), 5, "both facts rows, all their items");
+        let heading = state
+            .modules
+            .page_items(state.page(), |k| matches!(k, RowKind::Header { .. }));
+        assert_eq!(heading.len(), 1);
     }
 
     #[test]
