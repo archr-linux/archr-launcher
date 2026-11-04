@@ -467,6 +467,74 @@ mod tests {
     use archr_ui::settings::Id;
     use std::{fs, os::unix::fs::PermissionsExt};
     #[test]
+    fn physical_levels_update_open_settings_without_writing_back() {
+        use std::os::unix::net::UnixDatagram;
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("run")).unwrap();
+        let mut runtime = Runtime::new(Paths::new(Some(dir.path().into())));
+        runtime.active = true;
+        runtime.state.loading = false;
+        runtime.state.open(Page::Sound);
+        runtime.send(Work::Usb);
+        let path = dir.path().join("run/archr-launcher-levels.sock");
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while !path.exists() || runtime.busy() {
+            runtime.poll();
+            assert!(Instant::now() < deadline, "no level listener");
+            thread_yield();
+        }
+        let socket = UnixDatagram::unbound().unwrap();
+        for (id, text, value) in [
+            (Id::Volume, "volume 72", "72"),
+            (Id::Brightness, "brightness 35", "35"),
+            (Id::Volume, "volume 0 muted", "0"),
+        ] {
+            socket.send_to(text.as_bytes(), &path).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(2);
+            let mut dirty = false;
+            while runtime.state.value(id) != value {
+                dirty |= runtime.poll().0;
+                assert!(Instant::now() < deadline, "slider did not follow {text}");
+                thread_yield();
+            }
+            assert!(dirty, "the updated slider must redraw");
+            assert!(!runtime.busy() && !runtime.mutations_pending());
+            assert!(runtime.state.error.is_none());
+        }
+        assert_eq!(runtime.state.page(), Page::Sound);
+        assert!(!runtime.paths.config.exists(), "not a settings write");
+        // A notice must not consume an unrelated command's completion.
+        let bin = dir.path().join("usr/bin");
+        fs::create_dir_all(&bin).unwrap();
+        let tool = bin.join("archr-levels");
+        fs::write(&tool, "#!/bin/sh\n/bin/sleep 0.3\necho 73\n").unwrap();
+        fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).unwrap();
+        runtime.state.pending = Some(Id::Volume);
+        runtime.send(Work::Set(Id::Volume, "73".into()));
+        socket.send_to(b"brightness 44", &path).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while runtime.state.value(Id::Brightness) != "44" {
+            runtime.poll();
+            assert!(Instant::now() < deadline);
+            thread_yield();
+        }
+        assert!(runtime.busy());
+        assert_eq!(runtime.state.pending, Some(Id::Volume));
+        while runtime.busy() {
+            runtime.poll();
+            assert!(Instant::now() < deadline);
+            thread_yield();
+        }
+        assert_eq!(runtime.state.value(Id::Volume), "73");
+        assert!(!runtime.mutations_pending());
+        runtime.worker = None;
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while path.exists() {
+            assert!(Instant::now() < deadline, "listener socket left behind");
+            thread_yield();
+        }
+    }
+    #[test]
     fn refresh_is_disposable_uses_two_second_interval_and_never_runs_ip() {
         let dir = tempfile::tempdir().unwrap();
         let bin = dir.path().join("usr/bin");

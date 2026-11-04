@@ -18,6 +18,7 @@ use std::{
     os::{fd::AsRawFd, unix::fs::PermissionsExt, unix::net::UnixDatagram},
     path::PathBuf,
     process::ExitCode,
+    sync::mpsc,
     time::Duration,
 };
 
@@ -68,14 +69,41 @@ fn bind() -> Result<UnixDatagram, String> {
     Ok(socket)
 }
 
+/// Forward every level, before pill coalescing, without socket I/O on the UI thread.
+fn relay(path: PathBuf) -> Result<mpsc::Sender<String>, String> {
+    let (tx, rx) = mpsc::channel::<String>();
+    std::thread::Builder::new()
+        .name("osd-levels".into())
+        .spawn(move || {
+            let Ok(socket) = UnixDatagram::unbound() else {
+                return;
+            };
+            if socket.set_nonblocking(true).is_err() {
+                return;
+            }
+            while let Ok(text) = rx.recv() {
+                // No launcher (or a full queue) must never delay the OSD.
+                let _ = socket.send_to(text.as_bytes(), &path);
+            }
+        })
+        .map_err(|e| e.to_string())?;
+    Ok(tx)
+}
+
 /// The latest well-formed pill and card messages waiting on the socket.
-fn drain(socket: &UnixDatagram) -> (Option<proto::Message>, Option<proto::Alert>) {
+fn drain(
+    socket: &UnixDatagram,
+    levels: &mpsc::Sender<String>,
+) -> (Option<proto::Message>, Option<proto::Alert>) {
     let mut buf = [0u8; 64];
     let (mut pill, mut card) = (None, None);
     while let Ok(n) = socket.recv(&mut buf) {
         let text = std::str::from_utf8(&buf[..n]).unwrap_or("");
         match proto::parse_notice(text) {
-            Some(proto::Notice::Level(m)) => pill = Some(m),
+            Some(proto::Notice::Level(m)) => {
+                let _ = levels.send(text.to_owned());
+                pill = Some(m);
+            }
             Some(proto::Notice::Alert(a)) => card = Some(a),
             None => {}
         }
@@ -86,6 +114,7 @@ fn drain(socket: &UnixDatagram) -> (Option<proto::Message>, Option<proto::Alert>
 fn serve() -> Result<(), String> {
     let conn = Connection::connect_to_env().map_err(|e| format!("wayland: {e}"))?;
     let socket = bind()?;
+    let levels = relay(socket_path().with_file_name("archr-launcher-levels.sock"))?;
     let (globals, mut queue) = registry_queue_init(&conn).map_err(|e| e.to_string())?;
     let qh = queue.handle();
     let mut overlay = overlay::Overlay::new(&globals, &qh)?;
@@ -121,7 +150,7 @@ fn serve() -> Result<(), String> {
             .dispatch_pending(&mut overlay)
             .map_err(|e| e.to_string())?;
         if ready > 0 && fds[1].revents != 0 {
-            let (pill, card) = drain(&socket);
+            let (pill, card) = drain(&socket, &levels);
             if let Some(message) = pill {
                 overlay.show(message, &qh);
             }
@@ -138,10 +167,32 @@ mod tests {
     use super::*;
 
     #[test]
+    fn relay_delivers_levels_without_a_wayland_session() {
+        let path = std::env::temp_dir().join(format!("osd-{}.sock", std::process::id()));
+        let listener = UnixDatagram::bind(&path).unwrap();
+        listener
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let levels = relay(path.clone()).unwrap();
+        let (a, b) = UnixDatagram::pair().unwrap();
+        b.set_nonblocking(true).unwrap();
+        a.send(b"volume 23").unwrap();
+        a.send(b"brightness 81").unwrap();
+        drain(&b, &levels);
+        let mut buf = [0; 64];
+        for text in ["volume 23", "brightness 81"] {
+            let n = listener.recv(&mut buf).unwrap();
+            assert_eq!(&buf[..n], text.as_bytes());
+        }
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
     fn drain_keeps_the_latest_valid_message() {
         let (a, b) = UnixDatagram::pair().unwrap();
         b.set_nonblocking(true).unwrap();
-        assert_eq!(drain(&b), (None, None));
+        let (levels, notices) = mpsc::channel();
+        assert_eq!(drain(&b, &levels), (None, None));
         for text in [
             "volume 10",
             "garbage",
@@ -152,11 +203,15 @@ mod tests {
             a.send(text.as_bytes()).unwrap();
         }
         a.send(&[0xff, 0xfe]).unwrap();
-        assert_eq!(drain(&b), (proto::parse("brightness 40"), None));
-        assert_eq!(drain(&b), (None, None));
+        assert_eq!(drain(&b, &levels), (proto::parse("brightness 40"), None));
+        assert_eq!(
+            notices.try_iter().collect::<Vec<_>>(),
+            ["volume 10", "brightness 40"]
+        );
+        assert_eq!(drain(&b, &levels), (None, None));
         a.send(b"battery 3 2 8 game").unwrap();
         assert!(matches!(
-            drain(&b),
+            drain(&b, &levels),
             (None, Some(proto::Alert::Battery(c))) if c.level == 3
         ));
     }

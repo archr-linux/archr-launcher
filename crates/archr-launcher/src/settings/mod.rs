@@ -6,6 +6,7 @@ mod controls;
 mod diag;
 mod games;
 mod info;
+mod levels;
 mod mangohud;
 pub use mangohud::supported as mangohud_supported;
 mod pages;
@@ -415,6 +416,7 @@ enum Reply {
     Loaded(Result<Box<Settings>, String>),
     Set(Id, Result<String, String>),
     Level(Id, Result<String, String>),
+    LiveLevel(Id, String),
     Info(Information),
     Usb(archr_ui::settings::network::Usb),
     Scan(
@@ -463,6 +465,8 @@ pub struct Worker {
     store: mpsc::Sender<archr_ui::settings::store::Action>,
     slow: mpsc::Sender<diag::Slow>,
     rx: mpsc::Receiver<Reply>,
+    /// Dropping this stops the socket listener off-thread.
+    _level_notices: std::sync::Arc<()>,
     pending: usize,
     scanning: bool,
     /// A scan was requested while one ran: dispatch again when it ends.
@@ -478,6 +482,7 @@ impl Worker {
     pub fn start(paths: Paths) -> Result<Self, String> {
         let (tx, requests) = mpsc::channel();
         let (results, rx) = mpsc::channel();
+        let level_notices = levels::start(&paths, results.clone())?;
         let (scans, scan_requests) = mpsc::channel();
         let (bt_scans, bt_requests) = mpsc::channel();
         let (profiles, profile_requests) = mpsc::channel::<()>();
@@ -630,6 +635,7 @@ impl Worker {
             store,
             slow,
             rx,
+            _level_notices: level_notices,
             pending: 0,
             scanning: false,
             rescan: false,
@@ -710,6 +716,14 @@ impl Worker {
         let mut changed = false;
         let mut language = None;
         while let Ok(reply) = self.rx.try_recv() {
+            // A notice is not a completed request or a setting effect: no write-back.
+            if let Reply::LiveLevel(id, ref value) = reply {
+                if state.value(id) != value {
+                    state.values.insert(id, value.clone());
+                    changed = true;
+                }
+                continue;
+            }
             changed = true;
             if matches!(reply, Reply::BtScan(_)) {
                 self.bt_scanning = false;
@@ -738,6 +752,7 @@ impl Worker {
                 self.pending = self.pending.saturating_sub(1);
             }
             match reply {
+                Reply::LiveLevel(..) => unreachable!("notices were handled above"),
                 Reply::Loaded(Ok(mut loaded)) => {
                     std::mem::swap(&mut state.values, &mut loaded.values);
                     // Module switches and rows live in the values too.
