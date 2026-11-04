@@ -1624,6 +1624,7 @@ fn capture_updates() {
 /// screen's right margin, and the list still shows a value on each row.
 #[test]
 fn update_versions_stay_inside_their_line() {
+    let _sdl = crate::SDL_TEST_LOCK.lock().unwrap();
     std::env::set_var("SDL_VIDEODRIVER", "offscreen");
     let ttf;
     let creator;
