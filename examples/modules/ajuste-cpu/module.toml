@@ -1,0 +1,80 @@
+id = "ajuste-cpu"
+version = "1.0.0"
+api_version = 3
+min_launcher = "0.1.0"
+name = { en = "Automatic CPU tuning", pt_BR = "Ajuste automático de CPU", es = "Ajuste automático de CPU", ru = "Автонастройка ЦП" }
+description = { en = "Learns the lowest CPU ceiling that keeps each game at full speed, and saves battery with it.", pt_BR = "Aprende o menor teto de CPU que mantém cada jogo na velocidade total e economiza bateria com ele.", es = "Aprende el tope de CPU más bajo que mantiene cada juego a velocidad completa y ahorra batería con él.", ru = "Подбирает для каждой игры самый низкий предел частоты ЦП без потери скорости и экономит заряд." }
+author = "ArchR <contato@archr.dev>"
+license = "MIT"
+homepage = "https://github.com/archr-linux/archr-ajuste-cpu"
+icon = "cpu"
+
+[run]
+runtime = "bash"
+entry = "main.sh"
+mode = "daemon"
+
+[limits]
+memory_mb = 24
+
+# Only the CPU ceiling of each launch (cpu-tune), never the GPU or the
+# memory, and never the user's own setting.
+[permissions]
+hooks = ["launch"]
+system = ["cpu-tune"]
+
+[[hooks]]
+event = "game.ended"
+
+[[settings.pages]]
+id = "main"
+title = "@title"
+hint = "@hint.page"
+
+[[settings.pages.rows]]
+type = "stats"
+id = "resumo"
+
+[[settings.pages.rows]]
+type = "list"
+id = "jogos"
+section = "@section.games"
+open = "jogo"
+alt_action = "reaprender"
+alt_label = "@hint.relearn"
+
+[[settings.pages]]
+id = "jogo"
+title = "@title"
+layout = "detail"
+hint = "@hint.detail"
+
+[[settings.pages.rows]]
+type = "header"
+id = "cabeca"
+
+[[settings.pages.rows]]
+type = "bars"
+id = "barras"
+label = "@bars.title"
+
+[[settings.pages.rows]]
+type = "text"
+id = "nota"
+value = "@note"
+
+[[settings.pages.rows]]
+type = "facts"
+id = "fatos"
+
+[[settings.pages.rows]]
+type = "action"
+action = "reaprender"
+label = "@button.relearn"
+icon = "refresh-cw"
+
+[[settings.pages.rows]]
+type = "action"
+action = "maximo"
+label = "@button.max"
+icon = "zap"
