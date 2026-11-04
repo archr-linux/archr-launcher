@@ -59,6 +59,7 @@ launcher=/usr/bin/archr-launcher
 log_file=/var/log/archr-launcher-session.log
 kill_file=/tmp/.process-kill-data
 cpufreq=/sys/devices/system/cpu/cpufreq
+proc_root=/proc
 sway_attempts=100
 sleep_bin=sleep
 stop_sleep=sleep
@@ -71,6 +72,7 @@ if [ "${ARCHR_SESSION_TEST:-0}" = 1 ]; then
     log_file=${ARCHR_SESSION_LOG:?}
     kill_file=${ARCHR_SESSION_KILL_FILE:?}
     cpufreq=${ARCHR_SESSION_CPUFREQ:?}
+    proc_root=${ARCHR_SESSION_PROC_ROOT:-/proc}
     sway_attempts=${ARCHR_SESSION_SWAY_ATTEMPTS:-100}
     sleep_bin=${ARCHR_SESSION_SLEEP:?}
     stop_sleep=${ARCHR_SESSION_STOP_SLEEP:?}
@@ -114,25 +116,53 @@ session_log() {
 
 child_pid=
 child_group=0
+child_sid=
+child_reaped=0
 child_is_game=0
 launching=0
 stop_requested=0
 
+game_group_members() {
+    member_signal=${1-}
+    # A PGID alone can be reused after the launch group empties. Match the
+    # saved setsid session as well, and ignore dead/zombie members. Signal each
+    # freshly checked PID rather than broadcasting to a numeric process group.
+    for member_stat in "$proc_root"/[0-9]*/stat; do
+        { IFS= read -r member_line <"$member_stat"; } 2>/dev/null || continue
+        member_fields=${member_line##*) }
+        # The comm field is gone; the remaining stat fields are plain tokens.
+        set -- $member_fields
+        [ "$#" -ge 4 ] || continue
+        case "$1" in Z|X|x) continue ;; esac
+        [ "$3" = "$child_pid" ] && [ "$4" = "$child_sid" ] || continue
+        member_pid=${member_stat%/stat}
+        member_pid=${member_pid##*/}
+        if [ -n "$member_signal" ]; then
+            kill "-$member_signal" "$member_pid" 2>/dev/null || :
+        else
+            printf '%s\n' "$member_pid"
+        fi
+    done
+}
+
 child_alive() {
     [ -n "$child_pid" ] || return 1
     if [ "$child_group" -eq 1 ]; then
-        kill -0 -- "-$child_pid" 2>/dev/null
+        [ -n "$(game_group_members)" ]
     else
-        kill -0 "$child_pid" 2>/dev/null
+        [ "$child_reaped" -eq 0 ] && kill -0 "$child_pid" 2>/dev/null
     fi
 }
 
 signal_child() {
     [ -n "$child_pid" ] || return 0
     if [ "$child_group" -eq 1 ]; then
-        # A very early stop may precede setsid; fall back to its child PID.
-        kill "-$1" -- "-$child_pid" 2>/dev/null && return 0
+        game_group_members "$1"
+        # A very early stop may precede setsid. Its direct child is still
+        # tracked before wait; never fall back to that numeric PID afterward.
+        [ "$child_reaped" -eq 0 ] || return 0
     fi
+    [ "$child_reaped" -eq 0 ] || return 0
     kill "-$1" "$child_pid" 2>/dev/null || :
 }
 
@@ -269,6 +299,8 @@ while :; do
     rm -f "$run_dir/next" || exit 1
     launching=1
     child_group=0
+    child_sid=
+    child_reaped=0
     child_is_game=0
     "$launcher" &
     child_pid=$!
@@ -301,6 +333,8 @@ while :; do
             session_log 'Starting game'
             launching=1
             child_group=0
+            child_sid=
+            child_reaped=0
             child_is_game=1
             # ArchR's target BusyBox enables setsid; keep a PID-only fallback
             # for minimal hosts. Never place the supervisor in this group.
@@ -312,16 +346,23 @@ while :; do
                 sh -c "$command" &
             fi
             child_pid=$!
+            # setsid makes the launch leader's PID both its PGID and SID.
+            [ "$child_group" -eq 0 ] || child_sid=$child_pid
             launching=0
             [ "$stop_requested" -eq 0 ] || stop_session
             wait "$child_pid"
             game_status=$?
+            child_reaped=1
             # wait only reaps the launch shell; a killed runemu.sh can leave
             # emulators behind in its setsid group. Let normal save/quit finish
             # BEFORE signaling survivors, and retain the group until teardown.
             if child_alive; then
                 signal_child TERM
-                "$stop_sleep" 1
+                remaining=10
+                while child_alive && [ "$remaining" -gt 0 ]; do
+                    "$stop_sleep" 0.1
+                    remaining=$((remaining - 1))
+                done
                 if child_alive; then
                     signal_child KILL
                 fi
