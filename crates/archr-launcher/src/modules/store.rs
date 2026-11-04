@@ -195,9 +195,9 @@ impl Shop {
             Some((body, signature))
         });
         let Some((body, signature)) = remote else {
-            return saved_reviewed(&self.dirs, &self.review_key);
+            return saved_reviewed(&self.dirs, &self.review_key).map(|r| r.modules);
         };
-        let list = check_list(&body, &signature, &self.review_key, &self.dirs)?;
+        let list = check_list(&body, &signature, &self.review_key, &self.dirs)?.modules;
         let (path, sig) = list_paths(&self.dirs);
         for (path, bytes) in [(&sig, &signature), (&path, &body)] {
             if let Err(error) =
@@ -612,6 +612,14 @@ fn list_paths(dirs: &Dirs) -> (PathBuf, PathBuf) {
         dirs.state.with_file_name("modules-reviewed.json.sig"),
     )
 }
+/// A reviewed list that passed: repository and package digest of each
+/// reviewed release, and when the list stops counting (seconds since 1970).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Reviewed {
+    pub modules: Vec<(String, String)>,
+    pub expires: u64,
+}
+
 /// `reviewed.json` and its signature, checked: the project's key, an
 /// `expires` still ahead, and a serial no older than the last one seen nor
 /// than this build's `MIN_SERIAL`. A newer serial is recorded.
@@ -620,7 +628,7 @@ pub fn check_list(
     signature: &[u8],
     key: &[u8; 32],
     dirs: &Dirs,
-) -> Result<Vec<(String, String)>, &'static str> {
+) -> Result<Reviewed, &'static str> {
     if !signed(body, signature, key) {
         log::warn!("The reviewed list is not signed by the ArchR key: no module is reviewed");
         return Err("modules.review_unsigned");
@@ -631,10 +639,8 @@ pub fn check_list(
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs());
-    if json["expires"]
-        .as_u64()
-        .is_none_or(|expires| expires <= now)
-    {
+    let expires = json["expires"].as_u64().unwrap_or(0);
+    if expires <= now {
         log::warn!("The reviewed list has expired: no module is reviewed");
         return Err("modules.review_expired");
     }
@@ -657,7 +663,7 @@ pub fn check_list(
             log::warn!("Cannot record the reviewed list's serial {serial}: {error}");
         }
     }
-    Ok(json["modules"]
+    let modules = json["modules"]
         .as_array()
         .into_iter()
         .flatten()
@@ -667,17 +673,18 @@ pub fn check_list(
                 m["digest"].as_str()?.to_owned(),
             ))
         })
-        .collect())
+        .collect();
+    Ok(Reviewed { modules, expires })
 }
 /// The kept reviewed list, checked again as if just downloaded. None kept:
 /// nothing is reviewed.
-pub fn saved_reviewed(dirs: &Dirs, key: &[u8; 32]) -> Result<Vec<(String, String)>, &'static str> {
+pub fn saved_reviewed(dirs: &Dirs, key: &[u8; 32]) -> Result<Reviewed, &'static str> {
     let (path, sig) = list_paths(dirs);
     let (Ok(body), Ok(signature)) = (
         read_bytes(&path, TOML_LIMIT, Symlinks::Reject),
         read_bytes(&sig, 1024, Symlinks::Reject),
     ) else {
-        return Ok(Vec::new());
+        return Ok(Reviewed::default());
     };
     check_list(&body, &signature, key, dirs)
 }

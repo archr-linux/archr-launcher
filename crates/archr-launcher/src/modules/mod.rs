@@ -192,7 +192,8 @@ enum Input {
     Store(Box<(StoreReply, Option<store::Installed>)>),
     /// A reconciliation's result: the modules whose badge holds, by id with
     /// the package digest and content it held for.
-    Reviewed(u64, BTreeSet<Badge>),
+    /// The last carries when the list they hold by stops counting.
+    Reviewed(u64, BTreeSet<Badge>, u64),
 }
 /// Module id, package digest, content hash: the badge holds for exactly
 /// these.
@@ -307,6 +308,9 @@ struct Host {
     /// The last reconciliation, and which of its answers counts.
     reviewed: BTreeSet<Badge>,
     reconciling: u64,
+    /// When the list behind `reviewed` expires (seconds since 1970): the
+    /// badges go then, with the launcher open or not.
+    reviewed_until: u64,
     installed: Vec<Installed>,
     state: State,
     view: View,
@@ -384,6 +388,7 @@ impl Host {
             review_key,
             reviewed: BTreeSet::new(),
             reconciling: 0,
+            reviewed_until: 0,
             start_at: Instant::now() + config.delay,
             installed: Vec::new(),
             state: State::default(),
@@ -533,6 +538,23 @@ impl Host {
                 .contains(&(id.to_owned(), r.digest.clone(), r.content.clone()))
         })
     }
+    /// New badges: the view follows.
+    fn set_reviewed(&mut self, held: BTreeSet<Badge>) {
+        if held == self.reviewed {
+            return;
+        }
+        self.reviewed = held;
+        let badges: Vec<bool> = self
+            .view
+            .modules
+            .iter()
+            .map(|m| self.badge(&m.id))
+            .collect();
+        for (module, badge) in self.view.modules.iter_mut().zip(badges) {
+            module.reviewed = badge;
+        }
+        self.touch();
+    }
     /// Checks every store module against the kept reviewed list and its
     /// files on disk, in a worker: hashing folders is no work for this
     /// thread. The answer comes back as `Input::Reviewed`.
@@ -560,20 +582,21 @@ impl Host {
             .name("launcher-module-review".into())
             .spawn(move || {
                 let list = if jobs.is_empty() {
-                    Vec::new()
+                    store::Reviewed::default()
                 } else {
                     store::saved_reviewed(&dirs, &key).unwrap_or_default()
                 };
                 let held = jobs
                     .into_iter()
                     .filter(|(id, source, digest, content)| {
-                        list.iter()
+                        list.modules
+                            .iter()
                             .any(|(repo, d)| repo == source && store::same_digest(d, digest))
                             && registry::tree(&dirs.module(id)).as_deref() == Some(content.as_str())
                     })
                     .map(|(id, _, digest, content)| (id, digest, content))
                     .collect();
-                let _ = inbox.send(Input::Reviewed(generation, held));
+                let _ = inbox.send(Input::Reviewed(generation, held, list.expires));
             });
         if let Err(error) = spawned {
             log::warn!("Cannot check the reviewed modules: {error}");
@@ -615,19 +638,10 @@ impl Host {
     fn input(&mut self, input: Input) {
         match input {
             Input::Request(request) => self.request(request),
-            Input::Reviewed(generation, held) => {
-                if generation == self.reconciling && held != self.reviewed {
-                    self.reviewed = held;
-                    let badges: Vec<bool> = self
-                        .view
-                        .modules
-                        .iter()
-                        .map(|m| self.badge(&m.id))
-                        .collect();
-                    for (module, badge) in self.view.modules.iter_mut().zip(badges) {
-                        module.reviewed = badge;
-                    }
-                    self.touch();
+            Input::Reviewed(generation, held, until) => {
+                if generation == self.reconciling {
+                    self.reviewed_until = until;
+                    self.set_reviewed(held);
                 }
             }
             Input::Language(language) => {
@@ -1974,6 +1988,12 @@ impl Host {
 
     fn tick(&mut self) {
         let now = Instant::now();
+        // The list behind the badges ran out while the launcher is open
+        // (ticks come at least every second).
+        if !self.reviewed.is_empty() && now_secs() >= self.reviewed_until {
+            log::warn!("The reviewed list has expired: no module is reviewed");
+            self.set_reviewed(BTreeSet::new());
+        }
         if self.stopped {
             self.settle();
             return;

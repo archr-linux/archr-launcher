@@ -950,3 +950,28 @@ fn a_revoking_list_takes_the_badge_off_installed_modules() {
     modules.request(Request::Store(StoreAction::List(Tab::Reviewed, true)));
     assert_eq!(badge_of(&modules, Some(false), wait), Some(false));
 }
+
+/// A list that runs out while the launcher is open takes the badges with
+/// it, without a restart or a store visit.
+#[test]
+fn the_badge_goes_when_the_list_expires_with_the_launcher_open() {
+    let root = tempfile::tempdir().unwrap();
+    let fake = Fake::default();
+    let tarball = Tarball::module(MANIFEST).bytes();
+    publish(&fake, MANIFEST, &tarball, &sha(&tarball), &sha(&tarball));
+    let soon = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        + 5;
+    let list = format!(
+        r#"{{"serial":3,"expires":{soon},"modules":[{{"repo":"kaio-dev/archr-bateria","digest":"sha256:{}"}}]}}"#,
+        sha(&tarball)
+    );
+    review(&fake, list.as_bytes(), &sign(list.as_bytes()));
+    let modules = install_reviewed(root.path(), &fake);
+    let wait = std::time::Duration::from_millis(800);
+    assert_eq!(badge_of(&modules, Some(true), wait), Some(true));
+    // The clock passes the list's date with the same launcher open.
+    assert_eq!(badge_of(&modules, Some(false), wait), Some(false));
+}
