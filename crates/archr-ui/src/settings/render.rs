@@ -32,6 +32,8 @@ mod roms;
 mod store;
 #[path = "render/updates.rs"]
 mod updates;
+#[path = "render/usb.rs"]
+mod usb;
 const VIEW_TOP: f32 = 50.;
 const VIEW_BOTTOM: f32 = 428.;
 const FOOTER: f32 = 432.;
@@ -642,6 +644,7 @@ impl View<'_, '_, '_> {
             Page::RaImportList => self.raimport_list(state)?,
             Page::Roms => self.roms_page(state, &rows)?,
             Page::RomsList => self.roms_list(state)?,
+            Page::UsbAdapters => self.usb_page(state)?,
             Page::Scraper => {
                 self.rows_at(state, &rows, &placements(Page::Scraper, &rows), 384.)?;
                 self.scraper_panel(state)?;
@@ -726,6 +729,8 @@ impl View<'_, '_, '_> {
                 "modules.",
                 "raimport.",
                 "roms.",
+                "convert.",
+                "usb.",
             ]
             .iter()
             .any(|prefix| error.starts_with(prefix))
@@ -768,6 +773,17 @@ impl View<'_, '_, '_> {
             Some(note)
         } else if state.page() == Page::Hotkeys {
             Some(self.tr("controls.hotkeys_note"))
+        } else if state.page() == Page::UsbAdapters {
+            state
+                .adapters
+                .as_ref()
+                .map(|usb| match usb.table.date.as_str() {
+                    "" => self.tr("usb.no_table"),
+                    _ => self.ui.catalog.format(
+                        "usb.table_date",
+                        &[("date", &usb.table.day(self.ui.catalog.language()))],
+                    ),
+                })
         } else if state.capturing() && state.page() == Page::LauncherControls {
             Some(self.tr(&format!(
                 "controls.press_hint|button={}",
@@ -797,6 +813,9 @@ impl View<'_, '_, '_> {
         };
         if let Some(status) = status {
             self.note((24., footer, (left - 36.).max(60.), 48.), &status, 13.)?;
+        }
+        if let Some(offer) = &state.convert {
+            return self.ui.convert_question(offer, self.theme);
         }
         use crate::HintButton::Key;
         type Hints = &'static [(crate::HintButton, &'static str)];
@@ -892,6 +911,22 @@ impl View<'_, '_, '_> {
                 ))
             } else if let Some(key) = state.storage.working {
                 Some((self.tr(key), Some(self.tr("settings.wait_storage")), None))
+            } else if state.converting {
+                Some((
+                    self.tr("convert.working"),
+                    Some(self.tr("convert.wait")),
+                    None,
+                ))
+            } else if let Some(adapter) = state.usb_adapter().filter(|_| state.usb_details) {
+                let chips = state
+                    .adapters
+                    .as_ref()
+                    .map_or(&[][..], |u| &u.table.chips[..]);
+                Some((
+                    adapter.name.clone(),
+                    Some(adapter.advice(chips, &self.ui.catalog)),
+                    Some(&[(Key('B'), "hint.back")]),
+                ))
             } else {
                 state.connecting.as_ref().map(|ssid| {
                     (

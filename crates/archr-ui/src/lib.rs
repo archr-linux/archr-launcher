@@ -9,12 +9,14 @@ pub mod i18n;
 pub mod layout;
 pub mod sounds;
 pub mod theme;
+pub mod usb;
 
 pub use theme::{
     resolve_theme, theme_dir, Frame9, Outline, Rect01, Rgba, ShadowStyle, SystemScreen, Theme,
     DEFAULT_THEME_DIR,
 };
 
+pub mod convert;
 pub mod covers;
 
 pub mod input;

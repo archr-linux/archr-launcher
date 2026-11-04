@@ -77,6 +77,8 @@ pub enum SessionAction {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Outcome {
     None,
+    /// Convert the saves the user agreed to take along.
+    Convert(Box<crate::convert::Offer>),
     Settings,
     /// Opens Settings, System, Updates.
     Updates,
@@ -277,6 +279,8 @@ pub struct App {
     pub scan: Option<(String, usize)>,
     /// The open question on the Saves or Screenshots screens.
     pub confirm: Option<Confirm>,
+    /// Take the saves along to the emulator just chosen (Converter-save).
+    pub convert: Option<crate::convert::Offer>,
     /// States per page and the screenshot grid, reported by the renderer.
     pub saves_page: usize,
     pub shots_columns: usize,
@@ -315,6 +319,7 @@ impl App {
             progress: Progress::default(),
             scan: None,
             confirm: None,
+            convert: None,
             saves_page: 1,
             shots_columns: 1,
             shots_page: 1,
@@ -443,6 +448,18 @@ impl App {
     /// Returns effects for the caller to apply. Core selection is tracked locally
     /// while the quick menu is open, independently of persistence timing.
     pub fn handle(&mut self, b: Button, data: &dyn DataSource) -> Outcome {
+        if let Some(offer) = &mut self.convert {
+            return match offer.handle(b) {
+                Some(crate::convert::Answer::Convert) => {
+                    Outcome::Convert(Box::new(self.convert.take().expect("offer")))
+                }
+                Some(crate::convert::Answer::Later) => {
+                    self.convert = None;
+                    Outcome::None
+                }
+                None => Outcome::None,
+            };
+        }
         if self.moving.is_some() {
             return self.handle_move(b);
         }

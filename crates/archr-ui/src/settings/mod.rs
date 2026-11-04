@@ -26,6 +26,7 @@ pub mod roms;
 pub mod storage;
 pub mod store;
 pub mod updates;
+mod usb;
 pub use information::{InfoCard, InfoDetail, InfoMeter, Information};
 use network::Network;
 
@@ -72,6 +73,8 @@ pub enum Page {
     /// Storage › ROMs on the PC, and its list of names.
     Roms,
     RomsList,
+    /// Network › USB adapters.
+    UsbAdapters,
     Soon(&'static str),
 }
 impl Page {
@@ -108,13 +111,16 @@ impl Page {
             Self::RaImportList => "raimport.list_title",
             Self::Roms => "roms.title",
             Self::RomsList => "roms.list_title",
+            Self::UsbAdapters => "usb.title",
             Self::Soon(key) => key,
         }
     }
     /// Breadcrumb parents between "Settings" and the page itself.
     pub fn parent(self) -> &'static [&'static str] {
         match self {
-            Self::Wifi | Self::Bluetooth | Self::Services => &["settings.network"],
+            Self::Wifi | Self::Bluetooth | Self::Services | Self::UsbAdapters => {
+                &["settings.network"]
+            }
             Self::Netplay | Self::Scraper | Self::Mangohud => &["settings.games"],
             Self::MangohudItems => &["settings.games", "settings.mangohud_page"],
             Self::AccentColor | Self::Store => &["settings.appearance"],
@@ -744,6 +750,10 @@ pub enum Effect {
         backup: bool,
         seen: Box<raimport::Found>,
     },
+    /// Read the USB adapters again, after forgetting this one if given.
+    Adapters(Option<String>),
+    /// Take the saves along to the emulator just chosen.
+    Convert(Box<crate::convert::Offer>),
 }
 /// A level slider held on L/R: a press starts the hold (up?), its repeats
 /// renew it, and the host releases it when the button comes up.
@@ -785,6 +795,8 @@ impl std::fmt::Debug for Effect {
             }
             Self::Module(request) => write!(f, "Module({request:?})"),
             Self::RaImport { backup, .. } => write!(f, "RaImport {{ backup: {backup} }}"),
+            Self::Adapters(id) => write!(f, "Adapters({id:?})"),
+            Self::Convert(offer) => write!(f, "Convert({:?} -> {:?})", offer.from, offer.to),
         }
     }
 }
@@ -877,6 +889,12 @@ pub struct Settings {
     pub updates: updates::Updates,
     pub raimport: raimport::RaImport,
     pub roms: roms::Roms,
+    /// Network › USB adapters, once read; the details of the one selected.
+    pub adapters: Option<crate::usb::Adapters>,
+    pub usb_details: bool,
+    /// Take the saves along (Converter-save), and while converting.
+    pub convert: Option<crate::convert::Offer>,
+    pub converting: bool,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -931,6 +949,10 @@ impl Default for Settings {
             updates: updates::Updates::default(),
             raimport: raimport::RaImport::default(),
             roms: roms::Roms::default(),
+            adapters: None,
+            usb_details: false,
+            convert: None,
+            converting: false,
         }
     }
 }
@@ -1278,7 +1300,11 @@ impl Settings {
     pub fn hints(&self) -> &'static [(HintButton, &'static str)] {
         use HintButton::{Key, Pair};
         const BACK: &[(HintButton, &str)] = &[(Key('B'), "hint.back")];
-        if self.connecting.is_some() || self.storage.working.is_some() {
+        if self.connecting.is_some()
+            || self.storage.working.is_some()
+            || self.convert.is_some()
+            || self.converting
+        {
             return &[];
         }
         if let Some(confirm) = &self.storage.confirm {
@@ -1294,6 +1320,7 @@ impl Settings {
             Page::Updates | Page::UpdatePackages => self.updates_hints(),
             Page::RaImport | Page::RaImportList => self.raimport_hints(),
             Page::RomsList => BACK,
+            Page::UsbAdapters => self.usb_hints(),
             Page::Root => &[
                 (Key('A'), "hint.open"),
                 (Key('B'), "hint.back"),
@@ -1549,8 +1576,21 @@ impl Settings {
             };
         }
         // Presses go to an open prompt (`captured`), never here.
-        if self.capturing() {
+        if self.capturing() || self.converting {
             return Effect::None;
+        }
+        if let Some(offer) = &mut self.convert {
+            return match offer.handle(button) {
+                Some(crate::convert::Answer::Convert) => {
+                    self.converting = true;
+                    Effect::Convert(Box::new(self.convert.take().expect("offer")))
+                }
+                Some(crate::convert::Answer::Later) => {
+                    self.convert = None;
+                    Effect::None
+                }
+                None => Effect::None,
+            };
         }
         // Any navigation input dismisses the last message.
         self.error = None;

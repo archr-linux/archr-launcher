@@ -38,6 +38,10 @@ pub struct Runtime {
     reattached: bool,
     /// A volume or brightness hold running in archr-levels.
     level_hold: Option<Id>,
+    /// A Games page emulator or core change: the system and its pair before.
+    switch: Option<(String, (String, String))>,
+    /// Conversion work for the host's one runner.
+    convert: Vec<crate::convert::Request>,
 }
 impl Runtime {
     pub fn new(paths: Paths) -> Self {
@@ -59,6 +63,8 @@ impl Runtime {
             attaching: false,
             reattached: false,
             level_hold: None,
+            switch: None,
+            convert: Vec::new(),
         }
     }
     fn send(&mut self, work: Work) {
@@ -110,6 +116,7 @@ impl Runtime {
             || self.state.store.working.is_some()
             || self.state.raimport.working
             || !self.state.slides.is_empty()
+            || self.state.converting
             || self.install.is_some()
             || self.level_hold.is_some()
     }
@@ -140,6 +147,18 @@ impl Runtime {
     }
     pub fn take_reattached(&mut self) -> bool {
         std::mem::take(&mut self.reattached)
+    }
+    /// From the USB adapter announcement: Network › USB adapters.
+    pub fn open_usb(&mut self) {
+        self.open();
+        let effect = self.state.open_usb();
+        self.apply(effect);
+    }
+    /// archr-usb-advisor wrote again: an open adapters page reads it.
+    pub fn usb_changed(&mut self) {
+        if self.active && self.state.page() == Page::UsbAdapters {
+            self.send(Work::Adapters(None));
+        }
     }
     /// The START menu's update shortcut.
     pub fn open_updates(&mut self) {
@@ -220,6 +239,10 @@ impl Runtime {
             Effect::Close => self.active = false,
             Effect::Set(id, value) if Games::ROWS.contains(&id) => {
                 let system = self.state.games.name().to_owned();
+                if matches!(id, Id::Emulator | Id::Core) {
+                    let pair = |id| self.state.value(id).to_owned();
+                    self.switch = Some((system.clone(), (pair(Id::Emulator), pair(Id::Core))));
+                }
                 self.send(Work::Game(system, id, value));
             }
             Effect::Set(id, value) => self.send(Work::Set(id, value)),
@@ -285,6 +308,8 @@ impl Runtime {
                 }
             }
             Effect::RaImport { backup, seen } => self.send(Work::RaImport(backup, seen)),
+            Effect::Adapters(forget) => self.send(Work::Adapters(forget)),
+            Effect::Convert(offer) => self.convert.push(crate::convert::Request::Run(offer)),
             Effect::Module(request) => return Outcome::Module(request),
             Effect::Reboot => return Outcome::Action(SessionAction::Reboot),
             Effect::None => {}
@@ -320,6 +345,30 @@ impl Runtime {
         changed
     }
 
+    /// After an emulator change: plan the offer to take the saves along.
+    fn poll_convert(&mut self) {
+        if self.state.pending.is_some() {
+            return;
+        }
+        if let Some((system, before)) = self.switch.take() {
+            let after = (
+                self.state.value(Id::Emulator).to_owned(),
+                self.state.value(Id::Core).to_owned(),
+            );
+            if after != before && system == self.state.games.name() {
+                self.convert.push(crate::convert::Request::Plan {
+                    system,
+                    rom: None,
+                    from: before,
+                    to: after,
+                });
+            }
+        }
+    }
+    /// Conversion work for the host's runner, which answers in main.
+    pub fn take_convert(&mut self) -> Vec<crate::convert::Request> {
+        std::mem::take(&mut self.convert)
+    }
     /// Systems to reload once a scraping run has ended.
     pub fn take_scraped(&mut self) -> Option<Vec<String>> {
         self.scraped.take()
@@ -336,6 +385,7 @@ impl Runtime {
         self.launch_saved |= writing.is_some() && self.state.pending.is_none();
         dirty |= self.poll_scrape();
         dirty |= self.poll_updates();
+        self.poll_convert();
         // Nothing known yet about an open import page: look.
         if self.active
             && !self.closing

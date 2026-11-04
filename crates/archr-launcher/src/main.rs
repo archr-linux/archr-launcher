@@ -312,6 +312,12 @@ fn run(
     let mut dirty = false;
     let mut deferred = None;
     let mut closing = false;
+    // A game menu core change: the game and its pair before, until the menu closes.
+    let mut core_change: Option<(String, usize, (String, String))> = None;
+    // The one owner of save conversion work, for Settings and the game menu.
+    let mut converter =
+        archr_launcher::convert::Runner::new(archr_launcher::convert::Env::new(&paths));
+    let mut usb_seq = 0;
     loop {
         // A successful power request owns the screen until the OS stops us.
         // Store is already flushed; no more input, scans, scripts or handoffs.
@@ -604,6 +610,67 @@ fn run(
             ui.banner = None;
             dirty = true;
         }
+        if ui
+            .dongle
+            .as_ref()
+            .is_some_and(|c| c.expired(Instant::now()))
+        {
+            ui.dongle = None;
+            dirty = true;
+        }
+        if ui.usb_seq() != usb_seq {
+            usb_seq = ui.usb_seq();
+            settings.usb_changed();
+        }
+        // The game menu closed on another core: offer to take the save along.
+        if !matches!(app.screen, Screen::QuickMenu { .. }) {
+            if let Some((system, game, before)) = core_change.take() {
+                let after = library.current_core(&system, game);
+                let rom = library.games(&system).get(game).map(|g| g.path.clone());
+                if let (Some(to), Some(rom)) = (after.filter(|a| *a != before), rom) {
+                    converter.send(archr_launcher::convert::Request::Plan {
+                        system,
+                        rom: Some(rom),
+                        from: before,
+                        to,
+                    });
+                }
+            }
+        }
+        for request in settings.take_convert() {
+            converter.send(request);
+        }
+        while let Some(event) = converter.poll() {
+            match event {
+                archr_launcher::convert::Event::Offer(offer) => {
+                    let offer = offer.map(|o| *o);
+                    if settings.active {
+                        settings.state.convert = offer;
+                    } else {
+                        app.convert = offer;
+                    }
+                }
+                archr_launcher::convert::Event::Done(report) => {
+                    settings.state.converting = false;
+                    let count = |key, n: usize| {
+                        ui.catalog
+                            .plural(key, n as f64, &[("count", &n.to_string())])
+                    };
+                    let mut text = count("convert.done", report.done);
+                    if report.failed > 0 {
+                        text = format!("{text}\n{}", count("convert.failed_some", report.failed));
+                    }
+                    let severity = if report.failed > 0 {
+                        Severity::Error
+                    } else {
+                        Severity::Info
+                    };
+                    ui.banner = Some(text);
+                    banner_timer.restart(severity, Instant::now());
+                }
+            }
+            dirty = true;
+        }
         if let Screen::Games { system } = &app.screen {
             library.ensure(system);
             ui.loading = library.loading(system);
@@ -742,6 +809,20 @@ fn run(
                 }
             }
         }
+        // The adapter card takes Y (its page) and B (close); any other press
+        // closes it and still does its own work.
+        if let Some(pressed) = button.filter(|_| ui.dongle.is_some()) {
+            ui.dongle = None;
+            dirty = true;
+            match pressed {
+                archr_launcher::state::Button::Y => {
+                    settings.open_usb();
+                    button = None;
+                }
+                archr_launcher::state::Button::B => button = None,
+                _ => {}
+            }
+        }
         let mut outcome = None;
         closing |= close_requested;
         if closing {
@@ -828,6 +909,20 @@ fn run(
                             progress.start(Task::Play(entry), game);
                         }
                     }
+                    Outcome::None
+                }
+                requested => requested,
+            };
+            if let Outcome::SetCore { system, game, .. } = &requested {
+                if core_change.is_none() {
+                    core_change = library
+                        .current_core(system, *game)
+                        .map(|pair| (system.clone(), *game, pair));
+                }
+            }
+            let requested = match requested {
+                Outcome::Convert(offer) => {
+                    converter.send(archr_launcher::convert::Request::Run(offer));
                     Outcome::None
                 }
                 requested => requested,
