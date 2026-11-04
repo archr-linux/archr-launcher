@@ -7,7 +7,7 @@ use std::{
     io::{self, BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, Stdio},
-    sync::{mpsc, Mutex},
+    sync::{mpsc, Mutex, OnceLock},
     thread,
     time::{Duration, Instant},
 };
@@ -56,11 +56,48 @@ pub trait Executor: Send + Sync {
 pub struct Systemd {
     pub run: PathBuf,
     pub ctl: PathBuf,
+    /// Whether systemd was built with seccomp: asked once, on the first
+    /// module start (a module thread, never the drawing one).
+    seccomp: OnceLock<bool>,
+}
+impl Systemd {
+    pub fn new(run: PathBuf, ctl: PathBuf) -> Self {
+        Self {
+            run,
+            ctl,
+            seccomp: OnceLock::new(),
+        }
+    }
+    fn seccomp(&self) -> bool {
+        *self.seccomp.get_or_init(|| {
+            let output = Command::new(&self.ctl)
+                .arg("--version")
+                .stdin(Stdio::null())
+                .stderr(Stdio::null())
+                .output();
+            let found = output
+                .map(|o| seccomp(&String::from_utf8_lossy(&o.stdout)))
+                .unwrap_or(true);
+            if !found {
+                log::warn!("systemd has no seccomp: modules run without a system call filter");
+            }
+            found
+        })
+    }
+}
+/// `systemctl --version` names a systemd built with seccomp (`+SECCOMP`).
+/// Only an explicit `-SECCOMP` turns the filter off: an unreadable answer
+/// keeps it.
+pub fn seccomp(version: &str) -> bool {
+    !version.split_whitespace().any(|f| f == "-SECCOMP")
 }
 impl Executor for Systemd {
     fn command(&self, plan: &Plan) -> Command {
         let mut command = Command::new(&self.run);
-        command.args(sandbox(plan)).arg("--").args(&plan.argv);
+        command
+            .args(sandbox(plan, self.seccomp()))
+            .arg("--")
+            .args(&plan.argv);
         command.env_clear();
         command
     }
@@ -78,8 +115,10 @@ impl Executor for Systemd {
     }
 }
 
-/// The `systemd-run` arguments for `plan`, before `--`.
-pub fn sandbox(plan: &Plan) -> Vec<String> {
+/// The `systemd-run` arguments for `plan`, before `--`. Without `seccomp`
+/// systemd refuses the properties built on it (the system call filter and
+/// the socket families), so they are left out; the rest stays.
+pub fn sandbox(plan: &Plan, seccomp: bool) -> Vec<String> {
     let mut args: Vec<String> = [
         "--pipe",
         "--quiet",
@@ -106,8 +145,6 @@ pub fn sandbox(plan: &Plan) -> Vec<String> {
         "-p RestrictSUIDSGID=yes",
         "-p LockPersonality=yes",
         "-p RestrictNamespaces=yes",
-        "-p SystemCallFilter=@system-service",
-        "-p SystemCallArchitectures=native",
         "-p TemporaryFileSystem=/storage:ro",
         // The system bus is AF_UNIX too: no module talks to the services.
         "-p InaccessiblePaths=-/run/dbus",
@@ -124,6 +161,16 @@ pub fn sandbox(plan: &Plan) -> Vec<String> {
     .flat_map(|a| a.split_once(' ').map_or(vec![*a], |(f, v)| vec![f, v]))
     .map(str::to_owned)
     .collect();
+    if seccomp {
+        args.extend(
+            [
+                "SystemCallFilter=@system-service",
+                "SystemCallArchitectures=native",
+            ]
+            .into_iter()
+            .flat_map(|p| ["-p".to_owned(), p.to_owned()]),
+        );
+    }
     args.push(format!("--unit={}", plan.unit));
     args.extend(["-p".into(), format!("User={}", plan.uid)]);
     args.extend(["-p".into(), format!("Group={}", plan.uid)]);
@@ -149,14 +196,18 @@ pub fn sandbox(plan: &Plan) -> Vec<String> {
     if plan.net {
         // The internet, not netlink or raw packets, and not the services
         // listening on this device (RetroArch's command port, sshd...).
-        property("RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6".into());
+        if seccomp {
+            property("RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6".into());
+        }
         property("IPAddressDeny=localhost".into());
         for stub in loopback_dns(&plan.resolv) {
             property(format!("IPAddressAllow={stub}"));
         }
     } else {
         property("PrivateNetwork=yes".into());
-        property("RestrictAddressFamilies=AF_UNIX".into());
+        if seccomp {
+            property("RestrictAddressFamilies=AF_UNIX".into());
+        }
     }
     property(format!("MemoryMax={}M", plan.memory_mb));
     property(format!("WorkingDirectory={}", plan.dir.display()));
@@ -360,7 +411,7 @@ mod tests {
             env: vec![("HOME".into(), "/data".into())],
             ..Plan::default()
         };
-        let args = sandbox(&plan).join(" ");
+        let args = sandbox(&plan, true).join(" ");
         for expected in [
             "--pipe",
             "--unit=archr-mod-x",
@@ -382,10 +433,13 @@ mod tests {
             assert!(args.contains(expected), "{expected} in {args}");
         }
         assert!(!args.contains("archr-mod "), "no shared user: {args}");
-        let online = sandbox(&Plan {
-            net: true,
-            ..plan.clone()
-        })
+        let online = sandbox(
+            &Plan {
+                net: true,
+                ..plan.clone()
+            },
+            true,
+        )
         .join(" ");
         assert!(!online.contains("PrivateNetwork"));
         assert!(online.contains("-p RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6"));
@@ -397,20 +451,74 @@ mod tests {
             "no loopback DNS: {online}"
         );
         assert!(!args.contains("IPAddressDeny"), "PrivateNetwork covers it");
-        let stub = sandbox(&Plan {
-            net: true,
-            resolv: "# resolved\nnameserver 127.0.0.53\noptions edns0\n".into(),
-            ..plan.clone()
-        })
+        let stub = sandbox(
+            &Plan {
+                net: true,
+                resolv: "# resolved\nnameserver 127.0.0.53\noptions edns0\n".into(),
+                ..plan.clone()
+            },
+            true,
+        )
         .join(" ");
         assert!(stub.contains("-p IPAddressAllow=127.0.0.53"), "{stub}");
         // Only the folders above a hidden one hide it.
-        let bios = sandbox(&Plan {
-            read: vec!["/storage/roms/bios".into()],
-            ..plan
-        })
+        let bios = sandbox(
+            &Plan {
+                read: vec!["/storage/roms/bios".into()],
+                ..plan
+            },
+            true,
+        )
         .join(" ");
         assert!(!bios.contains("InaccessiblePaths=-/storage"), "{bios}");
+    }
+
+    #[test]
+    fn without_seccomp_only_the_properties_built_on_it_are_left_out() {
+        let plan = Plan {
+            unit: "archr-mod-x".into(),
+            uid: 60642,
+            memory_mb: 24,
+            ..Plan::default()
+        };
+        let seccomp = [
+            "SystemCallFilter=",
+            "SystemCallArchitectures=",
+            "RestrictAddressFamilies=",
+        ];
+        for net in [false, true] {
+            let plan = Plan {
+                net,
+                ..plan.clone()
+            };
+            let (with, without) = (sandbox(&plan, true), sandbox(&plan, false));
+            let (shown, hidden) = (with.join(" "), without.join(" "));
+            for property in seccomp {
+                assert!(shown.contains(property), "{property} in {shown}");
+                assert!(!hidden.contains(property), "no {property} in {hidden}");
+            }
+            // The same arguments, in the same order, minus those "-p" pairs.
+            let rest: Vec<&String> = with
+                .iter()
+                .enumerate()
+                .filter(|(n, arg)| {
+                    let property = |a: &String| seccomp.iter().any(|s| a.starts_with(s));
+                    !property(arg) && !(*arg == "-p" && with.get(n + 1).is_some_and(property))
+                })
+                .map(|(_, arg)| arg)
+                .collect();
+            assert_eq!(
+                rest,
+                without.iter().collect::<Vec<_>>(),
+                "everything else stays"
+            );
+        }
+        let built = "systemd 255 (255.8)\n+PAM -AUDIT -SELINUX +SECCOMP +GCRYPT -GNUTLS\n";
+        assert!(super::seccomp(built));
+        let device =
+            "systemd 255 (255.8)\n-PAM -AUDIT -SELINUX -APPARMOR -IMA -SMACK -SECCOMP +GCRYPT\n";
+        assert!(!super::seccomp(device));
+        assert!(super::seccomp(""), "unknown: keep the filter");
     }
 
     #[test]

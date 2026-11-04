@@ -229,7 +229,7 @@ fn a_daemon_speaks_the_protocol_and_only_gets_what_it_was_granted() {
 struct Sandboxes(Mutex<Vec<(String, Vec<String>)>>);
 impl Executor for Sandboxes {
     fn command(&self, plan: &Plan) -> Command {
-        let args = process::sandbox(plan);
+        let args = process::sandbox(plan, true);
         self.0.lock().unwrap().push((plan.id.clone(), args));
         Direct::default().command(plan)
     }

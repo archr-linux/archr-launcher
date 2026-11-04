@@ -98,10 +98,8 @@ impl Config {
             let direct = Arc::new(Direct::default());
             (direct.clone(), Some(direct), None)
         } else {
-            let systemd = process::Systemd {
-                run: "/usr/bin/systemd-run".into(),
-                ctl: "/usr/bin/systemctl".into(),
-            };
+            let systemd =
+                process::Systemd::new("/usr/bin/systemd-run".into(), "/usr/bin/systemctl".into());
             (Arc::new(systemd), None, Some("/run/userdb".into()))
         };
         let firewall = paths
