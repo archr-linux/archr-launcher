@@ -1715,7 +1715,7 @@ fn module_view() -> crate::modules::View {
         icon: svg("cpu"),
         enabled: true,
         granted: true,
-        source: "archr-linux/archr-perfil-cpu".into(),
+        source: "archr-linux/archr-module-perfil-cpu".into(),
         reviewed: true,
         digest: format!("sha256:3f9a{}c21e", "0".repeat(56)),
         used: now - 600,
@@ -1967,7 +1967,8 @@ fn module_pages(dir: &std::path::Path) -> Vec<(&'static str, Settings)> {
                 ..cards[1].clone()
             },
             version: "2.0.0".into(),
-            author: "archr-linux".into(),
+            // A long author gives way; version, size and license stay.
+            author: "ArchR Linux Project <contato@archr.dev>".into(),
             license: "MIT".into(),
             size: 24 * 1024,
             reviewed: true,

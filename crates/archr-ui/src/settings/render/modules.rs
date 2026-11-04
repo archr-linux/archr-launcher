@@ -310,11 +310,13 @@ impl View<'_, '_, '_> {
             let Some(module) = state.modules.module() else {
                 return Ok(());
             };
-            let meta = [
+            let meta = (
                 module.author.clone(),
-                self.tr(&format!("modules.version|version={}", module.version)),
-                module.license.clone(),
-            ];
+                [
+                    self.tr(&format!("modules.version|version={}", module.version)),
+                    module.license.clone(),
+                ],
+            );
             let note = match (module.status, module.reviewed, module.source.is_empty()) {
                 (Status::Invalid, ..) => module.problem.clone(),
                 (Status::Incompatible, ..) => self.tr("modules.incompatible"),
@@ -325,10 +327,7 @@ impl View<'_, '_, '_> {
             (
                 module.name.clone(),
                 (module.icon.clone(), String::new()),
-                meta.into_iter()
-                    .filter(|p| !p.is_empty())
-                    .collect::<Vec<_>>()
-                    .join(" · "),
+                (meta.0, joined(&meta.1)),
                 sentences(&module.description, &note),
                 None,
                 module.permissions.clone(),
@@ -359,7 +358,10 @@ impl View<'_, '_, '_> {
                 }
                 _ => self.tr(&format!("modules.version|version={}", offer.version)),
             };
-            let meta = [offer.author.clone(), version, size, offer.license.clone()];
+            let meta = (
+                offer.author.clone(),
+                joined(&[version, size, offer.license.clone()]),
+            );
             // The badge already says it is reviewed.
             let note = if offer.reviewed {
                 String::new()
@@ -369,10 +371,7 @@ impl View<'_, '_, '_> {
             (
                 offer.card.title().to_owned(),
                 (None, offer.card.icon.clone()),
-                meta.into_iter()
-                    .filter(|p| !p.is_empty())
-                    .collect::<Vec<_>>()
-                    .join(" · "),
+                meta,
                 sentences(&offer.card.description, &note),
                 offer.preview.clone(),
                 offer.permissions.clone(),
@@ -381,7 +380,7 @@ impl View<'_, '_, '_> {
             )
         };
         let (x, w) = LEFT;
-        let below = self.module_header(icon, &title, &meta, reviewed)?;
+        let below = self.module_header(icon, &title, (&meta.0, &meta.1), reviewed)?;
         let below = self.flow(
             (x, below + 4., w),
             &description,
@@ -460,7 +459,7 @@ impl View<'_, '_, '_> {
         &mut self,
         icon: (Option<std::sync::Arc<str>>, String),
         title: &str,
-        meta: &str,
+        (author, rest): (&str, &str),
         reviewed: bool,
     ) -> Result<f32, String> {
         let theme = self.theme;
@@ -484,16 +483,27 @@ impl View<'_, '_, '_> {
             (text_x, top, title_w, 26.),
             (Face::Semibold, 19., theme.text),
         )?;
-        self.plain(
-            meta,
-            (text_x, top + 26., title_w, 17.),
-            (Face::Regular, 12., theme.muted),
+        // Version, size and license always show: the author (or source)
+        // gives way first, then the rest wraps.
+        let meta = self.meta_line(author, rest, title_w)?;
+        let below = self.flow(
+            (text_x, top + 26., title_w),
+            &meta,
+            (12., theme.muted, Face::Regular),
+            2,
         )?;
         if reviewed {
-            self.badge_long(text_x, top + 45.)?;
-            return Ok(top + 66.);
+            self.badge_long(text_x, below + 2.)?;
+            return Ok(below + 23.);
         }
-        Ok(top + 54.)
+        Ok(below + 11.)
+    }
+    /// "author · rest" in one line of `width` (see `shorten`).
+    fn meta_line(&mut self, author: &str, rest: &str, width: f32) -> Result<String, String> {
+        let scale = self.ui.frame.scale;
+        shorten(author, rest, |text| {
+            Ok(self.ui.measure(text, Face::Regular, 12.)? as f32 / scale <= width)
+        })
     }
     /// Modulo-detalhes: an installed module the user allowed: its package,
     /// review, use and failures; Open, Remove, Remove with data; and the
@@ -504,23 +514,16 @@ impl View<'_, '_, '_> {
             return Ok(());
         };
         let (x, w) = LEFT;
-        let meta = [
-            if module.source.is_empty() {
-                module.author.clone()
-            } else {
-                module.source.clone()
-            },
-            module.version.clone(),
-            module.license.clone(),
-        ]
-        .into_iter()
-        .filter(|p| !p.is_empty())
-        .collect::<Vec<_>>()
-        .join(" · ");
+        let who = if module.source.is_empty() {
+            &module.author
+        } else {
+            &module.source
+        };
+        let rest = joined(&[module.version.clone(), module.license.clone()]);
         let below = self.module_header(
             (module.icon.clone(), String::new()),
             &module.name,
-            &meta,
+            (who, &rest),
             module.reviewed,
         )?;
         let digest = module
@@ -863,5 +866,62 @@ fn sentences(first: &str, second: &str) -> String {
         text if second.is_empty() => text.to_owned(),
         text if text.ends_with(['.', '!', '?']) => format!("{text} {second}"),
         text => format!("{text}. {second}"),
+    }
+}
+
+/// "author · rest" as `fits` takes it: the author shortened with "…" as far
+/// as needed, dropped if even one letter does not fit; `rest` is never cut.
+fn shorten(
+    author: &str,
+    rest: &str,
+    mut fits: impl FnMut(&str) -> Result<bool, String>,
+) -> Result<String, String> {
+    let line = |author: &str| joined(&[author.to_owned(), rest.to_owned()]);
+    if fits(&line(author))? {
+        return Ok(line(author));
+    }
+    let chars: Vec<char> = author.chars().collect();
+    for keep in (1..chars.len()).rev() {
+        let short = format!("{}…", chars[..keep].iter().collect::<String>().trim_end());
+        if fits(&line(&short))? {
+            return Ok(line(&short));
+        }
+    }
+    Ok(line(""))
+}
+
+/// The non-empty parts, joined by " · ".
+fn joined(parts: &[String]) -> String {
+    parts
+        .iter()
+        .filter(|p| !p.is_empty())
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(" · ")
+}
+
+#[cfg(test)]
+mod meta_tests {
+    use super::shorten;
+
+    #[test]
+    fn the_author_gives_way_before_version_size_and_license() {
+        let rest = "versão 1.0.0 · 23 KB · MIT";
+        let width = |max: usize| move |t: &str| Ok(t.chars().count() <= max);
+        let author = "ArchR <contato@archr.dev>";
+        let full = format!("{author} · {rest}");
+        assert_eq!(shorten(author, rest, width(80)).unwrap(), full);
+        let short = shorten(author, rest, width(40)).unwrap();
+        assert!(short.ends_with(&format!("… · {rest}")), "{short}");
+        assert!(
+            short.chars().count() <= 40 && short.starts_with("Arch"),
+            "{short}"
+        );
+        assert_eq!(
+            shorten(author, rest, width(10)).unwrap(),
+            rest,
+            "no room: only the rest"
+        );
+        assert_eq!(shorten("", rest, width(10)).unwrap(), rest);
     }
 }
