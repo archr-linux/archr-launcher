@@ -35,6 +35,7 @@ fn applying_controls_animate_in_place_and_hold_still_without_motion() {
             .read_pixels(None, sdl2::pixels::PixelFormatEnum::RGBA32)
             .unwrap()
     };
+    let saved = std::env::var_os("ARCHR_BUSY_SHOTS").map(std::path::PathBuf::from);
     for (page, id) in [
         (Page::Services, Id::Ssh),
         (Page::Services, Id::UsbMode),
@@ -48,7 +49,10 @@ fn applying_controls_animate_in_place_and_hold_still_without_motion() {
         let idle = frame(&mut ui, &state);
         state.pending = Some(id);
         let mut shots = Vec::new();
-        for _ in 0..3 {
+        for n in 0..3 {
+            if let Some(dir) = &saved {
+                ui.screenshot = Some(dir.join(format!("busy-{id:?}-{n}.png")));
+            }
             shots.push(frame(&mut ui, &state));
             assert!(
                 ui.animating(),
