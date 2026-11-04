@@ -61,6 +61,13 @@ struct Placement {
     /// Space below the row that belongs to it (a note), kept in view with it.
     trail: f32,
 }
+/// `c` at `alpha` opacity, in sixteenths so a slow pulse never shimmers.
+fn faded(c: Rgba, alpha: f32) -> Rgba {
+    Rgba {
+        a: (f32::from(c.a) * (alpha * 16.).round() / 16.) as u8,
+        ..c
+    }
+}
 impl Placement {
     fn selected_top(self) -> f32 {
         self.top - self.lead()
@@ -286,20 +293,32 @@ impl View<'_, '_, '_> {
         );
         self.ui.rounded(rect, corner, back, Some(edge))
     }
-    /// "Searching" heading with pulsing dots at `top`, then `skeleton` pixels
-    /// of placeholder rows. Looping state comes from the clock, never stored.
-    fn searching(&mut self, key: &str, top: f32, skeleton: f32) -> Result<(), String> {
-        let secs = self
-            .ui
+    /// Seconds since the window opened: the phase of every looping animation.
+    fn clock(&self) -> f32 {
+        self.ui
             .frame
             .now
             .saturating_duration_since(self.ui.born)
-            .as_secs_f32();
-        let motion = self.ui.motion;
-        let faded = |c: Rgba, alpha: f32| Rgba {
-            a: (f32::from(c.a) * (alpha * 16.).round() / 16.) as u8,
-            ..c
-        };
+            .as_secs_f32()
+    }
+    /// Three dots pulsing in turn at the right of a control that is applying
+    /// a change; on the selected row they take the row's text color.
+    fn busy_dots(&mut self, (x, y, w, h): Bounds, selected: bool) -> Result<(), String> {
+        let (secs, motion) = (self.clock(), self.ui.motion);
+        let ink = selection(selected, self.theme.highlight_bg, self.theme.highlight_text);
+        let mid = y + h / 2.;
+        for n in 0..3 {
+            let (alpha, lift) = motion.search_dot(secs, n);
+            let dot = self.rect((x + w - 26. + 10. * n as f32, mid - 3. - lift, 6., 6.));
+            self.ui
+                .rounded(dot, self.ui.px(3.) as f32, faded(ink, alpha), None)?;
+        }
+        Ok(())
+    }
+    /// "Searching" heading with pulsing dots at `top`, then `skeleton` pixels
+    /// of placeholder rows. Looping state comes from the clock, never stored.
+    fn searching(&mut self, key: &str, top: f32, skeleton: f32) -> Result<(), String> {
+        let (secs, motion) = (self.clock(), self.ui.motion);
         let mid = top + SECTION_HEIGHT / 2. + 1.;
         for n in 0..3 {
             let (alpha, lift) = motion.search_dot(secs, n);
@@ -1257,16 +1276,7 @@ impl View<'_, '_, '_> {
                 ),
             )?;
         }
-        if state.pending == Some(row.id) {
-            self.text_face(
-                control,
-                &self.tr("settings.applying"),
-                (14., ink, Align::Right),
-                face,
-            )
-        } else {
-            self.control(row.id, row.kind, state, selected, control)
-        }
+        self.control(row.id, row.kind, state, selected, control)
     }
     /// "Cover · screen · logo", or "3 of 8" when the names do not fit.
     fn media_summary(&mut self, state: &Settings, width: f32) -> Result<String, String> {
@@ -1357,6 +1367,10 @@ impl View<'_, '_, '_> {
             let names: Vec<Option<&str>> = names.iter().map(|n| Some(n.as_str())).collect();
             return self.pads(&names, selected, (x, y, w, h));
         }
+        let busy = state.pending == Some(id);
+        if busy && kind != Kind::Toggle {
+            return self.busy_dots((x, y, w, h), selected);
+        }
         let ink = match state.roms_ink(id).or_else(|| state.diag_ink(id)) {
             Some(power) if !selected => {
                 if power {
@@ -1414,17 +1428,15 @@ impl View<'_, '_, '_> {
             }
             Kind::Toggle => {
                 let on = state.value(id) == "1";
+                // While the change applies, the knob waits halfway and breathes.
+                let target = if busy { 0.5 } else { f32::from(u8::from(on)) };
                 let (now, motion) = (self.ui.frame.now, self.ui.motion());
-                let (seen, knob) = self.ui.switches.entry(id).or_insert_with(|| {
-                    (
-                        on,
-                        Tween::new(f32::from(u8::from(on)), motion.travel(SWITCH)),
-                    )
-                });
-                if *seen != on {
-                    *seen = on;
-                    knob.retarget(f32::from(u8::from(on)), now);
-                }
+                let knob = self
+                    .ui
+                    .switches
+                    .entry(id)
+                    .or_insert_with(|| Tween::new(target, motion.travel(SWITCH)));
+                knob.retarget(target, now);
                 let at = knob.value(now);
                 let track = mix(
                     self.theme.badge,
@@ -1432,10 +1444,17 @@ impl View<'_, '_, '_> {
                     at,
                 );
                 self.capsule((x + w - 38., y + h / 2. - 10., 38., 20.), track)?;
-                self.capsule(
-                    (x + w - 36. + 18. * at, y + h / 2. - 8., 16., 16.),
-                    selection(selected && on, self.theme.text, self.theme.highlight_bg),
-                )?;
+                let fill = selection(selected && on, self.theme.text, self.theme.highlight_bg);
+                let fill = if busy {
+                    let alpha = motion.busy(self.clock());
+                    faded(
+                        selection(selected, self.theme.text, self.theme.highlight_bg),
+                        alpha,
+                    )
+                } else {
+                    fill
+                };
+                self.capsule((x + w - 36. + 18. * at, y + h / 2. - 8., 16., 16.), fill)?;
             }
             _ => {
                 let v = state.display_value(id, &self.ui.catalog);

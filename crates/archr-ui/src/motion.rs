@@ -79,6 +79,14 @@ impl Motion {
         }
         0.35 + 0.35 * (1. - (2. * cycle(secs, 1.4, 0.15 * n as f32) - 1.).abs())
     }
+    /// Opacity of a control that is applying a change, `secs` in: it
+    /// breathes slowly, and holds still at a mid value when motion is off.
+    pub fn busy(self, secs: f32) -> f32 {
+        if self == Self::Off {
+            return 0.6;
+        }
+        0.35 + 0.65 * (1. - (2. * cycle(secs, 1.1, 0.) - 1.).abs())
+    }
     /// Pixels something travels: none unless motion is on.
     pub fn distance(self, full: f32) -> f32 {
         if self == Self::On {
@@ -221,6 +229,14 @@ mod tests {
         );
         set_steps(false);
         assert!(at(4) > 4. && at(4) < 8., "back to ease-out");
+    }
+    #[test]
+    fn a_busy_control_breathes_and_holds_still_without_motion() {
+        let (low, high) = (Motion::On.busy(0.), Motion::On.busy(0.55));
+        assert!((low - 0.35).abs() < 1e-3 && (high - 1.).abs() < 1e-3);
+        assert_eq!(Motion::On.busy(0.), Motion::On.busy(1.1), "it loops");
+        assert_eq!(Motion::Reduced.busy(0.3), Motion::On.busy(0.3));
+        assert_eq!(Motion::Off.busy(0.), Motion::Off.busy(0.55));
     }
     #[test]
     fn search_dots_pulse_in_sequence_and_respect_the_motion_choice() {

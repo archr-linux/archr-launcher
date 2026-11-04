@@ -341,7 +341,7 @@ pub struct Ui<'font, 'texture> {
     settings_banner: settings_render::Banner,
     menu_open: bool,
     /// Each settings switch's last state and its knob's position.
-    switches: std::collections::BTreeMap<crate::settings::Id, (bool, Tween)>,
+    switches: std::collections::BTreeMap<crate::settings::Id, Tween>,
     cover_key: Option<PathBuf>,
     cover_visible: bool,
     cover_fade: Tween,
@@ -557,7 +557,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         self.menu_pill.snap();
         self.settings_scroll.tween.snap();
         self.settings_banner.fade.snap();
-        for (_, switch) in self.switches.values_mut() {
+        for switch in self.switches.values_mut() {
             switch.snap();
         }
         self.cover_fade.snap();
@@ -887,9 +887,11 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             self.settings_page(settings, theme)?;
             self.animating = self.settings_scroll.tween.active(now)
                 || self.settings_banner.busy(now)
-                || self.switches.values().any(|(_, knob)| knob.active(now))
-                // The search dots loop for as long as a search runs.
-                || ((settings.searching() || settings.updates.working())
+                || self.switches.values().any(|knob| knob.active(now))
+                // Search and busy dots loop for as long as the work runs.
+                || ((settings.searching()
+                    || settings.updates.working()
+                    || settings.pending.is_some())
                     && self.motion != Motion::Off);
         } else if matches!(app.screen, Screen::Switcher | Screen::Resume) {
             // Fixed compositions in their theme rectangles, no decorations.
