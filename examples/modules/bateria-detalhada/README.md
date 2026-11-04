@@ -17,9 +17,12 @@ state, voltage and health. Daemon, bash + jq, API 2, no permissions.*
 
 ## Publicar uma versão
 
+Suba `version` no `module.toml`, faça o commit e crie a tag `v<versão>`; o
+pacote sai da própria tag:
+
 ```
-tar --owner=0 --group=0 --numeric-owner -czf bateria-detalhada-<versão>.tar.gz \
-    --transform 's,^\.,bateria-detalhada,' --exclude=.git --exclude='*.tar.gz' .
+git archive --format=tar.gz --prefix=bateria-detalhada/ -o ../bateria-detalhada-<versão>.tar.gz v<versão>
 ```
 
-Release `v<versão>` com o `.tar.gz`, `module.toml` e `preview.png`.
+Release `v<versão>` com três assets: o `.tar.gz`, `module.toml` e
+`preview.png` (640×480).
