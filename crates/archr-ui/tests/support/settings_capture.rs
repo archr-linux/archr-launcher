@@ -1655,6 +1655,8 @@ fn module_view() -> crate::modules::View {
         pages: vec![ModPage {
             id: "main".into(),
             title: "Bateria detalhada".into(),
+            detail: false,
+            hint: None,
             rows: vec![
                 row(
                     "Agora",
@@ -1691,6 +1693,7 @@ fn module_view() -> crate::modules::View {
                     RowKind::Action {
                         action: "atualizar".into(),
                         confirm: None,
+                        icon: None,
                     },
                     "",
                 ),
@@ -1765,6 +1768,8 @@ fn module_view() -> crate::modules::View {
         pages: vec![ModPage {
             id: "main".into(),
             title: "Backup na nuvem".into(),
+            detail: false,
+            hint: None,
             rows: vec![
                 row(
                     "Enviando saves",
@@ -1775,7 +1780,11 @@ fn module_view() -> crate::modules::View {
                 row(
                     "",
                     Some("Últimos jogos"),
-                    RowKind::List { id: "jogos".into() },
+                    RowKind::List {
+                        id: "jogos".into(),
+                        open: None,
+                        alt: None,
+                    },
                     "",
                 ),
             ],
@@ -1804,6 +1813,7 @@ fn module_view() -> crate::modules::View {
         subtitle: subtitle.into(),
         value: value.into(),
         action: Some("abrir".into()),
+        ..Default::default()
     };
     view.items.insert(
         key("backup-nuvem", "row:jogos"),
@@ -2507,5 +2517,373 @@ fn capture_resume() {
             progress: 0.2,
         });
         frame(&mut ui, &app, "retomar-boot-sem-estado");
+    }
+}
+
+/// The automatic CPU tuning module (examples/modules/ajuste-cpu) as it
+/// shows on a device after some games, in `language`: its texts come from
+/// the module's own locales (Modulo-ajuste-auto, Modulo-ajuste-jogo).
+fn tune_pages(language: &str, picture: &std::path::Path) -> Vec<(&'static str, Settings)> {
+    use crate::modules::{
+        Item, Module, Page as ModPage, Permission, Row as ModRow, RowKind, Tone, View as ModView,
+    };
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples/modules/ajuste-cpu");
+    let table = |lang: &str| -> toml::Table {
+        std::fs::read_to_string(root.join(format!("locales/{lang}.toml")))
+            .ok()
+            .and_then(|t| toml::from_str(&t).ok())
+            .unwrap_or_default()
+    };
+    let (own, en) = (table(language), table("en"));
+    let tr = |text: &str, args: &[(&str, &str)]| -> String {
+        let Some(key) = text.strip_prefix('@') else {
+            return text.to_owned();
+        };
+        let mut text = own
+            .get(key)
+            .or_else(|| en.get(key))
+            .and_then(|v| v.as_str())
+            .unwrap_or(key)
+            .to_owned();
+        for (name, value) in args {
+            text = text.replace(&format!("{{{name}}}"), value);
+        }
+        text
+    };
+    let svg = |name: &str| {
+        std::fs::read_to_string(root.join(format!("icons/{name}.svg")))
+            .ok()
+            .map(Into::into)
+    };
+    let row = |kind, label: &str, section: Option<&str>| ModRow {
+        label: tr(label, &[]),
+        subtitle: None,
+        section: section.map(|s| tr(s, &[])),
+        kind,
+        default: String::new(),
+    };
+    let action = |name: &str, label: &str, icon: &str| {
+        row(
+            RowKind::Action {
+                action: name.into(),
+                confirm: None,
+                icon: svg(icon),
+            },
+            label,
+            None,
+        )
+    };
+    let module = Module {
+        id: "ajuste-cpu".into(),
+        name: tr("@title", &[]),
+        version: "1.0.0".into(),
+        license: "MIT".into(),
+        icon: svg("cpu"),
+        enabled: true,
+        granted: true,
+        source: "archr-linux/archr-ajuste-cpu".into(),
+        reviewed: true,
+        permissions: vec![
+            Permission {
+                key: "modules.perm_hooks_launch",
+                detail: "modules.perm_hooks_launch_detail".into(),
+                sensitive: false,
+            },
+            Permission {
+                key: "modules.perm_cpu_tune",
+                detail: "modules.perm_cpu_tune_detail".into(),
+                sensitive: false,
+            },
+            Permission {
+                key: "modules.perm_page",
+                detail: String::new(),
+                sensitive: false,
+            },
+        ],
+        pages: vec![
+            ModPage {
+                id: "main".into(),
+                title: tr("@title", &[]),
+                detail: false,
+                hint: Some(tr("@hint.page", &[])),
+                rows: vec![
+                    row(
+                        RowKind::Stats {
+                            id: "resumo".into(),
+                        },
+                        "",
+                        None,
+                    ),
+                    row(
+                        RowKind::List {
+                            id: "jogos".into(),
+                            open: Some(1),
+                            alt: Some(("reaprender".into(), tr("@hint.relearn", &[]))),
+                        },
+                        "",
+                        Some("@section.games"),
+                    ),
+                ],
+            },
+            ModPage {
+                id: "jogo".into(),
+                title: tr("@title", &[]),
+                detail: true,
+                hint: Some(tr("@hint.detail", &[])),
+                rows: vec![
+                    row(
+                        RowKind::Header {
+                            id: "cabeca".into(),
+                        },
+                        "",
+                        None,
+                    ),
+                    row(
+                        RowKind::Bars {
+                            id: "barras".into(),
+                        },
+                        "@bars.title",
+                        None,
+                    ),
+                    ModRow {
+                        default: tr("@note", &[]),
+                        ..row(RowKind::Text { id: "nota".into() }, "", None)
+                    },
+                    row(RowKind::Facts { id: "fatos".into() }, "", None),
+                    action("reaprender", "@button.relearn", "refresh-cw"),
+                    action("maximo", "@button.max", "zap"),
+                ],
+            },
+        ],
+        ..Module::default()
+    };
+    let item = |title: &str, sub: String, value: &str, detail: String, badge: &str, tone| Item {
+        id: title.to_lowercase().replace(' ', "-"),
+        title: title.into(),
+        subtitle: sub,
+        value: value.into(),
+        action: Some("detalhes".into()),
+        detail,
+        badge: badge.into(),
+        tone,
+        ..Item::default()
+    };
+    let learned = |system: &str, n: &str| tr("@sub.learned", &[("system", system), ("n", n)]);
+    let saving = |pct: &str| tr("@detail.saving", &[("pct", pct)]);
+    let games = vec![
+        item(
+            "Chrono Trigger",
+            tr(
+                "@sub.testing",
+                &[("system", "Super Nintendo"), ("mhz", "816 MHz")],
+            ),
+            "",
+            tr("@detail.session", &[("n", "2"), ("of", "3")]),
+            &tr("@badge.learning", &[]),
+            Tone::Info,
+        ),
+        item(
+            "Super Mario 64",
+            tr("@sub.out", &[("system", "Nintendo 64")]),
+            "",
+            tr("@detail.always", &[("mhz", "1416 MHz")]),
+            &tr("@badge.out", &[]),
+            Tone::Muted,
+        ),
+        item(
+            "Super Mario World",
+            learned("Super Nintendo", "6"),
+            "816 MHz",
+            saving("38"),
+            "",
+            Tone::Plain,
+        ),
+        item(
+            "Pokémon Emerald",
+            learned("Game Boy Advance", "4"),
+            "1008 MHz",
+            saving("27"),
+            "",
+            Tone::Plain,
+        ),
+        item(
+            "Castlevania: SotN",
+            learned("PlayStation", "3"),
+            "1008 MHz",
+            saving("16"),
+            "",
+            Tone::Plain,
+        ),
+    ];
+    let stat = |title: &str, value: &str, subtitle: String, tone| Item {
+        title: tr(title, &[]),
+        value: value.into(),
+        subtitle,
+        tone,
+        ..Item::default()
+    };
+    let bar = |mhz: &str, speed: u8, tone| Item {
+        title: mhz.into(),
+        value: format!("{speed}%"),
+        progress: Some(speed),
+        tone,
+        ..Item::default()
+    };
+    let fact = |title: &str, value: &str, tone| Item {
+        title: tr(title, &[]),
+        value: value.into(),
+        tone,
+        ..Item::default()
+    };
+    let mut view = ModView {
+        modules: vec![module],
+        ..ModView::default()
+    };
+    let target = |t: &str| ("ajuste-cpu".to_owned(), t.to_owned());
+    view.items.insert(
+        target("row:resumo"),
+        vec![
+            stat(
+                "@stat.saving",
+                "−22%",
+                tr("@stat.saving_sub", &[]),
+                Tone::Good,
+            ),
+            stat(
+                "@stat.learned",
+                "14",
+                tr("@stat.learned_sub", &[]),
+                Tone::Plain,
+            ),
+            stat(
+                "@stat.learning",
+                "3",
+                tr("@stat.learning_sub", &[("n", "3")]),
+                Tone::Plain,
+            ),
+        ],
+    );
+    view.items.insert(target("row:jogos"), games);
+    let game = ("snes".to_owned(), "snes/Super Mario World.sfc".to_owned());
+    view.items.insert(
+        target("row:cabeca"),
+        vec![Item {
+            id: "super-mario-world".into(),
+            title: "Super Mario World".into(),
+            subtitle: tr(
+                "@sub.core",
+                &[("system", "Super Nintendo"), ("core", "snes9x")],
+            ),
+            badge: tr("@badge.learned", &[]),
+            tone: Tone::Good,
+            game: Some(game.clone()),
+            ..Item::default()
+        }],
+    );
+    view.items.insert(
+        target("row:barras"),
+        vec![
+            bar("408 MHz", 96, Tone::Bad),
+            bar("816 MHz", 68, Tone::Info),
+            bar("1008 MHz", 57, Tone::Plain),
+            bar("1416 MHz", 44, Tone::Plain),
+        ],
+    );
+    view.items.insert(
+        target("row:fatos"),
+        vec![
+            fact("@fact.cap", "816 MHz", Tone::Plain),
+            fact("@fact.sessions", "6", Tone::Plain),
+            fact("@fact.limit", "0%", Tone::Plain),
+            fact("@fact.saving", "−38%", Tone::Good),
+            fact(
+                "@fact.battery",
+                &tr("@fact.minutes", &[("n", "40")]),
+                Tone::Plain,
+            ),
+        ],
+    );
+    let view = std::sync::Arc::new(view);
+    let mut list = ready();
+    list.set_modules(view.clone());
+    list.open(Page::System);
+    list.open(Page::Modules);
+    let mut auto = list.clone();
+    auto.open_module_page("ajuste-cpu", 0);
+    auto.cursor = 2;
+    let mut learning = auto.clone();
+    learning.cursor = 0;
+    let mut detail = auto.clone();
+    detail.modules.images.insert(game, picture.to_path_buf());
+    detail.handle(Button::A);
+    let mut details = list.clone();
+    details.handle(Button::Y);
+    vec![
+        ("ajuste-auto", auto),
+        ("ajuste-aprendendo", learning),
+        ("ajuste-jogo", detail),
+        ("ajuste-detalhes", details),
+    ]
+}
+#[test]
+#[ignore = "manual capture, ARCHR_SETTINGS_CAPTURE_DIR required"]
+fn capture_tune() {
+    std::env::set_var("SDL_VIDEODRIVER", "offscreen");
+    let output = std::path::PathBuf::from(
+        std::env::var_os("ARCHR_SETTINGS_CAPTURE_DIR").expect("capture directory"),
+    );
+    let (ttf, creator);
+    let mut ui = Ui::new(640, 480, true).unwrap();
+    ttf = sdl2::ttf::init().unwrap();
+    creator = ui.canvas.texture_creator();
+    let themes = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../themes");
+    let theme = Theme::load(&themes.join("default"));
+    let images = tempfile::tempdir().unwrap();
+    ui.theme_dir = Some(themes.join("default"));
+    ui.configure(&ttf, &creator, &theme, None).unwrap();
+    ui.root = Some(images.path().to_path_buf());
+    // A game picture: sky, hills and ground.
+    let picture = images.path().join("smw.png");
+    image::RgbaImage::from_fn(256, 224, |_, y| match y {
+        0..=140 => image::Rgba([92 + (y / 4) as u8, 148 + (y / 4) as u8, 252, 255]),
+        141..=180 => image::Rgba([63, 163, 77, 255]),
+        _ => image::Rgba([200, 116, 58, 255]),
+    })
+    .save(&picture)
+    .unwrap();
+    for language in ["pt_BR", "ru", "es", "en"] {
+        ui.catalog = I18n::load(std::path::Path::new("/nonexistent"), Some(language), None);
+        for (name, state) in tune_pages(language, &picture) {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            ui.switches.clear();
+            loop {
+                ui.snap_animations();
+                ui.canvas.set_draw_color(color(theme.background));
+                ui.canvas.clear();
+                ui.settings_page(&state, &theme).unwrap();
+                let wanted = ui.store_wanted.clone();
+                let ready = wanted
+                    .iter()
+                    .all(|p| ui.store_art.as_ref().is_some_and(|a| a.peek(p).is_some()));
+                if ready || Instant::now() > deadline {
+                    break;
+                }
+                ui.tick();
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            let pixels = ui
+                .canvas
+                .read_pixels(None, sdl2::pixels::PixelFormatEnum::RGBA32)
+                .unwrap();
+            image::save_buffer(
+                output.join(format!("{name}-{language}.png")),
+                &pixels,
+                640,
+                480,
+                image::ColorType::Rgba8,
+            )
+            .unwrap();
+        }
     }
 }

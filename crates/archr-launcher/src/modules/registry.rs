@@ -362,6 +362,12 @@ pub fn permissions(manifest: &Manifest) -> Vec<Permission> {
             false,
         ),
         (
+            "cpu-tune",
+            "modules.perm_cpu_tune",
+            "modules.perm_cpu_tune_detail",
+            false,
+        ),
+        (
             "brightness",
             "modules.perm_brightness",
             "modules.perm_brightness_detail",
@@ -612,6 +618,8 @@ pub fn module(
             .map(|page| archr_ui::modules::Page {
                 id: page.id.clone(),
                 title: tr(&page.title),
+                detail: page.detail,
+                hint: page.hint.as_deref().map(tr),
                 rows: page
                     .rows
                     .iter()
@@ -633,13 +641,27 @@ pub fn module(
                                     .map(|(l, c)| if l.is_empty() { c.clone() } else { tr(l) })
                                     .collect(),
                             },
-                            RowKind::Action { action, confirm } => RowKind::Action {
+                            RowKind::Action {
+                                action,
+                                confirm,
+                                icon,
+                            } => RowKind::Action {
                                 action: action.clone(),
                                 confirm: confirm.as_deref().map(tr),
+                                icon: icon.as_deref().and_then(svg),
+                            },
+                            RowKind::List { id, open, alt } => RowKind::List {
+                                id: id.clone(),
+                                open: *open,
+                                alt: alt.as_ref().map(|(a, label)| (a.clone(), tr(label))),
                             },
                             other => other.clone(),
                         },
-                        default: row.default.clone(),
+                        // A text row's first value may be an `@key` too.
+                        default: match row.kind {
+                            RowKind::Text { .. } => tr(&row.default),
+                            _ => row.default.clone(),
+                        },
                     })
                     .collect(),
             })
@@ -816,5 +838,39 @@ mod tests {
         assert_eq!(installed.tr("@missing"), "missing");
         assert_eq!(installed.tr("plain"), "plain");
         assert!(installed.manifest.is_none(), "no module.toml");
+    }
+
+    #[test]
+    fn the_tuning_module_reaches_the_screens_translated() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../examples/modules/ajuste-cpu");
+        let installed = Installed::read(&dir, "pt_BR");
+        assert!(installed.manifest.is_some(), "{}", installed.problem);
+        let data = tempfile::tempdir().unwrap();
+        let module = module(&Dirs::new(data.path()), &installed, None, "pt_BR");
+        let detail = &module.pages[1];
+        assert!(detail.detail);
+        assert_eq!(
+            module.pages[0].hint.as_deref(),
+            Some("Desce só com folga clara; um jogo que chegar ao limite sobe um degrau")
+        );
+        let note = detail
+            .rows
+            .iter()
+            .find(|r| matches!(r.kind, RowKind::Text { .. }))
+            .unwrap();
+        assert!(
+            note.default.contains("não conta quadros"),
+            "{}",
+            note.default
+        );
+        assert!(detail.rows.iter().any(|r| matches!(
+            &r.kind,
+            RowKind::Action { icon: Some(svg), .. } if svg.contains("<svg")
+        )));
+        assert!(matches!(
+            &module.pages[0].rows[1].kind,
+            RowKind::List { open: Some(1), alt: Some((_, label)), .. } if label == "Reaprender"
+        ));
     }
 }

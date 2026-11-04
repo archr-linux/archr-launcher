@@ -8,9 +8,12 @@ use std::{collections::BTreeSet, fs, path::Path};
 use toml::{Table, Value};
 
 /// The newest API this launcher speaks; every one from 1 up runs.
-pub const API_VERSION: i64 = 2;
+pub const API_VERSION: i64 = 3;
 /// The API that brought `config_write`, `hooks`, `system` and `launch`.
 const API_2: i64 = 2;
+/// The API that brought `cpu-tune`, the detail page and the rows and
+/// fields it draws (`stats`, `header`, `bars`, `facts`).
+pub const API_3: i64 = 3;
 pub const FILE: &str = "module.toml";
 /// Path aliases a module may read; never a free path.
 pub const ALIASES: &[(&str, &str)] = &[
@@ -43,9 +46,17 @@ pub const GOVERNORS: &[&str] = &["performance", "ondemand", "schedutil", "powers
 /// Hooks a module may ask for: `launch` answers `launch.before`.
 pub const HOOKS: &[&str] = &["launch"];
 /// System capabilities, a closed list: `cpu-profile` picks the governor of
-/// one launch from `launch.before`; the rest are `system.call` actions that
-/// the launcher runs through the script that owns each one.
-pub const SYSTEM: &[&str] = &["cpu-profile", "brightness", "volume", "wifi", "screenshot"];
+/// one launch from `launch.before`, `cpu-tune` (API 3) its CPU ceiling and
+/// gets the run's measurement; the rest are `system.call` actions that the
+/// launcher runs through the script that owns each one.
+pub const SYSTEM: &[&str] = &[
+    "cpu-profile",
+    "cpu-tune",
+    "brightness",
+    "volume",
+    "wifi",
+    "screenshot",
+];
 /// The events this launcher delivers.
 pub const EVENTS: &[&str] = &[
     "launcher.started",
@@ -384,6 +395,13 @@ pub fn parse(source: &str) -> Result<(Manifest, Vec<String>), Vec<String>> {
             "permissions: config_write, hooks, system and launch need api_version = {API_2}"
         ));
     }
+    if permissions.system.iter().any(|s| s == "cpu-tune") && api_version.is_some_and(|v| v < API_3)
+    {
+        errors.push(format!(
+            "permissions.system: cpu-tune needs api_version = {API_3}"
+        ));
+    }
+    let api = api_version.unwrap_or(1);
     let hooks = hooks
         .iter()
         .filter_map(|hook| {
@@ -404,11 +422,15 @@ pub fn parse(source: &str) -> Result<(Manifest, Vec<String>), Vec<String>> {
     let widgets = start.tables("widgets");
     let mut settings = reader(&settings, "settings.", &mut warnings);
     settings.check(&["pages"]);
-    let pages: Vec<Page> = settings
-        .tables("pages")
+    let tables: Vec<Table> = settings.tables("pages").into_iter().take(PAGES).collect();
+    // A list row may open any page, also a later one.
+    let ids: Vec<&str> = tables
         .iter()
-        .take(PAGES)
-        .filter_map(|page| read_page(page, &mut warnings))
+        .filter_map(|t| t.get("id").and_then(Value::as_str))
+        .collect();
+    let pages: Vec<Page> = tables
+        .iter()
+        .filter_map(|page| read_page(page, api, &ids, &mut warnings))
         .collect();
     let rows: usize = pages.iter().map(|p| p.rows.len()).sum();
     if rows > ROWS {
@@ -578,26 +600,87 @@ fn read_quick(table: &Table, warnings: &mut Vec<String>) -> Option<Quick> {
     })
 }
 
-fn read_page(table: &Table, warnings: &mut Vec<String>) -> Option<Page> {
-    let mut page = reader(table, "settings.pages.", warnings);
-    page.check(&["id", "title", "rows"]);
+/// Keys and row types a manifest may use only from API 3 on.
+const PAGE_3: &[&str] = &["layout", "hint"];
+const ROW_3: &[&str] = &["open", "alt_action", "alt_label", "icon"];
+const TYPES_3: &[&str] = &["stats", "header", "bars", "facts"];
+
+/// Warns about and drops the API 3 keys of an older manifest.
+fn older(table: &Table, keys: &[&str], api: i64, at: &str, warnings: &mut Vec<String>) -> Table {
+    let mut table = table.clone();
+    if api < API_3 {
+        for key in keys {
+            if table.remove(*key).is_some() {
+                warnings.push(format!("{at}{key}: needs api_version = {API_3}, ignored"));
+            }
+        }
+    }
+    table
+}
+
+fn read_page(table: &Table, api: i64, ids: &[&str], warnings: &mut Vec<String>) -> Option<Page> {
+    let table = older(table, PAGE_3, api, "settings.pages.", warnings);
+    let mut page = reader(&table, "settings.pages.", warnings);
+    page.check(&["id", "title", "rows", "layout", "hint"]);
     let id = page.text("id")?;
     let title = page.text("title").unwrap_or_default();
+    let detail = match page.text("layout").as_deref() {
+        None | Some("list") => false,
+        Some("detail") => true,
+        Some(other) => {
+            page.warnings
+                .push(format!("settings.pages.layout: {other} unknown, list"));
+            false
+        }
+    };
+    let hint = page.text("hint");
     let rows = page.tables("rows");
     let rows = rows
         .iter()
-        .filter_map(|row| read_row(row, warnings))
+        .filter_map(|row| read_row(row, api, ids, warnings))
         .collect();
-    Some(Page { id, title, rows })
+    Some(Page {
+        id,
+        title,
+        rows,
+        detail,
+        hint,
+    })
 }
 
-fn read_row(table: &Table, warnings: &mut Vec<String>) -> Option<Row> {
-    let mut row = reader(table, "settings.pages.rows.", warnings);
+fn read_row(table: &Table, api: i64, ids: &[&str], warnings: &mut Vec<String>) -> Option<Row> {
+    let at = "settings.pages.rows.";
+    let table = &older(table, ROW_3, api, at, warnings);
+    let mut row = reader(table, at, warnings);
     row.check(&[
-        "type", "label", "subtitle", "section", "key", "default", "choices", "labels", "min",
-        "max", "step", "action", "confirm", "id", "value", "secret",
+        "type",
+        "label",
+        "subtitle",
+        "section",
+        "key",
+        "default",
+        "choices",
+        "labels",
+        "min",
+        "max",
+        "step",
+        "action",
+        "confirm",
+        "id",
+        "value",
+        "secret",
+        "open",
+        "alt_action",
+        "alt_label",
+        "icon",
     ]);
     let kind = row.text("type")?;
+    if api < API_3 && TYPES_3.contains(&kind.as_str()) {
+        row.warnings.push(format!(
+            "settings.pages.rows: type {kind} needs api_version = {API_3}, ignored"
+        ));
+        return None;
+    }
     let key = || row_key(table);
     let flag = |row: &mut Reader| {
         row.flag("default")
@@ -656,6 +739,8 @@ fn read_row(table: &Table, warnings: &mut Vec<String>) -> Option<Row> {
             RowKind::Action {
                 action: row.text("action")?,
                 confirm: row.text("confirm"),
+                // The name rides here until the registry swaps in the SVG.
+                icon: row.text("icon").filter(|i| icon_ok(i)).map(Into::into),
             },
             String::new(),
         ),
@@ -671,8 +756,47 @@ fn read_row(table: &Table, warnings: &mut Vec<String>) -> Option<Row> {
             },
             String::new(),
         ),
-        "list" => (
-            RowKind::List {
+        "list" => {
+            let open = row.text("open").and_then(|open| {
+                let page = ids.iter().position(|id| *id == open);
+                if page.is_none() {
+                    row.warnings
+                        .push(format!("{at}open: no page {open}, ignored"));
+                }
+                page.map(|p| p as u8)
+            });
+            let alt = row
+                .text("alt_action")
+                .map(|action| (action, row.text("alt_label").unwrap_or_default()));
+            (
+                RowKind::List {
+                    id: row.text("id")?,
+                    open,
+                    alt,
+                },
+                String::new(),
+            )
+        }
+        "stats" => (
+            RowKind::Stats {
+                id: row.text("id")?,
+            },
+            String::new(),
+        ),
+        "header" => (
+            RowKind::Header {
+                id: row.text("id")?,
+            },
+            String::new(),
+        ),
+        "bars" => (
+            RowKind::Bars {
+                id: row.text("id")?,
+            },
+            String::new(),
+        ),
+        "facts" => (
+            RowKind::Facts {
                 id: row.text("id")?,
             },
             String::new(),
@@ -773,6 +897,16 @@ pub fn check(dir: &Path) -> Result<(Manifest, Vec<String>), Vec<String>> {
                 .chain(&manifest.widgets)
                 .filter_map(|e| e.icon.as_deref()),
         )
+        .chain(
+            manifest
+                .pages
+                .iter()
+                .flat_map(|p| &p.rows)
+                .filter_map(|r| match &r.kind {
+                    RowKind::Action { icon, .. } => icon.as_deref(),
+                    _ => None,
+                }),
+        )
         .collect();
     for icon in icons {
         let path = dir.join("icons").join(format!("{icon}.svg"));
@@ -863,7 +997,7 @@ id = "jogos"
         let rows = &manifest.pages[0].rows;
         assert_eq!(rows.len(), 4);
         assert!(matches!(&rows[2].kind, RowKind::Progress { id } if id == "envio"));
-        assert!(matches!(&rows[3].kind, RowKind::List { id } if id == "jogos"));
+        assert!(matches!(&rows[3].kind, RowKind::List { id, .. } if id == "jogos"));
         assert_eq!(rows[0].default, "50");
         assert!(matches!(&rows[0].kind, RowKind::Value { choices, .. } if choices.len() == 5));
         assert_eq!(rows[1].default, "1");
@@ -954,7 +1088,107 @@ id = "jogos"
                 .join("\n");
             assert!(parse(&bad).is_err(), "{line}");
         }
-        assert!(api_ok(1) && api_ok(2) && !api_ok(3) && !api_ok(0));
+        assert!(api_ok(1) && api_ok(2) && api_ok(3) && !api_ok(4) && !api_ok(0));
+    }
+
+    #[test]
+    fn api_3_brings_cpu_tune_and_the_detail_page() {
+        let three = r#"
+id = "ajuste-cpu"
+version = "1.0.0"
+api_version = 3
+[run]
+runtime = "bash"
+entry = "main.sh"
+mode = "daemon"
+[permissions]
+hooks = ["launch"]
+system = ["cpu-tune"]
+[[settings.pages]]
+id = "main"
+hint = "@hint"
+[[settings.pages.rows]]
+type = "stats"
+id = "resumo"
+[[settings.pages.rows]]
+type = "list"
+id = "jogos"
+open = "jogo"
+alt_action = "reaprender"
+alt_label = "@relearn"
+[[settings.pages.rows]]
+type = "list"
+id = "outros"
+open = "nenhuma"
+[[settings.pages]]
+id = "jogo"
+layout = "detail"
+[[settings.pages.rows]]
+type = "header"
+id = "cabeca"
+[[settings.pages.rows]]
+type = "bars"
+id = "barras"
+[[settings.pages.rows]]
+type = "facts"
+id = "fatos"
+[[settings.pages.rows]]
+type = "action"
+action = "maximo"
+icon = "zap"
+"#;
+        let (manifest, warnings) = parse(three).unwrap();
+        assert_eq!(manifest.permissions.system, ["cpu-tune"]);
+        let (main, detail) = (&manifest.pages[0], &manifest.pages[1]);
+        assert_eq!(main.hint.as_deref(), Some("@hint"));
+        assert!(!main.detail && detail.detail);
+        assert!(matches!(&main.rows[0].kind, RowKind::Stats { id } if id == "resumo"));
+        assert!(matches!(
+            &main.rows[1].kind,
+            RowKind::List { open: Some(1), alt: Some((action, label)), .. }
+                if action == "reaprender" && label == "@relearn"
+        ));
+        assert!(matches!(
+            &main.rows[2].kind,
+            RowKind::List { open: None, .. }
+        ));
+        assert!(
+            warnings.iter().any(|w| w.contains("nenhuma")),
+            "{warnings:?}"
+        );
+        assert_eq!(detail.rows.len(), 4);
+        assert!(matches!(
+            &detail.rows[3].kind,
+            RowKind::Action { icon: Some(icon), .. } if &**icon == "zap"
+        ));
+        // An API 2 module keeps working, without what API 3 brought.
+        let two = three.replace("api_version = 3", "api_version = 2");
+        let errors = parse(&two).unwrap_err();
+        assert!(errors.iter().any(|e| e.contains("cpu-tune")), "{errors:?}");
+        let two = two.replace("system = [\"cpu-tune\"]", "system = [\"cpu-profile\"]");
+        let (manifest, warnings) = parse(&two).unwrap();
+        let (main, detail) = (&manifest.pages[0], &manifest.pages[1]);
+        assert!(main.hint.is_none() && !detail.detail);
+        assert_eq!(main.rows.len(), 2, "stats needs API 3");
+        assert!(matches!(
+            &main.rows[0].kind,
+            RowKind::List {
+                open: None,
+                alt: None,
+                ..
+            }
+        ));
+        assert_eq!(detail.rows.len(), 1, "only the action");
+        assert!(matches!(
+            &detail.rows[0].kind,
+            RowKind::Action { icon: None, .. }
+        ));
+        for expected in ["layout", "hint", "open", "alt_action", "icon", "type stats"] {
+            assert!(
+                warnings.iter().any(|w| w.contains(expected)),
+                "{expected}: {warnings:?}"
+            );
+        }
     }
 
     #[test]

@@ -444,6 +444,25 @@ fn run(
         for event in modules.poll() {
             match event {
                 modules::Event::View(view) => {
+                    // The pictures of the games module items are about.
+                    let images = &mut settings.state.modules.images;
+                    for game in view
+                        .items
+                        .values()
+                        .flatten()
+                        .filter_map(|i| i.game.as_ref())
+                    {
+                        if images.contains_key(game) {
+                            continue;
+                        }
+                        let (system, key) = game;
+                        let image = library
+                            .emulated(system, key)
+                            .and_then(|n| library.games(system).get(n)?.image.clone());
+                        if let Some(image) = image {
+                            images.insert(game.clone(), image);
+                        }
+                    }
                     app.modules = view.clone();
                     settings.state.set_modules(view);
                 }
@@ -1136,7 +1155,18 @@ fn run(
             if let Some((system, index)) = &game {
                 let key = library.game_key(system, *index).unwrap_or_default();
                 let name = library.games(system).get(*index).map(|g| g.name.clone());
-                library.governor = modules.hand_off(system, &key, &name.unwrap_or_default());
+                let mut about = serde_json::json!({
+                    "system": system,
+                    "game_key": key,
+                    "name": name.unwrap_or_default(),
+                });
+                if let Some((emulator, core)) = library.current_core(system, *index) {
+                    let full = library.systems().iter().find(|s| s.name == *system);
+                    about["system_name"] = full.map(|s| s.fullname.clone()).into();
+                    about["emulator"] = emulator.into();
+                    about["core"] = core.into();
+                }
+                library.tune = modules.hand_off(about);
             }
             if transition::apply(
                 &mut ui,

@@ -6,9 +6,10 @@ conversa por JSON. O módulo **declara** no `module.toml` o que acrescenta
 receber) e o launcher desenha tudo com os próprios componentes. O módulo nunca
 desenha pixels, nunca lê o controle e nunca roda como root.
 
-Este guia descreve a **API 2**. Módulos com `api_version = 1` continuam
-rodando; as permissões `config_write`, `hooks`, `system` e `launch` exigem
-`api_version = 2`. A especificação completa das fases 2 e 3 (ameaças,
+Este guia descreve a **API 3**. Módulos com `api_version = 1` e `2`
+continuam rodando; as permissões `config_write`, `hooks`, `system` e `launch`
+exigem `api_version = 2`; o `cpu-tune` e a página de detalhe exigem
+`api_version = 3` (seção 9). A especificação completa das fases 2 e 3 (ameaças,
 mitigações, o que ainda aguarda) está em
 `docs/superpowers/specs/2026-10-29-modulos-fases-2-3.md`. Linguagens garantidas na imagem:
 **sh/bash + `jq`** e **binários aarch64**. Python pode existir na imagem, mas
@@ -17,7 +18,8 @@ um módulo não pode depender dele (`runtime = "python3"` é recusado).
 Exemplos completos e funcionando: `examples/modules/bateria-detalhada`
 (daemon) e `examples/modules/perfil-cpu` (oneshot), publicados na Loja como
 `archr-linux/archr-module-bateria-detalhada` e
-`archr-linux/archr-module-perfil-cpu`.
+`archr-linux/archr-module-perfil-cpu`; e `examples/modules/ajuste-cpu`
+(API 3, o módulo oficial de ajuste automático de CPU, ainda não publicado).
 
 ## 1. Pacote
 
@@ -46,7 +48,7 @@ tipos errados) aparecem mas não impedem.
 ```toml
 id = "bateria-detalhada"        # [a-z0-9-]{3,40}, único no aparelho
 version = "1.0.0"               # x.y.z
-api_version = 2                 # 1 ou 2
+api_version = 3                 # 1, 2 ou 3
 min_launcher = "0.1.0"          # opcional
 name = "@name"                  # texto, "@chave" do locales/, ou tabela por idioma
 description = "@description"
@@ -177,6 +179,7 @@ usuário do próprio módulo. O valor também chega no `initialize` e no
 | `config_write = [...]` | `config.set` só das chaves listadas, valores conferidos (API 2) | "Muda ajustes" (âmbar) |
 | `hooks = ["launch"]` | recebe `launch.before` antes de cada jogo (API 2) | "Vê cada jogo que você abre" |
 | `system = ["cpu-profile"]` | em `launch.before`, pode escolher o governador daquela abertura (API 2) | "Escolhe o perfil de CPU de um jogo" |
+| `system = ["cpu-tune"]` | em `launch.before`, pode escolher o teto de CPU daquela abertura; recebe a medida do jogo no `game.ended` (API 3) | "Ajusta a CPU de cada jogo" |
 | `system = ["brightness"]` | `system.call` muda o brilho, 10–100 % (API 2) | "Muda o brilho da tela" |
 | `system = ["volume"]` | `system.call` muda o volume, 0–100 % (API 2) | "Muda o volume" |
 | `system = ["wifi"]` | `system.call` liga ou desliga o Wi-Fi (API 2) | "Liga e desliga o Wi-Fi" (âmbar) |
@@ -637,3 +640,99 @@ fica "→ x.y.z disponível". Mesmas checagens da instalação à mão; aviso na
 faixa ("X foi atualizado para 1.2.0") e "atualizado sozinho" na lista por uma
 semana. Detalhes (Y na lista) mostram o digest do pacote, se ele confere com a
 lista revisada, o último uso e as falhas dos últimos 10 min.
+
+## 9. API 3 — ajuste de CPU e página de detalhe
+
+A API 3 acrescenta só o que o ajuste automático de CPU
+(`examples/modules/ajuste-cpu`) precisa. Nada muda para quem declara
+`api_version = 1` ou `2`; num manifesto antigo, as chaves e os tipos abaixo
+viram aviso e são ignorados, e `cpu-tune` é erro.
+
+### 9.1 `system = ["cpu-tune"]`
+
+Só o **teto de frequência da CPU** de uma abertura: nunca o governador do
+usuário (isso é `cpu-profile`), nunca a GPU nem a memória, nunca escrita
+livre em `/sys`. Exige `hooks = ["launch"]` para ter efeito.
+
+- `initialize` traz `cpu: {opps, max_khz}`: as frequências que esta CPU aceita
+  agora, em kHz, da menor para a maior (as de boost só com o boost ligado;
+  no RK3326, 408000, 816000, 1008000, 1416000 e, com turbo, 1512000).
+- Em `launch.before`, `{"decision":"modify","changes":{"cpu_max_khz":816000}}`.
+  O launcher só aceita um valor de `cpu.opps`; passa `--cpu-max=<kHz>` ao
+  `runemu.sh`, que confere o número contra `scaling_available_frequencies`
+  (e `scaling_boost_frequencies`) antes de chamar `set_cpu_max_freq`, depois
+  do governador. Vale só naquela abertura: ao fim do jogo o `runemu.sh` volta
+  ao teto mais alto. Se dois módulos escolhem, vale o primeiro em ordem de
+  `id`, como o governador.
+- Com algum módulo `cpu-tune` ligado, o launcher passa também `--measure`: o
+  `archr-perf-probe` da imagem mede o jogo (qualquer emulador, sem MangoHud)
+  e, na volta, o `game.ended` traz, só para módulos `cpu-tune`:
+
+```json
+"perf": {"cpu_max_khz": 816000, "seconds": 150, "busy_p95": 71,
+         "limit_seconds": 0, "current_ma": 420}
+```
+
+| campo | significado |
+|---|---|
+| `cpu_max_khz` | o teto com que o jogo rodou |
+| `seconds` | segundos medidos (os primeiros 30 s, carregamento e menus, não contam) |
+| `busy_p95` | percentil 95 da ocupação (%) da thread mais ocupada do emulador, a cada segundo |
+| `limit_seconds` | segundos em que essa thread passou de 92 % |
+| `idle_seconds` | segundos em que ela ficou abaixo de 20 % (pausa, menu, espera) |
+| `current_ma` | corrente média da bateria em mA, só descarregando (`null` na tomada) |
+
+O emulador é o processo mais ocupado **dentro da árvore do lançamento**
+(o `runemu.sh` passa o próprio PID à sonda); nada mais do aparelho conta.
+
+É uma **heurística de ocupação da CPU, não uma medida de velocidade**: um
+emulador adiantado espera o vsync ou o áudio e um que não acompanha fica
+ocupado o tempo todo, mas a sonda não conta quadros. Um módulo não deve
+prometer "100 % de velocidade" com ela; a validação contra a contagem de
+quadros (`--max-frames`) ainda está pendente. Sessões quase todas ociosas
+não dizem nada sobre o ritmo e devem ser descartadas.
+
+Ao fim de cada jogo, mesmo que o `runemu.sh` tenha sido morto, o
+`archr-launcher-session` devolve o teto mais alto da CPU.
+
+### 9.2 Linhas e campos novos das páginas
+
+Todos são desenhados pelo launcher; o conteúdo vem de `ui.update` com
+`items` para `row:<id>`. O layout continua fixo (o tema muda cores, fontes e
+ícones). Cores só por nome (`tone`): `good` (verde), `info` (azul), `bad`
+(vermelho), `muted` (cinza) ou nada.
+
+| chave | onde | efeito |
+|---|---|---|
+| `hint` | página | texto do rodapé, à esquerda dos botões |
+| `layout = "detail"` | página | layout de detalhe (abaixo) |
+| `open = "<página>"` | linha `list` | A num item envia a ação dele e abre essa página, que mostra só aquele item |
+| `alt_action`, `alt_label` | linha `list` | X num item envia `alt_action` com `context.item`; o rodapé mostra `alt_label` |
+| `icon` | linha `action` | ícone Lucide do botão numa página de detalhe |
+
+| `type` | desenho | campos dos itens |
+|---|---|---|
+| `stats` | até 3 cartões no topo da página, nunca selecionados | `title`, `value` (grande, na cor do `tone`), `subtitle` |
+| `header` | cabeçalho da página de detalhe: a capa do jogo, nome, linha e selo | `id` (o do item aberto), `title`, `subtitle`, `badge`, `tone`, `game: {system, game_key}` |
+| `bars` | barras com título à esquerda e valor à direita; o `label` da linha é o título da seção | `title`, `value`, `progress` (0–100), `tone` |
+| `facts` | linhas nome/valor na coluna da direita | `title`, `value`, `tone` |
+
+Itens de `list` ganham `detail` (segunda linha, à direita), `badge` (selo no
+lugar do valor), `tone` e `open: false`: A envia a ação do item sem abrir a
+página de `open` (para as páginas seguinte e anterior de uma lista longa).
+
+**Página de detalhe** (`layout = "detail"`): à esquerda o `header`, as `bars`
+e as linhas `text` (nota); à direita os `facts` e, embaixo, as linhas
+`action` como botões, as únicas selecionáveis. Abre por um item com `open`;
+cada botão envia a ação com `context.item` daquele item. Enquanto o módulo
+não manda o `header` com o `id` do item aberto, a página fica vazia (nunca
+mostra outro jogo). A capa vem da biblioteca do launcher pelo `game` do
+`header`; o módulo não lê ROMs nem imagens.
+
+Exemplo completo: `examples/modules/ajuste-cpu`. Desce um degrau só com
+folga clara (p95 abaixo de 75 % e menos de 1 % do tempo no limite), sobe um quando
+chega ao limite, fica "aprendido" depois de 3 sessões estáveis no mesmo
+teto e descarta sessões curtas ou ociosas; N64, PSP, Dreamcast e Saturn
+ficam fora. A lista vai em páginas de 18 jogos (os que estão aprendendo, depois
+os de fora, depois os aprendidos), com itens `open: false` para a página
+seguinte e a anterior, no máximo 20 itens por atualização. Teste no PC: `bash examples/modules/ajuste-cpu.test.sh`.

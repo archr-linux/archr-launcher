@@ -42,6 +42,12 @@ pub struct Modules {
     pub wanted: String,
     /// An install runs.
     pub working: bool,
+    /// The list item a detail page is about (API 3): its actions carry it,
+    /// and the page shows only what the module sent for it.
+    pub item: Option<String>,
+    /// Pictures of the games items name (system, game key), found by the
+    /// host in the library.
+    pub images: std::collections::BTreeMap<(String, String), std::path::PathBuf>,
 }
 impl Modules {
     pub fn module(&self) -> Option<&Module> {
@@ -57,17 +63,56 @@ impl Modules {
             _ => None,
         }
     }
-    /// The open page's rows, as the module declared them.
-    fn page_rows(&self, page: Page) -> &[crate::modules::Row] {
+    /// The open page as the module declared it.
+    pub fn declared(&self, page: Page) -> Option<&crate::modules::Page> {
         match page {
             Page::Module(m, p) => self
                 .view
                 .modules
                 .get(usize::from(m))
-                .and_then(|module| module.pages.get(usize::from(p)))
-                .map_or(&[], |page| &page.rows),
-            _ => &[],
+                .and_then(|module| module.pages.get(usize::from(p))),
+            _ => None,
         }
+    }
+    /// The open page's rows, as the module declared them.
+    fn page_rows(&self, page: Page) -> &[crate::modules::Row] {
+        self.declared(page).map_or(&[], |page| &page.rows)
+    }
+    /// The items of every row of this kind on the open page, in order:
+    /// what the cards, the heading and the facts draw.
+    pub fn page_items(
+        &self,
+        page: Page,
+        kind: impl Fn(&RowKind) -> bool,
+    ) -> Vec<&crate::modules::Item> {
+        self.page_rows(page)
+            .iter()
+            .filter_map(|r| match &r.kind {
+                RowKind::Stats { id } | RowKind::Header { id } | RowKind::Facts { id }
+                    if kind(&r.kind) =>
+                {
+                    Some(id.as_str())
+                }
+                _ => None,
+            })
+            .flat_map(|id| self.row_items(page, id))
+            .collect()
+    }
+    /// A detail page's heading, once the module sent it for the open item.
+    pub fn detail_header(&self, page: Page) -> Option<&crate::modules::Item> {
+        let header = self
+            .page_items(page, |k| matches!(k, RowKind::Header { .. }))
+            .first()
+            .copied()?;
+        self.item
+            .as_ref()
+            .is_none_or(|i| *i == header.id)
+            .then_some(header)
+    }
+    /// The items a module sent for one of the open page's rows.
+    pub fn row_items(&self, page: Page, row: &str) -> &[crate::modules::Item] {
+        self.page_module(page)
+            .map_or(&[], |m| self.view.items(&m.id, &format!("row:{row}")))
     }
 }
 
@@ -132,6 +177,7 @@ impl Settings {
             }
             page @ Page::Module(..) => {
                 let module = self.modules.page_module(page);
+                let detail = self.modules.declared(page).is_some_and(|p| p.detail);
                 let mut rows = Vec::new();
                 let mut marker = SECTION_NEXT;
                 for (n, row) in self.modules.page_rows(page).iter().enumerate() {
@@ -143,14 +189,23 @@ impl Settings {
                         };
                         marker
                     });
+                    // A detail page selects only its buttons; the API 3
+                    // rows are drawn, never selected.
+                    if detail && !matches!(row.kind, RowKind::Action { .. }) {
+                        continue;
+                    }
                     let kind = match row.kind {
+                        RowKind::Stats { .. }
+                        | RowKind::Header { .. }
+                        | RowKind::Bars { .. }
+                        | RowKind::Facts { .. } => continue,
                         RowKind::Toggle { .. } => Kind::Toggle,
                         RowKind::Check { .. } => Kind::Check,
                         RowKind::Action { .. } | RowKind::Keyboard { .. } => Kind::Action,
                         RowKind::Value { .. } | RowKind::Text { .. } | RowKind::Progress { .. } => {
                             Kind::Value
                         }
-                        RowKind::List { ref id } => {
+                        RowKind::List { ref id, .. } => {
                             let items = module.map_or(&[][..], |m| {
                                 self.modules.view.items(&m.id, &format!("row:{id}"))
                             });
@@ -193,7 +248,7 @@ impl Settings {
             return None;
         };
         let module = self.modules.page_module(self.page())?;
-        let RowKind::List { id } = &self
+        let RowKind::List { id, .. } = &self
             .modules
             .page_rows(self.page())
             .get(usize::from(n))?
@@ -363,12 +418,40 @@ impl Settings {
             _ => None,
         }
     }
+    /// An action row's action; on a detail page, about its item.
     fn invoke(&mut self, module: String, action: String) -> Effect {
+        let detail = self.modules.declared(self.page()).is_some_and(|p| p.detail);
+        let item = self.modules.item.clone().filter(|_| detail);
         Effect::Module(Request::Invoke {
             module,
             action,
-            call: None,
+            call: item.map(|item| crate::modules::Call {
+                item: Some(item),
+                ..Default::default()
+            }),
         })
+    }
+    /// An action row's own icon (the module's SVG).
+    pub fn module_icon(&self, id: Id) -> Option<Arc<str>> {
+        match &self.module_row(id)?.kind {
+            RowKind::Action { icon, .. } => icon.clone(),
+            _ => None,
+        }
+    }
+    /// The selected list item's hints (API 3): A opens its page, X sends
+    /// the row's other action, whose text the module gave.
+    pub fn module_item_hints(&self) -> Option<(bool, Option<String>)> {
+        let id = self.module_rows().get(self.cursor)?.id;
+        let item = self.module_item(id)?;
+        match &self.module_row(id)?.kind {
+            RowKind::List { open, alt, .. } if !item.id.is_empty() => Some((
+                open.is_some() && item.action.is_some() && !item.stay,
+                alt.as_ref()
+                    .filter(|_| !item.stay)
+                    .map(|(_, label)| label.clone()),
+            )),
+            _ => None,
+        }
     }
     fn list_input(&mut self, button: Button) -> Option<Effect> {
         let count = self.modules.view.modules.len();
@@ -477,7 +560,7 @@ impl Settings {
         Effect::None
     }
     fn page_rows_input(&mut self, button: Button) -> Option<Effect> {
-        if !matches!(button, Button::A | Button::L | Button::R) {
+        if !matches!(button, Button::A | Button::L | Button::R | Button::X) {
             return None;
         }
         let Page::Module(m, _) = self.page() else {
@@ -485,20 +568,40 @@ impl Settings {
         };
         let id = self.module_rows().get(self.cursor)?.id;
         let module = self.modules.view.modules.get(usize::from(m))?.id.clone();
+        let call = |item: String| {
+            Some(crate::modules::Call {
+                item: Some(item),
+                ..Default::default()
+            })
+        };
         if let Id::ModuleItem(..) = id {
-            let item = self.module_item(id)?;
-            let (action, item) = (item.action.clone(), item.id.clone());
-            return Some(match action {
-                Some(action) if button == Button::A => Effect::Module(Request::Invoke {
-                    module,
-                    action,
-                    call: Some(crate::modules::Call {
-                        item: Some(item),
-                        ..Default::default()
-                    }),
-                }),
-                _ => Effect::None,
-            });
+            let item = self.module_item(id)?.clone();
+            let Some(RowKind::List { open, alt, .. }) = self.module_row(id).map(|r| &r.kind) else {
+                return None;
+            };
+            let (open, alt) = (*open, alt.clone());
+            let action = match button {
+                Button::A => item.action.clone(),
+                Button::X => alt.filter(|_| !item.stay).map(|(action, _)| action),
+                _ => None,
+            };
+            let Some(action) = action.filter(|_| !item.id.is_empty()) else {
+                return Some(Effect::None);
+            };
+            if let (Button::A, Some(page), false) = (button, open, item.stay) {
+                // The detail page shows this item only.
+                self.modules.item = Some(item.id.clone());
+                self.open(Page::Module(m, page));
+                self.sync_modules();
+            }
+            return Some(Effect::Module(Request::Invoke {
+                module,
+                action,
+                call: call(item.id),
+            }));
+        }
+        if button == Button::X {
+            return None;
         }
         let row = self.module_row(id)?.clone();
         let old = self.value(id).to_owned();
@@ -517,7 +620,9 @@ impl Settings {
                 };
                 choices[(at + step) % choices.len()].clone()
             }
-            RowKind::Action { action, confirm } if button == Button::A => {
+            RowKind::Action {
+                action, confirm, ..
+            } if button == Button::A => {
                 return Some(match confirm {
                     Some(question) => {
                         self.modules.confirm = Some((action.clone(), question.clone()));
@@ -761,6 +866,8 @@ mod tests {
             pages: vec![crate::modules::Page {
                 id: "main".into(),
                 title: "Bateria".into(),
+                detail: false,
+                hint: None,
                 rows: vec![
                     ModuleRow {
                         label: "Mostrar potência".into(),
@@ -796,6 +903,7 @@ mod tests {
                         kind: RowKind::Action {
                             action: "atualizar".into(),
                             confirm: Some("Certeza?".into()),
+                            icon: None,
                         },
                         default: String::new(),
                     },
@@ -927,7 +1035,11 @@ mod tests {
             label: String::new(),
             subtitle: None,
             section: Some("Jogos".into()),
-            kind: RowKind::List { id: "jogos".into() },
+            kind: RowKind::List {
+                id: "jogos".into(),
+                open: None,
+                alt: None,
+            },
             default: String::new(),
         });
         let item = |title: &str, action: Option<&str>| crate::modules::Item {
@@ -936,6 +1048,7 @@ mod tests {
             subtitle: "SNES".into(),
             value: "há 2 h".into(),
             action: action.map(Into::into),
+            ..Default::default()
         };
         view.items.insert(
             ("bateria".into(), "row:jogos".into()),
@@ -967,6 +1080,155 @@ mod tests {
                 })
             })
         );
+    }
+
+    #[test]
+    fn a_list_item_opens_its_detail_page_whose_buttons_carry_it() {
+        let mut view = (*view()).clone();
+        let row = |kind| ModuleRow {
+            label: String::new(),
+            subtitle: None,
+            section: None,
+            kind,
+            default: String::new(),
+        };
+        let module = &mut view.modules[0];
+        module.pages[0].rows = vec![
+            row(RowKind::Stats {
+                id: "resumo".into(),
+            }),
+            row(RowKind::List {
+                id: "jogos".into(),
+                open: Some(1),
+                alt: Some(("reaprender".into(), "Reaprender".into())),
+            }),
+        ];
+        module.pages.push(crate::modules::Page {
+            id: "jogo".into(),
+            title: "Jogo".into(),
+            detail: true,
+            hint: None,
+            rows: vec![
+                row(RowKind::Header {
+                    id: "cabeca".into(),
+                }),
+                row(RowKind::Bars {
+                    id: "barras".into(),
+                }),
+                row(RowKind::Action {
+                    action: "reaprender".into(),
+                    confirm: None,
+                    icon: None,
+                }),
+                row(RowKind::Action {
+                    action: "maximo".into(),
+                    confirm: None,
+                    icon: None,
+                }),
+            ],
+        });
+        let item = |id: &str| crate::modules::Item {
+            id: id.into(),
+            title: id.into(),
+            action: Some("detalhes".into()),
+            ..Default::default()
+        };
+        let next = crate::modules::Item {
+            stay: true,
+            ..item("pagina-seguinte")
+        };
+        view.items.insert(
+            ("bateria".into(), "row:jogos".into()),
+            vec![item("mario"), item("zelda"), next],
+        );
+        let mut state = settings();
+        state.set_modules(Arc::new(view));
+        state.open_module_page("bateria", 0);
+        let rows = state.visible_rows();
+        assert_eq!(rows.len(), 3, "the cards are never selected");
+        let call = |item: &str| {
+            Some(crate::modules::Call {
+                item: Some(item.into()),
+                ..Default::default()
+            })
+        };
+        let invoke = |action: &str, item: &str| {
+            Effect::Module(Request::Invoke {
+                module: "bateria".into(),
+                action: action.into(),
+                call: call(item),
+            })
+        };
+        // The next page: A sends its action and the page stays.
+        state.cursor = 2;
+        assert_eq!(state.module_item_hints(), Some((false, None)));
+        assert_eq!(state.handle(Button::X), Effect::None);
+        assert_eq!(
+            state.handle(Button::A),
+            invoke("detalhes", "pagina-seguinte")
+        );
+        assert_eq!(state.page(), Page::Module(0, 0));
+        state.cursor = 1;
+        assert_eq!(
+            state.module_item_hints(),
+            Some((true, Some("Reaprender".into())))
+        );
+        assert_eq!(state.handle(Button::X), invoke("reaprender", "zelda"));
+        assert_eq!(state.page(), Page::Module(0, 0), "X stays");
+        assert_eq!(state.handle(Button::A), invoke("detalhes", "zelda"));
+        assert_eq!(state.page(), Page::Module(0, 1));
+        assert_eq!(state.modules.item.as_deref(), Some("zelda"));
+        let rows = state.visible_rows();
+        assert_eq!(rows.len(), 2, "only the buttons are selected");
+        assert_eq!(state.cursor, 0);
+        state.handle(Button::Down);
+        assert_eq!(state.handle(Button::A), invoke("maximo", "zelda"));
+        state.handle(Button::B);
+        assert_eq!(state.page(), Page::Module(0, 0));
+    }
+
+    #[test]
+    fn a_detail_page_draws_the_items_of_every_facts_row() {
+        let mut view = (*view()).clone();
+        let row = |kind| ModuleRow {
+            label: String::new(),
+            subtitle: None,
+            section: None,
+            kind,
+            default: String::new(),
+        };
+        view.modules[0].pages[0].rows = vec![
+            row(RowKind::Header {
+                id: "cabeca".into(),
+            }),
+            row(RowKind::Facts { id: "teto".into() }),
+            row(RowKind::Facts {
+                id: "bateria".into(),
+            }),
+        ];
+        let items = |n: usize| -> Vec<crate::modules::Item> {
+            (0..n)
+                .map(|i| crate::modules::Item {
+                    title: format!("f{i}"),
+                    ..Default::default()
+                })
+                .collect()
+        };
+        for (target, n) in [("row:cabeca", 1), ("row:teto", 3), ("row:bateria", 2)] {
+            view.items
+                .insert(("bateria".into(), target.into()), items(n));
+        }
+        let mut state = settings();
+        state.set_modules(Arc::new(view));
+        state.open_module_page("bateria", 0);
+        let facts = state
+            .modules
+            .page_items(state.page(), |k| matches!(k, RowKind::Facts { .. }));
+        assert_eq!(facts.len(), 5, "both facts rows, all their items");
+        let heading = state
+            .modules
+            .page_items(state.page(), |k| matches!(k, RowKind::Header { .. }));
+        assert_eq!(heading.len(), 1);
     }
 
     #[test]

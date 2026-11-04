@@ -206,10 +206,10 @@ impl View<'_, '_, '_> {
             Face::Mono,
         )?;
         if system.installable() {
-            self.bios_button(
+            self.icon_button(
                 (PANEL_X, BUTTON_TOP, PANEL_W, 40.),
                 true,
-                Some(Glyph::Download),
+                Some((None, "download")),
                 &self.tr("bios.install"),
             )?;
         }
@@ -288,11 +288,13 @@ impl View<'_, '_, '_> {
         )?;
         Ok(y + 46.)
     }
-    fn bios_button(
+    /// A button: the module's own SVG or a shipped Lucide glyph by name,
+    /// then the label, centred together.
+    pub(super) fn icon_button(
         &mut self,
         bounds: Bounds,
         primary: bool,
-        glyph: Option<Glyph>,
+        icon: Option<(Option<&str>, &str)>,
         label: &str,
     ) -> Result<(), String> {
         let theme = self.theme;
@@ -310,14 +312,14 @@ impl View<'_, '_, '_> {
             .rounded(self.rect(bounds), self.ui.px(10.) as f32, fill, edge)?;
         let (x, y, w, h) = bounds;
         let text = self.ui.measure(label, face, 15.)? as f32 / self.ui.frame.scale;
-        let icon = if glyph.is_some() { 23. } else { 0. };
-        let left = x + ((w - text - icon) / 2.).max(8.);
-        if let Some(glyph) = glyph {
-            self.ui
-                .icon(glyph, self.rect((left, y + (h - 15.) / 2., 15., 15.)), ink)?;
+        let room = if icon.is_some() { 23. } else { 0. };
+        let left = x + ((w - text - room) / 2.).max(8.);
+        if let Some(icon) = icon {
+            let at = self.rect((left, y + (h - 15.) / 2., 15., 15.));
+            self.ui.module_icon(icon, at, ink)?;
         }
         self.text_face(
-            (left + icon, y, w - (left + icon - x) - 8., h),
+            (left + room, y, w - (left + room - x) - 8., h),
             label,
             (15., ink, Align::Left),
             face,
@@ -414,13 +416,13 @@ impl View<'_, '_, '_> {
         y += 14.;
         let half = (inner - 10.) / 2.;
         let install = state.bios.choice == 0;
-        self.bios_button(
+        self.icon_button(
             (left, y, half, 40.),
             install,
-            Some(Glyph::Download),
+            Some((None, "download")),
             &self.tr("bios.install_short"),
         )?;
-        self.bios_button(
+        self.icon_button(
             (left + half + 10., y, half, 40.),
             !install,
             None,

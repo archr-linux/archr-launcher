@@ -923,6 +923,8 @@
 "modules.perm_hooks_launch_detail" = "And may adjust that launch, up to 0.3 s before it starts"
 "modules.perm_cpu_profile" = "Picks the CPU profile of a game"
 "modules.perm_cpu_profile_detail" = "Only for that launch; your setting stays"
+"modules.perm_cpu_tune" = "Tunes the CPU of each game"
+"modules.perm_cpu_tune_detail" = "Frequency ceiling for that launch only; measures the game to learn"
 "modules.perm_launch" = "Opens games"
 "modules.perm_launch_detail" = "Only right after you choose one of its actions"
 "modules.perm_tile" = "Tile in the Start menu"

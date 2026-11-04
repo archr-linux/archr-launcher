@@ -174,6 +174,13 @@ setup_case() {
   export ARCHR_SESSION_RUN_DIR="$CASE_DIR/run"
   export ARCHR_SESSION_LOG="$CASE_DIR/session.log"
   export ARCHR_SESSION_KILL_FILE="$CASE_DIR/kill-data"
+  # A CPU a module capped at 816 MHz for the game, with boost off.
+  export ARCHR_SESSION_CPUFREQ="$CASE_DIR/cpufreq"
+  mkdir -p "$ARCHR_SESSION_CPUFREQ/policy0"
+  echo "${CASE_BOOST:-0}" >"$ARCHR_SESSION_CPUFREQ/boost"
+  echo '408000 816000 1008000 1416000 ' >"$ARCHR_SESSION_CPUFREQ/policy0/scaling_available_frequencies"
+  echo '1512000 ' >"$ARCHR_SESSION_CPUFREQ/policy0/scaling_boost_frequencies"
+  echo 816000 >"$ARCHR_SESSION_CPUFREQ/policy0/scaling_max_freq"
   printf '%s\n' "$2" >"$CASE_DIR/plan"
 }
 
@@ -207,7 +214,17 @@ END'
 [ -f "$CASE_DIR/locale-applied" ]
 [ "$(cat "$CASE_DIR/imports")" = 'import-environment MALI_WAYLAND_AFBC SDL_VIDEODRIVER' ]
 [ "$(cat "$CASE_DIR/controller-db")" = "$ARCHR_SESSION_PACKAGED_CONTROLLER_DB" ]
-printf '%s\n' 'PASS game round-trip and kill-target reset'
+# The fake runemu.sh never lifts the cap, like one that was killed.
+[ "$(cat "$ARCHR_SESSION_CPUFREQ/policy0/scaling_max_freq")" = 1416000 ]
+printf '%s\n' 'PASS game round-trip, kill-target reset and CPU ceiling'
+
+# With boost on the boost OPP is the top; two games in a row, same result.
+CASE_BOOST=1 run_case cpu-boost 'game runemu.sh demo
+game runemu.sh demo
+END'
+[ "$(cat "$ARCHR_SESSION_CPUFREQ/policy0/scaling_max_freq")" = 1512000 ]
+[ "$(grep -c 'Game exited' "$ARCHR_SESSION_LOG")" = 2 ]
+printf '%s\n' 'PASS the CPU ceiling comes back after every game'
 
 : >"$ARCHR_SESSION_USER_CONTROLLER_DB"
 run_case user-controller-db 'CLEAN
@@ -346,6 +363,9 @@ END"
 run_stop_case() {
   stop_case "$1" "$2" game-ready
   [ -f "$CASE_DIR/cleanup" ] || { echo 'FAIL: service stop skipped game cleanup' >&2; exit 1; }
+  # The game was capped and stopped with the service: the ceiling is back.
+  [ "$(cat "$ARCHR_SESSION_CPUFREQ/policy0/scaling_max_freq")" = 1416000 ] ||
+    { echo 'FAIL: service stop left the CPU ceiling capped' >&2; exit 1; }
   while IFS= read -r pid; do
     if kill -0 "$pid" 2>/dev/null; then
       echo "FAIL: fake game process $pid survived service stop" >&2

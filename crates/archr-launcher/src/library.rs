@@ -22,8 +22,8 @@ pub struct Library {
     pub banner: Option<Message>,
     pub pending_writes: usize,
     pub write_failed: bool,
-    /// The CPU governor a module chose for the next launch only.
-    pub governor: Option<String>,
+    /// What the modules chose for the next launch only.
+    pub tune: crate::modules::Tune,
     /// The save state the next launch starts from.
     pub entry: Option<crate::saves::Entry>,
     moonlight_available: bool,
@@ -96,7 +96,7 @@ impl Library {
             banner,
             pending_writes: 0,
             write_failed: false,
-            governor: None,
+            tune: Default::default(),
             entry: None,
             overview,
             definitions,
@@ -344,7 +344,7 @@ impl Library {
                 return Ok(true);
             }
             Outcome::Launch { system, game } => {
-                let governor = self.governor.take();
+                let tune = std::mem::take(&mut self.tune);
                 // The state is for this launch of this game only: taken
                 // first, so no failure below leaves it for another.
                 let entry = self.entry.take().filter(|entry| {
@@ -353,12 +353,21 @@ impl Library {
                 });
                 let mut command = self.launch_command(&system, game, controllers)?;
                 // runemu.sh runs the governor as a function name: only the
-                // known ones, and only on its own command line.
-                if let Some(governor) = governor.filter(|g| {
-                    crate::modules::manifest::GOVERNORS.contains(&g.as_str())
-                        && self.current_core(&system, game).is_some()
-                }) {
-                    command.push_str(&format!(" --governor={governor}"));
+                // known ones, and only on its own command line. The ceiling
+                // is a number it checks against the CPU's own frequencies.
+                if self.current_core(&system, game).is_some() {
+                    if let Some(governor) = tune
+                        .governor
+                        .filter(|g| crate::modules::manifest::GOVERNORS.contains(&g.as_str()))
+                    {
+                        command.push_str(&format!(" --governor={governor}"));
+                    }
+                    if let Some(khz) = tune.cpu_max_khz {
+                        command.push_str(&format!(" --cpu-max={khz}"));
+                    }
+                    if tune.measure {
+                        command.push_str(" --measure");
+                    }
                 }
                 // The saves worker backed up the cartridge save already.
                 if let Some(entry) = entry {

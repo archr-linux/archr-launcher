@@ -16,6 +16,8 @@ pub const QUICK: (usize, usize) = (3, 1);
 pub const WIDGETS: (usize, usize) = (2, 1);
 /// Items of one `list` row.
 pub const ITEMS: usize = 20;
+/// Cards of a `stats` row.
+pub const STATS: usize = 3;
 
 /// What choosing a tile or shortcut does.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -66,10 +68,12 @@ pub enum RowKind {
     Check {
         key: String,
     },
-    /// `confirm` asks this question before sending.
+    /// `confirm` asks this question before sending. On a detail page it is
+    /// a button, with the module's own Lucide `icon` (API 3).
     Action {
         action: String,
         confirm: Option<String>,
+        icon: Option<Arc<str>>,
     },
     /// Read only; the value comes from `ui.update`.
     Text {
@@ -85,7 +89,29 @@ pub enum RowKind {
         id: String,
     },
     /// Rows the module sends with `ui.update` (`items`), up to `ITEMS`.
+    /// API 3: A on an item also opens the page `open` (a detail page about
+    /// that item), and X sends `alt`, an action and its hint text.
     List {
+        id: String,
+        open: Option<u8>,
+        alt: Option<(String, String)>,
+    },
+    /// API 3, never selected, all from `ui.update` items. Cards above the
+    /// page's rows (`title`, `value`, `subtitle`; up to `STATS`).
+    Stats {
+        id: String,
+    },
+    /// A detail page's heading: the first item's `title`, `subtitle`,
+    /// `badge` and the game's picture (`system`, `game_key`).
+    Header {
+        id: String,
+    },
+    /// Bars: `title` on the left, `progress` and `value` on the right.
+    Bars {
+        id: String,
+    },
+    /// Name and value lines in a detail page's side column.
+    Facts {
         id: String,
     },
 }
@@ -97,9 +123,7 @@ impl RowKind {
             | Self::Value { key, .. }
             | Self::Check { key }
             | Self::Keyboard { key, .. } => Some(key),
-            Self::Action { .. } | Self::Text { .. } | Self::Progress { .. } | Self::List { .. } => {
-                None
-            }
+            _ => None,
         }
     }
 }
@@ -119,6 +143,12 @@ pub struct Page {
     pub id: String,
     pub title: String,
     pub rows: Vec<Row>,
+    /// API 3: the detail layout (Modulo-ajuste-jogo), opened from a list
+    /// item: header, bars and text on the left; facts and action buttons
+    /// on the right.
+    pub detail: bool,
+    /// API 3: the footer note.
+    pub hint: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -204,7 +234,8 @@ pub struct View {
     pub items: BTreeMap<(String, String), Vec<Item>>,
 }
 
-/// One row of a `list` row, as the module sent it.
+/// One row of a `list` row, as the module sent it, or one entry of the
+/// API 3 rows (`stats`, `header`, `bars`, `facts`).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Item {
     /// The module's own name for the row, sent back as `context.item`: the
@@ -215,6 +246,38 @@ pub struct Item {
     pub value: String,
     /// What A sends; only rows with an id have one.
     pub action: Option<String>,
+    /// API 3: a second line under the value, a tag in place of the value,
+    /// the colour of both, a bar (0–100) and the game it is about.
+    pub detail: String,
+    pub badge: String,
+    pub tone: Tone,
+    pub progress: Option<u8>,
+    pub game: Option<(String, String)>,
+    /// `"open": false`: A sends the action and the page stays (a list's
+    /// next and previous pages), even on a row that opens a detail page.
+    pub stay: bool,
+}
+
+/// The colour a module gives an item (API 3): a theme colour, never a value.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Tone {
+    #[default]
+    Plain,
+    Good,
+    Info,
+    Bad,
+    Muted,
+}
+impl Tone {
+    pub fn parse(text: &str) -> Self {
+        match text {
+            "good" => Self::Good,
+            "info" => Self::Info,
+            "bad" => Self::Bad,
+            "muted" => Self::Muted,
+            _ => Self::Plain,
+        }
+    }
 }
 
 impl View {

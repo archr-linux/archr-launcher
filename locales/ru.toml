@@ -923,6 +923,8 @@
 "modules.perm_hooks_launch_detail" = "И может изменить этот запуск, не дольше 0,3 с"
 "modules.perm_cpu_profile" = "Выбирает профиль ЦП для игры"
 "modules.perm_cpu_profile_detail" = "Только для этого запуска; ваша настройка не меняется"
+"modules.perm_cpu_tune" = "Настраивает ЦП для каждой игры"
+"modules.perm_cpu_tune_detail" = "Предел частоты только для этого запуска; измеряет игру, чтобы обучиться"
 "modules.perm_launch" = "Запускает игры"
 "modules.perm_launch_detail" = "Только сразу после того, как вы выбрали его действие"
 "modules.perm_tile" = "Плитка в меню Start"

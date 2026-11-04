@@ -1795,24 +1795,39 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         y: i32,
         h: u32,
     ) -> Result<i32, String> {
+        let labels: Vec<(HintButton, String)> = hints
+            .iter()
+            .map(|&(button, key)| (button.into(), self.catalog.text(key)))
+            .collect();
+        self.hint_labels(&labels, theme, width, y, h)
+    }
+    /// The hints with their texts already in the user's language.
+    fn hint_labels(
+        &mut self,
+        hints: &[(HintButton, String)],
+        theme: &Theme,
+        width: u32,
+        y: i32,
+        h: u32,
+    ) -> Result<i32, String> {
         let mut right = width as i32 - self.px(24.);
-        for &(button, key) in hints.iter().rev() {
-            let start = matches!(button.into(), HintButton::Start);
+        for (button, label) in hints.iter().rev() {
+            let button = *button;
+            let start = matches!(button, HintButton::Start);
             let letter = |key| {
                 ['A', 'B', 'X', 'Y']
                     .iter()
                     .position(|k| *k == key)
                     .map_or(key, |n| self.face_letters[n])
             };
-            let buttons = match button.into() {
+            let buttons = match button {
                 HintButton::Key(key) => [Some(letter(key)), None],
                 HintButton::Pair(left, right) => [Some(letter(left)), Some(letter(right))],
                 HintButton::Start => [None, None],
             };
             let paired = buttons[1].is_some();
-            let label = self.catalog.text(key);
             right = self.packed_label(
-                &label,
+                label,
                 (Face::Regular, 13., theme.muted),
                 (right, y, h),
                 u32::MAX,
