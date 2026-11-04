@@ -788,3 +788,238 @@ fn walk_files(dir: &Path) -> Vec<std::path::PathBuf> {
     }
     found
 }
+
+/// Names by language reach the store's cards in the launcher's language,
+/// with English when the manifest lacks it, and follow a change of language.
+#[test]
+fn store_cards_speak_the_launchers_language() {
+    let root = tempfile::tempdir().unwrap();
+    let fake = Fake::default();
+    let tarball = Tarball::module(MANIFEST).bytes();
+    publish(&fake, MANIFEST, &tarball, &sha(&tarball), "");
+    fake.answer(
+        "https://github.com/kaio-dev/archr-bateria/releases/latest/download/module.toml",
+        MANIFEST,
+    );
+    for (language, name) in [("pt_BR", "Bateria"), ("ru", "Battery"), ("en", "Battery")] {
+        let store = shop(root.path(), &fake).with_language(language);
+        assert_eq!(store.decorate(&card()).unwrap().name, name, "{language}");
+        assert_eq!(store.offer(&card()).unwrap().card.name, name, "{language}");
+    }
+    // The host's language reaches a running shop.
+    let store = shop(root.path(), &fake);
+    let shared = store.language();
+    assert_eq!(store.decorate(&card()).unwrap().name, "Battery");
+    *shared.write().unwrap() = "pt_BR".into();
+    assert_eq!(store.decorate(&card()).unwrap().name, "Bateria");
+}
+
+/// The host hands a change of language to the store's lane.
+#[test]
+fn the_store_follows_the_launchers_language_change() {
+    use archr_ui::modules::{Request, StoreAction};
+    let root = tempfile::tempdir().unwrap();
+    let fake = Fake::default();
+    let tarball = Tarball::module(MANIFEST).bytes();
+    publish(&fake, MANIFEST, &tarball, &sha(&tarball), "");
+    let modules = host(root.path(), &fake, std::time::Duration::from_secs(3600));
+    modules.language("pt_BR");
+    modules.request(Request::Store(StoreAction::Open(Box::new(card()))));
+    let (replies, _) = until_store(&modules, |r, _| {
+        r.iter().any(|r| matches!(r, StoreReply::Offer(..)))
+    });
+    let name = replies.iter().find_map(|r| match r {
+        StoreReply::Offer(_, Ok(offer)) => Some(offer.card.name.clone()),
+        _ => None,
+    });
+    assert_eq!(name.as_deref(), Some("Bateria"));
+}
+
+/// The badge on the Modules page, as the host's views show it: the last
+/// one seen within `settle`, or the first equal to `want` before 10 s.
+fn badge_of(
+    modules: &archr_launcher::modules::Modules,
+    want: Option<bool>,
+    settle: std::time::Duration,
+) -> Option<bool> {
+    use archr_launcher::modules::Event;
+    let start = std::time::Instant::now();
+    let mut last = None;
+    loop {
+        for event in modules.poll() {
+            if let Event::View(view) = event {
+                if let Some(m) = view.modules.iter().find(|m| m.id == "bateria") {
+                    last = Some(m.reviewed);
+                }
+            }
+        }
+        match want {
+            Some(w) if last == Some(w) => return last,
+            Some(_) if start.elapsed() > std::time::Duration::from_secs(10) => return last,
+            None if start.elapsed() > settle => return last,
+            _ => {}
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+/// bateria 1.0.0, reviewed, installed through the host's store lane.
+fn install_reviewed(root: &Path, fake: &Fake) -> archr_launcher::modules::Modules {
+    use archr_ui::modules::{Request, StoreAction};
+    let offer = shop(root, fake).offer(&card()).unwrap();
+    assert!(offer.reviewed);
+    let modules = host(root, fake, std::time::Duration::from_secs(3600));
+    modules.request(Request::Store(StoreAction::Install(Box::new(offer))));
+    until_store(&modules, |r, _| {
+        r.iter().any(|r| matches!(r, StoreReply::Done(Ok(_))))
+    });
+    modules
+}
+fn reviewed_release(fake: &Fake) {
+    let tarball = Tarball::module(MANIFEST).bytes();
+    publish(fake, MANIFEST, &tarball, &sha(&tarball), &sha(&tarball));
+}
+
+/// The badge is derived, never stored: the kept list, checked again, names
+/// the installed package, and its files are still those installed. It
+/// holds offline after a restart, and goes when a file changes or the kept
+/// list expires.
+#[test]
+fn the_badge_follows_the_kept_list_and_the_files_on_disk() {
+    let root = tempfile::tempdir().unwrap();
+    let fake = Fake::default();
+    reviewed_release(&fake);
+    let modules = install_reviewed(root.path(), &fake);
+    let wait = std::time::Duration::from_millis(800);
+    assert_eq!(badge_of(&modules, Some(true), wait), Some(true));
+    let record = State::load(&root.path().join("modules.toml")).modules["bateria"].clone();
+    assert!(record.content.starts_with("sha256:"), "{record:?}");
+    drop(modules);
+    // Offline: the list kept on disk still counts.
+    let offline = Fake::default();
+    let modules = host(root.path(), &offline, std::time::Duration::from_secs(3600));
+    assert_eq!(badge_of(&modules, Some(true), wait), Some(true));
+    drop(modules);
+    // A file changed on disk: no badge.
+    let script = root.path().join("modules/bateria/main.sh");
+    let original = fs::read(&script).unwrap();
+    fs::write(&script, b"#!/bin/bash\necho changed\n").unwrap();
+    let modules = host(root.path(), &offline, std::time::Duration::from_secs(3600));
+    assert_eq!(badge_of(&modules, None, wait), Some(false));
+    drop(modules);
+    fs::write(&script, original).unwrap();
+    // The kept list expired: no badge.
+    let expired = format!(
+        r#"{{"serial":3,"expires":1000,"modules":[{{"repo":"kaio-dev/archr-bateria","digest":"{}"}}]}}"#,
+        record.digest
+    );
+    fs::write(root.path().join("modules-reviewed.json"), &expired).unwrap();
+    fs::write(
+        root.path().join("modules-reviewed.json.sig"),
+        sign(expired.as_bytes()),
+    )
+    .unwrap();
+    let modules = host(root.path(), &offline, std::time::Duration::from_secs(3600));
+    assert_eq!(badge_of(&modules, None, wait), Some(false));
+}
+
+/// A newer signed list without the module takes the badge off every
+/// installed module, whatever store tab brought it.
+#[test]
+fn a_revoking_list_takes_the_badge_off_installed_modules() {
+    use archr_ui::modules::{Request, StoreAction};
+    let root = tempfile::tempdir().unwrap();
+    let fake = Fake::default();
+    reviewed_release(&fake);
+    let modules = install_reviewed(root.path(), &fake);
+    let wait = std::time::Duration::from_millis(800);
+    assert_eq!(badge_of(&modules, Some(true), wait), Some(true));
+    drop(modules);
+    // Past the hour the store keeps a release's answer.
+    fs::remove_dir_all(root.path().join("cache")).unwrap();
+    let revoked = Fake::default();
+    let tarball = Tarball::module(MANIFEST).bytes();
+    publish(&revoked, MANIFEST, &tarball, &sha(&tarball), "");
+    let list = r#"{"serial":4,"expires":4102444800,"modules":[]}"#;
+    review(&revoked, list.as_bytes(), &sign(list.as_bytes()));
+    let modules = host(root.path(), &revoked, std::time::Duration::from_secs(3600));
+    assert_eq!(
+        badge_of(&modules, Some(true), wait),
+        Some(true),
+        "kept list"
+    );
+    modules.request(Request::Store(StoreAction::List(Tab::Reviewed, true)));
+    assert_eq!(badge_of(&modules, Some(false), wait), Some(false));
+}
+
+/// A list that runs out while the launcher is open takes the badges with
+/// it, without a restart or a store visit.
+#[test]
+fn the_badge_goes_when_the_list_expires_with_the_launcher_open() {
+    let root = tempfile::tempdir().unwrap();
+    let fake = Fake::default();
+    let tarball = Tarball::module(MANIFEST).bytes();
+    publish(&fake, MANIFEST, &tarball, &sha(&tarball), &sha(&tarball));
+    let soon = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        + 5;
+    let list = format!(
+        r#"{{"serial":3,"expires":{soon},"modules":[{{"repo":"kaio-dev/archr-bateria","digest":"sha256:{}"}}]}}"#,
+        sha(&tarball)
+    );
+    review(&fake, list.as_bytes(), &sign(list.as_bytes()));
+    let modules = install_reviewed(root.path(), &fake);
+    let wait = std::time::Duration::from_millis(800);
+    assert_eq!(badge_of(&modules, Some(true), wait), Some(true));
+    // The clock passes the list's date with the same launcher open.
+    assert_eq!(badge_of(&modules, Some(false), wait), Some(false));
+}
+
+/// A revoking list that arrives with an offer, not a listing, still takes
+/// the badge off the installed module.
+#[test]
+fn a_revoking_list_from_an_offer_takes_the_badge_off() {
+    use archr_ui::modules::{Request, StoreAction};
+    let root = tempfile::tempdir().unwrap();
+    let fake = Fake::default();
+    reviewed_release(&fake);
+    let modules = install_reviewed(root.path(), &fake);
+    let wait = std::time::Duration::from_millis(800);
+    assert_eq!(badge_of(&modules, Some(true), wait), Some(true));
+    drop(modules);
+    fs::remove_dir_all(root.path().join("cache")).unwrap();
+    let revoked = Fake::default();
+    let tarball = Tarball::module(MANIFEST).bytes();
+    publish(&revoked, MANIFEST, &tarball, &sha(&tarball), "");
+    let list = r#"{"serial":4,"expires":4102444800,"modules":[]}"#;
+    review(&revoked, list.as_bytes(), &sign(list.as_bytes()));
+    let modules = host(root.path(), &revoked, std::time::Duration::from_secs(3600));
+    assert_eq!(
+        badge_of(&modules, Some(true), wait),
+        Some(true),
+        "kept list"
+    );
+    modules.request(Request::Store(StoreAction::Open(Box::new(card()))));
+    assert_eq!(badge_of(&modules, Some(false), wait), Some(false));
+}
+
+/// A file changed on disk loses the badge when the store list is refreshed
+/// with the same reviewed list, with no restart.
+#[test]
+fn refreshing_the_store_checks_the_files_again() {
+    use archr_ui::modules::{Request, StoreAction};
+    let root = tempfile::tempdir().unwrap();
+    let fake = Fake::default();
+    reviewed_release(&fake);
+    let modules = install_reviewed(root.path(), &fake);
+    let wait = std::time::Duration::from_millis(800);
+    assert_eq!(badge_of(&modules, Some(true), wait), Some(true));
+    fs::write(
+        root.path().join("modules/bateria/main.sh"),
+        b"#!/bin/bash\necho changed\n",
+    )
+    .unwrap();
+    modules.request(Request::Store(StoreAction::List(Tab::Reviewed, true)));
+    assert_eq!(badge_of(&modules, Some(false), wait), Some(false));
+}

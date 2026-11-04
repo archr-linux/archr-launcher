@@ -1,13 +1,13 @@
 id = "bateria-detalhada"
 version = "1.0.0"
-api_version = 1
+api_version = 2
 min_launcher = "0.1.0"
 # A table by language: the store shows it before the module is installed.
 name = { en = "Detailed battery", pt_BR = "Bateria detalhada", es = "Batería detallada", ru = "Подробно о батарее" }
-description = { en = "Charge, power and battery health in the Start menu.", pt_BR = "Carga, potência e saúde da bateria no menu Start.", es = "Carga, potencia y salud de la batería en el menú Start.", ru = "Заряд, мощность и состояние батареи в меню Start." }
+description = { en = "Charge, power, voltage and battery health in the Start menu.", pt_BR = "Carga, potência, tensão e saúde da bateria no menu Start.", es = "Carga, potencia, tensión y salud de la batería en el menú Start.", ru = "Заряд, мощность, напряжение и состояние батареи в меню Start." }
 author = "ArchR <contato@archr.dev>"
 license = "MIT"
-homepage = "https://github.com/archr-linux/archr-launcher"
+homepage = "https://github.com/archr-linux/archr-module-bateria-detalhada"
 icon = "battery-full"
 
 [run]
@@ -33,6 +33,11 @@ type = "text"
 id = "agora"
 label = "@row.now"
 section = "@section.state"
+
+[[settings.pages.rows]]
+type = "text"
+id = "tensao"
+label = "@row.voltage"
 
 [[settings.pages.rows]]
 type = "text"

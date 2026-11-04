@@ -15,7 +15,9 @@ mitigações, o que ainda aguarda) está em
 um módulo não pode depender dele (`runtime = "python3"` é recusado).
 
 Exemplos completos e funcionando: `examples/modules/bateria-detalhada`
-(daemon) e `examples/modules/perfil-cpu` (oneshot).
+(daemon) e `examples/modules/perfil-cpu` (oneshot), publicados na Loja como
+`archr-linux/archr-module-bateria-detalhada` e
+`archr-linux/archr-module-perfil-cpu`.
 
 ## 1. Pacote
 
@@ -80,7 +82,8 @@ de página; ícone que não é um SVG Lucide intacto; falta de `locales/en.toml`
 Todo o resto inválido vira aviso e o campo é ignorado.
 
 `name` e `description` em tabela por idioma (`{ en = "...", pt_BR = "..." }`)
-aparecem já na Loja, antes da instalação; com `@chave` a Loja mostra o nome do
+aparecem já na Loja, antes da instalação, no idioma do launcher (ou em `en`;
+a Loja acompanha a troca de idioma); com `@chave` a Loja mostra o nome do
 repositório até o módulo estar instalado.
 
 ### 2.1 Pontos de extensão
@@ -168,7 +171,7 @@ usuário do próprio módulo. O valor também chega no `initialize` e no
 | permissão | efeito | texto ao usuário |
 |---|---|---|
 | (nenhuma) | só a própria pasta, `/sys` e `/proc` para leitura | "Sem acesso especial" |
-| `net = true` | rede liberada (sem ela: `PrivateNetwork`, só `AF_UNIX`) | "Rede · Acessa a internet" (âmbar) |
+| `net = true` | rede liberada (sem ela: `PrivateNetwork`) | "Rede · Acessa a internet" (âmbar) |
 | `read = ["roms", "bios", "screenshots"]` | `/storage/roms`, `/storage/roms/bios`, `/storage/roms/screenshots` só leitura | "Lê suas ROMs" … (âmbar junto com `net`) |
 | `config_read = [...]` | `config.get` só das chaves listadas | "Lê ajustes" |
 | `config_write = [...]` | `config.set` só das chaves listadas, valores conferidos (API 2) | "Muda ajustes" (âmbar) |
@@ -209,32 +212,56 @@ o módulo não roda.
 
 ## 3. Execução
 
-Cada processo roda com `systemd-run --pipe` como o **usuário do próprio
-módulo**: um uid (igual ao gid) por id, de 60600 a 61099, dado na primeira vez
-que o launcher vê o módulo e guardado em `modules.toml` (`[uids]`); remover o
-módulo com os dados libera o uid. O launcher escreve o registro do usuário
-(`archr-mod-<uid>`) em `/run/userdb`, que o nss-systemd lê, porque o systemd 255
-recusa `User=` numérico sem usuário conhecido. Assim um módulo não lê o
-`/proc`, o ambiente, os arquivos nem os sinais de outro: `ProtectProc=invisible`
-esconde processos de outros uids, e `PrivateUsers=yes` mostra todo uid que não
-seja root ou o dele como `nobody` (`PrivatePIDs=` só existe a partir do
-systemd 257). Também: `NoNewPrivileges`, sem capabilities, `ProtectSystem=strict`,
-`TemporaryFileSystem=/storage:ro` (toda a partição do usuário escondida),
-de volta só a pasta do módulo (de root, só leitura), `module-data/<id>`
-(gravável, é o `HOME`; 0700, do uid do módulo) e os arquivos de ajustes e de
-segredos (só leitura); `/run/dbus` e os sockets do userdbd
-(`/run/systemd/userdb`) inacessíveis (nenhum módulo fala com os serviços do
-sistema); com `net`, só sockets `AF_UNIX`, `AF_INET` e `AF_INET6` e nada em
-`localhost` (`IPAddressDeny=localhost`), exceto o stub de DNS do
-systemd-resolved (`127.0.0.53`/`.54`) quando o `resolv.conf` aponta para ele;
-um `resolv.conf` com `127.0.0.1` ou `::1` deixa o módulo sem DNS; e nenhum
-endereço do próprio aparelho (o IP do Wi-Fi ou do cabo USB, mesmo depois de um
-DHCP novo): o `archr-modules-firewall` da imagem recusa destino local para os
-uids 60600–61099, e o launcher só dá rede a um módulo depois de ver
-`/run/archr/modules-firewall`;
-`MemoryMax`, `TasksMax=16`,
-`CPUWeight=20`, `Nice=10`. Para ver a saída de erro no aparelho:
-`journalctl -u 'archr-mod-<id>*'`.
+Cada processo roda com `systemd-run --pipe` numa unidade própria. O que vale
+hoje na imagem:
+
+- **Usuário do próprio módulo:** um uid (igual ao gid) por id, de 60600 a
+  61099, dado na primeira vez que o launcher vê o módulo e guardado em
+  `modules.toml` (`[uids]`); remover o módulo com os dados libera o uid. O
+  launcher escreve o registro do usuário (`archr-mod-<uid>`) em `/run/userdb`,
+  que o nss-systemd lê, porque o systemd 255 recusa `User=` numérico sem
+  usuário conhecido. Um módulo não lê o `/proc`, o ambiente, os arquivos nem
+  os sinais de outro: `ProtectProc=invisible` esconde processos de outros
+  uids, e `PrivateUsers=yes` mostra todo uid que não seja root ou o dele como
+  `nobody` (`PrivatePIDs=` só existe a partir do systemd 257). Sem root e sem
+  capabilities (`NoNewPrivileges`, conjunto de capabilities vazio).
+- **Sistema de arquivos protegido:** `ProtectSystem=strict`, `ProtectHome`,
+  `PrivateTmp`, `PrivateDevices`, `ProtectKernelTunables`/`Modules`/`Logs`,
+  `ProtectControlGroups`, `ProtectClock`, `ProtectHostname`;
+  `TemporaryFileSystem=/storage:ro` esconde toda a partição do usuário e só
+  volta a pasta do módulo (de root, só leitura), `module-data/<id>` (gravável,
+  é o `HOME`; 0700, do uid do módulo), os arquivos de ajustes e de segredos
+  (só leitura) e as pastas que `read` libera; `/run/dbus` e os sockets do
+  userdbd (`/run/systemd/userdb`) ficam inacessíveis (nenhum módulo fala com
+  os serviços do sistema).
+- **Rede só com `net`:** sem `net`, `PrivateNetwork=yes` (o módulo só tem um
+  loopback dele). Com `net`, nada em `localhost` (`IPAddressDeny=localhost`),
+  exceto o stub de DNS do systemd-resolved (`127.0.0.53`/`.54`) quando o
+  `resolv.conf` aponta para ele (um `resolv.conf` com `127.0.0.1` ou `::1`
+  deixa o módulo sem DNS), e nenhum endereço do próprio aparelho (o IP do
+  Wi-Fi ou do cabo USB, mesmo depois de um DHCP novo): o
+  `archr-modules-firewall` da imagem recusa destino local para os uids
+  60600–61099, e o launcher só dá rede a um módulo depois de ver
+  `/run/archr/modules-firewall`.
+- **Permissões declaradas:** tudo além disso (ler ROMs, ajustes, ações do
+  sistema, abrir jogos) passa pelo launcher e só com a permissão do
+  manifesto que o usuário aceitou (seção 2.2).
+- **Recursos:** `MemoryMax`, `MemorySwapMax=0`, `TasksMax=16`,
+  `CPUWeight=20`, `IOWeight=20`, `Nice=10`.
+- **Selo da Loja:** só com a lista revisada assinada pela chave do projeto
+  (seção 8); o selo diz que o projeto leu aquele pacote, não muda o
+  isolamento.
+
+**Filtro de chamadas do sistema:** `SystemCallFilter=@system-service`,
+`SystemCallArchitectures=native` e `RestrictAddressFamilies` (só `AF_UNIX`, ou
+`AF_UNIX`/`AF_INET`/`AF_INET6` com `net`) dependem de seccomp. O launcher
+pergunta uma vez ao `systemctl --version` e só os passa quando o systemd tem
+`+SECCOMP`. **O systemd da imagem do ArchR hoje é compilado sem seccomp**:
+esses três ficam de fora, e `LockPersonality`, `RestrictNamespaces` e
+`RestrictSUIDSGID` são aceitos mas não têm efeito. O isolamento real é o da
+lista acima.
+
+Para ver a saída de erro no aparelho: `journalctl -u 'archr-mod-<id>*'`.
 
 | modo | vida | uso |
 |---|---|---|
@@ -443,8 +470,9 @@ Sem bateria (num PC) o módulo esconde o bloco com `hidden: true`.
 
 ## 6. Exemplo 2 — "Perfil de CPU" (sh + jq, oneshot)
 
-Na fase 1 o módulo **sugere** o governador de CPU do sistema do jogo pelo
-menu Y e mostra o governador atual numa página. Arquivos em
+Como oneshot, o módulo **sugere** o governador de CPU do sistema do jogo pelo
+menu Y e mostra o governador atual numa página (preenchida no
+`launcher.started`). Não pede nenhuma permissão e não muda nada. Arquivos em
 `examples/modules/perfil-cpu/`.
 
 ```toml
@@ -483,8 +511,7 @@ printf '{"jsonrpc":"2.0","id":%s,"result":{}}\n' "$id"
 `launch.before` com `{"decision":"modify","changes":{"governor":"performance"}}`
 e o launcher passa `--governor=performance` ao `runemu.sh` só naquela
 execução, sem mudar o ajuste do usuário; o item no menu Y deixa de ser
-necessário. (O `runemu.sh` da imagem ainda ignora `--governor=`; a mudança na
-distribuição está na especificação das fases 2 e 3.)
+necessário.
 
 ## 7. Testar
 
@@ -495,6 +522,9 @@ distribuição está na especificação das fases 2 e 3.)
   os módulos **sem sandbox** e avisa no log: só para desenvolvimento.
 - No aparelho: copie a pasta para `/storage/.config/archr-launcher/modules/<id>/`
   por SSH e ligue em Configurações › Sistema › Módulos (aparece como "Local").
+- Um módulo que não sobe com `status=217/USER` no `journalctl -u
+  'archr-mod-<id>*'` está num sistema sem `/usr/lib/libnss_systemd.so.2`
+  (imagens até 20261027): o systemd não acha o usuário do módulo.
 
 ## 8. Publicar na Loja de módulos
 
@@ -518,23 +548,50 @@ assinatura cobre o arquivo inteiro: um `.sig` de outra lista é recusado.
 {"serial": 4, "expires": 1785000000, "modules": [{"repo": "dono/repo", "digest": "sha256:<hex>"}]}
 ```
 
+A primeira lista (serial 1, de 2026-11-04, vence em 2027-02-02) está na
+release `reviewed-1` de `archr-linux/archr-modules`; o repositório guarda
+também cada `reviewed.json` publicado. A tag da release pode ter qualquer
+nome (`reviewed-<serial>` por convenção): vale a última release.
+
 Publicar uma revisão (só o mantenedor, com a chave privada fora do
 repositório, em `~/.archr/archr-modules-ed25519.pem`, modo 600):
 
 1. acrescente (ou tire, para revogar) a entrada com `repo` e o `digest` que o
-   GitHub publica para o `.tar.gz` revisado, **aumente `serial`** (inteiro
+   GitHub publica para o `.tar.gz` revisado (`gh release view v<versão> -R
+   <repo> --json assets -q '.assets[].digest'`; confira com `sha256sum` do
+   pacote que você leu), **aumente `serial`** (inteiro
    > 0) e ponha `expires` à frente (ex.: `date -d +90days +%s`); republique
    antes de vencer, senão os selos somem; a cada versão do launcher, suba
    `MIN_SERIAL` para o serial publicado;
 2. `tools/sign-reviewed reviewed.json` (confere o JSON, assina, verifica a
    assinatura contra a chave pública e grava `reviewed.json.sig`);
 3. publique os dois arquivos como assets de uma release nova de
-   `archr-linux/archr-modules`.
+   `archr-linux/archr-modules` (`gh release create reviewed-<serial>
+   --latest reviewed.json reviewed.json.sig`).
 
 A chave privada nunca vai para o GitHub, para o aparelho nem para o
-repositório; quem tomar a conta `archr-linux` não consegue dar selo. Um módulo
-instalado só mostra o selo se o digest do pacote que está no aparelho estiver
-na lista.
+repositório; quem tomar a conta `archr-linux` não consegue dar selo.
+
+**Selo de um módulo instalado.** Nunca é guardado: é calculado de novo ao
+iniciar, a cada mudança nos módulos e sempre que a Loja guarda uma lista
+nova (ao listar, ao abrir um módulo ou na checagem de atualização
+automática), para todos os instalados. Vale só se:
+
+- a última lista que passou nas checagens, guardada como veio
+  (`modules-reviewed.json` e `.sig`, ao lado do `modules.toml`), passa de novo
+  agora: assinatura, `expires` no futuro, `serial` não menor que o último
+  visto. Sem rede, vale a guardada; vencida ou inválida, nenhum selo;
+- ela traz o repositório e o digest do pacote instalado (guardado no
+  `modules.toml` na instalação);
+- os arquivos de `modules/<id>/` ainda são os instalados: na instalação o
+  launcher guarda um SHA-256 da árvore (caminhos, tipos, conteúdo) e o confere
+  numa thread à parte, lendo em blocos até 32 MiB. Um arquivo mudado, um
+  link ou uma árvore maior que isso: sem selo.
+
+Uma lista nova assinada sem o módulo (revogação) tira o selo assim que a Loja
+a busca (o GitHub fica em cache por uma hora). Quando a lista vence com o
+launcher aberto, os selos somem em até um segundo. Se uma atualização volta atrás,
+o digest e o hash da versão anterior voltam juntos.
 
 Regras da release (a última, não pre-release):
 
@@ -544,10 +601,24 @@ Regras da release (a última, não pre-release):
 - tarball até 8 MB, até 16 MB descompactado, até 500 entradas, tudo dentro de
   `<id>/`; só arquivos e pastas: link, dispositivo, caminho absoluto ou `..`
   recusam o pacote inteiro. Modos são normalizados (0644; a entrada, 0755).
+- o repositório tem o tópico `archr-launcher-module` e é público.
+
+O jeito mais simples de cumprir tudo: o repositório do módulo é a própria
+pasta do módulo (`module.toml` na raiz), e o pacote sai da tag com
+`git archive`, que já põe tudo dentro de `<id>/` e não leva links nem `.git`;
+o `module.toml` avulso da release é o da mesma tag, logo idêntico:
 
 ```
-tar -czf bateria-detalhada-1.0.0.tar.gz bateria-detalhada/
+git tag v1.0.0
+git archive --format=tar.gz --prefix=bateria-detalhada/ \
+    -o ../bateria-detalhada-1.0.0.tar.gz v1.0.0
+gh release create v1.0.0 --latest ../bateria-detalhada-1.0.0.tar.gz \
+    module.toml preview.png
+gh repo edit --add-topic archr-launcher-module
 ```
+
+Gere o pacote fora da pasta do módulo: um `.tar.gz` dentro dela acaba no
+próprio pacote. Os dois módulos de exemplo foram publicados assim.
 
 A Loja confere o SHA-256 que o GitHub publica para o asset, exige o
 `module.toml` idêntico e valida o pacote antes de colocá-lo em `modules/<id>`.

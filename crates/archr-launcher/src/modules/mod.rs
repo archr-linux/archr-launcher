@@ -98,10 +98,8 @@ impl Config {
             let direct = Arc::new(Direct::default());
             (direct.clone(), Some(direct), None)
         } else {
-            let systemd = process::Systemd {
-                run: "/usr/bin/systemd-run".into(),
-                ctl: "/usr/bin/systemctl".into(),
-            };
+            let systemd =
+                process::Systemd::new("/usr/bin/systemd-run".into(), "/usr/bin/systemctl".into());
             (Arc::new(systemd), None, Some("/run/userdb".into()))
         };
         let firewall = paths
@@ -192,7 +190,16 @@ enum Input {
         code: Option<i32>,
     },
     Store(Box<(StoreReply, Option<store::Installed>)>),
+    /// A reconciliation's result: the modules whose badge holds, by id with
+    /// the package digest and content it held for.
+    /// The store kept a new reviewed list: every badge is checked again.
+    ReviewedList,
+    /// The last carries when the list they hold by stops counting.
+    Reviewed(u64, BTreeSet<Badge>, u64),
 }
+/// Module id, package digest, content hash: the badge holds for exactly
+/// these.
+type Badge = (String, String, String);
 
 /// The event loop's handle on the host thread.
 pub struct Modules {
@@ -296,6 +303,16 @@ struct Host {
     inbox: mpsc::Sender<Input>,
     out: mpsc::Sender<Event>,
     store: Option<mpsc::Sender<StoreAction>>,
+    /// The store's language, shared with its lane.
+    store_language: Option<Arc<std::sync::RwLock<String>>>,
+    /// The key the reviewed list must be signed with.
+    review_key: [u8; 32],
+    /// The last reconciliation, and which of its answers counts.
+    reviewed: BTreeSet<Badge>,
+    reconciling: u64,
+    /// When the list behind `reviewed` expires (seconds since 1970): the
+    /// badges go then, with the launcher open or not.
+    reviewed_until: u64,
     installed: Vec<Installed>,
     state: State,
     view: View,
@@ -350,6 +367,15 @@ impl Host {
                 .trim()
                 .to_owned();
         }
+        let review_key = config
+            .shop
+            .as_ref()
+            .map_or(store::REVIEW_KEY, store::Shop::review_key);
+        let language = config.shop.as_ref().map(|shop| {
+            let language = shop.language();
+            *language.write().unwrap_or_else(|e| e.into_inner()) = config.language.clone();
+            language
+        });
         let store = config.shop.take().map(|shop| {
             let (tx, rx) = mpsc::channel();
             let replies = inbox.clone();
@@ -360,6 +386,11 @@ impl Host {
             tx
         });
         let mut host = Self {
+            store_language: language,
+            review_key,
+            reviewed: BTreeSet::new(),
+            reconciling: 0,
+            reviewed_until: 0,
             start_at: Instant::now() + config.delay,
             installed: Vec::new(),
             state: State::default(),
@@ -477,8 +508,8 @@ impl Host {
                     self.state.modules.get(&i.id),
                     &self.config.language,
                 );
+                module.reviewed = self.badge(&module.id);
                 if let Some(seen) = old.iter().find(|m| m.id == module.id) {
-                    module.reviewed = seen.reviewed && seen.version == module.version;
                     module.update = seen
                         .update
                         .clone()
@@ -498,6 +529,80 @@ impl Host {
             });
         }
         self.publish();
+        self.reconcile();
+    }
+    /// The badge, always derived: the last reconciliation found the kept
+    /// reviewed list valid and naming this package, with its files on disk
+    /// unchanged, for the package and content recorded now.
+    fn badge(&self, id: &str) -> bool {
+        self.state.modules.get(id).is_some_and(|r| {
+            self.reviewed
+                .contains(&(id.to_owned(), r.digest.clone(), r.content.clone()))
+        })
+    }
+    /// New badges: the view follows.
+    fn set_reviewed(&mut self, held: BTreeSet<Badge>) {
+        if held == self.reviewed {
+            return;
+        }
+        self.reviewed = held;
+        let badges: Vec<bool> = self
+            .view
+            .modules
+            .iter()
+            .map(|m| self.badge(&m.id))
+            .collect();
+        for (module, badge) in self.view.modules.iter_mut().zip(badges) {
+            module.reviewed = badge;
+        }
+        self.touch();
+    }
+    /// Checks every store module against the kept reviewed list and its
+    /// files on disk, in a worker: hashing folders is no work for this
+    /// thread. The answer comes back as `Input::Reviewed`.
+    fn reconcile(&mut self) {
+        self.reconciling += 1;
+        let generation = self.reconciling;
+        let dirs = self.config.dirs.clone();
+        let key = self.review_key;
+        let jobs: Vec<(String, String, String, String)> = self
+            .state
+            .modules
+            .iter()
+            .filter(|(_, r)| !r.source.is_empty() && !r.digest.is_empty() && !r.content.is_empty())
+            .map(|(id, r)| {
+                (
+                    id.clone(),
+                    r.source.clone(),
+                    r.digest.clone(),
+                    r.content.clone(),
+                )
+            })
+            .collect();
+        let inbox = self.inbox.clone();
+        let spawned = thread::Builder::new()
+            .name("launcher-module-review".into())
+            .spawn(move || {
+                let list = if jobs.is_empty() {
+                    store::Reviewed::default()
+                } else {
+                    store::saved_reviewed(&dirs, &key).unwrap_or_default()
+                };
+                let held = jobs
+                    .into_iter()
+                    .filter(|(id, source, digest, content)| {
+                        list.modules
+                            .iter()
+                            .any(|(repo, d)| repo == source && store::same_digest(d, digest))
+                            && registry::tree(&dirs.module(id)).as_deref() == Some(content.as_str())
+                    })
+                    .map(|(id, _, digest, content)| (id, digest, content))
+                    .collect();
+                let _ = inbox.send(Input::Reviewed(generation, held, list.expires));
+            });
+        if let Err(error) = spawned {
+            log::warn!("Cannot check the reviewed modules: {error}");
+        }
     }
     fn save_state(&self) {
         if let Err(error) = self.state.save(&self.config.dirs.state) {
@@ -535,7 +640,18 @@ impl Host {
     fn input(&mut self, input: Input) {
         match input {
             Input::Request(request) => self.request(request),
+            Input::ReviewedList => self.reconcile(),
+            Input::Reviewed(generation, held, until) => {
+                if generation == self.reconciling {
+                    self.reviewed_until = until;
+                    self.set_reviewed(held);
+                }
+            }
             Input::Language(language) => {
+                // The store speaks it too, from its next answer on.
+                if let Some(shop) = &self.store_language {
+                    *shop.write().unwrap_or_else(|e| e.into_inner()) = language.clone();
+                }
                 self.config.language = language;
                 self.reload();
             }
@@ -831,6 +947,7 @@ impl Host {
         record.source = installed.source;
         record.version = installed.version;
         record.previous_digest = std::mem::replace(&mut record.digest, installed.digest);
+        record.previous_content = std::mem::replace(&mut record.content, installed.content);
         record.granted = installed.granted;
         record.consent = true;
         record.enabled = true;
@@ -872,8 +989,10 @@ impl Host {
         }
         let record = registry::record(&mut self.state, &id);
         record.previous_digest = std::mem::take(&mut record.digest);
+        record.previous_content = std::mem::take(&mut record.content);
         record.version = installed.version.clone();
         record.digest = installed.digest;
+        record.content = installed.content;
         record.auto_updated = now_secs();
         self.save_state();
         self.end_daemon(&id, false);
@@ -889,13 +1008,19 @@ impl Host {
         let notice = Notice::Updated(self.name(&id), installed.version);
         let _ = self.out.send(Event::Notice(notice));
     }
-    /// Store cards tell which installed modules are reviewed (the digest of
-    /// the installed package is on the reviewed list) or outdated.
+    /// Store cards tell which installed modules are outdated; a listing
+    /// checks every badge again. (A new reviewed list also comes as
+    /// `Input::ReviewedList`, from any answer.)
     fn store_reply(&mut self, reply: &StoreReply) {
         let cards = match reply {
-            // The Installed tab comes from the disk: it knows neither.
+            // The Installed tab comes from the disk: it knows nothing new.
             StoreReply::Listed { tab, .. } if *tab == archr_ui::modules::Tab::Installed => return,
-            StoreReply::Listed { cards, .. } => cards.as_slice(),
+            StoreReply::Listed { cards, .. } => {
+                // Refreshing a list checks the files on disk again too,
+                // even when the reviewed list did not change.
+                self.reconcile();
+                cards.as_slice()
+            }
             StoreReply::Card(card) => std::slice::from_ref(card),
             _ => return,
         };
@@ -906,15 +1031,6 @@ impl Host {
                 .iter_mut()
                 .find(|m| m.source == card.source() && m.id == card.id)
             {
-                let installed = self
-                    .state
-                    .modules
-                    .get(&module.id)
-                    .map_or("", |r| r.digest.as_str());
-                module.reviewed = card
-                    .digests
-                    .iter()
-                    .any(|d| store::same_digest(d, installed));
                 module.update = archr_ui::settings::store::newer(&card.version, &module.version)
                     .then(|| card.version.clone());
             }
@@ -1870,6 +1986,7 @@ impl Host {
         record.version = version;
         record.bad_digest = std::mem::take(&mut record.digest);
         record.digest = std::mem::take(&mut record.previous_digest);
+        record.content = std::mem::take(&mut record.previous_content);
         self.save_state();
         self.reload();
         true
@@ -1877,6 +1994,12 @@ impl Host {
 
     fn tick(&mut self) {
         let now = Instant::now();
+        // The list behind the badges ran out while the launcher is open
+        // (ticks come at least every second).
+        if !self.reviewed.is_empty() && now_secs() >= self.reviewed_until {
+            log::warn!("The reviewed list has expired: no module is reviewed");
+            self.set_reviewed(BTreeSet::new());
+        }
         if self.stopped {
             self.settle();
             return;

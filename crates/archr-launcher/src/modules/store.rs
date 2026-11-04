@@ -17,7 +17,10 @@ use std::{
     collections::{BTreeMap, VecDeque},
     fs,
     path::PathBuf,
-    sync::mpsc,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc, Arc, RwLock,
+    },
 };
 
 pub const TOPIC: &str = "archr-launcher-module";
@@ -81,6 +84,8 @@ pub struct Installed {
     pub source: String,
     pub version: String,
     pub digest: String,
+    /// `registry::tree` of the folder as installed.
+    pub content: String,
     pub granted: Vec<String>,
 }
 
@@ -96,6 +101,11 @@ pub struct Shop {
     github: GitHub,
     dirs: Dirs,
     review_key: [u8; 32],
+    /// The launcher's language, for names and descriptions by language;
+    /// the host changes it when the user does.
+    language: Arc<RwLock<String>>,
+    /// A different reviewed list was kept since the last `kept_new_list`.
+    new_list: AtomicBool,
 }
 impl Shop {
     pub fn new(http: Box<dyn Http>, cache: PathBuf, dirs: Dirs) -> Self {
@@ -103,12 +113,32 @@ impl Shop {
             github: GitHub::new(http, cache),
             dirs,
             review_key: REVIEW_KEY,
+            language: Arc::new(RwLock::new("en".into())),
+            new_list: AtomicBool::new(false),
         }
+    }
+    /// Names and descriptions in this language when the manifest has it.
+    pub fn with_language(self, language: &str) -> Self {
+        *self.language.write().unwrap_or_else(|e| e.into_inner()) = language.to_owned();
+        self
+    }
+    /// The language the shop speaks, shared: write to it to change it.
+    pub fn language(&self) -> Arc<RwLock<String>> {
+        Arc::clone(&self.language)
+    }
+    fn lang(&self) -> String {
+        self.language
+            .read()
+            .map_or_else(|e| e.into_inner().clone(), |l| l.clone())
     }
     /// Another public key for the reviewed list: for tests only.
     pub fn with_review_key(mut self, key: [u8; 32]) -> Self {
         self.review_key = key;
         self
+    }
+    /// The public key this shop checks the reviewed list with.
+    pub fn review_key(&self) -> [u8; 32] {
+        self.review_key
     }
     pub fn production(cache: PathBuf, dirs: Dirs) -> Self {
         Self::new(GitHub::curl(&cache, HOSTS), cache, dirs)
@@ -148,76 +178,47 @@ impl Shop {
     }
     /// The reviewed list: repository and package digest of each reviewed
     /// release, from `reviewed.json` signed by the project's key
-    /// (`reviewed.json.sig`). Unreachable: nothing is reviewed. Unsigned,
-    /// badly signed or older than one already seen: nothing is reviewed
-    /// either, and the key says why.
+    /// (`reviewed.json.sig`). A list that passes is kept on disk as
+    /// downloaded; unreachable, the kept one is checked again instead.
+    /// Unsigned, badly signed, expired or older than one already seen:
+    /// nothing is reviewed, and the key says why.
     fn reviewed(&self) -> Result<Vec<(String, String)>, &'static str> {
         let (owner, repo) = REVIEWED.split_once('/').expect("owner/repo");
-        let Ok((_, mut assets)) = self.release(owner, repo) else {
-            return Ok(Vec::new());
+        let remote = self.release(owner, repo).ok().and_then(|(_, mut assets)| {
+            let list = assets.remove("reviewed.json")?;
+            let fetch = |asset: &Asset, name: &str| {
+                self.github
+                    .saved(&asset.url, name, false)
+                    .0
+                    .map(|(body, _)| body)
+                    .unwrap_or_default()
+            };
+            let body = fetch(&list, "reviewed.json");
+            let signature = assets
+                .remove("reviewed.json.sig")
+                .map(|asset| fetch(&asset, "reviewed.json.sig"))
+                .unwrap_or_default();
+            Some((body, signature))
+        });
+        let Some((body, signature)) = remote else {
+            return saved_reviewed(&self.dirs, &self.review_key).map(|r| r.modules);
         };
-        let Some(list) = assets.remove("reviewed.json") else {
-            return Ok(Vec::new());
-        };
-        let fetch = |asset: &Asset, name: &str| {
-            self.github
-                .saved(&asset.url, name, false)
-                .0
-                .map(|(body, _)| body)
-                .unwrap_or_default()
-        };
-        let body = fetch(&list, "reviewed.json");
-        let signature = assets
-            .remove("reviewed.json.sig")
-            .map(|asset| fetch(&asset, "reviewed.json.sig"))
-            .unwrap_or_default();
-        if !signed(&body, &signature, &self.review_key) {
-            log::warn!("The reviewed list is not signed by the ArchR key: no module is reviewed");
-            return Err("modules.review_unsigned");
+        let list = check_list(&body, &signature, &self.review_key, &self.dirs)?.modules;
+        let (path, sig) = list_paths(&self.dirs);
+        let kept = read_bytes(&path, TOML_LIMIT, Symlinks::Reject).ok();
+        if kept.as_deref() != Some(body.as_slice()) {
+            // Whoever keeps a new list says so: every badge is checked again,
+            // whichever store answer brought it.
+            self.new_list.store(true, Ordering::Relaxed);
         }
-        let json: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
-        // A list past its date, or older than one already seen (or than this
-        // build knew), could bring back a revoked review.
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_secs());
-        if json["expires"]
-            .as_u64()
-            .is_none_or(|expires| expires <= now)
-        {
-            log::warn!("The reviewed list has expired: no module is reviewed");
-            return Err("modules.review_expired");
-        }
-        let serial = json["serial"].as_u64().unwrap_or(0);
-        let path = self.dirs.state.with_file_name("modules-reviewed.serial");
-        let seen = read_bytes(&path, 64, Symlinks::Reject)
-            .ok()
-            .and_then(|b| String::from_utf8(b).ok())
-            .and_then(|t| t.trim().parse::<u64>().ok())
-            .unwrap_or(0)
-            .max(MIN_SERIAL);
-        if serial < seen {
-            log::warn!("The reviewed list {serial} is older than {seen}: ignored");
-            return Err("modules.review_old");
-        }
-        if serial > seen {
-            if let Err(error) = archr_io::atomic_publish(&path, false, |file| {
-                std::io::Write::write_all(file, serial.to_string().as_bytes())
-            }) {
-                log::warn!("Cannot record the reviewed list's serial {serial}: {error}");
+        for (path, bytes) in [(&sig, &signature), (&path, &body)] {
+            if let Err(error) =
+                archr_io::atomic_publish(path, false, |file| std::io::Write::write_all(file, bytes))
+            {
+                log::warn!("Cannot keep the reviewed list: {error}");
             }
         }
-        Ok(json["modules"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|m| {
-                Some((
-                    m["repo"].as_str()?.to_owned(),
-                    m["digest"].as_str()?.to_owned(),
-                ))
-            })
-            .collect())
+        Ok(list)
     }
     /// A `.tar.gz` of the latest release carries one of `digests`. Asked
     /// only for repositories on the reviewed list (saved for an hour).
@@ -227,6 +228,10 @@ impl Shop {
                 name.ends_with(".tar.gz") && digests.iter().any(|d| same_digest(d, &asset.digest))
             })
         })
+    }
+    /// A different reviewed list was kept since the last call.
+    pub fn kept_new_list(&self) -> bool {
+        self.new_list.swap(false, Ordering::Relaxed)
     }
     fn records(&self) -> State {
         State::load(&self.dirs.state)
@@ -279,19 +284,20 @@ impl Shop {
     }
     /// Store modules on this device, as cards.
     fn installed(&self) -> Vec<Card> {
+        let language = self.lang();
         self.records()
             .modules
             .iter()
             .filter_map(|(id, record)| {
                 let (owner, repo) = record.source.split_once('/')?;
-                let module = registry::Installed::read(&self.dirs.module(id), "en");
+                let module = registry::Installed::read(&self.dirs.module(id), &language);
                 let manifest = module.manifest.as_ref()?;
                 Some(Card {
                     owner: owner.into(),
                     repo: repo.into(),
                     id: id.clone(),
-                    name: text(&module, manifest.name.as_ref()),
-                    description: text(&module, manifest.description.as_ref()),
+                    name: text(&module, manifest.name.as_ref(), &language),
+                    description: text(&module, manifest.description.as_ref(), &language),
                     icon: manifest.icon.clone().unwrap_or_default(),
                     version: manifest.version.clone(),
                     ..Card::default()
@@ -318,8 +324,8 @@ impl Shop {
         let (manifest, _) = manifest::parse(std::str::from_utf8(&body).ok()?).ok()?;
         Some(Card {
             id: manifest.id.clone(),
-            name: plain(manifest.name.as_ref()),
-            description: plain(manifest.description.as_ref()),
+            name: plain(manifest.name.as_ref(), &self.lang()),
+            description: plain(manifest.description.as_ref(), &self.lang()),
             icon: manifest.icon.clone().unwrap_or_default(),
             version: manifest.version,
             ..card.clone()
@@ -395,8 +401,8 @@ impl Shop {
         Ok(Offer {
             card: Card {
                 id: manifest.id.clone(),
-                name: plain(manifest.name.as_ref()),
-                description: plain(manifest.description.as_ref()),
+                name: plain(manifest.name.as_ref(), &self.lang()),
+                description: plain(manifest.description.as_ref(), &self.lang()),
                 icon: manifest.icon.clone().unwrap_or_default(),
                 version: manifest.version.clone(),
                 reviewed,
@@ -535,11 +541,13 @@ impl Shop {
         })();
         let _ = fs::remove_dir_all(&staging);
         result?;
+        let content = registry::tree(&self.dirs.module(id)).unwrap_or_default();
         Ok(Installed {
             id: id.clone(),
             source: card.source(),
             version: manifest.version.clone(),
             digest: package.digest.clone(),
+            content,
             granted: manifest.permissions.tokens().into_iter().collect(),
         })
     }
@@ -613,6 +621,90 @@ impl Shop {
     }
 }
 
+/// Where the last reviewed list that passed is kept, as downloaded.
+fn list_paths(dirs: &Dirs) -> (PathBuf, PathBuf) {
+    (
+        dirs.state.with_file_name("modules-reviewed.json"),
+        dirs.state.with_file_name("modules-reviewed.json.sig"),
+    )
+}
+/// A reviewed list that passed: repository and package digest of each
+/// reviewed release, and when the list stops counting (seconds since 1970).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Reviewed {
+    pub modules: Vec<(String, String)>,
+    pub expires: u64,
+}
+
+/// `reviewed.json` and its signature, checked: the project's key, an
+/// `expires` still ahead, and a serial no older than the last one seen nor
+/// than this build's `MIN_SERIAL`. A newer serial is recorded.
+pub fn check_list(
+    body: &[u8],
+    signature: &[u8],
+    key: &[u8; 32],
+    dirs: &Dirs,
+) -> Result<Reviewed, &'static str> {
+    if !signed(body, signature, key) {
+        log::warn!("The reviewed list is not signed by the ArchR key: no module is reviewed");
+        return Err("modules.review_unsigned");
+    }
+    let json: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+    // A list past its date, or older than one already seen (or than this
+    // build knew), could bring back a revoked review.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let expires = json["expires"].as_u64().unwrap_or(0);
+    if expires <= now {
+        log::warn!("The reviewed list has expired: no module is reviewed");
+        return Err("modules.review_expired");
+    }
+    let serial = json["serial"].as_u64().unwrap_or(0);
+    let path = dirs.state.with_file_name("modules-reviewed.serial");
+    let seen = read_bytes(&path, 64, Symlinks::Reject)
+        .ok()
+        .and_then(|b| String::from_utf8(b).ok())
+        .and_then(|t| t.trim().parse::<u64>().ok())
+        .unwrap_or(0)
+        .max(MIN_SERIAL);
+    if serial < seen {
+        log::warn!("The reviewed list {serial} is older than {seen}: ignored");
+        return Err("modules.review_old");
+    }
+    if serial > seen {
+        if let Err(error) = archr_io::atomic_publish(&path, false, |file| {
+            std::io::Write::write_all(file, serial.to_string().as_bytes())
+        }) {
+            log::warn!("Cannot record the reviewed list's serial {serial}: {error}");
+        }
+    }
+    let modules = json["modules"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|m| {
+            Some((
+                m["repo"].as_str()?.to_owned(),
+                m["digest"].as_str()?.to_owned(),
+            ))
+        })
+        .collect();
+    Ok(Reviewed { modules, expires })
+}
+/// The kept reviewed list, checked again as if just downloaded. None kept:
+/// nothing is reviewed.
+pub fn saved_reviewed(dirs: &Dirs, key: &[u8; 32]) -> Result<Reviewed, &'static str> {
+    let (path, sig) = list_paths(dirs);
+    let (Ok(body), Ok(signature)) = (
+        read_bytes(&path, TOML_LIMIT, Symlinks::Reject),
+        read_bytes(&sig, 1024, Symlinks::Reject),
+    ) else {
+        return Ok(Reviewed::default());
+    };
+    check_list(&body, &signature, key, dirs)
+}
+
 /// Two `sha256:<hex>` digests name the same package.
 pub fn same_digest(a: &str, b: &str) -> bool {
     let hex = |d: &str| d.strip_prefix("sha256:").unwrap_or(d).to_ascii_lowercase();
@@ -684,22 +776,22 @@ fn module_key(key: &'static str) -> &'static str {
 
 /// `name`/`description` without the module's catalog: text or a language
 /// table; an `@key` has no text before the install.
-fn plain(value: Option<&toml::Value>) -> String {
+fn plain(value: Option<&toml::Value>, language: &str) -> String {
     match value {
         Some(toml::Value::String(text)) if !text.starts_with('@') => text.clone(),
         Some(table @ toml::Value::Table(_)) => {
             archr_ui::layout::Names::parse(Some(table), "module")
-                .get("en")
+                .get(language)
                 .unwrap_or_default()
                 .to_owned()
         }
         _ => String::new(),
     }
 }
-fn text(module: &registry::Installed, value: Option<&toml::Value>) -> String {
+fn text(module: &registry::Installed, value: Option<&toml::Value>, language: &str) -> String {
     match value {
         Some(toml::Value::String(text)) => module.tr(text),
-        other => plain(other),
+        other => plain(other, language),
     }
 }
 
@@ -728,7 +820,7 @@ pub(super) fn lane(
                 ),
                 None => (StoreReply::Checked(id.clone()), None),
             };
-            if results.send(Input::Store(Box::new(answer))).is_err() {
+            if results.send(Input::Store(Box::new(answer))).is_err() || !signal(shop, results) {
                 return;
             }
             continue;
@@ -743,8 +835,13 @@ pub(super) fn lane(
         if results
             .send(Input::Store(Box::new((reply, installed))))
             .is_err()
+            || !signal(shop, results)
         {
             return;
         }
     }
+}
+/// Tells the host a new reviewed list was kept; false once it is gone.
+fn signal(shop: &Shop, results: &mpsc::Sender<Input>) -> bool {
+    !shop.kept_new_list() || results.send(Input::ReviewedList).is_ok()
 }

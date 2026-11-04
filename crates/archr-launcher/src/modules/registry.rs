@@ -68,8 +68,13 @@ pub struct Record {
     pub failed: bool,
     /// SHA-256 of the installed package, for the reviewed badge.
     pub digest: String,
+    /// `tree` of the folder as the store installed it: the badge needs the
+    /// files on disk to still be those.
+    pub content: String,
     /// The digest of the version before the last update, for a rollback.
     pub previous_digest: String,
+    /// Its `tree`, restored with it.
+    pub previous_content: String,
     /// A package that failed and was rolled back: automatic updates never
     /// take it again.
     pub bad_digest: String,
@@ -78,6 +83,68 @@ pub struct Record {
     pub used: u64,
     pub auto_updated: u64,
 }
+/// The most bytes of file content `tree` reads: past it, no hash.
+pub const TREE_LIMIT: u64 = 32 << 20;
+/// SHA-256 of a module folder's files: every path, kind and content, in
+/// name order. `None` with anything but files and folders (a link), or
+/// past `TREE_LIMIT` bytes of content.
+pub fn tree(dir: &Path) -> Option<String> {
+    tree_within(dir, TREE_LIMIT)
+}
+/// `tree` with another limit. Files are read in blocks, each counted
+/// against what is left before it is read: a big file never lands in memory.
+pub fn tree_within(dir: &Path, limit: u64) -> Option<String> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+    fn file(path: &Path, size: u64, hash: &mut Sha256, left: &mut u64) -> Option<()> {
+        *left = left.checked_sub(size)?;
+        let mut file = fs::File::open(path).ok()?;
+        if !file.metadata().ok()?.is_file() {
+            return None;
+        }
+        let mut block = vec![0u8; 64 << 10];
+        let mut read = 0u64;
+        loop {
+            let n = file.read(&mut block).ok()?;
+            if n == 0 {
+                break;
+            }
+            read += n as u64;
+            // It grew since it was measured: not the counted file.
+            if read > size {
+                return None;
+            }
+            hash.update(&block[..n]);
+        }
+        (read == size).then_some(())
+    }
+    fn walk(dir: &Path, base: &Path, hash: &mut Sha256, left: &mut u64) -> Option<()> {
+        let mut entries: Vec<_> = fs::read_dir(dir).ok()?.collect::<Result<_, _>>().ok()?;
+        entries.sort_by_key(fs::DirEntry::file_name);
+        for entry in entries {
+            let path = entry.path();
+            let name = path.strip_prefix(base).ok()?.to_str()?.to_owned();
+            let kind = entry.file_type().ok()?;
+            if kind.is_dir() {
+                hash.update(format!("d {name}\0"));
+                walk(&path, base, hash, left)?;
+            } else if kind.is_file() {
+                let size = entry.metadata().ok()?.len();
+                hash.update(format!("f {name} {size}\0"));
+                file(&path, size, hash, left)?;
+            } else {
+                return None;
+            }
+        }
+        Some(())
+    }
+    let mut hash = Sha256::new();
+    let mut left = limit;
+    walk(dir, dir, &mut hash, &mut left)?;
+    let hex: String = hash.finalize().iter().map(|b| format!("{b:02x}")).collect();
+    Some(format!("sha256:{hex}"))
+}
+
 /// Module uids, which are also their gids: above useradd's UID_MAX (60000)
 /// and systemd-homed's 60001–60513, below DynamicUser's 61184–65519.
 pub const UIDS: std::ops::Range<u32> = 60600..61100;
@@ -590,6 +657,37 @@ pub fn record<'a>(state: &'a mut State, id: &str) -> &'a mut Record {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_folder_hash_follows_every_file_and_refuses_links() {
+        let dir = tempfile::tempdir().unwrap();
+        let module = dir.path().join("m");
+        fs::create_dir_all(module.join("locales")).unwrap();
+        fs::write(module.join("main.sh"), "a").unwrap();
+        fs::write(module.join("locales/en.toml"), "b").unwrap();
+        let first = tree(&module).unwrap();
+        assert_eq!(
+            tree(&module).unwrap(),
+            first,
+            "the same files, the same hash"
+        );
+        fs::write(module.join("locales/en.toml"), "c").unwrap();
+        assert_ne!(tree(&module).unwrap(), first, "a changed file");
+        fs::write(module.join("locales/en.toml"), "b").unwrap();
+        fs::write(module.join("extra"), "").unwrap();
+        assert_ne!(tree(&module).unwrap(), first, "an added file");
+        fs::remove_file(module.join("extra")).unwrap();
+        assert_eq!(tree(&module).unwrap(), first);
+        std::os::unix::fs::symlink("/etc/passwd", module.join("link")).unwrap();
+        assert_eq!(tree(&module), None, "a link");
+        fs::remove_file(module.join("link")).unwrap();
+        // Two files of 1 and 1 bytes: 2 fits, 1 does not.
+        assert_eq!(tree_within(&module, 2).as_deref(), Some(first.as_str()));
+        assert_eq!(tree_within(&module, 1), None, "past the limit");
+        fs::write(module.join("big"), vec![0u8; 200 << 10]).unwrap();
+        assert!(tree_within(&module, 100 << 10).is_none(), "a file past it");
+        assert!(tree_within(&module, 300 << 10).is_some());
+    }
 
     #[test]
     fn uids_stay_put_across_restarts_and_never_collide() {
