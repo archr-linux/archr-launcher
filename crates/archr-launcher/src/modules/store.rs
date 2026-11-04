@@ -17,7 +17,10 @@ use std::{
     collections::{BTreeMap, VecDeque},
     fs,
     path::PathBuf,
-    sync::{mpsc, Arc, RwLock},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc, Arc, RwLock,
+    },
 };
 
 pub const TOPIC: &str = "archr-launcher-module";
@@ -101,6 +104,8 @@ pub struct Shop {
     /// The launcher's language, for names and descriptions by language;
     /// the host changes it when the user does.
     language: Arc<RwLock<String>>,
+    /// A different reviewed list was kept since the last `kept_new_list`.
+    new_list: AtomicBool,
 }
 impl Shop {
     pub fn new(http: Box<dyn Http>, cache: PathBuf, dirs: Dirs) -> Self {
@@ -109,6 +114,7 @@ impl Shop {
             dirs,
             review_key: REVIEW_KEY,
             language: Arc::new(RwLock::new("en".into())),
+            new_list: AtomicBool::new(false),
         }
     }
     /// Names and descriptions in this language when the manifest has it.
@@ -199,6 +205,12 @@ impl Shop {
         };
         let list = check_list(&body, &signature, &self.review_key, &self.dirs)?.modules;
         let (path, sig) = list_paths(&self.dirs);
+        let kept = read_bytes(&path, TOML_LIMIT, Symlinks::Reject).ok();
+        if kept.as_deref() != Some(body.as_slice()) {
+            // Whoever keeps a new list says so: every badge is checked again,
+            // whichever store answer brought it.
+            self.new_list.store(true, Ordering::Relaxed);
+        }
         for (path, bytes) in [(&sig, &signature), (&path, &body)] {
             if let Err(error) =
                 archr_io::atomic_publish(path, false, |file| std::io::Write::write_all(file, bytes))
@@ -216,6 +228,10 @@ impl Shop {
                 name.ends_with(".tar.gz") && digests.iter().any(|d| same_digest(d, &asset.digest))
             })
         })
+    }
+    /// A different reviewed list was kept since the last call.
+    pub fn kept_new_list(&self) -> bool {
+        self.new_list.swap(false, Ordering::Relaxed)
     }
     fn records(&self) -> State {
         State::load(&self.dirs.state)
@@ -804,7 +820,7 @@ pub(super) fn lane(
                 ),
                 None => (StoreReply::Checked(id.clone()), None),
             };
-            if results.send(Input::Store(Box::new(answer))).is_err() {
+            if results.send(Input::Store(Box::new(answer))).is_err() || !signal(shop, results) {
                 return;
             }
             continue;
@@ -819,8 +835,13 @@ pub(super) fn lane(
         if results
             .send(Input::Store(Box::new((reply, installed))))
             .is_err()
+            || !signal(shop, results)
         {
             return;
         }
     }
+}
+/// Tells the host a new reviewed list was kept; false once it is gone.
+fn signal(shop: &Shop, results: &mpsc::Sender<Input>) -> bool {
+    !shop.kept_new_list() || results.send(Input::ReviewedList).is_ok()
 }

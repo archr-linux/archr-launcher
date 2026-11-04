@@ -975,3 +975,27 @@ fn the_badge_goes_when_the_list_expires_with_the_launcher_open() {
     // The clock passes the list's date with the same launcher open.
     assert_eq!(badge_of(&modules, Some(false), wait), Some(false));
 }
+
+/// A revoking list that arrives with an offer, not a listing, still takes
+/// the badge off the installed module.
+#[test]
+fn a_revoking_list_from_an_offer_takes_the_badge_off() {
+    use archr_ui::modules::{Request, StoreAction};
+    let root = tempfile::tempdir().unwrap();
+    let fake = Fake::default();
+    reviewed_release(&fake);
+    let modules = install_reviewed(root.path(), &fake);
+    let wait = std::time::Duration::from_millis(800);
+    assert_eq!(badge_of(&modules, Some(true), wait), Some(true));
+    drop(modules);
+    fs::remove_dir_all(root.path().join("cache")).unwrap();
+    let revoked = Fake::default();
+    let tarball = Tarball::module(MANIFEST).bytes();
+    publish(&revoked, MANIFEST, &tarball, &sha(&tarball), "");
+    let list = r#"{"serial":4,"expires":4102444800,"modules":[]}"#;
+    review(&revoked, list.as_bytes(), &sign(list.as_bytes()));
+    let modules = host(root.path(), &revoked, std::time::Duration::from_secs(3600));
+    assert_eq!(badge_of(&modules, Some(true), wait), Some(true), "kept list");
+    modules.request(Request::Store(StoreAction::Open(Box::new(card()))));
+    assert_eq!(badge_of(&modules, Some(false), wait), Some(false));
+}

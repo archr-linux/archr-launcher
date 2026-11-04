@@ -192,6 +192,8 @@ enum Input {
     Store(Box<(StoreReply, Option<store::Installed>)>),
     /// A reconciliation's result: the modules whose badge holds, by id with
     /// the package digest and content it held for.
+    /// The store kept a new reviewed list: every badge is checked again.
+    ReviewedList,
     /// The last carries when the list they hold by stops counting.
     Reviewed(u64, BTreeSet<Badge>, u64),
 }
@@ -638,6 +640,7 @@ impl Host {
     fn input(&mut self, input: Input) {
         match input {
             Input::Request(request) => self.request(request),
+            Input::ReviewedList => self.reconcile(),
             Input::Reviewed(generation, held, until) => {
                 if generation == self.reconciling {
                     self.reviewed_until = until;
@@ -1005,16 +1008,13 @@ impl Host {
         let notice = Notice::Updated(self.name(&id), installed.version);
         let _ = self.out.send(Event::Notice(notice));
     }
-    /// Store cards tell which installed modules are outdated. A listing
-    /// fetched the reviewed list again: every badge is checked again.
+    /// Store cards tell which installed modules are outdated. (A new
+    /// reviewed list comes as `Input::ReviewedList`, from any answer.)
     fn store_reply(&mut self, reply: &StoreReply) {
         let cards = match reply {
             // The Installed tab comes from the disk: it knows nothing new.
             StoreReply::Listed { tab, .. } if *tab == archr_ui::modules::Tab::Installed => return,
-            StoreReply::Listed { cards, .. } => {
-                self.reconcile();
-                cards.as_slice()
-            }
+            StoreReply::Listed { cards, .. } => cards.as_slice(),
             StoreReply::Card(card) => std::slice::from_ref(card),
             _ => return,
         };
