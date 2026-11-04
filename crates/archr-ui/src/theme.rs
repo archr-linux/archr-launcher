@@ -142,6 +142,16 @@ pub struct Theme {
     pub saves_card: Rect01,
     /// Screenshots screen: the grid of pictures.
     pub shots_grid: Rect01,
+    /// Switcher (Alternador): the selected game's picture; the neighbours'
+    /// size and top (`w`, `h`, `y`) and their gap to it (`x`); and the name,
+    /// line and dots.
+    pub switcher_card: Rect01,
+    pub switcher_side: Rect01,
+    pub switcher_info: Rect01,
+    /// Resume at power on (Retomar-boot): the picture, and the texts, bar
+    /// and buttons under it.
+    pub resume_shot: Rect01,
+    pub resume_info: Rect01,
     /// Style (docs/temas.md, Estilo): every corner radius times `corners`
     /// (0 = square), panel borders `border_width` reference pixels thick,
     /// the shadow under panels, console pictures scaled without smoothing
@@ -297,6 +307,11 @@ impl Theme {
             saves_list: token!(saves_list, rectangle),
             saves_card: token!(saves_card, rectangle),
             shots_grid: token!(shots_grid, rectangle),
+            switcher_card: token!(switcher_card, rectangle),
+            switcher_side: token!(switcher_side, rectangle),
+            switcher_info: token!(switcher_info, rectangle),
+            resume_shot: token!(resume_shot, rectangle),
+            resume_info: token!(resume_info, rectangle),
             corners: token!(corners, unit),
             border_width: token!(border_width, border_width),
             shadow: token!(shadow, shadow),
@@ -419,6 +434,11 @@ pub const KNOWN_KEYS: &[&str] = &[
     "saves_list",
     "saves_card",
     "shots_grid",
+    "switcher_card",
+    "switcher_side",
+    "switcher_info",
+    "resume_shot",
+    "resume_info",
     "corners",
     "border_width",
     "shadow",

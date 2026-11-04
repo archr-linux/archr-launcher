@@ -86,7 +86,7 @@ impl Ui<'_, '_> {
         Ok(())
     }
     /// The bottom bar: a summary at the left, the buttons at the right.
-    fn progress_footer(
+    pub(super) fn progress_footer(
         &mut self,
         summary: &str,
         hints: &[(HintButton, &str)],

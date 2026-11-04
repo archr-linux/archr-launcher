@@ -62,6 +62,10 @@ pub enum Screen {
         system: String,
         game: usize,
     },
+    /// The recent games with where they were left (`App::switcher`).
+    Switcher,
+    /// Back to the last game at power on (`App::boot`).
+    Resume,
 }
 
 /// Buttons of the details screen, left to right.
@@ -143,6 +147,20 @@ pub enum Outcome {
     SetOrder(Vec<String>),
     /// Something for the module host, or a module page to open.
     Module(crate::modules::Request),
+    /// Launch the game, from its saved state when `entry` (runemu.sh's
+    /// argument) is given.
+    Continue {
+        system: String,
+        game: usize,
+        entry: Option<String>,
+    },
+    /// Take the game off the recent games.
+    ForgetRecent {
+        system: String,
+        game: usize,
+    },
+    /// The resume at power on was refused: it is not offered again.
+    SkipResume,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -285,6 +303,11 @@ pub struct App {
     pub saves_page: usize,
     pub shots_columns: usize,
     pub shots_page: usize,
+    /// The switcher's games, filled by the host, and the one just left.
+    pub switcher: Vec<crate::resume::Recent>,
+    pub switcher_left: Option<crate::resume::Recent>,
+    /// The resume screen's game, filled by the host.
+    pub boot: Option<crate::resume::Boot>,
     history: Vec<(Screen, usize)>,
     moving: Option<order::Moving>,
     selected_core: Option<(String, String)>,
@@ -323,6 +346,9 @@ impl App {
             saves_page: 1,
             shots_columns: 1,
             shots_page: 1,
+            switcher: Vec::new(),
+            switcher_left: None,
+            boot: None,
         }
     }
 
@@ -474,6 +500,11 @@ impl App {
         if matches!(self.screen, Screen::StartHub { .. }) {
             return self.handle_hub(b, data);
         }
+        match self.screen {
+            Screen::Switcher => return self.handle_switcher(b),
+            Screen::Resume => return self.handle_resume(b),
+            _ => {}
+        }
         if let Screen::Details { system, game } = self.screen.clone() {
             return self.handle_details(b, system, game, data);
         }
@@ -493,7 +524,9 @@ impl App {
             | Screen::Achievements { .. }
             | Screen::Saves { .. }
             | Screen::Shots { .. }
-            | Screen::Shot { .. } => {
+            | Screen::Shot { .. }
+            | Screen::Switcher
+            | Screen::Resume => {
                 unreachable!()
             }
             Screen::Systems => Self::system_rows(data).len(),
@@ -545,7 +578,9 @@ impl App {
             | Screen::Achievements { .. }
             | Screen::Saves { .. }
             | Screen::Shots { .. }
-            | Screen::Shot { .. } => {
+            | Screen::Shot { .. }
+            | Screen::Switcher
+            | Screen::Resume => {
                 unreachable!()
             }
             Screen::Games { system } => match b {
@@ -801,7 +836,21 @@ impl App {
             first..(first + size).min(len)
         };
         let picture = |save: &Save| save.picture.clone();
+        // The switcher's selected game and its neighbours; the resume's game.
+        let recents = |games: &[crate::resume::Recent]| {
+            (at.saturating_sub(1)..(at + 2).min(games.len()))
+                .filter_map(|n| games[n].picture.clone())
+                .collect()
+        };
         match self.backdrop().0 {
+            Screen::Switcher => (Vec::new(), recents(&self.switcher)),
+            Screen::Resume => (
+                Vec::new(),
+                self.boot
+                    .iter()
+                    .filter_map(|b| b.game.picture.clone())
+                    .collect(),
+            ),
             Screen::Saves { .. } => (
                 saves[page(self.saves_page, saves.len())]
                     .iter()

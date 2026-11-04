@@ -152,7 +152,7 @@ fn layer(
     out
 }
 
-fn rounded_rect((x, y, w, h): (f32, f32, f32, f32), r: f32) -> sk::Path {
+pub(crate) fn rounded_rect((x, y, w, h): (f32, f32, f32, f32), r: f32) -> sk::Path {
     let r = r.min(w / 2.0).min(h / 2.0);
     let k = r * 0.447_715; // 1 - 0.552285: cubic quarter-circle handle
     let (right, bottom) = (x + w, y + h);
@@ -217,7 +217,7 @@ fn box_blur(data: &mut [f32], len: usize, lines: usize, step: usize, pitch: usiz
     }
 }
 
-fn rasterize(svg: &str, color: &str, size: u32) -> sk::Pixmap {
+pub(crate) fn rasterize(svg: &str, color: &str, size: u32) -> sk::Pixmap {
     let mut pixmap = sk::Pixmap::new(size, size).expect("icon size");
     let source = svg.replace("currentColor", color);
     if let Ok(tree) = usvg::Tree::from_str(&source, &usvg::Options::default()) {

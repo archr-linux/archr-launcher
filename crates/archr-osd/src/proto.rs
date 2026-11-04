@@ -1,4 +1,6 @@
-//! Datagram protocol (`volume 60 [muted]`, `brightness 40`) and the icon it selects.
+//! Datagram protocol (`volume 60 [muted]`, `brightness 40`) and the icon it
+//! selects; and the battery card (`battery-low 10`, `battery 3 LEFT TOTAL
+//! game|menu`, a second of archr-battery-guard's countdown).
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Icon {
@@ -27,6 +29,53 @@ pub struct Message {
     pub icon: Icon,
     /// Percent, 0..=100.
     pub level: u8,
+}
+
+/// The battery card: the level, the countdown (seconds left of the total)
+/// for the critical one, and whether a game is being saved.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Battery {
+    pub level: u8,
+    pub left: Option<(u8, u8)>,
+    pub game: bool,
+}
+
+/// The cards over the screen: the battery's, and "this emulator saves no
+/// state" when the switcher's shortcut cannot save the game (`nostate`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Alert {
+    Battery(Battery),
+    NoState,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Notice {
+    Level(Message),
+    Alert(Alert),
+}
+
+/// A level pill or a battery card; anything else is `None`.
+pub fn parse_notice(text: &str) -> Option<Notice> {
+    let words: Vec<&str> = text.split_ascii_whitespace().collect();
+    let number = |w: &str| w.parse::<u8>().ok().filter(|n| *n <= 100);
+    match words[..] {
+        ["nostate"] => Some(Notice::Alert(Alert::NoState)),
+        ["battery-low", level] => Some(Notice::Alert(Alert::Battery(Battery {
+            level: number(level)?,
+            left: None,
+            game: false,
+        }))),
+        ["battery", level, left, total, game @ ("game" | "menu")] => {
+            let (left, total) = (number(left)?, number(total)?);
+            (left >= 1 && left <= total).then_some(())?;
+            Some(Notice::Alert(Alert::Battery(Battery {
+                level: number(level)?,
+                left: Some((left, total)),
+                game: game == "game",
+            })))
+        }
+        _ => parse(text).map(Notice::Level),
+    }
 }
 
 /// Parses one message; anything else (unknown kind, missing or non-numeric
@@ -101,6 +150,39 @@ mod tests {
             "\u{0}\u{ff}",
         ] {
             assert_eq!(parse(text), None, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn parses_battery_cards() {
+        let battery =
+            |level, left, game| Some(Notice::Alert(Alert::Battery(Battery { level, left, game })));
+        assert_eq!(parse_notice("nostate"), Some(Notice::Alert(Alert::NoState)));
+        assert_eq!(parse_notice("battery-low 10"), battery(10, None, false));
+        assert_eq!(
+            parse_notice("battery 3 8 8 game"),
+            battery(3, Some((8, 8)), true)
+        );
+        assert_eq!(
+            parse_notice("battery 3 1 8 menu"),
+            battery(3, Some((1, 8)), false)
+        );
+        assert_eq!(
+            parse_notice("volume 60"),
+            Some(Notice::Level(Message {
+                icon: Icon::Volume2,
+                level: 60
+            }))
+        );
+        for text in [
+            "battery 3 9 8 game",
+            "battery 3 0 8 game",
+            "battery 3 8 8",
+            "battery-low",
+            "battery-low 300",
+            "battery 3 8 8 other",
+        ] {
+            assert_eq!(parse_notice(text), None, "{text}");
         }
     }
 

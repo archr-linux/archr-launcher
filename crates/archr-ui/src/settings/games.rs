@@ -303,6 +303,7 @@ mod tests {
             ids(&state),
             [
                 Id::PreviewVideo,
+                Id::ResumeLink,
                 Id::NetplayLink,
                 Id::ScraperLink,
                 Id::MangohudLink,

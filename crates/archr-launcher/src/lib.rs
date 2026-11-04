@@ -16,6 +16,7 @@ pub mod paths;
 pub mod preview;
 pub mod raimport;
 pub mod rescrape;
+pub mod resume;
 pub mod saves;
 pub mod wifi;
 mod worker;

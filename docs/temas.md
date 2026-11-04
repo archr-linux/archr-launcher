@@ -383,6 +383,37 @@ nas notas, `dim` no tempo relativo, `danger` no botão Apagar da confirmação.
 A captura aberta ocupa a tela inteira, com o nome do jogo no alto e os botões
 no rodapé; as confirmações (Jogar daqui e Apagar) são janelas centradas.
 
+## Alternador e retomada ao ligar
+
+O Alternador (um toque no FN durante o jogo: o jogo é salvo e fechado e
+o launcher abre nos jogos recentes) e a tela de retomada ao ligar
+(Configurações › Jogos › Retomar e alternar) seguem retângulos do
+`theme.toml`, com a mesma regra dos `details_*`.
+
+| chave | conteúdo |
+|---|---|
+| `switcher_card` | a imagem do jogo selecionado, com o anel `accent` em volta e o selo "Salvo agora" (ou "Sem retomar") no canto |
+| `switcher_side` | os vizinhos, esmaecidos: `w` e `h` são o tamanho deles, `y` o topo e `x` o espaço até a imagem selecionada (o da esquerda e o da direita ficam simétricos; podem sair da tela) |
+| `switcher_info` | o nome do jogo (19 px, centralizado), a linha com sistema e quando foi jogado e um ponto por jogo |
+| `resume_shot` | a imagem do jogo na tela de retomada |
+| `resume_info` | "Voltando para", o nome (22 px), quando foi salvo, a barra da contagem e os botões A e B |
+
+O padrão (maquetes Alternador e Retomar-boot):
+
+```toml
+switcher_card = { x = 0.1875, y = 0.108333333, w = 0.625, h = 0.625 }
+switcher_side = { x = 0.046875, y = 0.129166667, w = 0.375, h = 0.375 }
+switcher_info = { x = 0.0, y = 0.758333333, w = 1.0, h = 0.125 }
+resume_shot = { x = 0.25, y = 0.110416667, w = 0.5, h = 0.5 }
+resume_info = { x = 0.0, y = 0.6375, w = 1.0, h = 0.258333333 }
+```
+
+As cores vêm das chaves gerais: `accent` no anel, no ponto do jogo
+selecionado e na barra; `badge` nos outros pontos e no fundo da barra;
+`surface` e `border` na caixa de um jogo sem imagem; `muted` nas linhas de
+apoio. A imagem é a tela no momento em que o jogo foi salvo; sem ela, a
+captura de tela do jogo ou a capa.
+
 ## Movendo as ROMs
 
 A tela que aparece no boot de manutenção que move as ROMs para a partição

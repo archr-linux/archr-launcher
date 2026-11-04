@@ -1,6 +1,8 @@
-//! The wlr-layer-shell surface: mapped only while the pill is visible.
+//! The wlr-layer-shell surfaces: mapped only while the pill or the battery
+//! card is visible.
+use crate::card::{self, Assets, Card};
 use crate::pill::{self, Geometry, Painter, Timeline};
-use crate::proto::{Icon, Message};
+use crate::proto::{Alert, Icon, Message};
 use smithay_client_toolkit::reexports::client::{
     globals::GlobalList,
     protocol::{wl_output, wl_shm, wl_surface},
@@ -33,6 +35,16 @@ struct Shown {
     drawn: Option<(Icon, u32, u8)>,
 }
 
+struct CardShown {
+    layer: LayerSurface,
+    configured: bool,
+    card: Card,
+    hold: Duration,
+    shown_at: Instant,
+    changed_at: Instant,
+    size: (u32, u32),
+}
+
 pub struct Overlay {
     registry: RegistryState,
     outputs: OutputState,
@@ -42,6 +54,9 @@ pub struct Overlay {
     pool: Option<SlotPool>,
     painter: Option<Painter>,
     shown: Option<Shown>,
+    assets: Assets,
+    card_pool: Option<SlotPool>,
+    card: Option<CardShown>,
 }
 
 impl Overlay {
@@ -56,6 +71,12 @@ impl Overlay {
             pool: None,
             painter: None,
             shown: None,
+            assets: Assets::load(
+                std::path::Path::new("/usr/share/archr-launcher"),
+                std::path::Path::new("/storage/.config/system/configs/system.cfg"),
+            ),
+            card_pool: None,
+            card: None,
         })
     }
 
@@ -107,9 +128,114 @@ impl Overlay {
         });
     }
 
-    /// Draws the current frame or unmaps a finished pill; returns how long
-    /// the event loop may sleep (None: until the next message).
+    /// The battery card, centered over the whole output; a new message
+    /// replaces its text and keeps it up.
+    pub fn show_card(&mut self, alert: Alert, qh: &QueueHandle<Self>) {
+        let now = Instant::now();
+        let card = self.assets.card(alert);
+        let hold = if card.critical {
+            card::HOLD
+        } else {
+            card::HOLD_LOW
+        };
+        if let Some(shown) = &mut self.card {
+            shown.card = card;
+            shown.hold = hold;
+            shown.changed_at = now;
+            return;
+        }
+        let (w, h) = self.output_size();
+        let surface = self.compositor.create_surface(qh);
+        if let Ok(region) = Region::new(&self.compositor) {
+            surface.set_input_region(Some(region.wl_region()));
+        }
+        let layer = self.layer_shell.create_layer_surface(
+            qh,
+            surface,
+            Layer::Overlay,
+            Some("archr-osd"),
+            None,
+        );
+        layer.set_size(w as u32, h as u32);
+        layer.set_keyboard_interactivity(KeyboardInteractivity::None);
+        layer.set_exclusive_zone(-1);
+        layer.commit();
+        self.card = Some(CardShown {
+            layer,
+            configured: false,
+            card,
+            hold,
+            shown_at: now,
+            changed_at: now,
+            size: (w.max(1) as u32, h.max(1) as u32),
+        });
+    }
+
+    fn card_tick(&mut self) -> Option<Duration> {
+        let shown = self.card.as_ref()?;
+        let now = Instant::now();
+        let (since_shown, since_change) = (now - shown.shown_at, now - shown.changed_at);
+        if since_change >= shown.hold + pill::FADE_OUT {
+            self.card = None;
+            return None;
+        }
+        const FRAME: Duration = Duration::from_millis(16);
+        let next = if since_shown < pill::FADE_IN || since_change >= shown.hold {
+            FRAME
+        } else {
+            shown.hold - since_change
+        };
+        if !shown.configured {
+            return Some(next);
+        }
+        let fade_in = since_shown.as_secs_f32() / pill::FADE_IN.as_secs_f32();
+        let fade_out = 1.0
+            - since_change.saturating_sub(shown.hold).as_secs_f32() / pill::FADE_OUT.as_secs_f32();
+        let frame = card::render(
+            &shown.card,
+            &self.assets,
+            shown.size,
+            fade_in.min(fade_out).clamp(0.0, 1.0),
+        );
+        let (w, h) = shown.size;
+        let pool = match &mut self.card_pool {
+            Some(pool) => pool,
+            None => match SlotPool::new(frame.data().len(), &self.shm) {
+                Ok(pool) => self.card_pool.insert(pool),
+                Err(e) => {
+                    eprintln!("archr-osd: shm pool: {e}");
+                    return Some(next);
+                }
+            },
+        };
+        let Ok((buffer, canvas)) =
+            pool.create_buffer(w as i32, h as i32, w as i32 * 4, wl_shm::Format::Argb8888)
+        else {
+            return Some(next);
+        };
+        for (dst, src) in canvas.chunks_exact_mut(4).zip(frame.data().chunks_exact(4)) {
+            dst.copy_from_slice(&[src[2], src[1], src[0], src[3]]);
+        }
+        let surface = shown.layer.wl_surface();
+        surface.damage_buffer(0, 0, w as i32, h as i32);
+        if buffer.attach_to(surface).is_ok() {
+            shown.layer.commit();
+        }
+        Some(next)
+    }
+
+    /// Draws the current frames or unmaps finished surfaces; returns how
+    /// long the event loop may sleep (None: until the next message).
     pub fn tick(&mut self) -> Option<Duration> {
+        let card = self.card_tick();
+        let pill = self.pill_tick();
+        match (card, pill) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        }
+    }
+
+    fn pill_tick(&mut self) -> Option<Duration> {
         let shown = self.shown.as_mut()?;
         let now = Instant::now();
         let (since_shown, since_change) = (now - shown.shown_at, now - shown.changed_at);
@@ -168,8 +294,12 @@ impl Overlay {
 }
 
 impl LayerShellHandler for Overlay {
-    fn closed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &LayerSurface) {
-        self.shown = None;
+    fn closed(&mut self, _: &Connection, _: &QueueHandle<Self>, layer: &LayerSurface) {
+        if self.card.as_ref().is_some_and(|c| &c.layer == layer) {
+            self.card = None;
+        } else {
+            self.shown = None;
+        }
     }
 
     fn configure(
@@ -181,6 +311,9 @@ impl LayerShellHandler for Overlay {
         _: u32,
     ) {
         if let Some(shown) = self.shown.as_mut().filter(|s| &s.layer == layer) {
+            shown.configured = true;
+        }
+        if let Some(shown) = self.card.as_mut().filter(|s| &s.layer == layer) {
             shown.configured = true;
         }
     }

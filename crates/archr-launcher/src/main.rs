@@ -15,6 +15,7 @@ use archr_launcher::{
     paths::Paths,
     preview::Preview,
     rescrape::Rescrape,
+    resume::{self, Records, Start},
     saves::{Entry, Task},
     state::{App, Button, DataSource, Outcome, Screen},
     wifi,
@@ -129,7 +130,7 @@ fn run(
             catalog,
             mut library,
             prepared,
-            (netplay_on, cheevos_on, mangohud_on),
+            (netplay_on, cheevos_on, mangohud_on, start),
         ),
     ) = std::thread::scope(|scope| {
         let (sized, size) = std::sync::mpsc::sync_channel(1);
@@ -185,6 +186,8 @@ fn run(
             let cheevos_on = setting(Id::Cheevos.key()).is_some_and(|value| value == "1")
                 && setting(archr_launcher::settings::CHEEVOS_TOKEN).is_some();
             let mangohud_on = archr_launcher::settings::mangohud_supported(paths);
+            // The switcher after its shortcut, the last game at power on.
+            let start = resume::start(paths, config.as_ref());
             Ok((
                 theme,
                 (base, look),
@@ -192,7 +195,7 @@ fn run(
                 catalog,
                 library,
                 prepared,
-                (netplay_on, cheevos_on, mangohud_on),
+                (netplay_on, cheevos_on, mangohud_on, start),
             ))
         });
         let sdl = sdl2::init()?;
@@ -227,6 +230,20 @@ fn run(
     app.netplay = netplay_on;
     app.cheevos = cheevos_on;
     app.mangohud = mangohud_on;
+    // The switcher waits for the records; the resume for its game's system.
+    let mut records = None;
+    let mut resuming = None;
+    match start {
+        Start::Plain => {}
+        Start::Switcher => {
+            app.screen = Screen::Switcher;
+            records = Some((Records::read(&paths), None));
+        }
+        Start::Resume(record) => {
+            app.screen = Screen::Resume;
+            resuming = Some((record, None::<Instant>));
+        }
+    }
     let first = library.banner.take();
     let mut banner_timer =
         notice::Timer::new(Severity::of(first.as_ref().map_or("", |m| m.key)), began);
@@ -251,6 +268,15 @@ fn run(
     audio.play(Sound::Boot);
     let mut seen_errors = 0;
     let (width, height) = ui.canvas.output_size()?;
+    let saved_number = |key: &str, default: u64| {
+        startup_config
+            .as_ref()
+            .and_then(|cfg| cfg.get_setting(key, None, None))
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(default)
+    };
+    let switcher_count = saved_number("launcher.switcher.count", 8) as usize;
+    let resume_wait = Duration::from_secs(saved_number("launcher.resume.wait", 3).clamp(1, 60));
     let mut settings = archr_launcher::settings::Runtime::new(paths.clone());
     let saved = |id: Id| {
         startup_config
@@ -530,6 +556,61 @@ fn run(
             }
             dirty = true;
         }
+        // The switcher's games, once the records and the recent games are read.
+        if let Some((reader, read)) = records.as_mut() {
+            if read.is_none() {
+                *read = reader.poll();
+            }
+            if let Some(found) = read.as_ref() {
+                if let Some(games) = resume::switcher(&mut library, found, switcher_count) {
+                    app.switcher_left = games.first().cloned();
+                    app.switcher = games;
+                    app.cursor = 0;
+                    records = None;
+                    dirty = true;
+                }
+            }
+        }
+        if app.screen != Screen::Switcher {
+            records = None;
+        }
+        // The resume at power on: its game, then the countdown.
+        if app.screen != Screen::Resume {
+            resuming = None;
+        }
+        if let Some((record, since)) = resuming.as_mut() {
+            match since {
+                None => match resume::boot(&mut library, record) {
+                    Some(Some(boot)) => {
+                        app.boot = Some(boot);
+                        *since = Some(Instant::now());
+                        dirty = true;
+                    }
+                    Some(None) => {
+                        app.screen = Screen::Systems;
+                        dirty = true;
+                    }
+                    None => {}
+                },
+                Some(at) => {
+                    let progress = at.elapsed().as_secs_f32() / resume_wait.as_secs_f32();
+                    if let Some(boot) = app.boot.as_mut() {
+                        boot.progress = progress.min(1.);
+                    }
+                    dirty = true;
+                    if progress >= 1. && deferred.is_none() {
+                        if let Some(boot) = app.boot.take() {
+                            let game = boot.game;
+                            library.entry = resume::entry(&library, &game);
+                            deferred = Some(Outcome::Launch {
+                                system: game.system,
+                                game: game.game,
+                            });
+                        }
+                    }
+                }
+            }
+        }
         if let Screen::Details { system, game } = app.backdrop().0.clone() {
             library.ensure(&system);
             let games = library.games(&system);
@@ -725,6 +806,7 @@ fn run(
                 badges: Some(&badges),
                 thumbs: Some(&thumbs),
                 picture: large.first().and_then(|path| pictures.peek(path)),
+                pictures: Some(&pictures),
             };
             ui.draw_with_settings(
                 &app,
@@ -772,10 +854,13 @@ fn run(
             0
         } else {
             let now = Instant::now();
+            // The resume countdown moves its bar.
+            let countdown = if resuming.is_some() { 40 } else { u32::MAX };
             repeat
                 .wait_ms(now)
                 .min(audio.wait_ms(now))
                 .min(preview.wait_ms(now))
+                .min(countdown)
         }) {
             match event {
                 Event::Quit { .. } => close_requested = true,
@@ -909,6 +994,27 @@ fn run(
                             progress.start(Task::Play(entry), game);
                         }
                     }
+                    Outcome::None
+                }
+                // The switcher and the resume start the game where it was left.
+                Outcome::Continue {
+                    system,
+                    game,
+                    entry,
+                } => {
+                    let recent = archr_ui::resume::Recent {
+                        system: system.clone(),
+                        game,
+                        entry,
+                        ..Default::default()
+                    };
+                    library.entry = resume::entry(&library, &recent);
+                    resuming = None;
+                    Outcome::Launch { system, game }
+                }
+                Outcome::SkipResume => {
+                    resume::skip(&paths);
+                    resuming = None;
                     Outcome::None
                 }
                 requested => requested,

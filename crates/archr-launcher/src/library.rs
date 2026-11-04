@@ -289,7 +289,14 @@ impl Library {
             | Outcome::Moonlight
             | Outcome::Rescrape { .. }
             | Outcome::Achievements { .. }
+            | Outcome::SkipResume
             | Outcome::Module(_) => {}
+            Outcome::ForgetRecent { system, game } => {
+                let key = self.game_key(&system, game).ok_or("error.game_missing")?;
+                self.store.forget_recent(&key);
+                self.refresh_collection("@recent");
+                self.queue_store();
+            }
             Outcome::ToggleFavorite { system, game } => {
                 let key = self.game_key(&system, game).ok_or("error.game_missing")?;
                 self.store.toggle_favorite(&key);
@@ -400,6 +407,7 @@ impl Library {
             Outcome::Action(_)
             | Outcome::ToggleWifi
             | Outcome::PlayFrom { .. }
+            | Outcome::Continue { .. }
             | Outcome::Delete { .. }
             | Outcome::UseShot { .. }
             | Outcome::Convert(_) => return Err("error.operation".to_owned()),

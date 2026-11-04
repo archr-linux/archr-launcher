@@ -30,6 +30,7 @@ mod saves;
 mod usb;
 pub(crate) use usb::tone as usb_tone;
 mod convert;
+mod switcher;
 
 use sdl2::{
     rect::Rect,
@@ -890,6 +891,16 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 // The search dots loop for as long as a search runs.
                 || ((settings.searching() || settings.updates.working())
                     && self.motion != Motion::Off);
+        } else if matches!(app.screen, Screen::Switcher | Screen::Resume) {
+            // Fixed compositions in their theme rectangles, no decorations.
+            self.begin_page(false, None, theme)?;
+            if app.screen == Screen::Switcher {
+                self.switcher(app, data, theme, art)?;
+            } else {
+                self.resume(app, data, theme, art)?;
+            }
+            self.end_page(theme)?;
+            self.animating = false;
         } else {
             let (backdrop, cursor) = app.backdrop();
             let view = self.view(theme);
