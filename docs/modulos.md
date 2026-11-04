@@ -168,7 +168,7 @@ usuário do próprio módulo. O valor também chega no `initialize` e no
 | permissão | efeito | texto ao usuário |
 |---|---|---|
 | (nenhuma) | só a própria pasta, `/sys` e `/proc` para leitura | "Sem acesso especial" |
-| `net = true` | rede liberada (sem ela: `PrivateNetwork`, só `AF_UNIX`) | "Rede · Acessa a internet" (âmbar) |
+| `net = true` | rede liberada (sem ela: `PrivateNetwork`) | "Rede · Acessa a internet" (âmbar) |
 | `read = ["roms", "bios", "screenshots"]` | `/storage/roms`, `/storage/roms/bios`, `/storage/roms/screenshots` só leitura | "Lê suas ROMs" … (âmbar junto com `net`) |
 | `config_read = [...]` | `config.get` só das chaves listadas | "Lê ajustes" |
 | `config_write = [...]` | `config.set` só das chaves listadas, valores conferidos (API 2) | "Muda ajustes" (âmbar) |
@@ -209,32 +209,56 @@ o módulo não roda.
 
 ## 3. Execução
 
-Cada processo roda com `systemd-run --pipe` como o **usuário do próprio
-módulo**: um uid (igual ao gid) por id, de 60600 a 61099, dado na primeira vez
-que o launcher vê o módulo e guardado em `modules.toml` (`[uids]`); remover o
-módulo com os dados libera o uid. O launcher escreve o registro do usuário
-(`archr-mod-<uid>`) em `/run/userdb`, que o nss-systemd lê, porque o systemd 255
-recusa `User=` numérico sem usuário conhecido. Assim um módulo não lê o
-`/proc`, o ambiente, os arquivos nem os sinais de outro: `ProtectProc=invisible`
-esconde processos de outros uids, e `PrivateUsers=yes` mostra todo uid que não
-seja root ou o dele como `nobody` (`PrivatePIDs=` só existe a partir do
-systemd 257). Também: `NoNewPrivileges`, sem capabilities, `ProtectSystem=strict`,
-`TemporaryFileSystem=/storage:ro` (toda a partição do usuário escondida),
-de volta só a pasta do módulo (de root, só leitura), `module-data/<id>`
-(gravável, é o `HOME`; 0700, do uid do módulo) e os arquivos de ajustes e de
-segredos (só leitura); `/run/dbus` e os sockets do userdbd
-(`/run/systemd/userdb`) inacessíveis (nenhum módulo fala com os serviços do
-sistema); com `net`, só sockets `AF_UNIX`, `AF_INET` e `AF_INET6` e nada em
-`localhost` (`IPAddressDeny=localhost`), exceto o stub de DNS do
-systemd-resolved (`127.0.0.53`/`.54`) quando o `resolv.conf` aponta para ele;
-um `resolv.conf` com `127.0.0.1` ou `::1` deixa o módulo sem DNS; e nenhum
-endereço do próprio aparelho (o IP do Wi-Fi ou do cabo USB, mesmo depois de um
-DHCP novo): o `archr-modules-firewall` da imagem recusa destino local para os
-uids 60600–61099, e o launcher só dá rede a um módulo depois de ver
-`/run/archr/modules-firewall`;
-`MemoryMax`, `TasksMax=16`,
-`CPUWeight=20`, `Nice=10`. Para ver a saída de erro no aparelho:
-`journalctl -u 'archr-mod-<id>*'`.
+Cada processo roda com `systemd-run --pipe` numa unidade própria. O que vale
+hoje na imagem:
+
+- **Usuário do próprio módulo:** um uid (igual ao gid) por id, de 60600 a
+  61099, dado na primeira vez que o launcher vê o módulo e guardado em
+  `modules.toml` (`[uids]`); remover o módulo com os dados libera o uid. O
+  launcher escreve o registro do usuário (`archr-mod-<uid>`) em `/run/userdb`,
+  que o nss-systemd lê, porque o systemd 255 recusa `User=` numérico sem
+  usuário conhecido. Um módulo não lê o `/proc`, o ambiente, os arquivos nem
+  os sinais de outro: `ProtectProc=invisible` esconde processos de outros
+  uids, e `PrivateUsers=yes` mostra todo uid que não seja root ou o dele como
+  `nobody` (`PrivatePIDs=` só existe a partir do systemd 257). Sem root e sem
+  capabilities (`NoNewPrivileges`, conjunto de capabilities vazio).
+- **Sistema de arquivos protegido:** `ProtectSystem=strict`, `ProtectHome`,
+  `PrivateTmp`, `PrivateDevices`, `ProtectKernelTunables`/`Modules`/`Logs`,
+  `ProtectControlGroups`, `ProtectClock`, `ProtectHostname`;
+  `TemporaryFileSystem=/storage:ro` esconde toda a partição do usuário e só
+  volta a pasta do módulo (de root, só leitura), `module-data/<id>` (gravável,
+  é o `HOME`; 0700, do uid do módulo), os arquivos de ajustes e de segredos
+  (só leitura) e as pastas que `read` libera; `/run/dbus` e os sockets do
+  userdbd (`/run/systemd/userdb`) ficam inacessíveis (nenhum módulo fala com
+  os serviços do sistema).
+- **Rede só com `net`:** sem `net`, `PrivateNetwork=yes` (o módulo só tem um
+  loopback dele). Com `net`, nada em `localhost` (`IPAddressDeny=localhost`),
+  exceto o stub de DNS do systemd-resolved (`127.0.0.53`/`.54`) quando o
+  `resolv.conf` aponta para ele (um `resolv.conf` com `127.0.0.1` ou `::1`
+  deixa o módulo sem DNS), e nenhum endereço do próprio aparelho (o IP do
+  Wi-Fi ou do cabo USB, mesmo depois de um DHCP novo): o
+  `archr-modules-firewall` da imagem recusa destino local para os uids
+  60600–61099, e o launcher só dá rede a um módulo depois de ver
+  `/run/archr/modules-firewall`.
+- **Permissões declaradas:** tudo além disso (ler ROMs, ajustes, ações do
+  sistema, abrir jogos) passa pelo launcher e só com a permissão do
+  manifesto que o usuário aceitou (seção 2.2).
+- **Recursos:** `MemoryMax`, `MemorySwapMax=0`, `TasksMax=16`,
+  `CPUWeight=20`, `IOWeight=20`, `Nice=10`.
+- **Selo da Loja:** só com a lista revisada assinada pela chave do projeto
+  (seção 8); o selo diz que o projeto leu aquele pacote, não muda o
+  isolamento.
+
+**Filtro de chamadas do sistema:** `SystemCallFilter=@system-service`,
+`SystemCallArchitectures=native` e `RestrictAddressFamilies` (só `AF_UNIX`, ou
+`AF_UNIX`/`AF_INET`/`AF_INET6` com `net`) dependem de seccomp. O launcher
+pergunta uma vez ao `systemctl --version` e só os passa quando o systemd tem
+`+SECCOMP`. **O systemd da imagem do ArchR hoje é compilado sem seccomp**:
+esses três ficam de fora, e `LockPersonality`, `RestrictNamespaces` e
+`RestrictSUIDSGID` são aceitos mas não têm efeito. O isolamento real é o da
+lista acima.
+
+Para ver a saída de erro no aparelho: `journalctl -u 'archr-mod-<id>*'`.
 
 | modo | vida | uso |
 |---|---|---|
@@ -443,8 +467,9 @@ Sem bateria (num PC) o módulo esconde o bloco com `hidden: true`.
 
 ## 6. Exemplo 2 — "Perfil de CPU" (sh + jq, oneshot)
 
-Na fase 1 o módulo **sugere** o governador de CPU do sistema do jogo pelo
-menu Y e mostra o governador atual numa página. Arquivos em
+Como oneshot, o módulo **sugere** o governador de CPU do sistema do jogo pelo
+menu Y e mostra o governador atual numa página (preenchida no
+`launcher.started`). Não pede nenhuma permissão e não muda nada. Arquivos em
 `examples/modules/perfil-cpu/`.
 
 ```toml
@@ -483,8 +508,7 @@ printf '{"jsonrpc":"2.0","id":%s,"result":{}}\n' "$id"
 `launch.before` com `{"decision":"modify","changes":{"governor":"performance"}}`
 e o launcher passa `--governor=performance` ao `runemu.sh` só naquela
 execução, sem mudar o ajuste do usuário; o item no menu Y deixa de ser
-necessário. (O `runemu.sh` da imagem ainda ignora `--governor=`; a mudança na
-distribuição está na especificação das fases 2 e 3.)
+necessário.
 
 ## 7. Testar
 
