@@ -59,7 +59,7 @@ launcher=/usr/bin/archr-launcher
 log_file=/var/log/archr-launcher-session.log
 kill_file=/tmp/.process-kill-data
 cpufreq=/sys/devices/system/cpu/cpufreq
-game_shell=/bin/sh
+save_exit=/usr/bin/archr-game-save-exit
 sway_attempts=100
 sleep_bin=sleep
 stop_sleep=sleep
@@ -72,7 +72,7 @@ if [ "${ARCHR_SESSION_TEST:-0}" = 1 ]; then
     log_file=${ARCHR_SESSION_LOG:?}
     kill_file=${ARCHR_SESSION_KILL_FILE:?}
     cpufreq=${ARCHR_SESSION_CPUFREQ:?}
-    game_shell=${ARCHR_SESSION_SHELL:?}
+    save_exit=${ARCHR_SESSION_SAVE_EXIT:?}
     sway_attempts=${ARCHR_SESSION_SWAY_ATTEMPTS:-100}
     sleep_bin=${ARCHR_SESSION_SLEEP:?}
     stop_sleep=${ARCHR_SESSION_STOP_SLEEP:?}
@@ -115,110 +115,55 @@ session_log() {
 }
 
 child_pid=
-child_group=0
-child_is_game=0
+child_scope=
 launching=0
 stop_requested=0
 
-child_alive() {
-    [ -n "$child_pid" ] || return 1
-    if [ "$child_group" -eq 1 ]; then
-        # The guardian reserves PGID until reap_child. Only other live group
-        # members count: a lone guardian or unreaped zombies need no grace.
-        ps -A -o pid=,pgid=,stat= | awk -v group="$child_pid" '
-            $2 == group && $1 != group && $3 !~ /^[ZXx]/ { found = 1; exit }
-            END { exit !found }'
-    else
-        kill -0 "$child_pid" 2>/dev/null
-    fi
-}
-
-signal_child() {
-    [ -n "$child_pid" ] || return 0
-    if [ "$child_group" -eq 1 ]; then
-        # The live guardian pins this group; never fall back to a numeric PID.
-        kill "-$1" -- "-$child_pid" 2>/dev/null || :
-    else
-        kill "-$1" "$child_pid" 2>/dev/null || :
-    fi
-}
-
-reap_child() {
-    if [ "$child_group" -eq 1 ]; then
-        printf 'release\n' >&4
-    fi
-    [ -z "$child_pid" ] || wait "$child_pid" 2>/dev/null || :
-    if [ "$child_group" -eq 1 ]; then
-        exec 3>&- 4>&-
-        rm -f "$run_dir/game-exit" "$run_dir/game-release"
-    fi
-}
-
-game_descendants() {
-    # Snapshot PPID links once, before any signal can reparent emulator children.
-    # comm can contain spaces and ')': fields start after the LAST closing ')'.
-    for proc_stat in /proc/[0-9]*/stat; do
-        { IFS= read -r proc_line <"$proc_stat"; } 2>/dev/null || continue
-        proc_fields=${proc_line##*) }
-        proc_fields=${proc_fields#* }
-        proc_parent=${proc_fields%% *}
-        case "$proc_parent" in ''|*[!0-9]*) continue ;; esac
-        proc_pid=${proc_stat#/proc/}
-        proc_pid=${proc_pid%/stat}
-        proc_name=${proc_line#*(}
-        proc_name=${proc_name%)*}
-        proc_wrapper=0
-        [ "$proc_name" != runemu.sh ] || proc_wrapper=1
-        printf '%s %s %s\n' "$proc_pid" "$proc_parent" "$proc_wrapper"
-    done | awk -v root="$child_pid" '
-        { parent[$1] = $2; wrapper[$1] = $3 }
-        END {
-            for (pid in parent) {
-                cursor = pid
-                below_wrapper = 0
-                for (depth = 0; depth < NR && (cursor in parent); depth++) {
-                    if (cursor == root) {
-                        if (below_wrapper) print pid
-                        break
-                    }
-                    cursor = parent[cursor]
-                    if (wrapper[cursor]) below_wrapper = 1
-                }
-            }
-        }'
+cleanup_scope() {
+    # The persistent sequence never reuses a unit name during this boot. Let
+    # systemd keep the cgroup identity, including after the direct child exits.
+    systemctl kill --signal=TERM "$1" 2>/dev/null || :
+    cleanup_wait=10
+    while systemctl is-active --quiet "$1" >/dev/null 2>&1 && [ "$cleanup_wait" -gt 0 ]; do
+        "$stop_sleep" 0.1
+        cleanup_wait=$((cleanup_wait - 1))
+    done
+    systemctl kill --signal=KILL "$1" 2>/dev/null || :
+    systemctl stop "$1" 2>/dev/null || :
 }
 
 stop_session() {
     trap '' TERM INT HUP
     rm -f "$run_dir/next" "$kill_file"
-    remaining=0
-    if [ "$child_is_game" -eq 1 ]; then
-        session_log 'Stopping session; allowing up to 4 s for game cleanup'
-        remaining=40
-        # runemu.sh has no TERM trap. Keep it AND its leading sh -c alive so
-        # the emulator's exit returns through runemu's normal quit()/cleanup.
-        # Signal the snapshot only once: later children may be cleanup helpers.
-        descendants=$(game_descendants)
-        [ -z "$descendants" ] || kill -TERM $descendants 2>/dev/null || :
+    if [ -n "$child_scope" ]; then
+        session_log 'Stopping session; allowing up to 5.2 s for save and game cleanup'
+        # Keep runemu alive to finish quit(). The helper targets the emulator,
+        # not its wrapper. Bound it to 3.2 s, then allow at most 1 s for runemu;
+        # residual cgroup cleanup has 1 s, within TimeoutStopSec=6.
+        if [ -x "$save_exit" ] && timeout -k 0.2 3 "$save_exit" suspend; then
+            remaining=10
+            while kill -0 "$child_pid" 2>/dev/null && [ "$remaining" -gt 0 ]; do
+                "$stop_sleep" 0.1
+                remaining=$((remaining - 1))
+            done
+        fi
+        cleanup_scope "$child_scope"
+        # Not yet reaped, so the PID cannot be reused. This only matters when
+        # the stop came before systemd-run had registered the scope.
+        kill -KILL "$child_pid" 2>/dev/null || :
     else
         session_log 'Stopping launcher session'
-        signal_child TERM
-    fi
-    # Wait for the entire game group, not just sh -c: its wrapper may still be
-    # cleaning up after that shell exits. The service cgroup is the final guard.
-    while child_alive && [ "$remaining" -gt 0 ]; do
-        "$stop_sleep" 0.1
-        remaining=$((remaining - 1))
-    done
-    if child_alive; then
-        session_log 'Child cleanup timed out; terminating remaining processes'
-        signal_child TERM
-        "$stop_sleep" 0.2
-        if child_alive; then
-            signal_child KILL
+        if [ -n "$child_pid" ]; then
+            kill -TERM "$child_pid" 2>/dev/null || :
+            if kill -0 "$child_pid" 2>/dev/null; then
+                "$stop_sleep" 0.2
+                if kill -0 "$child_pid" 2>/dev/null; then
+                    kill -KILL "$child_pid" 2>/dev/null || :
+                fi
+            fi
         fi
     fi
-    reap_child
+    [ -z "$child_pid" ] || wait "$child_pid" 2>/dev/null
     exit 0
 }
 
@@ -273,8 +218,26 @@ restore_cpu_max() {
         [ -z "$top" ] || echo "$top" >"$policy/scaling_max_freq" 2>/dev/null || :
     done
 }
-# Also on any way out of the session: a service stop kills the game group.
+# Also on any way out of the session, including a failed scope launch.
 trap restore_cpu_max EXIT
+
+# Games require systemd's system manager (this service runs as root). After
+# SIGKILL/Restart=always, reclaim scopes the previous supervisor could not stop.
+command -v systemd-run >/dev/null 2>&1 && command -v systemctl >/dev/null 2>&1 || exit 1
+stale_scopes=$(systemctl list-units --all --plain --no-legend 'archr-game-*.scope') || exit 1
+recovered_scope=0
+for stale_scope in $(printf '%s\n' "$stale_scopes" | awk '{print $1}'); do
+    case "$stale_scope" in
+        archr-game-*.scope) cleanup_scope "$stale_scope"; recovered_scope=1 ;;
+    esac
+done
+[ "$recovered_scope" -eq 0 ] || restore_cpu_max
+# /run survives service restarts, not reboots (when all old scopes are gone).
+game_sequence=0
+if [ -f "$run_dir/scope-sequence" ]; then
+    read -r game_sequence <"$run_dir/scope-sequence" || exit 1
+fi
+case "$game_sequence" in ''|*[!0-9]*) exit 1 ;; esac
 
 session_log 'Starting launcher session'
 
@@ -286,8 +249,7 @@ while :; do
     # A leftover belongs to an interrupted cycle, never the next invocation.
     rm -f "$run_dir/next" || exit 1
     launching=1
-    child_group=0
-    child_is_game=0
+    child_scope=
     "$launcher" &
     child_pid=$!
     launching=0
@@ -317,63 +279,23 @@ while :; do
             # may refine it (e.g. -9 mupen64plus). Never overwrite it mid-game.
             rm -f "$kill_file"
             session_log 'Starting game'
+            game_sequence=$((game_sequence + 1))
+            printf '%s\n' "$game_sequence" >"$run_dir/scope-sequence.tmp" &&
+                mv -f "$run_dir/scope-sequence.tmp" "$run_dir/scope-sequence" || exit 1
             launching=1
-            child_group=0
-            child_is_game=1
-            # ArchR's target BusyBox enables setsid; keep a PID-only fallback
-            # for minimal hosts. Never place the supervisor in this group.
-            if command -v setsid >/dev/null 2>&1; then
-                rm -f "$run_dir/game-exit" "$run_dir/game-release"
-                mkfifo "$run_dir/game-exit" "$run_dir/game-release" || exit 1
-                exec 3<>"$run_dir/game-exit" 4<>"$run_dir/game-release"
-                setsid "$game_shell" -c '
-                    # A caught no-op (not SIG_IGN) resets to default in the
-                    # game child. The guardian alone survives group TERM.
-                    trap ":" TERM INT HUP
-                    sh -c "$1" 3>&- 4>&- &
-                    game=$!
-                    printf "ready\n" >&3
-                    wait "$game"
-                    printf "%s\n" "$?" >&3
-                    # Pin PGID/SID until the supervisor releases or KILLs us.
-                    while ! IFS= read -r release <&4; do :; done
-                ' archr-game-guardian "$command" &
-                child_group=1
-            else
-                session_log 'setsid unavailable; tracking game child PID only'
-                sh -c "$command" &
-            fi
+            child_scope=archr-game-$game_sequence.scope
+            # --scope execs the command synchronously, preserving runemu's $$
+            # and its environment; unlike a transient service it adds no parent.
+            systemd-run --scope --unit="$child_scope" --collect -- sh -c "$command" &
             child_pid=$!
-            if [ "$child_group" -eq 1 ]; then
-                # Defer stop handling until the guardian installed its trap.
-                while ! read -r ready <&3; do :; done
-            fi
             launching=0
             [ "$stop_requested" -eq 0 ] || stop_session
-            if [ "$child_group" -eq 1 ]; then
-                # The guardian waits for the game shell/runemu to finish its
-                # save/quit before reporting status. It stays alive meanwhile,
-                # so neither PGID nor SID can be reused during group teardown.
-                while ! read -r game_status <&3; do :; done
-                if child_alive; then
-                    signal_child TERM
-                    remaining=10
-                    while child_alive && [ "$remaining" -gt 0 ]; do
-                        "$stop_sleep" 0.1
-                        remaining=$((remaining - 1))
-                    done
-                    if child_alive; then
-                        signal_child KILL
-                    fi
-                fi
-                reap_child
-            else
-                wait "$child_pid"
-                game_status=$?
-            fi
+            wait "$child_pid"
+            game_status=$?
+            # Only AFTER runemu's save/quit exits, terminate residual helpers.
+            cleanup_scope "$child_scope"
             child_pid=
-            child_group=0
-            child_is_game=0
+            child_scope=
             session_log "Game exited with $game_status"
             restore_cpu_max
             printf '%s\n' "$game_status" >"$run_dir/last-exit.tmp" &&

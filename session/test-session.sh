@@ -27,6 +27,7 @@ export ARCHR_SESSION_LAUNCHER=archr-launcher
 export ARCHR_SESSION_SWAY_ATTEMPTS=0
 export ARCHR_SESSION_SLEEP="$root/bin/sleep"
 export ARCHR_SESSION_STOP_SLEEP=/bin/sleep
+export ARCHR_SESSION_SAVE_EXIT="$root/bin/save-exit"
 export ARCHR_SESSION_PROFILE="$root/profile"
 export ARCHR_SESSION_SHELL=${SESSION_TEST_SHELL:-sh}
 export ARCHR_TEST_EMULATOR="$root/bin/fake) emulator"
@@ -66,6 +67,14 @@ printf '%s\n' "$SDL_GAMECONTROLLERCONFIG_FILE" >"$CASE_DIR/controller-db"
 [ "$SDL_VIDEODRIVER" = wayland ]
 [ "$SDL_AUDIODRIVER" = pulseaudio ]
 [ "$(cat "$ARCHR_SESSION_KILL_FILE")" = archr-launcher ]
+if [ -f "$CASE_DIR/stale-scope-pid" ]; then
+  [ -f "$CASE_DIR/scopes/archr-game-old.scope/stopped" ]
+fi
+if [ -f "$CASE_DIR/recovered-scope" ]; then
+  [ -f "$CASE_DIR/scopes/$(cat "$CASE_DIR/recovered-scope")/stopped" ]
+  [ "$(cat "$ARCHR_SESSION_CPUFREQ/policy0/scaling_max_freq")" = 1416000 ] ||
+    : >"$CASE_DIR/cpu-stale-on-recovery"
+fi
 printf '%s\n' "$PPID" >"$CASE_DIR/supervisor-pid"
 n=0
 [ ! -f "$CASE_DIR/count" ] || n=$(cat "$CASE_DIR/count")
@@ -106,11 +115,12 @@ set -eu
 [ ! -e "$ARCHR_SESSION_RUN_DIR/next" ]
 # Do not target the wrapper: it must survive to restore services/governors.
 [ ! -e "$ARCHR_SESSION_KILL_FILE" ]
-guardian=$(ps -o pgid= -p "$$" | tr -d ' ')
-printf '%s\n' "$guardian" >"$CASE_DIR/guardian-pid"
-stat -c %i "/proc/$guardian" >"$CASE_DIR/guardian-inode"
-# Same contract as the real runemu: save-exit reads its $$, not the guardian.
+printf '%s\n' "$$" >>"$CASE_DIR/scopes/$ARCHR_TEST_SCOPE/members"
+# Same contract as the real runemu: save-exit reads its own $$.
 printf '%s\n' demo.zip "$$" nes retroarch core >"$CASE_DIR/current-game"
+# Like a per-game module, lower the ceiling at every game start, independently
+# of any recovery the supervisor performed before returning to the launcher.
+echo 816000 >"$ARCHR_SESSION_CPUFREQ/policy0/scaling_max_freq"
 if [ "${1-}" = LONG ] || [ "${1-}" = ORPHAN ] ||
    [ "${1-}" = NORMAL ] || [ "${1-}" = COOPERATIVE ]; then
   # Like the real runemu.sh: NO TERM trap. Cleanup is normal control flow
@@ -149,7 +159,6 @@ exit 37
 EOF
 cat >"$ARCHR_TEST_EMULATOR" <<'EOF'
 #!/bin/sh
-# This process name contains ')' and a space to exercise /proc/stat parsing.
 case "${1-}" in
   STUBBORN) trap '' TERM ;;
   # A cooperative helper needs time to flush a save on TERM (not just exit).
@@ -158,6 +167,7 @@ esac
 /bin/sleep 30 &
 child=$!
 printf '%s\n' "$$" "$child" >>"$CASE_DIR/game-pids"
+printf '%s\n' "$$" "$child" >>"$CASE_DIR/scopes/$ARCHR_TEST_SCOPE/members"
 case "${1-}" in
   STUBBORN) : >"$CASE_DIR/stubborn-ready" ;;
   TERM) : >"$CASE_DIR/term-ready" ;;
@@ -169,12 +179,61 @@ cat >"$root/bin/systemctl" <<'EOF'
 #!/bin/sh
 case "$1" in
   import-environment) printf '%s\n' "$*" >>"$CASE_DIR/imports" ;;
+  list-units)
+    printf '%s\n' "$*" >>"$CASE_DIR/scope-calls"
+    for unit in "$CASE_DIR"/scopes/archr-game-*.scope; do
+      [ -d "$unit" ] || continue
+      printf '%s loaded active running\n' "${unit##*/}"
+    done
+    ;;
+  is-active)
+    printf '%s\n' "$*" >>"$CASE_DIR/scope-calls"
+    unit=$3
+    [ ! -f "$CASE_DIR/scopes/$unit/stopped" ] || exit 3
+    [ -f "$CASE_DIR/scopes/$unit/members" ] || exit 3
+    while IFS= read -r pid; do
+      state=$(ps -o stat= -p "$pid" 2>/dev/null) || continue
+      case "$state" in ''|Z*|X*) continue ;; esac
+      exit 0
+    done <"$CASE_DIR/scopes/$unit/members"
+    exit 3
+    ;;
+  kill)
+    printf '%s\n' "$*" >>"$CASE_DIR/scope-calls"
+    signal=${2#--signal=}
+    unit=$3
+    if [ -f "$CASE_DIR/save-exit-calls" ] && [ ! -f "$CASE_DIR/cleanup" ]; then
+      : >"$CASE_DIR/residual-before-cleanup"
+    fi
+    [ -f "$CASE_DIR/scopes/$unit/members" ] || exit 0
+    while IFS= read -r pid; do
+      kill "-$signal" "$pid" 2>/dev/null || :
+    done <"$CASE_DIR/scopes/$unit/members"
+    ;;
+  stop)
+    printf '%s\n' "$*" >>"$CASE_DIR/scope-calls"
+    unit=$2
+    [ ! -d "$CASE_DIR/scopes/$unit" ] || : >"$CASE_DIR/scopes/$unit/stopped"
+    ;;
   *) printf '%s\n' "$*" >>"$CASE_DIR/actions" ;;
 esac
 EOF
 cat >"$root/bin/systemd-run" <<'EOF'
 #!/bin/sh
-# Like the real one: return at once and run the unit command elsewhere.
+if [ "$1" = --scope ]; then
+  printf '%s\n' "$*" >>"$CASE_DIR/scope-runs"
+  shift
+  case "$1" in --unit=archr-game-*.scope) unit=${1#--unit=} ;; *) exit 2 ;; esac
+  shift
+  [ "$1" = --collect ] && [ "$2" = -- ] || exit 2
+  shift 2
+  export ARCHR_TEST_SCOPE=$unit
+  mkdir -p "$CASE_DIR/scopes/$unit"
+  printf '%s\n' "$$" >"$CASE_DIR/scopes/$unit/members"
+  # Real systemd-run --scope execs the command rather than a detached service.
+  exec "$@"
+fi
+# Locale generation uses a detached transient service, not a game scope.
 printf '%s\n' "$*" >"$CASE_DIR/detached"
 for command; do :; done
 "$command" >/dev/null 2>&1 </dev/null &
@@ -188,24 +247,26 @@ cat >"$ARCHR_SESSION_APPLY_LOCALE" <<'EOF'
 echo 'LOCPATH=/storage/.config/emulationstation/locale'
 exit 1
 EOF
+cat >"$root/bin/save-exit" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >>"$CASE_DIR/save-exit-calls"
+[ "$1" = suspend ] || exit 2
+[ ! -f "$CASE_DIR/save-exit-fail" ] || exit 1
+if [ -f "$CASE_DIR/save-exit-hang" ]; then
+  trap '' TERM
+  /bin/sleep 30
+fi
+pid=$(sed -n '2p' "$CASE_DIR/current-game")
+[ "$pid" = "$(cat "$CASE_DIR/wrapper-pid")" ] || exit 2
+kill -TERM "$(cat "$CASE_DIR/emulator-pid")"
+while kill -0 "$pid" 2>/dev/null; do /bin/sleep 0.01; done
+[ -f "$CASE_DIR/cleanup" ] || exit 1
+: >"$CASE_DIR/save-exit-finished"
+EOF
 cat >"$root/bin/stop-sleep" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >>"$CASE_DIR/stop-sleeps"
-check_guardian() {
-  [ -f "$CASE_DIR/guardian-pid" ] || return 0
-  guardian=$(cat "$CASE_DIR/guardian-pid")
-  # /proc inode identity must stay pinned for the WHOLE grace interval, not
-  # just at a snapshot before TERM. The same live leader reserves PGID/SID.
-  if ! kill -0 "$guardian" 2>/dev/null ||
-     [ "$(stat -c %i "/proc/$guardian" 2>/dev/null)" != "$(cat "$CASE_DIR/guardian-inode")" ]; then
-    : >"$CASE_DIR/guardian-lost"
-    return 1
-  fi
-  : >"$CASE_DIR/guardian-reserved"
-}
-check_guardian || exit 1
-/bin/sleep "$@"
-check_guardian
+exec /bin/sleep "$@"
 EOF
 cat >"$root/bin/swaymsg" <<'EOF'
 #!/bin/sh
@@ -221,7 +282,7 @@ chmod +x "$root/bin/"*
 setup_case() {
   name=$1
   export CASE_DIR="$root/$name"
-  mkdir -p "$CASE_DIR"
+  mkdir -p "$CASE_DIR/scopes"
   export ARCHR_SESSION_RUN_DIR="$CASE_DIR/run"
   export ARCHR_SESSION_LOG="$CASE_DIR/session.log"
   export ARCHR_SESSION_KILL_FILE="$CASE_DIR/kill-data"
@@ -244,6 +305,14 @@ run_case() {
     mkdir -p "$ARCHR_SESSION_RUN_DIR"
     printf '%s\n' 'action reboot' >"$ARCHR_SESSION_RUN_DIR/next"
   fi
+  if [ "$name" = stale-scope ]; then
+    /bin/sleep 30 &
+    stale_pid=$!
+    printf '%s\n' "$stale_pid" >"$CASE_DIR/stale-scope-pid"
+    printf '%s\n' "$stale_pid" >"$CASE_DIR/game-pids"
+    mkdir -p "$CASE_DIR/scopes/archr-game-old.scope"
+    printf '%s\n' "$stale_pid" >"$CASE_DIR/scopes/archr-game-old.scope/members"
+  fi
   # END terminates the supervisor; a timeout or an earlier failure is not success.
   status=0
   timeout 15 "${SESSION_TEST_SHELL:-sh}" "$session" >"$CASE_DIR/output" 2>&1 || status=$?
@@ -256,12 +325,12 @@ run_case() {
   [ "$(stat -c %a "$ARCHR_SESSION_RUN_DIR")" = 755 ]
   [ ! -e "$ARCHR_SESSION_RUN_DIR/next" ]
   [ ! -e "$ARCHR_SESSION_RUN_DIR/last-exit.tmp" ]
-  [ ! -e "$ARCHR_SESSION_RUN_DIR/game-exit" ]
-  [ ! -e "$ARCHR_SESSION_RUN_DIR/game-release" ]
 }
 
 run_case game 'game runemu.sh /roms/demo.zip -Pnes --core=auto --emulator=retroarch --controllers=
 END'
+[ -f "$CASE_DIR/scope-runs" ] ||
+  { echo 'FAIL: game did not launch in a systemd scope' >&2; exit 1; }
 [ "$(cat "$ARCHR_SESSION_RUN_DIR/last-exit")" = 37 ]
 [ ! -f "$CASE_DIR/sleeps" ]
 [ -f "$CASE_DIR/locale-applied" ]
@@ -278,7 +347,17 @@ game runemu.sh demo
 END'
 [ "$(cat "$ARCHR_SESSION_CPUFREQ/policy0/scaling_max_freq")" = 1512000 ]
 [ "$(grep -c 'Game exited' "$ARCHR_SESSION_LOG")" = 2 ]
-printf '%s\n' 'PASS the CPU ceiling comes back after every game'
+[ "$(cut -d ' ' -f2 "$CASE_DIR/scope-runs" | sort -u | wc -l)" -eq 2 ]
+printf '%s\n' 'PASS CPU ceiling restored after every game; scope names never reused'
+
+run_case stale-scope 'CLEAN
+END'
+wait "$stale_pid" 2>/dev/null || :
+! kill -0 "$stale_pid" 2>/dev/null
+[ -f "$CASE_DIR/scopes/archr-game-old.scope/stopped" ]
+grep -q '^kill --signal=TERM archr-game-old.scope$' "$CASE_DIR/scope-calls"
+grep -q '^kill --signal=KILL archr-game-old.scope$' "$CASE_DIR/scope-calls"
+printf '%s\n' 'PASS startup clears leftover scopes before the launcher starts'
 
 : >"$ARCHR_SESSION_USER_CONTROLLER_DB"
 run_case user-controller-db 'CLEAN
@@ -399,6 +478,10 @@ stop_case() {
   export ARCHR_SESSION_SWAY_ATTEMPTS=0
   setup_case "$1" "$2
 END"
+  case "$1" in
+    service-stop-failed) : >"$CASE_DIR/save-exit-fail" ;;
+    service-stop-hung) : >"$CASE_DIR/save-exit-hang" ;;
+  esac
   timeout 12 "${SESSION_TEST_SHELL:-sh}" "$session" >"$CASE_DIR/output" 2>&1 &
   test_runner=$!
   i=0
@@ -409,7 +492,7 @@ END"
   [ -f "$CASE_DIR/$3" ]
   kill -TERM "$(cat "$CASE_DIR/supervisor-pid")"
   status=0
-  wait "$test_runner" || status=$?
+  wait "$test_runner" 2>/dev/null || status=$?
   test_runner=
   [ "$status" -eq 0 ]
 }
@@ -430,20 +513,43 @@ run_stop_case() {
       exit 1
     fi
   done <"$CASE_DIR/game-pids"
-  if kill -0 "$(cat "$CASE_DIR/guardian-pid")" 2>/dev/null; then
-    echo 'FAIL: service stop did not reap the guardian' >&2
-    exit 1
-  fi
-  [ ! -e "$ARCHR_SESSION_RUN_DIR/game-exit" ]
-  [ ! -e "$ARCHR_SESSION_RUN_DIR/game-release" ]
-  if grep -q 'cleanup timed out' "$ARCHR_SESSION_LOG"; then
-    echo 'FAIL: normal wrapper cleanup needed forced group termination' >&2
-    exit 1
-  fi
+  [ "$(cat "$CASE_DIR/save-exit-calls")" = suspend ]
+  [ -f "$CASE_DIR/save-exit-finished" ]
+  [ ! -f "$CASE_DIR/residual-before-cleanup" ]
+  grep -q '^kill --signal=TERM archr-game-' "$CASE_DIR/scope-calls"
+  grep -q '^stop archr-game-' "$CASE_DIR/scope-calls"
   printf '%s\n' "PASS $1 preserves untrapped wrapper cleanup and leaves no processes"
 }
 run_stop_case service-stop 'game runemu.sh LONG'
 run_stop_case service-stop-shell 'game runemu.sh LONG; :'
+
+for mode in failed missing hung; do
+  export ARCHR_SESSION_SAVE_EXIT="$root/bin/save-exit"
+  [ "$mode" != missing ] || ARCHR_SESSION_SAVE_EXIT="$root/missing-save-exit"
+  started=$(date +%s%N)
+  stop_case "service-stop-$mode" 'game runemu.sh LONG' game-ready
+  ended=$(date +%s%N)
+  awk -v started="$started" -v ended="$ended" 'BEGIN { exit !((ended-started)/1000000 < 6000) }'
+  grep -q '^kill --signal=TERM archr-game-' "$CASE_DIR/scope-calls"
+  grep -q '^kill --signal=KILL archr-game-' "$CASE_DIR/scope-calls"
+  grep -q '^stop archr-game-' "$CASE_DIR/scope-calls"
+  [ "$(cat "$ARCHR_SESSION_CPUFREQ/policy0/scaling_max_freq")" = 1416000 ]
+  if [ "$mode" = missing ]; then
+    [ ! -f "$CASE_DIR/save-exit-calls" ]
+  else
+    [ "$(cat "$CASE_DIR/save-exit-calls")" = suspend ]
+  fi
+  while IFS= read -r pid; do
+    i=0
+    while kill -0 "$pid" 2>/dev/null && [ "$i" -lt 100 ]; do
+      /bin/sleep 0.01
+      i=$((i+1))
+    done
+    ! kill -0 "$pid" 2>/dev/null
+  done <"$CASE_DIR/game-pids"
+  printf '%s\n' "PASS save-exit $mode: bounded scope fallback and CPU restoration"
+done
+export ARCHR_SESSION_SAVE_EXIT="$root/bin/save-exit"
 
 # The wrapper may die before its emulator. Tracking only wait's PID must fail
 # these checks; a TERM-only implementation must also fail (STUBBORN ignores it).
@@ -463,11 +569,8 @@ END"
   [ -f "$CASE_DIR/game-ready" ] && [ -f "$CASE_DIR/term-ready" ]
   [ "$2" = COOPERATIVE ] || [ -f "$CASE_DIR/stubborn-ready" ]
   wrapper=$(cat "$CASE_DIR/wrapper-pid")
-  group=$(ps -o pgid= -p "$wrapper" | tr -d ' ')
-  [ -n "$group" ]
-  [ "$wrapper" != "$group" ] ||
-    { echo 'FAIL: runemu is still the group leader; no guardian reserves PGID' >&2; exit 1; }
   [ "$(sed -n '2p' "$CASE_DIR/current-game")" = "$wrapper" ]
+  [ -f "$CASE_DIR/scope-runs" ]
   [ ! -f "$CASE_DIR/group-term" ]
   if [ "$2" != NORMAL ]; then
     kill -KILL "$wrapper"
@@ -477,18 +580,15 @@ END"
     kill -TERM "$(cat "$CASE_DIR/emulator-pid")"
   fi
   status=0
-  wait "$test_runner" || status=$?
+  wait "$test_runner" 2>/dev/null || status=$?
   test_runner=
   [ "$status" -eq 0 ] && [ -f "$CASE_DIR/finished" ]
   [ "$(cat "$ARCHR_SESSION_RUN_DIR/last-exit")" = "$4" ]
   [ "$(cat "$ARCHR_SESSION_CPUFREQ/policy0/scaling_max_freq")" = 1416000 ]
   [ -f "$CASE_DIR/cpu-restored-before-launcher" ]
-  [ -f "$CASE_DIR/guardian-reserved" ] && [ ! -f "$CASE_DIR/guardian-lost" ] ||
-    { echo 'FAIL: launch leader did not reserve PGID throughout teardown' >&2; exit 1; }
-  if kill -0 "$(cat "$CASE_DIR/guardian-pid")" 2>/dev/null; then
-    echo 'FAIL: guardian survived game teardown instead of being reaped' >&2
-    exit 1
-  fi
+  grep -q '^kill --signal=TERM archr-game-' "$CASE_DIR/scope-calls"
+  grep -q '^kill --signal=KILL archr-game-' "$CASE_DIR/scope-calls"
+  grep -q '^stop archr-game-' "$CASE_DIR/scope-calls"
   [ "$(sort -u "$CASE_DIR/stop-sleeps")" = 0.1 ]
   [ "$(wc -l <"$CASE_DIR/stop-sleeps")" -le 10 ]
   if [ "$2" = COOPERATIVE ]; then
@@ -499,20 +599,21 @@ END"
     [ -f "$CASE_DIR/cleanup" ] && [ ! -f "$CASE_DIR/premature-term" ] ||
       { echo 'FAIL: group termination interrupted normal save/cleanup' >&2; exit 1; }
   fi
-  # Allow init to reap killed orphans: a zombie is already dead but can briefly
-  # keep kill -0 on the group successful. No running descendant may survive.
-  i=0
-  while kill -0 -- "-$group" 2>/dev/null && [ "$i" -lt 100 ]; do
-    /bin/sleep 0.01
-    i=$((i + 1))
-  done
-  if kill -0 -- "-$group" 2>/dev/null; then
-    echo "FAIL: game group $group survived $1" >&2
-    exit 1
-  fi
+  # Every recorded cgroup member must be gone (allow init to reap orphans).
+  while IFS= read -r pid; do
+    i=0
+    while kill -0 "$pid" 2>/dev/null && [ "$i" -lt 100 ]; do
+      /bin/sleep 0.01
+      i=$((i + 1))
+    done
+    if kill -0 "$pid" 2>/dev/null; then
+      echo "FAIL: fake cgroup member $pid survived $1" >&2
+      exit 1
+    fi
+  done <"$CASE_DIR/game-pids"
   [ -f "$CASE_DIR/group-term" ] ||
     { echo 'FAIL: group teardown skipped TERM grace period' >&2; exit 1; }
-  printf '%s\n' "PASS $1: no game group; guardian pinned through teardown and reaped"
+  printf '%s\n' "PASS $1: cgroup TERM/KILL leaves no emulator or helper"
 }
 exit_group_case wrapper-killed ORPHAN '' 137
 exit_group_case wrapper-killed-shell ORPHAN '; :' 0
@@ -531,14 +632,43 @@ awk -v ended="$(cat "$CASE_DIR/empty-group-end")" \
   exit !(elapsed < 1000)
 }'
 
-# The empty-group fast path still releases and reaps its guardian.
-if kill -0 "$(cat "$CASE_DIR/guardian-pid")" 2>/dev/null; then
-  echo 'FAIL: empty group left its guardian alive' >&2
-  exit 1
-fi
-[ ! -e "$ARCHR_SESSION_RUN_DIR/game-exit" ]
-[ ! -e "$ARCHR_SESSION_RUN_DIR/game-release" ]
+grep -q '^stop archr-game-' "$CASE_DIR/scope-calls"
 export ARCHR_SESSION_STOP_SLEEP=/bin/sleep
+
+# A SIGKILL cannot run traps. Keep the fake cgroup registry across a fresh
+# supervisor invocation, as systemd does, and require recovery before any UI.
+setup_case session-restart 'game runemu.sh LONG'
+timeout 12 "${SESSION_TEST_SHELL:-sh}" "$session" >"$CASE_DIR/first-output" 2>&1 &
+test_runner=$!
+i=0
+while [ ! -f "$CASE_DIR/game-ready" ] && [ "$i" -lt 200 ]; do
+  /bin/sleep 0.01
+  i=$((i+1))
+done
+[ -f "$CASE_DIR/game-ready" ]
+kill -KILL "$(cat "$CASE_DIR/supervisor-pid")"
+status=0
+wait "$test_runner" 2>/dev/null || status=$?
+test_runner=
+[ "$status" -eq 137 ]
+kill -0 "$(cat "$CASE_DIR/wrapper-pid")"
+old_unit=$(cut -d ' ' -f2 "$CASE_DIR/scope-runs")
+printf '%s\n' "${old_unit#--unit=}" >"$CASE_DIR/recovered-scope"
+rm -f "$CASE_DIR/count"
+run_case session-restart 'game runemu.sh demo
+END'
+[ "$(cut -d ' ' -f2 "$CASE_DIR/scope-runs" | sort -u | wc -l)" -eq 2 ]
+[ ! -f "$CASE_DIR/cpu-stale-on-recovery" ] ||
+  { echo 'FAIL: recovered scope left the CPU capped before the launcher' >&2; exit 1; }
+while IFS= read -r pid; do
+  i=0
+  while kill -0 "$pid" 2>/dev/null && [ "$i" -lt 100 ]; do
+    /bin/sleep 0.01
+    i=$((i+1))
+  done
+  ! kill -0 "$pid" 2>/dev/null
+done <"$CASE_DIR/game-pids"
+printf '%s\n' 'PASS supervisor SIGKILL: next session clears the scope and never reuses its name'
 
 run_case removed-actions 'action suspend
 action shutdown
@@ -550,7 +680,7 @@ printf '%s\n' 'PASS removed actions cannot execute in supervisor'
 export ARCHR_SESSION_STOP_SLEEP="$root/bin/stop-sleep"
 stop_case launcher-stop HOLD launcher-ready
 [ "$(cat "$CASE_DIR/stop-sleeps")" = 0.2 ]
-! grep -q '4 s' "$ARCHR_SESSION_LOG"
+! grep -q 'game cleanup' "$ARCHR_SESSION_LOG"
 [ ! -e "$ARCHR_SESSION_RUN_DIR/next" ]
 [ "$(cat "$CASE_DIR/count")" = 1 ]
 printf '%s\n' 'PASS launcher-only stop has no game cleanup window'

@@ -15,8 +15,9 @@ ExecStart=/usr/bin/archr-launcher-session
 WorkingDirectory=/storage
 Restart=always
 RestartSec=1
-# TERM reaches only the supervisor; it preserves runemu.sh during cleanup.
-# After TimeoutStopSec, systemd still KILLs the entire cgroup as a final guard.
+# TERM reaches only the supervisor: save-exit closes runemu before scope cleanup.
+# Save-exit + wrapper grace + residual scope grace are bounded to 5.2 s.
+# TimeoutStopSec still KILLs helpers left in the session service's own cgroup.
 KillMode=mixed
 KillSignal=SIGTERM
 TimeoutStopSec=6
