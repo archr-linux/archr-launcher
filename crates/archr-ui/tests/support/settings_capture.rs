@@ -1655,6 +1655,8 @@ fn module_view() -> crate::modules::View {
         pages: vec![ModPage {
             id: "main".into(),
             title: "Bateria detalhada".into(),
+            detail: false,
+            hint: None,
             rows: vec![
                 row(
                     "Agora",
@@ -1691,6 +1693,7 @@ fn module_view() -> crate::modules::View {
                     RowKind::Action {
                         action: "atualizar".into(),
                         confirm: None,
+                        icon: None,
                     },
                     "",
                 ),
@@ -1765,6 +1768,8 @@ fn module_view() -> crate::modules::View {
         pages: vec![ModPage {
             id: "main".into(),
             title: "Backup na nuvem".into(),
+            detail: false,
+            hint: None,
             rows: vec![
                 row(
                     "Enviando saves",
@@ -1775,7 +1780,11 @@ fn module_view() -> crate::modules::View {
                 row(
                     "",
                     Some("Últimos jogos"),
-                    RowKind::List { id: "jogos".into() },
+                    RowKind::List {
+                        id: "jogos".into(),
+                        open: None,
+                        alt: None,
+                    },
                     "",
                 ),
             ],
@@ -1804,6 +1813,7 @@ fn module_view() -> crate::modules::View {
         subtitle: subtitle.into(),
         value: value.into(),
         action: Some("abrir".into()),
+        ..Default::default()
     };
     view.items.insert(
         key("backup-nuvem", "row:jogos"),
@@ -2509,3 +2519,4 @@ fn capture_resume() {
         frame(&mut ui, &app, "retomar-boot-sem-estado");
     }
 }
+

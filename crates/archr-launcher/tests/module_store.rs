@@ -557,6 +557,8 @@ fn host(
         firewall: None,
         bin: std::path::PathBuf::from("/nonexistent"),
         shop: Some(shop(root, fake)),
+        cpufreq: root.join("cpufreq/policy0"),
+        perf: root.join("run/perf-last.json"),
     })
 }
 /// Store answers and notices until `done` holds, at most 10 s.
@@ -603,7 +605,7 @@ fn the_host_updates_on_its_own_only_outside_games_and_keeps_the_switch() {
         std::time::Duration::from_millis(400),
     );
     // A game takes the screen before the first look: nothing happens.
-    modules.hand_off("", "", "");
+    modules.hand_off(serde_json::json!({}));
     std::thread::sleep(std::time::Duration::from_millis(1200));
     assert!(version_on_disk(root.path()).contains("1.0.0"));
     modules.resume();

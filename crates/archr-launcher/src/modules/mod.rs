@@ -87,6 +87,11 @@ pub struct Config {
     /// archr-screenshot and archr-osd, for `system.call`.
     pub bin: PathBuf,
     pub shop: Option<store::Shop>,
+    /// The CPU's cpufreq policy (`scaling_available_frequencies`...): the
+    /// ceilings a `cpu-tune` module may choose.
+    pub cpufreq: PathBuf,
+    /// What archr-perf-probe measured in the last game (runemu.sh --measure).
+    pub perf: PathBuf,
 }
 impl Config {
     /// The device's sandbox, or the plain runner for a fixture root.
@@ -121,6 +126,8 @@ impl Config {
             firewall,
             bin: paths.at("/usr/bin"),
             shop: Some(shop),
+            cpufreq: paths.at("/sys/devices/system/cpu/cpufreq/policy0"),
+            perf: paths.at("/run/archr/perf-last.json"),
         }
     }
 }
@@ -155,8 +162,18 @@ pub enum Notice {
     Text(String),
 }
 
-/// Where the governor chosen for one launch goes.
-type Governor = mpsc::Sender<Option<String>>;
+/// What the modules chose for one launch, and whether runemu.sh measures it
+/// for them (API 3). Only this launch: the user's settings stay.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Tune {
+    /// One of `manifest::GOVERNORS`.
+    pub governor: Option<String>,
+    /// One of the CPU's own frequencies, in kHz.
+    pub cpu_max_khz: Option<u32>,
+    pub measure: bool,
+}
+/// Where the choice for one launch goes.
+type Governor = mpsc::Sender<Tune>;
 
 enum Input {
     Request(Request),
@@ -173,7 +190,7 @@ enum Input {
         name: &'static str,
         ok: bool,
     },
-    /// `launch.before` to the modules with the hook; the governor comes back.
+    /// `launch.before` to the modules with the hook; their choice comes back.
     Before(Json, Governor),
     Stop(mpsc::Sender<()>),
     Resume,
@@ -257,18 +274,18 @@ impl Modules {
     }
     /// A game is about to take the screen: ask the modules with the launch
     /// hook (`BEFORE` at most), tell every module, then stop them all.
-    /// Returns once nothing runs (500 ms for daemons, then killed), with the
-    /// CPU governor a module chose for this launch.
-    pub fn hand_off(&self, system: &str, game_key: &str, name: &str) -> Option<String> {
-        let game = json!({"system": system, "game_key": game_key, "name": name});
-        let mut governor = None;
-        if !system.is_empty() {
+    /// Returns once nothing runs (500 ms for daemons, then killed), with
+    /// what the modules chose for this launch. `game` holds `system`,
+    /// `game_key` and `name`, and for an emulated game `system_name`,
+    /// `emulator` and `core`; netplay and Moonlight have no system.
+    pub fn hand_off(&self, game: Json) -> Tune {
+        let mut tune = Tune::default();
+        if game["system"].as_str().is_some_and(|s| !s.is_empty()) {
             let (tx, rx) = mpsc::channel();
             if self.tx.send(Input::Before(game.clone(), tx)).is_ok() {
-                governor = rx
+                tune = rx
                     .recv_timeout(BEFORE + Duration::from_millis(200))
-                    .ok()
-                    .flatten();
+                    .unwrap_or_default();
             }
         }
         let _ = self.tx.send(Input::GameStarted(game));
@@ -276,7 +293,7 @@ impl Modules {
         if self.tx.send(Input::Stop(ack)).is_ok() {
             let _ = done.recv_timeout(Duration::from_secs(5));
         }
-        governor
+        tune
     }
     /// The hand-off failed: modules run again.
     pub fn resume(&self) {
@@ -353,9 +370,9 @@ struct Host {
     late: BTreeMap<String, u32>,
     /// When the user last chose an action of each module (`game.launch`).
     gestures: BTreeMap<String, Instant>,
-    /// A launch waiting for `launch.before`: where the answer goes and the
-    /// governor each module chose.
-    before: Option<(Governor, BTreeMap<String, String>)>,
+    /// A launch waiting for `launch.before`: where the answer goes and what
+    /// each module chose.
+    before: Option<(Governor, BTreeMap<String, Tune>)>,
 }
 
 impl Host {
@@ -436,17 +453,32 @@ impl Host {
             .ok()
             .and_then(|bytes| serde_json::from_slice::<Json>(&bytes).ok());
         let _ = fs::remove_file(&path);
+        // The probe's summary, only of this very launch.
+        let perf = archr_io::read_bytes(&self.config.perf, 4096, archr_io::Symlinks::Reject)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<Json>(&bytes).ok());
+        let _ = fs::remove_file(&self.config.perf);
         let mut events = vec![("launcher.started", json!({"cold": ended.is_none()}))];
         if let Some(last) = ended {
-            let seconds = now_secs().saturating_sub(last["started"].as_u64().unwrap_or(0));
-            events.push((
-                "game.ended",
-                json!({
-                    "game": last["game"],
-                    "exit_code": crate::handoff::read_last_exit(&self.config.run),
-                    "seconds": seconds,
-                }),
-            ));
+            let started = last["started"].as_u64().unwrap_or(0);
+            let seconds = now_secs().saturating_sub(started);
+            let mut data = json!({
+                "game": last["game"],
+                "exit_code": crate::handoff::read_last_exit(&self.config.run),
+                "seconds": seconds,
+            });
+            if let Some(perf) = perf.filter(|p| {
+                p["started"].as_u64().is_some_and(|at| at + 5 >= started) && p["seconds"].is_u64()
+            }) {
+                data["perf"] = json!({
+                    "cpu_max_khz": perf["cpu_max_khz"].as_u64().unwrap_or(0),
+                    "seconds": perf["seconds"],
+                    "busy_p95": perf["busy_p95"].as_u64().unwrap_or(0).min(100),
+                    "limit_seconds": perf["limit_seconds"].as_u64().unwrap_or(0),
+                    "current_ma": perf["current_ma"].as_u64(),
+                });
+            }
+            events.push(("game.ended", data));
         }
         events
     }
@@ -1219,7 +1251,7 @@ impl Host {
                 Instant::now() + INITIALIZE,
             ),
         );
-        let params = json!({
+        let mut params = json!({
             "api_version": manifest::API_VERSION,
             "launcher_version": env!("CARGO_PKG_VERSION"),
             "language": self.config.language,
@@ -1229,6 +1261,10 @@ impl Host {
             "capabilities": ["ui.update", "ui.notify", "settings.set", "config.get",
                 "config.set", "game.launch", "launch.before", "system.call", "log"],
         });
+        if permissions.iter().any(|p| p == "system:cpu-tune") {
+            let opps = self.cpu_opps();
+            params["cpu"] = json!({"opps": opps, "max_khz": opps.last()});
+        }
         self.send(
             id,
             &json!({"jsonrpc": "2.0", "id": request, "method": "initialize", "params": params}),
@@ -1424,7 +1460,7 @@ impl Host {
                     let subscribed = self.subscribed(id);
                     for (name, data) in self.boot.clone() {
                         if subscribed.contains(name) {
-                            self.send(id, &event(name, &data));
+                            self.send(id, &self.event_for(id, name, &data));
                         }
                     }
                 }
@@ -1477,12 +1513,29 @@ impl Host {
                                         .map(str::to_owned)
                                 };
                                 let id = short("id").unwrap_or_default();
+                                let game = item.get("game").and_then(|g| {
+                                    let field = |f: &str| {
+                                        g[f].as_str()
+                                            .filter(|t| (1..=256).contains(&t.len()))
+                                            .map(str::to_owned)
+                                    };
+                                    Some((field("system")?, field("game_key")?))
+                                });
                                 archr_ui::modules::Item {
                                     title: text(item, "title"),
                                     subtitle: text(item, "subtitle"),
                                     value: text(item, "value"),
                                     action: short("action").filter(|_| !id.is_empty()),
                                     id,
+                                    detail: text(item, "detail"),
+                                    badge: text(item, "badge"),
+                                    tone: archr_ui::modules::Tone::parse(
+                                        item["tone"].as_str().unwrap_or(""),
+                                    ),
+                                    progress: item["progress"]
+                                        .as_f64()
+                                        .map(|p| p.clamp(0., 100.).round() as u8),
+                                    game,
                                 }
                             })
                             .collect()
@@ -1661,16 +1714,56 @@ impl Host {
             if !self.subscribed(&id).contains(name) {
                 continue;
             }
+            let message = self.event_for(&id, name, data);
             match manifest.mode {
                 Mode::Daemon if self.daemons.get(&id).is_some_and(|d| d.ready) => {
-                    self.send(&id, &event(name, data));
+                    self.send(&id, &message);
                 }
                 Mode::Oneshot if !name.starts_with("focus.") => {
-                    self.oneshot(&id, event(name, data), None);
+                    self.oneshot(&id, message, None);
                 }
                 _ => {}
             }
         }
+    }
+    /// The event as this module may see it: the game's measurement only
+    /// for `cpu-tune`.
+    fn event_for(&self, id: &str, name: &str, data: &Json) -> Json {
+        let mut data = data.clone();
+        if !self.has_system(id, "cpu-tune") {
+            if let Some(data) = data.as_object_mut() {
+                data.remove("perf");
+            }
+        }
+        event(name, &data)
+    }
+    fn has_system(&self, id: &str, system: &str) -> bool {
+        self.active(id)
+            .is_some_and(|(_, m)| m.permissions.system.iter().any(|s| s == system))
+    }
+    /// The ceilings a `cpu-tune` module may choose, in kHz, lowest first:
+    /// the regular ones and, with boost on, the boost ones.
+    fn cpu_opps(&self) -> Vec<u32> {
+        let read = |name: &str| fs::read_to_string(self.config.cpufreq.join(name));
+        let boost = fs::read_to_string(self.config.cpufreq.with_file_name("boost"))
+            .is_ok_and(|b| b.trim() == "1");
+        let mut opps: Vec<u32> = [
+            read("scaling_available_frequencies").ok(),
+            boost
+                .then(|| read("scaling_boost_frequencies").ok())
+                .flatten(),
+        ]
+        .into_iter()
+        .flatten()
+        .flat_map(|list| {
+            list.split_whitespace()
+                .filter_map(|f| f.parse().ok())
+                .collect::<Vec<u32>>()
+        })
+        .collect();
+        opps.sort_unstable();
+        opps.dedup();
+        opps
     }
 
     /// Asks the store for automatic updates when the user switched them on
@@ -1893,16 +1986,25 @@ impl Host {
         if result["decision"] != "modify" {
             return;
         }
-        let granted = self
-            .active(id)
-            .is_some_and(|(_, m)| m.permissions.system.iter().any(|s| s == "cpu-profile"));
-        let governor = result["changes"]["governor"].as_str();
-        match (governor, &mut self.before) {
-            (Some(g), Some((_, chosen))) if granted && manifest::GOVERNORS.contains(&g) => {
-                chosen.insert(id.to_owned(), g.to_owned());
+        let changes = &result["changes"];
+        let mut tune = Tune::default();
+        if let Some(g) = changes["governor"].as_str() {
+            if self.has_system(id, "cpu-profile") && manifest::GOVERNORS.contains(&g) {
+                tune.governor = Some(g.to_owned());
+            } else {
+                log::warn!("Module {id}: launch change refused (governor)");
             }
-            (Some(_), _) => log::warn!("Module {id}: launch change refused"),
-            _ => {}
+        }
+        if let Some(khz) = changes.get("cpu_max_khz").filter(|v| !v.is_null()) {
+            match khz.as_u64().and_then(|k| u32::try_from(k).ok()) {
+                Some(k) if self.has_system(id, "cpu-tune") && self.cpu_opps().contains(&k) => {
+                    tune.cpu_max_khz = Some(k);
+                }
+                _ => log::warn!("Module {id}: launch change refused (cpu_max_khz)"),
+            }
+        }
+        if let Some((_, chosen)) = &mut self.before {
+            chosen.insert(id.to_owned(), tune);
         }
     }
     /// Every answer is in, or late: the first module (by id) decides.
@@ -1915,15 +2017,29 @@ impl Host {
             return;
         }
         if let Some((reply, chosen)) = self.before.take() {
-            let mut chosen = chosen.into_iter();
-            let first = chosen.next();
-            for (id, _) in chosen {
-                log::info!("Module {id}: another module already chose the governor");
+            // Each choice is the first module's (by id) that made one.
+            let mut tune = Tune::default();
+            for (id, choice) in chosen {
+                if let Some(governor) = choice.governor {
+                    if tune.governor.is_none() {
+                        log::info!("Module {id} runs this game with the {governor} governor");
+                        tune.governor = Some(governor);
+                    } else {
+                        log::info!("Module {id}: another module already chose the governor");
+                    }
+                }
+                if let Some(khz) = choice.cpu_max_khz {
+                    if tune.cpu_max_khz.is_none() {
+                        log::info!("Module {id} runs this game under {khz} kHz");
+                        tune.cpu_max_khz = Some(khz);
+                    } else {
+                        log::info!("Module {id}: another module already chose the ceiling");
+                    }
+                }
             }
-            if let Some((id, governor)) = &first {
-                log::info!("Module {id} runs this game with the {governor} governor");
-            }
-            let _ = reply.send(first.map(|(_, g)| g));
+            let ids: Vec<String> = self.view.modules.iter().map(|m| m.id.clone()).collect();
+            tune.measure = ids.iter().any(|id| self.has_system(id, "cpu-tune"));
+            let _ = reply.send(tune);
         }
     }
 

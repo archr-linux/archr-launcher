@@ -515,6 +515,31 @@ impl View<'_, '_, '_> {
                 let card = card.or_else(|| state.modules.cards().get(state.cursor));
                 card.map_or_else(|| self.tr(page.title()), |c| c.title().to_owned())
             }
+            // A detail page: "Módulos / <first page> / <its item>".
+            Page::Module(m, _) if state.modules.declared(page).is_some_and(|d| d.detail) => {
+                let module = state.modules.view.modules.get(usize::from(m));
+                trail.push(self.tr("settings.modules"));
+                trail.extend(module.map(|m| {
+                    m.pages
+                        .first()
+                        .map(|p| p.title.clone())
+                        .filter(|t| !t.is_empty())
+                        .unwrap_or_else(|| m.name.clone())
+                }));
+                let header = state.modules.declared(page).and_then(|d| {
+                    d.rows.iter().find_map(|r| match &r.kind {
+                        crate::modules::RowKind::Header { id } => {
+                            state.modules.row_items(page, id).first()
+                        }
+                        _ => None,
+                    })
+                });
+                header
+                    .filter(|h| state.modules.item.as_ref().is_none_or(|i| *i == h.id))
+                    .map(|h| h.title.clone())
+                    .or_else(|| state.modules.declared(page).map(|d| d.title.clone()))
+                    .unwrap_or_default()
+            }
             // "Sistema / Módulos / <module>" and its pages.
             Page::ModuleInfo | Page::Module(..) => {
                 trail.extend(page.parent().iter().map(|key| self.tr(key)));
@@ -762,13 +787,15 @@ impl View<'_, '_, '_> {
             self.ui.frame.width,
             self.theme.border,
         )?;
-        let left = self.ui.hints(
-            state.hints(),
-            self.theme,
+        let (width, y, h) = (
             self.ui.frame.width,
             self.ui.px(footer),
             self.ui.px(480. - footer) as u32,
-        )? as f32
+        );
+        let left = match self.module_hints(state) {
+            Some(labels) => self.ui.hint_labels(&labels, self.theme, width, y, h)?,
+            None => self.ui.hints(state.hints(), self.theme, width, y, h)?,
+        } as f32
             / self.ui.frame.scale;
         let status = if state.loading {
             Some(self.ui.catalog.text("loading"))
@@ -1044,34 +1071,41 @@ impl View<'_, '_, '_> {
         state: &Settings,
         positions: &[Placement],
         right: f32,
+        draw: impl FnMut(&mut Self, usize, f32, Placement, bool) -> Result<(), String>,
+    ) -> Result<(), String> {
+        self.list_from(state, positions, (VIEW_TOP, right), draw)
+    }
+    /// The same list under something that stays put (`top`).
+    fn list_from(
+        &mut self,
+        state: &Settings,
+        positions: &[Placement],
+        (top, right): (f32, f32),
         mut draw: impl FnMut(&mut Self, usize, f32, Placement, bool) -> Result<(), String>,
     ) -> Result<(), String> {
         let selected = positions.get(state.cursor).copied().unwrap_or(Placement {
-            top: VIEW_TOP,
+            top,
             height: 0.,
             section: None,
             searching: None,
             trail: 0.,
         });
-        let bottom = positions.last().map_or(VIEW_TOP, |p| p.end());
+        let bottom = positions.last().map_or(top, |p| p.end());
         let offset = self.ui.settings_scroll.offset(
             state.page(),
-            selected.selected_top(),
+            // A list under something fixed keeps the selection below it.
+            selected.selected_top() - (top - VIEW_TOP),
             selected.end(),
             bottom,
             self.ui.frame.now,
         );
-        self.ui.canvas.set_clip_rect(self.rect((
-            16.,
-            VIEW_TOP,
-            right - 16.,
-            VIEW_BOTTOM - VIEW_TOP,
-        )));
+        self.ui
+            .canvas
+            .set_clip_rect(self.rect((16., top, right - 16., VIEW_BOTTOM - top)));
         let result = (|| {
             for (n, position) in positions.iter().enumerate() {
                 let y = position.top - offset;
-                if position.end() - offset < VIEW_TOP
-                    || position.selected_top() - offset >= VIEW_BOTTOM
+                if position.end() - offset < top || position.selected_top() - offset >= VIEW_BOTTOM
                 {
                     continue;
                 }

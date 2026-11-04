@@ -362,6 +362,12 @@ pub fn permissions(manifest: &Manifest) -> Vec<Permission> {
             false,
         ),
         (
+            "cpu-tune",
+            "modules.perm_cpu_tune",
+            "modules.perm_cpu_tune_detail",
+            false,
+        ),
+        (
             "brightness",
             "modules.perm_brightness",
             "modules.perm_brightness_detail",
@@ -612,6 +618,8 @@ pub fn module(
             .map(|page| archr_ui::modules::Page {
                 id: page.id.clone(),
                 title: tr(&page.title),
+                detail: page.detail,
+                hint: page.hint.as_deref().map(tr),
                 rows: page
                     .rows
                     .iter()
@@ -633,9 +641,19 @@ pub fn module(
                                     .map(|(l, c)| if l.is_empty() { c.clone() } else { tr(l) })
                                     .collect(),
                             },
-                            RowKind::Action { action, confirm } => RowKind::Action {
+                            RowKind::Action {
+                                action,
+                                confirm,
+                                icon,
+                            } => RowKind::Action {
                                 action: action.clone(),
                                 confirm: confirm.as_deref().map(tr),
+                                icon: icon.as_deref().and_then(svg),
+                            },
+                            RowKind::List { id, open, alt } => RowKind::List {
+                                id: id.clone(),
+                                open: *open,
+                                alt: alt.as_ref().map(|(a, label)| (a.clone(), tr(label))),
                             },
                             other => other.clone(),
                         },

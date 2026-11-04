@@ -4,7 +4,7 @@
 use archr_launcher::modules::{
     process::{self, Direct, Executor, Plan},
     registry::{Dirs, Record, State},
-    Config, Event, Modules, Notice,
+    Config, Event, Modules, Notice, Tune,
 };
 use archr_ui::modules::{Request, Status, View};
 use std::{
@@ -16,6 +16,10 @@ use std::{
     time::{Duration, Instant},
 };
 
+/// The game a launch hands to the modules.
+fn game(system: &str, key: &str, name: &str) -> serde_json::Value {
+    serde_json::json!({"system": system, "game_key": key, "name": name})
+}
 /// A module folder: module.toml, an English catalog and main.sh.
 fn module(base: &Path, id: &str, mode: &str, extra: &str, script: &str) {
     let dir = base.join("modules").join(id);
@@ -76,6 +80,8 @@ fn start_with(
         firewall: None,
         bin: base.join("bin"),
         shop: None,
+        cpufreq: base.join("cpufreq/policy0"),
+        perf: base.join("run/perf-last.json"),
     })
 }
 /// The host's handle with what it published so far.
@@ -416,7 +422,7 @@ fn the_stop_before_a_game_ends_every_module_and_the_return_reports_the_game() {
     let began = Instant::now();
     probe
         .modules
-        .hand_off("snes", "snes/Chrono.sfc", "Chrono Trigger");
+        .hand_off(game("snes", "snes/Chrono.sfc", "Chrono Trigger"));
     assert!(
         began.elapsed() < Duration::from_secs(3),
         "{:?}",
@@ -921,8 +927,11 @@ fn launch_before_picks_the_governor_only_with_cpu_profile_and_in_time() {
     probe.wait(|_, _| true);
     std::thread::sleep(Duration::from_millis(300));
     let started = Instant::now();
-    let governor = probe.modules.hand_off("n64", "n64/mario.z64", "Mario");
-    assert_eq!(governor.as_deref(), Some("performance"));
+    let tune = probe
+        .modules
+        .hand_off(game("n64", "n64/mario.z64", "Mario"));
+    assert_eq!(tune.governor.as_deref(), Some("performance"));
+    assert!(!tune.measure, "nobody learns from the run");
     assert!(started.elapsed() < Duration::from_secs(2));
     let seen = fs::read_to_string(base.join("module-data/b-plain/seen.log")).unwrap();
     assert!(seen.contains("\"method\":\"launch.before\""), "{seen}");
@@ -942,8 +951,10 @@ fn launch_before_picks_the_governor_only_with_cpu_profile_and_in_time() {
     std::thread::sleep(Duration::from_millis(300));
     let started = Instant::now();
     assert_eq!(
-        probe.modules.hand_off("n64", "n64/mario.z64", "Mario"),
-        None
+        probe
+            .modules
+            .hand_off(game("n64", "n64/mario.z64", "Mario")),
+        Tune::default()
     );
     assert!(
         started.elapsed() < Duration::from_millis(1500),
@@ -952,7 +963,98 @@ fn launch_before_picks_the_governor_only_with_cpu_profile_and_in_time() {
     );
     // Netplay and streams have no game of their own: nobody is asked.
     probe.modules.resume();
-    assert_eq!(probe.modules.hand_off("", "", ""), None);
+    assert_eq!(probe.modules.hand_off(game("", "", "")), Tune::default());
+}
+
+#[test]
+fn cpu_tune_chooses_a_ceiling_of_this_cpu_and_learns_from_the_measurement() {
+    let root = tempfile::tempdir().unwrap();
+    let base = root.path();
+    let cpufreq = base.join("cpufreq/policy0");
+    fs::create_dir_all(&cpufreq).unwrap();
+    fs::write(
+        cpufreq.join("scaling_available_frequencies"),
+        "408000 816000 1008000 1416000 \n",
+    )
+    .unwrap();
+    fs::write(cpufreq.join("scaling_boost_frequencies"), "1512000 \n").unwrap();
+    fs::write(base.join("cpufreq/boost"), "0\n").unwrap();
+    let ended = "\n[[hooks]]\nevent = \"game.ended\"";
+    let api_3 = |id: &str, permissions: &str, granted: &[&str], ceiling: u32| {
+        let dir = api_2(base, id, &format!("{permissions}{ended}"), granted);
+        let toml = fs::read_to_string(dir.join("module.toml")).unwrap();
+        fs::write(
+            dir.join("module.toml"),
+            toml.replace("api_version = 2", "api_version = 3"),
+        )
+        .unwrap();
+        let changes = format!(r#"{{"governor":"powersave","cpu_max_khz":{ceiling}}}"#);
+        fs::write(
+            dir.join("before.json"),
+            format!(r#"{{"decision":"modify","changes":{changes}}}"#),
+        )
+        .unwrap();
+    };
+    let tune = "hooks = [\"launch\"]\nsystem = [\"cpu-tune\"]";
+    let granted = ["hooks:launch", "system:cpu-tune"];
+    // A boost frequency with boost off is not one of this CPU's now.
+    api_3("a-boost", tune, &granted, 1_512_000);
+    api_3("c-tune", tune, &granted, 816_000);
+    // Without cpu-tune: heard, not obeyed.
+    api_3(
+        "d-plain",
+        "hooks = [\"launch\"]",
+        &["hooks:launch"],
+        408_000,
+    );
+    let ids = ["a-boost", "c-tune", "d-plain"];
+    let mut probe = Probe::new(base);
+    ready(base, &ids);
+    probe.wait(|_, _| true);
+    let seen = |id: &str| fs::read_to_string(base.join(format!("module-data/{id}/seen.log")));
+    let init = seen("c-tune").unwrap();
+    assert!(
+        init.contains(r#""cpu":{"max_khz":1416000,"opps":[408000,816000,1008000,1416000]}"#),
+        "{init}"
+    );
+    assert!(!seen("d-plain").unwrap().contains("opps"));
+    let tune = probe
+        .modules
+        .hand_off(game("snes", "snes/smw.sfc", "Super Mario World"));
+    assert_eq!(
+        tune,
+        Tune {
+            governor: None,
+            cpu_max_khz: Some(816_000),
+            measure: true,
+        },
+        "the governor needs cpu-profile"
+    );
+    // runemu.sh measured the game; the launcher starts again after it.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    fs::write(
+        base.join("run/perf-last.json"),
+        format!(
+            r#"{{"started":{now},"cpu_max_khz":816000,"seconds":150,"busy_p95":71,"limit_seconds":0,"current_ma":420}}"#
+        ),
+    )
+    .unwrap();
+    drop(probe);
+    for id in ids {
+        let _ = fs::remove_file(base.join(format!("module-data/{id}/seen.log")));
+    }
+    let _probe = Probe::new(base);
+    let log = until(&base.join("module-data/c-tune/seen.log"), "game.ended");
+    assert!(
+        log.contains(r#""perf":{"busy_p95":71,"cpu_max_khz":816000,"current_ma":420,"limit_seconds":0,"seconds":150}"#),
+        "{log}"
+    );
+    let log = until(&base.join("module-data/d-plain/seen.log"), "game.ended");
+    assert!(!log.contains("perf"), "only for cpu-tune: {log}");
+    assert!(!base.join("run/perf-last.json").exists(), "read once");
 }
 
 #[test]
@@ -1006,7 +1108,10 @@ fn late_launch_answers_are_allowed_and_count_only_as_a_habit() {
     // Two late launches in a row: allowed, no strike, it comes back.
     for _ in 0..2 {
         ready(base, &["lento"]);
-        assert_eq!(probe.modules.hand_off("n64", "n64/m.z64", "M"), None);
+        assert_eq!(
+            probe.modules.hand_off(game("n64", "n64/m.z64", "M")),
+            Tune::default()
+        );
         let _ = fs::remove_file(&log);
         probe.modules.resume();
     }
@@ -1083,6 +1188,8 @@ fn no_module_gets_the_network_before_the_modules_firewall_is_up() {
             firewall: Some(marker.clone()),
             bin: base.join("bin"),
             shop: None,
+            cpufreq: base.join("cpufreq/policy0"),
+            perf: base.join("run/perf-last.json"),
         }),
         view: Arc::default(),
         notices: Vec::new(),

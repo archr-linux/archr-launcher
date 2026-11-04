@@ -2,8 +2,9 @@
 //! permission page shared by a store module and an installed one
 //! (Loja-modulo). Fixed layout like every settings page.
 use super::*;
-use crate::modules::{Module, Permission, Status, Tab};
+use crate::modules::{Item, Module, Permission, RowKind, Status, Tab, Tone, STATS};
 use crate::settings::modules::{SECTION, SECTION_NEXT};
+use crate::HintButton;
 
 const LIST_TOP: f32 = 82.;
 const CARD: f32 = 54.;
@@ -13,6 +14,13 @@ const EMPTY_NOTE: f32 = 52.;
 const LEFT: (f32, f32) = (20., 334.);
 const ASKS: (f32, f32) = (370., 250.);
 const BUTTON: f32 = 384.;
+/// The `stats` cards over a module page's rows, and the room they take.
+const CARDS: (f32, f32) = (48., 78.);
+const CARDS_ROOM: f32 = 88.;
+/// The detail page (Modulo-ajuste-jogo): its columns, and the picture.
+const DETAIL_LEFT: (f32, f32) = (20., 348.);
+const DETAIL_SIDE: (f32, f32) = (384., 236.);
+const PICTURE: (f32, f32) = (96., 72.);
 
 impl View<'_, '_, '_> {
     /// "1.0.2 · Revisado · bloco no Start", or why it is off.
@@ -95,15 +103,48 @@ impl View<'_, '_, '_> {
         Ok(())
     }
     /// A module's own page: its rows, a `progress` row as a title, the
-    /// module's text on the right and a bar under them.
+    /// module's text on the right and a bar under them; `stats` cards on
+    /// top (API 3); or the detail layout.
     pub(super) fn module_page(&mut self, state: &Settings, rows: &[Row]) -> Result<(), String> {
-        let positions = placements(state.page(), rows);
-        self.list(
+        let page = state.page();
+        let declared = state.modules.declared(page);
+        if declared.is_some_and(|p| p.detail) {
+            return self.module_detail(state, rows);
+        }
+        let cards: Vec<Item> = declared
+            .into_iter()
+            .flat_map(|p| &p.rows)
+            .find_map(|r| match &r.kind {
+                RowKind::Stats { id } => Some(state.modules.row_items(page, id)),
+                _ => None,
+            })
+            .unwrap_or_default()
+            .iter()
+            .take(STATS)
+            .cloned()
+            .collect();
+        let mut positions = placements(page, rows);
+        let top = if cards.is_empty() {
+            VIEW_TOP
+        } else {
+            self.stat_cards(&cards)?;
+            for place in &mut positions {
+                place.top += CARDS_ROOM;
+            }
+            VIEW_TOP + CARDS_ROOM
+        };
+        self.list_from(
             state,
             &positions,
-            RIGHT,
+            (top, RIGHT),
             |view, n, y, position, selected| {
                 let row = &rows[n];
+                if let Some(item) = state
+                    .module_item(row.id)
+                    .filter(|i| !i.badge.is_empty() || !i.detail.is_empty())
+                {
+                    return view.item_row(state, row, item, (y, position.height), selected);
+                }
                 let Some(progress) = state.module_progress(row.id) else {
                     return view.row(state, row, (y, position.height), RIGHT, selected);
                 };
@@ -136,6 +177,336 @@ impl View<'_, '_, '_> {
                 Ok(())
             },
         )
+    }
+    /// A tone's ink: theme colours only.
+    fn tone(&self, tone: Tone) -> Rgba {
+        let theme = self.theme;
+        match tone {
+            Tone::Plain => theme.text,
+            Tone::Good => theme.success,
+            Tone::Info => mix(theme.highlight_bg, theme.text, 0.45),
+            Tone::Bad => theme.danger,
+            Tone::Muted => theme.muted,
+        }
+    }
+    /// "Aprendendo": a tag in the tone's colour; returns its width.
+    fn tag(&mut self, text: &str, tone: Tone, (right, y): (f32, f32)) -> Result<f32, String> {
+        let ink = self.tone(tone);
+        let w = self.width(text, Face::Semibold, 11.)? + 14.;
+        let back = self.theme.background;
+        self.ui.rounded(
+            self.rect((right - w, y, w, 18.)),
+            self.ui.px(8.) as f32,
+            mix(back, ink, 0.14),
+            Some(mix(back, ink, 0.4)),
+        )?;
+        self.text_face(
+            (right - w, y, w, 18.),
+            text,
+            (11., ink, Align::Center),
+            Face::Semibold,
+        )?;
+        Ok(w)
+    }
+    /// Up to three cards over the rows: name, big value, a line under it.
+    fn stat_cards(&mut self, cards: &[Item]) -> Result<(), String> {
+        let theme = self.theme;
+        let (top, height) = CARDS;
+        let (left, right, gap) = (16., 620., 10.);
+        let count = cards.len() as f32;
+        let w = (right - left - gap * (count - 1.)) / count;
+        for (n, card) in cards.iter().enumerate() {
+            let x = left + n as f32 * (w + gap);
+            self.ui.rounded(
+                self.rect((x, top, w, height)),
+                self.ui.px(12.) as f32,
+                theme.surface,
+                Some(theme.border),
+            )?;
+            let inner = (x + 12., w - 24.);
+            self.text(
+                (inner.0, top + 9., inner.1, 15.),
+                &card.title.to_uppercase(),
+                (11., theme.muted, Align::Left),
+            )?;
+            self.text_face(
+                (inner.0, top + 25., inner.1, 29.),
+                &card.value,
+                (22., self.tone(card.tone), Align::Left),
+                Face::Semibold,
+            )?;
+            self.text(
+                (inner.0, top + 55., inner.1, 15.),
+                &card.subtitle,
+                (11., theme.dim_text, Align::Left),
+            )?;
+        }
+        Ok(())
+    }
+    /// A list item with a value or a tag on top and a line under it.
+    fn item_row(
+        &mut self,
+        state: &Settings,
+        row: &Row,
+        item: &Item,
+        (y, height): (f32, f32),
+        selected: bool,
+    ) -> Result<(), String> {
+        let theme = self.theme;
+        let ink = self.ink(selected);
+        let soft = selection(selected, theme.muted, theme.accent_text_secondary);
+        let face = selection(selected, Face::Regular, Face::Semibold);
+        let right = RIGHT - 14.;
+        let half = ((height - 4.) / 2.).floor();
+        let top = (y + 4., half);
+        let below = (y + height - half - 3., half);
+        let mut side = self.width(&item.detail, Face::Regular, 12.)?;
+        if item.badge.is_empty() {
+            side = side.max(self.width(&item.value, Face::Mono, 14.)?);
+            let w = self.width(&item.value, Face::Mono, 14.)?;
+            self.plain(
+                &item.value,
+                (right - w, top.0, w + 1., top.1),
+                (Face::Mono, 14., ink),
+            )?;
+        } else {
+            side = side.max(self.tag(&item.badge, item.tone, (right, top.0 + 1.))?);
+        }
+        self.text(
+            (right - side - 2., below.0, side + 2., below.1),
+            &item.detail,
+            (12., soft, Align::Right),
+        )?;
+        let width = right - side - 16. - 30.;
+        self.text_face(
+            (30., top.0, width, top.1),
+            &state.label(row),
+            (15., ink, Align::Left),
+            face,
+        )?;
+        self.text(
+            (30., below.0, width, below.1),
+            &item.subtitle,
+            (12., soft, Align::Left),
+        )
+    }
+    /// Modulo-ajuste-jogo: the item's picture, name and tag, its bars and
+    /// note on the left; its facts and the action buttons on the right.
+    /// Nothing about another item shows while the module answers.
+    fn module_detail(&mut self, state: &Settings, rows: &[Row]) -> Result<(), String> {
+        let theme = self.theme;
+        let page = state.page();
+        let Some(declared) = state.modules.declared(page) else {
+            return Ok(());
+        };
+        let items = |id: &str| state.modules.row_items(page, id);
+        let header = declared.rows.iter().find_map(|r| match &r.kind {
+            RowKind::Header { id } => items(id).first(),
+            _ => None,
+        });
+        let fresh = header.is_some_and(|h| state.modules.item.as_ref().is_none_or(|i| *i == h.id));
+        if fresh {
+            let header = header.expect("fresh");
+            self.detail_header(state, header)?;
+            let (x, w) = DETAIL_LEFT;
+            let mut y = 50. + PICTURE.1 + 12.;
+            for row in &declared.rows {
+                match &row.kind {
+                    RowKind::Bars { id } => {
+                        y = self.flow(
+                            (x, y, w),
+                            &row.label.to_uppercase(),
+                            (11., theme.muted, Face::Regular),
+                            2,
+                        )? + 6.;
+                        for bar in items(id) {
+                            self.detail_bar(bar, (x, y, w))?;
+                            y += 22.;
+                        }
+                        y += 4.;
+                    }
+                    RowKind::Text { id } => {
+                        let module = state.modules.module().map_or("", |m| m.id.as_str());
+                        let text = state
+                            .modules
+                            .view
+                            .value(module, &format!("row:{id}"))
+                            .unwrap_or(&row.default);
+                        y = self.flow((x, y, w), text, (12., theme.dim_text, Face::Regular), 4)?
+                            + 6.;
+                    }
+                    _ => {}
+                }
+            }
+            let (x, w) = DETAIL_SIDE;
+            let mut y = 50.;
+            for fact in declared.rows.iter().flat_map(|r| match &r.kind {
+                RowKind::Facts { id } => items(id),
+                _ => &[],
+            }) {
+                self.plain(
+                    &fact.title,
+                    (x, y, w * 0.55, 26.),
+                    (Face::Regular, 12., theme.muted),
+                )?;
+                let ink = self.tone(fact.tone);
+                let value_w = self.width(&fact.value, Face::Mono, 12.)?.min(w * 0.45);
+                self.plain(
+                    &fact.value,
+                    (x + w - value_w, y, value_w + 1., 26.),
+                    (Face::Mono, 12., ink),
+                )?;
+                self.ui.divider(
+                    self.ui.px(x),
+                    self.ui.px(y + 26.),
+                    self.ui.px(w) as u32,
+                    theme.border,
+                )?;
+                y += 27.;
+            }
+        }
+        // The buttons, bottom up: the page's action rows.
+        let (x, w) = DETAIL_SIDE;
+        let count = rows.len() as f32;
+        for (n, row) in rows.iter().enumerate() {
+            let y = FOOTER - 10. - (count - n as f32) * 48. + 8.;
+            let selected = n == state.cursor;
+            let (fill, edge, ink) = if selected {
+                (theme.highlight_bg, None, theme.highlight_text)
+            } else {
+                (theme.badge, Some(theme.border), theme.text)
+            };
+            let rect = (x, y, w, 40.);
+            self.ui
+                .rounded(self.rect(rect), self.ui.px(10.) as f32, fill, edge)?;
+            let label = state.label(row);
+            let icon = state
+                .modules
+                .declared(page)
+                .and_then(|p| match row.id {
+                    Id::ModuleRow(n) => p.rows.get(usize::from(n)),
+                    _ => None,
+                })
+                .and_then(|r| match &r.kind {
+                    RowKind::Action { icon, .. } => icon.clone(),
+                    _ => None,
+                });
+            let label_w = self.width(&label, Face::Regular, 15.)?.min(w - 48.);
+            let icon_w = if icon.is_some() { 23. } else { 0. };
+            let start = x + (w - label_w - icon_w) / 2.;
+            if let Some(svg) = icon {
+                self.ui.module_icon(
+                    (Some(&svg), ""),
+                    self.rect((start, y + 12.5, 15., 15.)),
+                    ink,
+                )?;
+            }
+            self.text(
+                (start + icon_w, y, label_w + 2., 40.),
+                &label,
+                (15., ink, Align::Left),
+            )?;
+        }
+        Ok(())
+    }
+    /// The picture of the item's game (or the module's icon), its name,
+    /// its line and its tag.
+    fn detail_header(&mut self, state: &Settings, header: &Item) -> Result<(), String> {
+        let theme = self.theme;
+        let (x, w) = DETAIL_LEFT;
+        let (pw, ph) = PICTURE;
+        let top = 50.;
+        let frame = (x, top, pw, ph);
+        self.ui
+            .rounded(self.rect(frame), self.ui.px(8.) as f32, theme.badge, None)?;
+        let path = header
+            .game
+            .as_ref()
+            .and_then(|game| state.modules.images.get(game))
+            .cloned();
+        if !self.picture(path.as_deref(), frame, true)? {
+            let icon = state.modules.module().and_then(|m| m.icon.clone());
+            self.ui.module_icon(
+                (icon.as_deref(), "gamepad-2"),
+                self.rect((x + pw / 2. - 14., top + ph / 2. - 14., 28., 28.)),
+                theme.muted,
+            )?;
+        }
+        let tx = x + pw + 12.;
+        let tw = w - pw - 12.;
+        let lines = if header.badge.is_empty() { 52. } else { 64. };
+        let y = top + (ph - lines) / 2.;
+        self.text_face(
+            (tx, y, tw, 25.),
+            &header.title,
+            (18., theme.text, Align::Left),
+            Face::Semibold,
+        )?;
+        self.text(
+            (tx, y + 25., tw, 18.),
+            &header.subtitle,
+            (12., theme.muted, Align::Left),
+        )?;
+        if !header.badge.is_empty() {
+            let w = self.width(&header.badge, Face::Semibold, 11.)? + 14.;
+            self.tag(&header.badge, header.tone, (tx + w, y + 46.))?;
+        }
+        Ok(())
+    }
+    /// "408 MHz ▬▬▬▬ 91%": a bar in the item's tone.
+    fn detail_bar(&mut self, bar: &Item, (x, y, w): (f32, f32, f32)) -> Result<(), String> {
+        let theme = self.theme;
+        let (label_w, value_w) = (62., 40.);
+        self.plain(
+            &bar.title,
+            (x, y, label_w + 4., 16.),
+            (Face::Mono, 12., theme.muted),
+        )?;
+        let track = (x + label_w + 10., y + 4., w - label_w - value_w - 20., 8.);
+        self.capsule(track, theme.badge)?;
+        let fill = match bar.tone {
+            Tone::Info => theme.highlight_bg,
+            Tone::Plain | Tone::Muted => mix(theme.badge, theme.text, 0.14),
+            tone => self.tone(tone),
+        };
+        if let Some(progress) = bar.progress.filter(|p| *p > 0) {
+            let part = (track.2 * f32::from(progress) / 100.).max(track.3);
+            self.capsule((track.0, track.1, part, track.3), fill)?;
+        }
+        let ink = match bar.tone {
+            Tone::Bad => theme.danger,
+            _ => theme.text,
+        };
+        self.text_face(
+            (x + w - value_w, y, value_w, 16.),
+            &bar.value,
+            (12., ink, Align::Right),
+            Face::Mono,
+        )
+    }
+    /// A module page's hints when a list item opens a page or has a second
+    /// action, whose text the module gave (API 3).
+    pub(super) fn module_hints(&self, state: &Settings) -> Option<Vec<(HintButton, String)>> {
+        let page = state.page();
+        if !matches!(page, Page::Module(..))
+            || state.modules.confirm.is_some()
+            || state.modules.working
+        {
+            return None;
+        }
+        let (opens, alt) = state.module_item_hints()?;
+        if !opens && alt.is_none() {
+            return None;
+        }
+        let first = if opens {
+            "settings.details"
+        } else {
+            "hint.choose"
+        };
+        let mut hints = vec![(HintButton::Key('A'), self.tr(first))];
+        hints.extend(alt.map(|label| (HintButton::Key('X'), label)));
+        hints.push((HintButton::Key('B'), self.tr("hint.back")));
+        Some(hints)
     }
     /// Loja-modulos: tabs, then one card per repository.
     pub(super) fn module_store(&mut self, state: &Settings) -> Result<(), String> {
@@ -841,6 +1212,7 @@ impl View<'_, '_, '_> {
             Page::Modules if state.cursor == modules.view.modules.len() => {
                 self.tr("modules.never_in_game")
             }
+            page @ Page::Module(..) => modules.declared(page)?.hint.clone()?,
             _ => return None,
         })
     }
