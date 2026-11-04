@@ -104,14 +104,27 @@ impl Backend {
         }
         // An explicit empty third argument is an open network; wifictl then
         // clears the saved key itself.
-        self.command_with_timeout("wifictl", &["connect", ssid, password], CONNECT_TIMEOUT)
-            .map_err(wifi_error)?;
+        if let Err(error) =
+            self.command_with_timeout("wifictl", &["connect", ssid, password], CONNECT_TIMEOUT)
+        {
+            // iwd can join from the saved profile after wifictl gave up: the
+            // answer is the radio's state, not the script's exit status.
+            if !self.joined(ssid) {
+                return Err(wifi_error(error));
+            }
+            log::warn!("Wi-Fi: joined {ssid:?} although {error}");
+        }
         SystemCfg::set_many_and_save(
             &self.paths.config,
             &self.paths.lock,
             &[("wifi.ssid", ssid), ("wifi.key", password)],
         )
         .map_err(|e| e.to_string())
+    }
+    /// The station is connected to `ssid` right now.
+    fn joined(&self, ssid: &str) -> bool {
+        self.scan()
+            .is_ok_and(|(networks, _)| networks.iter().any(|n| n.connected && n.ssid == ssid))
     }
     pub(super) fn forget(&self, ssid: &str) -> Result<(), String> {
         if ssid.is_empty() || ssid.contains(['\n', '\r', '\0']) {
@@ -584,6 +597,30 @@ mod tests {
         assert_eq!(
             fs::read_to_string(root.path().join("called")).unwrap(),
             "3\nconnect\nGuest\n\n"
+        );
+    }
+    #[test]
+    fn a_failed_connect_that_joined_anyway_is_a_success() {
+        // wifictl gave up (exit 1) while iwd joined from the saved profile.
+        let (root, paths) = fixture("wifi.ssid=\nwifi.key=\n");
+        recorder(
+            &root,
+            &paths,
+            "wifictl",
+            "[ \"$1\" = connect ] && exit 1\nprintf 'Casa\\tpsk\\t80\\t1\\t1\\nVizinho\\tpsk\\t40\\t0\\t0\\n'",
+        );
+        let backend = Backend::new(paths.clone());
+        assert_eq!(backend.connect("Casa", "12345678"), Ok(()));
+        let config = SystemCfg::load(&paths.config).unwrap();
+        assert_eq!(config.get("wifi", None, "ssid").as_deref(), Some("Casa"));
+        assert_eq!(
+            calls(&root),
+            "wifictl connect Casa 12345678\nwifictl scanlist --detail\n"
+        );
+        // Joined to another network, or not at all: the failure stands.
+        assert_eq!(
+            backend.connect("Vizinho", "12345678"),
+            Err("settings.wifi_connect_failed".into())
         );
     }
     #[test]
