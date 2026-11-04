@@ -6,6 +6,7 @@
 //!   archr-osd send brightness 40   exit 1 when no overlay is listening
 //!   archr-osd send battery-low 10
 //!   archr-osd send battery 3 LEFT TOTAL game|menu
+//!   archr-osd send report start|done|failed
 mod card;
 mod overlay;
 mod pill;
