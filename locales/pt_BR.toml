@@ -1248,7 +1248,7 @@
 "diag.report_last" = "Último relatório"
 "diag.report_saved" = "Relatório salvo em roms/relatorios/{name}"
 "diag.report_failed" = "Não foi possível gerar o relatório."
-"diag.note" = "O relatório reúne hardware, kernel, serviços, rede, armazenamento, temperaturas, emuladores, logs do boot e do último jogo. *Senhas, tokens e chaves nunca entram.* Fica em `roms/relatorios/`, visível no PC."
+"diag.note" = "O relatório reúne hardware, kernel, serviços, rede, armazenamento, temperaturas, emuladores, logs do boot e do último jogo. *Senhas, tokens e chaves nunca entram.* Fica em `roms/relatorios/`, visível no PC. Atalho, até dentro de um jogo: segure *FN + L1 + R1* por 3 s."
 
 # Games › BIOS (Bios, Bios-livre)
 "bios.title" = "BIOS"

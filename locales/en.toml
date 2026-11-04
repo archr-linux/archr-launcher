@@ -1248,7 +1248,7 @@
 "diag.report_last" = "Last report"
 "diag.report_saved" = "Report saved to roms/relatorios/{name}"
 "diag.report_failed" = "Could not create the report."
-"diag.note" = "The report gathers hardware, kernel, services, network, storage, temperatures, emulators and the logs of the boot and of the last game. *Passwords, tokens and keys never go in.* It is in `roms/relatorios/`, visible on a PC."
+"diag.note" = "The report gathers hardware, kernel, services, network, storage, temperatures, emulators and the logs of the boot and of the last game. *Passwords, tokens and keys never go in.* It is in `roms/relatorios/`, visible on a PC. Shortcut, even in a game: hold *FN + L1 + R1* for 3 s."
 
 # Games › BIOS (Bios, Bios-livre)
 "bios.title" = "BIOS"
