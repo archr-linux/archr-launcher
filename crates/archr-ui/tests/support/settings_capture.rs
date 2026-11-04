@@ -1518,8 +1518,33 @@ fn updates_pages() -> Vec<(&'static str, Settings)> {
         line: "error: failed retrieving file 'retroarch-1.22.0-1-aarch64.pkg.tar.zst'".into(),
         changed: false,
     });
+    // Versions pinned to a commit (AIC8800 on the device), a 64-character
+    // hash and one that no abbreviation shortens.
+    let absurd = "0123456789abcdef".repeat(4);
+    let mut hashed = page.clone();
+    if let Some(report) = &mut hashed.updates.report {
+        report.packages = vec![
+            package(
+                "AIC8800",
+                "b6ba4cbacf9657caecce26c2426880c5bb485266-1",
+                "1018f17a629c638acc1a01df19e3f2146e7b4f5c-1",
+                368_204,
+            ),
+            package(
+                "firmware-absurdo",
+                &absurd,
+                &format!("{absurd}-1"),
+                1_992_294,
+            ),
+            package("versao-longa", &"x".repeat(64), &"y".repeat(64), 400_000),
+        ];
+    }
+    let mut hashed_list = hashed.clone();
+    hashed_list.open(Page::UpdatePackages);
     vec![
         ("atualizacoes", page),
+        ("atualizacoes-hash", hashed),
+        ("atualizacoes-hash-pacotes", hashed_list),
         ("atualizacoes-em-dia", current),
         ("atualizacoes-verificando", checking),
         ("atualizacoes-sem-rede", offline),
@@ -1590,6 +1615,73 @@ fn capture_updates() {
                     .unwrap();
             }
             save(&mut ui, format!("{name}-{language}.png"));
+        }
+    }
+}
+
+/// Long versions (a 64-character hash among them) stay on their own line:
+/// nothing reaches the gap between the rows and the packages panel, nor the
+/// screen's right margin, and the list still shows a value on each row.
+#[test]
+fn update_versions_stay_inside_their_line() {
+    std::env::set_var("SDL_VIDEODRIVER", "offscreen");
+    let ttf;
+    let creator;
+    let mut ui = Ui::new(640, 480, true).unwrap();
+    ttf = sdl2::ttf::init().unwrap();
+    creator = ui.canvas.texture_creator();
+    let theme = Theme::load(
+        &std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../themes/default"),
+    );
+    ui.configure(&ttf, &creator, &theme, None).unwrap();
+    let pages: std::collections::HashMap<_, _> = updates_pages().into_iter().collect();
+    let draw = |ui: &mut Ui, state: &Settings, area: sdl2::rect::Rect| {
+        ui.switches.clear();
+        ui.frame.now = ui.born + Duration::from_millis(480);
+        for _ in 0..2 {
+            ui.canvas.set_draw_color(color(theme.background));
+            ui.canvas.clear();
+            ui.settings_page(state, &theme).unwrap();
+            ui.snap_animations();
+        }
+        ui.canvas
+            .read_pixels(Some(area), sdl2::pixels::PixelFormatEnum::RGBA32)
+            .unwrap()
+    };
+    let mut empty = pages["atualizacoes"].clone();
+    if let Some(report) = &mut empty.updates.report {
+        report.packages.clear();
+    }
+    for language in ["pt_BR", "ru"] {
+        ui.catalog = I18n::load(std::path::Path::new("/nonexistent"), Some(language), None);
+        // The gap column and the right margin, beside the package lines.
+        for area in [
+            sdl2::rect::Rect::new(370, 70, 12, 140),
+            sdl2::rect::Rect::new(626, 70, 14, 140),
+        ] {
+            let clean = draw(&mut ui, &empty, area);
+            let hashed = draw(&mut ui, &pages["atualizacoes-hash"], area);
+            assert!(
+                clean == hashed,
+                "a version left its line ({language}, {area:?})"
+            );
+        }
+        // Each row of the list draws its value in the right half.
+        let list = &pages["atualizacoes-hash-pacotes"];
+        for row in 0..3 {
+            let area = sdl2::rect::Rect::new(330, 56 + row * 40, 280, 22);
+            let pixels = draw(&mut ui, list, area);
+            let background = color(theme.background);
+            let ink = pixels
+                .chunks(4)
+                .any(|p| (p[0], p[1], p[2]) != (background.r, background.g, background.b));
+            assert!(ink, "row {row} shows no version ({language})");
+            let edge = sdl2::rect::Rect::new(626, 50, 14, 140);
+            let clean = draw(&mut ui, &empty, edge);
+            assert!(
+                clean == draw(&mut ui, list, edge),
+                "the list passed the margin ({language})"
+            );
         }
     }
 }
