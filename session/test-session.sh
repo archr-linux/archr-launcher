@@ -97,14 +97,22 @@ set -eu
 [ ! -e "$ARCHR_SESSION_RUN_DIR/next" ]
 # Do not target the wrapper: it must survive to restore services/governors.
 [ ! -e "$ARCHR_SESSION_KILL_FILE" ]
-if [ "${1-}" = LONG ]; then
+if [ "${1-}" = LONG ] || [ "${1-}" = ORPHAN ] || [ "${1-}" = NORMAL ]; then
   # Like the real runemu.sh: NO TERM trap. Cleanup is normal control flow
   # after its emulator exits, including a nonzero/signaled emulator status.
   printf '%s\n' "$$" >"$CASE_DIR/game-pids"
+  printf '%s\n' "$$" >"$CASE_DIR/wrapper-pid"
+  if [ "$1" != LONG ]; then
+    "$ARCHR_TEST_EMULATOR" STUBBORN &
+    "$ARCHR_TEST_EMULATOR" TERM &
+  fi
   "$ARCHR_TEST_EMULATOR" &
   child=$!
+  printf '%s\n' "$child" >"$CASE_DIR/emulator-pid"
   wait "$child" || :
   /bin/sleep 0.15
+  # Model save/quit work: group teardown must not interrupt this window.
+  [ ! -f "$CASE_DIR/group-term" ] || : >"$CASE_DIR/premature-term"
   : >"$CASE_DIR/cleanup"
   exit 0
 fi
@@ -122,10 +130,19 @@ EOF
 cat >"$ARCHR_TEST_EMULATOR" <<'EOF'
 #!/bin/sh
 # This process name contains ')' and a space to exercise /proc/stat parsing.
+case "${1-}" in
+  STUBBORN) trap '' TERM ;;
+  # A cooperative helper needs time to flush a save on TERM (not just exit).
+  TERM) trap '/bin/sleep 0.3; : >"$CASE_DIR/group-term"; exit 0' TERM ;;
+esac
 /bin/sleep 30 &
 child=$!
 printf '%s\n' "$$" "$child" >>"$CASE_DIR/game-pids"
-: >"$CASE_DIR/game-ready"
+case "${1-}" in
+  STUBBORN) : >"$CASE_DIR/stubborn-ready" ;;
+  TERM) : >"$CASE_DIR/term-ready" ;;
+  *) : >"$CASE_DIR/game-ready" ;;
+esac
 wait "$child"
 EOF
 cat >"$root/bin/systemctl" <<'EOF'
@@ -380,6 +397,62 @@ run_stop_case() {
 }
 run_stop_case service-stop 'game runemu.sh LONG'
 run_stop_case service-stop-shell 'game runemu.sh LONG; :'
+
+# The wrapper may die before its emulator. Tracking only wait's PID must fail
+# these checks; a TERM-only implementation must also fail (STUBBORN ignores it).
+exit_group_case() {
+  setup_case "$1" "game runemu.sh $2$3
+END"
+  timeout 12 "${SESSION_TEST_SHELL:-sh}" "$session" >"$CASE_DIR/output" 2>&1 &
+  test_runner=$!
+  i=0
+  while { [ ! -f "$CASE_DIR/game-ready" ] ||
+          [ ! -f "$CASE_DIR/stubborn-ready" ] ||
+          [ ! -f "$CASE_DIR/term-ready" ]; } && [ "$i" -lt 200 ]; do
+    /bin/sleep 0.01
+    i=$((i + 1))
+  done
+  [ -f "$CASE_DIR/game-ready" ] && [ -f "$CASE_DIR/stubborn-ready" ] &&
+    [ -f "$CASE_DIR/term-ready" ]
+  wrapper=$(cat "$CASE_DIR/wrapper-pid")
+  group=$(ps -o pgid= -p "$wrapper" | tr -d ' ')
+  [ -n "$group" ]
+  [ ! -f "$CASE_DIR/group-term" ]
+  if [ "$2" = ORPHAN ]; then
+    kill -KILL "$wrapper"
+  else
+    # Normal emulator exit (Select+Start/save-and-quit): runemu must finish its
+    # cleanup before the remaining helpers receive any group signal.
+    kill -TERM "$(cat "$CASE_DIR/emulator-pid")"
+  fi
+  status=0
+  wait "$test_runner" || status=$?
+  test_runner=
+  [ "$status" -eq 0 ] && [ -f "$CASE_DIR/finished" ]
+  [ "$(cat "$ARCHR_SESSION_RUN_DIR/last-exit")" = "$4" ]
+  [ "$(cat "$ARCHR_SESSION_CPUFREQ/policy0/scaling_max_freq")" = 1416000 ]
+  if [ "$2" = NORMAL ]; then
+    [ -f "$CASE_DIR/cleanup" ] && [ ! -f "$CASE_DIR/premature-term" ] ||
+      { echo 'FAIL: group termination interrupted normal save/cleanup' >&2; exit 1; }
+  fi
+  # Allow init to reap killed orphans: a zombie is already dead but can briefly
+  # keep kill -0 on the group successful. No running descendant may survive.
+  i=0
+  while kill -0 -- "-$group" 2>/dev/null && [ "$i" -lt 100 ]; do
+    /bin/sleep 0.01
+    i=$((i + 1))
+  done
+  if kill -0 -- "-$group" 2>/dev/null; then
+    echo "FAIL: game group $group survived $1" >&2
+    exit 1
+  fi
+  [ -f "$CASE_DIR/group-term" ] ||
+    { echo 'FAIL: group teardown skipped TERM grace period' >&2; exit 1; }
+  printf '%s\n' "PASS $1 leaves no game group after TERM/KILL"
+}
+exit_group_case wrapper-killed ORPHAN '' 137
+exit_group_case wrapper-killed-shell ORPHAN '; :' 0
+exit_group_case normal-save NORMAL '' 0
 
 run_case removed-actions 'action suspend
 action shutdown

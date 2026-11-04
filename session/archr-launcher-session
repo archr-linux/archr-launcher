@@ -316,6 +316,16 @@ while :; do
             [ "$stop_requested" -eq 0 ] || stop_session
             wait "$child_pid"
             game_status=$?
+            # wait only reaps the launch shell; a killed runemu.sh can leave
+            # emulators behind in its setsid group. Let normal save/quit finish
+            # BEFORE signaling survivors, and retain the group until teardown.
+            if child_alive; then
+                signal_child TERM
+                "$stop_sleep" 1
+                if child_alive; then
+                    signal_child KILL
+                fi
+            fi
             child_pid=
             child_group=0
             child_is_game=0
