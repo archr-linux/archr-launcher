@@ -657,7 +657,11 @@ pub fn module(
                             },
                             other => other.clone(),
                         },
-                        default: row.default.clone(),
+                        // A text row's first value may be an `@key` too.
+                        default: match row.kind {
+                            RowKind::Text { .. } => tr(&row.default),
+                            _ => row.default.clone(),
+                        },
                     })
                     .collect(),
             })
@@ -834,5 +838,35 @@ mod tests {
         assert_eq!(installed.tr("@missing"), "missing");
         assert_eq!(installed.tr("plain"), "plain");
         assert!(installed.manifest.is_none(), "no module.toml");
+    }
+
+    #[test]
+    fn the_tuning_module_reaches_the_screens_translated() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../examples/modules/ajuste-cpu");
+        let installed = Installed::read(&dir, "pt_BR");
+        assert!(installed.manifest.is_some(), "{}", installed.problem);
+        let data = tempfile::tempdir().unwrap();
+        let module = module(&Dirs::new(data.path()), &installed, None, "pt_BR");
+        let detail = &module.pages[1];
+        assert!(detail.detail);
+        assert_eq!(
+            module.pages[0].hint.as_deref(),
+            Some("Um jogo que ficar lento volta um degrau")
+        );
+        let note = detail
+            .rows
+            .iter()
+            .find(|r| matches!(r.kind, RowKind::Text { .. }))
+            .unwrap();
+        assert!(note.default.starts_with("Medida pelo"), "{}", note.default);
+        assert!(detail.rows.iter().any(|r| matches!(
+            &r.kind,
+            RowKind::Action { icon: Some(svg), .. } if svg.contains("<svg")
+        )));
+        assert!(matches!(
+            &module.pages[0].rows[1].kind,
+            RowKind::List { open: Some(1), alt: Some((_, label)), .. } if label == "Reaprender"
+        ));
     }
 }
