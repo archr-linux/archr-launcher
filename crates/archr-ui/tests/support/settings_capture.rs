@@ -2669,14 +2669,28 @@ fn tune_pages(language: &str, picture: &std::path::Path) -> Vec<(&'static str, S
         tone,
         ..Item::default()
     };
-    let learned = |system: &str, n: &str| {
-        tr(
-            "@sub.learned",
-            &[("system", system), ("speed", "100"), ("n", n)],
-        )
-    };
+    let learned = |system: &str, n: &str| tr("@sub.learned", &[("system", system), ("n", n)]);
     let saving = |pct: &str| tr("@detail.saving", &[("pct", pct)]);
     let games = vec![
+        item(
+            "Chrono Trigger",
+            tr(
+                "@sub.testing",
+                &[("system", "Super Nintendo"), ("mhz", "816 MHz")],
+            ),
+            "",
+            tr("@detail.session", &[("n", "2"), ("of", "3")]),
+            &tr("@badge.learning", &[]),
+            Tone::Info,
+        ),
+        item(
+            "Super Mario 64",
+            tr("@sub.out", &[("system", "Nintendo 64")]),
+            "",
+            tr("@detail.always", &[("mhz", "1416 MHz")]),
+            &tr("@badge.out", &[]),
+            Tone::Muted,
+        ),
         item(
             "Super Mario World",
             learned("Super Nintendo", "6"),
@@ -2700,25 +2714,6 @@ fn tune_pages(language: &str, picture: &std::path::Path) -> Vec<(&'static str, S
             saving("16"),
             "",
             Tone::Plain,
-        ),
-        item(
-            "Chrono Trigger",
-            tr(
-                "@sub.testing",
-                &[("system", "Super Nintendo"), ("mhz", "816 MHz")],
-            ),
-            "",
-            tr("@detail.session", &[("n", "2"), ("of", "3")]),
-            &tr("@badge.learning", &[]),
-            Tone::Info,
-        ),
-        item(
-            "Super Mario 64",
-            tr("@sub.out", &[("system", "Nintendo 64")]),
-            "",
-            tr("@detail.always", &[("mhz", "1416 MHz")]),
-            &tr("@badge.out", &[]),
-            Tone::Muted,
         ),
     ];
     let stat = |title: &str, value: &str, subtitle: String, tone| Item {
@@ -2789,10 +2784,10 @@ fn tune_pages(language: &str, picture: &std::path::Path) -> Vec<(&'static str, S
     view.items.insert(
         target("row:barras"),
         vec![
-            bar("408 MHz", 91, Tone::Bad),
-            bar("816 MHz", 100, Tone::Info),
-            bar("1008 MHz", 100, Tone::Plain),
-            bar("1416 MHz", 100, Tone::Plain),
+            bar("408 MHz", 96, Tone::Bad),
+            bar("816 MHz", 68, Tone::Info),
+            bar("1008 MHz", 57, Tone::Plain),
+            bar("1416 MHz", 44, Tone::Plain),
         ],
     );
     view.items.insert(
@@ -2816,8 +2811,9 @@ fn tune_pages(language: &str, picture: &std::path::Path) -> Vec<(&'static str, S
     list.open(Page::Modules);
     let mut auto = list.clone();
     auto.open_module_page("ajuste-cpu", 0);
+    auto.cursor = 2;
     let mut learning = auto.clone();
-    learning.cursor = 3;
+    learning.cursor = 0;
     let mut detail = auto.clone();
     detail.modules.images.insert(game, picture.to_path_buf());
     detail.handle(Button::A);
