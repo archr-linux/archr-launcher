@@ -16,11 +16,13 @@ WorkingDirectory=/storage
 Restart=always
 RestartSec=1
 # TERM reaches only the supervisor: save-exit closes runemu before scope cleanup.
-# Save-exit + wrapper grace + residual scope grace are bounded to 5.2 s.
-# TimeoutStopSec still KILLs helpers left in the session service's own cgroup.
+# Its stop is bounded to 6.8 s with every limit reached (scope registration
+# 1.2 s, save-exit 3.2 s, runemu 1 s, scope stop 1.4 s); 8 s leaves room for
+# process start-up on the RK3326. TimeoutStopSec then KILLs what is left in
+# this cgroup; a game scope it misses is stopped when the session next starts.
 KillMode=mixed
 KillSignal=SIGTERM
-TimeoutStopSec=6
+TimeoutStopSec=8
 
 [Install]
 WantedBy=archr.target

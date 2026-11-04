@@ -127,13 +127,15 @@ if [ "${1-}" = LONG ] || [ "${1-}" = ORPHAN ] ||
   # after its emulator exits, including a nonzero/signaled emulator status.
   printf '%s\n' "$$" >"$CASE_DIR/game-pids"
   printf '%s\n' "$$" >"$CASE_DIR/wrapper-pid"
+  # Like runemu's set_kill for a 32-bit core: the name is not EMULATOR's.
+  printf '%s\n' retroarch32 >"$ARCHR_SESSION_KILL_FILE"
   if [ "$1" != LONG ]; then
     if [ "$1" != COOPERATIVE ]; then
       "$ARCHR_TEST_EMULATOR" STUBBORN &
     fi
     "$ARCHR_TEST_EMULATOR" TERM &
   fi
-  "$ARCHR_TEST_EMULATOR" &
+  ARCHR_TEST_NAME=retroarch32 "$ARCHR_TEST_EMULATOR" &
   child=$!
   printf '%s\n' "$child" >"$CASE_DIR/emulator-pid"
   wait "$child" || :
@@ -168,6 +170,11 @@ esac
 child=$!
 printf '%s\n' "$$" "$child" >>"$CASE_DIR/game-pids"
 printf '%s\n' "$$" "$child" >>"$CASE_DIR/scopes/$ARCHR_TEST_SCOPE/members"
+# What killall would match.
+if [ -n "${ARCHR_TEST_NAME-}" ]; then
+  mkdir -p "$CASE_DIR/names"
+  printf '%s\n' "$$" >>"$CASE_DIR/names/$ARCHR_TEST_NAME"
+fi
 case "${1-}" in
   STUBBORN) : >"$CASE_DIR/stubborn-ready" ;;
   TERM) : >"$CASE_DIR/term-ready" ;;
@@ -177,12 +184,27 @@ wait "$child"
 EOF
 cat >"$root/bin/systemctl" <<'EOF'
 #!/bin/sh
+# Barrier: a manager that never answers (the session must time it out).
+case "$1" in
+  is-active|stop) [ ! -f "$CASE_DIR/systemctl-hang-$1" ] || exec /bin/sleep 30 ;;
+esac
+alive_members() {
+  [ -f "$CASE_DIR/scopes/$1/members" ] || return 0
+  while IFS= read -r pid; do
+    state=$(ps -o stat= -p "$pid" 2>/dev/null) || continue
+    case "$state" in ''|Z*|X*) continue ;; esac
+    printf '%s\n' "$pid"
+  done <"$CASE_DIR/scopes/$1/members"
+}
+signal_scope() {
+  for pid in $(alive_members "$2"); do kill "-$1" "$pid" 2>/dev/null || :; done
+}
 case "$1" in
   import-environment) printf '%s\n' "$*" >>"$CASE_DIR/imports" ;;
   list-units)
     printf '%s\n' "$*" >>"$CASE_DIR/scope-calls"
     for unit in "$CASE_DIR"/scopes/archr-game-*.scope; do
-      [ -d "$unit" ] || continue
+      [ -d "$unit" ] && [ ! -f "$unit/stopped" ] || continue
       printf '%s loaded active running\n' "${unit##*/}"
     done
     ;;
@@ -190,30 +212,35 @@ case "$1" in
     printf '%s\n' "$*" >>"$CASE_DIR/scope-calls"
     unit=$3
     [ ! -f "$CASE_DIR/scopes/$unit/stopped" ] || exit 3
-    [ -f "$CASE_DIR/scopes/$unit/members" ] || exit 3
-    while IFS= read -r pid; do
-      state=$(ps -o stat= -p "$pid" 2>/dev/null) || continue
-      case "$state" in ''|Z*|X*) continue ;; esac
-      exit 0
-    done <"$CASE_DIR/scopes/$unit/members"
-    exit 3
-    ;;
-  kill)
-    printf '%s\n' "$*" >>"$CASE_DIR/scope-calls"
-    signal=${2#--signal=}
-    unit=$3
-    if [ -f "$CASE_DIR/save-exit-calls" ] && [ ! -f "$CASE_DIR/cleanup" ]; then
-      : >"$CASE_DIR/residual-before-cleanup"
-    fi
-    [ -f "$CASE_DIR/scopes/$unit/members" ] || exit 0
-    while IFS= read -r pid; do
-      kill "-$signal" "$pid" 2>/dev/null || :
-    done <"$CASE_DIR/scopes/$unit/members"
+    [ -n "$(alive_members "$unit")" ] || exit 3
     ;;
   stop)
     printf '%s\n' "$*" >>"$CASE_DIR/scope-calls"
     unit=$2
-    [ ! -d "$CASE_DIR/scopes/$unit" ] || : >"$CASE_DIR/scopes/$unit/stopped"
+    if [ -f "$CASE_DIR/save-exit-calls" ] && [ ! -f "$CASE_DIR/cleanup" ]; then
+      : >"$CASE_DIR/residual-before-cleanup"
+    fi
+    if [ -f "$CASE_DIR/stop-barrier" ]; then
+      : >"$CASE_DIR/stop-waiting"
+      while [ -f "$CASE_DIR/stop-barrier" ]; do /bin/sleep 0.01; done
+    fi
+    [ -d "$CASE_DIR/scopes/$unit" ] || exit 5
+    # Like systemd with TimeoutStopSec=1: TERM, up to 1 s, then KILL until
+    # the cgroup is empty, including processes forked meanwhile.
+    signal_scope TERM "$unit"
+    deadline=$(($(date +%s%N) + 1000000000))
+    while [ -n "$(alive_members "$unit")" ]; do
+      if [ "$(date +%s%N)" -ge "$deadline" ]; then
+        : >"$CASE_DIR/stop-grace-expired"
+        break
+      fi
+      /bin/sleep 0.01
+    done
+    while [ -n "$(alive_members "$unit")" ]; do
+      signal_scope KILL "$unit"
+      /bin/sleep 0.01
+    done
+    : >"$CASE_DIR/scopes/$unit/stopped"
     ;;
   *) printf '%s\n' "$*" >>"$CASE_DIR/actions" ;;
 esac
@@ -225,9 +252,15 @@ if [ "$1" = --scope ]; then
   shift
   case "$1" in --unit=archr-game-*.scope) unit=${1#--unit=} ;; *) exit 2 ;; esac
   shift
-  [ "$1" = --collect ] && [ "$2" = -- ] || exit 2
-  shift 2
+  [ "$1 $2 $3 $4" = '--collect -p TimeoutStopSec=1 --' ] || exit 2
+  shift 4
   export ARCHR_TEST_SCOPE=$unit
+  # Barrier: systemd has not registered the scope yet.
+  if [ -f "$CASE_DIR/register-barrier" ]; then
+    : >"$CASE_DIR/register-waiting"
+    while [ -f "$CASE_DIR/register-barrier" ]; do /bin/sleep 0.01; done
+    [ ! -f "$CASE_DIR/register-fail" ] || exit 1
+  fi
   mkdir -p "$CASE_DIR/scopes/$unit"
   printf '%s\n' "$$" >"$CASE_DIR/scopes/$unit/members"
   # Real systemd-run --scope execs the command rather than a detached service.
@@ -256,9 +289,19 @@ if [ -f "$CASE_DIR/save-exit-hang" ]; then
   trap '' TERM
   /bin/sleep 30
 fi
-pid=$(sed -n '2p' "$CASE_DIR/current-game")
+{ IFS= read -r rom; IFS= read -r pid; IFS= read -r platform; IFS= read -r emulator; } \
+  <"$CASE_DIR/current-game" || exit 2
 [ "$pid" = "$(cat "$CASE_DIR/wrapper-pid")" ] || exit 2
-kill -TERM "$(cat "$CASE_DIR/emulator-pid")"
+# As the real helper: the kill file's names, else EMULATOR; then killall.
+targets=
+[ ! -r "$ARCHR_SESSION_KILL_FILE" ] || targets=$(grep -v '^-' "$ARCHR_SESSION_KILL_FILE")
+[ -n "$targets" ] || targets=$emulator
+printf '%s\n' "$targets" >"$CASE_DIR/save-exit-targets"
+for name in $targets; do
+  [ -f "$CASE_DIR/names/$name" ] || continue
+  while IFS= read -r target; do kill -TERM "$target" 2>/dev/null || :; done \
+    <"$CASE_DIR/names/$name"
+done
 while kill -0 "$pid" 2>/dev/null; do /bin/sleep 0.01; done
 [ -f "$CASE_DIR/cleanup" ] || exit 1
 : >"$CASE_DIR/save-exit-finished"
@@ -355,8 +398,7 @@ END'
 wait "$stale_pid" 2>/dev/null || :
 ! kill -0 "$stale_pid" 2>/dev/null
 [ -f "$CASE_DIR/scopes/archr-game-old.scope/stopped" ]
-grep -q '^kill --signal=TERM archr-game-old.scope$' "$CASE_DIR/scope-calls"
-grep -q '^kill --signal=KILL archr-game-old.scope$' "$CASE_DIR/scope-calls"
+grep -q '^stop archr-game-old.scope$' "$CASE_DIR/scope-calls"
 printf '%s\n' 'PASS startup clears leftover scopes before the launcher starts'
 
 : >"$ARCHR_SESSION_USER_CONTROLLER_DB"
@@ -514,9 +556,12 @@ run_stop_case() {
     fi
   done <"$CASE_DIR/game-pids"
   [ "$(cat "$CASE_DIR/save-exit-calls")" = suspend ]
+  # The kill file still named retroarch32; EMULATOR=retroarch would miss it.
+  [ "$(cat "$CASE_DIR/save-exit-targets")" = retroarch32 ] ||
+    { echo 'FAIL: save-exit ran without the kill file' >&2; exit 1; }
   [ -f "$CASE_DIR/save-exit-finished" ]
   [ ! -f "$CASE_DIR/residual-before-cleanup" ]
-  grep -q '^kill --signal=TERM archr-game-' "$CASE_DIR/scope-calls"
+  [ ! -e "$ARCHR_SESSION_KILL_FILE" ]
   grep -q '^stop archr-game-' "$CASE_DIR/scope-calls"
   printf '%s\n' "PASS $1 preserves untrapped wrapper cleanup and leaves no processes"
 }
@@ -530,8 +575,6 @@ for mode in failed missing hung; do
   stop_case "service-stop-$mode" 'game runemu.sh LONG' game-ready
   ended=$(date +%s%N)
   awk -v started="$started" -v ended="$ended" 'BEGIN { exit !((ended-started)/1000000 < 6000) }'
-  grep -q '^kill --signal=TERM archr-game-' "$CASE_DIR/scope-calls"
-  grep -q '^kill --signal=KILL archr-game-' "$CASE_DIR/scope-calls"
   grep -q '^stop archr-game-' "$CASE_DIR/scope-calls"
   [ "$(cat "$ARCHR_SESSION_CPUFREQ/policy0/scaling_max_freq")" = 1416000 ]
   if [ "$mode" = missing ]; then
@@ -586,13 +629,11 @@ END"
   [ "$(cat "$ARCHR_SESSION_RUN_DIR/last-exit")" = "$4" ]
   [ "$(cat "$ARCHR_SESSION_CPUFREQ/policy0/scaling_max_freq")" = 1416000 ]
   [ -f "$CASE_DIR/cpu-restored-before-launcher" ]
-  grep -q '^kill --signal=TERM archr-game-' "$CASE_DIR/scope-calls"
-  grep -q '^kill --signal=KILL archr-game-' "$CASE_DIR/scope-calls"
   grep -q '^stop archr-game-' "$CASE_DIR/scope-calls"
-  [ "$(sort -u "$CASE_DIR/stop-sleeps")" = 0.1 ]
-  [ "$(wc -l <"$CASE_DIR/stop-sleeps")" -le 10 ]
+  [ ! -f "$CASE_DIR/save-exit-calls" ]
+  [ ! -f "$CASE_DIR/stop-sleeps" ]
   if [ "$2" = COOPERATIVE ]; then
-    [ "$(wc -l <"$CASE_DIR/stop-sleeps")" -lt 10 ] ||
+    [ ! -f "$CASE_DIR/stop-grace-expired" ] ||
       { echo 'FAIL: cooperative group waited the full deadline' >&2; exit 1; }
   fi
   if [ "$2" = NORMAL ]; then
@@ -669,6 +710,140 @@ while IFS= read -r pid; do
   ! kill -0 "$pid" 2>/dev/null
 done <"$CASE_DIR/game-pids"
 printf '%s\n' 'PASS supervisor SIGKILL: next session clears the scope and never reuses its name'
+
+# Wait until the game's processes are gone (init reaps the orphans).
+all_gone() {
+  for list in "$CASE_DIR"/scopes/*/members; do
+    [ -f "$list" ] || continue
+    while IFS= read -r pid; do
+      i=0
+      while kill -0 "$pid" 2>/dev/null && [ "$i" -lt 100 ]; do
+        /bin/sleep 0.01
+        i=$((i + 1))
+      done
+      if kill -0 "$pid" 2>/dev/null; then
+        echo "FAIL: process $pid survived $name" >&2
+        exit 1
+      fi
+    done <"$list"
+  done
+}
+
+# A TERM before systemd registers the scope is held until it exists, then
+# the scope is stopped: nothing it started may survive.
+export ARCHR_SESSION_STOP_SLEEP=/bin/sleep
+setup_case late-register 'game runemu.sh LONG
+END'
+name=late-register
+: >"$CASE_DIR/register-barrier"
+timeout 12 "${SESSION_TEST_SHELL:-sh}" "$session" >"$CASE_DIR/output" 2>&1 &
+test_runner=$!
+i=0
+while [ ! -f "$CASE_DIR/register-waiting" ] && [ "$i" -lt 200 ]; do
+  /bin/sleep 0.01
+  i=$((i + 1))
+done
+[ -f "$CASE_DIR/register-waiting" ]
+kill -TERM "$(cat "$CASE_DIR/supervisor-pid")"
+/bin/sleep 0.2
+rm -f "$CASE_DIR/register-barrier"
+status=0
+wait "$test_runner" 2>/dev/null || status=$?
+test_runner=
+[ "$status" -eq 0 ]
+[ -f "$CASE_DIR/scopes/$(ls "$CASE_DIR/scopes")/stopped" ] ||
+  { echo 'FAIL: late scope was never stopped' >&2; exit 1; }
+all_gone
+printf '%s\n' 'PASS TERM before scope registration: held, then the scope is stopped'
+
+# systemd-run fails without a scope: nothing to save, nothing left over.
+setup_case register-fail 'game runemu.sh LONG
+END'
+name=register-fail
+: >"$CASE_DIR/register-barrier"
+: >"$CASE_DIR/register-fail"
+timeout 12 "${SESSION_TEST_SHELL:-sh}" "$session" >"$CASE_DIR/output" 2>&1 &
+test_runner=$!
+i=0
+while [ ! -f "$CASE_DIR/register-waiting" ] && [ "$i" -lt 200 ]; do
+  /bin/sleep 0.01
+  i=$((i + 1))
+done
+kill -TERM "$(cat "$CASE_DIR/supervisor-pid")"
+/bin/sleep 0.1
+rm -f "$CASE_DIR/register-barrier"
+status=0
+wait "$test_runner" 2>/dev/null || status=$?
+test_runner=
+[ "$status" -eq 0 ]
+[ ! -f "$CASE_DIR/save-exit-calls" ]
+printf '%s\n' 'PASS failed scope registration: stop needs no save and no cleanup'
+
+# A TERM while the scope of a finished game is being stopped: no save-exit.
+setup_case term-in-cleanup 'game runemu.sh NORMAL
+END'
+name=term-in-cleanup
+: >"$CASE_DIR/stop-barrier"
+timeout 12 "${SESSION_TEST_SHELL:-sh}" "$session" >"$CASE_DIR/output" 2>&1 &
+test_runner=$!
+i=0
+while { [ ! -f "$CASE_DIR/game-ready" ] || [ ! -f "$CASE_DIR/term-ready" ] ||
+        [ ! -f "$CASE_DIR/stubborn-ready" ]; } && [ "$i" -lt 200 ]; do
+  /bin/sleep 0.01
+  i=$((i + 1))
+done
+kill -TERM "$(cat "$CASE_DIR/emulator-pid")"
+i=0
+while [ ! -f "$CASE_DIR/stop-waiting" ] && [ "$i" -lt 200 ]; do
+  /bin/sleep 0.01
+  i=$((i + 1))
+done
+[ -f "$CASE_DIR/stop-waiting" ]
+kill -TERM "$(cat "$CASE_DIR/supervisor-pid")"
+/bin/sleep 0.2
+rm -f "$CASE_DIR/stop-barrier"
+status=0
+wait "$test_runner" 2>/dev/null || status=$?
+test_runner=
+[ "$status" -eq 0 ]
+[ ! -f "$CASE_DIR/save-exit-calls" ] ||
+  { echo 'FAIL: TERM during cleanup asked a finished game to save' >&2; exit 1; }
+[ "$(grep -c '^stop archr-game-' "$CASE_DIR/scope-calls")" -eq 1 ]
+[ "$(cat "$ARCHR_SESSION_CPUFREQ/policy0/scaling_max_freq")" = 1416000 ]
+all_gone
+printf '%s\n' 'PASS TERM during normal game cleanup: no second save, one scope stop'
+
+# A manager that never answers, with save-exit hung too: still under 8 s.
+for hang in stop is-active; do
+  setup_case "systemctl-hang-$hang" 'game runemu.sh LONG
+END'
+  name=systemctl-hang-$hang
+  : >"$CASE_DIR/save-exit-hang"
+  timeout 14 "${SESSION_TEST_SHELL:-sh}" "$session" >"$CASE_DIR/output" 2>&1 &
+  test_runner=$!
+  i=0
+  while [ ! -f "$CASE_DIR/game-ready" ] && [ "$i" -lt 200 ]; do
+    /bin/sleep 0.01
+    i=$((i + 1))
+  done
+  [ -f "$CASE_DIR/game-ready" ]
+  : >"$CASE_DIR/systemctl-hang-$hang"
+  started=$(date +%s%N)
+  kill -TERM "$(cat "$CASE_DIR/supervisor-pid")"
+  status=0
+  wait "$test_runner" 2>/dev/null || status=$?
+  test_runner=
+  ended=$(date +%s%N)
+  [ "$status" -eq 0 ]
+  awk -v started="$started" -v ended="$ended" -v hang="$hang" 'BEGIN {
+    elapsed = (ended - started) / 1000000
+    printf "PASS systemctl %s hung (save-exit hung too): stop took %.0f ms\n", hang, elapsed
+    exit !(elapsed < 8000)
+  }'
+  # A dead manager stops nothing; the next session would. Clean up here.
+  rm -f "$CASE_DIR/systemctl-hang-$hang"
+  for unit in "$CASE_DIR"/scopes/*; do systemctl stop "${unit##*/}" || :; done
+done
 
 run_case removed-actions 'action suspend
 action shutdown
