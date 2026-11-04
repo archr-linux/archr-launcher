@@ -31,5 +31,5 @@ Guia completo: `docs/modulos.md`, seção 9. Teste no PC:
 
 Publicar: tag `v1.0.0`, `tar -czf ajuste-cpu-1.0.0.tar.gz ajuste-cpu/`, e os
 assets da release (`ajuste-cpu-1.0.0.tar.gz`, `module.toml`, `preview.png`),
-no repositório `archr-linux/archr-ajuste-cpu` com o tópico
+no repositório `archr-linux/archr-module-ajuste-cpu` com o tópico
 `archr-launcher-module`.
