@@ -4,6 +4,7 @@
 "section.options" = "Opções"
 "row.now" = "Agora"
 "row.health" = "Saúde"
+"row.voltage" = "Tensão"
 "row.watts" = "Mostrar potência"
 "row.interval" = "Atualizar a cada"
 "row.refresh" = "Atualizar agora"
@@ -14,3 +15,5 @@
 "st.Discharging" = "{pct} %"
 "st.Full" = "{pct} % · completa"
 "st.watts" = "{pct} % · {w} W"
+"st.Idle" = "{pct} % · sem carregar"
+"st.watts_in" = "{pct} % · carregando {w} W"

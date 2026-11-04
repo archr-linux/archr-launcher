@@ -4,6 +4,7 @@
 "section.options" = "Параметры"
 "row.now" = "Сейчас"
 "row.health" = "Износ"
+"row.voltage" = "Напряжение"
 "row.watts" = "Показывать мощность"
 "row.interval" = "Обновлять каждые"
 "row.refresh" = "Обновить сейчас"
@@ -14,3 +15,5 @@
 "st.Discharging" = "{pct} %"
 "st.Full" = "{pct} % · заряжена"
 "st.watts" = "{pct} % · {w} Вт"
+"st.Idle" = "{pct} % · не заряжается"
+"st.watts_in" = "{pct} % · заряжается {w} Вт"
