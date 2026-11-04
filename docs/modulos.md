@@ -15,7 +15,9 @@ mitigações, o que ainda aguarda) está em
 um módulo não pode depender dele (`runtime = "python3"` é recusado).
 
 Exemplos completos e funcionando: `examples/modules/bateria-detalhada`
-(daemon) e `examples/modules/perfil-cpu` (oneshot).
+(daemon) e `examples/modules/perfil-cpu` (oneshot), publicados na Loja como
+`archr-linux/archr-module-bateria-detalhada` e
+`archr-linux/archr-module-perfil-cpu`.
 
 ## 1. Pacote
 
@@ -80,7 +82,8 @@ de página; ícone que não é um SVG Lucide intacto; falta de `locales/en.toml`
 Todo o resto inválido vira aviso e o campo é ignorado.
 
 `name` e `description` em tabela por idioma (`{ en = "...", pt_BR = "..." }`)
-aparecem já na Loja, antes da instalação; com `@chave` a Loja mostra o nome do
+aparecem já na Loja, antes da instalação, no idioma do launcher (ou em `en`;
+a Loja acompanha a troca de idioma); com `@chave` a Loja mostra o nome do
 repositório até o módulo estar instalado.
 
 ### 2.1 Pontos de extensão
@@ -519,6 +522,9 @@ necessário.
   os módulos **sem sandbox** e avisa no log: só para desenvolvimento.
 - No aparelho: copie a pasta para `/storage/.config/archr-launcher/modules/<id>/`
   por SSH e ligue em Configurações › Sistema › Módulos (aparece como "Local").
+- Um módulo que não sobe com `status=217/USER` no `journalctl -u
+  'archr-mod-<id>*'` está num sistema sem `/usr/lib/libnss_systemd.so.2`
+  (imagens até 20261027): o systemd não acha o usuário do módulo.
 
 ## 8. Publicar na Loja de módulos
 
@@ -542,18 +548,26 @@ assinatura cobre o arquivo inteiro: um `.sig` de outra lista é recusado.
 {"serial": 4, "expires": 1785000000, "modules": [{"repo": "dono/repo", "digest": "sha256:<hex>"}]}
 ```
 
+A primeira lista (serial 1, de 2026-11-04, vence em 2027-02-02) está na
+release `reviewed-1` de `archr-linux/archr-modules`; o repositório guarda
+também cada `reviewed.json` publicado. A tag da release pode ter qualquer
+nome (`reviewed-<serial>` por convenção): vale a última release.
+
 Publicar uma revisão (só o mantenedor, com a chave privada fora do
 repositório, em `~/.archr/archr-modules-ed25519.pem`, modo 600):
 
 1. acrescente (ou tire, para revogar) a entrada com `repo` e o `digest` que o
-   GitHub publica para o `.tar.gz` revisado, **aumente `serial`** (inteiro
+   GitHub publica para o `.tar.gz` revisado (`gh release view v<versão> -R
+   <repo> --json assets -q '.assets[].digest'`; confira com `sha256sum` do
+   pacote que você leu), **aumente `serial`** (inteiro
    > 0) e ponha `expires` à frente (ex.: `date -d +90days +%s`); republique
    antes de vencer, senão os selos somem; a cada versão do launcher, suba
    `MIN_SERIAL` para o serial publicado;
 2. `tools/sign-reviewed reviewed.json` (confere o JSON, assina, verifica a
    assinatura contra a chave pública e grava `reviewed.json.sig`);
 3. publique os dois arquivos como assets de uma release nova de
-   `archr-linux/archr-modules`.
+   `archr-linux/archr-modules` (`gh release create reviewed-<serial>
+   --latest reviewed.json reviewed.json.sig`).
 
 A chave privada nunca vai para o GitHub, para o aparelho nem para o
 repositório; quem tomar a conta `archr-linux` não consegue dar selo.
@@ -584,10 +598,24 @@ Regras da release (a última, não pre-release):
 - tarball até 8 MB, até 16 MB descompactado, até 500 entradas, tudo dentro de
   `<id>/`; só arquivos e pastas: link, dispositivo, caminho absoluto ou `..`
   recusam o pacote inteiro. Modos são normalizados (0644; a entrada, 0755).
+- o repositório tem o tópico `archr-launcher-module` e é público.
+
+O jeito mais simples de cumprir tudo: o repositório do módulo é a própria
+pasta do módulo (`module.toml` na raiz), e o pacote sai da tag com
+`git archive`, que já põe tudo dentro de `<id>/` e não leva links nem `.git`;
+o `module.toml` avulso da release é o da mesma tag, logo idêntico:
 
 ```
-tar -czf bateria-detalhada-1.0.0.tar.gz bateria-detalhada/
+git tag v1.0.0
+git archive --format=tar.gz --prefix=bateria-detalhada/ \
+    -o ../bateria-detalhada-1.0.0.tar.gz v1.0.0
+gh release create v1.0.0 --latest ../bateria-detalhada-1.0.0.tar.gz \
+    module.toml preview.png
+gh repo edit --add-topic archr-launcher-module
 ```
+
+Gere o pacote fora da pasta do módulo: um `.tar.gz` dentro dela acaba no
+próprio pacote. Os dois módulos de exemplo foram publicados assim.
 
 A Loja confere o SHA-256 que o GitHub publica para o asset, exige o
 `module.toml` idêntico e valida o pacote antes de colocá-lo em `modules/<id>`.
