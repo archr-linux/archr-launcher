@@ -78,7 +78,7 @@ impl Systemd {
         })
     }
 }
-/// `systemctl --version`, within a second: false only when it answered
+/// `systemctl --version`, within one second in all: false only when it answered
 /// well and said `-SECCOMP`. In doubt the filter stays.
 fn probe(ctl: &Path) -> bool {
     let child = Command::new(ctl)
@@ -101,10 +101,13 @@ fn probe(ctl: &Path) -> bool {
         let _ = (&mut stdout).take(64 << 10).read_to_string(&mut text);
         let _ = tx.send(text);
     });
+    // One second for both the exit and the output.
+    let deadline = Instant::now() + Duration::from_secs(1);
     let Some(code) = wait_for(child, Duration::from_secs(1)) else {
         return true;
     };
-    let text = rx.recv_timeout(Duration::from_secs(1)).unwrap_or_default();
+    let left = deadline.saturating_duration_since(Instant::now());
+    let text = rx.recv_timeout(left).unwrap_or_default();
     seccomp(Some(code), &text)
 }
 /// A systemd built with seccomp (`+SECCOMP`), from what `systemctl
