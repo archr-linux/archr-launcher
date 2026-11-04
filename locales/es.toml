@@ -517,7 +517,7 @@
 "settings.wifi_backup_question" = "¿Incluir las redes Wi-Fi en la copia?"
 "settings.wifi_backup_explain" = "La copia no está cifrada y queda en la carpeta compartida de ROMs: quien abra esa carpeta por la red puede leer las contraseñas del Wi-Fi."
 "settings.restore_question" = "¿Restaurar la copia?"
-"settings.restore_explain" = "Los ajustes actuales se sustituyen por los de la copia. Las redes Wi-Fi actuales se mantienen, salvo que restaures con Wi-Fi."
+"settings.restore_explain" = "Los ajustes actuales se sustituyen por los de la copia. Las partidas más nuevas que las de la copia se mantienen, y la de la copia queda a su lado. Las redes Wi-Fi actuales se mantienen, salvo que restaures con Wi-Fi."
 "settings.restore_short" = "Restaurar"
 "settings.restore_wifi" = "Con Wi-Fi"
 "settings.password_question" = "¿Cambiar la contraseña de root?"

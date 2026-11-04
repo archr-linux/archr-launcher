@@ -517,7 +517,7 @@
 "settings.wifi_backup_question" = "Incluir as redes Wi-Fi no backup?"
 "settings.wifi_backup_explain" = "O backup não é criptografado e fica no compartilhamento de ROMs: quem abrir essa pasta pela rede pode ler as senhas do Wi-Fi."
 "settings.restore_question" = "Restaurar o backup?"
-"settings.restore_explain" = "As configurações atuais serão substituídas pelas do backup. As redes Wi-Fi atuais ficam, a menos que você restaure com Wi-Fi."
+"settings.restore_explain" = "As configurações atuais serão substituídas pelas do backup. Saves mais novos que os do backup ficam, e a cópia do backup vai para o lado deles. As redes Wi-Fi atuais ficam, a menos que você restaure com Wi-Fi."
 "settings.restore_short" = "Restaurar"
 "settings.restore_wifi" = "Com Wi-Fi"
 "settings.password_question" = "Trocar a senha de root?"

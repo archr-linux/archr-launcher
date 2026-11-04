@@ -517,7 +517,7 @@
 "settings.wifi_backup_question" = "Добавить сети Wi-Fi в копию?"
 "settings.wifi_backup_explain" = "Копия не зашифрована и лежит в общей папке ROM: любой, кто откроет эту папку по сети, прочитает пароли Wi-Fi."
 "settings.restore_question" = "Восстановить копию?"
-"settings.restore_explain" = "Текущие настройки заменятся настройками из копии. Текущие сети Wi-Fi останутся, если не восстанавливать с Wi-Fi."
+"settings.restore_explain" = "Текущие настройки заменятся настройками из копии. Сохранения новее, чем в копии, останутся, а версия из копии ляжет рядом. Текущие сети Wi-Fi останутся, если не восстанавливать с Wi-Fi."
 "settings.restore_short" = "Восстановить"
 "settings.restore_wifi" = "С Wi-Fi"
 "settings.password_question" = "Сменить пароль root?"
