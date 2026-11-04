@@ -106,6 +106,11 @@ set -eu
 [ ! -e "$ARCHR_SESSION_RUN_DIR/next" ]
 # Do not target the wrapper: it must survive to restore services/governors.
 [ ! -e "$ARCHR_SESSION_KILL_FILE" ]
+guardian=$(ps -o pgid= -p "$$" | tr -d ' ')
+printf '%s\n' "$guardian" >"$CASE_DIR/guardian-pid"
+stat -c %i "/proc/$guardian" >"$CASE_DIR/guardian-inode"
+# Same contract as the real runemu: save-exit reads its $$, not the guardian.
+printf '%s\n' demo.zip "$$" nes retroarch core >"$CASE_DIR/current-game"
 if [ "${1-}" = LONG ] || [ "${1-}" = ORPHAN ] ||
    [ "${1-}" = NORMAL ] || [ "${1-}" = COOPERATIVE ]; then
   # Like the real runemu.sh: NO TERM trap. Cleanup is normal control flow
@@ -130,11 +135,6 @@ if [ "${1-}" = LONG ] || [ "${1-}" = ORPHAN ] ||
 fi
 if [ "${1-}" = EMPTY ]; then
   date +%s%N >"$CASE_DIR/empty-group-end"
-fi
-if [ "${1-}" = REUSED ]; then
-  printf '%s\n' "$$" >"$CASE_DIR/wrapper-pid"
-  : >"$CASE_DIR/wrapper-ready"
-  while [ ! -f "$CASE_DIR/release-wrapper" ]; do /bin/sleep 0.01; done
 fi
 if [ "${1-}" = LOGCHECK ]; then
   head -c 300000 /dev/zero
@@ -191,7 +191,21 @@ EOF
 cat >"$root/bin/stop-sleep" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >>"$CASE_DIR/stop-sleeps"
-exec /bin/sleep "$@"
+check_guardian() {
+  [ -f "$CASE_DIR/guardian-pid" ] || return 0
+  guardian=$(cat "$CASE_DIR/guardian-pid")
+  # /proc inode identity must stay pinned for the WHOLE grace interval, not
+  # just at a snapshot before TERM. The same live leader reserves PGID/SID.
+  if ! kill -0 "$guardian" 2>/dev/null ||
+     [ "$(stat -c %i "/proc/$guardian" 2>/dev/null)" != "$(cat "$CASE_DIR/guardian-inode")" ]; then
+    : >"$CASE_DIR/guardian-lost"
+    return 1
+  fi
+  : >"$CASE_DIR/guardian-reserved"
+}
+check_guardian || exit 1
+/bin/sleep "$@"
+check_guardian
 EOF
 cat >"$root/bin/swaymsg" <<'EOF'
 #!/bin/sh
@@ -242,6 +256,8 @@ run_case() {
   [ "$(stat -c %a "$ARCHR_SESSION_RUN_DIR")" = 755 ]
   [ ! -e "$ARCHR_SESSION_RUN_DIR/next" ]
   [ ! -e "$ARCHR_SESSION_RUN_DIR/last-exit.tmp" ]
+  [ ! -e "$ARCHR_SESSION_RUN_DIR/game-exit" ]
+  [ ! -e "$ARCHR_SESSION_RUN_DIR/game-release" ]
 }
 
 run_case game 'game runemu.sh /roms/demo.zip -Pnes --core=auto --emulator=retroarch --controllers=
@@ -400,7 +416,11 @@ END"
 
 run_stop_case() {
   stop_case "$1" "$2" game-ready
-  [ -f "$CASE_DIR/cleanup" ] || { echo 'FAIL: service stop skipped game cleanup' >&2; exit 1; }
+  [ -f "$CASE_DIR/cleanup" ] || {
+    cat "$CASE_DIR/output" "$ARCHR_SESSION_LOG" >&2
+    echo 'FAIL: service stop skipped game cleanup' >&2
+    exit 1
+  }
   # The game was capped and stopped with the service: the ceiling is back.
   [ "$(cat "$ARCHR_SESSION_CPUFREQ/policy0/scaling_max_freq")" = 1416000 ] ||
     { echo 'FAIL: service stop left the CPU ceiling capped' >&2; exit 1; }
@@ -410,6 +430,12 @@ run_stop_case() {
       exit 1
     fi
   done <"$CASE_DIR/game-pids"
+  if kill -0 "$(cat "$CASE_DIR/guardian-pid")" 2>/dev/null; then
+    echo 'FAIL: service stop did not reap the guardian' >&2
+    exit 1
+  fi
+  [ ! -e "$ARCHR_SESSION_RUN_DIR/game-exit" ]
+  [ ! -e "$ARCHR_SESSION_RUN_DIR/game-release" ]
   if grep -q 'cleanup timed out' "$ARCHR_SESSION_LOG"; then
     echo 'FAIL: normal wrapper cleanup needed forced group termination' >&2
     exit 1
@@ -439,6 +465,9 @@ END"
   wrapper=$(cat "$CASE_DIR/wrapper-pid")
   group=$(ps -o pgid= -p "$wrapper" | tr -d ' ')
   [ -n "$group" ]
+  [ "$wrapper" != "$group" ] ||
+    { echo 'FAIL: runemu is still the group leader; no guardian reserves PGID' >&2; exit 1; }
+  [ "$(sed -n '2p' "$CASE_DIR/current-game")" = "$wrapper" ]
   [ ! -f "$CASE_DIR/group-term" ]
   if [ "$2" != NORMAL ]; then
     kill -KILL "$wrapper"
@@ -454,6 +483,12 @@ END"
   [ "$(cat "$ARCHR_SESSION_RUN_DIR/last-exit")" = "$4" ]
   [ "$(cat "$ARCHR_SESSION_CPUFREQ/policy0/scaling_max_freq")" = 1416000 ]
   [ -f "$CASE_DIR/cpu-restored-before-launcher" ]
+  [ -f "$CASE_DIR/guardian-reserved" ] && [ ! -f "$CASE_DIR/guardian-lost" ] ||
+    { echo 'FAIL: launch leader did not reserve PGID throughout teardown' >&2; exit 1; }
+  if kill -0 "$(cat "$CASE_DIR/guardian-pid")" 2>/dev/null; then
+    echo 'FAIL: guardian survived game teardown instead of being reaped' >&2
+    exit 1
+  fi
   [ "$(sort -u "$CASE_DIR/stop-sleeps")" = 0.1 ]
   [ "$(wc -l <"$CASE_DIR/stop-sleeps")" -le 10 ]
   if [ "$2" = COOPERATIVE ]; then
@@ -477,7 +512,7 @@ END"
   fi
   [ -f "$CASE_DIR/group-term" ] ||
     { echo 'FAIL: group teardown skipped TERM grace period' >&2; exit 1; }
-  printf '%s\n' "PASS $1 leaves no game group after TERM/KILL"
+  printf '%s\n' "PASS $1: no game group; guardian pinned through teardown and reaped"
 }
 exit_group_case wrapper-killed ORPHAN '' 137
 exit_group_case wrapper-killed-shell ORPHAN '; :' 0
@@ -496,47 +531,14 @@ awk -v ended="$(cat "$CASE_DIR/empty-group-end")" \
   exit !(elapsed < 1000)
 }'
 
-# Deterministic /proc snapshot: an unrelated real process has the retired PGID
-# but another SID. A second real process is represented as a zombie in the old
-# session. Neither row is a live launch member and neither PID may be signaled.
-setup_case reused-group 'game runemu.sh REUSED
-END'
-mkdir -p "$CASE_DIR/proc"
-export ARCHR_SESSION_PROC_ROOT="$CASE_DIR/proc"
-/bin/sleep 30 &
-foreign=$!
-/bin/sleep 30 &
-zombie=$!
-printf '%s\n' "$foreign" "$zombie" >"$CASE_DIR/game-pids"
-timeout 12 "${SESSION_TEST_SHELL:-sh}" "$session" >"$CASE_DIR/output" 2>&1 &
-test_runner=$!
-i=0
-while [ ! -f "$CASE_DIR/wrapper-ready" ] && [ "$i" -lt 200 ]; do
-  /bin/sleep 0.01
-  i=$((i + 1))
-done
-[ -f "$CASE_DIR/wrapper-ready" ]
-group=$(ps -o pgid= -p "$(cat "$CASE_DIR/wrapper-pid")" | tr -d ' ')
-mkdir -p "$CASE_DIR/proc/$foreign" "$CASE_DIR/proc/$zombie"
-printf '%s (unrelated) S 1 %s %s 0\n' "$foreign" "$group" "$foreign" >"$CASE_DIR/proc/$foreign/stat"
-printf '%s (zombie) Z 1 %s %s 0\n' "$zombie" "$group" "$group" >"$CASE_DIR/proc/$zombie/stat"
-: >"$CASE_DIR/release-wrapper"
-status=0
-wait "$test_runner" || status=$?
-test_runner=
-[ "$status" -eq 0 ] && [ -f "$CASE_DIR/finished" ]
-kill -0 "$foreign" 2>/dev/null ||
-  { echo 'FAIL: reused PGID killed a process from another SID' >&2; exit 1; }
-kill -0 "$zombie" 2>/dev/null ||
-  { echo 'FAIL: zombie row was treated as a live group member' >&2; exit 1; }
-[ ! -f "$CASE_DIR/stop-sleeps" ]
-[ -f "$CASE_DIR/cpu-restored-before-launcher" ]
-kill -TERM "$foreign" "$zombie"
-wait "$foreign" 2>/dev/null || :
-wait "$zombie" 2>/dev/null || :
-unset ARCHR_SESSION_PROC_ROOT
+# The empty-group fast path still releases and reaps its guardian.
+if kill -0 "$(cat "$CASE_DIR/guardian-pid")" 2>/dev/null; then
+  echo 'FAIL: empty group left its guardian alive' >&2
+  exit 1
+fi
+[ ! -e "$ARCHR_SESSION_RUN_DIR/game-exit" ]
+[ ! -e "$ARCHR_SESSION_RUN_DIR/game-release" ]
 export ARCHR_SESSION_STOP_SLEEP=/bin/sleep
-printf '%s\n' 'PASS reused PGID with foreign SID survives; zombies do not delay teardown'
 
 run_case removed-actions 'action suspend
 action shutdown
