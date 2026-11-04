@@ -469,7 +469,12 @@ mod tests {
     #[test]
     fn physical_levels_update_open_settings_without_writing_back() {
         use std::os::unix::net::UnixDatagram;
-        let dir = tempfile::tempdir().unwrap();
+        // A socket path holds at most 108 bytes: a short folder, whatever
+        // TMPDIR is.
+        let dir = tempfile::Builder::new()
+            .prefix("lv")
+            .tempdir_in("/tmp")
+            .unwrap();
         fs::create_dir(dir.path().join("run")).unwrap();
         let mut runtime = Runtime::new(Paths::new(Some(dir.path().into())));
         runtime.active = true;
