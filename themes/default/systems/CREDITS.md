@@ -19,6 +19,7 @@
 | mastersystem.png | Console photo: Evan Amos, public domain, via Wikimedia Commons. |
 | megacd.png | Console photo: Evan Amos, public domain, via Wikimedia Commons. |
 | n64.png | Console photo: Evan Amos, public domain, via Wikimedia Commons. |
+| nds.png | Console picture supplied by the ArchR maintainer. Nintendo DS is a trademark of Nintendo, used only to identify the system. |
 | neogeo.png | Console photo: Evan Amos, public domain, via Wikimedia Commons. |
 | nes.png | Console photo: Evan Amos, public domain, via Wikimedia Commons. |
 | ngp.png | Console photo: Evan Amos, public domain, via Wikimedia Commons. |
