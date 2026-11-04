@@ -18,17 +18,15 @@ struct Device {
     guid: String,
     joystick: Joystick,
     controller: Option<GameController>,
-    /// Raw buttons the controller mapping binds; any other one (FN on the
-    /// R36S, BTN_MODE) is a modifier the launcher never acts on.
-    bound: Vec<u8>,
+    /// The raw index of the handheld's FN (BTN_MODE), on its built-in pad.
+    fn_button: Option<u8>,
 }
 
-/// The raw button indices (`b<n>`) a GameController mapping string binds.
-fn bound_buttons(mapping: &str) -> Vec<u8> {
-    mapping
-        .split(',')
-        .filter_map(|entry| entry.split_once(':')?.1.strip_prefix('b')?.parse().ok())
-        .collect()
+/// FN on a built-in pad, by its kernel name: b10 on the R36S (SDL numbers
+/// its buttons in evdev order, BTN_MODE is the eleventh). No other pad,
+/// external ones included, gets the modifier.
+fn fn_button(name: &str) -> Option<u8> {
+    (name == "r36s_Gamepad").then_some(10)
 }
 
 pub struct Controllers {
@@ -74,8 +72,8 @@ impl Controllers {
     pub(crate) fn read(&self, event: &Event) -> Option<Option<Button>> {
         self.routed(event).then(|| self.remap.map(event))
     }
-    /// A press (true) or release of a raw button the device's mapping leaves
-    /// out: FN, held for input_sense's shortcuts (FN + L1 + R1).
+    /// A press (true) or release of the built-in pad's FN, held for
+    /// input_sense's shortcuts (FN + L1 + R1).
     pub(crate) fn modifier(&self, event: &Event) -> Option<((u32, u8), bool)> {
         let (which, idx, down) = match *event {
             Event::JoyButtonDown {
@@ -89,7 +87,7 @@ impl Controllers {
         self.devices
             .iter()
             .find(|d| d.joystick.instance_id() == which)
-            .filter(|d| d.controller.is_some() && !d.bound.contains(&idx))
+            .filter(|d| d.fn_button == Some(idx))
             .map(|_| ((which, idx), down))
     }
     /// The control a fresh press comes from, for "press a button" prompts.
@@ -110,15 +108,13 @@ impl Controllers {
                         .is_game_controller(index)
                         .then(|| self.controllers.open(index).ok())
                         .flatten();
-                    let bound = controller
-                        .as_ref()
-                        .map_or_else(Vec::new, |c| bound_buttons(&c.mapping()));
+                    let fn_button = fn_button(&joystick.name());
                     self.devices.push(Device {
                         index,
                         guid: joystick.guid().to_string(),
                         joystick,
                         controller,
-                        bound,
+                        fn_button,
                     });
                 }
                 Err(error) => log::warn!("Cannot open joystick {index}: {error}"),
@@ -148,17 +144,17 @@ pub fn controller_arguments(devices: impl IntoIterator<Item = (u32, String)>) ->
 }
 
 #[cfg(test)]
-mod modifier_tests {
+mod fn_button_tests {
     #[test]
-    fn the_r36s_mapping_leaves_fn_out() {
-        let r36s = "19003982010000008811000088010000,r36s_Gamepad,platform:Linux,a:b1,b:b0,\
-            dpdown:b14,dpleft:b15,+lefty:+a1,-leftx:-a0,leftshoulder:b4,leftstick:b11,\
-            lefttrigger:b6,dpright:b16,rightshoulder:b5,rightstick:b12,righttrigger:b7,\
-            back:b8,start:b9,dpup:b13,x:b2,y:b3,";
-        let bound = super::bound_buttons(r36s);
-        assert!(!bound.contains(&10));
-        for n in (0..17).filter(|n| *n != 10) {
-            assert!(bound.contains(&n), "b{n}");
+    fn fn_is_b10_on_the_r36s_pad_only() {
+        assert_eq!(super::fn_button("r36s_Gamepad"), Some(10));
+        for name in [
+            "Xbox Wireless Controller",
+            "USB Gamepad",
+            "odroidgo2_joypad",
+            "",
+        ] {
+            assert_eq!(super::fn_button(name), None, "{name}");
         }
     }
 }

@@ -17,6 +17,19 @@ enum Source {
     Axis(u32, u8),
 }
 
+impl Source {
+    /// The SDL instance it comes from; None for the keyboard.
+    fn device(self) -> Option<u32> {
+        match self {
+            Self::Key(_) => None,
+            Self::ControllerButton(which, _)
+            | Self::JoystickButton(which, _)
+            | Self::Hat(which, _)
+            | Self::Axis(which, _) => Some(which),
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct Repeat {
     held: Option<(Button, Instant)>,
@@ -48,15 +61,34 @@ impl Repeat {
         self.sources.clear();
         self.modifiers.clear();
     }
-    /// FN went down or up; a page turn already repeating stops.
+    /// FN went down or up on a pad. Down: that pad's L1 and R1 are dropped,
+    /// so neither the page turn repeating nor a later release brings them
+    /// back.
     fn modifier(&mut self, key: (u32, u8), down: bool) {
         self.modifiers.retain(|k| *k != key);
-        if down {
-            self.modifiers.push(key);
-            if matches!(self.held, Some((Button::L | Button::R, _))) {
-                self.held = None;
-            }
+        if !down {
+            return;
         }
+        self.modifiers.push(key);
+        let shoulder = |b: &Button| matches!(b, Button::L | Button::R);
+        let pad = key.0;
+        let before = self.sources.len();
+        self.sources
+            .retain(|(s, b)| !(shoulder(b) && s.device() == Some(pad)));
+        if self.sources.len() != before
+            && self.held.is_some_and(|(b, _)| {
+                shoulder(&b) && !self.sources.iter().any(|(_, held)| *held == b)
+            })
+        {
+            self.held = None;
+        }
+    }
+    /// L1 or R1 from a pad whose FN is down.
+    fn suppressed(&self, source: Source, button: Button) -> bool {
+        matches!(button, Button::L | Button::R)
+            && source
+                .device()
+                .is_some_and(|pad| self.modifiers.iter().any(|(m, _)| *m == pad))
     }
     fn event(&mut self, event: &Event, mut button: Option<Button>, now: Instant) -> Option<Button> {
         let (source, axis) = match *event {
@@ -123,7 +155,7 @@ impl Repeat {
             }
         }
         let button = button?;
-        if !self.modifiers.is_empty() && matches!(button, Button::L | Button::R) {
+        if self.suppressed(source, button) {
             return None;
         }
         let duplicate = self.sources.iter().any(|(_, b)| *b == button);
@@ -252,6 +284,50 @@ mod tests {
         }
         repeat.modifier((1, 10), false);
         assert_eq!(repeat.event(&r1, map_event(&r1), now), Some(Button::R));
+    }
+
+    fn shoulder(which: u32, button: Pad, down: bool) -> Event {
+        if down {
+            Event::ControllerButtonDown {
+                timestamp: 0,
+                which,
+                button,
+            }
+        } else {
+            Event::ControllerButtonUp {
+                timestamp: 0,
+                which,
+                button,
+            }
+        }
+    }
+
+    #[test]
+    fn releasing_l1_does_not_rearm_r1_while_fn_is_held() {
+        let now = Instant::now();
+        let mut repeat = Repeat::default();
+        for event in [
+            shoulder(1, Pad::LeftShoulder, true),
+            shoulder(1, Pad::RightShoulder, true),
+        ] {
+            repeat.event(&event, map_event(&event), now);
+        }
+        repeat.modifier((1, 10), true);
+        let up = shoulder(1, Pad::LeftShoulder, false);
+        assert_eq!(repeat.event(&up, map_event(&up), now), None);
+        assert_eq!(repeat.poll(now + Duration::from_secs(1)), None);
+        assert_eq!(repeat.poll(now + Duration::from_secs(2)), None);
+    }
+
+    #[test]
+    fn fn_on_one_pad_leaves_another_pads_shoulders_alone() {
+        let now = Instant::now();
+        let mut repeat = Repeat::default();
+        repeat.modifier((1, 10), true);
+        let r1 = shoulder(2, Pad::RightShoulder, true);
+        assert_eq!(repeat.event(&r1, map_event(&r1), now), Some(Button::R));
+        let l1 = shoulder(1, Pad::LeftShoulder, true);
+        assert_eq!(repeat.event(&l1, map_event(&l1), now), None);
     }
 
     fn axis(axis: sdl2::controller::Axis, value: i16) -> Event {
