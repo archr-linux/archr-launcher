@@ -1,4 +1,4 @@
-//! OSD level notices, never requests to archr-levels (even reads delay its save).
+//! Direct daemon notices, never polling (even reads delay archr-levels' save).
 use super::{Id, Paths, Reply};
 use std::{
     fs, io,
@@ -7,6 +7,28 @@ use std::{
     thread,
     time::Duration,
 };
+
+#[derive(Debug, PartialEq, Eq)]
+pub(super) struct Reading {
+    pub value: String,
+    pub seq: u64,
+}
+impl Reading {
+    pub fn parse(id: Id, text: &str) -> Option<Self> {
+        Self::words(id, text.split_ascii_whitespace())
+    }
+    fn words<'a>(id: Id, mut words: impl Iterator<Item = &'a str>) -> Option<Self> {
+        let value = words.next()?;
+        let seq = words.next()?.parse().ok()?;
+        if words.next().is_some() || value.parse::<u8>().ok()? > 100 {
+            return None;
+        }
+        Some(Self {
+            value: id.normalize(value),
+            seq,
+        })
+    }
+}
 
 pub(super) fn start(paths: &Paths, results: mpsc::Sender<Reply>) -> Result<Arc<()>, String> {
     let alive = Arc::new(());
@@ -66,6 +88,10 @@ fn receive(
             }
             Err(e) => return Err(e),
         };
+        // A full buffer may be a truncated datagram with a valid-looking prefix.
+        if n == buf.len() {
+            continue;
+        }
         if let Some((id, value)) = std::str::from_utf8(&buf[..n]).ok().and_then(parse) {
             if results.send(Reply::LiveLevel(id, value)).is_err() {
                 break;
@@ -75,34 +101,90 @@ fn receive(
     Ok(())
 }
 
-fn parse(text: &str) -> Option<(Id, String)> {
-    let words: Vec<_> = text.split_ascii_whitespace().collect();
-    let (id, level) = match words[..] {
-        ["volume", level] | ["volume", level, "muted"] => (Id::Volume, level),
-        ["brightness", level] => (Id::Brightness, level),
+fn parse(text: &str) -> Option<(Id, Reading)> {
+    let mut words = text.split_ascii_whitespace();
+    let id = match words.next()? {
+        "volume" => Id::Volume,
+        "brightness" => Id::Brightness,
         _ => return None,
     };
-    let n = level.parse::<u8>().ok()?;
-    (n <= 100).then(|| (id, id.normalize(level)))
+    Reading::words(id, words).map(|reading| (id, reading))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
-    fn notices_accept_only_levels_and_normalize_brightness() {
-        assert_eq!(parse("volume 70 muted"), Some((Id::Volume, "70".into())));
-        assert_eq!(parse("brightness 0"), Some((Id::Brightness, "5".into())));
+    fn notices_require_a_sequence_and_normalize_brightness() {
+        assert_eq!(
+            parse("volume 70 9"),
+            Some((
+                Id::Volume,
+                Reading {
+                    value: "70".into(),
+                    seq: 9
+                }
+            ))
+        );
+        assert_eq!(
+            parse("brightness 0 10"),
+            Some((
+                Id::Brightness,
+                Reading {
+                    value: "5".into(),
+                    seq: 10
+                }
+            ))
+        );
+        assert_eq!(
+            Reading::parse(Id::Volume, "70 18446744073709551615")
+                .unwrap()
+                .seq,
+            u64::MAX
+        );
         for text in [
-            "volume 101",
-            "volume -1",
-            "volume 6.5",
-            "brightness 40 muted",
-            "battery-low 10",
+            "volume 101 1",
+            "volume -1 1",
+            "volume 6.5 1",
+            "brightness 40 muted 1",
+            "brightness2 40 1",
+            "battery-low 10 1",
             "volume 70 extra",
+            "volume 70",
+            "volume 70 muted",
             "volume",
+            "volume 70 -1",
+            "volume 70 18446744073709551616",
+            "volume 70 1 extra",
         ] {
             assert_eq!(parse(text), None, "{text}");
         }
+    }
+
+    #[test]
+    fn full_and_truncated_datagrams_cannot_publish_their_valid_prefix() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("notices");
+        let socket = UnixDatagram::bind(&path).unwrap();
+        let sender = UnixDatagram::unbound().unwrap();
+        sender.connect(&path).unwrap();
+        let alive = Arc::new(());
+        let weak = Arc::downgrade(&alive);
+        let (tx, rx) = mpsc::channel();
+        let listener = thread::spawn(move || receive(&socket, &path, &weak, &tx));
+        let mut full = [b' '; 64];
+        full[..11].copy_from_slice(b"volume 70 9");
+        sender.send(&full).unwrap();
+        let mut truncated = full.to_vec();
+        truncated.extend_from_slice(b"invalid suffix");
+        sender.send(&truncated).unwrap();
+        sender.send(&[0xff]).unwrap();
+        sender.send(b"volume 80 10").unwrap();
+        assert!(matches!(rx.recv_timeout(Duration::from_secs(2)).unwrap(),
+            Reply::LiveLevel(Id::Volume, Reading { ref value, seq: 10 }) if value == "80"));
+        drop(alive);
+        sender.send(b"").unwrap();
+        listener.join().unwrap().unwrap();
+        assert!(rx.try_recv().is_err());
     }
 }

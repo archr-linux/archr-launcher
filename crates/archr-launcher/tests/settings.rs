@@ -26,12 +26,16 @@ fn scripts_are_single_owners_and_runtime_only_operations_publish_after_success()
     script(&dir, "suspendmode", "case \"$(/bin/cat \"$ARCHR_LAUNCHER_ROOT/storage/.config/system/configs/system.cfg\")\" in *system.suspendmode=off*) printf 'system.suspendmode=mem\n' > \"$ARCHR_LAUNCHER_ROOT/storage/.config/system/configs/system.cfg\";; *) exit 23;; esac");
     assert_eq!(backend.apply(Id::Suspend, "mem").unwrap(), "mem");
     // archr-levels owns both levels and saves them itself, once they settle.
-    script(&dir, "archr-levels", "[ \"$*\" = 'volume 66' ] && echo 66");
+    script(
+        &dir,
+        "archr-levels",
+        "[ \"$*\" = 'volume 66 seq' ] && echo 66 1",
+    );
     assert_eq!(backend.apply(Id::Volume, "66").unwrap(), "66");
     script(
         &dir,
         "archr-levels",
-        "[ \"$*\" = 'brightness 75' ] && echo 75",
+        "[ \"$*\" = 'brightness 75 seq' ] && echo 75 2",
     );
     assert_eq!(backend.apply(Id::Brightness, "75").unwrap(), "75");
     let cfg =
@@ -118,7 +122,7 @@ fn level_holds_go_to_archr_levels_without_blocking_input() {
         &dir,
         "archr-levels",
         &format!(
-            "echo \"$*\" >>{}; case $2 in hold) /bin/sleep 0.2; echo 62;; *) echo 64;; esac",
+            "echo \"$*\" >>{}; counter=\"$ARCHR_LAUNCHER_ROOT/level-seq\"; n=$(/bin/cat \"$counter\" 2>/dev/null); n=$((${{n:-0}} + 1)); echo $n >\"$counter\"; case $2 in hold) /bin/sleep 0.2; echo 62 $n;; *) echo 64 $n;; esac",
             log.display()
         ),
     );
@@ -157,14 +161,17 @@ fn level_holds_go_to_archr_levels_without_blocking_input() {
     runtime.track_hold(false);
     settle(&mut runtime);
     assert!(!runtime.mutations_pending());
-    assert_eq!(calls(), "volume hold up\nrenew\nvolume\nrelease\nvolume\n");
+    assert_eq!(
+        calls(),
+        "volume hold up seq\nrenew\nvolume seq\nrelease\nvolume seq\n"
+    );
     // A hold never outlives the page being closed.
     runtime.state.held = 0;
     runtime.handle(Button::L);
     runtime.close();
     runtime.track_hold(true);
     settle(&mut runtime);
-    assert!(calls().ends_with("volume hold down\nrelease\nvolume\n"));
+    assert!(calls().ends_with("volume hold down seq\nrelease\nvolume seq\n"));
     assert!(!runtime.mutations_pending());
 }
 
@@ -174,7 +181,7 @@ fn load_uses_the_live_levels() {
     script(
         &dir,
         "archr-levels",
-        "case $1 in volume) echo 50;; brightness) echo 25;; *) exit 1;; esac",
+        "case $1 in volume) echo 50 1;; brightness) echo 25 2;; *) exit 1;; esac",
     );
     let state = backend.load().unwrap();
     assert_eq!(state.value(Id::Volume), "50");

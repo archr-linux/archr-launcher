@@ -485,9 +485,9 @@ mod tests {
         }
         let socket = UnixDatagram::unbound().unwrap();
         for (id, text, value) in [
-            (Id::Volume, "volume 72", "72"),
-            (Id::Brightness, "brightness 35", "35"),
-            (Id::Volume, "volume 0 muted", "0"),
+            (Id::Volume, "volume 72 1", "72"),
+            (Id::Brightness, "brightness 35 2", "35"),
+            (Id::Volume, "volume 0 3", "0"),
         ] {
             socket.send_to(text.as_bytes(), &path).unwrap();
             let deadline = Instant::now() + Duration::from_secs(2);
@@ -507,11 +507,11 @@ mod tests {
         let bin = dir.path().join("usr/bin");
         fs::create_dir_all(&bin).unwrap();
         let tool = bin.join("archr-levels");
-        fs::write(&tool, "#!/bin/sh\n/bin/sleep 0.3\necho 73\n").unwrap();
+        fs::write(&tool, "#!/bin/sh\n/bin/sleep 0.3\necho 73 5\n").unwrap();
         fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).unwrap();
         runtime.state.pending = Some(Id::Volume);
         runtime.send(Work::Set(Id::Volume, "73".into()));
-        socket.send_to(b"brightness 44", &path).unwrap();
+        socket.send_to(b"brightness 44 4", &path).unwrap();
         let deadline = Instant::now() + Duration::from_secs(2);
         while runtime.state.value(Id::Brightness) != "44" {
             runtime.poll();
