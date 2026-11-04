@@ -48,9 +48,12 @@ pub struct System {
     pub files: Vec<File>,
 }
 impl System {
-    /// The page offers to install its free BIOS.
+    /// The page offers to install its free BIOS only while the console's
+    /// own is missing: a file that matches its MD5 needs no substitute.
     pub fn installable(&self) -> bool {
-        self.free.is_some() && !self.free_installed
+        self.free.is_some()
+            && !self.free_installed
+            && !self.files.iter().any(|f| f.state == FileState::Ok)
     }
 }
 #[derive(Debug, Deserialize)]
@@ -208,6 +211,12 @@ mod tests {
         assert_eq!(systems[0].verdict, Verdict::Builtin);
         assert_eq!(systems[2].files[0].state, FileState::Free);
         assert!(systems[0].installable() && !systems[1].installable() && !systems[2].installable());
+        // The console's BIOS checked against its MD5: nothing to install.
+        let mut real = systems[0].clone();
+        real.files[0].state = FileState::Ok;
+        assert!(!real.installable());
+        real.files[0].state = FileState::Bad;
+        assert!(real.installable(), "a different file is not a valid BIOS");
         assert!(parse("No missing bios").is_err());
     }
     #[test]
