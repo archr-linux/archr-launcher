@@ -43,20 +43,30 @@ impl Backend {
             .trim()
             .to_owned()
     }
-    fn backlight(&self) -> Result<std::path::PathBuf, String> {
-        fs::read_dir(self.paths.at("/sys/class/backlight"))
-            .map_err(|e| e.to_string())?
-            .filter_map(Result::ok)
-            .map(|e| e.path())
-            .min()
-            .ok_or_else(|| "No backlight available".into())
+    /// A level hold on archr-levels; returns the level after it.
+    pub fn level(&self, id: Id, level: archr_ui::settings::Level) -> Result<String, String> {
+        use archr_ui::settings::Level;
+        let kind = Self::level_kind(id);
+        let short = Duration::from_secs(3);
+        match level {
+            Level::Hold(up) => {
+                let direction = if up { "up" } else { "down" };
+                return self
+                    .command_with_timeout("archr-levels", &[kind, "hold", direction], short)
+                    .map(|v| id.normalize(&v));
+            }
+            Level::Renew => self.command_with_timeout("archr-levels", &["renew"], short)?,
+            Level::Release => self.command_with_timeout("archr-levels", &["release"], short)?,
+        };
+        self.command_with_timeout("archr-levels", &[kind], short)
+            .map(|v| id.normalize(&v))
     }
-    fn number(path: &std::path::Path) -> Result<u64, String> {
-        archr_io::read_utf8(path, 4096, archr_io::Symlinks::Follow)
-            .map_err(|e| e.to_string())?
-            .trim()
-            .parse()
-            .map_err(|e: std::num::ParseIntError| e.to_string())
+    fn level_kind(id: Id) -> &'static str {
+        if id == Id::Volume {
+            "volume"
+        } else {
+            "brightness"
+        }
     }
     fn cfg(&self) -> Result<SystemCfg, String> {
         SystemCfg::load(&self.paths.config).map_err(|e| e.to_string())
@@ -134,27 +144,10 @@ impl Backend {
         self.load_mangohud(&cfg, &mut state);
         self.load_cheevos(&cfg, &mut state);
         self.load_controls(&cfg, &mut state);
-        if let Ok(output) = self.command("pactl", &["get-sink-volume", "@DEFAULT_SINK@"]) {
-            if let Some(volume) = output
-                .split_whitespace()
-                .find_map(|token| token.strip_suffix('%')?.parse::<u8>().ok())
-                .filter(|v| *v <= 100)
-            {
-                state.values.insert(Id::Volume, volume.to_string());
-            }
-        }
-        if let Ok(panel) = self.backlight() {
-            let number = |name| Self::number(&panel.join(name)).ok();
-            if let (Some(raw), Some(max)) = (number("brightness"), number("max_brightness")) {
-                if let Some(percent) = raw
-                    .saturating_mul(100)
-                    .saturating_add(max / 2)
-                    .checked_div(max)
-                {
-                    state
-                        .values
-                        .insert(Id::Brightness, percent.clamp(5, 100).to_string());
-                }
+        // The live levels, on archr-levels' perceptual scale (it owns both keys).
+        for id in [Id::Volume, Id::Brightness] {
+            if let Ok(level) = self.command("archr-levels", &[Self::level_kind(id)]) {
+                state.values.insert(id, id.normalize(&level));
             }
         }
         let mut errors = Vec::new();
@@ -274,6 +267,12 @@ impl Backend {
         if !valid {
             return Err("Invalid setting value".into());
         }
+        // archr-levels applies at once and saves the level once it settles.
+        if matches!(id, Id::Volume | Id::Brightness) {
+            return self
+                .command("archr-levels", &[Self::level_kind(id), value])
+                .map(|level| id.normalize(&level));
+        }
         // Legacy scripts own these keys. Never pre-save, restore or write twice.
         let script = match id {
             Id::Suspend => Some(("suspendmode", value)),
@@ -297,24 +296,6 @@ impl Backend {
         }
         // Runtime-only operations must succeed before the single atomic publish.
         match id {
-            Id::Volume => {
-                self.command(
-                    "pactl",
-                    &[
-                        "--",
-                        "set-sink-volume",
-                        "@DEFAULT_SINK@",
-                        &format!("{value}%"),
-                    ],
-                )?;
-            }
-            Id::Brightness => {
-                let panel = self.backlight()?;
-                let max = Self::number(&panel.join("max_brightness"))?;
-                let raw = max.saturating_mul(value.parse().expect("validated percent")) / 100;
-                fs::write(panel.join("brightness"), raw.max(1).to_string())
-                    .map_err(|e| format!("brightness: {e}"))?;
-            }
             Id::Audio => {
                 self.command("set-audio", &["set", value])?;
             }
@@ -356,6 +337,7 @@ impl Backend {
 pub(super) enum Work {
     Load,
     Set(Id, String),
+    Level(Id, archr_ui::settings::Level),
     /// A Games page row of the named system.
     Game(String, Id, String),
     Info,
@@ -392,6 +374,7 @@ type StorageReply = (
 enum Reply {
     Loaded(Result<Box<Settings>, String>),
     Set(Id, Result<String, String>),
+    Level(Id, Result<String, String>),
     Info(Information),
     Usb(archr_ui::settings::network::Usb),
     Scan(
@@ -442,6 +425,8 @@ pub struct Worker {
     bt_rescan: bool,
     /// Bumped on every Wi-Fi switch change; older scans' replies are stale.
     generation: u64,
+    /// Level holds sent and not answered: a renewal waits for none.
+    pub(super) levels: usize,
 }
 impl Worker {
     pub fn start(paths: Paths) -> Result<Self, String> {
@@ -521,6 +506,7 @@ impl Worker {
                         Work::Game(system, id, value) => {
                             Reply::Set(id, backend.apply_game(&system, id, &value))
                         }
+                        Work::Level(id, level) => Reply::Level(id, backend.level(id, level)),
                         Work::Info => Reply::Info(backend.refresh_info()),
                         Work::Usb => Reply::Usb(backend.usb()),
                         Work::Scan | Work::BtScan => unreachable!("scans have their own lane"),
@@ -583,6 +569,7 @@ impl Worker {
             bt_scanning: false,
             bt_rescan: false,
             generation: 0,
+            levels: 0,
         })
     }
     pub fn busy(&self) -> bool {
@@ -629,6 +616,9 @@ impl Worker {
         }
         if matches!(work, Work::Set(Id::WifiSwitch, _)) {
             self.generation += 1;
+        }
+        if matches!(work, Work::Level(..)) {
+            self.levels += 1;
         }
         self.tx.send(work).map_err(|e| e.to_string())?;
         self.pending += 1;
@@ -750,6 +740,18 @@ impl Worker {
                             state.cursor = state.cursor.min(state.wifi_rows() - 1);
                         }
                         None => {}
+                    }
+                }
+                Reply::Level(id, result) => {
+                    self.levels = self.levels.saturating_sub(1);
+                    match result {
+                        Ok(value) => {
+                            state.values.insert(id, value);
+                        }
+                        Err(error) => {
+                            log::warn!("Level {id:?} failed: {error}");
+                            state.fail(Some(id), error);
+                        }
                     }
                 }
                 Reply::Info(info) => state.info = info,

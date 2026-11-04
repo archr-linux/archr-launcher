@@ -626,7 +626,7 @@ const fn slider(id: Id, label: &'static str, min: u8) -> Row {
         Kind::Slider {
             min,
             max: 100,
-            step: 5,
+            step: 2,
         },
     )
 }
@@ -710,6 +710,8 @@ pub enum Effect {
     None,
     Close,
     Set(Id, String),
+    /// Volume or brightness held on L/R: archr-levels steps it.
+    Level(Id, Level),
     Reboot,
     Scan,
     Connect(String, String),
@@ -743,6 +745,14 @@ pub enum Effect {
         seen: Box<raimport::Found>,
     },
 }
+/// A level slider held on L/R: a press starts the hold (up?), its repeats
+/// renew it, and the host releases it when the button comes up.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Level {
+    Hold(bool),
+    Renew,
+    Release,
+}
 /// Passwords never reach a log through `{:?}`.
 impl std::fmt::Debug for Effect {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -750,6 +760,7 @@ impl std::fmt::Debug for Effect {
             Self::None => write!(f, "None"),
             Self::Close => write!(f, "Close"),
             Self::Set(id, value) => write!(f, "Set({id:?}, {value:?})"),
+            Self::Level(id, level) => write!(f, "Level({id:?}, {level:?})"),
             Self::Reboot => write!(f, "Reboot"),
             Self::Scan => write!(f, "Scan"),
             Self::Connect(ssid, _) => write!(f, "Connect({ssid:?}, <hidden>)"),
@@ -843,6 +854,9 @@ pub struct Settings {
     pub modules: modules::Modules,
     /// Sliders in flight: last confirmed value and the newest unsent one.
     pub slides: BTreeMap<Id, (String, Option<String>)>,
+    /// Repeats of the held button behind the next press (0: a fresh press);
+    /// the host also releases a level hold once no L/R is held.
+    pub held: u32,
     /// Appearance page: the choices when it opened, the theme being previewed
     /// and the choices the host just saved (taken by the host to apply them).
     pub appearance_saved: Appearance,
@@ -913,6 +927,7 @@ impl Default for Settings {
             mangohud_saved: Default::default(),
             capture: None,
             custom_kept: Custom::default(),
+            held: 0,
             updates: updates::Updates::default(),
             raimport: raimport::RaImport::default(),
             roms: roms::Roms::default(),
@@ -1585,6 +1600,19 @@ impl Settings {
                             "1".into()
                         }
                     }
+                    // archr-levels owns these: it steps and speeds up a hold.
+                    Kind::Slider { .. }
+                        if button != Button::A && matches!(row.id, Id::Volume | Id::Brightness) =>
+                    {
+                        return Effect::Level(
+                            row.id,
+                            if self.held == 0 {
+                                Level::Hold(button == Button::R)
+                            } else {
+                                Level::Renew
+                            },
+                        );
+                    }
                     Kind::Slider { min, max, step } if button != Button::A => {
                         let old = row
                             .id
@@ -1733,23 +1761,66 @@ mod tests {
             ..Default::default()
         };
         state.open(Page::Sound);
+        state.cursor = 4;
         assert_eq!(
             state.handle(Button::R),
-            Effect::Set(Id::Volume, "65".into())
+            Effect::Set(Id::SoundsVolume, "70".into())
         );
         assert_eq!(state.pending, None);
-        assert_eq!(state.value(Id::Volume), "65");
+        assert_eq!(state.value(Id::SoundsVolume), "70");
         assert_eq!(state.handle(Button::R), Effect::None);
         assert_eq!(state.handle(Button::R), Effect::None);
-        assert_eq!(state.value(Id::Volume), "75");
-        assert_eq!(state.settle(Id::Volume, Ok("65".into())), Some("75".into()));
-        assert_eq!(state.value(Id::Volume), "75");
-        assert_eq!(state.settle(Id::Volume, Ok("75".into())), None);
+        assert_eq!(state.value(Id::SoundsVolume), "90");
+        assert_eq!(
+            state.settle(Id::SoundsVolume, Ok("70".into())),
+            Some("90".into())
+        );
+        assert_eq!(state.value(Id::SoundsVolume), "90");
+        assert_eq!(state.settle(Id::SoundsVolume, Ok("90".into())), None);
         assert!(state.slides.is_empty());
         state.handle(Button::R);
-        assert_eq!(state.settle(Id::Volume, Err("pactl".into())), None);
-        assert_eq!(state.value(Id::Volume), "75");
-        assert_eq!(state.error, Some((Some(Id::Volume), "pactl".into())));
+        assert_eq!(
+            state.settle(Id::SoundsVolume, Err("archr-levels".into())),
+            None
+        );
+        assert_eq!(state.value(Id::SoundsVolume), "90");
+        assert_eq!(
+            state.error,
+            Some((Some(Id::SoundsVolume), "archr-levels".into()))
+        );
+    }
+    #[test]
+    fn level_sliders_hand_the_hold_to_archr_levels() {
+        let mut state = Settings {
+            loading: false,
+            ..Default::default()
+        };
+        state.open(Page::Sound);
+        state.cursor = 1;
+        // A press starts a hold in archr-levels (the tap and the speed are
+        // its own); repeats of the held button only keep it alive.
+        assert_eq!(
+            state.handle(Button::R),
+            Effect::Level(Id::Brightness, Level::Hold(true))
+        );
+        state.held = 3;
+        assert_eq!(
+            state.handle(Button::L),
+            Effect::Level(Id::Brightness, Level::Renew)
+        );
+        state.held = 0;
+        state.cursor = 0;
+        assert_eq!(
+            state.handle(Button::L),
+            Effect::Level(Id::Volume, Level::Hold(false))
+        );
+        assert!(state.slides.is_empty());
+        // The sounds slider keeps its own coarse step.
+        state.values.insert(Id::SoundsVolume, "50".into());
+        state.cursor = 4;
+        state.held = 20;
+        state.handle(Button::R);
+        assert_eq!(state.value(Id::SoundsVolume), "60");
     }
 }
 #[cfg(test)]

@@ -21,6 +21,7 @@ enum Source {
 pub struct Repeat {
     held: Option<(Button, Instant)>,
     sources: Vec<(Source, Button)>,
+    repeats: u32,
 }
 impl Repeat {
     pub fn press(&mut self, button: Button, now: Instant) {
@@ -28,6 +29,7 @@ impl Repeat {
             && self.held.map(|(b, _)| b) != Some(button)
         {
             self.held = Some((button, now + Duration::from_millis(300)));
+            self.repeats = 0;
         }
     }
     pub fn is_held(&self, button: Button) -> bool {
@@ -121,7 +123,13 @@ impl Repeat {
             return None;
         }
         self.held = Some((button, now + Duration::from_millis(80)));
+        self.repeats += 1;
         Some(button)
+    }
+    /// Repeats of the held button so far: 0 for its press, 1 for the first
+    /// repeat (300 ms in), then one every 80 ms.
+    pub fn repeats(&self) -> u32 {
+        self.repeats
     }
     pub fn wait_ms(&self, now: Instant) -> u32 {
         self.held

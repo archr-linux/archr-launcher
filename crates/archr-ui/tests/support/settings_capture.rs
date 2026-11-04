@@ -321,6 +321,10 @@ fn pages() -> Vec<(&'static str, Settings)> {
     let sink = "Built-in Audio Internal Speaker".to_owned();
     sound.options.insert(Id::Audio, vec![sink.clone()]);
     sound.values.insert(Id::Audio, sink);
+    // Volume and brightness move through archr-levels; the sounds slider
+    // still slides here.
+    sound.values.insert(Id::Volume, "64".into());
+    sound.cursor = 4;
     sound.handle(Button::R);
     sound.handle(Button::R);
     assert!(!sound.slides.is_empty() && sound.pending.is_none());

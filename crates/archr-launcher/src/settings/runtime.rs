@@ -7,7 +7,7 @@ use crate::{
     paths::Paths,
     state::{Button, Outcome, SessionAction},
 };
-use archr_ui::settings::{Effect, Games, Id, Page, Settings};
+use archr_ui::settings::{Effect, Games, Id, Level, Page, Settings};
 use std::time::{Duration, Instant};
 /// Active radio scans are not free: refresh an open Wi-Fi page once a minute.
 const SCAN_INTERVAL: Duration = Duration::from_secs(60);
@@ -36,6 +36,8 @@ pub struct Runtime {
     attaching: bool,
     /// That run was found: the host opens its progress screen.
     reattached: bool,
+    /// A volume or brightness hold running in archr-levels.
+    level_hold: Option<Id>,
 }
 impl Runtime {
     pub fn new(paths: Paths) -> Self {
@@ -56,6 +58,7 @@ impl Runtime {
             install: None,
             attaching: false,
             reattached: false,
+            level_hold: None,
         }
     }
     fn send(&mut self, work: Work) {
@@ -108,6 +111,17 @@ impl Runtime {
             || self.state.raimport.working
             || !self.state.slides.is_empty()
             || self.install.is_some()
+            || self.level_hold.is_some()
+    }
+    /// Whether L or R is still held: a level hold ends when neither is.
+    pub fn track_hold(&mut self, held: bool) {
+        if let Some(id) = self
+            .level_hold
+            .filter(|_| !held || self.closing || !self.active)
+        {
+            self.level_hold = None;
+            self.send(Work::Level(id, Level::Release));
+        }
     }
     /// archr-update check in the background (also the one at startup).
     pub fn check_updates(&mut self) {
@@ -209,6 +223,22 @@ impl Runtime {
                 self.send(Work::Game(system, id, value));
             }
             Effect::Set(id, value) => self.send(Work::Set(id, value)),
+            Effect::Level(id, Level::Hold(up)) => {
+                if let Some(old) = self.level_hold.replace(id).filter(|old| *old != id) {
+                    self.send(Work::Level(old, Level::Release));
+                }
+                self.send(Work::Level(id, Level::Hold(up)));
+            }
+            // Repeats (every 80 ms) renew it and read the level back, one
+            // request at a time.
+            Effect::Level(id, Level::Renew) => {
+                if self.level_hold == Some(id)
+                    && self.worker.as_ref().is_some_and(|w| w.levels == 0)
+                {
+                    self.send(Work::Level(id, Level::Renew));
+                }
+            }
+            Effect::Level(id, Level::Release) => self.send(Work::Level(id, Level::Release)),
             // Radio scans: on entry, on X, and every minute while open.
             Effect::Scan => {
                 let now = Instant::now();

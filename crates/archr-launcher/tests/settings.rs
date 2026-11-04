@@ -25,14 +25,23 @@ fn scripts_are_single_owners_and_runtime_only_operations_publish_after_success()
     let (dir, backend) = fixture();
     script(&dir, "suspendmode", "case \"$(/bin/cat \"$ARCHR_LAUNCHER_ROOT/storage/.config/system/configs/system.cfg\")\" in *system.suspendmode=off*) printf 'system.suspendmode=mem\n' > \"$ARCHR_LAUNCHER_ROOT/storage/.config/system/configs/system.cfg\";; *) exit 23;; esac");
     assert_eq!(backend.apply(Id::Suspend, "mem").unwrap(), "mem");
-    script(&dir, "pactl", "case \"$(/bin/cat \"$ARCHR_LAUNCHER_ROOT/storage/.config/system/configs/system.cfg\")\" in *audio.volume=65*) exit 24;; *) exit 0;; esac");
-    backend.apply(Id::Volume, "65").unwrap();
+    // archr-levels owns both levels and saves them itself, once they settle.
+    script(&dir, "archr-levels", "[ \"$*\" = 'volume 66' ] && echo 66");
+    assert_eq!(backend.apply(Id::Volume, "66").unwrap(), "66");
+    script(
+        &dir,
+        "archr-levels",
+        "[ \"$*\" = 'brightness 75' ] && echo 75",
+    );
+    assert_eq!(backend.apply(Id::Brightness, "75").unwrap(), "75");
+    let cfg =
+        fs::read_to_string(dir.path().join("storage/.config/system/configs/system.cfg")).unwrap();
+    assert!(!cfg.contains("audio.volume") && !cfg.contains("display.brightness"));
 }
 #[test]
 fn failure_reports_status_and_stderr_without_publishing_value() {
     let (dir, backend) = fixture();
-    script(&dir, "volume", "false; exit 0"); // Legacy helper masks the runtime error.
-    script(&dir, "pactl", "echo 'sink unavailable' >&2; exit 7");
+    script(&dir, "archr-levels", "echo 'sink unavailable' >&2; exit 7");
     let error = backend.apply(Id::Volume, "65").unwrap_err();
     assert!(
         error.contains('7') && error.contains("sink unavailable"),
@@ -93,7 +102,7 @@ fn inactivity_keys_store_minutes_and_default_to_never() {
 }
 
 #[test]
-fn worker_does_not_block_input_and_commits_only_after_success() {
+fn level_holds_go_to_archr_levels_without_blocking_input() {
     use archr_launcher::{
         settings::Runtime,
         state::{Button, Outcome},
@@ -103,55 +112,70 @@ fn worker_does_not_block_input_and_commits_only_after_success() {
     let (dir, _) = fixture();
     script(&dir, "set-audio", "printf 'Speakers\\n'");
     script(&dir, "timeinfo", "printf 'UTC,\\n'");
+    // archr-levels logs its calls; a hold answers 62 slowly, a read 64.
+    let log = dir.path().join("levels.log");
     script(
         &dir,
-        "pactl",
-        "if [ \"$1\" = -- ]; then /bin/sleep 0.2; fi; exit 0",
+        "archr-levels",
+        &format!(
+            "echo \"$*\" >>{}; case $2 in hold) /bin/sleep 0.2; echo 62;; *) echo 64;; esac",
+            log.display()
+        ),
     );
+    let calls = || fs::read_to_string(&log).unwrap_or_default();
     let mut runtime = Runtime::new(Paths::new(Some(dir.path().to_owned())));
     runtime.open();
-    let deadline = Instant::now() + Duration::from_secs(3);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let settle = |runtime: &mut Runtime| {
+        while runtime.busy() {
+            runtime.poll();
+            assert!(Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+    };
     while runtime.state.loading {
         runtime.poll();
         assert!(Instant::now() < deadline);
         std::thread::yield_now();
     }
+    std::fs::remove_file(&log).ok();
     runtime.state.open(Page::Sound);
+    // A press starts a hold in archr-levels without blocking input.
     let began = Instant::now();
     assert_eq!(runtime.handle(Button::R), Outcome::None);
     assert!(began.elapsed() < Duration::from_millis(50));
-    // Sliders are optimistic: no "applying" state, the close gate still waits.
     assert_eq!(runtime.state.pending, None);
-    assert_eq!(runtime.state.value(Id::Volume), "65");
+    runtime.track_hold(true);
     assert!(runtime.mutations_pending());
-    runtime.handle(Button::B);
-    assert_eq!(runtime.state.page(), Page::Root);
-    while runtime.busy() {
-        runtime.poll();
-        assert!(Instant::now() < deadline);
-        std::thread::yield_now();
-    }
-    assert_eq!(runtime.state.value(Id::Volume), "65");
+    settle(&mut runtime);
+    assert_eq!(runtime.state.value(Id::Volume), "62");
+    // Repeats renew it and read the level back; letting go releases it.
+    runtime.state.held = 1;
+    runtime.handle(Button::R);
+    settle(&mut runtime);
+    assert_eq!(runtime.state.value(Id::Volume), "64");
+    runtime.track_hold(false);
+    settle(&mut runtime);
+    assert!(!runtime.mutations_pending());
+    assert_eq!(calls(), "volume hold up\nrenew\nvolume\nrelease\nvolume\n");
+    // A hold never outlives the page being closed.
+    runtime.state.held = 0;
+    runtime.handle(Button::L);
+    runtime.close();
+    runtime.track_hold(true);
+    settle(&mut runtime);
+    assert!(calls().ends_with("volume hold down\nrelease\nvolume\n"));
     assert!(!runtime.mutations_pending());
 }
 
 #[test]
-fn load_uses_live_volume_and_first_backlight_percent() {
+fn load_uses_the_live_levels() {
     let (dir, backend) = fixture();
     script(
         &dir,
-        "pactl",
-        "printf 'Volume: front-left: 32768 / 50%% / -18.06 dB\\n'",
+        "archr-levels",
+        "case $1 in volume) echo 50;; brightness) echo 25;; *) exit 1;; esac",
     );
-    let backlight = dir.path().join("sys/class/backlight/panel");
-    fs::create_dir_all(&backlight).unwrap();
-    // Sysfs reports a page-sized st_size even for short numeric attributes.
-    fs::write(backlight.join("brightness"), format!("{:<4096}", "64\n")).unwrap();
-    fs::write(
-        backlight.join("max_brightness"),
-        format!("{:<4096}", "255\n"),
-    )
-    .unwrap();
     let state = backend.load().unwrap();
     assert_eq!(state.value(Id::Volume), "50");
     assert_eq!(state.value(Id::Brightness), "25");
@@ -242,25 +266,6 @@ fn information_distinguishes_active_driver_and_detects_hardware_and_metrics() {
         .iter()
         .flat_map(|c| &c.lines)
         .any(|l| l.contains("Cortex-A35") || l.contains("Mali-G31")));
-}
-
-#[test]
-fn brightness_publishes_once_after_success_and_keeps_config_on_sysfs_failure() {
-    let (dir, backend) = fixture();
-    let panel = dir.path().join("sys/class/backlight/panel");
-    fs::create_dir_all(&panel).unwrap();
-    fs::write(panel.join("max_brightness"), format!("{:<4096}", "255\n")).unwrap();
-    fs::write(panel.join("brightness"), "128").unwrap();
-    script(&dir, "brightness", "exit 29"); // Must never invoke the owning legacy helper.
-    assert_eq!(backend.apply(Id::Brightness, "75").unwrap(), "75");
-    assert_eq!(fs::read_to_string(panel.join("brightness")).unwrap(), "191");
-    fs::remove_file(panel.join("brightness")).unwrap();
-    fs::create_dir(panel.join("brightness")).unwrap();
-    assert!(backend
-        .apply(Id::Brightness, "80")
-        .unwrap_err()
-        .contains("brightness"));
-    assert_eq!(backend.load().unwrap().value(Id::Brightness), "75");
 }
 
 #[test]
