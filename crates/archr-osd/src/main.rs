@@ -69,14 +69,14 @@ fn bind() -> Result<UnixDatagram, String> {
 }
 
 /// The latest well-formed pill and card messages waiting on the socket.
-fn drain(socket: &UnixDatagram) -> (Option<proto::Message>, Option<proto::Battery>) {
+fn drain(socket: &UnixDatagram) -> (Option<proto::Message>, Option<proto::Alert>) {
     let mut buf = [0u8; 64];
     let (mut pill, mut card) = (None, None);
     while let Ok(n) = socket.recv(&mut buf) {
         let text = std::str::from_utf8(&buf[..n]).unwrap_or("");
         match proto::parse_notice(text) {
             Some(proto::Notice::Level(m)) => pill = Some(m),
-            Some(proto::Notice::Battery(b)) => card = Some(b),
+            Some(proto::Notice::Alert(a)) => card = Some(a),
             None => {}
         }
     }
@@ -125,8 +125,8 @@ fn serve() -> Result<(), String> {
             if let Some(message) = pill {
                 overlay.show(message, &qh);
             }
-            if let Some(battery) = card {
-                overlay.show_card(battery, &qh);
+            if let Some(alert) = card {
+                overlay.show_card(alert, &qh);
             }
         }
         sleep = overlay.tick();
@@ -155,6 +155,9 @@ mod tests {
         assert_eq!(drain(&b), (proto::parse("brightness 40"), None));
         assert_eq!(drain(&b), (None, None));
         a.send(b"battery 3 2 8 game").unwrap();
-        assert!(matches!(drain(&b), (None, Some(c)) if c.level == 3));
+        assert!(matches!(
+            drain(&b),
+            (None, Some(proto::Alert::Battery(c))) if c.level == 3
+        ));
     }
 }

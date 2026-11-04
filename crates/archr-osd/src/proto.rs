@@ -40,10 +40,18 @@ pub struct Battery {
     pub game: bool,
 }
 
+/// The cards over the screen: the battery's, and "this emulator saves no
+/// state" when the switcher's shortcut cannot save the game (`nostate`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Alert {
+    Battery(Battery),
+    NoState,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Notice {
     Level(Message),
-    Battery(Battery),
+    Alert(Alert),
 }
 
 /// A level pill or a battery card; anything else is `None`.
@@ -51,19 +59,20 @@ pub fn parse_notice(text: &str) -> Option<Notice> {
     let words: Vec<&str> = text.split_ascii_whitespace().collect();
     let number = |w: &str| w.parse::<u8>().ok().filter(|n| *n <= 100);
     match words[..] {
-        ["battery-low", level] => Some(Notice::Battery(Battery {
+        ["nostate"] => Some(Notice::Alert(Alert::NoState)),
+        ["battery-low", level] => Some(Notice::Alert(Alert::Battery(Battery {
             level: number(level)?,
             left: None,
             game: false,
-        })),
+        }))),
         ["battery", level, left, total, game @ ("game" | "menu")] => {
             let (left, total) = (number(left)?, number(total)?);
             (left >= 1 && left <= total).then_some(())?;
-            Some(Notice::Battery(Battery {
+            Some(Notice::Alert(Alert::Battery(Battery {
                 level: number(level)?,
                 left: Some((left, total)),
                 game: game == "game",
-            }))
+            })))
         }
         _ => parse(text).map(Notice::Level),
     }
@@ -146,7 +155,9 @@ mod tests {
 
     #[test]
     fn parses_battery_cards() {
-        let battery = |level, left, game| Some(Notice::Battery(Battery { level, left, game }));
+        let battery =
+            |level, left, game| Some(Notice::Alert(Alert::Battery(Battery { level, left, game })));
+        assert_eq!(parse_notice("nostate"), Some(Notice::Alert(Alert::NoState)));
         assert_eq!(parse_notice("battery-low 10"), battery(10, None, false));
         assert_eq!(
             parse_notice("battery 3 8 8 game"),

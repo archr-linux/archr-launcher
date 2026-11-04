@@ -2,7 +2,7 @@
 //! card is visible.
 use crate::card::{self, Assets, Card};
 use crate::pill::{self, Geometry, Painter, Timeline};
-use crate::proto::{Battery, Icon, Message};
+use crate::proto::{Alert, Icon, Message};
 use smithay_client_toolkit::reexports::client::{
     globals::GlobalList,
     protocol::{wl_output, wl_shm, wl_surface},
@@ -130,9 +130,9 @@ impl Overlay {
 
     /// The battery card, centered over the whole output; a new message
     /// replaces its text and keeps it up.
-    pub fn show_card(&mut self, battery: Battery, qh: &QueueHandle<Self>) {
+    pub fn show_card(&mut self, alert: Alert, qh: &QueueHandle<Self>) {
         let now = Instant::now();
-        let card = self.assets.card(battery);
+        let card = self.assets.card(alert);
         let hold = if card.critical {
             card::HOLD
         } else {

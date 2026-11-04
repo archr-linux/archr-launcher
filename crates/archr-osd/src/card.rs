@@ -1,7 +1,7 @@
 //! The battery card (Bateria-critica): a notice over the whole screen, games
 //! included. Geometry from the 640x480 design, text with the launcher's
 //! fonts and catalogs.
-use crate::proto::Battery;
+use crate::proto::Alert;
 use ab_glyph::{Font, FontVec, PxScale, ScaleFont};
 use resvg::tiny_skia as sk;
 use std::{collections::HashMap, path::Path, time::Duration};
@@ -23,6 +23,7 @@ pub const HOLD: Duration = Duration::from_millis(1500);
 pub const HOLD_LOW: Duration = Duration::from_millis(4000);
 
 const BATTERY: &str = include_str!("../../../themes/default/icons/battery-warning.svg");
+const ALERT: &str = include_str!("../../../themes/default/icons/triangle-alert.svg");
 const PLUG: &str = include_str!("../../../themes/default/icons/plug-zap.svg");
 
 /// The launcher's installed fonts and the language's catalog.
@@ -78,7 +79,24 @@ impl Assets {
         text
     }
     /// The card's texts for a message.
-    pub fn card(&self, battery: Battery) -> Card {
+    pub fn card(&self, alert: Alert) -> Card {
+        let battery = match alert {
+            Alert::Battery(battery) => battery,
+            Alert::NoState => {
+                return Card {
+                    title: self.tr("osd.nostate_title", "No state saved", &[]),
+                    body: self.tr(
+                        "osd.nostate",
+                        "This emulator does not save a state; use the game's menu.",
+                        &[],
+                    ),
+                    hint: None,
+                    bar: None,
+                    critical: false,
+                    icon: ALERT,
+                }
+            }
+        };
         let level = [("level", battery.level.to_string())];
         let title = self.tr("osd.battery_title", "Battery at {level}%", &level);
         match battery.left {
@@ -99,6 +117,7 @@ impl Assets {
                     hint: Some(self.tr("osd.battery_cancel", "Connect the charger to cancel", &[])),
                     bar: Some(1.0 - f32::from(left.saturating_sub(1)) / f32::from(total.max(1))),
                     critical: true,
+                    icon: BATTERY,
                 }
             }
             None => Card {
@@ -107,6 +126,7 @@ impl Assets {
                 hint: None,
                 bar: None,
                 critical: false,
+                icon: BATTERY,
             },
         }
     }
@@ -121,6 +141,8 @@ pub struct Card {
     pub bar: Option<f32>,
     /// The critical card: a veil over the screen and red edges.
     pub critical: bool,
+    /// Lucide SVG in the round badge.
+    pub icon: &'static str,
 }
 
 fn paint(color: [u8; 3], alpha: u8) -> sk::Paint<'static> {
@@ -299,7 +321,7 @@ pub fn render(
     let offset = ((circle - glyph as f32) / 2.0).round();
     icon(
         &mut out,
-        BATTERY,
+        card.icon,
         accent,
         glyph,
         ((cx + offset) as i32, (cy + offset) as i32),
@@ -370,6 +392,7 @@ pub fn render(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::proto::Battery;
 
     fn assets(language: &str) -> Assets {
         // One folder per call: the tests run at once.
@@ -393,52 +416,61 @@ mod tests {
     #[test]
     fn texts_follow_the_message_and_the_language() {
         let a = assets("pt_BR");
-        let critical = a.card(Battery {
+        let critical = a.card(Alert::Battery(Battery {
             level: 3,
             left: Some((8, 8)),
             game: true,
-        });
+        }));
         assert_eq!(critical.title, "Bateria em 3%");
         assert!(critical
             .body
             .starts_with("Salvando o jogo e desligando em 8 s."));
         assert_eq!(critical.bar, Some(0.125));
-        let low = a.card(Battery {
+        let low = a.card(Alert::Battery(Battery {
             level: 10,
             left: None,
             game: false,
-        });
+        }));
         assert_eq!((low.critical, low.bar, low.hint), (false, None, None));
-        let en = assets("xx_YY").card(Battery {
+        let en = assets("xx_YY").card(Alert::Battery(Battery {
             level: 3,
             left: Some((1, 8)),
             game: false,
-        });
+        }));
         assert_eq!(en.body, "Powering off in 1 s.");
         assert_eq!(en.bar, Some(1.0));
+        let nostate = a.card(Alert::NoState);
+        assert_eq!(nostate.title, "Sem salvar estado");
+        assert_eq!((nostate.critical, nostate.icon), (false, ALERT));
     }
 
     #[test]
     fn the_card_is_drawn_centered_with_its_veil() {
         let a = assets("pt_BR");
-        let card = a.card(Battery {
+        let card = a.card(Alert::Battery(Battery {
             level: 3,
             left: Some((5, 8)),
             game: true,
-        });
+        }));
         let frame = render(&card, &a, (640, 480), 1.0);
         let at = |x: u32, y: u32| frame.pixel(x, y).unwrap();
         // The veil in a corner, the card's own colour in its middle.
         assert_eq!(at(4, 4).alpha(), VEIL[3]);
         assert_eq!(at(320, 236).alpha(), 255);
         if let Some(dir) = std::env::var_os("ARCHR_OSD_CAPTURE_DIR") {
+            for language in ["pt_BR", "ru"] {
+                let a = assets(language);
+                render(&a.card(Alert::NoState), &a, (640, 480), 1.0)
+                    .save_png(Path::new(&dir).join(format!("sem-estado-{language}.png")))
+                    .unwrap();
+            }
             for (name, language) in [("bateria-critica", "pt_BR"), ("bateria-critica-ru", "ru")] {
                 let a = assets(language);
-                let card = a.card(Battery {
+                let card = a.card(Alert::Battery(Battery {
                     level: 3,
                     left: Some((8, 8)),
                     game: true,
-                });
+                }));
                 render(&card, &a, (640, 480), 1.0)
                     .save_png(Path::new(&dir).join(format!("{name}.png")))
                     .unwrap();
