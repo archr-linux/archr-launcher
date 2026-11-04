@@ -3,9 +3,11 @@
 use super::{described, hotkeys::key_name, row, Id, Kind, Row};
 use crate::i18n::I18n;
 
-/// Buttons the switcher shortcut may take with the function modifier: the
-/// shoulders other hotkeys leave free (L1 is the hotkey modifier).
-pub const SHORTCUTS: [&str; 3] = ["BTN_TR", "BTN_TR2", "BTN_TL2"];
+/// The switcher's shortcut, a tap on one button: FN, which no emulator
+/// binds (every Select combination is a RetroArch, mupen64plus or
+/// DuckStation hotkey; L3 and R3 are PPSSPP's pause, melonDS's screens and
+/// the DS touch).
+pub const SHORTCUTS: [&str; 1] = ["BTN_MODE"];
 
 pub const RESUME: &[Row] = &[
     described(Id::ResumeBoot, "resume.boot", "resume.boot_detail").under("resume.on_boot"),
@@ -44,9 +46,7 @@ pub(super) fn value(catalog: &I18n, id: Id, value: &str) -> String {
         (Id::ResumeBoot, "off") => catalog.text("settings.off"),
         (Id::ResumeBoot, _) => catalog.text("resume.last_game"),
         (Id::ResumeWait, _) => count("resume.seconds"),
-        (Id::SwitcherKey, key) => {
-            catalog.format("resume.shortcut_value", &[("button", key_name(key))])
-        }
+        (Id::SwitcherKey, key) => key_name(key).to_owned(),
         (Id::ResumeStandalone, "skip") => catalog.text("resume.skip"),
         (Id::ResumeStandalone, _) => catalog.text("resume.start"),
         (Id::BatteryCritical | Id::BatteryLow, "0") => catalog.text("settings.off"),
@@ -103,7 +103,7 @@ mod tests {
         };
         assert_eq!(shown(Id::ResumeBoot, "last"), "Último jogo");
         assert_eq!(shown(Id::ResumeWait, "3"), "3 s");
-        assert_eq!(shown(Id::SwitcherKey, "BTN_TR"), "Função + R1");
+        assert_eq!(shown(Id::SwitcherKey, "BTN_MODE"), "FN");
         assert_eq!(shown(Id::SwitcherCount, "8"), "8");
         assert_eq!(shown(Id::ResumeStandalone, "start"), "Abrir do início");
         assert_eq!(shown(Id::BatteryCritical, "3"), "3%");

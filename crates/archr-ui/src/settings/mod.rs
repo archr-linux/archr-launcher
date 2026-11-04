@@ -513,7 +513,7 @@ impl Id {
             Self::ResumeBoot => ("launcher.resume", "last"),
             Self::ResumeWait => ("launcher.resume.wait", "3"),
             Self::SwitcherOn => ("hotkey.switcher.enabled", "1"),
-            Self::SwitcherKey => ("hotkey.switcher", "BTN_TR"),
+            Self::SwitcherKey => ("hotkey.switcher", "BTN_MODE"),
             Self::SwitcherCount => ("launcher.switcher.count", "8"),
             Self::ResumeStandalone => ("launcher.resume.standalone", "start"),
             // archr-battery-guard reads these; archr-fake-suspend the delay.
