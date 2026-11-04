@@ -117,7 +117,7 @@ session_log() {
 
 child_pid=
 child_scope=
-gate=$run_dir/game-gate
+gate=
 game_started=0
 # A TERM while a child is being started or a game cleaned up is only recorded;
 # the stop runs at the next safe point.
@@ -135,13 +135,16 @@ stop_scope() {
     timeout -k 0.1 1.3 systemctl stop "$1" >/dev/null 2>&1 9>&- || :
 }
 
-# What systemd-run --scope runs: not the game, but a gate in front of it. It
-# opens the FIFO read-only without blocking (its own read-write descriptor
-# stands in as a writer until the second open), so the session's descriptor
-# is the only writer left. The game is exec'd, keeping this PID, only after
-# reading "go"; EOF, because the session closed the gate or died, ends it.
-gate_waiter='exec 4<>"$1" 3<"$1" 4>&-; IFS= read -r go <&3 && [ "$go" = go ] ||
-    exit 125; exec 3<&-; exec sh -c "$2"'
+# What systemd-run --scope runs: not the game, but a gate in front of it,
+# game-gate-<n> for scope archr-game-<n>, so a late gate of an earlier launch
+# never reads a newer "go". Anything but its own FIFO ends it. It opens the
+# FIFO read-only without blocking (its own read-write descriptor stands in as
+# a writer until the second open), so the session's descriptor is the only
+# writer left. The game is exec'd, keeping this PID, only after reading "go";
+# EOF, because the session closed the gate or died, ends it.
+gate_waiter='[ -p "$1" ] || exit 125; exec 4<>"$1" 3<"$1" 4>&-
+[ -p "$1" ] && IFS= read -r go <&3 && [ "$go" = go ] || exit 125
+exec 3<&-; exec sh -c "$2"'
 
 stop_session() {
     trap '' TERM INT HUP
@@ -151,6 +154,7 @@ stop_session() {
         # A gate still closed now never opens: the game cannot start, even if
         # systemd registers the scope after the stop below found nothing.
         exec 9>&-
+        [ -z "$gate" ] || rm -f "$gate"
         # Worst case, every bound reached: 3.2 s save-exit + 1 s for runemu
         # + 1.4 s scope stop = 5.6 s (TimeoutStopSec=8).
         # Only a runemu that has not returned yet has a game to save.
@@ -249,6 +253,8 @@ for stale_scope in $(printf '%s\n' "$stale_scopes" | awk '{print $1}'); do
     esac
 done
 [ "$recovered_scope" -eq 0 ] || restore_cpu_max
+# A gate of an earlier session that runs late finds no FIFO and exits.
+rm -f "$run_dir"/game-gate* || exit 1
 # /run survives service restarts, not reboots (when all old scopes are gone).
 game_sequence=0
 if [ -f "$run_dir/scope-sequence" ]; then
@@ -302,7 +308,9 @@ while :; do
             defer_stop=1
             game_started=0
             child_scope=archr-game-$game_sequence.scope
-            rm -f "$gate" && mkfifo -m 0600 "$gate" && exec 9<>"$gate" || exit 1
+            # mkfifo fails on an existing name: a gate is never reused.
+            gate=$run_dir/game-gate-$game_sequence
+            mkfifo -m 0600 "$gate" && exec 9<>"$gate" || exit 1
             # --scope execs the gate synchronously, and the gate execs the
             # game: runemu keeps this PID and its environment. The gate gets
             # no copy of the session's descriptor, so it cannot hold itself open.
@@ -329,14 +337,20 @@ while :; do
                 # Stays open until the game ends: closing it before the gate
                 # has read would discard the "go".
                 printf 'go\n' >&9
-            else
-                exec 9>&-
             fi
             defer_stop=0
             [ "$stop_pending" -eq 0 ] || stop_session
-            wait "$child_pid"
-            game_status=$?
+            # Never wait on a launch that was not let through: systemd-run may
+            # stay blocked on the manager, and with its gate gone it can only
+            # exit. The shell reaps it in the background; nothing waits on it.
+            game_status=125
+            if [ "$game_started" -eq 1 ]; then
+                wait "$child_pid"
+                game_status=$?
+            fi
             exec 9>&-
+            rm -f "$gate"
+            gate=
             # runemu has returned: a TERM now must not ask for another save.
             defer_stop=1
             stop_scope "$child_scope"

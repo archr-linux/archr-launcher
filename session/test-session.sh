@@ -112,6 +112,7 @@ cat >"$root/bin/runemu.sh" <<'EOF'
 #!/bin/sh
 set -eu
 : >"$CASE_DIR/runemu-started"
+printf '%s\n' "$ARCHR_TEST_SCOPE" >>"$CASE_DIR/runemu-runs"
 # The gate opens only after the session saw the scope registered.
 grep -q "^is-active --quiet $ARCHR_TEST_SCOPE active$" "$CASE_DIR/scope-calls" ||
   : >"$CASE_DIR/go-before-active"
@@ -269,9 +270,11 @@ if [ "$1" = --scope ]; then
   shift 4
   export ARCHR_TEST_SCOPE=$unit
   # Barrier: systemd has not registered the scope yet.
-  if [ -f "$CASE_DIR/register-barrier" ]; then
+  barrier=$CASE_DIR/register-barrier
+  [ -f "$barrier" ] || barrier=$CASE_DIR/register-barrier-$unit
+  if [ -f "$barrier" ]; then
     : >"$CASE_DIR/register-waiting"
-    while [ -f "$CASE_DIR/register-barrier" ]; do /bin/sleep 0.01; done
+    while [ -f "$barrier" ]; do /bin/sleep 0.01; done
     [ ! -f "$CASE_DIR/register-fail" ] || exit 1
   fi
   mkdir -p "$CASE_DIR/scopes/$unit"
@@ -809,6 +812,74 @@ test_runner=
 [ ! -f "$CASE_DIR/gate-fd-leak" ]
 printf '%s\n' 'PASS late registration: go only after is-active, the game holds no gate'
 
+# A gate of an earlier session registers late, while the next session holds
+# the "go" of its own game ready: it must never take that "go" nor run.
+setup_case gate-generations 'game runemu.sh LONG'
+name=gate-generations
+: >"$CASE_DIR/register-barrier-archr-game-1.scope"
+timeout 12 "${SESSION_TEST_SHELL:-sh}" "$session" >"$CASE_DIR/first-output" 2>&1 &
+test_runner=$!
+wait_for "$CASE_DIR/register-waiting"
+kill -KILL "$(cat "$CASE_DIR/supervisor-pid")"
+wait "$test_runner" 2>/dev/null || :
+rm -f "$CASE_DIR/count"
+printf '%s\n' 'game runemu.sh demo' END >"$CASE_DIR/plan"
+: >"$CASE_DIR/isactive-barrier"
+timeout 12 "${SESSION_TEST_SHELL:-sh}" "$session" >"$CASE_DIR/output" 2>&1 &
+test_runner=$!
+wait_for "$CASE_DIR/isactive-waiting"
+# The new gate is open and waiting; now the old launch registers.
+rm -f "$CASE_DIR/register-barrier-archr-game-1.scope"
+wait_for "$CASE_DIR/scopes/archr-game-1.scope/members"
+old_waiter=$(sed -n 1p "$CASE_DIR/scopes/archr-game-1.scope/members")
+i=0
+while kill -0 "$old_waiter" 2>/dev/null && [ "$i" -lt 200 ]; do
+  /bin/sleep 0.01
+  i=$((i + 1))
+done
+! kill -0 "$old_waiter" 2>/dev/null ||
+  { echo 'FAIL: the old gate is waiting on a FIFO' >&2; kill -KILL "$old_waiter"; exit 1; }
+rm -f "$CASE_DIR/isactive-barrier"
+status=0
+wait "$test_runner" 2>/dev/null || status=$?
+test_runner=
+[ "$status" -eq 0 ] && [ -f "$CASE_DIR/finished" ]
+[ "$(cat "$CASE_DIR/runemu-runs")" = archr-game-2.scope ] ||
+  { echo "FAIL: games run: $(tr '\n' ' ' <"$CASE_DIR/runemu-runs")" >&2; exit 1; }
+[ "$(cat "$ARCHR_SESSION_RUN_DIR/last-exit")" = 37 ]
+! ls "$ARCHR_SESSION_RUN_DIR" | grep -q game-gate ||
+  { echo 'FAIL: a gate FIFO outlived its launch' >&2; exit 1; }
+printf '%s\n' 'PASS late gate of an earlier session: no FIFO, no go taken, no game'
+
+# A registration that never comes: the session gives up, does not wait on
+# systemd-run, and is back at the launcher in bounded time.
+printf '#!/bin/sh\nexec /bin/sleep 0.01\n' >"$root/bin/fast-sleep"
+chmod +x "$root/bin/fast-sleep"
+export ARCHR_SESSION_STOP_SLEEP="$root/bin/fast-sleep"
+setup_case never-registered 'game runemu.sh LONG
+END'
+name=never-registered
+: >"$CASE_DIR/register-barrier"
+started=$(date +%s%N)
+status=0
+timeout 12 "${SESSION_TEST_SHELL:-sh}" "$session" >"$CASE_DIR/output" 2>&1 || status=$?
+ended=$(date +%s%N)
+[ "$status" -eq 0 ] || [ "$status" -eq 143 ]
+[ -f "$CASE_DIR/finished" ] ||
+  { echo 'FAIL: the session never came back to the launcher' >&2; exit 1; }
+[ "$(cat "$ARCHR_SESSION_RUN_DIR/last-exit")" = 125 ]
+grep -q 'not registered' "$ARCHR_SESSION_LOG"
+awk -v started="$started" -v ended="$ended" 'BEGIN {
+  elapsed = (ended - started) / 1000000
+  printf "PASS registration never comes: back at the launcher in %.0f ms\n", elapsed
+  exit !(elapsed < 5000)
+}'
+# Let the stuck client finish: its gate is gone, so no game runs.
+rm -f "$CASE_DIR/register-barrier"
+wait_for "$CASE_DIR/scopes/archr-game-1.scope/members"
+gate_closed
+export ARCHR_SESSION_STOP_SLEEP=/bin/sleep
+
 # SIGKILL with the gate process already reading: EOF ends it. It holds the
 # gate only read-only (read's stdin is a copy): it cannot keep it open.
 setup_case gate-eof 'game runemu.sh LONG
@@ -828,7 +899,7 @@ done
 gate_fds=0
 for fd in /proc/"$waiter"/fd/*; do
   case "$(readlink "$fd")" in
-    */game-gate)
+    */game-gate-*)
       gate_fds=$((gate_fds + 1))
       flags=$(awk '/^flags:/ { print $2 }' "/proc/$waiter/fdinfo/${fd##*/}")
       [ $((0$flags & 3)) -eq 0 ] ||
