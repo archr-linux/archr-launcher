@@ -526,16 +526,8 @@ impl View<'_, '_, '_> {
                         .filter(|t| !t.is_empty())
                         .unwrap_or_else(|| m.name.clone())
                 }));
-                let header = state.modules.declared(page).and_then(|d| {
-                    d.rows.iter().find_map(|r| match &r.kind {
-                        crate::modules::RowKind::Header { id } => {
-                            state.modules.row_items(page, id).first()
-                        }
-                        _ => None,
-                    })
-                });
+                let header = state.modules.detail_header(page);
                 header
-                    .filter(|h| state.modules.item.as_ref().is_none_or(|i| *i == h.id))
                     .map(|h| h.title.clone())
                     .or_else(|| state.modules.declared(page).map(|d| d.title.clone()))
                     .unwrap_or_default()

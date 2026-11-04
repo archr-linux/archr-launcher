@@ -111,26 +111,15 @@ impl View<'_, '_, '_> {
         if declared.is_some_and(|p| p.detail) {
             return self.module_detail(state, rows);
         }
-        let cards: Vec<Item> = declared
-            .into_iter()
-            .flat_map(|p| &p.rows)
-            .find_map(|r| match &r.kind {
-                RowKind::Stats { id } => Some(state.modules.row_items(page, id)),
-                _ => None,
-            })
-            .unwrap_or_default()
-            .iter()
-            .take(STATS)
-            .cloned()
-            .collect();
+        let cards = state
+            .modules
+            .page_items(page, |k| matches!(k, RowKind::Stats { .. }));
         let mut positions = placements(page, rows);
         let top = if cards.is_empty() {
             VIEW_TOP
         } else {
-            self.stat_cards(&cards)?;
-            for place in &mut positions {
-                place.top += CARDS_ROOM;
-            }
+            self.stat_cards(&cards[..cards.len().min(STATS)])?;
+            positions.iter_mut().for_each(|p| p.top += CARDS_ROOM);
             VIEW_TOP + CARDS_ROOM
         };
         self.list_from(
@@ -151,10 +140,9 @@ impl View<'_, '_, '_> {
                 let theme = view.theme;
                 let value = state.display_value(row.id, &view.ui.catalog);
                 let value_w = view.width(&value, Face::Mono, 12.)?;
-                let label = state.label(row);
                 view.text(
-                    (30., y + 4., RIGHT - 60. - value_w - 12., 20.),
-                    &label,
+                    (30., y + 4., RIGHT - 72. - value_w, 20.),
+                    &state.label(row),
                     (15., theme.text, Align::Left),
                 )?;
                 view.plain(
@@ -162,19 +150,11 @@ impl View<'_, '_, '_> {
                     (RIGHT - 30. - value_w, y + 6., value_w + 1., 18.),
                     (Face::Mono, 12., theme.muted),
                 )?;
-                let bar = (30., y + 30., RIGHT - 60., 6.);
-                view.ui
-                    .rounded(view.rect(bar), view.ui.px(3.) as f32, theme.badge, None)?;
-                if progress > 0 {
-                    let fill = (bar.0, bar.1, bar.2 * f32::from(progress) / 100., bar.3);
-                    view.ui.rounded(
-                        view.rect(fill),
-                        view.ui.px(3.) as f32,
-                        theme.highlight_bg,
-                        None,
-                    )?;
-                }
-                Ok(())
+                view.bar(
+                    (30., y + 30., RIGHT - 60., 6.),
+                    progress,
+                    theme.highlight_bg,
+                )
             },
         )
     }
@@ -189,57 +169,61 @@ impl View<'_, '_, '_> {
             Tone::Muted => theme.muted,
         }
     }
-    /// "Aprendendo": a tag in the tone's colour; returns its width.
-    fn tag(&mut self, text: &str, tone: Tone, (right, y): (f32, f32)) -> Result<f32, String> {
-        let ink = self.tone(tone);
-        let w = self.width(text, Face::Semibold, 11.)? + 14.;
-        let back = self.theme.background;
-        self.ui.rounded(
-            self.rect((right - w, y, w, 18.)),
-            self.ui.px(8.) as f32,
-            mix(back, ink, 0.14),
-            Some(mix(back, ink, 0.4)),
+    /// A tag in the tone's colour, right-aligned; returns its width.
+    fn module_tag(
+        &mut self,
+        text: &str,
+        tone: Tone,
+        (right, y): (f32, f32),
+    ) -> Result<f32, String> {
+        let (ink, back) = (self.tone(tone), self.theme.background);
+        let colors = (mix(back, ink, 0.14), mix(back, ink, 0.4), ink);
+        let at = (self.ui.px(right), self.ui.px(y + 9.5));
+        Ok(self.ui.tag(text, at, colors)? as f32 / self.ui.frame.scale)
+    }
+    /// A name on the left and its value on the right, over a rule.
+    fn fact_line(
+        &mut self,
+        (x, y, w): (f32, f32, f32),
+        (label, value): (&str, &str),
+        (face, ink): (Face, Rgba),
+    ) -> Result<(), String> {
+        let theme = self.theme;
+        let value_w = self.width(value, face, 12.)?.min(w * 0.55);
+        self.plain(
+            label,
+            (x, y, w - value_w - 8., 26.),
+            (Face::Regular, 12., theme.muted),
         )?;
-        self.text_face(
-            (right - w, y, w, 18.),
-            text,
-            (11., ink, Align::Center),
-            Face::Semibold,
+        self.plain(
+            value,
+            (x + w - value_w, y, value_w + 1., 26.),
+            (face, 12., ink),
         )?;
-        Ok(w)
+        let (left, top) = (self.ui.px(x), self.ui.px(y + 26.));
+        self.ui
+            .divider(left, top, self.ui.px(w) as u32, theme.border)
     }
     /// Up to three cards over the rows: name, big value, a line under it.
     fn stat_cards(&mut self, cards: &[Item]) -> Result<(), String> {
         let theme = self.theme;
         let (top, height) = CARDS;
-        let (left, right, gap) = (16., 620., 10.);
-        let count = cards.len() as f32;
-        let w = (right - left - gap * (count - 1.)) / count;
+        let gap = 10.;
+        let w = (604. - gap * (cards.len() as f32 - 1.)) / cards.len() as f32;
         for (n, card) in cards.iter().enumerate() {
-            let x = left + n as f32 * (w + gap);
-            self.ui.rounded(
-                self.rect((x, top, w, height)),
-                self.ui.px(12.) as f32,
-                theme.surface,
-                Some(theme.border),
-            )?;
-            let inner = (x + 12., w - 24.);
+            let x = 16. + n as f32 * (w + gap);
+            self.panel((x, top, w, height), false)?;
+            let (x, w) = (x + 12., w - 24.);
+            let title = card.title.to_uppercase();
             self.text(
-                (inner.0, top + 9., inner.1, 15.),
-                &card.title.to_uppercase(),
+                (x, top + 9., w, 15.),
+                &title,
                 (11., theme.muted, Align::Left),
             )?;
-            self.text_face(
-                (inner.0, top + 25., inner.1, 29.),
-                &card.value,
-                (22., self.tone(card.tone), Align::Left),
-                Face::Semibold,
-            )?;
-            self.text(
-                (inner.0, top + 55., inner.1, 15.),
-                &card.subtitle,
-                (11., theme.dim_text, Align::Left),
-            )?;
+            let value = (22., self.tone(card.tone), Align::Left);
+            self.text_face((x, top + 25., w, 29.), &card.value, value, Face::Semibold)?;
+            let line = (11., theme.dim_text, Align::Left);
+            self.text((x, top + 55., w, 15.), &card.subtitle, line)?;
         }
         Ok(())
     }
@@ -258,34 +242,26 @@ impl View<'_, '_, '_> {
         let face = selection(selected, Face::Regular, Face::Semibold);
         let right = RIGHT - 14.;
         let half = ((height - 4.) / 2.).floor();
-        let top = (y + 4., half);
-        let below = (y + height - half - 3., half);
+        let (top, below) = (y + 4., y + height - half - 3.);
         let mut side = self.width(&item.detail, Face::Regular, 12.)?;
         if item.badge.is_empty() {
-            side = side.max(self.width(&item.value, Face::Mono, 14.)?);
             let w = self.width(&item.value, Face::Mono, 14.)?;
+            side = side.max(w);
             self.plain(
                 &item.value,
-                (right - w, top.0, w + 1., top.1),
+                (right - w, top, w + 1., half),
                 (Face::Mono, 14., ink),
             )?;
         } else {
-            side = side.max(self.tag(&item.badge, item.tone, (right, top.0 + 1.))?);
+            side = side.max(self.module_tag(&item.badge, item.tone, (right, top + 1.))?);
         }
+        let detail = (right - side - 2., below, side + 2., half);
+        self.text(detail, &item.detail, (12., soft, Align::Right))?;
+        let width = right - side - 46.;
+        let label = (15., ink, Align::Left);
+        self.text_face((30., top, width, half), &state.label(row), label, face)?;
         self.text(
-            (right - side - 2., below.0, side + 2., below.1),
-            &item.detail,
-            (12., soft, Align::Right),
-        )?;
-        let width = right - side - 16. - 30.;
-        self.text_face(
-            (30., top.0, width, top.1),
-            &state.label(row),
-            (15., ink, Align::Left),
-            face,
-        )?;
-        self.text(
-            (30., below.0, width, below.1),
+            (30., below, width, half),
             &item.subtitle,
             (12., soft, Align::Left),
         )
@@ -296,116 +272,52 @@ impl View<'_, '_, '_> {
     fn module_detail(&mut self, state: &Settings, rows: &[Row]) -> Result<(), String> {
         let theme = self.theme;
         let page = state.page();
-        let Some(declared) = state.modules.declared(page) else {
-            return Ok(());
-        };
-        let items = |id: &str| state.modules.row_items(page, id);
-        let header = declared.rows.iter().find_map(|r| match &r.kind {
-            RowKind::Header { id } => items(id).first(),
-            _ => None,
-        });
-        let fresh = header.is_some_and(|h| state.modules.item.as_ref().is_none_or(|i| *i == h.id));
-        if fresh {
-            let header = header.expect("fresh");
+        let header = state.modules.detail_header(page);
+        if let Some(header) = header {
             self.detail_header(state, header)?;
             let (x, w) = DETAIL_LEFT;
             let mut y = 50. + PICTURE.1 + 12.;
-            for row in &declared.rows {
+            let declared = state.modules.declared(page).map_or(&[][..], |p| &p.rows);
+            for row in declared {
                 match &row.kind {
                     RowKind::Bars { id } => {
-                        y = self.flow(
-                            (x, y, w),
-                            &row.label.to_uppercase(),
-                            (11., theme.muted, Face::Regular),
-                            2,
-                        )? + 6.;
-                        for bar in items(id) {
-                            self.detail_bar(bar, (x, y, w))?;
+                        let title = row.label.to_uppercase();
+                        y = self.flow((x, y, w), &title, (11., theme.muted, Face::Regular), 2)?;
+                        for bar in state.modules.row_items(page, id) {
+                            self.detail_bar(bar, (x, y + 6., w))?;
                             y += 22.;
                         }
-                        y += 4.;
+                        y += 10.;
                     }
                     RowKind::Text { id } => {
                         let module = state.modules.module().map_or("", |m| m.id.as_str());
-                        let text = state
-                            .modules
-                            .view
-                            .value(module, &format!("row:{id}"))
-                            .unwrap_or(&row.default);
-                        y = self.flow((x, y, w), text, (12., theme.dim_text, Face::Regular), 4)?
-                            + 6.;
+                        let target = format!("row:{id}");
+                        let view = &state.modules.view;
+                        let text = view.value(module, &target).unwrap_or(&row.default);
+                        let style = (12., theme.dim_text, Face::Regular);
+                        y = self.flow((x, y, w), text, style, 4)? + 6.;
                     }
                     _ => {}
                 }
             }
             let (x, w) = DETAIL_SIDE;
-            let mut y = 50.;
-            for fact in declared.rows.iter().flat_map(|r| match &r.kind {
-                RowKind::Facts { id } => items(id),
-                _ => &[],
-            }) {
-                self.plain(
-                    &fact.title,
-                    (x, y, w * 0.55, 26.),
-                    (Face::Regular, 12., theme.muted),
-                )?;
-                let ink = self.tone(fact.tone);
-                let value_w = self.width(&fact.value, Face::Mono, 12.)?.min(w * 0.45);
-                self.plain(
-                    &fact.value,
-                    (x + w - value_w, y, value_w + 1., 26.),
-                    (Face::Mono, 12., ink),
-                )?;
-                self.ui.divider(
-                    self.ui.px(x),
-                    self.ui.px(y + 26.),
-                    self.ui.px(w) as u32,
-                    theme.border,
-                )?;
-                y += 27.;
+            let facts = state
+                .modules
+                .page_items(page, |k| matches!(k, RowKind::Facts { .. }));
+            for (n, fact) in facts.iter().enumerate() {
+                let at = (x, 50. + n as f32 * 27., w);
+                let style = (Face::Mono, self.tone(fact.tone));
+                self.fact_line(at, (&fact.title, &fact.value), style)?;
             }
         }
         // The buttons, bottom up: the page's action rows.
         let (x, w) = DETAIL_SIDE;
-        let count = rows.len() as f32;
         for (n, row) in rows.iter().enumerate() {
-            let y = FOOTER - 10. - (count - n as f32) * 48. + 8.;
-            let selected = n == state.cursor;
-            let (fill, edge, ink) = if selected {
-                (theme.highlight_bg, None, theme.highlight_text)
-            } else {
-                (theme.badge, Some(theme.border), theme.text)
-            };
-            let rect = (x, y, w, 40.);
-            self.ui
-                .rounded(self.rect(rect), self.ui.px(10.) as f32, fill, edge)?;
+            let y = FOOTER - 2. - (rows.len() - n) as f32 * 48.;
+            let icon = state.module_icon(row.id);
             let label = state.label(row);
-            let icon = state
-                .modules
-                .declared(page)
-                .and_then(|p| match row.id {
-                    Id::ModuleRow(n) => p.rows.get(usize::from(n)),
-                    _ => None,
-                })
-                .and_then(|r| match &r.kind {
-                    RowKind::Action { icon, .. } => icon.clone(),
-                    _ => None,
-                });
-            let label_w = self.width(&label, Face::Regular, 15.)?.min(w - 48.);
-            let icon_w = if icon.is_some() { 23. } else { 0. };
-            let start = x + (w - label_w - icon_w) / 2.;
-            if let Some(svg) = icon {
-                self.ui.module_icon(
-                    (Some(&svg), ""),
-                    self.rect((start, y + 12.5, 15., 15.)),
-                    ink,
-                )?;
-            }
-            self.text(
-                (start + icon_w, y, label_w + 2., 40.),
-                &label,
-                (15., ink, Align::Left),
-            )?;
+            let icon = icon.as_deref().map(|svg| (Some(svg), ""));
+            self.icon_button((x, y, w, 40.), n == state.cursor, icon, &label)?;
         }
         Ok(())
     }
@@ -415,82 +327,59 @@ impl View<'_, '_, '_> {
         let theme = self.theme;
         let (x, w) = DETAIL_LEFT;
         let (pw, ph) = PICTURE;
-        let top = 50.;
-        let frame = (x, top, pw, ph);
+        let frame = (x, 50., pw, ph);
         self.ui
             .rounded(self.rect(frame), self.ui.px(8.) as f32, theme.badge, None)?;
         let path = header
             .game
             .as_ref()
-            .and_then(|game| state.modules.images.get(game))
-            .cloned();
-        if !self.picture(path.as_deref(), frame, true)? {
+            .and_then(|g| state.modules.images.get(g));
+        if !self.picture(path.map(|p| p.as_path()), frame, true)? {
             let icon = state.modules.module().and_then(|m| m.icon.clone());
-            self.ui.module_icon(
-                (icon.as_deref(), "gamepad-2"),
-                self.rect((x + pw / 2. - 14., top + ph / 2. - 14., 28., 28.)),
-                theme.muted,
-            )?;
+            let at = self.rect((x + pw / 2. - 14., 50. + ph / 2. - 14., 28., 28.));
+            self.ui
+                .module_icon((icon.as_deref(), "gamepad-2"), at, theme.muted)?;
         }
-        let tx = x + pw + 12.;
-        let tw = w - pw - 12.;
-        let lines = if header.badge.is_empty() { 52. } else { 64. };
-        let y = top + (ph - lines) / 2.;
-        self.text_face(
-            (tx, y, tw, 25.),
-            &header.title,
-            (18., theme.text, Align::Left),
-            Face::Semibold,
-        )?;
-        self.text(
-            (tx, y + 25., tw, 18.),
-            &header.subtitle,
-            (12., theme.muted, Align::Left),
-        )?;
+        let (tx, tw) = (x + pw + 12., w - pw - 12.);
+        let y = 50. + (ph - if header.badge.is_empty() { 52. } else { 64. }) / 2.;
+        let title = (18., theme.text, Align::Left);
+        self.text_face((tx, y, tw, 25.), &header.title, title, Face::Semibold)?;
+        let line = (12., theme.muted, Align::Left);
+        self.text((tx, y + 25., tw, 18.), &header.subtitle, line)?;
         if !header.badge.is_empty() {
             let w = self.width(&header.badge, Face::Semibold, 11.)? + 14.;
-            self.tag(&header.badge, header.tone, (tx + w, y + 46.))?;
+            self.module_tag(&header.badge, header.tone, (tx + w, y + 46.))?;
         }
         Ok(())
     }
     /// "408 MHz ▬▬▬▬ 91%": a bar in the item's tone.
     fn detail_bar(&mut self, bar: &Item, (x, y, w): (f32, f32, f32)) -> Result<(), String> {
         let theme = self.theme;
-        let (label_w, value_w) = (62., 40.);
-        self.plain(
-            &bar.title,
-            (x, y, label_w + 4., 16.),
-            (Face::Mono, 12., theme.muted),
-        )?;
-        let track = (x + label_w + 10., y + 4., w - label_w - value_w - 20., 8.);
-        self.capsule(track, theme.badge)?;
+        let style = (Face::Mono, 12., theme.muted);
+        self.plain(&bar.title, (x, y, 66., 16.), style)?;
         let fill = match bar.tone {
             Tone::Info => theme.highlight_bg,
             Tone::Plain | Tone::Muted => mix(theme.badge, theme.text, 0.14),
             tone => self.tone(tone),
         };
-        if let Some(progress) = bar.progress.filter(|p| *p > 0) {
-            let part = (track.2 * f32::from(progress) / 100.).max(track.3);
-            self.capsule((track.0, track.1, part, track.3), fill)?;
-        }
-        let ink = match bar.tone {
-            Tone::Bad => theme.danger,
-            _ => theme.text,
+        self.bar(
+            (x + 72., y + 4., w - 122., 8.),
+            bar.progress.unwrap_or(0),
+            fill,
+        )?;
+        let ink = if bar.tone == Tone::Bad {
+            theme.danger
+        } else {
+            theme.text
         };
-        self.text_face(
-            (x + w - value_w, y, value_w, 16.),
-            &bar.value,
-            (12., ink, Align::Right),
-            Face::Mono,
-        )
+        let value = (12., ink, Align::Right);
+        self.text_face((x + w - 40., y, 40., 16.), &bar.value, value, Face::Mono)
     }
     /// A module page's hints when a list item opens a page or has a second
     /// action, whose text the module gave (API 3).
     pub(super) fn module_hints(&self, state: &Settings) -> Option<Vec<(HintButton, String)>> {
-        let page = state.page();
-        if !matches!(page, Page::Module(..))
-            || state.modules.confirm.is_some()
-            || state.modules.working
+        let modules = &state.modules;
+        if !matches!(state.page(), Page::Module(..)) || modules.confirm.is_some() || modules.working
         {
             return None;
         }
@@ -917,28 +806,10 @@ impl View<'_, '_, '_> {
             ("modules.fact_used", self.when(module.used), false),
             ("modules.fact_failures", module.failures.to_string(), true),
         ];
-        let mut y = below + 8.;
-        for (key, value, mono) in facts {
-            let label = self.tr(key);
-            self.plain(
-                &label,
-                (x, y, w * 0.45, 26.),
-                (Face::Regular, 12., theme.muted),
-            )?;
+        for (n, (key, value, mono)) in facts.into_iter().enumerate() {
             let face = if mono { Face::Mono } else { Face::Regular };
-            let value_w = self.width(&value, face, 12.)?.min(w * 0.55);
-            self.plain(
-                &value,
-                (x + w - value_w, y, value_w + 1., 26.),
-                (face, 12., theme.text_secondary),
-            )?;
-            self.ui.divider(
-                self.ui.px(x),
-                self.ui.px(y + 26.),
-                self.ui.px(w) as u32,
-                theme.border,
-            )?;
-            y += 27.;
+            let at = (x, below + 8. + n as f32 * 27., w);
+            self.fact_line(at, (&self.tr(key), &value), (face, theme.text_secondary))?;
         }
         let buttons = state.details_buttons();
         let gap = 8.;

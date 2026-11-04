@@ -78,6 +78,32 @@ impl Modules {
     fn page_rows(&self, page: Page) -> &[crate::modules::Row] {
         self.declared(page).map_or(&[], |page| &page.rows)
     }
+    /// The items of the open page's first row of this kind.
+    pub fn page_items(
+        &self,
+        page: Page,
+        kind: impl Fn(&RowKind) -> bool,
+    ) -> &[crate::modules::Item] {
+        let id = self.page_rows(page).iter().find_map(|r| match &r.kind {
+            RowKind::Stats { id } | RowKind::Header { id } | RowKind::Facts { id }
+                if kind(&r.kind) =>
+            {
+                Some(id.as_str())
+            }
+            _ => None,
+        });
+        id.map_or(&[], |id| self.row_items(page, id))
+    }
+    /// A detail page's heading, once the module sent it for the open item.
+    pub fn detail_header(&self, page: Page) -> Option<&crate::modules::Item> {
+        let header = self
+            .page_items(page, |k| matches!(k, RowKind::Header { .. }))
+            .first()?;
+        self.item
+            .as_ref()
+            .is_none_or(|i| *i == header.id)
+            .then_some(header)
+    }
     /// The items a module sent for one of the open page's rows.
     pub fn row_items(&self, page: Page, row: &str) -> &[crate::modules::Item] {
         self.page_module(page)
@@ -399,6 +425,13 @@ impl Settings {
                 ..Default::default()
             }),
         })
+    }
+    /// An action row's own icon (the module's SVG).
+    pub fn module_icon(&self, id: Id) -> Option<Arc<str>> {
+        match &self.module_row(id)?.kind {
+            RowKind::Action { icon, .. } => icon.clone(),
+            _ => None,
+        }
     }
     /// The selected list item's hints (API 3): A opens its page, X sends
     /// the row's other action, whose text the module gave.
