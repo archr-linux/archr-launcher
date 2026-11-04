@@ -37,4 +37,6 @@
 "empty" = "Nenhum jogo ainda"
 "empty_sub" = "Jogue por dois minutos para o ajuste começar"
 "more" = "Mais {n} jogos"
-"more_sub" = "Os aprendidos que não cabem aqui"
+"more_sub" = "Próxima página"
+"prev" = "Jogos anteriores"
+"prev_sub" = "Volta aos {n} jogos da página anterior"

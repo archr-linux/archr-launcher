@@ -1537,6 +1537,7 @@ impl Host {
                                         .as_f64()
                                         .map(|p| p.clamp(0., 100.).round() as u8),
                                     game,
+                                    stay: item["open"] == false,
                                 }
                             })
                             .collect()

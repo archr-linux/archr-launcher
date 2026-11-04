@@ -253,6 +253,9 @@ pub struct Item {
     pub tone: Tone,
     pub progress: Option<u8>,
     pub game: Option<(String, String)>,
+    /// `"open": false`: A sends the action and the page stays (a list's
+    /// next and previous pages), even on a row that opens a detail page.
+    pub stay: bool,
 }
 
 /// The colour a module gives an item (API 3): a theme colour, never a value.

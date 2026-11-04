@@ -440,8 +440,10 @@ impl Settings {
         let item = self.module_item(id)?;
         match &self.module_row(id)?.kind {
             RowKind::List { open, alt, .. } if !item.id.is_empty() => Some((
-                open.is_some() && item.action.is_some(),
-                alt.as_ref().map(|(_, label)| label.clone()),
+                open.is_some() && item.action.is_some() && !item.stay,
+                alt.as_ref()
+                    .filter(|_| !item.stay)
+                    .map(|(_, label)| label.clone()),
             )),
             _ => None,
         }
@@ -575,13 +577,13 @@ impl Settings {
             let (open, alt) = (*open, alt.clone());
             let action = match button {
                 Button::A => item.action.clone(),
-                Button::X => alt.map(|(action, _)| action),
+                Button::X => alt.filter(|_| !item.stay).map(|(action, _)| action),
                 _ => None,
             };
             let Some(action) = action.filter(|_| !item.id.is_empty()) else {
                 return Some(Effect::None);
             };
-            if let (Button::A, Some(page)) = (button, open) {
+            if let (Button::A, Some(page), false) = (button, open, item.stay) {
                 // The detail page shows this item only.
                 self.modules.item = Some(item.id.clone());
                 self.open(Page::Module(m, page));
@@ -1126,15 +1128,19 @@ mod tests {
             action: Some("detalhes".into()),
             ..Default::default()
         };
+        let next = crate::modules::Item {
+            stay: true,
+            ..item("pagina-seguinte")
+        };
         view.items.insert(
             ("bateria".into(), "row:jogos".into()),
-            vec![item("mario"), item("zelda")],
+            vec![item("mario"), item("zelda"), next],
         );
         let mut state = settings();
         state.set_modules(Arc::new(view));
         state.open_module_page("bateria", 0);
         let rows = state.visible_rows();
-        assert_eq!(rows.len(), 2, "the cards are never selected");
+        assert_eq!(rows.len(), 3, "the cards are never selected");
         let call = |item: &str| {
             Some(crate::modules::Call {
                 item: Some(item.into()),
@@ -1148,6 +1154,15 @@ mod tests {
                 call: call(item),
             })
         };
+        // The next page: A sends its action and the page stays.
+        state.cursor = 2;
+        assert_eq!(state.module_item_hints(), Some((false, None)));
+        assert_eq!(state.handle(Button::X), Effect::None);
+        assert_eq!(
+            state.handle(Button::A),
+            invoke("detalhes", "pagina-seguinte")
+        );
+        assert_eq!(state.page(), Page::Module(0, 0));
         state.cursor = 1;
         assert_eq!(
             state.module_item_hints(),

@@ -37,4 +37,6 @@
 "empty" = "No games yet"
 "empty_sub" = "Play for two minutes and tuning begins"
 "more" = "{n} more games"
-"more_sub" = "Learned ones that do not fit here"
+"more_sub" = "Next page"
+"prev" = "Previous games"
+"prev_sub" = "Back to the {n} games before"

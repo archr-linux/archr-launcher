@@ -40,8 +40,9 @@ def minus: if . > 0 then "−\(.)%" else "0%" end;
 def out: .status == "out" or .pinned == true;
 # Learning first, then the ones left out, then the learned.
 def order: if out then 1 elif .status == "learned" then 2 else 0 end;
-# Items of one list update, as the launcher takes them.
-def items: 20;
+# Games on one page of the list: the launcher takes 20 items an update,
+# two of them for the previous and next pages.
+def per_page: 18;
 
 def reply($result): {jsonrpc: "2.0", id: $msg.id, result: $result};
 def update($target; $fields): {jsonrpc: "2.0", method: "ui.update", params: ({target: $target} + $fields)};
@@ -64,7 +65,8 @@ def item($id):
     } end;
 
 def page:
-  .games as $games
+  (.page // 0) as $page
+  | .games as $games
   | [$games | to_entries[] | select(.value.status == "learned" and (.value.pinned | not)) | .value] as $learned
   | [$learned[] | saving | select(. != null)] as $savings
   | update("row:resumo"; {items: [
@@ -76,10 +78,15 @@ def page:
     ]}),
     update("row:jogos"; {items: (
       [$games | to_entries | sort_by((.value | order), .value.name)[] | .key as $id | .value | item($id)]
-      | if . == [] then [{title: "@empty", subtitle: "@empty_sub"}]
-        elif length > items then .[:items - 1] + [{title: {key: "@more", args: {n: (length - items + 1)}},
-          subtitle: "@more_sub"}]
-        else . end)});
+      | if . == [] then [{title: "@empty", subtitle: "@empty_sub"}] else
+        length as $n | (((($n - 1) / per_page) | floor) as $last | [[$page, $last] | min, 0] | max) as $p
+        | ($p * per_page) as $from
+        | (if $p > 0 then [{id: "pagina-anterior", title: "@prev", subtitle: {key: "@prev_sub", args: {n: $from}},
+            action: "pagina", open: false}] else [] end)
+          + .[$from:$from + per_page]
+          + (if $n > $from + per_page then [{id: "pagina-seguinte", title: {key: "@more", args: {n: ($n - $from - per_page)}},
+            subtitle: "@more_sub", action: "pagina", open: false}] else [] end)
+        end)});
 
 def detail($id):
   .games[$id] as $g
@@ -163,6 +170,9 @@ $st[0] as $s
       | $n, reply({}), ($n | page, detail($item)),
         {jsonrpc: "2.0", method: "ui.notify", params: {key: (if $n.games[$item].pinned then "@notify.max" else "@notify.auto" end),
           args: {name: $n.games[$item].name}}}
+    elif $p.action == "pagina" then
+      ($s | .page = ((.page // 0) + (if $item == "pagina-anterior" then -1 else 1 end) | [., 0] | max)) as $n
+      | $n, reply({}), ($n | page)
     elif $p.action == "detalhes" then
       null, reply({}), ($s | detail($item))
     else null, reply({}) end

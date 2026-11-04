@@ -718,7 +718,8 @@ Todos são desenhados pelo launcher; o conteúdo vem de `ui.update` com
 | `facts` | linhas nome/valor na coluna da direita | `title`, `value`, `tone` |
 
 Itens de `list` ganham `detail` (segunda linha, à direita), `badge` (selo no
-lugar do valor) e `tone`.
+lugar do valor), `tone` e `open: false`: A envia a ação do item sem abrir a
+página de `open` (para as páginas seguinte e anterior de uma lista longa).
 
 **Página de detalhe** (`layout = "detail"`): à esquerda o `header`, as `bars`
 e as linhas `text` (nota); à direita os `facts` e, embaixo, as linhas
@@ -732,6 +733,6 @@ Exemplo completo: `examples/modules/ajuste-cpu`. Desce um degrau só com
 folga clara (p95 abaixo de 75 % e nenhum segundo no limite), sobe um quando
 chega ao limite, fica "aprendido" depois de 3 sessões estáveis no mesmo
 teto e descarta sessões curtas ou ociosas; N64, PSP, Dreamcast e Saturn
-ficam fora. A lista manda até 20 itens por atualização: os que estão
-aprendendo, depois os de fora, depois os aprendidos, e um item final conta
-os que não couberam. Teste no PC: `bash examples/modules/ajuste-cpu.test.sh`.
+ficam fora. A lista vai em páginas de 18 jogos (os que estão aprendendo, depois
+os de fora, depois os aprendidos), com itens `open: false` para a página
+seguinte e a anterior, no máximo 20 itens por atualização. Teste no PC: `bash examples/modules/ajuste-cpu.test.sh`.

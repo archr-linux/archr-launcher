@@ -46,18 +46,25 @@ session snes/b 97 40 0 >/dev/null
 check "slow at the top: left out" '[ "$(game snes/b | jq -r .status)" = out ]'
 check "heavy systems are left out" '[ "$(session n64/c 50 0 0)" = 1416000 ] && [ "$(game n64/c | jq -r .status)" = out ]'
 
-# More games than one update takes: learning ones first, the rest counted.
-for n in $(seq 1 24); do session "gba/g${n}" 50 0 0 >/dev/null; done
-# shellcheck disable=SC2034 # read by check's eval
-items=$(grep '"row:jogos"' "${DATA}/last" | tail -n 1 | jq -c '.params.items')
-check "at most 20 items" '[ "$(jq length <<<"${items}")" = 20 ]'
-check "learning ones first" '[ "$(jq -r ".[0].badge" <<<"${items}")" = "@badge.learning" ]'
-check "the rest is counted" '[ "$(jq -r ".[19].title.key" <<<"${items}")" = "@more" ] && [ "$(jq ".[19].title.args.n" <<<"${items}")" = 8 ]'
+# Pages: 45 games, 18 a page, with the next and previous pages as items.
+for n in $(seq 1 42); do session "gba/g$(printf %02d "${n}")" 50 0 0 >/dev/null; done
+list() { grep '"row:jogos"' "${DATA}/last" | tail -n 1 | jq -c '.params.items'; }
 press() { # action, item; prints what the module said on stderr
   # shellcheck disable=SC2069 # stderr to the caller, stdout to the file
   { echo "${OPPS}"; printf '{"jsonrpc":"2.0","id":3,"method":"action.invoke","params":{"action":"%s","context":{"item":"%s"}}}\n' "$1" "$2"; } |
     ARCHR_MODULE_DATA=${DATA} ARCHR_MODULE_DIR=${MODULE} bash "${MODULE}/main.sh" 2>&1 >"${DATA}/last"
 }
+check "45 games" '[ "$(jq ".games | length" "${DATA}/games.json")" = 45 ]'
+check "page 1: 18 games and the next page" '[ "$(list | jq length)" = 19 ] && [ "$(list | jq -r ".[18].id")" = pagina-seguinte ] && [ "$(list | jq ".[18].title.args.n")" = 27 ]'
+check "learning ones first" '[ "$(list | jq -r ".[0].badge")" = "@badge.learning" ]'
+check "page items do not open the detail page" '[ "$(list | jq ".[18].open")" = false ] && [ "$(list | jq -r ".[18].action")" = pagina ]'
+press pagina pagina-seguinte
+check "page 2: back, 18 games, next" '[ "$(list | jq length)" = 20 ] && [ "$(list | jq -r ".[0].id")" = pagina-anterior ] && [ "$(list | jq ".[19].title.args.n")" = 9 ]'
+press pagina pagina-seguinte
+check "page 3: back and the last 9" '[ "$(list | jq length)" = 10 ] && [ "$(list | jq -r ".[9].id")" != pagina-seguinte ]'
+press pagina pagina-anterior
+press pagina pagina-anterior
+check "back to page 1" '[ "$(list | jq -r ".[0].id")" != pagina-anterior ] && [ "$(list | jq length)" = 19 ]'
 
 # A games.json of version 1.0.0 ("speed", no "busy" nor "limit").
 OLD="g$(printf %s psx/old | cksum | cut -d' ' -f1)"
