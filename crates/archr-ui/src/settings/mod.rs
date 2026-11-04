@@ -630,17 +630,6 @@ const fn slider(id: Id, label: &'static str, min: u8) -> Row {
         },
     )
 }
-/// The volume and brightness step for a press (`repeats` 0) or a repeat of
-/// a held L/R (every 80 ms from 300 ms): 2 % a press, then 25 %/s, 50 %/s
-/// past 950 ms and 75 %/s past 1550 ms, the speeds archr-levels gives the
-/// hardware buttons.
-pub fn level_step(repeats: u32) -> u8 {
-    match repeats {
-        0..=9 => 2,
-        10..=16 => 4,
-        _ => 6,
-    }
-}
 const fn described(id: Id, label: &'static str, subtitle: &'static str) -> Row {
     Row {
         subtitle: Some(subtitle),
@@ -721,6 +710,8 @@ pub enum Effect {
     None,
     Close,
     Set(Id, String),
+    /// Volume or brightness held on L/R: archr-levels steps it.
+    Level(Id, Level),
     Reboot,
     Scan,
     Connect(String, String),
@@ -754,6 +745,14 @@ pub enum Effect {
         seen: Box<raimport::Found>,
     },
 }
+/// A level slider held on L/R: a press starts the hold (up?), its repeats
+/// renew it, and the host releases it when the button comes up.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Level {
+    Hold(bool),
+    Renew,
+    Release,
+}
 /// Passwords never reach a log through `{:?}`.
 impl std::fmt::Debug for Effect {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -761,6 +760,7 @@ impl std::fmt::Debug for Effect {
             Self::None => write!(f, "None"),
             Self::Close => write!(f, "Close"),
             Self::Set(id, value) => write!(f, "Set({id:?}, {value:?})"),
+            Self::Level(id, level) => write!(f, "Level({id:?}, {level:?})"),
             Self::Reboot => write!(f, "Reboot"),
             Self::Scan => write!(f, "Scan"),
             Self::Connect(ssid, _) => write!(f, "Connect({ssid:?}, <hidden>)"),
@@ -854,7 +854,8 @@ pub struct Settings {
     pub modules: modules::Modules,
     /// Sliders in flight: last confirmed value and the newest unsent one.
     pub slides: BTreeMap<Id, (String, Option<String>)>,
-    /// Repeats of the held button behind the next press (0: a fresh press).
+    /// Repeats of the held button behind the next press (0: a fresh press);
+    /// the host also releases a level hold once no L/R is held.
     pub held: u32,
     /// Appearance page: the choices when it opened, the theme being previewed
     /// and the choices the host just saved (taken by the host to apply them).
@@ -1599,12 +1600,20 @@ impl Settings {
                             "1".into()
                         }
                     }
+                    // archr-levels owns these: it steps and speeds up a hold.
+                    Kind::Slider { .. }
+                        if button != Button::A && matches!(row.id, Id::Volume | Id::Brightness) =>
+                    {
+                        return Effect::Level(
+                            row.id,
+                            if self.held == 0 {
+                                Level::Hold(button == Button::R)
+                            } else {
+                                Level::Renew
+                            },
+                        );
+                    }
                     Kind::Slider { min, max, step } if button != Button::A => {
-                        let step = if matches!(row.id, Id::Volume | Id::Brightness) {
-                            level_step(self.held)
-                        } else {
-                            step
-                        };
                         let old = row
                             .id
                             .normalize(old)
@@ -1752,44 +1761,60 @@ mod tests {
             ..Default::default()
         };
         state.open(Page::Sound);
+        state.cursor = 4;
         assert_eq!(
             state.handle(Button::R),
-            Effect::Set(Id::Volume, "62".into())
+            Effect::Set(Id::SoundsVolume, "70".into())
         );
         assert_eq!(state.pending, None);
-        assert_eq!(state.value(Id::Volume), "62");
+        assert_eq!(state.value(Id::SoundsVolume), "70");
         assert_eq!(state.handle(Button::R), Effect::None);
         assert_eq!(state.handle(Button::R), Effect::None);
-        assert_eq!(state.value(Id::Volume), "66");
-        assert_eq!(state.settle(Id::Volume, Ok("62".into())), Some("66".into()));
-        assert_eq!(state.value(Id::Volume), "66");
-        assert_eq!(state.settle(Id::Volume, Ok("66".into())), None);
+        assert_eq!(state.value(Id::SoundsVolume), "90");
+        assert_eq!(
+            state.settle(Id::SoundsVolume, Ok("70".into())),
+            Some("90".into())
+        );
+        assert_eq!(state.value(Id::SoundsVolume), "90");
+        assert_eq!(state.settle(Id::SoundsVolume, Ok("90".into())), None);
         assert!(state.slides.is_empty());
         state.handle(Button::R);
-        assert_eq!(state.settle(Id::Volume, Err("archr-levels".into())), None);
-        assert_eq!(state.value(Id::Volume), "66");
-        assert_eq!(state.error, Some((Some(Id::Volume), "archr-levels".into())));
+        assert_eq!(
+            state.settle(Id::SoundsVolume, Err("archr-levels".into())),
+            None
+        );
+        assert_eq!(state.value(Id::SoundsVolume), "90");
+        assert_eq!(
+            state.error,
+            Some((Some(Id::SoundsVolume), "archr-levels".into()))
+        );
     }
     #[test]
-    fn held_level_sliders_speed_up_like_the_hardware_buttons() {
+    fn level_sliders_hand_the_hold_to_archr_levels() {
         let mut state = Settings {
             loading: false,
             ..Default::default()
         };
         state.open(Page::Sound);
-        state.values.insert(Id::Brightness, "10".into());
         state.cursor = 1;
-        // Press, then repeats every 80 ms from 300 ms: 25, 50, then 75 %/s.
-        let mut levels = Vec::new();
-        for repeats in 0..20 {
-            state.held = repeats;
-            state.handle(Button::R);
-            levels.push(state.value(Id::Brightness).parse::<u8>().unwrap());
-        }
-        assert_eq!(&levels[..3], [12, 14, 16]);
-        assert_eq!(levels[9] - levels[8], 2);
-        assert_eq!(levels[10] - levels[9], 4);
-        assert_eq!(levels[17] - levels[16], 6);
+        // A press starts a hold in archr-levels (the tap and the speed are
+        // its own); repeats of the held button only keep it alive.
+        assert_eq!(
+            state.handle(Button::R),
+            Effect::Level(Id::Brightness, Level::Hold(true))
+        );
+        state.held = 3;
+        assert_eq!(
+            state.handle(Button::L),
+            Effect::Level(Id::Brightness, Level::Renew)
+        );
+        state.held = 0;
+        state.cursor = 0;
+        assert_eq!(
+            state.handle(Button::L),
+            Effect::Level(Id::Volume, Level::Hold(false))
+        );
+        assert!(state.slides.is_empty());
         // The sounds slider keeps its own coarse step.
         state.values.insert(Id::SoundsVolume, "50".into());
         state.cursor = 4;

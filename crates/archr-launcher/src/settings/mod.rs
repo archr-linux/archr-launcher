@@ -43,6 +43,24 @@ impl Backend {
             .trim()
             .to_owned()
     }
+    /// A level hold on archr-levels; returns the level after it.
+    pub fn level(&self, id: Id, level: archr_ui::settings::Level) -> Result<String, String> {
+        use archr_ui::settings::Level;
+        let kind = Self::level_kind(id);
+        let short = Duration::from_secs(3);
+        match level {
+            Level::Hold(up) => {
+                let direction = if up { "up" } else { "down" };
+                return self
+                    .command_with_timeout("archr-levels", &[kind, "hold", direction], short)
+                    .map(|v| id.normalize(&v));
+            }
+            Level::Renew => self.command_with_timeout("archr-levels", &["renew"], short)?,
+            Level::Release => self.command_with_timeout("archr-levels", &["release"], short)?,
+        };
+        self.command_with_timeout("archr-levels", &[kind], short)
+            .map(|v| id.normalize(&v))
+    }
     fn level_kind(id: Id) -> &'static str {
         if id == Id::Volume {
             "volume"
@@ -319,6 +337,7 @@ impl Backend {
 pub(super) enum Work {
     Load,
     Set(Id, String),
+    Level(Id, archr_ui::settings::Level),
     /// A Games page row of the named system.
     Game(String, Id, String),
     Info,
@@ -355,6 +374,7 @@ type StorageReply = (
 enum Reply {
     Loaded(Result<Box<Settings>, String>),
     Set(Id, Result<String, String>),
+    Level(Id, Result<String, String>),
     Info(Information),
     Usb(archr_ui::settings::network::Usb),
     Scan(
@@ -405,6 +425,8 @@ pub struct Worker {
     bt_rescan: bool,
     /// Bumped on every Wi-Fi switch change; older scans' replies are stale.
     generation: u64,
+    /// Level holds sent and not answered: a renewal waits for none.
+    pub(super) levels: usize,
 }
 impl Worker {
     pub fn start(paths: Paths) -> Result<Self, String> {
@@ -484,6 +506,7 @@ impl Worker {
                         Work::Game(system, id, value) => {
                             Reply::Set(id, backend.apply_game(&system, id, &value))
                         }
+                        Work::Level(id, level) => Reply::Level(id, backend.level(id, level)),
                         Work::Info => Reply::Info(backend.refresh_info()),
                         Work::Usb => Reply::Usb(backend.usb()),
                         Work::Scan | Work::BtScan => unreachable!("scans have their own lane"),
@@ -546,6 +569,7 @@ impl Worker {
             bt_scanning: false,
             bt_rescan: false,
             generation: 0,
+            levels: 0,
         })
     }
     pub fn busy(&self) -> bool {
@@ -592,6 +616,9 @@ impl Worker {
         }
         if matches!(work, Work::Set(Id::WifiSwitch, _)) {
             self.generation += 1;
+        }
+        if matches!(work, Work::Level(..)) {
+            self.levels += 1;
         }
         self.tx.send(work).map_err(|e| e.to_string())?;
         self.pending += 1;
@@ -713,6 +740,18 @@ impl Worker {
                             state.cursor = state.cursor.min(state.wifi_rows() - 1);
                         }
                         None => {}
+                    }
+                }
+                Reply::Level(id, result) => {
+                    self.levels = self.levels.saturating_sub(1);
+                    match result {
+                        Ok(value) => {
+                            state.values.insert(id, value);
+                        }
+                        Err(error) => {
+                            log::warn!("Level {id:?} failed: {error}");
+                            state.fail(Some(id), error);
+                        }
                     }
                 }
                 Reply::Info(info) => state.info = info,

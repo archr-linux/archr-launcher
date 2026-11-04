@@ -21,13 +21,20 @@ fn sliders_clamp_and_coalesce_while_a_value_is_applied() {
     let mut s = Settings::default();
     s.loading = false;
     s.open(Page::Sound);
-    s.values.insert(Id::Volume, "100".into());
+    s.cursor = 4;
+    s.values.insert(Id::SoundsVolume, "100".into());
     assert_eq!(s.handle(Button::R), Effect::None);
-    assert_eq!(s.handle(Button::L), Effect::Set(Id::Volume, "98".into()));
+    assert_eq!(
+        s.handle(Button::L),
+        Effect::Set(Id::SoundsVolume, "90".into())
+    );
     // Shown at once; the next press waits for the reply, then only the latest applies.
     assert_eq!(s.handle(Button::L), Effect::None);
-    assert_eq!(s.value(Id::Volume), "96");
-    assert_eq!(s.settle(Id::Volume, Ok("98".into())), Some("96".into()));
+    assert_eq!(s.value(Id::SoundsVolume), "80");
+    assert_eq!(
+        s.settle(Id::SoundsVolume, Ok("90".into())),
+        Some("80".into())
+    );
 }
 
 #[test]
@@ -48,19 +55,24 @@ fn system_info_shortcut_and_gpu_reboot_confirmation() {
 #[test]
 fn malformed_negative_and_extreme_slider_values_are_normalized_before_stepping() {
     for (stored, normalized, right) in [
-        ("oops", "60", "62"),
-        ("--1", "60", "62"),
-        ("+-1", "60", "62"),
-        ("-200", "0", "2"),
+        ("oops", "60", "70"),
+        ("--1", "60", "70"),
+        ("+-1", "60", "70"),
+        ("-200", "0", "10"),
         ("32767", "100", "100"),
         ("999999999999999999999999999999999999999999", "100", "100"),
     ] {
         assert_eq!(Id::Volume.normalize(stored), normalized);
+        assert_eq!(Id::SoundsVolume.normalize(stored), normalized);
         let mut s = Settings::default();
         s.loading = false;
         s.open(Page::Sound);
-        s.values.insert(Id::Volume, stored.into());
-        assert_eq!(s.handle(Button::R), Effect::Set(Id::Volume, right.into()));
+        s.cursor = 4;
+        s.values.insert(Id::SoundsVolume, stored.into());
+        assert_eq!(
+            s.handle(Button::R),
+            Effect::Set(Id::SoundsVolume, right.into())
+        );
     }
     assert_eq!(Id::Brightness.normalize("-32768"), "5");
 }

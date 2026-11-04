@@ -16,7 +16,7 @@ use archr_launcher::{
     preview::Preview,
     rescrape::Rescrape,
     saves::{Entry, Task},
-    state::{App, DataSource, Outcome, Screen},
+    state::{App, Button, DataSource, Outcome, Screen},
     wifi,
 };
 use archr_ui::{
@@ -753,6 +753,7 @@ fn run(
             button = None;
             repeat.clear();
         }
+        settings.track_hold(repeat.is_held(Button::L) || repeat.is_held(Button::R));
         if close_requested {
             deferred = None;
             repeat.clear();

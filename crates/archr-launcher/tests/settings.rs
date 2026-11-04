@@ -102,7 +102,7 @@ fn inactivity_keys_store_minutes_and_default_to_never() {
 }
 
 #[test]
-fn worker_does_not_block_input_and_commits_only_after_success() {
+fn level_holds_go_to_archr_levels_without_blocking_input() {
     use archr_launcher::{
         settings::Runtime,
         state::{Button, Outcome},
@@ -112,35 +112,59 @@ fn worker_does_not_block_input_and_commits_only_after_success() {
     let (dir, _) = fixture();
     script(&dir, "set-audio", "printf 'Speakers\\n'");
     script(&dir, "timeinfo", "printf 'UTC,\\n'");
+    // archr-levels logs its calls; a hold answers 62 slowly, a read 64.
+    let log = dir.path().join("levels.log");
     script(
         &dir,
         "archr-levels",
-        "if [ $# = 2 ]; then /bin/sleep 0.2; echo \"$2\"; else echo 60; fi",
+        &format!(
+            "echo \"$*\" >>{}; case $2 in hold) /bin/sleep 0.2; echo 62;; *) echo 64;; esac",
+            log.display()
+        ),
     );
+    let calls = || fs::read_to_string(&log).unwrap_or_default();
     let mut runtime = Runtime::new(Paths::new(Some(dir.path().to_owned())));
     runtime.open();
-    let deadline = Instant::now() + Duration::from_secs(3);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let settle = |runtime: &mut Runtime| {
+        while runtime.busy() {
+            runtime.poll();
+            assert!(Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+    };
     while runtime.state.loading {
         runtime.poll();
         assert!(Instant::now() < deadline);
         std::thread::yield_now();
     }
+    std::fs::remove_file(&log).ok();
     runtime.state.open(Page::Sound);
+    // A press starts a hold in archr-levels without blocking input.
     let began = Instant::now();
     assert_eq!(runtime.handle(Button::R), Outcome::None);
     assert!(began.elapsed() < Duration::from_millis(50));
-    // Sliders are optimistic: no "applying" state, the close gate still waits.
     assert_eq!(runtime.state.pending, None);
-    assert_eq!(runtime.state.value(Id::Volume), "62");
+    runtime.track_hold(true);
     assert!(runtime.mutations_pending());
-    runtime.handle(Button::B);
-    assert_eq!(runtime.state.page(), Page::Root);
-    while runtime.busy() {
-        runtime.poll();
-        assert!(Instant::now() < deadline);
-        std::thread::yield_now();
-    }
+    settle(&mut runtime);
     assert_eq!(runtime.state.value(Id::Volume), "62");
+    // Repeats renew it and read the level back; letting go releases it.
+    runtime.state.held = 1;
+    runtime.handle(Button::R);
+    settle(&mut runtime);
+    assert_eq!(runtime.state.value(Id::Volume), "64");
+    runtime.track_hold(false);
+    settle(&mut runtime);
+    assert!(!runtime.mutations_pending());
+    assert_eq!(calls(), "volume hold up\nrenew\nvolume\nrelease\nvolume\n");
+    // A hold never outlives the page being closed.
+    runtime.state.held = 0;
+    runtime.handle(Button::L);
+    runtime.close();
+    runtime.track_hold(true);
+    settle(&mut runtime);
+    assert!(calls().ends_with("volume hold down\nrelease\nvolume\n"));
     assert!(!runtime.mutations_pending());
 }
 
