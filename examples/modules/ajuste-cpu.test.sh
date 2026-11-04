@@ -53,5 +53,20 @@ items=$(grep '"row:jogos"' "${DATA}/last" | tail -n 1 | jq -c '.params.items')
 check "at most 20 items" '[ "$(jq length <<<"${items}")" = 20 ]'
 check "learning ones first" '[ "$(jq -r ".[0].badge" <<<"${items}")" = "@badge.learning" ]'
 check "the rest is counted" '[ "$(jq -r ".[19].title.key" <<<"${items}")" = "@more" ] && [ "$(jq ".[19].title.args.n" <<<"${items}")" = 8 ]'
+press() { # action, item; prints what the module said on stderr
+  # shellcheck disable=SC2069 # stderr to the caller, stdout to the file
+  { echo "${OPPS}"; printf '{"jsonrpc":"2.0","id":3,"method":"action.invoke","params":{"action":"%s","context":{"item":"%s"}}}\n' "$1" "$2"; } |
+    ARCHR_MODULE_DATA=${DATA} ARCHR_MODULE_DIR=${MODULE} bash "${MODULE}/main.sh" 2>&1 >"${DATA}/last"
+}
+
+# A games.json of version 1.0.0 ("speed", no "busy" nor "limit").
+OLD="g$(printf %s psx/old | cksum | cut -d' ' -f1)"
+printf '{"games":{"%s":{"cap":816000,"floor":null,"stable":1,"sessions":2,"status":"learning","name":"Old","system":"psx","key":"psx/old","sysname":"PlayStation","core":"x","hist":{"1416000":{"n":1,"speed":100,"ma":44,"man":1},"816000":{"n":1,"speed":100,"ma":30,"man":1}}}},"pending":null}\n' "${OLD}" >"${DATA}/games.json"
+# shellcheck disable=SC2034 # read by check's eval
+problems=$(press detalhes "${OLD}")
+check "old data: the details still come" '[ -z "${problems}" ] && grep -q "row:fatos" "${DATA}/last"'
+check "old data: no bar without occupancy" '[ "$(grep "row:barras" "${DATA}/last" | jq ".params.items | length")" = 0 ]'
+session psx/old 60 0 0 >/dev/null
+check "old data: the next session starts over" '[ "$(game psx/old | jq ".hist[\"816000\"] | [.n, .busy] | join(\",\")" -r)" = "1,60" ]'
 [ "${FAILED}" = 0 ] || head -c 600 "${DATA}/last"
 exit ${FAILED}

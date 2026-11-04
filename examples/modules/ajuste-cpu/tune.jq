@@ -20,8 +20,10 @@ def mhz: "\(. / 1000 | floor) MHz";
 def below($c): [$opps[] | select(. < $c)] | last;
 def above($c): [$opps[] | select(. > $c)] | first;
 # Averages of one ceiling's sessions: p95 occupancy, % of time at the limit.
-def busy($h): if ($h.n // 0) > 0 then ($h.busy / $h.n | round) else null end;
-def at_limit($h): if ($h.n // 0) > 0 then ($h.limit / $h.n | round) else null end;
+# Sessions of version 1.0.0 (a "speed" field, no "busy" nor "limit") have
+# no occupancy: they show nothing and the next session starts them over.
+def busy($h): if ($h.n // 0) > 0 and $h.busy != null then ($h.busy / $h.n | round) else null end;
+def at_limit($h): if ($h.n // 0) > 0 and $h.limit != null then ($h.limit / $h.n | round) else null end;
 def current($h): if ($h.man // 0) > 0 then $h.ma / $h.man else null end;
 # Battery saved at the game's ceiling against the highest one, in %.
 def saving:
@@ -90,7 +92,7 @@ def detail($id):
       game: {system: $g.system, game_key: $g.key}
     }]}),
     update("row:barras"; {items: [$g.hist | to_entries | sort_by(.key | tonumber) | .[] | (.key | tonumber) as $khz
-      | busy(.value) as $busy | {
+      | busy(.value) as $busy | select($busy != null) | {
         title: ($khz | mhz), value: "\($busy)%", progress: $busy,
         tone: (if $busy >= limit or ($g.floor != null and $khz <= $g.floor) then "bad" elif $khz == $g.cap then "info" else "plain" end)
       }]}),
@@ -121,7 +123,7 @@ def learn($perf):
   | ($perf.busy_p95 >= limit or $perf.limit_seconds >= 2) as $lost
   | ($perf.busy_p95 < headroom and $perf.limit_seconds == 0) as $room
   | .sessions += 1
-  | .hist[$cap | tostring] |= ((. // {n: 0, busy: 0, limit: 0, ma: 0, man: 0})
+  | .hist[$cap | tostring] |= ((. // {} | if .busy == null then {n: 0, busy: 0, limit: 0, ma: 0, man: 0} else . end)
       | .n += 1 | .busy += $perf.busy_p95 | .limit += ($perf.limit_seconds * 100 / $perf.seconds)
       | if $perf.current_ma != null then .ma += $perf.current_ma | .man += 1 else . end)
   | if out then .
