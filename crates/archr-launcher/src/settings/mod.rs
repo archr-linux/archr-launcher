@@ -6,6 +6,7 @@ mod controls;
 mod diag;
 mod games;
 mod info;
+mod levels;
 mod mangohud;
 pub use mangohud::supported as mangohud_supported;
 mod pages;
@@ -44,23 +45,33 @@ impl Backend {
             .trim()
             .to_owned()
     }
-    /// A level hold on archr-levels; returns the level after it.
-    pub fn level(&self, id: Id, level: archr_ui::settings::Level) -> Result<String, String> {
+    fn level_command(&self, id: Id, args: &[&str]) -> Result<levels::Reading, String> {
+        let text = self.command_with_timeout("archr-levels", args, Duration::from_secs(3))?;
+        levels::Reading::parse(id, &text).ok_or_else(|| "Invalid level response".into())
+    }
+    fn set_level(&self, id: Id, value: &str) -> Result<levels::Reading, String> {
+        if !value
+            .parse::<u8>()
+            .is_ok_and(|n| n <= 100 && (id != Id::Brightness || n >= 5))
+        {
+            return Err("Invalid setting value".into());
+        }
+        self.level_command(id, &[Self::level_kind(id), value, "seq"])
+    }
+    /// A level hold on archr-levels; returns the level and its source version.
+    fn level(&self, id: Id, level: archr_ui::settings::Level) -> Result<levels::Reading, String> {
         use archr_ui::settings::Level;
         let kind = Self::level_kind(id);
         let short = Duration::from_secs(3);
         match level {
             Level::Hold(up) => {
                 let direction = if up { "up" } else { "down" };
-                return self
-                    .command_with_timeout("archr-levels", &[kind, "hold", direction], short)
-                    .map(|v| id.normalize(&v));
+                return self.level_command(id, &[kind, "hold", direction, "seq"]);
             }
             Level::Renew => self.command_with_timeout("archr-levels", &["renew"], short)?,
             Level::Release => self.command_with_timeout("archr-levels", &["release"], short)?,
         };
-        self.command_with_timeout("archr-levels", &[kind], short)
-            .map(|v| id.normalize(&v))
+        self.level_command(id, &[kind, "seq"])
     }
     fn level_kind(id: Id) -> &'static str {
         if id == Id::Volume {
@@ -148,6 +159,9 @@ impl Backend {
         Ok(Box::new(adapters))
     }
     pub fn load(&self) -> Result<Settings, String> {
+        self.load_with_levels().map(|(state, _)| state)
+    }
+    fn load_with_levels(&self) -> Result<Loaded, String> {
         let cfg = self.cfg()?;
         let mut state = Settings::default();
         let ids = [
@@ -174,10 +188,12 @@ impl Backend {
             Id::DebugMode,
             diag::debug_value(cfg.get_setting("system.loglevel", None, None)),
         );
-        // The live levels, on archr-levels' perceptual scale (it owns both keys).
+        // Keep source versions with the snapshot: notices may overtake this load.
+        let mut readings = BTreeMap::new();
         for id in [Id::Volume, Id::Brightness] {
-            if let Ok(level) = self.command("archr-levels", &[Self::level_kind(id)]) {
-                state.values.insert(id, id.normalize(&level));
+            if let Ok(reading) = self.level_command(id, &[Self::level_kind(id), "seq"]) {
+                state.values.insert(id, reading.value.clone());
+                readings.insert(id, reading);
             }
         }
         let mut errors = Vec::new();
@@ -253,9 +269,12 @@ impl Backend {
             log::warn!("Settings discovery failed: {error}");
             state.fail(None, error);
         }
-        Ok(state)
+        Ok((state, readings))
     }
     pub fn apply(&self, id: Id, value: &str) -> Result<String, String> {
+        if matches!(id, Id::Volume | Id::Brightness) {
+            return self.set_level(id, value).map(|reading| reading.value);
+        }
         if id == Id::DebugMode {
             return self.apply_debug(value);
         }
@@ -268,9 +287,7 @@ impl Backend {
             return result;
         }
         let valid = match id {
-            Id::Volume | Id::SoundsVolume | Id::Brightness => value
-                .parse::<u8>()
-                .is_ok_and(|n| n <= 100 && (id != Id::Brightness || n >= 5)),
+            Id::SoundsVolume => value.parse::<u8>().is_ok_and(|n| n <= 100),
             Id::Sounds | Id::Turbo | Id::Gpu | Id::Governor | Id::Language => {
                 id.choices().contains(&value)
             }
@@ -299,12 +316,6 @@ impl Backend {
         };
         if !valid {
             return Err("Invalid setting value".into());
-        }
-        // archr-levels applies at once and saves the level once it settles.
-        if matches!(id, Id::Volume | Id::Brightness) {
-            return self
-                .command("archr-levels", &[Self::level_kind(id), value])
-                .map(|level| id.normalize(&level));
         }
         // Legacy scripts own these keys. Never pre-save, restore or write twice.
         let script = match id {
@@ -411,10 +422,13 @@ type StorageReply = (
     Result<&'static str, String>,
     Box<archr_ui::settings::storage::Storage>,
 );
+type Loaded = (Settings, BTreeMap<Id, levels::Reading>);
 enum Reply {
-    Loaded(Result<Box<Settings>, String>),
+    Loaded(Result<Box<Loaded>, String>),
     Set(Id, Result<String, String>),
-    Level(Id, Result<String, String>),
+    SetLevel(Id, Result<levels::Reading, String>),
+    Level(Id, Result<levels::Reading, String>),
+    LiveLevel(Id, levels::Reading),
     Info(Information),
     Usb(archr_ui::settings::network::Usb),
     Scan(
@@ -463,6 +477,9 @@ pub struct Worker {
     store: mpsc::Sender<archr_ui::settings::store::Action>,
     slow: mpsc::Sender<diag::Slow>,
     rx: mpsc::Receiver<Reply>,
+    /// Dropping this stops the socket listener off-thread.
+    _level_notices: std::sync::Arc<()>,
+    level_sequences: BTreeMap<Id, u64>,
     pending: usize,
     scanning: bool,
     /// A scan was requested while one ran: dispatch again when it ends.
@@ -478,6 +495,7 @@ impl Worker {
     pub fn start(paths: Paths) -> Result<Self, String> {
         let (tx, requests) = mpsc::channel();
         let (results, rx) = mpsc::channel();
+        let level_notices = levels::start(&paths, results.clone())?;
         let (scans, scan_requests) = mpsc::channel();
         let (bt_scans, bt_requests) = mpsc::channel();
         let (profiles, profile_requests) = mpsc::channel::<()>();
@@ -553,7 +571,10 @@ impl Worker {
                 let backend = Backend::new(paths);
                 while let Ok(work) = requests.recv() {
                     let reply = match work {
-                        Work::Load => Reply::Loaded(backend.load().map(Box::new)),
+                        Work::Load => Reply::Loaded(backend.load_with_levels().map(Box::new)),
+                        Work::Set(id @ (Id::Volume | Id::Brightness), value) => {
+                            Reply::SetLevel(id, backend.set_level(id, &value))
+                        }
                         Work::Set(id, value) => {
                             let reply = Reply::Set(id, backend.apply(id, &value));
                             if id == Id::MergedStorage {
@@ -630,6 +651,8 @@ impl Worker {
             store,
             slow,
             rx,
+            _level_notices: level_notices,
+            level_sequences: BTreeMap::new(),
             pending: 0,
             scanning: false,
             rescan: false,
@@ -701,6 +724,22 @@ impl Worker {
         self.pending += 1;
         Ok(())
     }
+    /// Arrival order is not state order: the daemon owns the version.
+    fn apply_level(&mut self, state: &mut Settings, id: Id, reading: &levels::Reading) -> bool {
+        if self
+            .level_sequences
+            .get(&id)
+            .is_some_and(|seq| reading.seq < *seq)
+        {
+            return false;
+        }
+        self.level_sequences.insert(id, reading.seq);
+        let changed = state.value(id) != reading.value;
+        if changed {
+            state.values.insert(id, reading.value.clone());
+        }
+        changed
+    }
     /// Language is returned only after durable success, never speculatively.
     pub(super) fn poll(
         &mut self,
@@ -710,6 +749,11 @@ impl Worker {
         let mut changed = false;
         let mut language = None;
         while let Ok(reply) = self.rx.try_recv() {
+            // A notice is not a completed request or a setting effect: no write-back.
+            if let Reply::LiveLevel(id, ref reading) = reply {
+                changed |= self.apply_level(state, id, reading);
+                continue;
+            }
             changed = true;
             if matches!(reply, Reply::BtScan(_)) {
                 self.bt_scanning = false;
@@ -738,7 +782,17 @@ impl Worker {
                 self.pending = self.pending.saturating_sub(1);
             }
             match reply {
-                Reply::Loaded(Ok(mut loaded)) => {
+                Reply::LiveLevel(..) => unreachable!("notices were handled above"),
+                Reply::Loaded(Ok(loaded)) => {
+                    let (mut loaded, readings) = *loaded;
+                    for id in [Id::Volume, Id::Brightness] {
+                        if let Some(reading) = readings.get(&id) {
+                            self.apply_level(state, id, reading);
+                        } else if !self.level_sequences.contains_key(&id) {
+                            continue;
+                        }
+                        loaded.values.insert(id, state.value(id).to_owned());
+                    }
                     std::mem::swap(&mut state.values, &mut loaded.values);
                     // Module switches and rows live in the values too.
                     let modules = state.modules.view.clone();
@@ -825,11 +879,23 @@ impl Worker {
                         None => {}
                     }
                 }
+                Reply::SetLevel(id, result) => {
+                    if let Err(error) = &result {
+                        log::warn!("Setting {id:?} failed: {error}");
+                    }
+                    let result = result.map(|reading| {
+                        self.apply_level(state, id, &reading);
+                        state.value(id).to_owned()
+                    });
+                    if let Some(next) = state.settle(id, result) {
+                        let _ = self.send(Work::Set(id, next));
+                    }
+                }
                 Reply::Level(id, result) => {
                     self.levels = self.levels.saturating_sub(1);
                     match result {
-                        Ok(value) => {
-                            state.values.insert(id, value);
+                        Ok(reading) => {
+                            self.apply_level(state, id, &reading);
                         }
                         Err(error) => {
                             log::warn!("Level {id:?} failed: {error}");
@@ -1080,4 +1146,114 @@ fn refresh_storage(state: &mut Settings, facts: archr_ui::settings::storage::Sto
         working: ui.working,
         ..facts
     };
+}
+
+#[cfg(test)]
+mod level_order_tests {
+    use super::*;
+
+    fn fixture() -> (tempfile::TempDir, Worker, mpsc::Sender<Reply>) {
+        let dir = tempfile::tempdir().unwrap();
+        let mut worker = Worker::start(Paths::new(Some(dir.path().into()))).unwrap();
+        let (tx, rx) = mpsc::channel();
+        worker.rx = rx;
+        (dir, worker, tx)
+    }
+    fn reading(value: &str, seq: u64) -> levels::Reading {
+        levels::Reading {
+            value: value.into(),
+            seq,
+        }
+    }
+    fn snapshot(values: &[(Id, &str, u64)]) -> Reply {
+        let mut state = Settings::default();
+        let mut readings = BTreeMap::new();
+        for &(id, value, seq) in values {
+            state.values.insert(id, value.into());
+            readings.insert(id, reading(value, seq));
+        }
+        Reply::Loaded(Ok(Box::new((state, readings))))
+    }
+
+    #[test]
+    fn a_late_loaded_value_cannot_replace_a_newer_notice_of_the_same_level() {
+        let (_dir, mut worker, tx) = fixture();
+        let mut state = Settings::default();
+        tx.send(Reply::LiveLevel(Id::Volume, reading("70", 2)))
+            .unwrap();
+        worker.poll(&mut state, &mut None);
+        tx.send(snapshot(&[
+            (Id::Volume, "50", 1),
+            (Id::Brightness, "35", 1),
+        ]))
+        .unwrap();
+        worker.poll(&mut state, &mut None);
+        assert_eq!(state.value(Id::Volume), "70");
+        assert_eq!(state.value(Id::Brightness), "35", "versions are per level");
+        // A failed live read on reopening must not replace known state with config.
+        tx.send(snapshot(&[])).unwrap();
+        worker.poll(&mut state, &mut None);
+        assert_eq!(state.value(Id::Volume), "70");
+        assert_eq!(state.value(Id::Brightness), "35");
+    }
+
+    #[test]
+    fn late_hold_and_release_values_cannot_replace_newer_notices_of_the_same_level() {
+        let (_dir, mut worker, tx) = fixture();
+        let mut state = Settings::default();
+        worker.pending = 2;
+        worker.levels = 2;
+        tx.send(Reply::LiveLevel(Id::Volume, reading("70", 3)))
+            .unwrap();
+        tx.send(Reply::Level(Id::Volume, Ok(reading("50", 2))))
+            .unwrap();
+        worker.poll(&mut state, &mut None);
+        assert_eq!(state.value(Id::Volume), "70", "late hold");
+        assert_eq!((worker.pending, worker.levels), (1, 1));
+        tx.send(Reply::LiveLevel(Id::Volume, reading("80", 5)))
+            .unwrap();
+        tx.send(Reply::Level(Id::Volume, Ok(reading("60", 4))))
+            .unwrap();
+        worker.poll(&mut state, &mut None);
+        assert_eq!(state.value(Id::Volume), "80", "late release");
+        assert_eq!((worker.pending, worker.levels), (0, 0));
+        // Arrival can invert the other way too: the notice may be late.
+        tx.send(Reply::Level(Id::Volume, Ok(reading("90", 8))))
+            .unwrap();
+        tx.send(Reply::LiveLevel(Id::Volume, reading("85", 7)))
+            .unwrap();
+        worker.poll(&mut state, &mut None);
+        assert_eq!(state.value(Id::Volume), "90", "late notice");
+    }
+
+    #[test]
+    fn a_notice_advances_the_version_even_when_the_value_does_not_change() {
+        let (_dir, mut worker, tx) = fixture();
+        let mut state = Settings::default();
+        tx.send(Reply::LiveLevel(Id::Volume, reading("70", 1)))
+            .unwrap();
+        worker.poll(&mut state, &mut None);
+        tx.send(Reply::LiveLevel(Id::Volume, reading("70", 10)))
+            .unwrap();
+        assert!(!worker.poll(&mut state, &mut None).0);
+        tx.send(snapshot(&[(Id::Volume, "60", 9)])).unwrap();
+        worker.poll(&mut state, &mut None);
+        assert_eq!(state.value(Id::Volume), "70");
+    }
+
+    #[test]
+    fn a_late_set_reply_completes_without_overwriting_a_newer_notice() {
+        let (_dir, mut worker, tx) = fixture();
+        let mut state = Settings::default();
+        state.pending = Some(Id::Volume);
+        worker.pending = 1;
+        tx.send(Reply::LiveLevel(Id::Volume, reading("70", 5)))
+            .unwrap();
+        tx.send(Reply::SetLevel(Id::Volume, Ok(reading("50", 4))))
+            .unwrap();
+        worker.poll(&mut state, &mut None);
+        assert_eq!(state.value(Id::Volume), "70");
+        assert_eq!(state.pending, None);
+        assert!(!worker.busy());
+    }
 }
