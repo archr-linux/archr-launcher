@@ -556,9 +556,25 @@ repositório, em `~/.archr/archr-modules-ed25519.pem`, modo 600):
    `archr-linux/archr-modules`.
 
 A chave privada nunca vai para o GitHub, para o aparelho nem para o
-repositório; quem tomar a conta `archr-linux` não consegue dar selo. Um módulo
-instalado só mostra o selo se o digest do pacote que está no aparelho estiver
-na lista.
+repositório; quem tomar a conta `archr-linux` não consegue dar selo.
+
+**Selo de um módulo instalado.** Nunca é guardado: é calculado de novo ao
+iniciar, a cada mudança nos módulos e sempre que a Loja busca a lista, para
+todos os instalados, qualquer que seja a aba aberta. Vale só se:
+
+- a última lista que passou nas checagens, guardada como veio
+  (`modules-reviewed.json` e `.sig`, ao lado do `modules.toml`), passa de novo
+  agora: assinatura, `expires` no futuro, `serial` não menor que o último
+  visto. Sem rede, vale a guardada; vencida ou inválida, nenhum selo;
+- ela traz o repositório e o digest do pacote instalado (guardado no
+  `modules.toml` na instalação);
+- os arquivos de `modules/<id>/` ainda são os instalados: na instalação o
+  launcher guarda um SHA-256 da árvore (caminhos, tipos, conteúdo) e o confere
+  numa thread à parte. Um arquivo mudado ou um link: sem selo.
+
+Uma lista nova assinada sem o módulo (revogação) tira o selo assim que a Loja
+a busca (o GitHub fica em cache por uma hora). Se uma atualização volta atrás,
+o digest e o hash da versão anterior voltam juntos.
 
 Regras da release (a última, não pre-release):
 

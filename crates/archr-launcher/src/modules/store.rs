@@ -81,6 +81,8 @@ pub struct Installed {
     pub source: String,
     pub version: String,
     pub digest: String,
+    /// `registry::tree` of the folder as installed.
+    pub content: String,
     pub granted: Vec<String>,
 }
 
@@ -128,6 +130,10 @@ impl Shop {
         self.review_key = key;
         self
     }
+    /// The public key this shop checks the reviewed list with.
+    pub fn review_key(&self) -> [u8; 32] {
+        self.review_key
+    }
     pub fn production(cache: PathBuf, dirs: Dirs) -> Self {
         Self::new(GitHub::curl(&cache, HOSTS), cache, dirs)
     }
@@ -166,76 +172,41 @@ impl Shop {
     }
     /// The reviewed list: repository and package digest of each reviewed
     /// release, from `reviewed.json` signed by the project's key
-    /// (`reviewed.json.sig`). Unreachable: nothing is reviewed. Unsigned,
-    /// badly signed or older than one already seen: nothing is reviewed
-    /// either, and the key says why.
+    /// (`reviewed.json.sig`). A list that passes is kept on disk as
+    /// downloaded; unreachable, the kept one is checked again instead.
+    /// Unsigned, badly signed, expired or older than one already seen:
+    /// nothing is reviewed, and the key says why.
     fn reviewed(&self) -> Result<Vec<(String, String)>, &'static str> {
         let (owner, repo) = REVIEWED.split_once('/').expect("owner/repo");
-        let Ok((_, mut assets)) = self.release(owner, repo) else {
-            return Ok(Vec::new());
+        let remote = self.release(owner, repo).ok().and_then(|(_, mut assets)| {
+            let list = assets.remove("reviewed.json")?;
+            let fetch = |asset: &Asset, name: &str| {
+                self.github
+                    .saved(&asset.url, name, false)
+                    .0
+                    .map(|(body, _)| body)
+                    .unwrap_or_default()
+            };
+            let body = fetch(&list, "reviewed.json");
+            let signature = assets
+                .remove("reviewed.json.sig")
+                .map(|asset| fetch(&asset, "reviewed.json.sig"))
+                .unwrap_or_default();
+            Some((body, signature))
+        });
+        let Some((body, signature)) = remote else {
+            return saved_reviewed(&self.dirs, &self.review_key);
         };
-        let Some(list) = assets.remove("reviewed.json") else {
-            return Ok(Vec::new());
-        };
-        let fetch = |asset: &Asset, name: &str| {
-            self.github
-                .saved(&asset.url, name, false)
-                .0
-                .map(|(body, _)| body)
-                .unwrap_or_default()
-        };
-        let body = fetch(&list, "reviewed.json");
-        let signature = assets
-            .remove("reviewed.json.sig")
-            .map(|asset| fetch(&asset, "reviewed.json.sig"))
-            .unwrap_or_default();
-        if !signed(&body, &signature, &self.review_key) {
-            log::warn!("The reviewed list is not signed by the ArchR key: no module is reviewed");
-            return Err("modules.review_unsigned");
-        }
-        let json: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
-        // A list past its date, or older than one already seen (or than this
-        // build knew), could bring back a revoked review.
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_secs());
-        if json["expires"]
-            .as_u64()
-            .is_none_or(|expires| expires <= now)
-        {
-            log::warn!("The reviewed list has expired: no module is reviewed");
-            return Err("modules.review_expired");
-        }
-        let serial = json["serial"].as_u64().unwrap_or(0);
-        let path = self.dirs.state.with_file_name("modules-reviewed.serial");
-        let seen = read_bytes(&path, 64, Symlinks::Reject)
-            .ok()
-            .and_then(|b| String::from_utf8(b).ok())
-            .and_then(|t| t.trim().parse::<u64>().ok())
-            .unwrap_or(0)
-            .max(MIN_SERIAL);
-        if serial < seen {
-            log::warn!("The reviewed list {serial} is older than {seen}: ignored");
-            return Err("modules.review_old");
-        }
-        if serial > seen {
-            if let Err(error) = archr_io::atomic_publish(&path, false, |file| {
-                std::io::Write::write_all(file, serial.to_string().as_bytes())
-            }) {
-                log::warn!("Cannot record the reviewed list's serial {serial}: {error}");
+        let list = check_list(&body, &signature, &self.review_key, &self.dirs)?;
+        let (path, sig) = list_paths(&self.dirs);
+        for (path, bytes) in [(&sig, &signature), (&path, &body)] {
+            if let Err(error) =
+                archr_io::atomic_publish(path, false, |file| std::io::Write::write_all(file, bytes))
+            {
+                log::warn!("Cannot keep the reviewed list: {error}");
             }
         }
-        Ok(json["modules"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|m| {
-                Some((
-                    m["repo"].as_str()?.to_owned(),
-                    m["digest"].as_str()?.to_owned(),
-                ))
-            })
-            .collect())
+        Ok(list)
     }
     /// A `.tar.gz` of the latest release carries one of `digests`. Asked
     /// only for repositories on the reviewed list (saved for an hour).
@@ -554,11 +525,13 @@ impl Shop {
         })();
         let _ = fs::remove_dir_all(&staging);
         result?;
+        let content = registry::tree(&self.dirs.module(id)).unwrap_or_default();
         Ok(Installed {
             id: id.clone(),
             source: card.source(),
             version: manifest.version.clone(),
             digest: package.digest.clone(),
+            content,
             granted: manifest.permissions.tokens().into_iter().collect(),
         })
     }
@@ -630,6 +603,83 @@ impl Shop {
             },
         }
     }
+}
+
+/// Where the last reviewed list that passed is kept, as downloaded.
+fn list_paths(dirs: &Dirs) -> (PathBuf, PathBuf) {
+    (
+        dirs.state.with_file_name("modules-reviewed.json"),
+        dirs.state.with_file_name("modules-reviewed.json.sig"),
+    )
+}
+/// `reviewed.json` and its signature, checked: the project's key, an
+/// `expires` still ahead, and a serial no older than the last one seen nor
+/// than this build's `MIN_SERIAL`. A newer serial is recorded.
+pub fn check_list(
+    body: &[u8],
+    signature: &[u8],
+    key: &[u8; 32],
+    dirs: &Dirs,
+) -> Result<Vec<(String, String)>, &'static str> {
+    if !signed(body, signature, key) {
+        log::warn!("The reviewed list is not signed by the ArchR key: no module is reviewed");
+        return Err("modules.review_unsigned");
+    }
+    let json: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+    // A list past its date, or older than one already seen (or than this
+    // build knew), could bring back a revoked review.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    if json["expires"]
+        .as_u64()
+        .is_none_or(|expires| expires <= now)
+    {
+        log::warn!("The reviewed list has expired: no module is reviewed");
+        return Err("modules.review_expired");
+    }
+    let serial = json["serial"].as_u64().unwrap_or(0);
+    let path = dirs.state.with_file_name("modules-reviewed.serial");
+    let seen = read_bytes(&path, 64, Symlinks::Reject)
+        .ok()
+        .and_then(|b| String::from_utf8(b).ok())
+        .and_then(|t| t.trim().parse::<u64>().ok())
+        .unwrap_or(0)
+        .max(MIN_SERIAL);
+    if serial < seen {
+        log::warn!("The reviewed list {serial} is older than {seen}: ignored");
+        return Err("modules.review_old");
+    }
+    if serial > seen {
+        if let Err(error) = archr_io::atomic_publish(&path, false, |file| {
+            std::io::Write::write_all(file, serial.to_string().as_bytes())
+        }) {
+            log::warn!("Cannot record the reviewed list's serial {serial}: {error}");
+        }
+    }
+    Ok(json["modules"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|m| {
+            Some((
+                m["repo"].as_str()?.to_owned(),
+                m["digest"].as_str()?.to_owned(),
+            ))
+        })
+        .collect())
+}
+/// The kept reviewed list, checked again as if just downloaded. None kept:
+/// nothing is reviewed.
+pub fn saved_reviewed(dirs: &Dirs, key: &[u8; 32]) -> Result<Vec<(String, String)>, &'static str> {
+    let (path, sig) = list_paths(dirs);
+    let (Ok(body), Ok(signature)) = (
+        read_bytes(&path, TOML_LIMIT, Symlinks::Reject),
+        read_bytes(&sig, 1024, Symlinks::Reject),
+    ) else {
+        return Ok(Vec::new());
+    };
+    check_list(&body, &signature, key, dirs)
 }
 
 /// Two `sha256:<hex>` digests name the same package.

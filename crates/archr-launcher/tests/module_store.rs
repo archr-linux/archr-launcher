@@ -834,3 +834,119 @@ fn the_store_follows_the_launchers_language_change() {
     });
     assert_eq!(name.as_deref(), Some("Bateria"));
 }
+
+/// The badge on the Modules page, as the host's views show it: the last
+/// one seen within `settle`, or the first equal to `want` before 10 s.
+fn badge_of(
+    modules: &archr_launcher::modules::Modules,
+    want: Option<bool>,
+    settle: std::time::Duration,
+) -> Option<bool> {
+    use archr_launcher::modules::Event;
+    let start = std::time::Instant::now();
+    let mut last = None;
+    loop {
+        for event in modules.poll() {
+            if let Event::View(view) = event {
+                if let Some(m) = view.modules.iter().find(|m| m.id == "bateria") {
+                    last = Some(m.reviewed);
+                }
+            }
+        }
+        match want {
+            Some(w) if last == Some(w) => return last,
+            Some(_) if start.elapsed() > std::time::Duration::from_secs(10) => return last,
+            None if start.elapsed() > settle => return last,
+            _ => {}
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+/// bateria 1.0.0, reviewed, installed through the host's store lane.
+fn install_reviewed(root: &Path, fake: &Fake) -> archr_launcher::modules::Modules {
+    use archr_ui::modules::{Request, StoreAction};
+    let offer = shop(root, fake).offer(&card()).unwrap();
+    assert!(offer.reviewed);
+    let modules = host(root, fake, std::time::Duration::from_secs(3600));
+    modules.request(Request::Store(StoreAction::Install(Box::new(offer))));
+    until_store(&modules, |r, _| {
+        r.iter().any(|r| matches!(r, StoreReply::Done(Ok(_))))
+    });
+    modules
+}
+fn reviewed_release(fake: &Fake) {
+    let tarball = Tarball::module(MANIFEST).bytes();
+    publish(fake, MANIFEST, &tarball, &sha(&tarball), &sha(&tarball));
+}
+
+/// The badge is derived, never stored: the kept list, checked again, names
+/// the installed package, and its files are still those installed. It
+/// holds offline after a restart, and goes when a file changes or the kept
+/// list expires.
+#[test]
+fn the_badge_follows_the_kept_list_and_the_files_on_disk() {
+    let root = tempfile::tempdir().unwrap();
+    let fake = Fake::default();
+    reviewed_release(&fake);
+    let modules = install_reviewed(root.path(), &fake);
+    let wait = std::time::Duration::from_millis(800);
+    assert_eq!(badge_of(&modules, Some(true), wait), Some(true));
+    let record = State::load(&root.path().join("modules.toml")).modules["bateria"].clone();
+    assert!(record.content.starts_with("sha256:"), "{record:?}");
+    drop(modules);
+    // Offline: the list kept on disk still counts.
+    let offline = Fake::default();
+    let modules = host(root.path(), &offline, std::time::Duration::from_secs(3600));
+    assert_eq!(badge_of(&modules, Some(true), wait), Some(true));
+    drop(modules);
+    // A file changed on disk: no badge.
+    let script = root.path().join("modules/bateria/main.sh");
+    let original = fs::read(&script).unwrap();
+    fs::write(&script, b"#!/bin/bash\necho changed\n").unwrap();
+    let modules = host(root.path(), &offline, std::time::Duration::from_secs(3600));
+    assert_eq!(badge_of(&modules, None, wait), Some(false));
+    drop(modules);
+    fs::write(&script, original).unwrap();
+    // The kept list expired: no badge.
+    let expired = format!(
+        r#"{{"serial":3,"expires":1000,"modules":[{{"repo":"kaio-dev/archr-bateria","digest":"{}"}}]}}"#,
+        record.digest
+    );
+    fs::write(root.path().join("modules-reviewed.json"), &expired).unwrap();
+    fs::write(
+        root.path().join("modules-reviewed.json.sig"),
+        sign(expired.as_bytes()),
+    )
+    .unwrap();
+    let modules = host(root.path(), &offline, std::time::Duration::from_secs(3600));
+    assert_eq!(badge_of(&modules, None, wait), Some(false));
+}
+
+/// A newer signed list without the module takes the badge off every
+/// installed module, whatever store tab brought it.
+#[test]
+fn a_revoking_list_takes_the_badge_off_installed_modules() {
+    use archr_ui::modules::{Request, StoreAction};
+    let root = tempfile::tempdir().unwrap();
+    let fake = Fake::default();
+    reviewed_release(&fake);
+    let modules = install_reviewed(root.path(), &fake);
+    let wait = std::time::Duration::from_millis(800);
+    assert_eq!(badge_of(&modules, Some(true), wait), Some(true));
+    drop(modules);
+    // Past the hour the store keeps a release's answer.
+    fs::remove_dir_all(root.path().join("cache")).unwrap();
+    let revoked = Fake::default();
+    let tarball = Tarball::module(MANIFEST).bytes();
+    publish(&revoked, MANIFEST, &tarball, &sha(&tarball), "");
+    let list = r#"{"serial":4,"expires":4102444800,"modules":[]}"#;
+    review(&revoked, list.as_bytes(), &sign(list.as_bytes()));
+    let modules = host(root.path(), &revoked, std::time::Duration::from_secs(3600));
+    assert_eq!(
+        badge_of(&modules, Some(true), wait),
+        Some(true),
+        "kept list"
+    );
+    modules.request(Request::Store(StoreAction::List(Tab::Reviewed, true)));
+    assert_eq!(badge_of(&modules, Some(false), wait), Some(false));
+}

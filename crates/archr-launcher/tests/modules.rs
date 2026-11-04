@@ -576,6 +576,8 @@ fn an_update_that_keeps_failing_gives_way_to_the_previous_version() {
     let record = state.modules.get_mut("lento").unwrap();
     record.digest = "sha256:new".into();
     record.previous_digest = "sha256:old".into();
+    record.content = "sha256:new-files".into();
+    record.previous_content = "sha256:old-files".into();
     state.save(&path).unwrap();
     let mut probe = Probe::new(base);
     probe.wait(|v, _| v.modules.first().is_some_and(|m| m.version == "1.1.0"));
@@ -591,6 +593,11 @@ fn an_update_that_keeps_failing_gives_way_to_the_previous_version() {
     assert_eq!(
         (record.digest.as_str(), record.bad_digest.as_str()),
         ("sha256:old", "sha256:new")
+    );
+    // Its content hash comes back with it: the badge is derived from both.
+    assert_eq!(
+        (record.content.as_str(), record.previous_content.as_str()),
+        ("sha256:old-files", "")
     );
     assert_eq!(
         probe.view.modules[0].status,
