@@ -83,11 +83,41 @@ pub struct Record {
     pub used: u64,
     pub auto_updated: u64,
 }
+/// The most bytes of file content `tree` reads: past it, no hash.
+pub const TREE_LIMIT: u64 = 32 << 20;
 /// SHA-256 of a module folder's files: every path, kind and content, in
 /// name order. `None` with anything but files and folders (a link), or
-/// past 32 MiB of content.
+/// past `TREE_LIMIT` bytes of content.
 pub fn tree(dir: &Path) -> Option<String> {
+    tree_within(dir, TREE_LIMIT)
+}
+/// `tree` with another limit. Files are read in blocks, each counted
+/// against what is left before it is read: a big file never lands in memory.
+pub fn tree_within(dir: &Path, limit: u64) -> Option<String> {
     use sha2::{Digest, Sha256};
+    use std::io::Read;
+    fn file(path: &Path, size: u64, hash: &mut Sha256, left: &mut u64) -> Option<()> {
+        *left = left.checked_sub(size)?;
+        let mut file = fs::File::open(path).ok()?;
+        if !file.metadata().ok()?.is_file() {
+            return None;
+        }
+        let mut block = vec![0u8; 64 << 10];
+        let mut read = 0u64;
+        loop {
+            let n = file.read(&mut block).ok()?;
+            if n == 0 {
+                break;
+            }
+            read += n as u64;
+            // It grew since it was measured: not the counted file.
+            if read > size {
+                return None;
+            }
+            hash.update(&block[..n]);
+        }
+        (read == size).then_some(())
+    }
     fn walk(dir: &Path, base: &Path, hash: &mut Sha256, left: &mut u64) -> Option<()> {
         let mut entries: Vec<_> = fs::read_dir(dir).ok()?.collect::<Result<_, _>>().ok()?;
         entries.sort_by_key(fs::DirEntry::file_name);
@@ -99,10 +129,9 @@ pub fn tree(dir: &Path) -> Option<String> {
                 hash.update(format!("d {name}\0"));
                 walk(&path, base, hash, left)?;
             } else if kind.is_file() {
-                let bytes = fs::read(&path).ok()?;
-                *left = left.checked_sub(bytes.len() as u64)?;
-                hash.update(format!("f {name} {}\0", bytes.len()));
-                hash.update(&bytes);
+                let size = entry.metadata().ok()?.len();
+                hash.update(format!("f {name} {size}\0"));
+                file(&path, size, hash, left)?;
             } else {
                 return None;
             }
@@ -110,7 +139,8 @@ pub fn tree(dir: &Path) -> Option<String> {
         Some(())
     }
     let mut hash = Sha256::new();
-    walk(dir, dir, &mut hash, &mut (32 << 20))?;
+    let mut left = limit;
+    walk(dir, dir, &mut hash, &mut left)?;
     let hex: String = hash.finalize().iter().map(|b| format!("{b:02x}")).collect();
     Some(format!("sha256:{hex}"))
 }
@@ -650,6 +680,13 @@ mod tests {
         assert_eq!(tree(&module).unwrap(), first);
         std::os::unix::fs::symlink("/etc/passwd", module.join("link")).unwrap();
         assert_eq!(tree(&module), None, "a link");
+        fs::remove_file(module.join("link")).unwrap();
+        // Two files of 1 and 1 bytes: 2 fits, 1 does not.
+        assert_eq!(tree_within(&module, 2).as_deref(), Some(first.as_str()));
+        assert_eq!(tree_within(&module, 1), None, "past the limit");
+        fs::write(module.join("big"), vec![0u8; 200 << 10]).unwrap();
+        assert!(tree_within(&module, 100 << 10).is_none(), "a file past it");
+        assert!(tree_within(&module, 300 << 10).is_some());
     }
 
     #[test]

@@ -995,7 +995,11 @@ fn a_revoking_list_from_an_offer_takes_the_badge_off() {
     let list = r#"{"serial":4,"expires":4102444800,"modules":[]}"#;
     review(&revoked, list.as_bytes(), &sign(list.as_bytes()));
     let modules = host(root.path(), &revoked, std::time::Duration::from_secs(3600));
-    assert_eq!(badge_of(&modules, Some(true), wait), Some(true), "kept list");
+    assert_eq!(
+        badge_of(&modules, Some(true), wait),
+        Some(true),
+        "kept list"
+    );
     modules.request(Request::Store(StoreAction::Open(Box::new(card()))));
     assert_eq!(badge_of(&modules, Some(false), wait), Some(false));
 }
