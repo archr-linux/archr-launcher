@@ -17,7 +17,7 @@ use std::{
     collections::{BTreeMap, VecDeque},
     fs,
     path::PathBuf,
-    sync::mpsc,
+    sync::{mpsc, Arc, RwLock},
 };
 
 pub const TOPIC: &str = "archr-launcher-module";
@@ -96,6 +96,9 @@ pub struct Shop {
     github: GitHub,
     dirs: Dirs,
     review_key: [u8; 32],
+    /// The launcher's language, for names and descriptions by language;
+    /// the host changes it when the user does.
+    language: Arc<RwLock<String>>,
 }
 impl Shop {
     pub fn new(http: Box<dyn Http>, cache: PathBuf, dirs: Dirs) -> Self {
@@ -103,7 +106,22 @@ impl Shop {
             github: GitHub::new(http, cache),
             dirs,
             review_key: REVIEW_KEY,
+            language: Arc::new(RwLock::new("en".into())),
         }
+    }
+    /// Names and descriptions in this language when the manifest has it.
+    pub fn with_language(self, language: &str) -> Self {
+        *self.language.write().unwrap_or_else(|e| e.into_inner()) = language.to_owned();
+        self
+    }
+    /// The language the shop speaks, shared: write to it to change it.
+    pub fn language(&self) -> Arc<RwLock<String>> {
+        Arc::clone(&self.language)
+    }
+    fn lang(&self) -> String {
+        self.language
+            .read()
+            .map_or_else(|e| e.into_inner().clone(), |l| l.clone())
     }
     /// Another public key for the reviewed list: for tests only.
     pub fn with_review_key(mut self, key: [u8; 32]) -> Self {
@@ -279,19 +297,20 @@ impl Shop {
     }
     /// Store modules on this device, as cards.
     fn installed(&self) -> Vec<Card> {
+        let language = self.lang();
         self.records()
             .modules
             .iter()
             .filter_map(|(id, record)| {
                 let (owner, repo) = record.source.split_once('/')?;
-                let module = registry::Installed::read(&self.dirs.module(id), "en");
+                let module = registry::Installed::read(&self.dirs.module(id), &language);
                 let manifest = module.manifest.as_ref()?;
                 Some(Card {
                     owner: owner.into(),
                     repo: repo.into(),
                     id: id.clone(),
-                    name: text(&module, manifest.name.as_ref()),
-                    description: text(&module, manifest.description.as_ref()),
+                    name: text(&module, manifest.name.as_ref(), &language),
+                    description: text(&module, manifest.description.as_ref(), &language),
                     icon: manifest.icon.clone().unwrap_or_default(),
                     version: manifest.version.clone(),
                     ..Card::default()
@@ -318,8 +337,8 @@ impl Shop {
         let (manifest, _) = manifest::parse(std::str::from_utf8(&body).ok()?).ok()?;
         Some(Card {
             id: manifest.id.clone(),
-            name: plain(manifest.name.as_ref()),
-            description: plain(manifest.description.as_ref()),
+            name: plain(manifest.name.as_ref(), &self.lang()),
+            description: plain(manifest.description.as_ref(), &self.lang()),
             icon: manifest.icon.clone().unwrap_or_default(),
             version: manifest.version,
             ..card.clone()
@@ -395,8 +414,8 @@ impl Shop {
         Ok(Offer {
             card: Card {
                 id: manifest.id.clone(),
-                name: plain(manifest.name.as_ref()),
-                description: plain(manifest.description.as_ref()),
+                name: plain(manifest.name.as_ref(), &self.lang()),
+                description: plain(manifest.description.as_ref(), &self.lang()),
                 icon: manifest.icon.clone().unwrap_or_default(),
                 version: manifest.version.clone(),
                 reviewed,
@@ -684,22 +703,22 @@ fn module_key(key: &'static str) -> &'static str {
 
 /// `name`/`description` without the module's catalog: text or a language
 /// table; an `@key` has no text before the install.
-fn plain(value: Option<&toml::Value>) -> String {
+fn plain(value: Option<&toml::Value>, language: &str) -> String {
     match value {
         Some(toml::Value::String(text)) if !text.starts_with('@') => text.clone(),
         Some(table @ toml::Value::Table(_)) => {
             archr_ui::layout::Names::parse(Some(table), "module")
-                .get("en")
+                .get(language)
                 .unwrap_or_default()
                 .to_owned()
         }
         _ => String::new(),
     }
 }
-fn text(module: &registry::Installed, value: Option<&toml::Value>) -> String {
+fn text(module: &registry::Installed, value: Option<&toml::Value>, language: &str) -> String {
     match value {
         Some(toml::Value::String(text)) => module.tr(text),
-        other => plain(other),
+        other => plain(other, language),
     }
 }
 

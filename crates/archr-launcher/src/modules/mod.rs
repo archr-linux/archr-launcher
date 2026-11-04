@@ -294,6 +294,8 @@ struct Host {
     inbox: mpsc::Sender<Input>,
     out: mpsc::Sender<Event>,
     store: Option<mpsc::Sender<StoreAction>>,
+    /// The store's language, shared with its lane.
+    store_language: Option<Arc<std::sync::RwLock<String>>>,
     installed: Vec<Installed>,
     state: State,
     view: View,
@@ -348,6 +350,11 @@ impl Host {
                 .trim()
                 .to_owned();
         }
+        let language = config.shop.as_ref().map(|shop| {
+            let language = shop.language();
+            *language.write().unwrap_or_else(|e| e.into_inner()) = config.language.clone();
+            language
+        });
         let store = config.shop.take().map(|shop| {
             let (tx, rx) = mpsc::channel();
             let replies = inbox.clone();
@@ -358,6 +365,7 @@ impl Host {
             tx
         });
         let mut host = Self {
+            store_language: language,
             start_at: Instant::now() + config.delay,
             installed: Vec::new(),
             state: State::default(),
@@ -534,6 +542,10 @@ impl Host {
         match input {
             Input::Request(request) => self.request(request),
             Input::Language(language) => {
+                // The store speaks it too, from its next answer on.
+                if let Some(shop) = &self.store_language {
+                    *shop.write().unwrap_or_else(|e| e.into_inner()) = language.clone();
+                }
                 self.config.language = language;
                 self.reload();
             }

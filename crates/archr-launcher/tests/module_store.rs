@@ -788,3 +788,49 @@ fn walk_files(dir: &Path) -> Vec<std::path::PathBuf> {
     }
     found
 }
+
+/// Names by language reach the store's cards in the launcher's language,
+/// with English when the manifest lacks it, and follow a change of language.
+#[test]
+fn store_cards_speak_the_launchers_language() {
+    let root = tempfile::tempdir().unwrap();
+    let fake = Fake::default();
+    let tarball = Tarball::module(MANIFEST).bytes();
+    publish(&fake, MANIFEST, &tarball, &sha(&tarball), "");
+    fake.answer(
+        "https://github.com/kaio-dev/archr-bateria/releases/latest/download/module.toml",
+        MANIFEST,
+    );
+    for (language, name) in [("pt_BR", "Bateria"), ("ru", "Battery"), ("en", "Battery")] {
+        let store = shop(root.path(), &fake).with_language(language);
+        assert_eq!(store.decorate(&card()).unwrap().name, name, "{language}");
+        assert_eq!(store.offer(&card()).unwrap().card.name, name, "{language}");
+    }
+    // The host's language reaches a running shop.
+    let store = shop(root.path(), &fake);
+    let shared = store.language();
+    assert_eq!(store.decorate(&card()).unwrap().name, "Battery");
+    *shared.write().unwrap() = "pt_BR".into();
+    assert_eq!(store.decorate(&card()).unwrap().name, "Bateria");
+}
+
+/// The host hands a change of language to the store's lane.
+#[test]
+fn the_store_follows_the_launchers_language_change() {
+    use archr_ui::modules::{Request, StoreAction};
+    let root = tempfile::tempdir().unwrap();
+    let fake = Fake::default();
+    let tarball = Tarball::module(MANIFEST).bytes();
+    publish(&fake, MANIFEST, &tarball, &sha(&tarball), "");
+    let modules = host(root.path(), &fake, std::time::Duration::from_secs(3600));
+    modules.language("pt_BR");
+    modules.request(Request::Store(StoreAction::Open(Box::new(card()))));
+    let (replies, _) = until_store(&modules, |r, _| {
+        r.iter().any(|r| matches!(r, StoreReply::Offer(..)))
+    });
+    let name = replies.iter().find_map(|r| match r {
+        StoreReply::Offer(_, Ok(offer)) => Some(offer.card.name.clone()),
+        _ => None,
+    });
+    assert_eq!(name.as_deref(), Some("Bateria"));
+}
