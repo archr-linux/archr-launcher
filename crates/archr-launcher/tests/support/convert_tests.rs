@@ -109,16 +109,23 @@ fn mupen_names_follow_the_core() {
             "5BD1FE107BF8106B2AB6650ABECD54D6"
         )
         .unwrap(),
-        "Legend of Zelda, The - Ocarina o-5BD1FE10"
+        b"Legend of Zelda, The - Ocarina o-5BD1FE10"
     );
     assert_eq!(
         mupen_name("Doom 64: Complete Edition", "0123456789ABCDEF").unwrap(),
-        "Doom 64_ Complete Edition-01234567"
+        b"Doom 64_ Complete Edition-01234567"
     );
     assert_eq!(
         mupen_name("Super Mario 64 (U) [!]", "20B854B239203BAF6C961B850A4A51A2").unwrap(),
-        "Super Mario 64 (U) [!]-20B854B2"
+        b"Super Mario 64 (U) [!]-20B854B2"
     );
+    // Byte 32 inside a character: cut there, as the core does.
+    let name = mupen_name(&format!("{}é", "x".repeat(31)), "ABCDEF0123").unwrap();
+    assert_eq!(name.len(), 32 + 9);
+    assert_eq!(&name[31..33], [0xc3, b'-']);
+    assert!(named(Path::new("/r"), &name, "eep")
+        .to_string_lossy()
+        .ends_with("-ABCDEF01.eep"));
     let ini =
         "[AAA]\nGoodName=Game (U)\nRefMD5=BBB\n\n[BBB]\nGoodName=Game (E)\nSaveType=Eeprom 16KB\n\
                [CCC]\nGoodName=Zelda\nSaveType=SRAM\n";
@@ -216,10 +223,8 @@ fn backups_never_overwrite_an_older_copy() {
     let root = tempfile::tempdir().unwrap();
     let save = root.path().join("Zelda.dsv");
     let keep = root.path().join(".antes-melonds");
-    fs::write(&save, b"one").unwrap();
-    back_up(&keep, &save).unwrap();
-    fs::write(&save, b"two").unwrap();
-    back_up(&keep, &save).unwrap();
+    back_up(&keep, &save, b"one").unwrap();
+    back_up(&keep, &save, b"two").unwrap();
     assert_eq!(fs::read(keep.join("Zelda.dsv")).unwrap(), b"one");
     assert_eq!(fs::read(keep.join("Zelda.dsv.2")).unwrap(), b"two");
     assert_eq!(
@@ -228,6 +233,42 @@ fn backups_never_overwrite_an_older_copy() {
             .kind(),
         io::ErrorKind::AlreadyExists
     );
+}
+#[test]
+fn an_eep_into_an_older_srm_keeps_its_paks_sram_and_flash() {
+    let (_root, mut env) = env("PerGameFileTitle");
+    let n64 = env.roms.join("n64");
+    // A Mupen64Plus-Next .srm with a Controller Pak in use (ghosts).
+    let mut srm = eep_to_srm(&[1u8; 512], 0x200).unwrap();
+    srm[EEPROM + 0x500] = 0x77;
+    srm[EEPROM + 4 * PAK + 5] = 0x55;
+    let eep = [2u8; 512];
+    let step = Step {
+        source: n64.join("g.eep"),
+        target: n64.join("Game.srm"),
+        replace: true,
+        eeprom: 0x200,
+    };
+    fs::write(&step.source, eep).unwrap();
+    fs::write(&step.target, &srm).unwrap();
+    env.mupen_ini = n64.join("none");
+    let plan = Plan {
+        from: Format::MupenSa,
+        to: Format::N64Srm,
+        steps: Vec::new(),
+        unread: 0,
+    };
+    let keep = n64.join(".antes-mupen64plus_next");
+    assert!(apply(&plan, &step, &keep).unwrap());
+    let merged = fs::read(&step.target).unwrap();
+    assert_eq!(&merged[..0x200], eep);
+    assert_eq!(
+        &merged[0x200..],
+        &srm[0x200..],
+        "paks, SRAM and FlashRAM kept"
+    );
+    assert_eq!(fs::read(keep.join("Game.srm")).unwrap(), srm);
+    assert_eq!(fs::read(keep.join("g.eep")).unwrap(), eep);
 }
 #[test]
 fn psx_cards_follow_the_game_file_title_in_duckstations_folder() {
@@ -387,7 +428,7 @@ fn real_saves_convert_both_ways() {
             .to_uppercase();
         let text = fs::read_to_string(&ini).unwrap();
         let game = mupen_entry(&text, &md5).expect("in mupen64plus.ini");
-        let sa = mupen_name(&game.good, &md5).unwrap();
+        let sa = String::from_utf8(mupen_name(&game.good, &md5).unwrap()).unwrap();
         let own: Vec<&PathBuf> = files
             .iter()
             .filter(|p| name(p).starts_with(&format!("{sa}.")) || name(p) == format!("{stem}.srm"))

@@ -299,14 +299,25 @@ fn mupen_entry(ini: &str, md5: &str) -> Option<Mupen> {
 }
 /// The core's save name (mupen64plus-core main.c, get_save_filename):
 /// `snprintf("%.32s-%.8s", goodname, MD5)`, then `:<>"/\|?*` become `_`.
-fn mupen_name(good: &str, md5: &str) -> Option<String> {
-    let cut = &good.as_bytes()[..good.len().min(32)];
-    let name = format!("{}-{}", std::str::from_utf8(cut).ok()?, md5.get(..8)?);
-    Some(
-        name.chars()
-            .map(|c| if ":<>\"/\\|?*".contains(c) { '_' } else { c })
-            .collect(),
-    )
+/// The cut is in bytes, as the core makes it, even inside a character.
+fn mupen_name(good: &str, md5: &str) -> Option<Vec<u8>> {
+    let mut name = good.as_bytes()[..good.len().min(32)].to_vec();
+    name.push(b'-');
+    name.extend_from_slice(md5.get(..8)?.as_bytes());
+    for byte in &mut name {
+        if b":<>\"/\\|?*".contains(byte) {
+            *byte = b'_';
+        }
+    }
+    Some(name)
+}
+/// `<name>.<ext>` in `dir`, the name taken as bytes.
+fn named(dir: &Path, name: &[u8], ext: &str) -> PathBuf {
+    use std::os::unix::ffi::OsStrExt;
+    let mut file = name.to_vec();
+    file.push(b'.');
+    file.extend_from_slice(ext.as_bytes());
+    dir.join(std::ffi::OsStr::from_bytes(&file))
 }
 
 /// One save to convert: where it is, where the new one goes, and whether
@@ -379,7 +390,7 @@ fn n64_step(dir: &Path, stem: &str, rom: &Path, from: Format, ini: &str) -> Opti
     let name = mupen_name(&game.good, &game.md5)?;
     // Anything beyond the EEPROM was never tested: leave the game.
     let other = ["mpk", "sra", "fla"].iter().any(|ext| {
-        let path = dir.join(format!("{name}.{ext}"));
+        let path = named(dir, &name, ext);
         path.exists()
             && !(*ext == "mpk"
                 && fs::read(&path)
@@ -393,7 +404,7 @@ fn n64_step(dir: &Path, stem: &str, rom: &Path, from: Format, ini: &str) -> Opti
     let old = dir.join(format!("{}.eep", game.good));
     let old =
         (!game.good.contains('/') && fs::metadata(&old).is_ok_and(|m| m.len() > 0)).then_some(old);
-    let eep = old.unwrap_or_else(|| dir.join(format!("{name}.eep")));
+    let eep = old.unwrap_or_else(|| named(dir, &name, "eep"));
     if from == Format::MupenSa {
         step(eep, srm, size)
     } else {
@@ -484,37 +495,54 @@ fn convert(from: Format, to: Format, bytes: &[u8], eeprom: usize) -> Option<Vec<
         _ => None,
     }
 }
-/// A new file with `bytes`, synced; never over an existing one
-/// (`AlreadyExists` when something is there).
+/// A new file with `bytes`, synced and read back; never over an existing
+/// one (`AlreadyExists` when something is there). Where a rename without
+/// replace is refused (mergerfs over exFAT: EPERM, EXDEV, EINVAL), the
+/// file is created in place with O_EXCL instead.
 fn create_new(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let parent = archr_io::parent_dir(path);
     fs::create_dir_all(parent)?;
     let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
     io::Write::write_all(temporary.as_file_mut(), bytes)?;
     temporary.as_file().sync_all()?;
-    temporary.persist_noclobber(path).map_err(|e| e.error)?;
-    fs::File::open(parent)?.sync_all()
+    match temporary.persist_noclobber(path) {
+        Ok(_) => {}
+        Err(e)
+            if matches!(
+                e.error.raw_os_error(),
+                Some(libc::EPERM | libc::EXDEV | libc::EINVAL)
+            ) =>
+        {
+            drop(e);
+            let mut file = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(path)?;
+            io::Write::write_all(&mut file, bytes)?;
+            file.sync_all()?;
+        }
+        Err(e) => return Err(e.error),
+    }
+    fs::File::open(parent)?.sync_all()?;
+    let back = archr_io::read_bytes(path, MAX_SAVE, archr_io::Symlinks::Follow)?;
+    if back == bytes {
+        Ok(())
+    } else {
+        Err(archr_io::invalid_data("written save differs"))
+    }
 }
-/// A verified copy in the backup folder, under a free name.
-fn back_up(dir: &Path, path: &Path) -> io::Result<()> {
-    let bytes = archr_io::read_bytes(path, MAX_SAVE, archr_io::Symlinks::Follow)?;
+/// A verified copy of `bytes` (read from `path`) in the backup folder,
+/// under a free name.
+fn back_up(dir: &Path, path: &Path, bytes: &[u8]) -> io::Result<()> {
     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("save");
     for n in 1.. {
         let copy = match n {
             1 => dir.join(name),
             n => dir.join(format!("{name}.{n}")),
         };
-        match create_new(&copy, &bytes) {
+        match create_new(&copy, bytes) {
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
-            Err(e) => return Err(e),
-            Ok(()) => {
-                let back = archr_io::read_bytes(&copy, MAX_SAVE, archr_io::Symlinks::Follow)?;
-                return if back == bytes {
-                    Ok(())
-                } else {
-                    Err(archr_io::invalid_data("backup differs"))
-                };
-            }
+            result => return result,
         }
     }
     unreachable!("a free name")
@@ -523,11 +551,22 @@ fn back_up(dir: &Path, path: &Path) -> io::Result<()> {
 /// save appeared meanwhile.
 fn apply(plan: &Plan, step: &Step, keep: &Path) -> io::Result<bool> {
     let bytes = archr_io::read_bytes(&step.source, MAX_SAVE, archr_io::Symlinks::Follow)?;
-    let converted = convert(plan.from, plan.to, &bytes, step.eeprom)
+    let mut converted = convert(plan.from, plan.to, &bytes, step.eeprom)
         .ok_or_else(|| archr_io::invalid_data("not a save of that format"))?;
-    back_up(keep, &step.source)?;
+    back_up(keep, &step.source, &bytes)?;
     if step.replace {
-        back_up(keep, &step.target)?;
+        let old = archr_io::read_bytes(&step.target, MAX_SAVE, archr_io::Symlinks::Follow)?;
+        // An .srm also holds the Controller Paks, SRAM and FlashRAM (Mario
+        // Kart 64's ghosts): only its EEPROM region changes.
+        if plan.to == Format::N64Srm {
+            if old.len() != N64_SRM {
+                return Err(archr_io::invalid_data("not a Mupen64Plus-Next .srm"));
+            }
+            let mut merged = old.clone();
+            merged[..step.eeprom].copy_from_slice(&converted[..step.eeprom]);
+            converted = merged;
+        }
+        back_up(keep, &step.target, &old)?;
         archr_io::atomic_publish(&step.target, true, |file| {
             io::Write::write_all(file, &converted)
         })?;
@@ -613,6 +652,14 @@ pub enum Event {
     Offer(Option<Box<Offer>>),
     Done(Report),
 }
+/// The answer to a request that could not run.
+fn failure(plan: bool) -> Event {
+    if plan {
+        Event::Offer(None)
+    } else {
+        Event::Done(Report { done: 0, failed: 1 })
+    }
+}
 /// The one owner of the conversion work: requests queue in order and
 /// every one answers, even when the thread cannot start.
 pub struct Runner {
@@ -639,7 +686,9 @@ impl Runner {
             .name("launcher-convert".into())
             .spawn(move || {
                 for request in requests {
-                    let event = match request {
+                    // A panic answers as a failure; the thread goes on.
+                    let plan = matches!(request, Request::Plan { .. });
+                    let job = std::panic::AssertUnwindSafe(|| match request {
                         Request::Plan {
                             system,
                             rom,
@@ -647,7 +696,11 @@ impl Runner {
                             to,
                         } => Event::Offer(offer(&env, &system, rom, from, to).map(Box::new)),
                         Request::Run(offer) => Event::Done(run(&env, &offer)),
-                    };
+                    });
+                    let event = std::panic::catch_unwind(job).unwrap_or_else(|_| {
+                        log::warn!("Save conversion panicked");
+                        failure(plan)
+                    });
                     if answers.send(event).is_err() {
                         break;
                     }
@@ -668,10 +721,8 @@ impl Runner {
         };
         if let Some(request) = refused {
             self.jobs = None;
-            self.local.push_back(match request {
-                Request::Plan { .. } => Event::Offer(None),
-                Request::Run(_) => Event::Done(Report { done: 0, failed: 1 }),
-            });
+            self.local
+                .push_back(failure(matches!(request, Request::Plan { .. })));
         }
     }
     pub fn poll(&mut self) -> Option<Event> {
