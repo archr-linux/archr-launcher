@@ -21,6 +21,27 @@ fn wifi_error(error: String) -> String {
         "settings.wifi_connect_failed".into()
     }
 }
+/// `iwctl station <dev> show` says State connected, to exactly `ssid`.
+/// Values are padded columns; iwctl may color the table.
+fn station_joined(show: &str, ssid: &str) -> bool {
+    let mut plain = String::with_capacity(show.len());
+    let mut chars = show.chars();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            // CSI: ESC [ parameters, then one final letter.
+            chars.by_ref().find(char::is_ascii_alphabetic);
+        } else {
+            plain.push(c);
+        }
+    }
+    let field = |name: &str| {
+        plain.lines().find_map(|line| {
+            let rest = line.trim_start().strip_prefix(name)?;
+            rest.starts_with(char::is_whitespace).then(|| rest.trim())
+        })
+    };
+    field("State") == Some("connected") && field("Connected network") == Some(ssid)
+}
 /// usbgadget exits 3 when the single OTG port hosts a device (Wi-Fi dongle or
 /// gamepad) and when the gadget was never prepared; both leave the value as is.
 /// "compat" exits 4 when no network gadget could be built: the function is off.
@@ -121,10 +142,28 @@ impl Backend {
         )
         .map_err(|e| e.to_string())
     }
-    /// The station is connected to `ssid` right now.
+    /// The station finished joining `ssid`: Station.State is "connected".
+    /// Network.Connected (the scan list) is already true while connecting,
+    /// before the handshake, so it cannot tell a wrong password apart.
     fn joined(&self, ssid: &str) -> bool {
-        self.scan()
-            .is_ok_and(|(networks, _)| networks.iter().any(|n| n.connected && n.ssid == ssid))
+        // The first wireless interface, as wifictl picks it.
+        let Some(device) = fs::read_dir(self.paths.at("/sys/class/net"))
+            .ok()
+            .and_then(|dir| {
+                dir.filter_map(Result::ok)
+                    .filter_map(|entry| entry.file_name().into_string().ok())
+                    .filter(|name| name.starts_with("wl"))
+                    .min()
+            })
+        else {
+            return false;
+        };
+        self.command_with_timeout(
+            "iwctl",
+            &["station", &device, "show"],
+            Duration::from_secs(5),
+        )
+        .is_ok_and(|show| station_joined(&show, ssid))
     }
     pub(super) fn forget(&self, ssid: &str) -> Result<(), String> {
         if ssid.is_empty() || ssid.contains(['\n', '\r', '\0']) {
@@ -600,28 +639,60 @@ mod tests {
         );
     }
     #[test]
-    fn a_failed_connect_that_joined_anyway_is_a_success() {
-        // wifictl gave up (exit 1) while iwd joined from the saved profile.
+    fn a_failed_connect_counts_only_once_the_station_is_connected_to_it() {
+        // wifictl gave up (exit 1). iwd's Network.Connected is already true
+        // while the station is still connecting (wrong password, pending
+        // handshake): the scan list says connected, Station.State does not.
         let (root, paths) = fixture("wifi.ssid=\nwifi.key=\n");
+        fs::create_dir_all(paths.at("/sys/class/net/usb0")).unwrap();
+        fs::create_dir_all(paths.at("/sys/class/net/wlan0")).unwrap();
         recorder(
             &root,
             &paths,
             "wifictl",
-            "[ \"$1\" = connect ] && exit 1\nprintf 'Casa\\tpsk\\t80\\t1\\t1\\nVizinho\\tpsk\\t40\\t0\\t0\\n'",
+            "[ \"$1\" = connect ] && exit 1\nprintf 'Casa\\tpsk\\t80\\t1\\t1\\n'",
         );
+        let station = root.path().join("station");
+        recorder(
+            &root,
+            &paths,
+            "iwctl",
+            // Only shell builtins: the fixture's PATH has no cat.
+            &format!(
+                "while IFS= read -r l; do printf '%s\\n' \"$l\"; done < {}",
+                station.display()
+            ),
+        );
+        let show = |state: &str, network: &str| {
+            // iwctl colors its table; the values are padded columns.
+            let text = format!(
+                "\x1b[1;90m  Settable  Property   Value\x1b[0m\n\
+                 \x20           State                 {state}          \n\
+                 \x20           Connected network     {network}        \n\
+                 \x20           ConnectedBss          bc:1a:e4:63:12:64\n"
+            );
+            fs::write(&station, text).unwrap();
+        };
         let backend = Backend::new(paths.clone());
-        assert_eq!(backend.connect("Casa", "12345678"), Ok(()));
-        let config = SystemCfg::load(&paths.config).unwrap();
-        assert_eq!(config.get("wifi", None, "ssid").as_deref(), Some("Casa"));
+        let saved = || {
+            SystemCfg::load(&paths.config)
+                .unwrap()
+                .get("wifi", None, "ssid")
+                .unwrap_or_default()
+        };
+        let failed = Err("settings.wifi_connect_failed".into());
+        show("connecting", "Casa");
+        assert_eq!(backend.connect("Casa", "12345678"), failed);
+        assert_eq!(saved(), "", "an unverified password is never saved");
         assert_eq!(
             calls(&root),
-            "wifictl connect Casa 12345678\nwifictl scanlist --detail\n"
+            "wifictl connect Casa 12345678\niwctl station wlan0 show\n"
         );
-        // Joined to another network, or not at all: the failure stands.
-        assert_eq!(
-            backend.connect("Vizinho", "12345678"),
-            Err("settings.wifi_connect_failed".into())
-        );
+        show("connected", "Casa 5G");
+        assert_eq!(backend.connect("Casa", "12345678"), failed);
+        show("connected", "Casa");
+        assert_eq!(backend.connect("Casa", "12345678"), Ok(()));
+        assert_eq!(saved(), "Casa");
     }
     #[test]
     fn wifictl_failures_become_locale_keys() {
