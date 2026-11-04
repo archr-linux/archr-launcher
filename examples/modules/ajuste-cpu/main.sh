@@ -2,8 +2,10 @@
 # Automatic CPU tuning (archr-launcher module, API 3). Before each game it
 # chooses the CPU ceiling it is learning for that game; after the game the
 # launcher hands it what archr-perf-probe measured, and tune.jq moves the
-# ceiling: one step down after a session at full speed, one step up after a
-# slow one. Only the CPU's ceiling of that launch; never the GPU or memory.
+# ceiling: one step down after an active session with clear room on the
+# CPU, one step up after one at the CPU's limit (a heuristic of occupancy,
+# not a frame count). Only the CPU's ceiling of that launch; never the GPU
+# or memory.
 DATA="${ARCHR_MODULE_DATA:-$HOME}/games.json"
 # "<game id> <kHz>" of each game the module caps: launch.before answers
 # from it at once (the launcher waits 300 ms at most), tune.jq comes after.

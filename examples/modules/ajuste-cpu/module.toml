@@ -3,7 +3,7 @@ version = "1.0.0"
 api_version = 3
 min_launcher = "0.1.0"
 name = { en = "Automatic CPU tuning", pt_BR = "Ajuste automático de CPU", es = "Ajuste automático de CPU", ru = "Автонастройка ЦП" }
-description = { en = "Learns the lowest CPU ceiling that keeps each game at full speed, and saves battery with it.", pt_BR = "Aprende o menor teto de CPU que mantém cada jogo na velocidade total e economiza bateria com ele.", es = "Aprende el tope de CPU más bajo que mantiene cada juego a velocidad completa y ahorra batería con él.", ru = "Подбирает для каждой игры самый низкий предел частоты ЦП без потери скорости и экономит заряд." }
+description = { en = "Learns, game by game, the lowest CPU ceiling at which the emulator stays clear of the CPU's limit, and saves battery with it.", pt_BR = "Aprende, jogo a jogo, o menor teto de CPU em que o emulador não chega ao limite da CPU, e economiza bateria com ele.", es = "Aprende, juego a juego, el tope de CPU más bajo en que el emulador no llega al límite de la CPU, y ahorra batería con él.", ru = "Подбирает для каждой игры самый низкий предел частоты ЦП, при котором эмулятор не упирается в предел, и экономит заряд." }
 author = "ArchR <contato@archr.dev>"
 license = "MIT"
 homepage = "https://github.com/archr-linux/archr-ajuste-cpu"

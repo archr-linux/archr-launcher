@@ -852,7 +852,7 @@ mod tests {
         assert!(detail.detail);
         assert_eq!(
             module.pages[0].hint.as_deref(),
-            Some("Um jogo que ficar lento volta um degrau")
+            Some("Desce só com folga clara; um jogo que chegar ao limite sobe um degrau")
         );
         let note = detail
             .rows
