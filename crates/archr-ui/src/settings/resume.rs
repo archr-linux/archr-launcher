@@ -3,10 +3,11 @@
 use super::{described, hotkeys::key_name, row, Id, Kind, Row};
 use crate::i18n::I18n;
 
-/// The switcher's shortcut, a tap on one button: FN, which no emulator
-/// binds (every Select combination is a RetroArch, mupen64plus or
-/// DuckStation hotkey; L3 and R3 are PPSSPP's pause, melonDS's screens and
-/// the DS touch).
+/// The switcher's shortcut, a tap on one button: FN. It is not in the SDL
+/// pad mapping; mupen64plus only uses it as a modifier with another button
+/// and DraStic opens its menu. Every Select combination is a RetroArch,
+/// mupen64plus or DuckStation hotkey; L3 and R3 are PPSSPP's pause,
+/// melonDS's screens and the DS touch.
 pub const SHORTCUTS: [&str; 1] = ["BTN_MODE"];
 
 pub const RESUME: &[Row] = &[
