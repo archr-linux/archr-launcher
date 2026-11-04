@@ -255,6 +255,8 @@ restore_cpu_max() {
         [ -z "$top" ] || echo "$top" >"$policy/scaling_max_freq" 2>/dev/null || :
     done
 }
+# Also on any way out of the session: a service stop kills the game group.
+trap restore_cpu_max EXIT
 
 session_log 'Starting launcher session'
 

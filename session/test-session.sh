@@ -363,6 +363,9 @@ END"
 run_stop_case() {
   stop_case "$1" "$2" game-ready
   [ -f "$CASE_DIR/cleanup" ] || { echo 'FAIL: service stop skipped game cleanup' >&2; exit 1; }
+  # The game was capped and stopped with the service: the ceiling is back.
+  [ "$(cat "$ARCHR_SESSION_CPUFREQ/policy0/scaling_max_freq")" = 1416000 ] ||
+    { echo 'FAIL: service stop left the CPU ceiling capped' >&2; exit 1; }
   while IFS= read -r pid; do
     if kill -0 "$pid" 2>/dev/null; then
       echo "FAIL: fake game process $pid survived service stop" >&2
