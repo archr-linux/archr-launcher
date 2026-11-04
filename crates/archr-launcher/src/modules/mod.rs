@@ -907,7 +907,7 @@ impl Host {
         self.publish();
         if self.daemons.get(id).is_some_and(|d| d.ready) {
             let data = json!({"key": key, "value": json[key]});
-            self.send(id, &event("settings.changed", &data));
+            self.send(id, &self.event_for(id, "settings.changed", &data));
         }
     }
     fn enable(&mut self, id: &str, on: bool, grant: bool) {
@@ -1727,7 +1727,7 @@ impl Host {
         }
     }
     /// The event as this module may see it: the game's measurement only
-    /// for `cpu-tune`.
+    /// for `cpu-tune`. Every event to a module goes through here.
     fn event_for(&self, id: &str, name: &str, data: &Json) -> Json {
         let mut data = data.clone();
         if !self.has_system(id, "cpu-tune") {
@@ -2134,7 +2134,7 @@ impl Host {
                     let subscribed = self.subscribed(&id);
                     for (name, data) in &boot {
                         if subscribed.contains(name) {
-                            self.oneshot(&id, event(name, data), None);
+                            self.oneshot(&id, self.event_for(&id, name, data), None);
                         }
                     }
                 }

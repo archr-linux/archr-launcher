@@ -1046,6 +1046,41 @@ fn cpu_tune_chooses_a_ceiling_of_this_cpu_and_learns_from_the_measurement() {
     for id in ids {
         let _ = fs::remove_file(base.join(format!("module-data/{id}/seen.log")));
     }
+    // One-shots hear game.ended too, filtered the same way.
+    let oneshot =
+        "#!/bin/bash\nIFS= read -r line; printf '%s\\n' \"$line\" >> \"$HOME/seen.log\"\n";
+    for (id, permissions, granted) in [
+        (
+            "e-once",
+            "hooks = [\"launch\"]\nsystem = [\"cpu-tune\"]",
+            &granted[..],
+        ),
+        ("f-once", "hooks = [\"launch\"]", &["hooks:launch"][..]),
+    ] {
+        module(
+            base,
+            id,
+            "oneshot",
+            &format!("[permissions]\n{permissions}{ended}\n"),
+            oneshot,
+        );
+        let toml = base.join(format!("modules/{id}/module.toml"));
+        let text = fs::read_to_string(&toml)
+            .unwrap()
+            .replace("api_version = 1", "api_version = 3");
+        fs::write(&toml, text).unwrap();
+        let mut state = State::load(&base.join("modules.toml"));
+        state.modules.insert(
+            id.into(),
+            Record {
+                consent: true,
+                enabled: true,
+                granted: granted.iter().map(|g| (*g).into()).collect(),
+                ..Record::default()
+            },
+        );
+        state.save(&base.join("modules.toml")).unwrap();
+    }
     let _probe = Probe::new(base);
     let log = until(&base.join("module-data/c-tune/seen.log"), "game.ended");
     assert!(
@@ -1053,6 +1088,10 @@ fn cpu_tune_chooses_a_ceiling_of_this_cpu_and_learns_from_the_measurement() {
         "{log}"
     );
     let log = until(&base.join("module-data/d-plain/seen.log"), "game.ended");
+    assert!(!log.contains("perf"), "only for cpu-tune: {log}");
+    let log = until(&base.join("module-data/e-once/seen.log"), "game.ended");
+    assert!(log.contains(r#""perf":{"#), "{log}");
+    let log = until(&base.join("module-data/f-once/seen.log"), "game.ended");
     assert!(!log.contains("perf"), "only for cpu-tune: {log}");
     assert!(!base.join("run/perf-last.json").exists(), "read once");
 }
