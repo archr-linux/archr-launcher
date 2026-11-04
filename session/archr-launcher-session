@@ -117,49 +117,44 @@ session_log() {
 
 child_pid=
 child_scope=
+gate=$run_dir/game-gate
+game_started=0
 # A TERM while a child is being started or a game cleaned up is only recorded;
 # the stop runs at the next safe point.
 defer_stop=0
 stop_pending=0
 
-# Centiseconds since boot, for deadlines that slow commands cannot stretch.
-uptime_cs() {
-    read -r up _ </proc/uptime
-    echo $((${up%.*} * 100 + 1${up#*.} - 100))
-}
-
 # Every manager call is bounded, so a stuck systemd cannot stall the session.
 scope_active() {
-    timeout -k 0.1 0.5 systemctl is-active --quiet "$1" >/dev/null 2>&1
+    timeout -k 0.1 0.5 systemctl is-active --quiet "$1" >/dev/null 2>&1 9>&-
 }
 
 # Games run with TimeoutStopSec=1: systemd sends TERM to the whole scope,
 # KILL after 1 s, and returns once it is empty (at once if it already is).
 stop_scope() {
-    timeout -k 0.1 1.3 systemctl stop "$1" >/dev/null 2>&1 || :
+    timeout -k 0.1 1.3 systemctl stop "$1" >/dev/null 2>&1 9>&- || :
 }
 
-# A stop may arrive while systemd-run is still registering the scope; anything
-# it starts before then would escape the cleanup. Wait at most 0.5 s for the
-# scope, or until systemd-run has exited (it then registered nothing to save).
-await_scope() {
-    await_start=$(uptime_cs)
-    until scope_active "$child_scope"; do
-        kill -0 "$child_pid" 2>/dev/null || return 1
-        [ $(($(uptime_cs) - await_start)) -lt 50 ] || return 1
-        "$stop_sleep" 0.1
-    done
-}
+# What systemd-run --scope runs: not the game, but a gate in front of it. It
+# opens the FIFO read-only without blocking (its own read-write descriptor
+# stands in as a writer until the second open), so the session's descriptor
+# is the only writer left. The game is exec'd, keeping this PID, only after
+# reading "go"; EOF, because the session closed the gate or died, ends it.
+gate_waiter='exec 4<>"$1" 3<"$1" 4>&-; IFS= read -r go <&3 && [ "$go" = go ] ||
+    exit 125; exec 3<&-; exec sh -c "$2"'
 
 stop_session() {
     trap '' TERM INT HUP
     rm -f "$run_dir/next"
     if [ -n "$child_scope" ]; then
         session_log 'Stopping session during a game'
-        # Worst case, every bound reached: 1.2 s scope wait + 3.2 s save-exit
-        # + 1 s for runemu + 1.4 s scope stop = 6.8 s (TimeoutStopSec=8).
+        # A gate still closed now never opens: the game cannot start, even if
+        # systemd registers the scope after the stop below found nothing.
+        exec 9>&-
+        # Worst case, every bound reached: 3.2 s save-exit + 1 s for runemu
+        # + 1.4 s scope stop = 5.6 s (TimeoutStopSec=8).
         # Only a runemu that has not returned yet has a game to save.
-        if await_scope && kill -0 "$child_pid" 2>/dev/null &&
+        if [ "$game_started" -eq 1 ] && kill -0 "$child_pid" 2>/dev/null &&
             [ -x "$save_exit" ] && timeout -k 0.2 3 "$save_exit" suspend; then
             remaining=10
             while kill -0 "$child_pid" 2>/dev/null && [ "$remaining" -gt 0 ]; do
@@ -305,22 +300,49 @@ while :; do
             printf '%s\n' "$game_sequence" >"$run_dir/scope-sequence.tmp" &&
                 mv -f "$run_dir/scope-sequence.tmp" "$run_dir/scope-sequence" || exit 1
             defer_stop=1
+            game_started=0
             child_scope=archr-game-$game_sequence.scope
-            # --scope execs the command synchronously, preserving runemu's $$
-            # and its environment; unlike a transient service it adds no parent.
-            # It is the game itself, so only the stop path bounds its startup.
+            rm -f "$gate" && mkfifo -m 0600 "$gate" && exec 9<>"$gate" || exit 1
+            # --scope execs the gate synchronously, and the gate execs the
+            # game: runemu keeps this PID and its environment. The gate gets
+            # no copy of the session's descriptor, so it cannot hold itself open.
             systemd-run --scope --unit="$child_scope" --collect \
-                -p TimeoutStopSec=1 -- sh -c "$command" &
+                -p TimeoutStopSec=1 -- sh -c "$gate_waiter" archr-game-gate \
+                "$gate" "$command" 9>&- &
             child_pid=$!
+            defer_stop=0
+            [ "$stop_pending" -eq 0 ] || stop_session
+            # Open the gate only inside a registered scope. Giving up is safe:
+            # a closed gate never starts the game.
+            tries=50
+            until scope_active "$child_scope"; do
+                tries=$((tries - 1))
+                if [ "$tries" -eq 0 ] || ! kill -0 "$child_pid" 2>/dev/null; then
+                    session_log 'Game scope was not registered; not starting'
+                    break
+                fi
+                "$stop_sleep" 0.1
+            done
+            defer_stop=1
+            if [ "$tries" -gt 0 ] && kill -0 "$child_pid" 2>/dev/null; then
+                game_started=1
+                # Stays open until the game ends: closing it before the gate
+                # has read would discard the "go".
+                printf 'go\n' >&9
+            else
+                exec 9>&-
+            fi
             defer_stop=0
             [ "$stop_pending" -eq 0 ] || stop_session
             wait "$child_pid"
             game_status=$?
+            exec 9>&-
             # runemu has returned: a TERM now must not ask for another save.
             defer_stop=1
             stop_scope "$child_scope"
             child_pid=
             child_scope=
+            game_started=0
             defer_stop=0
             [ "$stop_pending" -eq 0 ] || stop_session
             session_log "Game exited with $game_status"

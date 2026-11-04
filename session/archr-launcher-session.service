@@ -16,10 +16,11 @@ WorkingDirectory=/storage
 Restart=always
 RestartSec=1
 # TERM reaches only the supervisor: save-exit closes runemu before scope cleanup.
-# Its stop is bounded to 6.8 s with every limit reached (scope registration
-# 1.2 s, save-exit 3.2 s, runemu 1 s, scope stop 1.4 s); 8 s leaves room for
-# process start-up on the RK3326. TimeoutStopSec then KILLs what is left in
-# this cgroup; a game scope it misses is stopped when the session next starts.
+# Its stop is bounded to 5.6 s with every limit reached (save-exit 3.2 s,
+# runemu 1 s, scope stop 1.4 s), plus at most 0.6 s for a manager call already
+# running; 8 s leaves room for process start-up on the RK3326. TimeoutStopSec
+# then KILLs what is left in this cgroup; a game scope it misses is stopped
+# when the session next starts.
 KillMode=mixed
 KillSignal=SIGTERM
 TimeoutStopSec=8

@@ -111,6 +111,12 @@ EOF
 cat >"$root/bin/runemu.sh" <<'EOF'
 #!/bin/sh
 set -eu
+: >"$CASE_DIR/runemu-started"
+# The gate opens only after the session saw the scope registered.
+grep -q "^is-active --quiet $ARCHR_TEST_SCOPE active$" "$CASE_DIR/scope-calls" ||
+  : >"$CASE_DIR/go-before-active"
+# Nothing of the gate reaches the game, neither end.
+! ls -l /proc/$$/fd 2>/dev/null | grep -q game-gate || : >"$CASE_DIR/gate-fd-leak"
 # The next instruction must be consumed before starting any game.
 [ ! -e "$ARCHR_SESSION_RUN_DIR/next" ]
 # Do not target the wrapper: it must survive to restore services/governors.
@@ -209,10 +215,17 @@ case "$1" in
     done
     ;;
   is-active)
-    printf '%s\n' "$*" >>"$CASE_DIR/scope-calls"
     unit=$3
-    [ ! -f "$CASE_DIR/scopes/$unit/stopped" ] || exit 3
-    [ -n "$(alive_members "$unit")" ] || exit 3
+    if [ -f "$CASE_DIR/scopes/$unit/stopped" ] || [ -z "$(alive_members "$unit")" ]; then
+      printf '%s inactive\n' "$*" >>"$CASE_DIR/scope-calls"
+      exit 3
+    fi
+    # Barrier: the scope exists, but the session has not seen it yet.
+    if [ -f "$CASE_DIR/isactive-barrier" ]; then
+      : >"$CASE_DIR/isactive-waiting"
+      while [ -f "$CASE_DIR/isactive-barrier" ]; do /bin/sleep 0.01; done
+    fi
+    printf '%s active\n' "$*" >>"$CASE_DIR/scope-calls"
     ;;
   stop)
     printf '%s\n' "$*" >>"$CASE_DIR/scope-calls"
@@ -248,7 +261,7 @@ EOF
 cat >"$root/bin/systemd-run" <<'EOF'
 #!/bin/sh
 if [ "$1" = --scope ]; then
-  printf '%s\n' "$*" >>"$CASE_DIR/scope-runs"
+  printf '%s %s\n' "$1" "$2" >>"$CASE_DIR/scope-runs"
   shift
   case "$1" in --unit=archr-game-*.scope) unit=${1#--unit=} ;; *) exit 2 ;; esac
   shift
@@ -368,6 +381,10 @@ run_case() {
   [ "$(stat -c %a "$ARCHR_SESSION_RUN_DIR")" = 755 ]
   [ ! -e "$ARCHR_SESSION_RUN_DIR/next" ]
   [ ! -e "$ARCHR_SESSION_RUN_DIR/last-exit.tmp" ]
+  [ ! -f "$CASE_DIR/go-before-active" ] ||
+    { echo "FAIL: $name: game started before its scope was seen" >&2; exit 1; }
+  [ ! -f "$CASE_DIR/gate-fd-leak" ] ||
+    { echo "FAIL: $name: the game inherited the gate" >&2; exit 1; }
 }
 
 run_case game 'game runemu.sh /roms/demo.zip -Pnes --core=auto --emulator=retroarch --controllers=
@@ -631,7 +648,6 @@ END"
   [ -f "$CASE_DIR/cpu-restored-before-launcher" ]
   grep -q '^stop archr-game-' "$CASE_DIR/scope-calls"
   [ ! -f "$CASE_DIR/save-exit-calls" ]
-  [ ! -f "$CASE_DIR/stop-sleeps" ]
   if [ "$2" = COOPERATIVE ]; then
     [ ! -f "$CASE_DIR/stop-grace-expired" ] ||
       { echo 'FAIL: cooperative group waited the full deadline' >&2; exit 1; }
@@ -665,7 +681,6 @@ exit_group_case cooperative-exit COOPERATIVE '' 137
 # nonzero game exit. Also measure the handoff rather than session shutdown.
 run_case empty-group 'game runemu.sh EMPTY
 END'
-[ ! -f "$CASE_DIR/stop-sleeps" ]
 awk -v ended="$(cat "$CASE_DIR/empty-group-end")" \
     -v returned="$(cat "$CASE_DIR/empty-group-return")" 'BEGIN {
   elapsed = (returned - ended) / 1000000
@@ -729,32 +744,107 @@ all_gone() {
   done
 }
 
-# A TERM before systemd registers the scope is held until it exists, then
-# the scope is stopped: nothing it started may survive.
+wait_for() {
+  i=0
+  while [ ! -e "$1" ] && [ "$i" -lt 300 ]; do
+    /bin/sleep 0.01
+    i=$((i + 1))
+  done
+  [ -e "$1" ] || { echo "FAIL: $name: $1 never appeared" >&2; exit 1; }
+}
+
+# The gate process must leave on its own, without the game ever running.
+gate_closed() {
+  waiter=$(sed -n 1p "$CASE_DIR/scopes/$(ls "$CASE_DIR/scopes")/members")
+  i=0
+  while kill -0 "$waiter" 2>/dev/null && [ "$i" -lt 200 ]; do
+    /bin/sleep 0.01
+    i=$((i + 1))
+  done
+  ! kill -0 "$waiter" 2>/dev/null ||
+    { echo "FAIL: $name: gate still waiting" >&2; kill -KILL "$waiter"; exit 1; }
+  [ ! -f "$CASE_DIR/runemu-started" ] ||
+    { echo "FAIL: $name: the game ran behind a closed gate" >&2; exit 1; }
+}
+
 export ARCHR_SESSION_STOP_SLEEP=/bin/sleep
+# Registration far later than any deadline, after a TERM: the session leaves,
+# then systemd registers the scope and runs the gate, which gets EOF.
 setup_case late-register 'game runemu.sh LONG
 END'
 name=late-register
 : >"$CASE_DIR/register-barrier"
 timeout 12 "${SESSION_TEST_SHELL:-sh}" "$session" >"$CASE_DIR/output" 2>&1 &
 test_runner=$!
-i=0
-while [ ! -f "$CASE_DIR/register-waiting" ] && [ "$i" -lt 200 ]; do
-  /bin/sleep 0.01
-  i=$((i + 1))
-done
-[ -f "$CASE_DIR/register-waiting" ]
+wait_for "$CASE_DIR/register-waiting"
 kill -TERM "$(cat "$CASE_DIR/supervisor-pid")"
-/bin/sleep 0.2
-rm -f "$CASE_DIR/register-barrier"
 status=0
 wait "$test_runner" 2>/dev/null || status=$?
 test_runner=
 [ "$status" -eq 0 ]
-[ -f "$CASE_DIR/scopes/$(ls "$CASE_DIR/scopes")/stopped" ] ||
-  { echo 'FAIL: late scope was never stopped' >&2; exit 1; }
-all_gone
-printf '%s\n' 'PASS TERM before scope registration: held, then the scope is stopped'
+/bin/sleep 1
+rm -f "$CASE_DIR/register-barrier"
+wait_for "$CASE_DIR/scopes/archr-game-1.scope/members"
+gate_closed
+[ ! -f "$CASE_DIR/save-exit-calls" ]
+printf '%s\n' 'PASS registration after the session left: the gate never opens'
+
+# Late registration with no stop: the game starts once the scope is seen.
+setup_case late-register-run 'game runemu.sh demo
+END'
+name=late-register-run
+: >"$CASE_DIR/register-barrier"
+timeout 12 "${SESSION_TEST_SHELL:-sh}" "$session" >"$CASE_DIR/output" 2>&1 &
+test_runner=$!
+wait_for "$CASE_DIR/register-waiting"
+/bin/sleep 0.5
+rm -f "$CASE_DIR/register-barrier"
+status=0
+wait "$test_runner" 2>/dev/null || status=$?
+test_runner=
+[ "$status" -eq 0 ] && [ -f "$CASE_DIR/finished" ]
+[ "$(cat "$ARCHR_SESSION_RUN_DIR/last-exit")" = 37 ]
+[ ! -f "$CASE_DIR/go-before-active" ] ||
+  { echo 'FAIL: the gate opened before the scope was seen' >&2; exit 1; }
+[ ! -f "$CASE_DIR/gate-fd-leak" ]
+printf '%s\n' 'PASS late registration: go only after is-active, the game holds no gate'
+
+# SIGKILL with the gate process already reading: EOF ends it. It holds the
+# gate only read-only (read's stdin is a copy): it cannot keep it open.
+setup_case gate-eof 'game runemu.sh LONG
+END'
+name=gate-eof
+: >"$CASE_DIR/isactive-barrier"
+timeout 12 "${SESSION_TEST_SHELL:-sh}" "$session" >"$CASE_DIR/output" 2>&1 &
+test_runner=$!
+wait_for "$CASE_DIR/isactive-waiting"
+waiter=$(sed -n 1p "$CASE_DIR/scopes/$(ls "$CASE_DIR/scopes")/members")
+i=0
+while [ "$(ls -l /proc/"$waiter"/fd 2>/dev/null | grep -c game-gate)" -eq 0 ] &&
+      [ "$i" -lt 200 ]; do
+  /bin/sleep 0.01
+  i=$((i + 1))
+done
+gate_fds=0
+for fd in /proc/"$waiter"/fd/*; do
+  case "$(readlink "$fd")" in
+    */game-gate)
+      gate_fds=$((gate_fds + 1))
+      flags=$(awk '/^flags:/ { print $2 }' "/proc/$waiter/fdinfo/${fd##*/}")
+      [ $((0$flags & 3)) -eq 0 ] ||
+        { echo "FAIL: gate process can write to its gate ($flags)" >&2; exit 1; }
+      ;;
+  esac
+done
+[ "$gate_fds" -ge 1 ] || { echo 'FAIL: gate process never opened its gate' >&2; exit 1; }
+kill -KILL "$(cat "$CASE_DIR/supervisor-pid")"
+status=0
+wait "$test_runner" 2>/dev/null || status=$?
+test_runner=
+[ "$status" -eq 137 ]
+rm -f "$CASE_DIR/isactive-barrier"
+gate_closed
+printf '%s\n' 'PASS session SIGKILL before go: gate EOF, read-only, the game never runs'
 
 # systemd-run fails without a scope: nothing to save, nothing left over.
 setup_case register-fail 'game runemu.sh LONG
