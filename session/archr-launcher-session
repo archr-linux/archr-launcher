@@ -33,14 +33,15 @@ if [ "${1-}" != --profile-loaded ]; then
         elif command -v systemd-run >/dev/null 2>&1; then
             # Own unit: survives session restarts; its fixed name keeps a
             # single instance (a second start fails while one is active).
-            systemd-run --no-block --collect --quiet --unit=archr-apply-locale \
-                --nice=19 -p IOSchedulingClass=idle "$4" >/dev/null 2>&1 || :
+            timeout -k 1 5 systemd-run --no-block --collect --quiet \
+                --unit=archr-apply-locale --nice=19 -p IOSchedulingClass=idle \
+                "$4" >/dev/null 2>&1 || :
         else
             nice -n 19 "$4" >/dev/null 2>&1 </dev/null &
         fi
         if [ -r "$5" ]; then
             names=$(sed "s/#.*//" "$5" | grep -o "[A-Z_][A-Z0-9_]*")
-            [ -z "$names" ] || systemctl import-environment $names || :
+            [ -z "$names" ] || timeout -k 1 5 systemctl import-environment $names || :
         fi
         # Functions such as get_setting do not survive exec into POSIX sh.
         # glibc finds generated locales through /usr/lib/locale; a LOCPATH
@@ -59,6 +60,7 @@ launcher=/usr/bin/archr-launcher
 log_file=/var/log/archr-launcher-session.log
 kill_file=/tmp/.process-kill-data
 cpufreq=/sys/devices/system/cpu/cpufreq
+save_exit=/usr/bin/archr-game-save-exit
 sway_attempts=100
 sleep_bin=sleep
 stop_sleep=sleep
@@ -71,6 +73,7 @@ if [ "${ARCHR_SESSION_TEST:-0}" = 1 ]; then
     log_file=${ARCHR_SESSION_LOG:?}
     kill_file=${ARCHR_SESSION_KILL_FILE:?}
     cpufreq=${ARCHR_SESSION_CPUFREQ:?}
+    save_exit=${ARCHR_SESSION_SAVE_EXIT:?}
     sway_attempts=${ARCHR_SESSION_SWAY_ATTEMPTS:-100}
     sleep_bin=${ARCHR_SESSION_SLEEP:?}
     stop_sleep=${ARCHR_SESSION_STOP_SLEEP:?}
@@ -113,101 +116,81 @@ session_log() {
 }
 
 child_pid=
-child_group=0
-child_is_game=0
-launching=0
-stop_requested=0
+child_scope=
+gate=
+game_started=0
+# A TERM while a child is being started or a game cleaned up is only recorded;
+# the stop runs at the next safe point.
+defer_stop=0
+stop_pending=0
 
-child_alive() {
-    [ -n "$child_pid" ] || return 1
-    if [ "$child_group" -eq 1 ]; then
-        kill -0 -- "-$child_pid" 2>/dev/null
-    else
-        kill -0 "$child_pid" 2>/dev/null
-    fi
+# Every manager call is bounded, so a stuck systemd cannot stall the session.
+scope_active() {
+    timeout -k 0.1 0.5 systemctl is-active --quiet "$1" >/dev/null 2>&1 9>&-
 }
 
-signal_child() {
-    [ -n "$child_pid" ] || return 0
-    if [ "$child_group" -eq 1 ]; then
-        # A very early stop may precede setsid; fall back to its child PID.
-        kill "-$1" -- "-$child_pid" 2>/dev/null && return 0
-    fi
-    kill "-$1" "$child_pid" 2>/dev/null || :
+# Games run with TimeoutStopSec=1: systemd sends TERM to the whole scope,
+# KILL after 1 s, and returns once it is empty (at once if it already is).
+stop_scope() {
+    timeout -k 0.1 1.3 systemctl stop "$1" >/dev/null 2>&1 9>&- || :
 }
 
-game_descendants() {
-    # Snapshot PPID links once, before any signal can reparent emulator children.
-    # comm can contain spaces and ')': fields start after the LAST closing ')'.
-    for proc_stat in /proc/[0-9]*/stat; do
-        { IFS= read -r proc_line <"$proc_stat"; } 2>/dev/null || continue
-        proc_fields=${proc_line##*) }
-        proc_fields=${proc_fields#* }
-        proc_parent=${proc_fields%% *}
-        case "$proc_parent" in ''|*[!0-9]*) continue ;; esac
-        proc_pid=${proc_stat#/proc/}
-        proc_pid=${proc_pid%/stat}
-        proc_name=${proc_line#*(}
-        proc_name=${proc_name%)*}
-        proc_wrapper=0
-        [ "$proc_name" != runemu.sh ] || proc_wrapper=1
-        printf '%s %s %s\n' "$proc_pid" "$proc_parent" "$proc_wrapper"
-    done | awk -v root="$child_pid" '
-        { parent[$1] = $2; wrapper[$1] = $3 }
-        END {
-            for (pid in parent) {
-                cursor = pid
-                below_wrapper = 0
-                for (depth = 0; depth < NR && (cursor in parent); depth++) {
-                    if (cursor == root) {
-                        if (below_wrapper) print pid
-                        break
-                    }
-                    cursor = parent[cursor]
-                    if (wrapper[cursor]) below_wrapper = 1
-                }
-            }
-        }'
-}
+# What systemd-run --scope runs: not the game, but a gate in front of it,
+# game-gate-<n> for scope archr-game-<n>, so a late gate of an earlier launch
+# never reads a newer "go". Anything but its own FIFO ends it. It opens the
+# FIFO read-only without blocking (its own read-write descriptor stands in as
+# a writer until the second open), so the session's descriptor is the only
+# writer left. The game is exec'd, keeping this PID, only after reading "go";
+# EOF, because the session closed the gate or died, ends it.
+gate_waiter='[ -p "$1" ] || exit 125; exec 4<>"$1" 3<"$1" 4>&-
+[ -p "$1" ] && IFS= read -r go <&3 && [ "$go" = go ] || exit 125
+exec 3<&-; exec sh -c "$2"'
 
 stop_session() {
     trap '' TERM INT HUP
-    rm -f "$run_dir/next" "$kill_file"
-    remaining=0
-    if [ "$child_is_game" -eq 1 ]; then
-        session_log 'Stopping session; allowing up to 4 s for game cleanup'
-        remaining=40
-        # runemu.sh has no TERM trap. Keep it AND its leading sh -c alive so
-        # the emulator's exit returns through runemu's normal quit()/cleanup.
-        # Signal the snapshot only once: later children may be cleanup helpers.
-        descendants=$(game_descendants)
-        [ -z "$descendants" ] || kill -TERM $descendants 2>/dev/null || :
+    rm -f "$run_dir/next"
+    if [ -n "$child_scope" ]; then
+        session_log 'Stopping session during a game'
+        # A gate still closed now never opens: the game cannot start, even if
+        # systemd registers the scope after the stop below found nothing.
+        exec 9>&-
+        [ -z "$gate" ] || rm -f "$gate"
+        # Worst case, every bound reached: 3.2 s save-exit + 1 s for runemu
+        # + 1.4 s scope stop = 5.6 s (TimeoutStopSec=8).
+        # Only a runemu that has not returned yet has a game to save.
+        if [ "$game_started" -eq 1 ] && kill -0 "$child_pid" 2>/dev/null &&
+            [ -x "$save_exit" ] && timeout -k 0.2 3 "$save_exit" suspend; then
+            remaining=10
+            while kill -0 "$child_pid" 2>/dev/null && [ "$remaining" -gt 0 ]; do
+                "$stop_sleep" 0.1
+                remaining=$((remaining - 1))
+            done
+        fi
+        # save-exit finds the emulator through the kill file; keep it until now.
+        rm -f "$kill_file"
+        stop_scope "$child_scope"
     else
+        rm -f "$kill_file"
         session_log 'Stopping launcher session'
-        signal_child TERM
-    fi
-    # Wait for the entire game group, not just sh -c: its wrapper may still be
-    # cleaning up after that shell exits. The service cgroup is the final guard.
-    while child_alive && [ "$remaining" -gt 0 ]; do
-        "$stop_sleep" 0.1
-        remaining=$((remaining - 1))
-    done
-    if child_alive; then
-        session_log 'Child cleanup timed out; terminating remaining processes'
-        signal_child TERM
-        "$stop_sleep" 0.2
-        if child_alive; then
-            signal_child KILL
+        if [ -n "$child_pid" ]; then
+            kill -TERM "$child_pid" 2>/dev/null || :
+            if kill -0 "$child_pid" 2>/dev/null; then
+                "$stop_sleep" 0.2
+                if kill -0 "$child_pid" 2>/dev/null; then
+                    kill -KILL "$child_pid" 2>/dev/null || :
+                fi
+            fi
+            wait "$child_pid" 2>/dev/null
         fi
     fi
-    [ -z "$child_pid" ] || wait "$child_pid" 2>/dev/null
+    # Never wait for a game: if its scope could not be stopped, the next
+    # session start stops it, and this stop stays within its bound.
     exit 0
 }
 
 request_stop() {
-    stop_requested=1
-    # Do not lose a signal between starting a child and recording its PID.
-    [ "$launching" -eq 1 ] || stop_session
+    stop_pending=1
+    [ "$defer_stop" -eq 1 ] || stop_session
 }
 trap request_stop TERM INT HUP
 
@@ -255,8 +238,29 @@ restore_cpu_max() {
         [ -z "$top" ] || echo "$top" >"$policy/scaling_max_freq" 2>/dev/null || :
     done
 }
-# Also on any way out of the session: a service stop kills the game group.
+# Also on any way out of the session, including a failed scope launch.
 trap restore_cpu_max EXIT
+
+# Games require systemd's system manager (this service runs as root). After
+# SIGKILL/Restart=always, reclaim scopes the previous supervisor could not stop.
+command -v systemd-run >/dev/null 2>&1 && command -v systemctl >/dev/null 2>&1 || exit 1
+stale_scopes=$(timeout -k 1 5 systemctl list-units --all --plain --no-legend \
+    'archr-game-*.scope') || exit 1
+recovered_scope=0
+for stale_scope in $(printf '%s\n' "$stale_scopes" | awk '{print $1}'); do
+    case "$stale_scope" in
+        archr-game-*.scope) stop_scope "$stale_scope"; recovered_scope=1 ;;
+    esac
+done
+[ "$recovered_scope" -eq 0 ] || restore_cpu_max
+# A gate of an earlier session that runs late finds no FIFO and exits.
+rm -f "$run_dir"/game-gate* || exit 1
+# /run survives service restarts, not reboots (when all old scopes are gone).
+game_sequence=0
+if [ -f "$run_dir/scope-sequence" ]; then
+    read -r game_sequence <"$run_dir/scope-sequence" || exit 1
+fi
+case "$game_sequence" in ''|*[!0-9]*) exit 1 ;; esac
 
 session_log 'Starting launcher session'
 
@@ -267,13 +271,12 @@ while :; do
     printf '%s\n' archr-launcher >"$kill_file"
     # A leftover belongs to an interrupted cycle, never the next invocation.
     rm -f "$run_dir/next" || exit 1
-    launching=1
-    child_group=0
-    child_is_game=0
+    defer_stop=1
+    child_scope=
     "$launcher" &
     child_pid=$!
-    launching=0
-    [ "$stop_requested" -eq 0 ] || stop_session
+    defer_stop=0
+    [ "$stop_pending" -eq 0 ] || stop_session
     wait "$child_pid"
     launcher_status=$?
     child_pid=
@@ -299,26 +302,63 @@ while :; do
             # may refine it (e.g. -9 mupen64plus). Never overwrite it mid-game.
             rm -f "$kill_file"
             session_log 'Starting game'
-            launching=1
-            child_group=0
-            child_is_game=1
-            # ArchR's target BusyBox enables setsid; keep a PID-only fallback
-            # for minimal hosts. Never place the supervisor in this group.
-            if command -v setsid >/dev/null 2>&1; then
-                setsid sh -c "$command" &
-                child_group=1
-            else
-                session_log 'setsid unavailable; tracking game child PID only'
-                sh -c "$command" &
-            fi
+            game_sequence=$((game_sequence + 1))
+            printf '%s\n' "$game_sequence" >"$run_dir/scope-sequence.tmp" &&
+                mv -f "$run_dir/scope-sequence.tmp" "$run_dir/scope-sequence" || exit 1
+            defer_stop=1
+            game_started=0
+            child_scope=archr-game-$game_sequence.scope
+            # mkfifo fails on an existing name: a gate is never reused.
+            gate=$run_dir/game-gate-$game_sequence
+            mkfifo -m 0600 "$gate" && exec 9<>"$gate" || exit 1
+            # --scope execs the gate synchronously, and the gate execs the
+            # game: runemu keeps this PID and its environment. The gate gets
+            # no copy of the session's descriptor, so it cannot hold itself open.
+            systemd-run --scope --unit="$child_scope" --collect \
+                -p TimeoutStopSec=1 -- sh -c "$gate_waiter" archr-game-gate \
+                "$gate" "$command" 9>&- &
             child_pid=$!
-            launching=0
-            [ "$stop_requested" -eq 0 ] || stop_session
-            wait "$child_pid"
-            game_status=$?
+            defer_stop=0
+            [ "$stop_pending" -eq 0 ] || stop_session
+            # Open the gate only inside a registered scope. Giving up is safe:
+            # a closed gate never starts the game.
+            tries=50
+            until scope_active "$child_scope"; do
+                tries=$((tries - 1))
+                if [ "$tries" -eq 0 ] || ! kill -0 "$child_pid" 2>/dev/null; then
+                    session_log 'Game scope was not registered; not starting'
+                    break
+                fi
+                "$stop_sleep" 0.1
+            done
+            defer_stop=1
+            if [ "$tries" -gt 0 ] && kill -0 "$child_pid" 2>/dev/null; then
+                game_started=1
+                # Stays open until the game ends: closing it before the gate
+                # has read would discard the "go".
+                printf 'go\n' >&9
+            fi
+            defer_stop=0
+            [ "$stop_pending" -eq 0 ] || stop_session
+            # Never wait on a launch that was not let through: systemd-run may
+            # stay blocked on the manager, and with its gate gone it can only
+            # exit. The shell reaps it in the background; nothing waits on it.
+            game_status=125
+            if [ "$game_started" -eq 1 ]; then
+                wait "$child_pid"
+                game_status=$?
+            fi
+            exec 9>&-
+            rm -f "$gate"
+            gate=
+            # runemu has returned: a TERM now must not ask for another save.
+            defer_stop=1
+            stop_scope "$child_scope"
             child_pid=
-            child_group=0
-            child_is_game=0
+            child_scope=
+            game_started=0
+            defer_stop=0
+            [ "$stop_pending" -eq 0 ] || stop_session
             session_log "Game exited with $game_status"
             restore_cpu_max
             printf '%s\n' "$game_status" >"$run_dir/last-exit.tmp" &&
