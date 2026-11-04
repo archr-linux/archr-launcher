@@ -1648,7 +1648,7 @@ impl Settings {
         }
     }
     /// A slider reply: returns the newest value still to apply, if any.
-    /// Sliders never show "applying"; a failure reverts to the real value.
+    /// Sliders never show the busy indicator; a failure reverts to the real value.
     pub fn settle(&mut self, id: Id, result: Result<String, String>) -> Option<String> {
         let Some((confirmed, queued)) = self.slides.get_mut(&id) else {
             self.complete(id, result);

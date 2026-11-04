@@ -137,15 +137,7 @@ impl View<'_, '_, '_> {
             (15., ink, Align::Left),
             face,
         )?;
-        let control = (300., y, 312., h);
-        if state.pending == Some(id) {
-            return self.text(
-                control,
-                &self.tr("settings.applying"),
-                (14., ink, Align::Right),
-            );
-        }
-        self.control(id, Kind::Toggle, state, selected, control)?;
+        self.control(id, Kind::Toggle, state, selected, (300., y, 312., h))?;
         self.ui.divider(
             self.ui.px(28.),
             self.ui.px(y + h + ROW_GAP + 4.),
