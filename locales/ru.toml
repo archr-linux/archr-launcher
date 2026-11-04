@@ -1364,7 +1364,7 @@
 "osd.nostate_title" = "Состояние не сохранено"
 "osd.nostate" = "Этот эмулятор не сохраняет состояние; используйте меню игры."
 "osd.report_start_title" = "Создаём отчёт…"
-"osd.report_start" = "Можно продолжать игру; это около 20 секунд."
+"osd.report_start" = "Это займёт около 20 секунд."
 "osd.report_done_title" = "Отчёт сохранён"
 "osd.report_done" = "В roms/relatorios, виден на ПК."
 "osd.report_failed_title" = "Отчёта нет"

@@ -106,11 +106,7 @@ impl Assets {
                 let (title, body, icon, accent) = match step {
                     Report::Start => (
                         self.tr("osd.report_start_title", "Creating the report…", &[]),
-                        self.tr(
-                            "osd.report_start",
-                            "Keep playing; it takes about 20 seconds.",
-                            &[],
-                        ),
+                        self.tr("osd.report_start", "It takes about 20 seconds.", &[]),
                         LOADER,
                         ACCENT,
                     ),
@@ -493,6 +489,10 @@ mod tests {
         assert_eq!((nostate.critical, nostate.icon), (false, ALERT));
         let report = |language, step| assets(language).card(Alert::Report(step));
         assert_eq!(report("pt_BR", Report::Start).title, "Gerando relatório…");
+        assert_eq!(
+            report("pt_BR", Report::Start).body,
+            "Leva cerca de 20 segundos."
+        );
         let done = report("pt_BR", Report::Done);
         assert_eq!(done.body, "Em roms/relatorios, visível no PC.");
         assert_eq!(

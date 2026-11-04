@@ -1364,7 +1364,7 @@
 "osd.nostate_title" = "Sem salvar estado"
 "osd.nostate" = "Este emulador não salva estado; use o menu do jogo."
 "osd.report_start_title" = "Gerando relatório…"
-"osd.report_start" = "Pode continuar jogando; leva cerca de 20 segundos."
+"osd.report_start" = "Leva cerca de 20 segundos."
 "osd.report_done_title" = "Relatório salvo"
 "osd.report_done" = "Em roms/relatorios, visível no PC."
 "osd.report_failed_title" = "Sem relatório"

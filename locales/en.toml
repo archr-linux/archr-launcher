@@ -1364,7 +1364,7 @@
 "osd.nostate_title" = "No state saved"
 "osd.nostate" = "This emulator does not save a state; use the game's menu."
 "osd.report_start_title" = "Creating the report…"
-"osd.report_start" = "Keep playing; it takes about 20 seconds."
+"osd.report_start" = "It takes about 20 seconds."
 "osd.report_done_title" = "Report saved"
 "osd.report_done" = "In roms/relatorios, visible on a PC."
 "osd.report_failed_title" = "No report"
