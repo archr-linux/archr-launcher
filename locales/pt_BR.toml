@@ -1212,9 +1212,9 @@
 "usb.title_not_bound_bt" = "Adaptador Bluetooth não ligou"
 "usb.advice_works" = "O driver {driver} ligou e criou {iface}. Escolha a rede em Configurações › Rede."
 "usb.advice_works_bt" = "O driver {driver} ligou e criou {iface}. Pareie controles em Configurações › Rede › Bluetooth."
-"usb.advice_no_driver" = "Esta imagem não traz driver para este chip. Adaptadores com {chips} funcionam sem configurar nada."
-"usb.advice_firmware" = "O driver {driver} está na imagem, mas falta o firmware {file}. Adaptadores com {chips} funcionam sem configurar nada."
-"usb.advice_not_bound" = "O driver {driver} não ligou neste adaptador. Desconecte e conecte de novo; adaptadores com {chips} funcionam sem configurar nada."
+"usb.advice_no_driver" = "Esta imagem não traz driver para este chip."
+"usb.advice_firmware" = "O driver {driver} está na imagem, mas falta o firmware {file}."
+"usb.advice_not_bound" = "O driver {driver} não ligou neste adaptador. Desconecte e conecte de novo."
 "convert.title" = "Levar os saves do {from} para o {to}?"
 "convert.title_game" = "Levar o save deste jogo do {from} para o {to}?"
 "convert.detail" = "Só o save do cartucho muda de formato. Os originais ficam guardados em {keep}."
@@ -1227,3 +1227,4 @@
 "convert.up_to" = "até {count}"
 "convert.replace" = { one = "Substitui {count} save mais antigo, que também fica guardado lá.", other = "Substituem {count} saves mais antigos, que também ficam guardados lá." }
 "convert.failed_some" = { one = "{count} save não pôde ser convertido; o original está intacto.", other = "{count} saves não puderam ser convertidos; os originais estão intactos." }
+"usb.suggest" = "Adaptadores com {chips} funcionam sem configurar nada."

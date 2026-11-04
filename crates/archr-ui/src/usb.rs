@@ -149,15 +149,20 @@ impl Adapter {
             Verdict::Firmware => "usb.advice_firmware",
             Verdict::NotBound => "usb.advice_not_bound",
         };
-        catalog.format(
+        let text = catalog.format(
             key,
             &[
-                ("chips", &chips),
                 ("driver", driver),
                 ("file", file),
                 ("iface", &self.interface(catalog)),
             ],
-        )
+        );
+        // What to buy instead, when the image's table names any chip.
+        if self.verdict == Verdict::Works || chips.is_empty() {
+            return text;
+        }
+        let suggestion = catalog.format("usb.suggest", &[("chips", &chips)]);
+        format!("{text} {suggestion}")
     }
     /// The announcement's title.
     pub fn title(&self) -> &'static str {
@@ -382,6 +387,11 @@ mod tests {
             missing.advice(&page.table.chips, &catalog),
             "Esta imagem não traz driver para este chip. Adaptadores com RTL8821CU, \
              RTL8188FTV ou MT7601U funcionam sem configurar nada."
+        );
+        // Without the image's table: the verdict alone, never a hole.
+        assert_eq!(
+            missing.advice(&[], &catalog),
+            "Esta imagem não traz driver para este chip."
         );
         let works = &page.now[1];
         assert_eq!(works.line(&catalog), "Wi‑Fi 2,4 GHz · 0bda:0179");

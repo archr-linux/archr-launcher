@@ -1212,9 +1212,9 @@
 "usb.title_not_bound_bt" = "Bluetooth adapter did not start"
 "usb.advice_works" = "The {driver} driver started and created {iface}. Pick the network in Settings › Network."
 "usb.advice_works_bt" = "The {driver} driver started and created {iface}. Pair controllers in Settings › Network › Bluetooth."
-"usb.advice_no_driver" = "This image has no driver for this chip. Adapters with {chips} work with nothing to set up."
-"usb.advice_firmware" = "The {driver} driver is in the image, but the {file} firmware is missing. Adapters with {chips} work with nothing to set up."
-"usb.advice_not_bound" = "The {driver} driver did not start on this adapter. Unplug it and plug it in again; adapters with {chips} work with nothing to set up."
+"usb.advice_no_driver" = "This image has no driver for this chip."
+"usb.advice_firmware" = "The {driver} driver is in the image, but the {file} firmware is missing."
+"usb.advice_not_bound" = "The {driver} driver did not start on this adapter. Unplug it and plug it in again."
 "convert.title" = "Take the {from} saves to {to}?"
 "convert.title_game" = "Take this game's {from} save to {to}?"
 "convert.detail" = "Only the cartridge save changes format. The originals are kept in {keep}."
@@ -1227,3 +1227,4 @@
 "convert.up_to" = "up to {count}"
 "convert.replace" = { one = "It replaces {count} older save, which is kept there too.", other = "They replace {count} older saves, which are kept there too." }
 "convert.failed_some" = { one = "{count} save could not be converted; its original is untouched.", other = "{count} saves could not be converted; their originals are untouched." }
+"usb.suggest" = "Adapters with {chips} work with nothing to set up."

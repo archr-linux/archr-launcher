@@ -1212,9 +1212,9 @@
 "usb.title_not_bound_bt" = "El adaptador Bluetooth no se activó"
 "usb.advice_works" = "El driver {driver} se activó y creó {iface}. Elige la red en Ajustes › Red."
 "usb.advice_works_bt" = "El driver {driver} se activó y creó {iface}. Empareja mandos en Ajustes › Red › Bluetooth."
-"usb.advice_no_driver" = "Esta imagen no trae driver para este chip. Los adaptadores con {chips} funcionan sin configurar nada."
-"usb.advice_firmware" = "El driver {driver} está en la imagen, pero falta el firmware {file}. Los adaptadores con {chips} funcionan sin configurar nada."
-"usb.advice_not_bound" = "El driver {driver} no se activó con este adaptador. Desconéctalo y conéctalo de nuevo; los adaptadores con {chips} funcionan sin configurar nada."
+"usb.advice_no_driver" = "Esta imagen no trae driver para este chip."
+"usb.advice_firmware" = "El driver {driver} está en la imagen, pero falta el firmware {file}."
+"usb.advice_not_bound" = "El driver {driver} no se activó con este adaptador. Desconéctalo y conéctalo de nuevo."
 "convert.title" = "¿Llevar las partidas de {from} a {to}?"
 "convert.title_game" = "¿Llevar la partida de este juego de {from} a {to}?"
 "convert.detail" = "Solo la partida del cartucho cambia de formato. Los originales se guardan en {keep}."
@@ -1227,3 +1227,4 @@
 "convert.up_to" = "hasta {count}"
 "convert.replace" = { one = "Sustituye {count} partida más antigua, que también se guarda allí.", other = "Sustituyen {count} partidas más antiguas, que también se guardan allí." }
 "convert.failed_some" = { one = "{count} partida no se pudo convertir; el original está intacto.", other = "{count} partidas no se pudieron convertir; los originales están intactos." }
+"usb.suggest" = "Los adaptadores con {chips} funcionan sin configurar nada."
