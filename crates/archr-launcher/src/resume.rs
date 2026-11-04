@@ -99,6 +99,12 @@ pub fn start(paths: &Paths, config: Option<&SystemCfg>) -> Start {
     if setting("launcher.resume", "last") == "off" {
         return Start::Plain;
     }
+    // At or under the critical level on battery the guard would power off
+    // again in the middle of the game: the menu instead.
+    let critical: u8 = setting("power.battery.critical", "3").parse().unwrap_or(3);
+    if critical > 0 && battery_low(paths, critical) {
+        return Start::Plain;
+    }
     let record = fs::read_to_string(paths.at(LAST))
         .ok()
         .and_then(|line| Record::parse(&line, paths))
@@ -111,6 +117,30 @@ pub fn start(paths: &Paths, config: Option<&SystemCfg>) -> Start {
         }
         _ => Start::Plain,
     }
+}
+
+/// The battery discharges at or under `limit` percent ("Not charging" means
+/// a charger is in).
+fn battery_low(paths: &Paths, limit: u8) -> bool {
+    let Some(dir) = archr_ui::status::find_battery(&paths.at("/")) else {
+        return false;
+    };
+    let read = |name: &str| fs::read_to_string(dir.join(name)).unwrap_or_default();
+    read("status").trim() == "Discharging"
+        && read("capacity")
+            .trim()
+            .parse::<u8>()
+            .is_ok_and(|level| level <= limit)
+}
+
+/// runemu.sh's start from this saved state, for the next launch of the game.
+pub fn entry(library: &Library, game: &Recent) -> Option<crate::saves::Entry> {
+    Some(crate::saves::Entry {
+        system: game.system.clone(),
+        rom: library.games(&game.system).get(game.game)?.path.clone(),
+        argument: game.entry.clone()?,
+        backup: Vec::new(),
+    })
 }
 
 /// The resume refused: it is not offered at the next power on.
@@ -300,5 +330,20 @@ mod tests {
         fs::remove_file(paths.run.join(BOOTED)).unwrap();
         let off = cfg("launcher.resume=off\n");
         assert_eq!(start(&paths, Some(&off)), Start::Plain);
+        // On battery at the critical level: the menu; with a charger: resumed.
+        let battery = paths.at("/sys/class/power_supply/battery");
+        fs::create_dir_all(&battery).unwrap();
+        for (status, level, resumed) in [
+            ("Discharging", "3", false),
+            ("Discharging", "4", true),
+            ("Not charging", "2", true),
+            ("Charging", "1", true),
+        ] {
+            fs::write(battery.join("status"), status).unwrap();
+            fs::write(battery.join("capacity"), level).unwrap();
+            fs::remove_file(paths.run.join(BOOTED)).unwrap();
+            let got = matches!(start(&paths, None), Start::Resume(_));
+            assert_eq!(got, resumed, "{status} {level}%");
+        }
     }
 }

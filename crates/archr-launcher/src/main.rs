@@ -601,15 +601,7 @@ fn run(
                     if progress >= 1. && deferred.is_none() {
                         if let Some(boot) = app.boot.take() {
                             let game = boot.game;
-                            library.entry = game.entry.and_then(|argument| {
-                                let rom = library.games(&game.system).get(game.game)?.path.clone();
-                                Some(Entry {
-                                    system: game.system.clone(),
-                                    rom,
-                                    argument,
-                                    backup: Vec::new(),
-                                })
-                            });
+                            library.entry = resume::entry(&library, &game);
                             deferred = Some(Outcome::Launch {
                                 system: game.system,
                                 game: game.game,
@@ -1010,15 +1002,13 @@ fn run(
                     game,
                     entry,
                 } => {
-                    library.entry = entry.and_then(|argument| {
-                        let rom = library.games(&system).get(game)?.path.clone();
-                        Some(Entry {
-                            system: system.clone(),
-                            rom,
-                            argument,
-                            backup: Vec::new(),
-                        })
-                    });
+                    let recent = archr_ui::resume::Recent {
+                        system: system.clone(),
+                        game,
+                        entry,
+                        ..Default::default()
+                    };
+                    library.entry = resume::entry(&library, &recent);
                     resuming = None;
                     Outcome::Launch { system, game }
                 }
