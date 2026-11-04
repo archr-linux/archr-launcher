@@ -118,14 +118,10 @@ impl View<'_, '_, '_> {
         )?;
         self.note((29., VIEW_TOP + 52., width, 17.), &detail, 12.)
     }
-    /// Width of `text` in layout units.
-    fn width_of(&mut self, text: &str, face: Face, size: f32) -> Result<f32, String> {
-        Ok(self.ui.measure(text, face, size)? as f32 / self.ui.frame.scale)
-    }
     /// `text` cut in the middle with "…" until it fits `width`: both ends of
     /// a version say more than its middle.
     fn squeeze(&mut self, text: &str, face: Face, size: f32, width: f32) -> Result<String, String> {
-        if self.width_of(text, face, size)? <= width {
+        if self.width(text, face, size)? <= width {
             return Ok(text.to_owned());
         }
         let chars: Vec<char> = text.chars().collect();
@@ -135,7 +131,7 @@ impl View<'_, '_, '_> {
             let head: String = chars[..keep.div_ceil(2)].iter().collect();
             let tail: String = chars[chars.len() - keep / 2..].iter().collect();
             let cut = format!("{head}…{tail}");
-            if self.width_of(&cut, face, size)? <= width {
+            if self.width(&cut, face, size)? <= width {
                 return Ok(cut);
             }
         }
@@ -154,8 +150,8 @@ impl View<'_, '_, '_> {
         let arrow = if package.old.is_empty() { "" } else { " → " };
         let mut old = short_version(&package.old);
         let mut new = short_version(&package.new);
-        let room = width - self.width_of(&bytes, face, size)? - self.width_of(arrow, face, size)?;
-        let wide = |view: &mut Self, text: &str| view.width_of(text, face, size);
+        let room = width - self.width(&bytes, face, size)? - self.width(arrow, face, size)?;
+        let wide = |view: &mut Self, text: &str| view.width(text, face, size);
         if wide(self, &old)? + wide(self, &new)? > room {
             // The new version first: it is what is coming.
             let half = if old.is_empty() { room } else { room / 2. };
@@ -174,10 +170,10 @@ impl View<'_, '_, '_> {
         let texts = self.package_parts(package, w, 11.)?;
         let mut widths = Vec::new();
         for text in &texts {
-            widths.push(self.width_of(text, Face::Mono, 11.)?);
+            widths.push(self.width(text, Face::Mono, 11.)?);
         }
         let value: f32 = widths.iter().sum();
-        let name = self.width_of(&package.name, Face::Regular, 12.)?;
+        let name = self.width(&package.name, Face::Regular, 12.)?;
         let single = name + 12. + value <= w;
         let height = if single { 23. } else { 38. };
         if !draw {
