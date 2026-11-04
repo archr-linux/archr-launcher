@@ -730,7 +730,7 @@ mostra outro jogo). A capa vem da biblioteca do launcher pelo `game` do
 `header`; o módulo não lê ROMs nem imagens.
 
 Exemplo completo: `examples/modules/ajuste-cpu`. Desce um degrau só com
-folga clara (p95 abaixo de 75 % e nenhum segundo no limite), sobe um quando
+folga clara (p95 abaixo de 75 % e menos de 1 % do tempo no limite), sobe um quando
 chega ao limite, fica "aprendido" depois de 3 sessões estáveis no mesmo
 teto e descarta sessões curtas ou ociosas; N64, PSP, Dreamcast e Saturn
 ficam fora. A lista vai em páginas de 18 jogos (os que estão aprendendo, depois

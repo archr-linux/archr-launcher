@@ -32,6 +32,9 @@ game() { jq -c --arg k "$1" '.games[] | select(.key == $k)' "${DATA}/games.json"
 # Clear room: down one step a session.
 check "starts at the top" '[ "$(session snes/a 50 0 0)" = 1416000 ]'
 check "then one step down" '[ "$(session snes/a 50 0 0)" = 1008000 ]'
+# One lone second at the limit in 150 (a loading) still leaves clear room.
+session snes/z 70 1 0 >/dev/null
+check "a lone second at the limit: one step down" '[ "$(game snes/z | jq .cap)" = 1008000 ]'
 # A paused game (idle most of the time) is no evidence: the ceiling stays.
 session snes/a 10 0 120 >/dev/null
 check "an idle session does not count" '[ "$(game snes/a | jq .sessions)" = 2 ] && [ "$(game snes/a | jq .cap)" = 816000 ]'
@@ -47,7 +50,7 @@ check "slow at the top: left out" '[ "$(game snes/b | jq -r .status)" = out ]'
 check "heavy systems are left out" '[ "$(session n64/c 50 0 0)" = 1416000 ] && [ "$(game n64/c | jq -r .status)" = out ]'
 
 # Pages: 45 games, 18 a page, with the next and previous pages as items.
-for n in $(seq 1 42); do session "gba/g$(printf %02d "${n}")" 50 0 0 >/dev/null; done
+for n in $(seq 1 41); do session "gba/g$(printf %02d "${n}")" 50 0 0 >/dev/null; done
 list() { grep '"row:jogos"' "${DATA}/last" | tail -n 1 | jq -c '.params.items'; }
 press() { # action, item; prints what the module said on stderr
   # shellcheck disable=SC2069 # stderr to the caller, stdout to the file

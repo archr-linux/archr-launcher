@@ -8,7 +8,8 @@
 def least: ($ENV.ARCHR_TUNE_MIN // "90" | tonumber);
 # A heuristic of CPU occupancy, not a frame count: a second the emulator's
 # busiest thread spends above `limit` (%) could not keep the pace; a session
-# whose p95 stays under `headroom` had clear room to spare.
+# whose p95 stays under `headroom`, with under 1 % of its time at the limit
+# (a lone second of loading), had clear room to spare.
 def limit: 92;
 def headroom: 75;
 # Systems that need the most this CPU has.
@@ -128,7 +129,7 @@ def counts($perf):
 def learn($perf):
   ($perf.cpu_max_khz) as $cap
   | ($perf.busy_p95 >= limit or $perf.limit_seconds >= 2) as $lost
-  | ($perf.busy_p95 < headroom and $perf.limit_seconds == 0) as $room
+  | ($perf.busy_p95 < headroom and $perf.limit_seconds * 100 < $perf.seconds) as $room
   | .sessions += 1
   | .hist[$cap | tostring] |= ((. // {} | if .busy == null then {n: 0, busy: 0, limit: 0, ma: 0, man: 0} else . end)
       | .n += 1 | .busy += $perf.busy_p95 | .limit += ($perf.limit_seconds * 100 / $perf.seconds)

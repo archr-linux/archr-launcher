@@ -12,7 +12,7 @@ Como aprende:
   (`cpu_max_khz`, um dos `cpu.opps` do `initialize`);
 - na volta, o `game.ended` traz a medida do `archr-perf-probe` (ocupação da
   thread mais ocupada do emulador, segundos no limite, corrente da bateria);
-- folga clara (p95 abaixo de 75 % e nenhum segundo no limite): desce um
+- folga clara (p95 abaixo de 75 % e menos de 1 % do tempo no limite): desce um
   degrau; no limite (p95 de 92 % ou 2 s ou mais no limite): sobe um e marca
   o piso; três sessões estáveis no mesmo teto: "aprendido". Um jogo
   aprendido que chegar ao limite volta um degrau;
