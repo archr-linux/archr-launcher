@@ -573,8 +573,9 @@ A chave privada nunca vai para o GitHub, para o aparelho nem para o
 repositório; quem tomar a conta `archr-linux` não consegue dar selo.
 
 **Selo de um módulo instalado.** Nunca é guardado: é calculado de novo ao
-iniciar, a cada mudança nos módulos e sempre que a Loja busca a lista, para
-todos os instalados, qualquer que seja a aba aberta. Vale só se:
+iniciar, a cada mudança nos módulos e sempre que a Loja guarda uma lista
+nova (ao listar, ao abrir um módulo ou na checagem de atualização
+automática), para todos os instalados. Vale só se:
 
 - a última lista que passou nas checagens, guardada como veio
   (`modules-reviewed.json` e `.sig`, ao lado do `modules.toml`), passa de novo
@@ -584,10 +585,12 @@ todos os instalados, qualquer que seja a aba aberta. Vale só se:
   `modules.toml` na instalação);
 - os arquivos de `modules/<id>/` ainda são os instalados: na instalação o
   launcher guarda um SHA-256 da árvore (caminhos, tipos, conteúdo) e o confere
-  numa thread à parte. Um arquivo mudado ou um link: sem selo.
+  numa thread à parte, lendo em blocos até 32 MiB. Um arquivo mudado, um
+  link ou uma árvore maior que isso: sem selo.
 
 Uma lista nova assinada sem o módulo (revogação) tira o selo assim que a Loja
-a busca (o GitHub fica em cache por uma hora). Se uma atualização volta atrás,
+a busca (o GitHub fica em cache por uma hora). Quando a lista vence com o
+launcher aberto, os selos somem em até um segundo. Se uma atualização volta atrás,
 o digest e o hash da versão anterior voltam juntos.
 
 Regras da release (a última, não pre-release):
