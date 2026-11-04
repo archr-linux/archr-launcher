@@ -197,26 +197,41 @@ fn recent(library: &Library, (system, game): (String, usize), record: Option<&Re
     }
 }
 
-/// The first `limit` recent games, once their systems are loaded.
+/// The first `limit` recent games, once their systems are loaded, led by
+/// the game "save and exit" closed last (B goes back to it), even when it
+/// was not started from the launcher.
 pub fn switcher(library: &mut Library, records: &[Record], limit: usize) -> Option<Vec<Recent>> {
     library.ensure("@recent");
-    if library.loading("@recent") {
+    let left = records.first().filter(|r| r.reason == "switch");
+    if let Some(record) = left {
+        library.ensure(&record.system);
+    }
+    if library.loading("@recent") || left.is_some_and(|r| library.loading(&r.system)) {
         return None;
     }
-    let count = library.games("@recent").len().min(limit);
-    Some(
-        (0..count)
-            .filter_map(|n| library.origin("@recent", n))
-            .map(|origin| {
-                let rom = library
-                    .games(&origin.0)
-                    .get(origin.1)
-                    .map(|g| g.path.clone());
-                let record = records.iter().find(|r| Some(&r.rom) == rom.as_ref());
-                recent(library, origin, record)
-            })
-            .collect(),
-    )
+    let left = left.and_then(|record| {
+        let game = library
+            .games(&record.system)
+            .iter()
+            .position(|g| g.path == record.rom)?;
+        Some(recent(library, (record.system.clone(), game), Some(record)))
+    });
+    let others = (0..library.games("@recent").len())
+        .filter_map(|n| library.origin("@recent", n))
+        .filter(|origin| {
+            left.as_ref()
+                .is_none_or(|l| (l.system.as_str(), l.game) != (origin.0.as_str(), origin.1))
+        })
+        .map(|origin| {
+            let rom = library
+                .games(&origin.0)
+                .get(origin.1)
+                .map(|g| g.path.clone());
+            let record = records.iter().find(|r| Some(&r.rom) == rom.as_ref());
+            recent(library, origin, record)
+        })
+        .collect::<Vec<_>>();
+    Some(left.into_iter().chain(others).take(limit).collect())
 }
 
 /// The resume screen's game, once its system is loaded; None while it
