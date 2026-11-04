@@ -372,7 +372,11 @@ mod tests {
     use super::*;
 
     fn assets(language: &str) -> Assets {
-        let dir = tempfile_dir();
+        // One folder per call: the tests run at once.
+        static CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = tempfile_dir().join(n.to_string());
+        std::fs::create_dir_all(&dir).unwrap();
         let config = dir.join("system.cfg");
         std::fs::write(&config, format!("system.language={language}\n")).unwrap();
         Assets::load(
