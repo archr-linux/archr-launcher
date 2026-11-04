@@ -1008,13 +1008,19 @@ impl Host {
         let notice = Notice::Updated(self.name(&id), installed.version);
         let _ = self.out.send(Event::Notice(notice));
     }
-    /// Store cards tell which installed modules are outdated. (A new
-    /// reviewed list comes as `Input::ReviewedList`, from any answer.)
+    /// Store cards tell which installed modules are outdated; a listing
+    /// checks every badge again. (A new reviewed list also comes as
+    /// `Input::ReviewedList`, from any answer.)
     fn store_reply(&mut self, reply: &StoreReply) {
         let cards = match reply {
             // The Installed tab comes from the disk: it knows nothing new.
             StoreReply::Listed { tab, .. } if *tab == archr_ui::modules::Tab::Installed => return,
-            StoreReply::Listed { cards, .. } => cards.as_slice(),
+            StoreReply::Listed { cards, .. } => {
+                // Refreshing a list checks the files on disk again too,
+                // even when the reviewed list did not change.
+                self.reconcile();
+                cards.as_slice()
+            }
             StoreReply::Card(card) => std::slice::from_ref(card),
             _ => return,
         };

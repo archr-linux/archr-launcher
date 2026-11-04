@@ -1003,3 +1003,23 @@ fn a_revoking_list_from_an_offer_takes_the_badge_off() {
     modules.request(Request::Store(StoreAction::Open(Box::new(card()))));
     assert_eq!(badge_of(&modules, Some(false), wait), Some(false));
 }
+
+/// A file changed on disk loses the badge when the store list is refreshed
+/// with the same reviewed list, with no restart.
+#[test]
+fn refreshing_the_store_checks_the_files_again() {
+    use archr_ui::modules::{Request, StoreAction};
+    let root = tempfile::tempdir().unwrap();
+    let fake = Fake::default();
+    reviewed_release(&fake);
+    let modules = install_reviewed(root.path(), &fake);
+    let wait = std::time::Duration::from_millis(800);
+    assert_eq!(badge_of(&modules, Some(true), wait), Some(true));
+    fs::write(
+        root.path().join("modules/bateria/main.sh"),
+        b"#!/bin/bash\necho changed\n",
+    )
+    .unwrap();
+    modules.request(Request::Store(StoreAction::List(Tab::Reviewed, true)));
+    assert_eq!(badge_of(&modules, Some(false), wait), Some(false));
+}
