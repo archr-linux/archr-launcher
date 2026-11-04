@@ -385,7 +385,7 @@ no rodapé; as confirmações (Jogar daqui e Apagar) são janelas centradas.
 
 ## Alternador e retomada ao ligar
 
-O Alternador (atalho Função + R1 durante o jogo: o jogo é salvo e fechado e
+O Alternador (um toque no FN durante o jogo: o jogo é salvo e fechado e
 o launcher abre nos jogos recentes) e a tela de retomada ao ligar
 (Configurações › Jogos › Retomar e alternar) seguem retângulos do
 `theme.toml`, com a mesma regra dos `details_*`.
