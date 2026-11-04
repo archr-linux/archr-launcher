@@ -1248,7 +1248,7 @@
 "diag.report_last" = "Last report"
 "diag.report_saved" = "Report saved to roms/relatorios/{name}"
 "diag.report_failed" = "Could not create the report."
-"diag.note" = "The report gathers hardware, kernel, services, network, storage, temperatures, emulators and the logs of the boot and of the last game. *Passwords, tokens and keys never go in.* It is in `roms/relatorios/`, visible on a PC."
+"diag.note" = "The report gathers hardware, kernel, services, network, storage, temperatures, emulators and the logs of the boot and of the last game. *Passwords, tokens and keys never go in.* It is in `roms/relatorios/`, visible on a PC. Shortcut, even in a game: hold *FN + L1 + R1* for 3 s."
 
 # Games › BIOS (Bios, Bios-livre)
 "bios.title" = "BIOS"
@@ -1363,3 +1363,9 @@
 "osd.battery_low" = "Connect the charger soon."
 "osd.nostate_title" = "No state saved"
 "osd.nostate" = "This emulator does not save a state; use the game's menu."
+"osd.report_start_title" = "Creating the report…"
+"osd.report_start" = "It takes about 20 seconds."
+"osd.report_done_title" = "Report saved"
+"osd.report_done" = "In roms/relatorios, visible on a PC."
+"osd.report_failed_title" = "No report"
+"osd.report_failed" = "The report could not be created."

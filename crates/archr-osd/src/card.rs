@@ -1,7 +1,7 @@
 //! The battery card (Bateria-critica): a notice over the whole screen, games
 //! included. Geometry from the 640x480 design, text with the launcher's
 //! fonts and catalogs.
-use crate::proto::Alert;
+use crate::proto::{Alert, Report};
 use ab_glyph::{Font, FontVec, PxScale, ScaleFont};
 use resvg::tiny_skia as sk;
 use std::{collections::HashMap, path::Path, time::Duration};
@@ -11,6 +11,8 @@ const CARD: [u8; 4] = [17, 22, 28, 240]; // rgba(17,22,28,.94)
 const DANGER: [u8; 3] = [0xF8, 0x51, 0x49];
 const DANGER_EDGE: [u8; 3] = [0x5C, 0x23, 0x28];
 const WARNING: [u8; 3] = [0xE3, 0xA0, 0x08];
+const ACCENT: [u8; 3] = [0x1E, 0x88, 0xFF];
+const SUCCESS: [u8; 3] = [0x3F, 0xB9, 0x50];
 const EDGE: [u8; 3] = [0x1C, 0x23, 0x2C];
 const TEXT: [u8; 3] = [0xE6, 0xED, 0xF3];
 const BODY: [u8; 3] = [0xC5, 0xCF, 0xDA];
@@ -25,6 +27,9 @@ pub const HOLD_LOW: Duration = Duration::from_millis(4000);
 const BATTERY: &str = include_str!("../../../themes/default/icons/battery-warning.svg");
 const ALERT: &str = include_str!("../../../themes/default/icons/triangle-alert.svg");
 const PLUG: &str = include_str!("../../../themes/default/icons/plug-zap.svg");
+const LOADER: &str = include_str!("../../../themes/default/icons/loader-circle.svg");
+const CHECK: &str = include_str!("../../../themes/default/icons/circle-check.svg");
+const FAILED: &str = include_str!("../../../themes/default/icons/circle-x.svg");
 
 /// The launcher's installed fonts and the language's catalog.
 pub struct Assets {
@@ -94,7 +99,43 @@ impl Assets {
                     bar: None,
                     critical: false,
                     icon: ALERT,
+                    accent: WARNING,
                 }
+            }
+            Alert::Report(step) => {
+                let (title, body, icon, accent) = match step {
+                    Report::Start => (
+                        self.tr("osd.report_start_title", "Creating the report…", &[]),
+                        self.tr("osd.report_start", "It takes about 20 seconds.", &[]),
+                        LOADER,
+                        ACCENT,
+                    ),
+                    Report::Done => (
+                        self.tr("osd.report_done_title", "Report saved", &[]),
+                        self.tr(
+                            "osd.report_done",
+                            "In roms/relatorios, visible on a PC.",
+                            &[],
+                        ),
+                        CHECK,
+                        SUCCESS,
+                    ),
+                    Report::Failed => (
+                        self.tr("osd.report_failed_title", "No report", &[]),
+                        self.tr("osd.report_failed", "The report could not be created.", &[]),
+                        FAILED,
+                        DANGER,
+                    ),
+                };
+                return Card {
+                    title,
+                    body,
+                    hint: None,
+                    bar: None,
+                    critical: false,
+                    icon,
+                    accent,
+                };
             }
         };
         let level = [("level", battery.level.to_string())];
@@ -118,6 +159,7 @@ impl Assets {
                     bar: Some(1.0 - f32::from(left.saturating_sub(1)) / f32::from(total.max(1))),
                     critical: true,
                     icon: BATTERY,
+                    accent: DANGER,
                 }
             }
             None => Card {
@@ -127,6 +169,7 @@ impl Assets {
                 bar: None,
                 critical: false,
                 icon: BATTERY,
+                accent: WARNING,
             },
         }
     }
@@ -143,6 +186,8 @@ pub struct Card {
     pub critical: bool,
     /// Lucide SVG in the round badge.
     pub icon: &'static str,
+    /// The badge's colour.
+    pub accent: [u8; 3],
 }
 
 fn paint(color: [u8; 3], alpha: u8) -> sk::Paint<'static> {
@@ -294,7 +339,7 @@ pub fn render(
         (true, _) => DANGER_EDGE,
         _ => EDGE,
     };
-    let accent = if card.critical { DANGER } else { WARNING };
+    let accent = card.accent;
     rounded(
         &mut out,
         (x - s, y - s, card_w + 2.0 * s, card_h + 2.0 * s),
@@ -442,6 +487,19 @@ mod tests {
         let nostate = a.card(Alert::NoState);
         assert_eq!(nostate.title, "Sem salvar estado");
         assert_eq!((nostate.critical, nostate.icon), (false, ALERT));
+        let report = |language, step| assets(language).card(Alert::Report(step));
+        assert_eq!(report("pt_BR", Report::Start).title, "Gerando relatório…");
+        assert_eq!(
+            report("pt_BR", Report::Start).body,
+            "Leva cerca de 20 segundos."
+        );
+        let done = report("pt_BR", Report::Done);
+        assert_eq!(done.body, "Em roms/relatorios, visível no PC.");
+        assert_eq!(
+            (done.critical, done.icon, done.accent),
+            (false, CHECK, SUCCESS)
+        );
+        assert_eq!(report("xx_YY", Report::Failed).accent, DANGER);
     }
 
     #[test]
@@ -463,6 +521,18 @@ mod tests {
                 render(&a.card(Alert::NoState), &a, (640, 480), 1.0)
                     .save_png(Path::new(&dir).join(format!("sem-estado-{language}.png")))
                     .unwrap();
+            }
+            for language in ["pt_BR", "ru"] {
+                let a = assets(language);
+                for (name, step) in [
+                    ("relatorio-gerando", Report::Start),
+                    ("relatorio-salvo", Report::Done),
+                    ("relatorio-falhou", Report::Failed),
+                ] {
+                    render(&a.card(Alert::Report(step)), &a, (640, 480), 1.0)
+                        .save_png(Path::new(&dir).join(format!("{name}-{language}.png")))
+                        .unwrap();
+                }
             }
             for (name, language) in [("bateria-critica", "pt_BR"), ("bateria-critica-ru", "ru")] {
                 let a = assets(language);

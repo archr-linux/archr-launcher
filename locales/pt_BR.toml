@@ -1248,7 +1248,7 @@
 "diag.report_last" = "Último relatório"
 "diag.report_saved" = "Relatório salvo em roms/relatorios/{name}"
 "diag.report_failed" = "Não foi possível gerar o relatório."
-"diag.note" = "O relatório reúne hardware, kernel, serviços, rede, armazenamento, temperaturas, emuladores, logs do boot e do último jogo. *Senhas, tokens e chaves nunca entram.* Fica em `roms/relatorios/`, visível no PC."
+"diag.note" = "O relatório reúne hardware, kernel, serviços, rede, armazenamento, temperaturas, emuladores, logs do boot e do último jogo. *Senhas, tokens e chaves nunca entram.* Fica em `roms/relatorios/`, visível no PC. Atalho, até dentro de um jogo: segure *FN + L1 + R1* por 3 s."
 
 # Games › BIOS (Bios, Bios-livre)
 "bios.title" = "BIOS"
@@ -1363,3 +1363,9 @@
 "osd.battery_low" = "Conecte o carregador logo."
 "osd.nostate_title" = "Sem salvar estado"
 "osd.nostate" = "Este emulador não salva estado; use o menu do jogo."
+"osd.report_start_title" = "Gerando relatório…"
+"osd.report_start" = "Leva cerca de 20 segundos."
+"osd.report_done_title" = "Relatório salvo"
+"osd.report_done" = "Em roms/relatorios, visível no PC."
+"osd.report_failed_title" = "Sem relatório"
+"osd.report_failed" = "Não foi possível gerar o relatório."

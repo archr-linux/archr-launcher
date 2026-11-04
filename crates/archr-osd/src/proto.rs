@@ -41,11 +41,20 @@ pub struct Battery {
 }
 
 /// The cards over the screen: the battery's, and "this emulator saves no
-/// state" when the switcher's shortcut cannot save the game (`nostate`).
+/// state" when the switcher's shortcut cannot save the game (`nostate`);
+/// the diagnostic report's, as archr-report --osd starts and ends
+/// (`report start|done|failed`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Alert {
     Battery(Battery),
     NoState,
+    Report(Report),
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Report {
+    Start,
+    Done,
+    Failed,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -60,6 +69,12 @@ pub fn parse_notice(text: &str) -> Option<Notice> {
     let number = |w: &str| w.parse::<u8>().ok().filter(|n| *n <= 100);
     match words[..] {
         ["nostate"] => Some(Notice::Alert(Alert::NoState)),
+        ["report", step] => Some(Notice::Alert(Alert::Report(match step {
+            "start" => Report::Start,
+            "done" => Report::Done,
+            "failed" => Report::Failed,
+            _ => return None,
+        }))),
         ["battery-low", level] => Some(Notice::Alert(Alert::Battery(Battery {
             level: number(level)?,
             left: None,
@@ -158,6 +173,10 @@ mod tests {
         let battery =
             |level, left, game| Some(Notice::Alert(Alert::Battery(Battery { level, left, game })));
         assert_eq!(parse_notice("nostate"), Some(Notice::Alert(Alert::NoState)));
+        assert_eq!(
+            parse_notice("report done"),
+            Some(Notice::Alert(Alert::Report(Report::Done)))
+        );
         assert_eq!(parse_notice("battery-low 10"), battery(10, None, false));
         assert_eq!(
             parse_notice("battery 3 8 8 game"),
@@ -181,6 +200,9 @@ mod tests {
             "battery-low",
             "battery-low 300",
             "battery 3 8 8 other",
+            "report",
+            "report later",
+            "report done now",
         ] {
             assert_eq!(parse_notice(text), None, "{text}");
         }
