@@ -2240,6 +2240,14 @@ fn capture_dongle_and_saves() {
         ..Default::default()
     };
     games.convert = Some(offer.clone());
+    let mut n64 = games.clone();
+    if let Some(offer) = n64.convert.as_mut() {
+        offer.from_name = "Mupen64Plus-Next".into();
+        offer.to_name = "Mupen64Plus".into();
+        (offer.from_ext, offer.to_ext) = (".srm".into(), ".eep".into());
+        offer.keep = "roms/n64/.antes-mupen64plus".into();
+        (offer.count, offer.up_to, offer.replace) = (7, true, 2);
+    }
     let mut later = games.clone();
     later.convert.as_mut().unwrap().on_convert = false;
     let mut converting = ready();
@@ -2271,6 +2279,7 @@ fn capture_dongle_and_saves() {
             ("wifi-usb-row", &wifi),
             ("convert-settings", &games),
             ("convert-later", &later),
+            ("convert-n64", &n64),
             ("convert-working", &converting),
         ] {
             for _ in 0..2 {

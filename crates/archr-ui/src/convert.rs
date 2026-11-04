@@ -17,6 +17,11 @@ pub struct Offer {
     pub from_ext: String,
     pub to_ext: String,
     pub count: usize,
+    /// The count is an upper bound (N64 ROMs are read only to convert).
+    pub up_to: bool,
+    /// Of them, older saves at the destination that are replaced (after
+    /// their own copy).
+    pub replace: usize,
     /// Where the originals are copied, as the dialog shows it.
     pub keep: String,
     /// The Convert button has the focus (else "Not now").
@@ -52,6 +57,8 @@ impl Default for Offer {
             from_ext: String::new(),
             to_ext: String::new(),
             count: 0,
+            up_to: false,
+            replace: 0,
             keep: String::new(),
             on_convert: true,
         }

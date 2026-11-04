@@ -38,7 +38,8 @@ pub struct Runtime {
     reattached: bool,
     /// A Games page emulator or core change: the system and its pair before.
     switch: Option<(String, (String, String))>,
-    convert: crate::convert::Runner,
+    /// Conversion work for the host's one runner.
+    convert: Vec<crate::convert::Request>,
 }
 impl Runtime {
     pub fn new(paths: Paths) -> Self {
@@ -60,7 +61,7 @@ impl Runtime {
             attaching: false,
             reattached: false,
             switch: None,
-            convert: Default::default(),
+            convert: Vec::new(),
         }
     }
     fn send(&mut self, work: Work) {
@@ -278,7 +279,7 @@ impl Runtime {
             }
             Effect::RaImport { backup, seen } => self.send(Work::RaImport(backup, seen)),
             Effect::Adapters(forget) => self.send(Work::Adapters(forget)),
-            Effect::Convert(offer) => self.convert.run(&self.paths, *offer),
+            Effect::Convert(offer) => self.convert.push(crate::convert::Request::Run(offer)),
             Effect::Module(request) => return Outcome::Module(request),
             Effect::Reboot => return Outcome::Action(SessionAction::Reboot),
             Effect::None => {}
@@ -314,39 +315,29 @@ impl Runtime {
         changed
     }
 
-    /// After an emulator change: offer to take the saves along; then the
-    /// conversion's answer.
-    fn poll_convert(&mut self) -> bool {
-        if self.state.pending.is_none() {
-            if let Some((system, before)) = self.switch.take() {
-                let after = (
-                    self.state.value(Id::Emulator).to_owned(),
-                    self.state.value(Id::Core).to_owned(),
-                );
-                if after != before && system == self.state.games.name() {
-                    self.convert.plan(&self.paths, system, None, before, after);
-                }
+    /// After an emulator change: plan the offer to take the saves along.
+    fn poll_convert(&mut self) {
+        if self.state.pending.is_some() {
+            return;
+        }
+        if let Some((system, before)) = self.switch.take() {
+            let after = (
+                self.state.value(Id::Emulator).to_owned(),
+                self.state.value(Id::Core).to_owned(),
+            );
+            if after != before && system == self.state.games.name() {
+                self.convert.push(crate::convert::Request::Plan {
+                    system,
+                    rom: None,
+                    from: before,
+                    to: after,
+                });
             }
         }
-        match self.convert.poll() {
-            Some(crate::convert::Event::Offer(offer)) => {
-                self.state.convert = offer.filter(|_| self.active).map(|o| *o);
-                true
-            }
-            Some(crate::convert::Event::Done(result)) => {
-                self.state.converting = false;
-                let message = match result {
-                    Ok(count) => format!("convert.done|count={count}"),
-                    Err(error) => {
-                        log::warn!("Save conversion failed: {error}");
-                        "convert.failed".into()
-                    }
-                };
-                self.state.fail(None, message);
-                true
-            }
-            None => false,
-        }
+    }
+    /// Conversion work for the host's runner, which answers in main.
+    pub fn take_convert(&mut self) -> Vec<crate::convert::Request> {
+        std::mem::take(&mut self.convert)
     }
     /// Systems to reload once a scraping run has ended.
     pub fn take_scraped(&mut self) -> Option<Vec<String>> {
@@ -364,7 +355,7 @@ impl Runtime {
         self.launch_saved |= writing.is_some() && self.state.pending.is_none();
         dirty |= self.poll_scrape();
         dirty |= self.poll_updates();
-        dirty |= self.poll_convert();
+        self.poll_convert();
         // Nothing known yet about an open import page: look.
         if self.active
             && !self.closing

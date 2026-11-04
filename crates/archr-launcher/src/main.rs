@@ -314,7 +314,9 @@ fn run(
     let mut closing = false;
     // A game menu core change: the game and its pair before, until the menu closes.
     let mut core_change: Option<(String, usize, (String, String))> = None;
-    let mut converter = archr_launcher::convert::Runner::default();
+    // The one owner of save conversion work, for Settings and the game menu.
+    let mut converter =
+        archr_launcher::convert::Runner::new(archr_launcher::convert::Env::new(&paths));
     let mut usb_seq = 0;
     loop {
         // A successful power request owns the screen until the OS stops us.
@@ -625,33 +627,49 @@ fn run(
             if let Some((system, game, before)) = core_change.take() {
                 let after = library.current_core(&system, game);
                 let rom = library.games(&system).get(game).map(|g| g.path.clone());
-                if let (Some(after), Some(rom)) = (after.filter(|a| *a != before), rom) {
-                    converter.plan(&paths, system, Some(rom), before, after);
+                if let (Some(to), Some(rom)) = (after.filter(|a| *a != before), rom) {
+                    converter.send(archr_launcher::convert::Request::Plan {
+                        system,
+                        rom: Some(rom),
+                        from: before,
+                        to,
+                    });
                 }
             }
         }
-        match converter.poll() {
-            Some(archr_launcher::convert::Event::Offer(offer)) => {
-                app.convert = offer.filter(|_| !settings.active).map(|o| *o);
-                dirty = true;
-            }
-            Some(archr_launcher::convert::Event::Done(result)) => {
-                let (text, severity) = match result {
-                    Ok(n) => (
-                        ui.catalog
-                            .plural("convert.done", n as f64, &[("count", &n.to_string())]),
-                        Severity::Info,
-                    ),
-                    Err(error) => {
-                        log::warn!("Save conversion failed: {error}");
-                        (ui.catalog.text("convert.failed"), Severity::Error)
+        for request in settings.take_convert() {
+            converter.send(request);
+        }
+        while let Some(event) = converter.poll() {
+            match event {
+                archr_launcher::convert::Event::Offer(offer) => {
+                    let offer = offer.map(|o| *o);
+                    if settings.active {
+                        settings.state.convert = offer;
+                    } else {
+                        app.convert = offer;
                     }
-                };
-                ui.banner = Some(text);
-                banner_timer.restart(severity, Instant::now());
-                dirty = true;
+                }
+                archr_launcher::convert::Event::Done(report) => {
+                    settings.state.converting = false;
+                    let count = |key, n: usize| {
+                        ui.catalog
+                            .plural(key, n as f64, &[("count", &n.to_string())])
+                    };
+                    let mut text = count("convert.done", report.done);
+                    if report.failed > 0 {
+                        text = format!("{text}\n{}", count("convert.failed_some", report.failed));
+                    }
+                    let severity = if report.failed > 0 {
+                        Severity::Error
+                    } else {
+                        Severity::Info
+                    };
+                    ui.banner = Some(text);
+                    banner_timer.restart(severity, Instant::now());
+                }
             }
-            None => {}
+            dirty = true;
         }
         if let Screen::Games { system } = &app.screen {
             library.ensure(system);
@@ -902,7 +920,7 @@ fn run(
             }
             let requested = match requested {
                 Outcome::Convert(offer) => {
-                    converter.run(&paths, *offer);
+                    converter.send(archr_launcher::convert::Request::Run(offer));
                     Outcome::None
                 }
                 requested => requested,

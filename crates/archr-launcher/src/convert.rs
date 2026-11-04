@@ -4,24 +4,41 @@
 //! - NDS: DraStic and DeSmuME `.dsv` (the raw save plus DeSmuME's 122-byte
 //!   footer) and melonDS `.sav` (the raw save);
 //! - PlayStation: RetroArch's `.srm` (PCSX ReARMed, SwanStation, Beetle)
-//!   and DuckStation's `duckstation/memcards/<game>_1.mcd`, both the raw
-//!   128 KiB card;
-//! - Nintendo 64: standalone Mupen64Plus `<good name>-<MD5>.eep` and
-//!   Mupen64Plus-Next's `.srm` (EEPROM 2 KiB, four Controller Paks, SRAM
-//!   32 KiB, FlashRAM 128 KiB). Only the EEPROM was checked against a real
-//!   save of both: a game with Controller Pak, SRAM or FlashRAM data is
-//!   left alone.
+//!   and DuckStation's card 1, both the raw 128 KiB card. DuckStation must
+//!   name its cards after the game file (`Card1Type = PerGameFileTitle`):
+//!   `<MemoryCards Directory>/<file title>_1.mcd`. With the database title
+//!   (`PerGameTitle`) nothing is offered;
+//! - Nintendo 64: standalone Mupen64Plus `.eep` and Mupen64Plus-Next's
+//!   `.srm` (EEPROM 2 KiB, four Controller Paks, SRAM 32 KiB, FlashRAM
+//!   128 KiB). Only EEPROM games, whose size comes from mupen64plus.ini's
+//!   `SaveType`; a game with Controller Pak, SRAM or FlashRAM data is left
+//!   alone until those are checked against real saves.
 //!
 //! Formats that already match need nothing: every RetroArch core keeps its
 //! `.srm` next to the ROM, and both Flycasts share bios/dc/vmu_save_*.bin.
-//! The original is never touched: a copy goes to `.antes-<new>/` first and
-//! the converted save is a new file, written only where none exists.
+//! The original is never touched: a verified copy goes to `.antes-<new>/`
+//! first and the converted save is a new file, created only where none
+//! exists (rename without replace: a save the emulator wrote meanwhile
+//! wins). An older save at the destination is replaced only after it was
+//! copied to `.antes-<new>/` too.
 use archr_ui::convert::Offer;
 use std::{
-    fs,
+    collections::{BTreeMap, VecDeque},
+    fs, io,
     path::{Path, PathBuf},
     sync::mpsc,
 };
+
+/// Largest save read: an 8 Mbit DS cartridge with its footer.
+const MAX_SAVE: u64 = (1 << 20) + DSV_FOOTER as u64;
+const DSV_FOOTER: usize = 122;
+const DSV_MAGIC: &[u8] = b"|-DESMUME SAVE-|";
+const DSV_SNIP: &[u8] =
+    b"|<--Snip above here to create a raw sav by excluding this DeSmuME savedata footer:";
+const CARD: usize = 128 * 1024;
+const EEPROM: usize = 0x800;
+const PAK: usize = 0x8000;
+const N64_SRM: usize = EEPROM + 4 * PAK + 0x8000 + 0x20000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Format {
@@ -48,6 +65,13 @@ impl Format {
             _ => return None,
         })
     }
+    fn system(self) -> &'static str {
+        match self {
+            Self::Dsv | Self::Sav => "nds",
+            Self::PsxSrm | Self::Mcd => "psx",
+            Self::MupenSa | Self::N64Srm => "n64",
+        }
+    }
     fn ext(self) -> &'static str {
         match self {
             Self::Dsv => ".dsv",
@@ -58,25 +82,20 @@ impl Format {
         }
     }
     fn pair(from: Self, to: Self) -> bool {
-        matches!(
-            (from, to),
-            (Self::Dsv, Self::Sav)
-                | (Self::Sav, Self::Dsv)
-                | (Self::PsxSrm, Self::Mcd)
-                | (Self::Mcd, Self::PsxSrm)
-                | (Self::MupenSa, Self::N64Srm)
-                | (Self::N64Srm, Self::MupenSa)
-        )
+        from != to && from.system() == to.system()
     }
 }
-/// The emulator as people know it.
-pub fn name((emulator, core): (&str, &str)) -> String {
-    let name = if emulator == "retroarch" {
+/// The emulator of an emulator/core pair: RetroArch's is its core.
+fn engine<'a>((emulator, core): (&'a str, &'a str)) -> &'a str {
+    if emulator == "retroarch" {
         core
     } else {
         emulator
-    };
-    match name {
+    }
+}
+/// The emulator as people know it.
+pub fn name(pair: (&str, &str)) -> String {
+    match engine(pair) {
         "drastic" => "DraStic",
         "melonds" => "melonDS",
         "desmume" => "DeSmuME",
@@ -91,23 +110,9 @@ pub fn name((emulator, core): (&str, &str)) -> String {
     .into()
 }
 /// The folder name the originals go to: the new emulator's.
-fn keep_dir((emulator, core): (&str, &str)) -> String {
-    let name = if emulator == "retroarch" {
-        core
-    } else {
-        emulator
-    };
-    format!(".antes-{name}")
+fn keep_dir(pair: (&str, &str)) -> String {
+    format!(".antes-{}", engine(pair))
 }
-
-const DSV_FOOTER: usize = 122;
-const DSV_MAGIC: &[u8] = b"|-DESMUME SAVE-|";
-const DSV_SNIP: &[u8] =
-    b"|<--Snip above here to create a raw sav by excluding this DeSmuME savedata footer:";
-const CARD: usize = 128 * 1024;
-const EEPROM: usize = 0x800;
-const PAK: usize = 0x8000;
-const N64_SRM: usize = EEPROM + 4 * PAK + 0x8000 + 0x20000;
 
 /// DraStic/DeSmuME `.dsv` → raw: the save without its footer.
 fn dsv_to_raw(dsv: &[u8]) -> Option<Vec<u8>> {
@@ -151,34 +156,41 @@ fn blank_pak() -> Vec<u8> {
     pak[0x101] = 0x71;
     pak
 }
-/// Mupen64Plus-Next `.srm` → the EEPROM file, when nothing else is saved.
-fn srm_to_eep(srm: &[u8]) -> Option<Vec<u8>> {
-    if srm.len() != N64_SRM {
+/// A Controller Pak no game wrote to: Mupen64Plus-Next's blank pak, or the
+/// standalone's (its own serials) with every page free, no note and no data.
+fn pak_unused(pak: &[u8]) -> bool {
+    pak == blank_pak()
+        || (pak.len() == PAK
+            && pak[0x100..0x200].chunks(2).skip(5).all(|i| i == [0, 3])
+            && pak[0x300..].iter().all(|&b| b == 0))
+}
+/// Mupen64Plus-Next `.srm` → the EEPROM file of `size` bytes (0x200 for a
+/// 4 Kbit game, 0x800 for 16 Kbit), when nothing else is saved.
+fn srm_to_eep(srm: &[u8], size: usize) -> Option<Vec<u8>> {
+    if srm.len() != N64_SRM || !matches!(size, 0x200 | EEPROM) {
         return None;
     }
-    let blank = blank_pak();
     let paks = &srm[EEPROM..EEPROM + 4 * PAK];
     let rest = &srm[EEPROM + 4 * PAK..];
     let untouched = |b: &[u8]| b.iter().all(|&x| x == 0) || b.iter().all(|&x| x == 0xff);
-    let eeprom = &srm[..EEPROM];
-    if !paks.chunks(PAK).all(|pak| pak == blank)
+    let eeprom = &srm[..size];
+    if !paks.chunks(PAK).all(pak_unused)
         || !untouched(&rest[..0x8000])
         || !untouched(&rest[0x8000..])
         || untouched(eeprom)
     {
         return None;
     }
-    // A 4 Kbit game leaves the rest of the 16 Kbit area erased.
-    let short = eeprom[0x200..].iter().all(|&x| x == 0xff);
-    Some(eeprom[..if short { 0x200 } else { EEPROM }].to_vec())
+    Some(eeprom.to_vec())
 }
 /// The EEPROM file → `.srm`, with blank paks, SRAM and FlashRAM.
-fn eep_to_srm(eep: &[u8]) -> Option<Vec<u8>> {
-    if !matches!(eep.len(), 0x200 | EEPROM) {
+fn eep_to_srm(eep: &[u8], size: usize) -> Option<Vec<u8>> {
+    // The core writes `size` bytes; an older file may hold the whole 2 KiB.
+    if eep.len() != size && eep.len() != EEPROM {
         return None;
     }
     let mut srm = vec![0xff; EEPROM];
-    srm[..eep.len()].copy_from_slice(eep);
+    srm[..size].copy_from_slice(eep.get(..size)?);
     for _ in 0..4 {
         srm.extend_from_slice(&blank_pak());
     }
@@ -187,19 +199,134 @@ fn eep_to_srm(eep: &[u8]) -> Option<Vec<u8>> {
     Some(srm)
 }
 
-/// One save to convert: where it is, where the new one goes.
+/// Where the emulators look: the ROMs, Mupen64Plus's game list and
+/// DuckStation's settings.
+#[derive(Clone, Debug)]
+pub struct Env {
+    pub roms: PathBuf,
+    pub mupen_ini: PathBuf,
+    /// DuckStation's settings.ini; relative card folders start beside it.
+    pub duckstation: PathBuf,
+}
+impl Env {
+    pub fn new(paths: &crate::paths::Paths) -> Self {
+        let user = paths.at("/storage/.config/duckstation/settings.ini");
+        Self {
+            roms: paths.at("/storage/roms"),
+            mupen_ini: paths.at("/usr/local/share/mupen64plus/mupen64plus.ini"),
+            duckstation: if user.exists() {
+                user
+            } else {
+                paths.at("/usr/config/duckstation/settings.ini")
+            },
+        }
+    }
+    /// DuckStation's card folder, when it names cards after the game file.
+    fn cards(&self) -> Option<PathBuf> {
+        let text =
+            archr_io::read_utf8(&self.duckstation, 1 << 20, archr_io::Symlinks::Follow).ok()?;
+        let mut section = "";
+        let mut values = BTreeMap::new();
+        for line in text.lines().map(str::trim) {
+            if let Some(name) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
+                section = name;
+            } else if let Some((key, value)) = line.split_once('=') {
+                if section == "MemoryCards" {
+                    values.insert(key.trim(), value.trim());
+                }
+            }
+        }
+        if values.get("Card1Type") != Some(&"PerGameFileTitle") {
+            return None;
+        }
+        let dir = Path::new(values.get("Directory").copied().unwrap_or("memcards"));
+        Some(match self.duckstation.parent() {
+            Some(base) if dir.is_relative() => base.join(dir),
+            _ => self
+                .roms
+                .join(dir.strip_prefix("/storage/roms").unwrap_or(dir)),
+        })
+    }
+}
+/// DuckStation's `Path::SanitizeFileName` on Linux: controls, `/` and `*`
+/// become `_`.
+fn duckstation_title(stem: &str) -> String {
+    stem.chars()
+        .map(|c| {
+            if c <= '\u{1f}' || c == '/' || c == '*' {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect()
+}
+
+/// A game's entry in mupen64plus.ini, following `RefMD5`.
+struct Mupen {
+    md5: String,
+    good: String,
+    /// EEPROM bytes the core writes, None for any other save type.
+    eeprom: Option<usize>,
+}
+fn mupen_entry(ini: &str, md5: &str) -> Option<Mupen> {
+    let section = |md5: &str| -> BTreeMap<&str, &str> {
+        let head = format!("[{md5}]");
+        ini.lines()
+            .skip_while(|l| l.trim() != head)
+            .skip(1)
+            .take_while(|l| !l.trim_start().starts_with('['))
+            .filter_map(|l| l.trim().split_once('='))
+            .collect()
+    };
+    let own = section(md5);
+    let good = own.get("GoodName")?.to_string();
+    let save = own.get("SaveType").map(|s| s.to_string()).or_else(|| {
+        section(own.get("RefMD5")?)
+            .get("SaveType")
+            .map(|s| s.to_string())
+    });
+    let eeprom = match save.as_deref() {
+        Some("Eeprom 4KB") => Some(0x200),
+        Some("Eeprom 16KB") => Some(EEPROM),
+        _ => None,
+    };
+    Some(Mupen {
+        md5: md5.into(),
+        good,
+        eeprom,
+    })
+}
+/// The core's save name (mupen64plus-core main.c, get_save_filename):
+/// `snprintf("%.32s-%.8s", goodname, MD5)`, then `:<>"/\|?*` become `_`.
+fn mupen_name(good: &str, md5: &str) -> Option<String> {
+    let cut = &good.as_bytes()[..good.len().min(32)];
+    let name = format!("{}-{}", std::str::from_utf8(cut).ok()?, md5.get(..8)?);
+    Some(
+        name.chars()
+            .map(|c| if ":<>\"/\\|?*".contains(c) { '_' } else { c })
+            .collect(),
+    )
+}
+
+/// One save to convert: where it is, where the new one goes, and whether
+/// an older save there is replaced (after its own copy).
 #[derive(Debug)]
 struct Step {
     source: PathBuf,
     target: PathBuf,
+    replace: bool,
+    /// N64 EEPROM size.
+    eeprom: usize,
 }
-/// Files of the system folder that are games, by stem.
+/// The game files of the system folder, one per stem (a .cue and its .bin
+/// are one game).
 fn roms(dir: &Path, only: Option<&Path>) -> Vec<(String, PathBuf)> {
     const NOT_GAMES: &[&str] = &[
         "srm", "dsv", "sav", "mcd", "eep", "mpk", "sra", "fla", "state", "png", "jpg", "xml",
         "txt", "cfg", "bak", "auto", "st0", "st1",
     ];
-    let files: Vec<PathBuf> = match only {
+    let mut files: Vec<PathBuf> = match only {
         Some(rom) => vec![rom.to_owned()],
         None => fs::read_dir(dir)
             .into_iter()
@@ -209,6 +336,9 @@ fn roms(dir: &Path, only: Option<&Path>) -> Vec<(String, PathBuf)> {
             .filter(|p| p.is_file())
             .collect(),
     };
+    // The track files sort after the sheet that names them.
+    files.sort_by_key(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("bin")));
+    let mut seen = std::collections::BTreeSet::new();
     files
         .into_iter()
         .filter(|p| {
@@ -216,38 +346,88 @@ fn roms(dir: &Path, only: Option<&Path>) -> Vec<(String, PathBuf)> {
             !ext.is_empty() && !NOT_GAMES.contains(&ext.to_ascii_lowercase().as_str())
         })
         .filter_map(|p| Some((p.file_stem()?.to_str()?.to_owned(), p)))
+        .filter(|(stem, _)| seen.insert(stem.clone()))
         .collect()
 }
-/// Mupen64Plus's name for a game's saves: its good name and the start of
-/// the ROM's MD5 (of the big-endian image), as the core writes them.
-fn mupen_stem(rom: &Path, ini: &str) -> Option<String> {
+/// Source to target, unless the target is there already. A target older
+/// than the source is replaced (after its own copy).
+fn step(source: PathBuf, target: PathBuf, eeprom: usize) -> Option<Step> {
+    let modified = |p: &Path| fs::metadata(p).and_then(|m| m.modified()).ok();
+    if !source.is_file() {
+        return None;
+    }
+    let replace = match (modified(&target), target.exists()) {
+        (_, false) => false,
+        (Some(old), true) => modified(&source).is_some_and(|new| new > old),
+        (None, true) => return None,
+    };
+    if target.exists() && !replace {
+        return None;
+    }
+    Some(Step {
+        source,
+        target,
+        replace,
+        eeprom,
+    })
+}
+/// The N64 step of one game: reads the ROM for its MD5.
+fn n64_step(dir: &Path, stem: &str, rom: &Path, from: Format, ini: &str) -> Option<Step> {
     let md5 = archr_cheevos::rom_hash("n64", rom).ok()??.to_uppercase();
-    let section = format!("[{md5}]");
-    let mut lines = ini.lines().skip_while(|l| l.trim() != section).skip(1);
-    let good = lines
-        .find_map(|l| l.trim().strip_prefix("GoodName="))
-        .map(str::to_owned)?;
-    (!good.contains('/')).then(|| format!("{good}-{}", &md5[..8]))
+    let game = mupen_entry(ini, &md5)?;
+    let size = game.eeprom?;
+    let name = mupen_name(&game.good, &game.md5)?;
+    // Anything beyond the EEPROM was never tested: leave the game.
+    let other = ["mpk", "sra", "fla"].iter().any(|ext| {
+        let path = dir.join(format!("{name}.{ext}"));
+        path.exists()
+            && !(*ext == "mpk"
+                && fs::read(&path)
+                    .is_ok_and(|b| b.len() == 4 * PAK && b.chunks(PAK).all(pak_unused)))
+    });
+    if other {
+        return None;
+    }
+    let srm = dir.join(format!("{stem}.srm"));
+    // The core still reads `<goodname>.eep` when that older file is there.
+    let old = dir.join(format!("{}.eep", game.good));
+    let old =
+        (!game.good.contains('/') && fs::metadata(&old).is_ok_and(|m| m.len() > 0)).then_some(old);
+    let eep = old.unwrap_or_else(|| dir.join(format!("{name}.eep")));
+    if from == Format::MupenSa {
+        step(eep, srm, size)
+    } else {
+        step(srm, eep, size)
+    }
 }
 struct Plan {
     from: Format,
     to: Format,
     steps: Vec<Step>,
+    /// N64 games not read yet: the count is "up to".
+    unread: usize,
 }
 /// What would convert. `hash` allows reading N64 ROMs (slow): without it a
-/// whole-system count from standalone saves is only an estimate.
-fn plan(roms_dir: &Path, offer: &Offer, ini: &Path, hash: bool) -> Option<(Plan, usize)> {
+/// whole-system count is an upper bound.
+fn plan(env: &Env, offer: &Offer, hash: bool) -> Option<Plan> {
     let from = Format::of(&offer.system, (&offer.from.0, &offer.from.1))?;
     let to = Format::of(&offer.system, (&offer.to.0, &offer.to.1))?;
     if !Format::pair(from, to) {
         return None;
     }
-    let dir = roms_dir.join(&offer.system);
-    let memcard = |stem: &str| dir.join(format!("duckstation/memcards/{stem}_1.mcd"));
-    let mut steps = Vec::new();
-    let mut estimate = 0;
-    let ini = if matches!(from, Format::MupenSa) || matches!(to, Format::MupenSa) {
-        archr_io::read_utf8(ini, 16 << 20, archr_io::Symlinks::Follow).unwrap_or_default()
+    let dir = env.roms.join(&offer.system);
+    let cards = if from == Format::Mcd || to == Format::Mcd {
+        Some(env.cards()?)
+    } else {
+        None
+    };
+    let card = |stem: &str| {
+        let dir = cards.as_deref().unwrap_or(&dir);
+        dir.join(format!("{}_1.mcd", duckstation_title(stem)))
+    };
+    let ini = if from.system() == "n64" {
+        archr_io::read_utf8(&env.mupen_ini, 16 << 20, archr_io::Symlinks::Follow)
+            .unwrap_or_default()
     } else {
         String::new()
     };
@@ -255,100 +435,114 @@ fn plan(roms_dir: &Path, offer: &Offer, ini: &Path, hash: bool) -> Option<(Plan,
         .into_iter()
         .flatten()
         .flatten()
-        .filter(|e| e.file_name().to_str().is_some_and(|n| n.ends_with(".eep")))
-        .count();
-    let games = roms(&dir, offer.rom.as_deref());
-    if !hash && from == Format::MupenSa {
-        estimate = eeps.min(games.len());
-    }
-    for (stem, rom) in games {
+        .any(|e| e.file_name().to_str().is_some_and(|n| n.ends_with(".eep")));
+    let mut plan = Plan {
+        from,
+        to,
+        steps: Vec::new(),
+        unread: 0,
+    };
+    for (stem, rom) in roms(&dir, offer.rom.as_deref()) {
         let simple = |ext: &str| dir.join(format!("{stem}{ext}"));
+        if from.system() == "n64" {
+            // A game with something to take: an .srm, or any .eep at all.
+            let wanted = if from == Format::N64Srm {
+                simple(".srm").is_file()
+            } else {
+                eeps
+            };
+            if !wanted {
+                continue;
+            }
+            if hash {
+                plan.steps.extend(n64_step(&dir, &stem, &rom, from, &ini));
+            } else {
+                plan.unread += 1;
+            }
+            continue;
+        }
         let (source, target) = match (from, to) {
-            (Format::Dsv | Format::Sav | Format::PsxSrm | Format::N64Srm, Format::Mcd) => {
-                (simple(from.ext()), memcard(&stem))
-            }
-            (Format::Mcd, _) => (memcard(&stem), simple(to.ext())),
-            (Format::MupenSa, _) | (_, Format::MupenSa) => {
-                let srm = simple(".srm");
-                // The standalone names saves by the ROM's MD5: read the ROM
-                // only when converting, and only when something can go.
-                let wanted = if from == Format::MupenSa {
-                    eeps > 0 && !srm.exists()
-                } else {
-                    srm.is_file()
-                };
-                if !wanted {
-                    continue;
-                }
-                if !hash {
-                    estimate += usize::from(from == Format::N64Srm);
-                    continue;
-                }
-                let Some(sa) = mupen_stem(&rom, &ini) else {
-                    continue;
-                };
-                let eep = dir.join(format!("{sa}.eep"));
-                // Anything beyond the EEPROM was never tested: leave the game.
-                if ["mpk", "sra", "fla"].iter().any(|ext| {
-                    let path = dir.join(format!("{sa}.{ext}"));
-                    path.exists()
-                        && !(*ext == "mpk"
-                            && fs::read(&path).is_ok_and(|b| {
-                                b.len() == 4 * PAK && b.chunks(PAK).all(|p| p == blank_pak())
-                            }))
-                }) {
-                    continue;
-                }
-                if from == Format::MupenSa {
-                    (eep, srm)
-                } else {
-                    (srm, eep)
-                }
-            }
+            (Format::Mcd, _) => (card(&stem), simple(to.ext())),
+            (_, Format::Mcd) => (simple(from.ext()), card(&stem)),
             _ => (simple(from.ext()), simple(to.ext())),
         };
-        if source.is_file() && !target.exists() {
-            steps.push(Step { source, target });
-        }
+        plan.steps.extend(step(source, target, 0));
     }
-    let count = steps.len() + estimate;
-    Some((Plan { from, to, steps }, count))
+    Some(plan)
 }
 
 /// The converted bytes of one save, or None when it cannot be taken.
-fn convert(from: Format, to: Format, bytes: &[u8]) -> Option<Vec<u8>> {
+fn convert(from: Format, to: Format, bytes: &[u8], eeprom: usize) -> Option<Vec<u8>> {
     match (from, to) {
         (Format::Dsv, Format::Sav) => dsv_to_raw(bytes),
         (Format::Sav, Format::Dsv) => (!bytes.is_empty()).then(|| raw_to_dsv(bytes)),
         (Format::PsxSrm, Format::Mcd) | (Format::Mcd, Format::PsxSrm) => {
             (bytes.len() == CARD && bytes.starts_with(b"MC")).then(|| bytes.to_vec())
         }
-        (Format::N64Srm, Format::MupenSa) => srm_to_eep(bytes),
-        (Format::MupenSa, Format::N64Srm) => eep_to_srm(bytes),
+        (Format::N64Srm, Format::MupenSa) => srm_to_eep(bytes, eeprom),
+        (Format::MupenSa, Format::N64Srm) => eep_to_srm(bytes, eeprom),
         _ => None,
     }
 }
-/// A free name in the backup folder: never over an older copy.
-fn backup_path(dir: &Path, name: &str) -> PathBuf {
-    let first = dir.join(name);
-    (1..)
-        .map(|n| match n {
-            1 => first.clone(),
+/// A new file with `bytes`, synced; never over an existing one
+/// (`AlreadyExists` when something is there).
+fn create_new(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let parent = archr_io::parent_dir(path);
+    fs::create_dir_all(parent)?;
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
+    io::Write::write_all(temporary.as_file_mut(), bytes)?;
+    temporary.as_file().sync_all()?;
+    temporary.persist_noclobber(path).map_err(|e| e.error)?;
+    fs::File::open(parent)?.sync_all()
+}
+/// A verified copy in the backup folder, under a free name.
+fn back_up(dir: &Path, path: &Path) -> io::Result<()> {
+    let bytes = archr_io::read_bytes(path, MAX_SAVE, archr_io::Symlinks::Follow)?;
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("save");
+    for n in 1.. {
+        let copy = match n {
+            1 => dir.join(name),
             n => dir.join(format!("{name}.{n}")),
-        })
-        .find(|p| !p.exists())
-        .expect("a free name")
+        };
+        match create_new(&copy, &bytes) {
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
+            Ok(()) => {
+                let back = archr_io::read_bytes(&copy, MAX_SAVE, archr_io::Symlinks::Follow)?;
+                return if back == bytes {
+                    Ok(())
+                } else {
+                    Err(archr_io::invalid_data("backup differs"))
+                };
+            }
+        }
+    }
+    unreachable!("a free name")
+}
+/// One save: back up, convert, write. Ok(false) when the emulator's own
+/// save appeared meanwhile.
+fn apply(plan: &Plan, step: &Step, keep: &Path) -> io::Result<bool> {
+    let bytes = archr_io::read_bytes(&step.source, MAX_SAVE, archr_io::Symlinks::Follow)?;
+    let converted = convert(plan.from, plan.to, &bytes, step.eeprom)
+        .ok_or_else(|| archr_io::invalid_data("not a save of that format"))?;
+    back_up(keep, &step.source)?;
+    if step.replace {
+        back_up(keep, &step.target)?;
+        archr_io::atomic_publish(&step.target, true, |file| {
+            io::Write::write_all(file, &converted)
+        })?;
+        return Ok(true);
+    }
+    match create_new(&step.target, &converted) {
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => Ok(false),
+        result => result.map(|()| true),
+    }
 }
 
-/// Saves the offer would take, for the dialog. Whole N64 systems are
-/// estimated (one per save that has no `.srm`), never hashed here.
-pub fn count(roms_dir: &Path, offer: &Offer, ini: &Path) -> usize {
-    plan(roms_dir, offer, ini, offer.rom.is_some()).map_or(0, |(_, n)| n)
-}
 /// The offer for a change of emulator, or None when nothing would convert.
+/// Whole N64 systems are counted without reading the ROMs: "up to".
 pub fn offer(
-    roms_dir: &Path,
-    ini: &Path,
+    env: &Env,
     system: &str,
     rom: Option<PathBuf>,
     from: (String, String),
@@ -368,310 +562,125 @@ pub fn offer(
         to,
         ..Offer::default()
     };
-    offer.count = count(roms_dir, &offer, ini);
+    let plan = plan(env, &offer, offer.rom.is_some())?;
+    offer.count = plan.steps.len() + plan.unread;
+    offer.up_to = plan.unread > 0;
+    offer.replace = plan.steps.iter().filter(|s| s.replace).count();
     (offer.count > 0).then_some(offer)
 }
-/// Convert: copy each original to the backup folder, then write the new
-/// save beside it. Returns how many converted.
-pub fn run(roms_dir: &Path, offer: &Offer, ini: &Path) -> Result<usize, String> {
-    let (plan, _) = plan(roms_dir, offer, ini, true).ok_or("convert.failed")?;
-    let keep = roms_dir
+/// How a conversion went.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Report {
+    pub done: usize,
+    pub failed: usize,
+}
+/// Convert every save of the offer; a bad one is logged and counted, and
+/// the others still go.
+pub fn run(env: &Env, offer: &Offer) -> Report {
+    let mut report = Report::default();
+    let Some(plan) = plan(env, offer, true) else {
+        report.failed = 1;
+        return report;
+    };
+    let keep = env
+        .roms
         .join(&offer.system)
         .join(keep_dir((&offer.to.0, &offer.to.1)));
-    let mut done = 0;
     for step in &plan.steps {
-        let bytes = archr_io::read_bytes(&step.source, 1 << 20, archr_io::Symlinks::Follow)
-            .map_err(|e| e.to_string())?;
-        let Some(converted) = convert(plan.from, plan.to, &bytes) else {
-            log::warn!("Save not converted: {}", step.source.display());
-            continue;
-        };
-        let name = step
-            .source
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("save");
-        let copy = backup_path(&keep, name);
-        archr_io::atomic_publish(&copy, true, |file| std::io::Write::write_all(file, &bytes))
-            .map_err(|e| e.to_string())?;
-        // Checked again right before: a save the emulator wrote meanwhile wins.
-        if step.target.exists() {
-            continue;
+        match apply(&plan, step, &keep) {
+            Ok(true) => report.done += 1,
+            Ok(false) => {}
+            Err(error) => {
+                log::warn!("Save not converted: {}: {error}", step.source.display());
+                report.failed += 1;
+            }
         }
-        archr_io::atomic_publish(&step.target, true, |file| {
-            std::io::Write::write_all(file, &converted)
-        })
-        .map_err(|e| e.to_string())?;
-        done += 1;
     }
-    Ok(done)
+    report
 }
 
-/// Planning and converting off the draw thread, one job at a time.
-pub enum Event {
-    Offer(Option<Box<Offer>>),
-    Done(Result<usize, String>),
-}
-#[derive(Default)]
-pub struct Runner {
-    rx: Option<mpsc::Receiver<Event>>,
-}
-impl Runner {
-    fn spawn(&mut self, job: impl FnOnce() -> Event + Send + 'static) {
-        let (tx, rx) = mpsc::channel();
-        let spawned = std::thread::Builder::new()
-            .name("launcher-convert".into())
-            .spawn(move || {
-                let _ = tx.send(job());
-            });
-        match spawned {
-            Ok(_) => self.rx = Some(rx),
-            Err(error) => log::warn!("Cannot start the save conversion: {error}"),
-        }
-    }
-    pub fn plan(
-        &mut self,
-        paths: &crate::paths::Paths,
+/// Planning and converting, one job at a time on one thread.
+pub enum Request {
+    Plan {
         system: String,
         rom: Option<PathBuf>,
         from: (String, String),
         to: (String, String),
-    ) {
-        let (roms_dir, ini) = (paths.at(ROMS), paths.at(MUPEN_INI));
-        self.spawn(move || {
-            Event::Offer(offer(&roms_dir, &ini, &system, rom, from, to).map(Box::new))
-        });
-    }
-    pub fn run(&mut self, paths: &crate::paths::Paths, offer: Offer) {
-        let (roms_dir, ini) = (paths.at(ROMS), paths.at(MUPEN_INI));
-        self.spawn(move || Event::Done(run(&roms_dir, &offer, &ini)));
-    }
-    pub fn poll(&mut self) -> Option<Event> {
-        let event = self.rx.as_ref()?.try_recv().ok()?;
-        self.rx = None;
-        Some(event)
-    }
+    },
+    Run(Box<Offer>),
 }
-const ROMS: &str = "/storage/roms";
-/// Where the standalone Mupen64Plus finds games' good names.
-const MUPEN_INI: &str = "/usr/local/share/mupen64plus/mupen64plus.ini";
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    fn pair(e: &str, c: &str) -> (String, String) {
-        (e.into(), c.into())
-    }
-    #[test]
-    fn dsv_footer_comes_off_and_goes_back_byte_for_byte() {
-        let raw: Vec<u8> = (0..8192u32).map(|n| (n * 7) as u8).collect();
-        let dsv = raw_to_dsv(&raw);
-        assert_eq!(dsv.len(), 8192 + DSV_FOOTER);
-        assert_eq!(dsv_to_raw(&dsv).unwrap(), raw);
-        // The footer DraStic itself wrote for an 8 KiB EEPROM.
-        let tail = &dsv[dsv.len() - DSV_FOOTER + DSV_SNIP.len()..];
-        assert_eq!(
-            &tail[..24],
-            [0, 32, 0, 0, 0, 32, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 32, 0, 0, 0, 0, 0, 0]
-        );
-        assert_eq!(dsv_to_raw(&raw), None, "no footer: not a .dsv");
-    }
-    #[test]
-    fn the_blank_pak_is_mupen64plus_format() {
-        use sha2::{Digest, Sha256};
-        // Measured on the Controller Paks of a real Mupen64Plus-Next .srm.
-        let digest: String = Sha256::digest(blank_pak())
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect();
-        assert_eq!(
-            digest,
-            "056d71a353d325330a0f44115c0d7ba91c64ef6a47ab666602d5380a97f3703b"
-        );
-    }
-    #[test]
-    fn n64_takes_the_eeprom_and_refuses_anything_else() {
-        let mut eep = vec![0u8; 512];
-        eep[52] = b'D';
-        eep[53] = b'A';
-        let srm = eep_to_srm(&eep).unwrap();
-        assert_eq!(srm.len(), N64_SRM);
-        assert_eq!(srm_to_eep(&srm).unwrap(), eep, "4 Kbit stays 512 bytes");
-        let mut sram = srm.clone();
-        sram[EEPROM + 4 * PAK + 10] = 1;
-        assert_eq!(srm_to_eep(&sram), None, "SRAM data was never tested");
-        let mut pak = srm.clone();
-        pak[EEPROM + 0x300] = 9;
-        assert_eq!(srm_to_eep(&pak), None, "a pak in use stays");
-        assert_eq!(srm_to_eep(&eep_to_srm(&[0xff; 512]).unwrap()), None);
-    }
-    fn tree() -> (tempfile::TempDir, PathBuf) {
-        let root = tempfile::tempdir().unwrap();
-        let roms = root.path().join("roms");
-        fs::create_dir_all(roms.join("nds")).unwrap();
-        fs::create_dir_all(roms.join("psx/duckstation/memcards")).unwrap();
-        (root, roms)
-    }
-    #[test]
-    fn drastic_to_melonds_keeps_the_original_and_skips_saves_already_there() {
-        let (_root, roms) = tree();
-        let nds = roms.join("nds");
-        for game in ["Mario Kart DS", "Zelda", "Nothing"] {
-            fs::write(nds.join(format!("{game}.nds")), b"rom").unwrap();
+pub enum Event {
+    Offer(Option<Box<Offer>>),
+    Done(Report),
+}
+/// The one owner of the conversion work: requests queue in order and
+/// every one answers, even when the thread cannot start.
+pub struct Runner {
+    env: Env,
+    jobs: Option<mpsc::Sender<Request>>,
+    events: Option<mpsc::Receiver<Event>>,
+    /// Answers given without the thread.
+    local: VecDeque<Event>,
+}
+impl Runner {
+    pub fn new(env: Env) -> Self {
+        Self {
+            env,
+            jobs: None,
+            events: None,
+            local: VecDeque::new(),
         }
-        let dsv = raw_to_dsv(&[7u8; 512]);
-        fs::write(nds.join("Mario Kart DS.dsv"), &dsv).unwrap();
-        fs::write(nds.join("Zelda.dsv"), &dsv).unwrap();
-        fs::write(nds.join("Zelda.sav"), b"newer").unwrap();
-        let ini = roms.join("none-ini");
-        let offer = offer(
-            &roms,
-            &ini,
-            "nds",
-            None,
-            pair("drastic", "drastic-arch"),
-            pair("melonds", "melonds-sa"),
-        )
-        .unwrap();
-        assert_eq!(offer.count, 1);
-        assert_eq!(
-            (offer.from_name.as_str(), offer.to_name.as_str()),
-            ("DraStic", "melonDS")
-        );
-        assert_eq!(offer.keep, "roms/nds/.antes-melonds");
-        assert_eq!(run(&roms, &offer, &ini), Ok(1));
-        assert_eq!(fs::read(nds.join("Mario Kart DS.sav")).unwrap(), [7u8; 512]);
-        assert_eq!(fs::read(nds.join("Mario Kart DS.dsv")).unwrap(), dsv);
-        assert_eq!(
-            fs::read(nds.join(".antes-melonds/Mario Kart DS.dsv")).unwrap(),
-            dsv
-        );
-        assert_eq!(fs::read(nds.join("Zelda.sav")).unwrap(), b"newer");
-        // And back: the melonDS save becomes a .dsv only where none is.
-        assert!(super::offer(
-            &roms,
-            &ini,
-            "nds",
-            None,
-            pair("melonds", "melonds-sa"),
-            pair("drastic", "drastic-arch"),
-        )
-        .is_none());
     }
-    #[test]
-    fn psx_cards_follow_the_game_file_name() {
-        let (_root, roms) = tree();
-        let psx = roms.join("psx");
-        fs::write(psx.join("Crash.chd"), b"rom").unwrap();
-        let mut card = vec![0u8; CARD];
-        card[..2].copy_from_slice(b"MC");
-        fs::write(psx.join("Crash.srm"), &card).unwrap();
-        let ini = roms.join("none-ini");
-        let offer = offer(
-            &roms,
-            &ini,
-            "psx",
-            Some(psx.join("Crash.chd")),
-            pair("retroarch", "pcsx_rearmed32"),
-            pair("duckstation", "duckstation-sa"),
-        )
-        .unwrap();
-        assert_eq!(offer.keep, "roms/psx/.antes-duckstation");
-        assert_eq!(run(&roms, &offer, &ini), Ok(1));
-        assert_eq!(
-            fs::read(psx.join("duckstation/memcards/Crash_1.mcd")).unwrap(),
-            card
-        );
-        // Same emulator family, or a pair never checked: no offer.
-        assert!(super::offer(
-            &roms,
-            &ini,
-            "psx",
-            None,
-            pair("retroarch", "pcsx_rearmed32"),
-            pair("retroarch", "pcsx_rearmed"),
-        )
-        .is_none());
-    }
-    /// Real saves, when a folder of them is given: ARCHR_REAL_SAVES holds
-    /// a DraStic .dsv, a PCSX ReARMed card, a Mupen64Plus-Next .srm and
-    /// the standalone .eep of the same game (Super Mario 64), its zipped ROM
-    /// and the device's mupen64plus.ini, as copied from a device.
-    #[test]
-    fn real_saves_convert_both_ways() {
-        let Some(dir) = std::env::var_os("ARCHR_REAL_SAVES").map(PathBuf::from) else {
-            return;
-        };
-        for entry in fs::read_dir(&dir).unwrap().flatten() {
-            let path = entry.path();
-            let bytes = fs::read(&path).unwrap();
-            match path.extension().and_then(|e| e.to_str()) {
-                Some("dsv") => {
-                    let raw = dsv_to_raw(&bytes).expect("a DraStic footer");
-                    assert_eq!(raw_to_dsv(&raw), bytes, "{}", path.display());
-                }
-                Some("srm") if bytes.len() == CARD => {
-                    let card = convert(Format::PsxSrm, Format::Mcd, &bytes).expect("a card");
-                    assert_eq!(convert(Format::Mcd, Format::PsxSrm, &card).unwrap(), bytes);
-                }
-                Some("srm") if bytes.len() == N64_SRM => {
-                    let eep = srm_to_eep(&bytes).expect("EEPROM only");
-                    let sa = fs::read_dir(&dir)
-                        .unwrap()
-                        .flatten()
-                        .find(|e| e.path().extension().is_some_and(|x| x == "eep"))
-                        .map(|e| fs::read(e.path()).unwrap());
-                    if let Some(sa) = sa {
-                        assert_eq!(eep, sa, "the standalone's own .eep");
+    fn start(&mut self) -> io::Result<()> {
+        let (jobs, requests) = mpsc::channel::<Request>();
+        let (answers, events) = mpsc::channel();
+        let env = self.env.clone();
+        std::thread::Builder::new()
+            .name("launcher-convert".into())
+            .spawn(move || {
+                for request in requests {
+                    let event = match request {
+                        Request::Plan {
+                            system,
+                            rom,
+                            from,
+                            to,
+                        } => Event::Offer(offer(&env, &system, rom, from, to).map(Box::new)),
+                        Request::Run(offer) => Event::Done(run(&env, &offer)),
+                    };
+                    if answers.send(event).is_err() {
+                        break;
                     }
-                    assert_eq!(srm_to_eep(&eep_to_srm(&eep).unwrap()).unwrap(), eep);
-                    assert_eq!(&eep_to_srm(&eep).unwrap()[..], &bytes[..], "byte for byte");
                 }
-                _ => {}
+            })?;
+        (self.jobs, self.events) = (Some(jobs), Some(events));
+        Ok(())
+    }
+    pub fn send(&mut self, request: Request) {
+        if self.jobs.is_none() {
+            if let Err(error) = self.start() {
+                log::warn!("Cannot start the save conversion: {error}");
             }
         }
-        // Both ways through the whole path: the ROM's MD5 and good name
-        // find the standalone's own file name.
-        let file = |ext: &str| {
-            fs::read_dir(&dir)
-                .unwrap()
-                .flatten()
-                .map(|e| e.path())
-                .filter(|p| p.extension().is_some_and(|x| x == ext))
-                .find(|p| ext != "srm" || fs::metadata(p).is_ok_and(|m| m.len() == N64_SRM as u64))
+        let refused = match &self.jobs {
+            Some(jobs) => jobs.send(request).err().map(|e| e.0),
+            None => Some(request),
         };
-        let (Some(zip), Some(srm), Some(eep), Some(ini)) =
-            (file("zip"), file("srm"), file("eep"), file("ini"))
-        else {
-            return;
-        };
-        for (from, to, keep) in [
-            (
-                pair("retroarch", "mupen64plus_next"),
-                pair("mupen64plus", "mupen64plus-arch"),
-                &srm,
-            ),
-            (
-                pair("mupen64plus", "mupen64plus-arch"),
-                pair("retroarch", "mupen64plus_next"),
-                &eep,
-            ),
-        ] {
-            let root = tempfile::tempdir().unwrap();
-            let n64 = root.path().join("n64");
-            fs::create_dir_all(&n64).unwrap();
-            fs::copy(&zip, n64.join(zip.file_name().unwrap())).unwrap();
-            fs::copy(keep, n64.join(keep.file_name().unwrap())).unwrap();
-            let game = Some(n64.join(zip.file_name().unwrap()));
-            let offer = offer(root.path(), &ini, "n64", game, from, to).expect("an offer");
-            assert_eq!(run(root.path(), &offer, &ini), Ok(1));
-            let made = if keep == &srm { &eep } else { &srm };
-            assert_eq!(
-                fs::read(n64.join(made.file_name().unwrap())).unwrap(),
-                fs::read(made).unwrap(),
-                "{}",
-                made.display()
-            );
+        if let Some(request) = refused {
+            self.jobs = None;
+            self.local.push_back(match request {
+                Request::Plan { .. } => Event::Offer(None),
+                Request::Run(_) => Event::Done(Report { done: 0, failed: 1 }),
+            });
         }
     }
+    pub fn poll(&mut self) -> Option<Event> {
+        self.local
+            .pop_front()
+            .or_else(|| self.events.as_ref()?.try_recv().ok())
+    }
 }
+
+#[cfg(test)]
+#[path = "../tests/support/convert_tests.rs"]
+mod tests;

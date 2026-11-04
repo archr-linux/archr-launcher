@@ -1223,5 +1223,7 @@
 "convert.later" = "Ahora no"
 "convert.working" = "Convirtiendo partidas…"
 "convert.wait" = "No apagues el equipo."
-"convert.failed" = "No se pudieron convertir las partidas; los originales están intactos."
 "convert.done" = { one = "{count} partida convertida", other = "{count} partidas convertidas" }
+"convert.up_to" = "hasta {count}"
+"convert.replace" = { one = "Sustituye {count} partida más antigua, que también se guarda allí.", other = "Sustituyen {count} partidas más antiguas, que también se guardan allí." }
+"convert.failed_some" = { one = "{count} partida no se pudo convertir; el original está intacto.", other = "{count} partidas no se pudieron convertir; los originales están intactos." }

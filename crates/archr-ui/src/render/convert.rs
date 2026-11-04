@@ -24,9 +24,18 @@ impl Ui<'_, '_> {
         let titles = self.wrap(&question, Face::Semibold, 17., title_room)?;
         let title_step = self.px(21.);
         let title_h = (title_step * titles.len() as i32).max(badge);
-        let detail = self
+        let mut detail = self
             .catalog
             .format("convert.detail", &[("keep", &offer.keep)]);
+        if offer.replace > 0 {
+            let n = offer.replace.to_string();
+            detail.push(' ');
+            detail.push_str(&self.catalog.plural(
+                "convert.replace",
+                offer.replace as f64,
+                &[("count", &n)],
+            ));
+        }
         let body = self.wrap(&detail, Face::Regular, 13., inner)?;
         let body_step = self.px(19.);
         let icon = self.px(14.);
@@ -97,14 +106,17 @@ impl Ui<'_, '_> {
             Some(theme.border),
         )?;
         let half = (inner as i32 - self.px(24. + 18. + 20.)) / 2;
-        let count = |ext: &str| format!("{} × {ext}", offer.count);
-        for (n, (name, ext)) in [
-            (&offer.from_name, &offer.from_ext),
-            (&offer.to_name, &offer.to_ext),
-        ]
-        .into_iter()
-        .enumerate()
-        {
+        let count = |ext: &str| {
+            let n = offer.count.to_string();
+            let n = if offer.up_to {
+                self.catalog.format("convert.up_to", &[("count", &n)])
+            } else {
+                n
+            };
+            format!("{n} × {ext}")
+        };
+        let counts = [count(&offer.from_ext), count(&offer.to_ext)];
+        for (n, name) in [&offer.from_name, &offer.to_name].into_iter().enumerate() {
             let (left, align) = if n == 0 {
                 (item.x() + self.px(12.), Align::Left)
             } else {
@@ -123,7 +135,7 @@ impl Ui<'_, '_> {
                 align,
             )?;
             self.label_aligned(
-                &count(ext),
+                &counts[n],
                 (Face::Mono, 12., theme.muted),
                 Rect::new(left, middle + self.px(1.), half as u32, self.px(16.) as u32),
                 align,

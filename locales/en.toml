@@ -1223,5 +1223,7 @@
 "convert.later" = "Not now"
 "convert.working" = "Converting saves…"
 "convert.wait" = "Keep the device on."
-"convert.failed" = "The saves could not be converted; the originals are untouched."
 "convert.done" = { one = "{count} save converted", other = "{count} saves converted" }
+"convert.up_to" = "up to {count}"
+"convert.replace" = { one = "It replaces {count} older save, which is kept there too.", other = "They replace {count} older saves, which are kept there too." }
+"convert.failed_some" = { one = "{count} save could not be converted; its original is untouched.", other = "{count} saves could not be converted; their originals are untouched." }
