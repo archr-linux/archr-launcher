@@ -1038,7 +1038,7 @@ fn cpu_tune_chooses_a_ceiling_of_this_cpu_and_learns_from_the_measurement() {
     fs::write(
         base.join("run/perf-last.json"),
         format!(
-            r#"{{"started":{now},"cpu_max_khz":816000,"seconds":150,"busy_p95":71,"limit_seconds":0,"current_ma":420}}"#
+            r#"{{"started":{now},"cpu_max_khz":816000,"seconds":150,"busy_p95":71,"limit_seconds":0,"idle_seconds":3,"current_ma":420}}"#
         ),
     )
     .unwrap();
@@ -1084,7 +1084,7 @@ fn cpu_tune_chooses_a_ceiling_of_this_cpu_and_learns_from_the_measurement() {
     let _probe = Probe::new(base);
     let log = until(&base.join("module-data/c-tune/seen.log"), "game.ended");
     assert!(
-        log.contains(r#""perf":{"busy_p95":71,"cpu_max_khz":816000,"current_ma":420,"limit_seconds":0,"seconds":150}"#),
+        log.contains(r#""perf":{"busy_p95":71,"cpu_max_khz":816000,"current_ma":420,"idle_seconds":3,"limit_seconds":0,"seconds":150}"#),
         "{log}"
     );
     let log = until(&base.join("module-data/d-plain/seen.log"), "game.ended");

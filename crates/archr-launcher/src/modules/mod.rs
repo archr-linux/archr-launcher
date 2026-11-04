@@ -475,6 +475,7 @@ impl Host {
                     "seconds": perf["seconds"],
                     "busy_p95": perf["busy_p95"].as_u64().unwrap_or(0).min(100),
                     "limit_seconds": perf["limit_seconds"].as_u64().unwrap_or(0),
+                    "idle_seconds": perf["idle_seconds"].as_u64().unwrap_or(0),
                     "current_ma": perf["current_ma"].as_u64(),
                 });
             }

@@ -678,12 +678,22 @@ livre em `/sys`. Exige `hooks = ["launch"]` para ter efeito.
 | `cpu_max_khz` | o teto com que o jogo rodou |
 | `seconds` | segundos medidos (os primeiros 30 s, carregamento e menus, não contam) |
 | `busy_p95` | percentil 95 da ocupação (%) da thread mais ocupada do emulador, a cada segundo |
-| `limit_seconds` | segundos em que essa thread passou de 92 %: o emulador não acompanhou o ritmo do jogo |
+| `limit_seconds` | segundos em que essa thread passou de 92 % |
+| `idle_seconds` | segundos em que ela ficou abaixo de 20 % (pausa, menu, espera) |
 | `current_ma` | corrente média da bateria em mA, só descarregando (`null` na tomada) |
 
-Um emulador adiantado espera o vsync ou o áudio; um que não acompanha fica
-ocupado o tempo todo. Por isso a ocupação da thread principal mede a
-velocidade sem depender do emulador.
+O emulador é o processo mais ocupado **dentro da árvore do lançamento**
+(o `runemu.sh` passa o próprio PID à sonda); nada mais do aparelho conta.
+
+É uma **heurística de ocupação da CPU, não uma medida de velocidade**: um
+emulador adiantado espera o vsync ou o áudio e um que não acompanha fica
+ocupado o tempo todo, mas a sonda não conta quadros. Um módulo não deve
+prometer "100 % de velocidade" com ela; a validação contra a contagem de
+quadros (`--max-frames`) ainda está pendente. Sessões quase todas ociosas
+não dizem nada sobre o ritmo e devem ser descartadas.
+
+Ao fim de cada jogo, mesmo que o `runemu.sh` tenha sido morto, o
+`archr-launcher-session` devolve o teto mais alto da CPU.
 
 ### 9.2 Linhas e campos novos das páginas
 
@@ -718,6 +728,10 @@ não manda o `header` com o `id` do item aberto, a página fica vazia (nunca
 mostra outro jogo). A capa vem da biblioteca do launcher pelo `game` do
 `header`; o módulo não lê ROMs nem imagens.
 
-Exemplo completo, com o algoritmo (desce um degrau a cada sessão sem perda,
-sobe um com perda, "aprendido" depois de 3 sessões estáveis; N64, PSP,
-Dreamcast e Saturn ficam fora): `examples/modules/ajuste-cpu`.
+Exemplo completo: `examples/modules/ajuste-cpu`. Desce um degrau só com
+folga clara (p95 abaixo de 75 % e nenhum segundo no limite), sobe um quando
+chega ao limite, fica "aprendido" depois de 3 sessões estáveis no mesmo
+teto e descarta sessões curtas ou ociosas; N64, PSP, Dreamcast e Saturn
+ficam fora. A lista manda até 20 itens por atualização: os que estão
+aprendendo, depois os de fora, depois os aprendidos, e um item final conta
+os que não couberam. Teste no PC: `bash examples/modules/ajuste-cpu.test.sh`.
