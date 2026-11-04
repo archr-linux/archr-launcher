@@ -68,16 +68,9 @@ impl Systemd {
             seccomp: OnceLock::new(),
         }
     }
-    fn seccomp(&self) -> bool {
+    pub fn seccomp(&self) -> bool {
         *self.seccomp.get_or_init(|| {
-            let output = Command::new(&self.ctl)
-                .arg("--version")
-                .stdin(Stdio::null())
-                .stderr(Stdio::null())
-                .output();
-            let found = output
-                .map(|o| seccomp(&String::from_utf8_lossy(&o.stdout)))
-                .unwrap_or(true);
+            let found = probe(&self.ctl);
             if !found {
                 log::warn!("systemd has no seccomp: modules run without a system call filter");
             }
@@ -85,11 +78,40 @@ impl Systemd {
         })
     }
 }
-/// `systemctl --version` names a systemd built with seccomp (`+SECCOMP`).
-/// Only an explicit `-SECCOMP` turns the filter off: an unreadable answer
-/// keeps it.
-pub fn seccomp(version: &str) -> bool {
-    !version.split_whitespace().any(|f| f == "-SECCOMP")
+/// `systemctl --version`, within a second: false only when it answered
+/// well and said `-SECCOMP`. In doubt the filter stays.
+fn probe(ctl: &Path) -> bool {
+    let child = Command::new(ctl)
+        .arg("--version")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn();
+    let Ok(mut child) = child else {
+        return true;
+    };
+    let Some(mut stdout) = child.stdout.take() else {
+        return true;
+    };
+    // Read aside: a pipe kept open by something it started never holds
+    // this thread.
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut text = String::new();
+        let _ = (&mut stdout).take(64 << 10).read_to_string(&mut text);
+        let _ = tx.send(text);
+    });
+    let Some(code) = wait_for(child, Duration::from_secs(1)) else {
+        return true;
+    };
+    let text = rx.recv_timeout(Duration::from_secs(1)).unwrap_or_default();
+    seccomp(Some(code), &text)
+}
+/// A systemd built with seccomp (`+SECCOMP`), from what `systemctl
+/// --version` exited with and wrote: only a clean exit with `-SECCOMP`
+/// turns the filter off.
+pub fn seccomp(code: Option<i32>, version: &str) -> bool {
+    !(code == Some(0) && version.split_whitespace().any(|f| f == "-SECCOMP"))
 }
 impl Executor for Systemd {
     fn command(&self, plan: &Plan) -> Command {
@@ -514,11 +536,38 @@ mod tests {
             );
         }
         let built = "systemd 255 (255.8)\n+PAM -AUDIT -SELINUX +SECCOMP +GCRYPT -GNUTLS\n";
-        assert!(super::seccomp(built));
+        assert!(super::seccomp(Some(0), built));
         let device =
             "systemd 255 (255.8)\n-PAM -AUDIT -SELINUX -APPARMOR -IMA -SMACK -SECCOMP +GCRYPT\n";
-        assert!(!super::seccomp(device));
-        assert!(super::seccomp(""), "unknown: keep the filter");
+        assert!(!super::seccomp(Some(0), device));
+        assert!(
+            super::seccomp(Some(1), device),
+            "a failed run: keep the filter"
+        );
+        assert!(super::seccomp(None, device), "timed out: keep the filter");
+        assert!(super::seccomp(Some(0), ""), "unknown: keep the filter");
+    }
+
+    /// The probe reads a real `systemctl`'s exit and output, within a
+    /// second, and keeps the filter unless both say no seccomp.
+    #[test]
+    fn the_seccomp_probe_needs_a_clean_answer() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let ctl = |name: &str, body: &str| {
+            let path = dir.path().join(name);
+            std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            Systemd::new("/nonexistent".into(), path)
+        };
+        let none = "echo 'systemd 255' && echo '-PAM -SECCOMP +GCRYPT'";
+        assert!(!ctl("none", none).seccomp());
+        assert!(ctl("built", "echo '+PAM +SECCOMP'").seccomp());
+        assert!(ctl("failed", &format!("{none}; exit 2")).seccomp());
+        let started = Instant::now();
+        assert!(ctl("slow", &format!("sleep 5; {none}")).seccomp());
+        assert!(started.elapsed() < Duration::from_secs(3), "a short wait");
+        assert!(Systemd::new("/x".into(), "/nonexistent".into()).seccomp());
     }
 
     #[test]
