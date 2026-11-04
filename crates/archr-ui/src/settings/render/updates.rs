@@ -2,7 +2,7 @@
 //! run's progress, success and failure screens. Fixed layout, like every
 //! settings page; the theme only gives colours, fonts and icons.
 use super::*;
-use crate::settings::updates::{Package, Progress, Reboot, Run, Stage, LOG};
+use crate::settings::updates::{short_version, Package, Progress, Reboot, Run, Stage, LOG};
 
 /// The left column ends here; the packages panel takes the rest.
 pub(super) const ROWS_RIGHT: f32 = 368.;
@@ -118,28 +118,66 @@ impl View<'_, '_, '_> {
         )?;
         self.note((29., VIEW_TOP + 52., width, 17.), &detail, 12.)
     }
+    /// Width of `text` in layout units.
+    fn width_of(&mut self, text: &str, face: Face, size: f32) -> Result<f32, String> {
+        Ok(self.ui.measure(text, face, size)? as f32 / self.ui.frame.scale)
+    }
+    /// `text` cut in the middle with "…" until it fits `width`: both ends of
+    /// a version say more than its middle.
+    fn squeeze(&mut self, text: &str, face: Face, size: f32, width: f32) -> Result<String, String> {
+        if self.width_of(text, face, size)? <= width {
+            return Ok(text.to_owned());
+        }
+        let chars: Vec<char> = text.chars().collect();
+        let mut keep = chars.len();
+        while keep > 0 {
+            keep -= 1;
+            let head: String = chars[..keep.div_ceil(2)].iter().collect();
+            let tail: String = chars[chars.len() - keep / 2..].iter().collect();
+            let cut = format!("{head}…{tail}");
+            if self.width_of(&cut, face, size)? <= width {
+                return Ok(cut);
+            }
+        }
+        Ok(String::new())
+    }
+    /// "old → ", "new" and " · size" of a package, hashes abbreviated and
+    /// each version cut in the middle so the three never pass `width`.
+    fn package_parts(
+        &mut self,
+        package: &Package,
+        width: f32,
+        size: f32,
+    ) -> Result<[String; 3], String> {
+        let face = Face::Mono;
+        let bytes = format!(" · {}", self.size(package.size));
+        let arrow = if package.old.is_empty() { "" } else { " → " };
+        let mut old = short_version(&package.old);
+        let mut new = short_version(&package.new);
+        let room = width - self.width_of(&bytes, face, size)? - self.width_of(arrow, face, size)?;
+        let wide = |view: &mut Self, text: &str| view.width_of(text, face, size);
+        if wide(self, &old)? + wide(self, &new)? > room {
+            // The new version first: it is what is coming.
+            let half = if old.is_empty() { room } else { room / 2. };
+            let rest = room - wide(self, &old)?.min(half);
+            new = self.squeeze(&new, face, size, rest)?;
+            let rest = room - wide(self, &new)?;
+            old = self.squeeze(&old, face, size, rest)?;
+        }
+        Ok([format!("{old}{arrow}"), new, bytes])
+    }
     /// One package: the name, then "old → new · size" with the new version
     /// brighter; on a second line when both do not fit. Returns its height.
     fn package_line(&mut self, package: &Package, y: f32, draw: bool) -> Result<f32, String> {
         let (x, w) = PANEL;
         let theme = self.theme;
-        let scale = self.ui.frame.scale;
-        let old = if package.old.is_empty() {
-            String::new()
-        } else {
-            format!("{} → ", package.old)
-        };
-        let parts = [
-            (old, theme.muted),
-            (package.new.clone(), theme.text),
-            (format!(" · {}", self.size(package.size)), theme.muted),
-        ];
+        let texts = self.package_parts(package, w, 11.)?;
         let mut widths = Vec::new();
-        for (text, _) in &parts {
-            widths.push(self.ui.measure(text, Face::Mono, 11.)? as f32 / scale);
+        for text in &texts {
+            widths.push(self.width_of(text, Face::Mono, 11.)?);
         }
         let value: f32 = widths.iter().sum();
-        let name = self.ui.measure(&package.name, Face::Regular, 12.)? as f32 / scale;
+        let name = self.width_of(&package.name, Face::Regular, 12.)?;
         let single = name + 12. + value <= w;
         let height = if single { 23. } else { 38. };
         if !draw {
@@ -148,12 +186,13 @@ impl View<'_, '_, '_> {
         self.label((x, y + 4., w, 16.), &package.name, 12.)?;
         let mut right = x + w;
         let line = if single { y + 4. } else { y + 19. };
-        for ((text, ink), width) in parts.iter().zip(&widths).rev() {
+        let inks = [theme.muted, theme.text, theme.muted];
+        for ((text, ink), width) in texts.iter().zip(inks).zip(&widths).rev() {
             right -= width;
             self.text_face(
                 (right, line, *width + 1., 16.),
                 text,
-                (11., *ink, Align::Left),
+                (11., ink, Align::Left),
                 Face::Mono,
             )?;
         }
@@ -269,18 +308,9 @@ impl View<'_, '_, '_> {
                 }
                 return Ok(());
             };
-            let value = if package.old.is_empty() {
-                format!("{} · {}", package.new, view.size(package.size))
-            } else {
-                format!(
-                    "{} → {} · {}",
-                    package.old,
-                    package.new,
-                    view.size(package.size)
-                )
-            };
-            let face = selection(selected, Face::Regular, Face::Semibold);
             let half = (RIGHT - 46.) / 2.;
+            let value = view.package_parts(package, half - 2., 12.)?.concat();
+            let face = selection(selected, Face::Regular, Face::Semibold);
             view.text_face(
                 (30., y, half, place.height),
                 &package.name,
@@ -307,6 +337,8 @@ impl View<'_, '_, '_> {
             (20., theme.text, Align::Left),
             Face::Semibold,
         )?;
+        // The cached file's name, its hash abbreviated.
+        let name = short_version(&progress.package);
         let (now, percent) = match progress.stage {
             Stage::Sync => (self.tr("updates.now_sync"), 0),
             Stage::Download if progress.cancelling => {
@@ -315,13 +347,13 @@ impl View<'_, '_, '_> {
             Stage::Download => (
                 self.ui
                     .catalog
-                    .format("updates.now_download", &[("name", &progress.package)]),
+                    .format("updates.now_download", &[("name", &name)]),
                 progress.percent,
             ),
             Stage::Install => (
                 self.ui
                     .catalog
-                    .format("updates.now_install", &[("name", &progress.package)]),
+                    .format("updates.now_install", &[("name", &name)]),
                 progress.percent,
             ),
             Stage::Hooks => (self.tr("updates.now_hooks"), 100),
@@ -384,7 +416,7 @@ impl View<'_, '_, '_> {
                 &[
                     ("done", &progress.current.to_string()),
                     ("count", &count.to_string()),
-                    ("name", &progress.package),
+                    ("name", &name),
                 ],
             )
         } else {

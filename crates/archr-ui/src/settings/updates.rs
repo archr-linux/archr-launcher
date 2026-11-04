@@ -29,6 +29,35 @@ pub struct Package {
     /// Download size in bytes.
     pub size: u64,
 }
+/// A version or file name as the screen shows it: a commit hash (40 hex
+/// characters when a package is pinned to a commit, as AIC8800 is) cut to
+/// its first 7, as git abbreviates it: "b6ba4cbacf…5266-1" becomes
+/// "b6ba4cb-1", "r120.g<hash>" keeps its "g". A run of digits alone is a
+/// date or a number, never a hash, and stays whole.
+pub fn short_version(text: &str) -> String {
+    const HASH: usize = 12;
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while !rest.is_empty() {
+        let end = rest
+            .find(|c: char| !c.is_ascii_alphanumeric())
+            .unwrap_or(rest.len());
+        let (token, tail) = rest.split_at(end);
+        let hex = token.strip_prefix('g').unwrap_or(token);
+        let hash = hex.len() >= HASH
+            && hex.bytes().all(|b| b.is_ascii_hexdigit())
+            && hex.bytes().any(|b| b.is_ascii_alphabetic());
+        if hash {
+            out.push_str(&token[..token.len() - hex.len() + 7]);
+        } else {
+            out.push_str(token);
+        }
+        let sep = tail.chars().next().map_or(0, char::len_utf8);
+        out.push_str(&tail[..sep]);
+        rest = &tail[sep..];
+    }
+    out
+}
 /// What only takes effect after a restart.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Reboot {
@@ -235,6 +264,32 @@ mod tests {
             ..Default::default()
         });
         state
+    }
+    #[test]
+    fn hashes_shrink_to_seven_and_versions_stay() {
+        let absurd = "0123456789abcdef".repeat(4);
+        assert_eq!(absurd.len(), 64);
+        assert_eq!(short_version(&absurd), "0123456");
+        assert_eq!(short_version(&format!("{absurd}-1")), "0123456-1");
+        assert_eq!(
+            short_version("b6ba4cbacf9657caecce26c2426880c5bb485266-1"),
+            "b6ba4cb-1"
+        );
+        assert_eq!(
+            short_version("AIC8800-1018f17a629c638acc1a01df19e3f2146e7b4f5c-1-aarch64.pkg.tar.zst"),
+            "AIC8800-1018f17-1-aarch64.pkg.tar.zst"
+        );
+        assert_eq!(short_version("r1234.g0f3c2a9be81d-1"), "r1234.g0f3c2a9-1");
+        for kept in [
+            "6.18.57-1",
+            "1:2.42.0-3",
+            "20261104",
+            "202611041530.1",
+            "",
+            "1.0.0+git→ä",
+        ] {
+            assert_eq!(short_version(kept), kept);
+        }
     }
     #[test]
     fn opens_over_system_and_installs_only_with_packages() {
