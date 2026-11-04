@@ -517,7 +517,7 @@
 "settings.wifi_backup_question" = "Include Wi-Fi networks in the backup?"
 "settings.wifi_backup_explain" = "The backup is not encrypted and sits on the ROMs share: anyone who opens that folder over the network can read the Wi-Fi passwords."
 "settings.restore_question" = "Restore the backup?"
-"settings.restore_explain" = "Current settings are replaced by the backup's. Current Wi-Fi networks stay unless you restore with Wi-Fi."
+"settings.restore_explain" = "Current settings are replaced by the backup's. Saves newer than the backup's stay, with the backup's copy kept beside them. Current Wi-Fi networks stay unless you restore with Wi-Fi."
 "settings.restore_short" = "Restore"
 "settings.restore_wifi" = "With Wi-Fi"
 "settings.password_question" = "Change the root password?"
