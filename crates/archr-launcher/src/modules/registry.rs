@@ -859,7 +859,11 @@ mod tests {
             .iter()
             .find(|r| matches!(r.kind, RowKind::Text { .. }))
             .unwrap();
-        assert!(note.default.starts_with("Medida pelo"), "{}", note.default);
+        assert!(
+            note.default.contains("não conta quadros"),
+            "{}",
+            note.default
+        );
         assert!(detail.rows.iter().any(|r| matches!(
             &r.kind,
             RowKind::Action { icon: Some(svg), .. } if svg.contains("<svg")
