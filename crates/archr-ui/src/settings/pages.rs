@@ -74,6 +74,7 @@ pub const GAMES: &[Row] = &[
     row(Id::NetplayLink, "settings.netplay", Kind::Action),
     row(Id::ScraperLink, "settings.scraper", Kind::Action),
     row(Id::MangohudLink, "settings.mangohud_link", Kind::Action),
+    row(Id::BiosLink, "bios.title", Kind::Action),
 ];
 pub const APPEARANCE: &[Row] = &[
     row(Id::Theme, "settings.theme", Kind::Value),
@@ -239,6 +240,7 @@ impl Settings {
             Page::RaImport | Page::RaImportList => self.raimport_input(button),
             Page::RomsList => self.roms_list_input(button),
             Page::UsbAdapters => self.usb_input(button),
+            Page::Bios => self.bios_input(button),
             Page::Modules
             | Page::ModuleInfo
             | Page::Module(..)
@@ -467,6 +469,12 @@ impl Settings {
             | Id::CheevosWebKeyRemove
             | Id::CheevosLogout) => return self.cheevos_activate(id),
             Id::RootPassword => self.open_keyboard(Id::RootPassword, Mode::Secret, String::new()),
+            // Every visit looks again.
+            Id::BiosLink => {
+                self.bios.systems = None;
+                self.open(Page::Bios);
+            }
+            id @ (Id::DiagLink | Id::ReportNow) => return self.diag_activate(id),
             id => return self.storage_activate(id),
         }
         Some(Effect::None)

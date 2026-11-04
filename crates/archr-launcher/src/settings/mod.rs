@@ -3,6 +3,7 @@ mod bluetooth;
 mod cheevos;
 pub use cheevos::{TOKEN as CHEEVOS_TOKEN, USER as CHEEVOS_USER};
 mod controls;
+mod diag;
 mod games;
 mod info;
 mod mangohud;
@@ -163,6 +164,10 @@ impl Backend {
         self.load_mangohud(&cfg, &mut state);
         self.load_cheevos(&cfg, &mut state);
         self.load_controls(&cfg, &mut state);
+        state.values.insert(
+            Id::DebugMode,
+            diag::debug_value(cfg.get_setting("system.loglevel", None, None)),
+        );
         // The live levels, on archr-levels' perceptual scale (it owns both keys).
         for id in [Id::Volume, Id::Brightness] {
             if let Ok(level) = self.command("archr-levels", &[Self::level_kind(id)]) {
@@ -245,6 +250,9 @@ impl Backend {
         Ok(state)
     }
     pub fn apply(&self, id: Id, value: &str) -> Result<String, String> {
+        if id == Id::DebugMode {
+            return self.apply_debug(value);
+        }
         if let Some(result) = self
             .apply_page(id, value)
             .or_else(|| self.apply_mangohud(id, value))
@@ -386,6 +394,11 @@ pub(super) enum Work {
     Roms,
     /// Network › USB adapters, after forgetting this one if given.
     Adapters(Option<String>),
+    /// Diagnostics and BIOS: their own lane (`diag::Slow`).
+    Diag,
+    Report,
+    Bios,
+    BiosInstall(String),
 }
 /// A storage action's outcome and the page's refreshed facts.
 type StorageReply = (
@@ -428,6 +441,10 @@ enum Reply {
             archr_ui::settings::roms::Scan,
         )>,
     ),
+    Diag(Box<archr_ui::settings::diag::Facts>),
+    Report(Result<archr_ui::settings::diag::Report, String>),
+    Bios(Result<Vec<archr_ui::settings::bios::System>, String>),
+    BiosInstall(Result<(), String>),
 }
 /// A radio scan takes ~20 s on the R36S: it runs on its own lane so it never
 /// delays the Wi-Fi switch or any other action.
@@ -438,6 +455,7 @@ pub struct Worker {
     bt_scans: mpsc::Sender<()>,
     profiles: mpsc::Sender<()>,
     store: mpsc::Sender<archr_ui::settings::store::Action>,
+    slow: mpsc::Sender<diag::Slow>,
     rx: mpsc::Receiver<Reply>,
     pending: usize,
     scanning: bool,
@@ -464,6 +482,20 @@ impl Worker {
         let profile_paths = paths.clone();
         let (store, store_requests) = mpsc::channel();
         let (store_results, store_paths) = (results.clone(), paths.clone());
+        let (slow, slow_requests) = mpsc::channel();
+        let (slow_results, slow_paths) = (results.clone(), paths.clone());
+        // Reports, checksums and pacman take seconds to minutes.
+        thread::Builder::new()
+            .name("launcher-diag".into())
+            .spawn(move || {
+                let backend = Backend::new(slow_paths);
+                while let Ok(work) = slow_requests.recv() {
+                    if slow_results.send(backend.slow(work)).is_err() {
+                        break;
+                    }
+                }
+            })
+            .map_err(|e| e.to_string())?;
         thread::Builder::new()
             .name("launcher-store".into())
             .spawn(move || store_lane(&store_paths, &store_requests, &store_results))
@@ -548,8 +580,13 @@ impl Worker {
                         }
                         Work::CheevosLogout => Reply::CheevosLogout(backend.cheevos_logout()),
                         Work::CheevosKey(key) => Reply::CheevosKey(backend.cheevos_key(&key)),
-                        Work::CheevosProfile | Work::Store(_) => {
-                            unreachable!("the profile and the store have their own lanes")
+                        Work::CheevosProfile
+                        | Work::Store(_)
+                        | Work::Diag
+                        | Work::Report
+                        | Work::Bios
+                        | Work::BiosInstall(_) => {
+                            unreachable!("these have their own lanes")
                         }
                         Work::Scrape => Reply::Scrape(backend.scrape()),
                         Work::Theme(name) => Reply::Theme(Box::new(crate::appearance::load_theme(
@@ -585,6 +622,7 @@ impl Worker {
             bt_scans,
             profiles,
             store,
+            slow,
             rx,
             pending: 0,
             scanning: false,
@@ -637,6 +675,16 @@ impl Worker {
         if let Work::Store(action) = work {
             return self.store.send(action).map_err(|e| e.to_string());
         }
+        let slow = match work {
+            Work::Diag => Some(diag::Slow::Diag),
+            Work::Report => Some(diag::Slow::Report),
+            Work::Bios => Some(diag::Slow::Bios),
+            Work::BiosInstall(ref free) => Some(diag::Slow::BiosInstall(free.clone())),
+            _ => None,
+        };
+        if let Some(slow) = slow {
+            return self.slow.send(slow).map_err(|e| e.to_string());
+        }
         if matches!(work, Work::Set(Id::WifiSwitch, _)) {
             self.generation += 1;
         }
@@ -673,7 +721,13 @@ impl Worker {
                 }
             } else if !matches!(
                 reply,
-                Reply::CheevosProfile(_) | Reply::Store(_) | Reply::Facts(_)
+                Reply::CheevosProfile(_)
+                    | Reply::Store(_)
+                    | Reply::Facts(_)
+                    | Reply::Diag(_)
+                    | Reply::Report(_)
+                    | Reply::Bios(_)
+                    | Reply::BiosInstall(_)
             ) {
                 self.pending = self.pending.saturating_sub(1);
             }
@@ -796,6 +850,18 @@ impl Worker {
                     state.adapters = Some(Default::default());
                     state.fail(None, error);
                 }
+                Reply::Diag(facts) => {
+                    state.diag.scanning = false;
+                    state.diag.facts = Some(*facts);
+                }
+                Reply::Report(result) => state.report_done(result),
+                Reply::Bios(Ok(systems)) => state.bios_scanned(systems),
+                Reply::Bios(Err(error)) => {
+                    log::warn!("archr-systems --json: {error}");
+                    state.bios_scanned(Vec::new());
+                    state.fail(None, "bios.check_failed".into());
+                }
+                Reply::BiosInstall(result) => state.bios_installed(result),
                 Reply::Roms(facts) => {
                     let (status, scan) = *facts;
                     state.storage.roms = status;

@@ -10,12 +10,16 @@ use crate::settings::{
 };
 #[path = "render/appearance.rs"]
 mod appearance;
+#[path = "render/bios.rs"]
+mod bios;
 #[path = "render/cheevos.rs"]
 mod cheevos;
 #[path = "render/controls.rs"]
 mod controls;
 #[path = "render/custom.rs"]
 mod custom;
+#[path = "render/diag.rs"]
+mod diag;
 #[path = "render/information.rs"]
 mod information;
 #[path = "render/mangohud.rs"]
@@ -97,7 +101,7 @@ fn placements(page: Page, rows: &[Row]) -> Vec<Placement> {
                 Page::Games if row.subtitle.is_some() => 40.,
                 Page::Netplay | Page::Games => 34.,
                 Page::Services => 38.,
-                Page::Storage | Page::ScraperMedia | Page::Roms => 40.,
+                Page::Storage | Page::ScraperMedia | Page::Roms | Page::Diagnostics => 40.,
                 Page::Mangohud if row.subtitle.is_some() => 44.,
                 Page::LauncherControls if row.id == Id::ButtonsRestore => 36.,
                 Page::LauncherControls | Page::Hotkeys if row.subtitle.is_none() => 38.,
@@ -645,6 +649,8 @@ impl View<'_, '_, '_> {
             Page::Roms => self.roms_page(state, &rows)?,
             Page::RomsList => self.roms_list(state)?,
             Page::UsbAdapters => self.usb_page(state)?,
+            Page::Diagnostics => self.diag_page(state, &rows)?,
+            Page::Bios => self.bios_page(state)?,
             Page::Scraper => {
                 self.rows_at(state, &rows, &placements(Page::Scraper, &rows), 384.)?;
                 self.scraper_panel(state)?;
@@ -731,6 +737,8 @@ impl View<'_, '_, '_> {
                 "roms.",
                 "convert.",
                 "usb.",
+                "diag.",
+                "bios.",
             ]
             .iter()
             .any(|prefix| error.starts_with(prefix))
@@ -784,6 +792,8 @@ impl View<'_, '_, '_> {
                         &[("date", &usb.table.day(self.ui.catalog.language()))],
                     ),
                 })
+        } else if state.page() == Page::Bios {
+            Some(self.tr("bios.footer"))
         } else if state.capturing() && state.page() == Page::LauncherControls {
             Some(self.tr(&format!(
                 "controls.press_hint|button={}",
@@ -909,6 +919,18 @@ impl View<'_, '_, '_> {
                     Some(self.tr("store.wait")),
                     None,
                 ))
+            } else if let Some(name) = state
+                .bios_system()
+                .filter(|_| state.bios.installing)
+                .map(|s| s.name.clone())
+            {
+                Some((
+                    self.ui
+                        .catalog
+                        .format("bios.installing", &[("name", &name)]),
+                    Some(self.tr("bios.wait")),
+                    None,
+                ))
             } else if let Some(key) = state.storage.working {
                 Some((self.tr(key), Some(self.tr("settings.wait_storage")), None))
             } else if state.converting {
@@ -938,6 +960,14 @@ impl View<'_, '_, '_> {
                     )
                 })
             };
+        if state.page() == Page::Bios && state.bios.confirm {
+            let theme = self.theme;
+            return self
+                .ui
+                .pop_in(crate::render::Pop::Dialog, "bios", (theme, 1.17), |ui| {
+                    View { ui, theme }.bios_question(state)
+                });
+        }
         if let Some((question, detail, hints)) = dialog {
             let theme = self.theme;
             return self
@@ -1287,7 +1317,7 @@ impl View<'_, '_, '_> {
             let names: Vec<Option<&str>> = names.iter().map(|n| Some(n.as_str())).collect();
             return self.pads(&names, selected, (x, y, w, h));
         }
-        let ink = match state.roms_ink(id) {
+        let ink = match state.roms_ink(id).or_else(|| state.diag_ink(id)) {
             Some(power) if !selected => {
                 if power {
                     self.theme.success

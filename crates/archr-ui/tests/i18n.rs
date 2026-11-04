@@ -375,6 +375,9 @@ const CONFIG_KEYS: &[&str] = &[
     "module.toml",
     "modules.toml",
     "reviewed.json",
+    // archr-debug's key and the free PlayStation BIOS file.
+    "system.loglevel",
+    "openbios.bin",
     // system.cfg keys the saves scan resolves per game.
     "retroachievements.hardcore",
     "reviewed.json.sig",

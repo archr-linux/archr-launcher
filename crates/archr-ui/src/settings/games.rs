@@ -305,7 +305,8 @@ mod tests {
                 Id::PreviewVideo,
                 Id::NetplayLink,
                 Id::ScraperLink,
-                Id::MangohudLink
+                Id::MangohudLink,
+                Id::BiosLink
             ]
         );
     }

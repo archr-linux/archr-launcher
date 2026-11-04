@@ -310,6 +310,8 @@ impl Runtime {
             Effect::RaImport { backup, seen } => self.send(Work::RaImport(backup, seen)),
             Effect::Adapters(forget) => self.send(Work::Adapters(forget)),
             Effect::Convert(offer) => self.convert.push(crate::convert::Request::Run(offer)),
+            Effect::Report => self.send(Work::Report),
+            Effect::BiosInstall(free) => self.send(Work::BiosInstall(free)),
             Effect::Module(request) => return Outcome::Module(request),
             Effect::Reboot => return Outcome::Action(SessionAction::Reboot),
             Effect::None => {}
@@ -394,6 +396,16 @@ impl Runtime {
         {
             self.state.raimport.scanning = true;
             self.send(Work::RaScan);
+            dirty = true;
+        }
+        if self.active && !self.closing && self.state.diag_wants_scan() {
+            self.state.diag.scanning = true;
+            self.send(Work::Diag);
+            dirty = true;
+        }
+        if self.active && !self.closing && self.state.bios_wants_scan() {
+            self.state.bios.scanning = true;
+            self.send(Work::Bios);
             dirty = true;
         }
         if self.active && !self.closing && self.state.roms_wants_scan() {
