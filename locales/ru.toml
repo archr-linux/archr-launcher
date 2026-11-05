@@ -818,6 +818,8 @@
 "updates.not_checked" = "Ещё не проверено"
 "updates.not_checked_detail" = "Нажмите «Проверить сейчас»"
 "updates.no_packages" = "Нет пакетов для обновления."
+"updates.kind_update" = "обновление"
+"updates.kind_new" = "новый"
 "updates.more" = { one = "+ {count} пакет · Y — все", few = "+ {count} пакета · Y — все", many = "+ {count} пакетов · Y — все", other = "+ {count} пакета · Y — все" }
 "updates.news" = "Что нового"
 "updates.no_news" = "У этого выпуска нет заметок."
