@@ -2,7 +2,9 @@
 //! run's progress, success and failure screens. Fixed layout, like every
 //! settings page; the theme only gives colours, fonts and icons.
 use super::*;
-use crate::settings::updates::{short_version, Package, Progress, Reboot, Run, Stage, LOG};
+use crate::settings::updates::{
+    short_file, short_versions, Package, Progress, Reboot, Run, Stage, LOG,
+};
 
 /// The left column ends here; the packages panel takes the rest.
 pub(super) const ROWS_RIGHT: f32 = 368.;
@@ -139,7 +141,7 @@ impl View<'_, '_, '_> {
     }
     /// "old → ", "new" and " · size" of a package, hashes abbreviated and
     /// each version cut in the middle so the three never pass `width`.
-    fn package_parts(
+    pub(super) fn package_parts(
         &mut self,
         package: &Package,
         width: f32,
@@ -148,8 +150,7 @@ impl View<'_, '_, '_> {
         let face = Face::Mono;
         let bytes = format!(" · {}", self.size(package.size));
         let arrow = if package.old.is_empty() { "" } else { " → " };
-        let mut old = short_version(&package.old);
-        let mut new = short_version(&package.new);
+        let (mut old, mut new) = short_versions(&package.old, &package.new);
         let room = width - self.width(&bytes, face, size)? - self.width(arrow, face, size)?;
         let wide = |view: &mut Self, text: &str| view.width(text, face, size);
         if wide(self, &old)? + wide(self, &new)? > room {
@@ -321,20 +322,19 @@ impl View<'_, '_, '_> {
             )
         })
     }
-    fn update_progress(&mut self, state: &Settings, progress: &Progress) -> Result<(), String> {
-        let theme = self.theme;
+    /// What the progress screen says of the package at hand: the line over
+    /// the bar, its percent and the install step's detail. A package file
+    /// shows its version abbreviated, its name whole.
+    pub(super) fn progress_text(
+        &self,
+        state: &Settings,
+        progress: &Progress,
+    ) -> (String, u8, String) {
         let count = progress
             .count
             .max(state.updates.count())
             .max(progress.current);
-        self.text_face(
-            (LEFT, 56., WIDE, 28.),
-            &self.tr("updates.updating"),
-            (20., theme.text, Align::Left),
-            Face::Semibold,
-        )?;
-        // The cached file's name, its hash abbreviated.
-        let name = short_version(&progress.package);
+        let name = short_file(&progress.package);
         let (now, percent) = match progress.stage {
             Stage::Sync => (self.tr("updates.now_sync"), 0),
             Stage::Download if progress.cancelling => {
@@ -366,6 +366,29 @@ impl View<'_, '_, '_> {
         } else {
             now
         };
+        let install = if progress.stage == Stage::Install && !progress.package.is_empty() {
+            self.ui.catalog.format(
+                "updates.install_now",
+                &[
+                    ("done", &progress.current.to_string()),
+                    ("count", &count.to_string()),
+                    ("name", &name),
+                ],
+            )
+        } else {
+            self.tr(&format!("updates.package_count|count={count}"))
+        };
+        (now, percent, install)
+    }
+    fn update_progress(&mut self, state: &Settings, progress: &Progress) -> Result<(), String> {
+        let theme = self.theme;
+        self.text_face(
+            (LEFT, 56., WIDE, 28.),
+            &self.tr("updates.updating"),
+            (20., theme.text, Align::Left),
+            Face::Semibold,
+        )?;
+        let (now, percent, install) = self.progress_text(state, progress);
         self.note((LEFT, 94., WIDE - 60., 16.), &now, 12.)?;
         self.text_face(
             (LEFT + WIDE - 60., 94., 60., 16.),
@@ -405,18 +428,6 @@ impl View<'_, '_, '_> {
             } else {
                 String::new()
             }
-        };
-        let install = if progress.stage == Stage::Install && !progress.package.is_empty() {
-            self.ui.catalog.format(
-                "updates.install_now",
-                &[
-                    ("done", &progress.current.to_string()),
-                    ("count", &count.to_string()),
-                    ("name", &name),
-                ],
-            )
-        } else {
-            self.tr(&format!("updates.package_count|count={count}"))
         };
         let steps = [
             (Stage::Sync, "updates.step_sync", "pacman -Sy".to_owned()),

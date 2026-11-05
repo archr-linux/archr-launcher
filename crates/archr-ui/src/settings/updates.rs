@@ -29,12 +29,11 @@ pub struct Package {
     /// Download size in bytes.
     pub size: u64,
 }
-/// A version or file name as the screen shows it: a commit hash (40 hex
-/// characters when a package is pinned to a commit, as AIC8800 is) cut to
-/// its first 7, as git abbreviates it: "b6ba4cbacf…5266-1" becomes
-/// "b6ba4cb-1", "r120.g<hash>" keeps its "g". A run of digits alone is a
-/// date or a number, never a hash, and stays whole.
-pub fn short_version(text: &str) -> String {
+/// `text` with each commit hash (40 hex characters when a package is pinned
+/// to a commit, as AIC8800 is) cut to its first `len`, "r120.g<hash>"
+/// keeping its "g". A run of digits alone is a date or a number, never a
+/// hash, and stays whole.
+fn abbreviate(text: &str, len: usize) -> String {
     const HASH: usize = 12;
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
@@ -48,7 +47,7 @@ pub fn short_version(text: &str) -> String {
             && hex.bytes().all(|b| b.is_ascii_hexdigit())
             && hex.bytes().any(|b| b.is_ascii_alphabetic());
         if hash {
-            out.push_str(&token[..token.len() - hex.len() + 7]);
+            out.push_str(&token[..token.len() - hex.len() + len.min(hex.len())]);
         } else {
             out.push_str(token);
         }
@@ -57,6 +56,39 @@ pub fn short_version(text: &str) -> String {
         rest = &tail[sep..];
     }
     out
+}
+/// A version as the screen shows it: hashes cut to 7 characters, as git
+/// abbreviates them. "b6ba4cbacf…5266-1" becomes "b6ba4cb-1".
+pub fn short_version(text: &str) -> String {
+    abbreviate(text, 7)
+}
+/// Old and new versions as a package line shows them: hashes as short as 7,
+/// longer when both would read the same, as git lengthens an abbreviation
+/// until it is unique.
+pub fn short_versions(old: &str, new: &str) -> (String, String) {
+    for len in 7..old.len().max(new.len()) {
+        let pair = (abbreviate(old, len), abbreviate(new, len));
+        if pair.0 != pair.1 || old == new {
+            return pair;
+        }
+    }
+    (old.to_owned(), new.to_owned())
+}
+/// A package file ("name-version-pkgrel-arch.pkg.tar.zst", the name may
+/// hold hyphens) with only its version abbreviated; anything else, a bare
+/// package name among them, stays whole.
+pub fn short_file(file: &str) -> String {
+    let Some(at) = file.rfind(".pkg.tar") else {
+        return file.to_owned();
+    };
+    let (stem, suffix) = file.split_at(at);
+    let mut parts = stem.rsplitn(4, '-');
+    match (parts.next(), parts.next(), parts.next(), parts.next()) {
+        (Some(arch), Some(rel), Some(version), Some(name)) => {
+            format!("{name}-{}-{rel}-{arch}{suffix}", short_version(version))
+        }
+        _ => file.to_owned(),
+    }
 }
 /// What only takes effect after a restart.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -276,7 +308,7 @@ mod tests {
             "b6ba4cb-1"
         );
         assert_eq!(
-            short_version("AIC8800-1018f17a629c638acc1a01df19e3f2146e7b4f5c-1-aarch64.pkg.tar.zst"),
+            short_file("AIC8800-1018f17a629c638acc1a01df19e3f2146e7b4f5c-1-aarch64.pkg.tar.zst"),
             "AIC8800-1018f17-1-aarch64.pkg.tar.zst"
         );
         assert_eq!(short_version("r1234.g0f3c2a9be81d-1"), "r1234.g0f3c2a9-1");
@@ -289,6 +321,43 @@ mod tests {
             "1.0.0+git→ä",
         ] {
             assert_eq!(short_version(kept), kept);
+        }
+    }
+    #[test]
+    fn a_shared_prefix_lengthens_both_until_they_differ() {
+        let old = format!("abc1234{}-1", "a".repeat(33));
+        let new = format!("abc1234{}-1", "b".repeat(33));
+        assert_eq!(
+            short_versions(&old, &new),
+            ("abc1234a-1".into(), "abc1234b-1".into())
+        );
+        let shared = "0123456789abcdef".repeat(4);
+        let (old, new) = short_versions(&format!("{shared}0"), &format!("{shared}1"));
+        assert_ne!(old, new);
+        assert!(old.ends_with('0') && new.ends_with('1'));
+        assert_eq!(
+            short_versions(
+                "b6ba4cbacf9657caecce26c2426880c5bb485266-1",
+                "1018f17a629c638acc1a01df19e3f2146e7b4f5c-1"
+            ),
+            ("b6ba4cb-1".into(), "1018f17-1".into())
+        );
+        assert_eq!(
+            short_versions("same", "same"),
+            ("same".into(), "same".into())
+        );
+    }
+    #[test]
+    fn package_files_abbreviate_only_their_version() {
+        let hash = "1018f17a629c638acc1a01df19e3f2146e7b4f5c";
+        for name in ["deadbeefcafe0-tools", "deadbeefcafe1-tools", "lib32-glibc"] {
+            assert_eq!(
+                short_file(&format!("{name}-{hash}-1-aarch64.pkg.tar.zst.part")),
+                format!("{name}-1018f17-1-aarch64.pkg.tar.zst.part")
+            );
+        }
+        for kept in ["deadbeefcafe0-tools", "AIC8800", "odd.pkg.tar.zst", ""] {
+            assert_eq!(short_file(kept), kept);
         }
     }
     #[test]
