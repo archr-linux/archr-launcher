@@ -1699,7 +1699,7 @@ fn update_versions_stay_inside_their_line() {
     }
     // What each line says: its name, update or new, and the size; never a
     // version, which is a 40- or 64-character hash for some packages.
-    let mut view = View {
+    let view = View {
         ui: &mut ui,
         theme: &theme,
     };

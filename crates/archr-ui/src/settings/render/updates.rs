@@ -307,13 +307,13 @@ impl View<'_, '_, '_> {
             Stage::Download => (
                 self.ui
                     .catalog
-                    .format("updates.now_download", &[("name", &name)]),
+                    .format("updates.now_download", &[("name", name)]),
                 progress.percent,
             ),
             Stage::Install => (
                 self.ui
                     .catalog
-                    .format("updates.now_install", &[("name", &name)]),
+                    .format("updates.now_install", &[("name", name)]),
                 progress.percent,
             ),
             Stage::Hooks => (self.tr("updates.now_hooks"), 100),
@@ -336,7 +336,7 @@ impl View<'_, '_, '_> {
                 &[
                     ("done", &progress.current.to_string()),
                     ("count", &count.to_string()),
-                    ("name", &name),
+                    ("name", name),
                 ],
             )
         } else {

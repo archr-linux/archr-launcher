@@ -259,9 +259,10 @@ mod tests {
             );
             assert_eq!(package_name(name), name);
         }
-        for kept in ["odd.pkg.tar.zst", ""] {
-            assert_eq!(package_name(kept), kept);
-        }
+        // A file without version, pkgrel and architecture stays whole.
+        let odd = format!("{}.pkg.tar.zst", "odd");
+        assert_eq!(package_name(&odd), odd);
+        assert_eq!(package_name(""), "");
     }
     #[test]
     fn opens_over_system_and_installs_only_with_packages() {
