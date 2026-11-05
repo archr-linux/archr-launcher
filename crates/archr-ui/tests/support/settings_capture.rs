@@ -1518,9 +1518,11 @@ fn updates_pages() -> Vec<(&'static str, Settings)> {
         line: "error: failed retrieving file 'retroarch-1.22.0-1-aarch64.pkg.tar.zst'".into(),
         changed: false,
     });
-    // Versions pinned to a commit (AIC8800 on the device), a 64-character
-    // hash and one that no abbreviation shortens.
+    // Versions pinned to a commit (AIC8800 on the device), two that share
+    // their first 7 characters, two 64-character hashes that differ only in
+    // the last one, and one that no abbreviation shortens.
     let absurd = "0123456789abcdef".repeat(4);
+    let other = format!("{}e", &absurd[..63]);
     let mut hashed = page.clone();
     if let Some(report) = &mut hashed.updates.report {
         report.packages = vec![
@@ -1531,9 +1533,15 @@ fn updates_pages() -> Vec<(&'static str, Settings)> {
                 368_204,
             ),
             package(
+                "colisao",
+                &format!("abc1234{}-1", "a".repeat(33)),
+                &format!("abc1234{}-1", "b".repeat(33)),
+                2_202_009,
+            ),
+            package(
                 "firmware-absurdo",
-                &absurd,
                 &format!("{absurd}-1"),
+                &format!("{other}-1"),
                 1_992_294,
             ),
             package("versao-longa", &"x".repeat(64), &"y".repeat(64), 400_000),
@@ -1541,10 +1549,23 @@ fn updates_pages() -> Vec<(&'static str, Settings)> {
     }
     let mut hashed_list = hashed.clone();
     hashed_list.open(Page::UpdatePackages);
+    let mut hashed_progress = hashed.clone();
+    hashed_progress.updates.run = Some(Run::Working(Progress {
+        stage: Stage::Download,
+        package:
+            "deadbeefcafe0-tools-1018f17a629c638acc1a01df19e3f2146e7b4f5c-1-aarch64.pkg.tar.zst"
+                .into(),
+        bytes: 368_204,
+        total: 2_570_408,
+        speed: 180_000,
+        percent: 14,
+        ..Default::default()
+    }));
     vec![
         ("atualizacoes", page),
         ("atualizacoes-hash", hashed),
         ("atualizacoes-hash-pacotes", hashed_list),
+        ("atualizacoes-hash-progresso", hashed_progress),
         ("atualizacoes-em-dia", current),
         ("atualizacoes-verificando", checking),
         ("atualizacoes-sem-rede", offline),
@@ -1621,9 +1642,11 @@ fn capture_updates() {
 
 /// Long versions (a 64-character hash among them) stay on their own line:
 /// nothing reaches the gap between the rows and the packages panel, nor the
-/// screen's right margin, and the list still shows a value on each row.
+/// screen's right margin; each line shows its versions abbreviated, distinct
+/// and within its width, and the progress screen keeps the file's name.
 #[test]
 fn update_versions_stay_inside_their_line() {
+    use crate::settings::updates::{Run, Stage};
     let _sdl = crate::SDL_TEST_LOCK.lock().unwrap();
     std::env::set_var("SDL_VIDEODRIVER", "offscreen");
     let ttf;
@@ -1667,24 +1690,62 @@ fn update_versions_stay_inside_their_line() {
                 "a version left its line ({language}, {area:?})"
             );
         }
-        // Each row of the list draws its value in the right half.
-        let list = &pages["atualizacoes-hash-pacotes"];
-        for row in 0..3 {
-            let area = sdl2::rect::Rect::new(330, 56 + row * 40, 280, 22);
-            let pixels = draw(&mut ui, list, area);
-            let background = color(theme.background);
-            let ink = pixels
-                .chunks(4)
-                .any(|p| (p[0], p[1], p[2]) != (background.r, background.g, background.b));
-            assert!(ink, "row {row} shows no version ({language})");
-            let edge = sdl2::rect::Rect::new(626, 50, 14, 140);
-            let clean = draw(&mut ui, &empty, edge);
-            assert!(
-                clean == draw(&mut ui, list, edge),
-                "the list passed the margin ({language})"
-            );
-        }
+        let edge = sdl2::rect::Rect::new(626, 50, 14, 140);
+        let clean = draw(&mut ui, &empty, edge);
+        let list = draw(&mut ui, &pages["atualizacoes-hash-pacotes"], edge);
+        assert!(clean == list, "the list passed the margin ({language})");
     }
+    // The strings the panel (236 wide, 11 px) and the list (287, 12 px) draw.
+    let mut view = View {
+        ui: &mut ui,
+        theme: &theme,
+    };
+    let report = pages["atualizacoes-hash"].updates.report.clone().unwrap();
+    for (width, size) in [(236., 11.), (287., 12.)] {
+        let mut shown = Vec::new();
+        for package in &report.packages {
+            let parts = view.package_parts(package, width, size).unwrap();
+            let mut drawn = 0.;
+            for part in &parts {
+                drawn += view.width(part, Face::Mono, size).unwrap();
+            }
+            assert!(
+                drawn <= width,
+                "{} is {drawn} wide in {width}",
+                package.name
+            );
+            let old = parts[0].trim_end_matches(" → ").to_owned();
+            assert_ne!(old, parts[1], "{} reads the same twice", package.name);
+            shown.push((old, parts[1].clone()));
+        }
+        let pair = |old: &str, new: &str| (old.to_owned(), new.to_owned());
+        assert_eq!(shown[0], pair("b6ba4cb-1", "1018f17-1"));
+        assert_eq!(shown[1], pair("abc1234a-1", "abc1234b-1"));
+        let (old, new) = &shown[2];
+        assert!(old.contains('…') && old.ends_with("f-1"), "{old}");
+        assert!(new.contains('…') && new.ends_with("e-1"), "{new}");
+        assert!(shown[3].0.contains('…') && shown[3].1.contains('…'));
+    }
+    // The progress screen: the file's version abbreviated, its name whole.
+    let state = &pages["atualizacoes-hash-progresso"];
+    let Some(Run::Working(mut progress)) = state.updates.run.clone() else {
+        panic!("a run in progress");
+    };
+    let (now, _, _) = view.progress_text(state, &progress);
+    assert!(
+        now.contains("deadbeefcafe0-tools-1018f17-1-aarch64.pkg.tar.zst"),
+        "{now}"
+    );
+    progress.package = progress.package.replace("cafe0", "cafe1");
+    let (other, _, _) = view.progress_text(state, &progress);
+    assert!(
+        other.contains("deadbeefcafe1-tools-1018f17-1-aarch64"),
+        "{other}"
+    );
+    progress.stage = Stage::Install;
+    progress.package = "deadbeefcafe1-tools".into();
+    let (now, _, install) = view.progress_text(state, &progress);
+    assert!(now.contains("deadbeefcafe1-tools") && install.contains("deadbeefcafe1-tools"));
 }
 
 /// System › Modules, the module store, the permission page, a module page
