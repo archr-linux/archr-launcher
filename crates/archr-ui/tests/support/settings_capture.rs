@@ -1551,6 +1551,20 @@ fn updates_pages() -> Vec<(&'static str, Settings)> {
     }
     let mut hashed_list = hashed.clone();
     hashed_list.open(Page::UpdatePackages);
+    // Names of 20 to 40 characters beside the largest plausible size.
+    let mut named = page.clone();
+    if let Some(report) = &mut named.updates.report {
+        report.packages = [
+            "linux-firmware-realtek",
+            "python-requests-toolbelt-extras",
+            "rk3326-mali-bifrost-userspace-driver-gl",
+        ]
+        .iter()
+        .map(|name| package(name, "1-1", "2-1", 1_048_471_142))
+        .collect();
+    }
+    let mut named_list = named.clone();
+    named_list.open(Page::UpdatePackages);
     let mut hashed_progress = hashed.clone();
     hashed_progress.updates.run = Some(Run::Working(Progress {
         stage: Stage::Download,
@@ -1568,6 +1582,8 @@ fn updates_pages() -> Vec<(&'static str, Settings)> {
         ("atualizacoes-hash", hashed),
         ("atualizacoes-hash-pacotes", hashed_list),
         ("atualizacoes-hash-progresso", hashed_progress),
+        ("atualizacoes-nomes", named),
+        ("atualizacoes-nomes-pacotes", named_list),
         ("atualizacoes-em-dia", current),
         ("atualizacoes-verificando", checking),
         ("atualizacoes-sem-rede", offline),
@@ -1648,7 +1664,7 @@ fn capture_updates() {
 /// size, never a version, and the progress names the package, not its file.
 #[test]
 fn update_versions_stay_inside_their_line() {
-    use crate::settings::updates::{Run, Stage};
+    use crate::settings::updates::{Package, Run, Stage};
     let _sdl = crate::SDL_TEST_LOCK.lock().unwrap();
     std::env::set_var("SDL_VIDEODRIVER", "offscreen");
     let ttf;
@@ -1696,6 +1712,55 @@ fn update_versions_stay_inside_their_line() {
         let clean = draw(&mut ui, &empty, edge);
         let list = draw(&mut ui, &pages["atualizacoes-hash-pacotes"], edge);
         assert!(clean == list, "the list passed the margin ({language})");
+    }
+    // Names of 20 to 40 characters beside the largest plausible size end in
+    // "…" and never become "unavailable": their start draws as a short
+    // prefix of them does, and unlike the localized "unavailable".
+    let one = |state: &Settings, name: &str| {
+        let mut state = state.clone();
+        if let Some(report) = &mut state.updates.report {
+            report.packages = vec![Package {
+                name: name.into(),
+                old: "1-1".into(),
+                new: "2-1".into(),
+                size: 1_048_471_142,
+            }];
+        }
+        state
+    };
+    let names = [
+        "linux-firmware-realtek".to_owned(),
+        format!("{:-<30}", "python-requests-toolbelt"),
+        format!("{:-<40}", "rk3326-mali-bifrost-userspace-driver"),
+    ];
+    for language in ["pt_BR", "ru"] {
+        ui.catalog = I18n::load(std::path::Path::new("/nonexistent"), Some(language), None);
+        if language == "pt_BR" {
+            assert_eq!(ui.catalog.size(1_048_471_142), "999,9 MB");
+        }
+        let unavailable = ui.catalog.text("settings.unavailable");
+        for (page, start) in [
+            ("atualizacoes-hash", sdl2::rect::Rect::new(384, 75, 36, 16)),
+            (
+                "atualizacoes-hash-pacotes",
+                sdl2::rect::Rect::new(30, 50, 36, 34),
+            ),
+        ] {
+            for name in &names {
+                assert!((20..=40).contains(&name.chars().count()), "{name}");
+                let full = draw(&mut ui, &one(&pages[page], name), start);
+                let prefix = draw(&mut ui, &one(&pages[page], &name[..8]), start);
+                let fallback = draw(&mut ui, &one(&pages[page], &unavailable), start);
+                assert!(
+                    full == prefix,
+                    "{name} does not start as itself ({language}, {page})"
+                );
+                assert!(
+                    full != fallback,
+                    "{name} became unavailable ({language}, {page})"
+                );
+            }
+        }
     }
     // What each line says: its name, update or new, and the size; never a
     // version, which is a 40- or 64-character hash for some packages.

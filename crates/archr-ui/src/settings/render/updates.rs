@@ -155,7 +155,12 @@ impl View<'_, '_, '_> {
             (11., tint, Align::Left),
         )?;
         let name_w = w - kind_w - size_w - 12.;
-        self.label((x, y + 4., name_w, 16.), &package.name, 12.)?;
+        // A long name ends in "…": fit would trade it for "unavailable".
+        self.plain(
+            &package.name,
+            (x, y + 4., name_w, 16.),
+            (Face::Regular, 12., theme.text),
+        )?;
         self.ui.divider(
             self.ui.px(x),
             self.ui.px(y + HEIGHT - 1.),
@@ -268,18 +273,18 @@ impl View<'_, '_, '_> {
                 }
                 return Ok(());
             };
-            let half = (RIGHT - 46.) / 2.;
             let (kind, size) = view.package_note(package);
             let value = format!("{kind}{size}");
+            let value_w = view.width(&value, Face::Regular, 12.)? + 1.;
             let face = selection(selected, Face::Regular, Face::Semibold);
-            view.text_face(
-                (30., y, half, place.height),
+            let room = RIGHT - 46. - value_w - 12.;
+            view.plain(
                 &package.name,
-                (15., ink, Align::Left),
-                face,
+                (30., y, room, place.height),
+                (face, 15., ink),
             )?;
             view.text_face(
-                (30. + half, y, half, place.height),
+                (RIGHT - 16. - value_w, y, value_w, place.height),
                 &value,
                 (12., quiet, Align::Right),
                 Face::Regular,
