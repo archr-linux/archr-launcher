@@ -2,7 +2,7 @@
 //! run's progress, success and failure screens. Fixed layout, like every
 //! settings page; the theme only gives colours, fonts and icons.
 use super::*;
-use crate::settings::updates::{Package, Progress, Reboot, Run, Stage, LOG};
+use crate::settings::updates::{package_name, Package, Progress, Reboot, Run, Stage, LOG};
 
 /// The left column ends here; the packages panel takes the rest.
 pub(super) const ROWS_RIGHT: f32 = 368.;
@@ -118,52 +118,56 @@ impl View<'_, '_, '_> {
         )?;
         self.note((29., VIEW_TOP + 52., width, 17.), &detail, 12.)
     }
-    /// One package: the name, then "old → new · size" with the new version
-    /// brighter; on a second line when both do not fit. Returns its height.
-    fn package_line(&mut self, package: &Package, y: f32, draw: bool) -> Result<f32, String> {
+    /// What a package line says beside the name: "update" or "new" (no
+    /// version installed) and the download size. Versions are left out:
+    /// a package pinned to a commit carries a 40-character hash as one.
+    pub(super) fn package_note(&self, package: &Package) -> (String, String) {
+        let kind = if package.old.is_empty() {
+            "updates.kind_new"
+        } else {
+            "updates.kind_update"
+        };
+        (self.tr(kind), format!(" · {}", self.size(package.size)))
+    }
+    /// One package: the name, then "update · size" or "new · size" on the
+    /// right, "new" in the success colour.
+    fn package_line(&mut self, package: &Package, y: f32) -> Result<(), String> {
+        const HEIGHT: f32 = 23.;
         let (x, w) = PANEL;
         let theme = self.theme;
-        let scale = self.ui.frame.scale;
-        let old = if package.old.is_empty() {
-            String::new()
+        let (kind, size) = self.package_note(package);
+        let kind_w = self.width(&kind, Face::Regular, 11.)?;
+        let size_w = self.width(&size, Face::Regular, 11.)?;
+        let tint = if package.old.is_empty() {
+            theme.success
         } else {
-            format!("{} → ", package.old)
+            theme.muted
         };
-        let parts = [
-            (old, theme.muted),
-            (package.new.clone(), theme.text),
-            (format!(" · {}", self.size(package.size)), theme.muted),
-        ];
-        let mut widths = Vec::new();
-        for (text, _) in &parts {
-            widths.push(self.ui.measure(text, Face::Mono, 11.)? as f32 / scale);
-        }
-        let value: f32 = widths.iter().sum();
-        let name = self.ui.measure(&package.name, Face::Regular, 12.)? as f32 / scale;
-        let single = name + 12. + value <= w;
-        let height = if single { 23. } else { 38. };
-        if !draw {
-            return Ok(height);
-        }
-        self.label((x, y + 4., w, 16.), &package.name, 12.)?;
-        let mut right = x + w;
-        let line = if single { y + 4. } else { y + 19. };
-        for ((text, ink), width) in parts.iter().zip(&widths).rev() {
-            right -= width;
-            self.text_face(
-                (right, line, *width + 1., 16.),
-                text,
-                (11., *ink, Align::Left),
-                Face::Mono,
-            )?;
-        }
+        let right = x + w - size_w;
+        self.text(
+            (right, y + 4., size_w + 1., 16.),
+            &size,
+            (11., theme.muted, Align::Left),
+        )?;
+        self.text(
+            (right - kind_w, y + 4., kind_w + 1., 16.),
+            &kind,
+            (11., tint, Align::Left),
+        )?;
+        let name_w = w - kind_w - size_w - 12.;
+        // A long name ends in "…": fit would trade it for "unavailable".
+        self.plain(
+            &package.name,
+            (x, y + 4., name_w, 16.),
+            (Face::Regular, 12., theme.text),
+        )?;
         self.ui.divider(
             self.ui.px(x),
-            self.ui.px(y + height - 1.),
+            self.ui.px(y + HEIGHT - 1.),
             self.ui.px(w) as u32,
             theme.border,
         )?;
-        Ok(height)
+        Ok(())
     }
     fn update_panel(&mut self, state: &Settings) -> Result<(), String> {
         let (x, w) = PANEL;
@@ -182,7 +186,7 @@ impl View<'_, '_, '_> {
         }
         let limit = VIEW_BOTTOM - NOTES_ROOM;
         for (n, package) in packages.iter().enumerate() {
-            let height = self.package_line(package, y, false)?;
+            let height = 23.;
             // The last line left says how many more Y lists.
             let rest = packages.len() - n;
             if rest > 1 && y + height + 20. > limit {
@@ -191,7 +195,7 @@ impl View<'_, '_, '_> {
                 y += 22.;
                 break;
             }
-            self.package_line(package, y, true)?;
+            self.package_line(package, y)?;
             y += height;
         }
         let news = report.map_or("", |r| r.news.as_str());
@@ -269,44 +273,37 @@ impl View<'_, '_, '_> {
                 }
                 return Ok(());
             };
-            let value = if package.old.is_empty() {
-                format!("{} · {}", package.new, view.size(package.size))
-            } else {
-                format!(
-                    "{} → {} · {}",
-                    package.old,
-                    package.new,
-                    view.size(package.size)
-                )
-            };
+            let (kind, size) = view.package_note(package);
+            let value = format!("{kind}{size}");
+            let value_w = view.width(&value, Face::Regular, 12.)? + 1.;
             let face = selection(selected, Face::Regular, Face::Semibold);
-            let half = (RIGHT - 46.) / 2.;
-            view.text_face(
-                (30., y, half, place.height),
+            let room = RIGHT - 46. - value_w - 12.;
+            view.plain(
                 &package.name,
-                (15., ink, Align::Left),
-                face,
+                (30., y, room, place.height),
+                (face, 15., ink),
             )?;
             view.text_face(
-                (30. + half, y, half, place.height),
+                (RIGHT - 16. - value_w, y, value_w, place.height),
                 &value,
                 (12., quiet, Align::Right),
-                Face::Mono,
+                Face::Regular,
             )
         })
     }
-    fn update_progress(&mut self, state: &Settings, progress: &Progress) -> Result<(), String> {
-        let theme = self.theme;
+    /// What the progress screen says of the package at hand: the line over
+    /// the bar, its percent and the install step's detail. A package file
+    /// shows only its package's name.
+    pub(super) fn progress_text(
+        &self,
+        state: &Settings,
+        progress: &Progress,
+    ) -> (String, u8, String) {
         let count = progress
             .count
             .max(state.updates.count())
             .max(progress.current);
-        self.text_face(
-            (LEFT, 56., WIDE, 28.),
-            &self.tr("updates.updating"),
-            (20., theme.text, Align::Left),
-            Face::Semibold,
-        )?;
+        let name = package_name(&progress.package);
         let (now, percent) = match progress.stage {
             Stage::Sync => (self.tr("updates.now_sync"), 0),
             Stage::Download if progress.cancelling => {
@@ -315,13 +312,13 @@ impl View<'_, '_, '_> {
             Stage::Download => (
                 self.ui
                     .catalog
-                    .format("updates.now_download", &[("name", &progress.package)]),
+                    .format("updates.now_download", &[("name", name)]),
                 progress.percent,
             ),
             Stage::Install => (
                 self.ui
                     .catalog
-                    .format("updates.now_install", &[("name", &progress.package)]),
+                    .format("updates.now_install", &[("name", name)]),
                 progress.percent,
             ),
             Stage::Hooks => (self.tr("updates.now_hooks"), 100),
@@ -338,6 +335,29 @@ impl View<'_, '_, '_> {
         } else {
             now
         };
+        let install = if progress.stage == Stage::Install && !progress.package.is_empty() {
+            self.ui.catalog.format(
+                "updates.install_now",
+                &[
+                    ("done", &progress.current.to_string()),
+                    ("count", &count.to_string()),
+                    ("name", name),
+                ],
+            )
+        } else {
+            self.tr(&format!("updates.package_count|count={count}"))
+        };
+        (now, percent, install)
+    }
+    fn update_progress(&mut self, state: &Settings, progress: &Progress) -> Result<(), String> {
+        let theme = self.theme;
+        self.text_face(
+            (LEFT, 56., WIDE, 28.),
+            &self.tr("updates.updating"),
+            (20., theme.text, Align::Left),
+            Face::Semibold,
+        )?;
+        let (now, percent, install) = self.progress_text(state, progress);
         self.note((LEFT, 94., WIDE - 60., 16.), &now, 12.)?;
         self.text_face(
             (LEFT + WIDE - 60., 94., 60., 16.),
@@ -377,18 +397,6 @@ impl View<'_, '_, '_> {
             } else {
                 String::new()
             }
-        };
-        let install = if progress.stage == Stage::Install && !progress.package.is_empty() {
-            self.ui.catalog.format(
-                "updates.install_now",
-                &[
-                    ("done", &progress.current.to_string()),
-                    ("count", &count.to_string()),
-                    ("name", &progress.package),
-                ],
-            )
-        } else {
-            self.tr(&format!("updates.package_count|count={count}"))
         };
         let steps = [
             (Stage::Sync, "updates.step_sync", "pacman -Sy".to_owned()),

@@ -818,6 +818,8 @@
 "updates.not_checked" = "Aún sin buscar"
 "updates.not_checked_detail" = "Usa Buscar ahora"
 "updates.no_packages" = "Ningún paquete por actualizar."
+"updates.kind_update" = "actualización"
+"updates.kind_new" = "nuevo"
 "updates.more" = { one = "+ {count} paquete · Y los muestra", other = "+ {count} paquetes · Y los muestra" }
 "updates.news" = "Novedades"
 "updates.no_news" = "Esta versión no publicó notas."

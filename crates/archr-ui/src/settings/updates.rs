@@ -29,6 +29,19 @@ pub struct Package {
     /// Download size in bytes.
     pub size: u64,
 }
+/// The package a progress line names: archr-update reports the cached file
+/// ("name-version-pkgrel-arch.pkg.tar.zst", the name may hold hyphens) while
+/// downloading and the bare name while installing.
+pub fn package_name(file: &str) -> &str {
+    let Some(at) = file.rfind(".pkg.tar") else {
+        return file;
+    };
+    let mut parts = file[..at].rsplitn(4, '-');
+    match (parts.next(), parts.next(), parts.next(), parts.next()) {
+        (Some(_), Some(_), Some(_), Some(name)) => name,
+        _ => file,
+    }
+}
 /// What only takes effect after a restart.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Reboot {
@@ -235,6 +248,21 @@ mod tests {
             ..Default::default()
         });
         state
+    }
+    #[test]
+    fn package_files_name_only_their_package() {
+        let hash = "0123456789abcdef".repeat(4);
+        for name in ["deadbeefcafe0-tools", "deadbeefcafe1-tools", "AIC8800"] {
+            assert_eq!(
+                package_name(&format!("{name}-{hash}-1-aarch64.pkg.tar.zst.part")),
+                name
+            );
+            assert_eq!(package_name(name), name);
+        }
+        // A file without version, pkgrel and architecture stays whole.
+        let odd = format!("{}.pkg.tar.zst", "odd");
+        assert_eq!(package_name(&odd), odd);
+        assert_eq!(package_name(""), "");
     }
     #[test]
     fn opens_over_system_and_installs_only_with_packages() {

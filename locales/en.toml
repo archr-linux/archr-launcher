@@ -818,6 +818,8 @@
 "updates.not_checked" = "Not checked yet"
 "updates.not_checked_detail" = "Use Check now"
 "updates.no_packages" = "No packages to update."
+"updates.kind_update" = "update"
+"updates.kind_new" = "new"
 "updates.more" = { one = "+ {count} package · Y lists all", other = "+ {count} packages · Y lists all" }
 "updates.news" = "What’s new"
 "updates.no_news" = "This release has no notes."

@@ -1031,7 +1031,7 @@ impl View<'_, '_, '_> {
         Ok(())
     }
     /// Text width in layout pixels.
-    fn width(&mut self, text: &str, face: Face, size: f32) -> Result<f32, String> {
+    pub(super) fn width(&mut self, text: &str, face: Face, size: f32) -> Result<f32, String> {
         Ok(self.ui.measure(text, face, size)? as f32 / self.ui.frame.scale)
     }
     /// The amber "NOVO" tag of a permission an update adds.

@@ -1518,8 +1518,72 @@ fn updates_pages() -> Vec<(&'static str, Settings)> {
         line: "error: failed retrieving file 'retroarch-1.22.0-1-aarch64.pkg.tar.zst'".into(),
         changed: false,
     });
+    // Versions pinned to a commit (AIC8800 on the device), two that share
+    // their first 7 characters, two 64-character hashes that differ only in
+    // the last one, a long plain version and a new dependency: no line
+    // shows any of them.
+    let absurd = "0123456789abcdef".repeat(4);
+    let other = format!("{}e", &absurd[..63]);
+    let mut hashed = page.clone();
+    if let Some(report) = &mut hashed.updates.report {
+        report.packages = vec![
+            package(
+                "AIC8800",
+                "b6ba4cbacf9657caecce26c2426880c5bb485266-1",
+                "1018f17a629c638acc1a01df19e3f2146e7b4f5c-1",
+                368_204,
+            ),
+            package(
+                "colisao",
+                &format!("abc1234{}-1", "a".repeat(33)),
+                &format!("abc1234{}-1", "b".repeat(33)),
+                2_202_009,
+            ),
+            package(
+                "firmware-absurdo",
+                &format!("{absurd}-1"),
+                &format!("{other}-1"),
+                1_992_294,
+            ),
+            package("versao-longa", &"x".repeat(64), &"y".repeat(64), 400_000),
+            package("dependencia-nova", "", &format!("{absurd}-1"), 52_000),
+        ];
+    }
+    let mut hashed_list = hashed.clone();
+    hashed_list.open(Page::UpdatePackages);
+    // Names of 20 to 40 characters beside the largest plausible size.
+    let mut named = page.clone();
+    if let Some(report) = &mut named.updates.report {
+        report.packages = [
+            "linux-firmware-realtek",
+            "python-requests-toolbelt-extras",
+            "rk3326-mali-bifrost-userspace-driver-gl",
+        ]
+        .iter()
+        .map(|name| package(name, "1-1", "2-1", 1_048_471_142))
+        .collect();
+    }
+    let mut named_list = named.clone();
+    named_list.open(Page::UpdatePackages);
+    let mut hashed_progress = hashed.clone();
+    hashed_progress.updates.run = Some(Run::Working(Progress {
+        stage: Stage::Download,
+        package:
+            "deadbeefcafe0-tools-1018f17a629c638acc1a01df19e3f2146e7b4f5c-1-aarch64.pkg.tar.zst"
+                .into(),
+        bytes: 368_204,
+        total: 2_570_408,
+        speed: 180_000,
+        percent: 14,
+        ..Default::default()
+    }));
     vec![
         ("atualizacoes", page),
+        ("atualizacoes-hash", hashed),
+        ("atualizacoes-hash-pacotes", hashed_list),
+        ("atualizacoes-hash-progresso", hashed_progress),
+        ("atualizacoes-nomes", named),
+        ("atualizacoes-nomes-pacotes", named_list),
         ("atualizacoes-em-dia", current),
         ("atualizacoes-verificando", checking),
         ("atualizacoes-sem-rede", offline),
@@ -1591,6 +1655,155 @@ fn capture_updates() {
             }
             save(&mut ui, format!("{name}-{language}.png"));
         }
+    }
+}
+
+/// Long versions (a 64-character hash among them) stay on their own line:
+/// nothing reaches the gap between the rows and the packages panel, nor the
+/// screen's right margin; each line shows the name, update or new and the
+/// size, never a version, and the progress names the package, not its file.
+#[test]
+fn update_versions_stay_inside_their_line() {
+    use crate::settings::updates::{Package, Run, Stage};
+    let _sdl = crate::SDL_TEST_LOCK.lock().unwrap();
+    std::env::set_var("SDL_VIDEODRIVER", "offscreen");
+    let ttf;
+    let creator;
+    let mut ui = Ui::new(640, 480, true).unwrap();
+    ttf = sdl2::ttf::init().unwrap();
+    creator = ui.canvas.texture_creator();
+    let theme = Theme::load(
+        &std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../themes/default"),
+    );
+    ui.configure(&ttf, &creator, &theme, None).unwrap();
+    let pages: std::collections::HashMap<_, _> = updates_pages().into_iter().collect();
+    let draw = |ui: &mut Ui, state: &Settings, area: sdl2::rect::Rect| {
+        ui.switches.clear();
+        ui.frame.now = ui.born + Duration::from_millis(480);
+        for _ in 0..2 {
+            ui.canvas.set_draw_color(color(theme.background));
+            ui.canvas.clear();
+            ui.settings_page(state, &theme).unwrap();
+            ui.snap_animations();
+        }
+        ui.canvas
+            .read_pixels(Some(area), sdl2::pixels::PixelFormatEnum::RGBA32)
+            .unwrap()
+    };
+    let mut empty = pages["atualizacoes"].clone();
+    if let Some(report) = &mut empty.updates.report {
+        report.packages.clear();
+    }
+    for language in ["pt_BR", "ru"] {
+        ui.catalog = I18n::load(std::path::Path::new("/nonexistent"), Some(language), None);
+        // The gap column and the right margin, beside the package lines.
+        for area in [
+            sdl2::rect::Rect::new(370, 70, 12, 140),
+            sdl2::rect::Rect::new(626, 70, 14, 140),
+        ] {
+            let clean = draw(&mut ui, &empty, area);
+            let hashed = draw(&mut ui, &pages["atualizacoes-hash"], area);
+            assert!(
+                clean == hashed,
+                "a version left its line ({language}, {area:?})"
+            );
+        }
+        let edge = sdl2::rect::Rect::new(626, 50, 14, 140);
+        let clean = draw(&mut ui, &empty, edge);
+        let list = draw(&mut ui, &pages["atualizacoes-hash-pacotes"], edge);
+        assert!(clean == list, "the list passed the margin ({language})");
+    }
+    // Names of 20 to 40 characters beside the largest plausible size end in
+    // "…" and never become "unavailable": their start draws as a short
+    // prefix of them does, and unlike the localized "unavailable".
+    let one = |state: &Settings, name: &str| {
+        let mut state = state.clone();
+        if let Some(report) = &mut state.updates.report {
+            report.packages = vec![Package {
+                name: name.into(),
+                old: "1-1".into(),
+                new: "2-1".into(),
+                size: 1_048_471_142,
+            }];
+        }
+        state
+    };
+    let names = [
+        "linux-firmware-realtek".to_owned(),
+        format!("{:-<30}", "python-requests-toolbelt"),
+        format!("{:-<40}", "rk3326-mali-bifrost-userspace-driver"),
+    ];
+    for language in ["pt_BR", "ru"] {
+        ui.catalog = I18n::load(std::path::Path::new("/nonexistent"), Some(language), None);
+        if language == "pt_BR" {
+            assert_eq!(ui.catalog.size(1_048_471_142), "999,9 MB");
+        }
+        let unavailable = ui.catalog.text("settings.unavailable");
+        for (page, start) in [
+            ("atualizacoes-hash", sdl2::rect::Rect::new(384, 75, 36, 16)),
+            (
+                "atualizacoes-hash-pacotes",
+                sdl2::rect::Rect::new(30, 50, 36, 34),
+            ),
+        ] {
+            for name in &names {
+                assert!((20..=40).contains(&name.chars().count()), "{name}");
+                let full = draw(&mut ui, &one(&pages[page], name), start);
+                let prefix = draw(&mut ui, &one(&pages[page], &name[..8]), start);
+                let fallback = draw(&mut ui, &one(&pages[page], &unavailable), start);
+                assert!(
+                    full == prefix,
+                    "{name} does not start as itself ({language}, {page})"
+                );
+                assert!(
+                    full != fallback,
+                    "{name} became unavailable ({language}, {page})"
+                );
+            }
+        }
+    }
+    // What each line says: its name, update or new, and the size; never a
+    // version, which is a 40- or 64-character hash for some packages.
+    let view = View {
+        ui: &mut ui,
+        theme: &theme,
+    };
+    view.ui.catalog = I18n::load(std::path::Path::new("/nonexistent"), Some("pt_BR"), None);
+    let report = pages["atualizacoes-hash"].updates.report.clone().unwrap();
+    for package in &report.packages {
+        let (kind, size) = view.package_note(package);
+        let line = format!("{}{kind}{size}", package.name);
+        assert!(line.contains(&view.ui.catalog.size(package.size)), "{line}");
+        let expected = if package.old.is_empty() {
+            "novo"
+        } else {
+            "atualização"
+        };
+        assert_eq!(kind, expected);
+        for version in [&package.old, &package.new] {
+            let start: String = version.chars().take(7).collect();
+            assert!(
+                start.is_empty() || !line.contains(&start),
+                "{line} shows {version}"
+            );
+        }
+    }
+    // The progress screen names the package, not its file.
+    let state = &pages["atualizacoes-hash-progresso"];
+    let Some(Run::Working(mut progress)) = state.updates.run.clone() else {
+        panic!("a run in progress");
+    };
+    let (now, _, _) = view.progress_text(state, &progress);
+    assert!(now.contains("deadbeefcafe0-tools"), "{now}");
+    assert!(
+        !now.contains("1018f17") && !now.contains("aarch64"),
+        "{now}"
+    );
+    progress.stage = Stage::Install;
+    progress.package = "deadbeefcafe1-tools".into();
+    let (now, _, install) = view.progress_text(state, &progress);
+    for text in [&now, &install] {
+        assert!(text.contains("deadbeefcafe1-tools"), "{text}");
     }
 }
 
