@@ -1520,7 +1520,8 @@ fn updates_pages() -> Vec<(&'static str, Settings)> {
     });
     // Versions pinned to a commit (AIC8800 on the device), two that share
     // their first 7 characters, two 64-character hashes that differ only in
-    // the last one, and one that no abbreviation shortens.
+    // the last one, a long plain version and a new dependency: no line
+    // shows any of them.
     let absurd = "0123456789abcdef".repeat(4);
     let other = format!("{}e", &absurd[..63]);
     let mut hashed = page.clone();
@@ -1545,6 +1546,7 @@ fn updates_pages() -> Vec<(&'static str, Settings)> {
                 1_992_294,
             ),
             package("versao-longa", &"x".repeat(64), &"y".repeat(64), 400_000),
+            package("dependencia-nova", "", &format!("{absurd}-1"), 52_000),
         ];
     }
     let mut hashed_list = hashed.clone();
@@ -1642,8 +1644,8 @@ fn capture_updates() {
 
 /// Long versions (a 64-character hash among them) stay on their own line:
 /// nothing reaches the gap between the rows and the packages panel, nor the
-/// screen's right margin; each line shows its versions abbreviated, distinct
-/// and within its width, and the progress screen keeps the file's name.
+/// screen's right margin; each line shows the name, update or new and the
+/// size, never a version, and the progress names the package, not its file.
 #[test]
 fn update_versions_stay_inside_their_line() {
     use crate::settings::updates::{Run, Stage};
@@ -1695,57 +1697,49 @@ fn update_versions_stay_inside_their_line() {
         let list = draw(&mut ui, &pages["atualizacoes-hash-pacotes"], edge);
         assert!(clean == list, "the list passed the margin ({language})");
     }
-    // The strings the panel (236 wide, 11 px) and the list (287, 12 px) draw.
+    // What each line says: its name, update or new, and the size; never a
+    // version, which is a 40- or 64-character hash for some packages.
     let mut view = View {
         ui: &mut ui,
         theme: &theme,
     };
+    view.ui.catalog = I18n::load(std::path::Path::new("/nonexistent"), Some("pt_BR"), None);
     let report = pages["atualizacoes-hash"].updates.report.clone().unwrap();
-    for (width, size) in [(236., 11.), (287., 12.)] {
-        let mut shown = Vec::new();
-        for package in &report.packages {
-            let parts = view.package_parts(package, width, size).unwrap();
-            let mut drawn = 0.;
-            for part in &parts {
-                drawn += view.width(part, Face::Mono, size).unwrap();
-            }
+    for package in &report.packages {
+        let (kind, size) = view.package_note(package);
+        let line = format!("{}{kind}{size}", package.name);
+        assert!(line.contains(&view.ui.catalog.size(package.size)), "{line}");
+        let expected = if package.old.is_empty() {
+            "novo"
+        } else {
+            "atualização"
+        };
+        assert_eq!(kind, expected);
+        for version in [&package.old, &package.new] {
+            let start: String = version.chars().take(7).collect();
             assert!(
-                drawn <= width,
-                "{} is {drawn} wide in {width}",
-                package.name
+                start.is_empty() || !line.contains(&start),
+                "{line} shows {version}"
             );
-            let old = parts[0].trim_end_matches(" → ").to_owned();
-            assert_ne!(old, parts[1], "{} reads the same twice", package.name);
-            shown.push((old, parts[1].clone()));
         }
-        let pair = |old: &str, new: &str| (old.to_owned(), new.to_owned());
-        assert_eq!(shown[0], pair("b6ba4cb-1", "1018f17-1"));
-        assert_eq!(shown[1], pair("abc1234a-1", "abc1234b-1"));
-        let (old, new) = &shown[2];
-        assert!(old.contains('…') && old.ends_with("f-1"), "{old}");
-        assert!(new.contains('…') && new.ends_with("e-1"), "{new}");
-        assert!(shown[3].0.contains('…') && shown[3].1.contains('…'));
     }
-    // The progress screen: the file's version abbreviated, its name whole.
+    // The progress screen names the package, not its file.
     let state = &pages["atualizacoes-hash-progresso"];
     let Some(Run::Working(mut progress)) = state.updates.run.clone() else {
         panic!("a run in progress");
     };
     let (now, _, _) = view.progress_text(state, &progress);
+    assert!(now.contains("deadbeefcafe0-tools"), "{now}");
     assert!(
-        now.contains("deadbeefcafe0-tools-1018f17-1-aarch64.pkg.tar.zst"),
+        !now.contains("1018f17") && !now.contains("aarch64"),
         "{now}"
-    );
-    progress.package = progress.package.replace("cafe0", "cafe1");
-    let (other, _, _) = view.progress_text(state, &progress);
-    assert!(
-        other.contains("deadbeefcafe1-tools-1018f17-1-aarch64"),
-        "{other}"
     );
     progress.stage = Stage::Install;
     progress.package = "deadbeefcafe1-tools".into();
     let (now, _, install) = view.progress_text(state, &progress);
-    assert!(now.contains("deadbeefcafe1-tools") && install.contains("deadbeefcafe1-tools"));
+    for text in [&now, &install] {
+        assert!(text.contains("deadbeefcafe1-tools"), "{text}");
+    }
 }
 
 /// System › Modules, the module store, the permission page, a module page
