@@ -369,6 +369,15 @@ fn run(
         {
             ui.invalidate_settings_clock();
         }
+        // The Wi-Fi switch's reply: the status bar and the Start menu read the
+        // radio on their own 30 s cycle, so read it now or they lag behind.
+        if previous_setting == Some(archr_ui::settings::Id::WifiSwitch)
+            && settings.state.pending.is_none()
+        {
+            if let Some(refresh) = ui.wifi_refresh_signal() {
+                refresh();
+            }
+        }
         // The clock format's own reply: a failed scan elsewhere never blocks it.
         if previous_setting == Some(archr_ui::settings::Id::ClockFormat)
             && settings.state.pending.is_none()
