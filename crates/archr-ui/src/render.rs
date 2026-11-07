@@ -139,7 +139,14 @@ impl Frame {
         // The floor never lifts text above the size the design gives it
         // at 640x480: a miniature drawn small there stays as small.
         let floor = self.floor.min(size.round() as i32);
-        self.px(size).max(floor).clamp(8, 128) as u16
+        // A miniature may go under 8 px where the screen is smaller than
+        // the design; elsewhere 8 px stays the least, as it always was.
+        let least = if self.floor == 0 {
+            (8. * self.scale.min(1.)).round() as i32
+        } else {
+            8
+        };
+        self.px(size).max(floor).clamp(least, 128) as u16
     }
     /// The smallest size worth asking for, before the text multipliers.
     fn min_size(self) -> f32 {
