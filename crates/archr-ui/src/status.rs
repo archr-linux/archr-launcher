@@ -93,43 +93,21 @@ impl Wifi {
         self != Self::Off
     }
 }
-/// The wireless interface's link, read with the battery while the radio is
-/// on. `operstate` is "up" once iwd has joined (after the handshake) and
-/// stays so through DHCP, so the icon does not blink while an address is
-/// being obtained. The interface is found once and searched for again only
-/// after a failed read (a USB adapter unplugged or renamed).
-struct LinkSource {
-    root: PathBuf,
-    dir: Option<PathBuf>,
-}
-impl LinkSource {
-    fn new(root: PathBuf) -> Self {
-        Self { root, dir: None }
-    }
-    fn state(dir: &Path) -> Option<String> {
-        archr_io::read_utf8(&dir.join("operstate"), 64, archr_io::Symlinks::Follow).ok()
-    }
-    fn connected(&mut self) -> bool {
-        if let Some(state) = self.dir.as_deref().and_then(Self::state) {
-            return state.trim() == "up";
-        }
-        self.dir = wireless_interface(&self.root);
-        self.dir
-            .as_deref()
-            .and_then(Self::state)
-            .is_some_and(|s| s.trim() == "up")
-    }
-}
-/// The first network interface with a `wireless` directory, by name order.
-fn wireless_interface(root: &Path) -> Option<PathBuf> {
-    let mut found: Vec<_> = fs::read_dir(root.join("sys/class/net"))
-        .ok()?
-        .filter_map(Result::ok)
-        .map(|e| e.path())
-        .filter(|p| p.join("wireless").is_dir())
-        .collect();
-    found.sort();
-    found.into_iter().next()
+/// Joined to a network: any network interface with a `wireless` directory
+/// has operstate "up". Read with the battery while the radio is on. iwd
+/// holds the link dormant until the handshake ends and it stays up through
+/// DHCP, so the icon does not blink while an address is obtained. The list
+/// is read every time (a handful of sysfs entries): an adapter plugged,
+/// unplugged or renamed counts at once.
+pub fn wifi_joined(root: &Path) -> bool {
+    let Ok(entries) = fs::read_dir(root.join("sys/class/net")) else {
+        return false;
+    };
+    entries.flatten().map(|e| e.path()).any(|dir| {
+        dir.join("wireless").is_dir()
+            && archr_io::read_utf8(&dir.join("operstate"), 64, archr_io::Symlinks::Follow)
+                .is_ok_and(|s| s.trim() == "up")
+    })
 }
 #[derive(Clone, Copy, Default, PartialEq)]
 struct Snapshot {
@@ -191,7 +169,6 @@ impl Worker {
                 }
                 let mut usb_stamp = None;
                 let mut source = BatterySource::new(path.clone(), Instant::now());
-                let mut link = LinkSource::new(path.clone());
                 let mut radio = false;
                 let mut snapshot = Snapshot::default();
                 let mut next_wifi = Instant::now();
@@ -217,7 +194,7 @@ impl Worker {
                         next_wifi = now + REFRESH;
                     }
                     if radio_tick || battery_tick.is_some() {
-                        next.wifi = match (radio, radio && link.connected()) {
+                        next.wifi = match (radio, radio && wifi_joined(&path)) {
                             (false, _) => Wifi::Off,
                             (true, false) => Wifi::On,
                             (true, true) => Wifi::Connected,
@@ -615,24 +592,44 @@ mod tests {
     #[test]
     fn the_link_tells_joined_from_only_switched_on() {
         let root = tempfile::tempdir().unwrap();
-        let mut link = LinkSource::new(root.path().into());
-        assert!(!link.connected(), "no interface");
+        let joined = || wifi_joined(root.path());
+        assert!(!joined(), "no interface");
         let wired = root.path().join("sys/class/net/eth0");
         fs::create_dir_all(&wired).unwrap();
         fs::write(wired.join("operstate"), "up\n").unwrap();
-        assert!(!link.connected(), "a cable is not Wi-Fi");
+        assert!(!joined(), "a cable is not Wi-Fi");
         // Joining: iwd holds the link dormant until the handshake ends.
         interface(root.path(), "wlan0", "dormant");
-        assert!(!link.connected());
+        assert!(!joined());
         interface(root.path(), "wlan0", "up");
-        assert!(link.connected());
+        assert!(joined());
         interface(root.path(), "wlan0", "down");
-        assert!(!link.connected());
+        assert!(!joined());
         // The adapter is unplugged and comes back under another name.
         fs::remove_dir_all(root.path().join("sys/class/net/wlan0")).unwrap();
-        assert!(!link.connected());
+        assert!(!joined());
         interface(root.path(), "wlan1", "up");
-        assert!(link.connected());
+        assert!(joined());
+    }
+
+    #[test]
+    fn any_of_two_adapters_joined_counts() {
+        let root = tempfile::tempdir().unwrap();
+        let joined = || wifi_joined(root.path());
+        interface(root.path(), "wlan0", "down");
+        interface(root.path(), "wlan1", "up");
+        assert!(joined(), "the second adapter joined");
+        interface(root.path(), "wlan1", "down");
+        assert!(!joined(), "both down");
+        // An earlier-named adapter appears joined while wlan1 is down.
+        interface(root.path(), "wlan0", "up");
+        assert!(joined());
+        interface(root.path(), "wlan0", "down");
+        interface(root.path(), "wlan1", "up");
+        assert!(joined());
+        // The joined one is unplugged: the other is only on.
+        fs::remove_dir_all(root.path().join("sys/class/net/wlan1")).unwrap();
+        assert!(!joined());
     }
 
     #[test]
