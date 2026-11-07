@@ -1350,7 +1350,7 @@ mod tests {
         assert_eq!(state.page(), Page::ModuleInfo, "only the question went");
         state.handle(Button::B);
         assert_eq!(state.page(), Page::Modules);
-        // The store's Installed tab: the installed module's offer.
+        // The store's Reviewed tab: the installed module's offer.
         state.cursor = 3;
         state.handle(Button::A);
         assert_eq!(state.page(), Page::ModuleStore);
@@ -1379,6 +1379,41 @@ mod tests {
         assert_eq!(state.offer_action(), Some("modules.installed"));
         assert_eq!(state.handle(Button::B), Effect::None);
         assert_eq!(state.page(), Page::ModuleStore);
+        assert_eq!(state.cursor, 1);
+        // The Installed tab (L from Reviewed): the same module's offer.
+        assert_eq!(
+            state.handle(Button::L),
+            Effect::Module(Request::Store(StoreAction::List(Tab::Installed, false)))
+        );
+        assert_eq!(state.modules.tab, Tab::Installed);
+        state.module_store_reply(StoreReply::Listed {
+            tab: Tab::Installed,
+            cards: vec![
+                card("archr-module-ajuste-cpu"),
+                card("archr-module-bateria-detalhada"),
+            ],
+            problem: None,
+        });
+        state.handle(Button::Down);
+        let Effect::Module(Request::Store(StoreAction::Open(opened))) = state.handle(Button::A)
+        else {
+            panic!("no open");
+        };
+        assert_eq!(opened.repo, "archr-module-bateria-detalhada");
+        assert_eq!(state.page(), Page::ModuleOffer);
+        state.module_store_reply(StoreReply::Offer(
+            "archr-linux/archr-module-bateria-detalhada".into(),
+            Ok(Box::new(Offer {
+                card: card("archr-module-bateria-detalhada"),
+                version: "1.0.0".into(),
+                installed: Some("1.0.0".into()),
+                ..Offer::default()
+            })),
+        ));
+        assert_eq!(state.offer_action(), Some("modules.installed"));
+        assert_eq!(state.handle(Button::B), Effect::None);
+        assert_eq!(state.page(), Page::ModuleStore);
+        assert_eq!(state.modules.tab, Tab::Installed, "the tab stays");
         assert_eq!(state.cursor, 1);
         assert_eq!(state.handle(Button::B), Effect::None);
         assert_eq!(state.page(), Page::Modules);
