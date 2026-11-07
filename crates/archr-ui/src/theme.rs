@@ -187,6 +187,9 @@ pub struct Theme {
     pub details_actions: Rect01,
     /// Start menu: the row of module widgets; tiles and shortcuts make room.
     pub start_widgets: Rect01,
+    /// Start menu: where its 640x480 composition (title, tiles, shortcuts)
+    /// is centered; the whole screen by default.
+    pub start_area: Rect01,
     /// Achievements screen: progress bar and counts, and the list.
     pub achievements_progress: Rect01,
     pub achievements_list: Rect01,
@@ -404,6 +407,7 @@ impl Theme {
             details_text: token!(details_text, rectangle),
             details_actions: token!(details_actions, rectangle),
             start_widgets: token!(start_widgets, rectangle),
+            start_area: token!(start_area, rectangle),
             achievements_progress: token!(achievements_progress, rectangle),
             achievements_list: token!(achievements_list, rectangle),
             saves_list: token!(saves_list, rectangle),
@@ -533,6 +537,7 @@ pub const KNOWN_KEYS: &[&str] = &[
     "details_text",
     "details_actions",
     "start_widgets",
+    "start_area",
     "achievements_progress",
     "achievements_list",
     "saves_list",

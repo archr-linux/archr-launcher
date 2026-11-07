@@ -491,7 +491,7 @@ impl View<'_, '_, '_> {
         let box_height = if box_lines.is_empty() {
             0.
         } else {
-            box_lines.len() as f32 * 14. + 16. + 12.
+            box_lines.len() as f32 * self.pitch(11., 14.) + 16. + 12.
         };
         let total = 56. + 12. + 26. + 12. + body_height + 12. + box_height + 6. + 38.;
         let mut y = (44. + (self.footer_top() - 44. - total) / 2.).round();
@@ -531,7 +531,12 @@ impl View<'_, '_, '_> {
             )?;
             for (n, text) in box_lines.iter().enumerate() {
                 self.text_face(
-                    (left + 10., y + 8. + n as f32 * 14., box_width - 20., 14.),
+                    (
+                        left + 10.,
+                        y + 8. + n as f32 * self.pitch(11., 14.),
+                        box_width - 20.,
+                        self.pitch(11., 14.),
+                    ),
                     text,
                     (11., theme.muted, Align::Center),
                     Face::Mono,

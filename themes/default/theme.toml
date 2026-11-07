@@ -69,6 +69,8 @@ details_text = { x = 0.45625, y = 0.266666667, w = 0.50625, h = 0.529166667 }
 details_actions = { x = 0.45625, y = 0.8125, w = 0.50625, h = 0.070833333 } # 34px
 # Start menu module widgets (Start-widget): 444x104px at 98,218.
 start_widgets = { x = 0.153125, y = 0.454166667, w = 0.69375, h = 0.216666667 }
+# Start menu: the box its title, tiles and shortcuts are centered in.
+start_area = { x = 0.0, y = 0.0, w = 1.0, h = 1.0 }
 # Game achievements (RA-jogo): progress over a 604px column, list of 50px rows below.
 achievements_progress = { x = 0.025, y = 0.108333333, w = 0.94375, h = 0.0625 }
 achievements_list = { x = 0.025, y = 0.183333333, w = 0.94375, h = 0.7125 }
@@ -96,6 +98,31 @@ switcher_side = { x = 0.046875, y = 0.19375, w = 0.375, h = 0.28125 }
 switcher_info = { x = 0.0, y = 0.6, w = 1.0, h = 0.125 }
 resume_shot = { x = 0.25, y = 0.15, w = 0.5, h = 0.375 }
 resume_info = { x = 0.0, y = 0.58, w = 1.0, h = 0.258333333 }
+# The Start menu's 640x480 composition centered between header and footer.
+start_area = { x = 0.0, y = 0.1796875, w = 1.0, h = 0.75 }
+# Covers keep a box-art shape: a narrower game list, a wider cover. The
+# details picture and table share the column's height.
+list_width = 0.5
+cover = { x = 0.555, y = 0.1125, w = 0.41, h = 0.583333333 }
+details_shot = { x = 0.0375, y = 0.104166667, w = 0.390625, h = 0.38 }
+details_info = { x = 0.0375, y = 0.505, w = 0.390625, h = 0.38 }
+
+# The console picture sits in the middle of the taller systems panel.
+[aspect.square.view.lista.systems]
+art = { y = 0.22, h = 0.36 }
+
+[aspect.square.view.vitrine.games]
+list = { w = 0.43 }
+panel = { x = 0.51, w = 0.45, h = 0.62 }
+art = { x = 0.51, w = 0.45, h = 0.62 }
+meta = { x = 0.51, y = 0.78, w = 0.45 }
+
+# On a 3:2 screen (480x320) the lists read in 13 px text: 19 px of reference.
+[aspect.wide]
+font_size = 0.039583333
+
+[aspect.wide.view.vitrine.games]
+list = { font = 0.0375 }
 
 # Sounds: the files in sounds/ named after each event play without any
 # declaration. A [sounds] table is only needed to rename or silence one

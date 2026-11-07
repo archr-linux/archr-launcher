@@ -304,6 +304,10 @@ fn icon(out: &mut sk::Pixmap, svg: &str, color: [u8; 3], size: u32, (x, y): (i32
     );
 }
 
+/// No text under this many pixels, as in the launcher: on a small screen
+/// the text keeps it while the card shrinks around it.
+const MIN_TEXT: f32 = 10.0;
+
 /// One frame of the card over a `width` x `height` surface.
 pub fn render(
     card: &Card,
@@ -322,7 +326,7 @@ pub fn render(
     let pad = 18.0 * s;
     let card_w = 340.0 * s;
     let inner = card_w - 2.0 * pad;
-    let body_px = 13.0 * s;
+    let body_px = (13.0 * s).max(MIN_TEXT);
     let body_line = body_px * 1.45;
     let lines = wrap(regular, body_px, &card.body, inner);
     let gap = 10.0 * s;
@@ -371,7 +375,7 @@ pub fn render(
         glyph,
         ((cx + offset) as i32, (cy + offset) as i32),
     );
-    let title_px = 17.0 * s;
+    let title_px = (17.0 * s).max(MIN_TEXT);
     text(
         &mut out,
         semibold,
@@ -415,7 +419,7 @@ pub fn render(
             size,
             ((x + pad) as i32, (line_y + s) as i32),
         );
-        let px = 12.0 * s;
+        let px = (12.0 * s).max(MIN_TEXT);
         text(
             &mut out,
             regular,

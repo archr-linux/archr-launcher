@@ -267,6 +267,30 @@ impl Ui<'_, '_> {
     }
 }
 impl View<'_, '_, '_> {
+    /// Reference pixels from one line of `size` text to the next: the
+    /// design's `pitch`, or more where the screen-pixel floor makes the
+    /// text taller than the design drew it.
+    fn pitch(&self, size: f32, pitch: f32) -> f32 {
+        let drawn = f32::from(self.ui.frame.font_size(size)) / self.ui.frame.scale;
+        pitch.max(drawn + 2.)
+    }
+    /// `line` cut to fit `width` screen pixels with an ellipsis.
+    fn ellipsized(
+        &mut self,
+        line: &str,
+        size: f32,
+        face: Face,
+        width: u32,
+    ) -> Result<String, String> {
+        let mut kept: Vec<char> = line.trim_end().chars().collect();
+        loop {
+            let text = format!("{}…", kept.iter().collect::<String>().trim_end());
+            if kept.is_empty() || self.ui.measure(&text, face, size)? <= width {
+                return Ok(text);
+            }
+            kept.pop();
+        }
+    }
     /// Width of `text` in reference pixels, like every other settings measure.
     fn span(&mut self, text: &str, face: Face, size: f32) -> Result<f32, String> {
         Ok(self.ui.measure(text, face, size)? as f32 / self.ui.frame.scale)
@@ -457,7 +481,7 @@ impl View<'_, '_, '_> {
     ) -> Result<(), String> {
         let (_, ink, align) = style;
         let (lines, size, face) = self.fit(bounds, text, style.0, face)?;
-        let step = size + 3.;
+        let step = self.pitch(size, size + 3.);
         let top = bounds.1 + (bounds.3 - lines.len() as f32 * step) / 2.;
         for (n, line) in lines.iter().enumerate() {
             self.ui.label_aligned(
@@ -484,7 +508,7 @@ impl View<'_, '_, '_> {
         let (mut size, mut face) = (start, face);
         Ok(loop {
             let (lines, split) = self.lines_split(text, size, rect.width(), face)?;
-            let limit = (bounds.3 / (size + 3.)).floor().max(1.) as usize;
+            let limit = (bounds.3 / self.pitch(size, size + 3.)).floor().max(1.) as usize;
             let fallback = face == Face::Fallback;
             if lines.len() <= limit && (!split || fallback && size <= floor) {
                 break (lines, size, face);
@@ -493,6 +517,18 @@ impl View<'_, '_, '_> {
                 size = (size - 1.).max(floor);
             } else if split && !fallback {
                 (size, face) = (start, Face::Fallback);
+            } else if self.ui.frame.scale < 1. {
+                // Where the screen-pixel floor makes text larger than the
+                // design, a long text keeps as many lines as the box holds,
+                // the last one ending in an ellipsis.
+                let (mut lines, _) = self.lines_split(text, floor, rect.width(), face)?;
+                let limit = (bounds.3 / self.pitch(floor, floor + 3.)).floor().max(1.) as usize;
+                if lines.len() > limit {
+                    lines.truncate(limit);
+                    let last = lines.pop().unwrap_or_default();
+                    lines.push(self.ellipsized(&last, floor, face, rect.width())?);
+                }
+                break (lines, floor, face);
             } else {
                 log::warn!("Settings text unavailable in this layout: {text}");
                 // "Unavailable" as usual; where it would split a word, in the
@@ -1077,7 +1113,7 @@ impl View<'_, '_, '_> {
     ) -> Result<(), String> {
         let height = |view: &mut Self, text: &str, size: f32, most: f32| {
             view.fit((104., 0., 432., most), text, size, Face::Regular)
-                .map(|(lines, size, _)| lines.len() as f32 * (size + 3.))
+                .map(|(lines, size, _)| lines.len() as f32 * view.pitch(size, size + 3.))
         };
         let title = height(self, question, 18., 63.)?;
         let body = height(self, detail, 14., 136.)?;

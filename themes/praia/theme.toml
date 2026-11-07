@@ -29,3 +29,11 @@ list = { x = 0.4, w = 0.575 }
 panel = { x = 0.025, w = 0.328125 }
 art = { x = 0.025, w = 0.328125 }
 meta = { x = 0.025, w = 0.328125 }
+
+# On a square screen (720x720) the art column widens so covers keep a
+# box-art shape, as in the default theme.
+[aspect.square.view.lista.games]
+list = { x = 0.48, w = 0.495 }
+panel = { x = 0.025, w = 0.42 }
+art = { x = 0.025, w = 0.42 }
+meta = { x = 0.025, w = 0.42 }

@@ -325,7 +325,7 @@ impl View<'_, '_, '_> {
             size = (size - 1.).max(12.);
             lines = self.lines_face(text, size, width, face)?;
         }
-        let step = (size * 1.4).round();
+        let step = self.pitch(size, (size * 1.4).round());
         for (n, line) in lines.iter().take(max).enumerate() {
             let rect = self.rect((x, y + n as f32 * step, w, step));
             self.ui
@@ -391,7 +391,8 @@ impl View<'_, '_, '_> {
             let label_w = self.span(&label, Face::Regular, 12.)? + 12.;
             let width = self.rect((0., 0., w - label_w, 1.)).width();
             let lines = self.lines(&value, 12., width)?;
-            let height = lines.len() as f32 * 15. + 6.;
+            let pitch = self.pitch(12., 15.);
+            let height = lines.len() as f32 * pitch + 6.;
             if y + height > BUTTONS - 6. {
                 break;
             }
@@ -401,7 +402,7 @@ impl View<'_, '_, '_> {
                 (12., theme.muted, Align::Left),
             )?;
             for (n, line) in lines.iter().enumerate() {
-                let rect = self.rect((x + label_w, y + 3. + n as f32 * 15., w - label_w, 15.));
+                let rect = self.rect((x + label_w, y + 3. + n as f32 * pitch, w - label_w, pitch));
                 self.ui.label_aligned(
                     line,
                     (Face::Regular, 12., theme.text),

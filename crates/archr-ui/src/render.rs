@@ -46,6 +46,13 @@ use std::{
 mod system_art;
 use system_art::SystemArt;
 
+/// No text is drawn smaller than this many screen pixels, on any screen
+/// and at any text size: on a small screen the text keeps it while the
+/// design shrinks around it. The one exception is the MangoHud preview, a
+/// miniature of the game's overlay, which sets `Frame::floor` to 0 while
+/// it draws.
+const MIN_TEXT: i32 = 10;
+
 /// Screen pixels per reference pixel: the 640×480 design fits whole, so
 /// the same text keeps its size on screens of the same density.
 pub fn scale(width: u32, height: u32) -> f32 {
@@ -64,6 +71,8 @@ struct Frame {
     grid: f32,
     /// Smallest text, in reference pixels.
     min: f32,
+    /// Smallest text, in screen pixels (`MIN_TEXT`; 0 inside a miniature).
+    floor: i32,
     now: Instant,
     unix: u64,
 }
@@ -77,6 +86,7 @@ impl Frame {
             font: 1.,
             grid: 0.,
             min: 8.,
+            floor: MIN_TEXT,
             now: Instant::now(),
             unix: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -127,11 +137,24 @@ impl Frame {
         } else {
             size
         };
-        self.px(size).clamp(8, 128) as u16
+        // Nothing under the floor; a miniature (floor 0) shrinks with the
+        // screen from the 8 px it has at 640x480.
+        let least = if self.floor == 0 {
+            (8. * self.scale.min(1.)).round() as i32
+        } else {
+            self.floor
+        };
+        self.px(size).clamp(least, 128) as u16
     }
     /// The smallest size worth asking for, before the text multipliers.
     fn min_size(self) -> f32 {
-        self.min.max(8. / self.scale) / (self.text * self.font)
+        // Below the screen-pixel floor every size looks the same.
+        let floor = if self.floor == 0 {
+            8.
+        } else {
+            self.floor as f32
+        };
+        self.min.max(floor / self.scale) / (self.text * self.font)
     }
 }
 fn localized_error(catalog: &I18n, error: String) -> String {
@@ -996,7 +1019,13 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                     self.header(backdrop, cursor, data, theme, layout)?;
                 }
                 if matches!(app.screen, Screen::StartHub { .. }) {
-                    self.hub(app, data, theme)?;
+                    // The composition, 480 reference px high and as wide as
+                    // the theme's `start_area` (the whole screen unless a
+                    // theme says), centered in it; tiles may run to its edges.
+                    let area = self.area(theme.start_area);
+                    let wide = area.width() as f32 / self.frame.scale;
+                    self.staged_in(area, (wide, 480.), |ui| ui.hub(app, data, theme))?;
+                    self.hub_footer(theme)?;
                 } else {
                     let lifted = app.moving().is_some();
                     self.list(backdrop, (&rows, lifted), cursor, data, theme, layout)?;
@@ -1084,6 +1113,17 @@ impl<'font, 'texture> Ui<'font, 'texture> {
     /// whole screen. Anything the design does not reach keeps the background.
     fn staged<T>(
         &mut self,
+        size: (f32, f32),
+        draw: impl FnOnce(&mut Self) -> Result<T, String>,
+    ) -> Result<T, String> {
+        let screen = Rect::new(0, 0, self.frame.width, self.frame.height);
+        self.staged_in(screen, size, draw)
+    }
+    /// `staged`, centered in `area` (pixels of the current stage) instead
+    /// of the whole screen.
+    fn staged_in<T>(
+        &mut self,
+        area: Rect,
         (w, h): (f32, f32),
         draw: impl FnOnce(&mut Self) -> Result<T, String>,
     ) -> Result<T, String> {
@@ -1093,16 +1133,16 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             scale,
             ..
         } = self.frame;
-        let w = ((w * scale).round() as u32).clamp(1, width);
-        let h = ((h * scale).round() as u32).clamp(1, height);
-        if (w, h) == (width, height) {
+        let w = ((w * scale).round() as u32).clamp(1, area.width());
+        let h = ((h * scale).round() as u32).clamp(1, area.height());
+        if (area.x(), area.y(), w, h) == (0, 0, width, height) {
             return draw(self);
         }
         // Viewports are in screen pixels: a stage inside a stage adds up.
         let (x, y) = self.stage.map_or((0, 0), |outer| (outer.x(), outer.y()));
         let previous = self.stage.replace(Rect::new(
-            x + ((width - w) / 2) as i32,
-            y + ((height - h) / 2) as i32,
+            x + area.x() + ((area.width() - w) / 2) as i32,
+            y + area.y() + ((area.height() - h) / 2) as i32,
             w,
             h,
         ));
@@ -1893,6 +1933,13 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 HintButton::Start => [None, None],
             };
             let paired = buttons[1].is_some();
+            // The START badge holds its word, which the text floor may widen.
+            let start_w = if start {
+                self.px(45.)
+                    .max(self.measure("START", Face::Regular, 10.)? as i32 + self.px(10.))
+            } else {
+                0
+            };
             right = self.packed_label(
                 label,
                 (Face::Regular, 13., theme.muted),
@@ -1900,18 +1947,16 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 u32::MAX,
                 Align::Left,
             )? - self.px(6.)
-                - self.px(if start {
-                    45.
-                } else if paired {
-                    50.
+                - if start {
+                    start_w
                 } else {
-                    20.
-                });
+                    self.px(if paired { 50. } else { 20. })
+                };
             if start {
                 let badge = Rect::new(
                     right,
                     y + (h as i32 - self.px(20.)) / 2,
-                    self.px(45.) as u32,
+                    start_w as u32,
                     self.px(20.) as u32,
                 );
                 self.rounded(badge, self.px(5.) as f32, theme.badge, None)?;
@@ -1956,7 +2001,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                     self.look.outlining = outlining;
                     continue;
                 }
-                let size = self.px(11.).clamp(8, 128) as u16;
+                let size = self.px(11.).clamp(MIN_TEXT, 128) as u16;
                 self.text
                     .as_mut()
                     .ok_or_else(|| self.catalog.text("error.font_init"))?
@@ -2629,6 +2674,43 @@ fn font_paths(theme: &Theme, root: Option<&Path>, default: &Path) -> [Vec<PathBu
 mod tests {
     use super::*;
 
+    #[test]
+    fn no_text_under_ten_screen_pixels_at_any_size_or_scale() {
+        for (width, height) in [(640, 480), (720, 720), (480, 320)] {
+            for scale in [1., 0.5] {
+                let mut frame = Frame::new(width, height);
+                (frame.text, frame.font) = (scale, scale);
+                for size in [0., 6., 8., 9., 10., 12., 13., 15., 17., 22.] {
+                    let px = frame.font_size(size);
+                    assert!(px >= 10, "{width}x{height} x{scale} at {size}: {px} px");
+                }
+                assert!(frame.font_size(frame.min_size()) >= 10);
+            }
+            // At 640x480 sizes from 10 px up are drawn as they are asked.
+            assert_eq!(Frame::new(640, 480).font_size(13.), 13);
+        }
+        // The miniature, and only it, goes under the floor.
+        let mut miniature = Frame::new(480, 320);
+        miniature.floor = 0;
+        assert_eq!(miniature.font_size(12.), 8);
+        let sources = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut opt_outs = Vec::new();
+        let mut dirs = vec![sources];
+        while let Some(dir) = dirs.pop() {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    dirs.push(path);
+                } else if std::fs::read_to_string(&path)
+                    .unwrap()
+                    .contains(concat!("&mut self.ui.frame.", "floor, 0)"))
+                {
+                    opt_outs.push(path.file_stem().unwrap().to_string_lossy().into_owned());
+                }
+            }
+        }
+        assert_eq!(opt_outs, ["mangohud"]);
+    }
     #[test]
     fn tools_are_neither_systems_nor_games_in_the_library_summary() {
         struct Data(Vec<archr_index::cache::SystemEntry>);
