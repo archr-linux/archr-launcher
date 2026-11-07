@@ -271,8 +271,9 @@ impl Ui<'_, '_> {
         let Some(name) = rows.get(cursor) else {
             return Ok(());
         };
-        let height = self.frame.height as f32;
-        let panel = layout.panel.map(|p| (self.area(p.rect), p.radius * height));
+        let panel = layout
+            .panel
+            .map(|p| (self.area(p.rect), self.frame.size(p.radius)));
         if let Some((rect, radius)) = panel {
             self.panel(rect, radius, theme.surface, theme.border)?;
             self.canvas.set_clip_rect(rect);
