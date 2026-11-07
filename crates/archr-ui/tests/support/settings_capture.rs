@@ -59,6 +59,18 @@ fn pages() -> Vec<(&'static str, Settings)> {
     forget.confirm_forget = Some("Casa_5G".into());
     let mut connecting = wifi.clone();
     connecting.connecting = Some("Casa".into());
+    let mut rejoining = connecting.clone();
+    rejoining.rejoining = true;
+    let mut joined = wifi.clone();
+    joined.note(crate::settings::network::about(
+        "settings.wifi_joined",
+        "Casa",
+    ));
+    let mut rejoin_failed = wifi.clone();
+    rejoin_failed.fail(
+        None,
+        crate::settings::network::about("settings.wifi_rejoin_failed", "Casa"),
+    );
     let mut bluetooth = ready();
     bluetooth.values.insert(Id::BtSwitch, "1".into());
     bluetooth.bt = crate::settings::bluetooth::parse_devices(
@@ -445,6 +457,9 @@ fn pages() -> Vec<(&'static str, Settings)> {
         ("password", password),
         ("forget", forget),
         ("connecting", connecting),
+        ("wifi-rejoining", rejoining),
+        ("wifi-joined", joined),
+        ("wifi-rejoin-failed", rejoin_failed),
         ("bluetooth", bluetooth),
         ("bluetooth-forget", bt_forget),
         ("bluetooth-pairing", bt_pairing),

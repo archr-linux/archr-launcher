@@ -4,6 +4,7 @@ use archr_scraper::{Credentials, Engine, Job, Media, Options, Stop};
 use archr_ui::settings::network::{parse_scanlist, wpa_valid, Network};
 use archr_ui::settings::MEDIA;
 use std::os::unix::process::CommandExt;
+use std::sync::atomic::Ordering;
 
 /// wifictl's worst case: scan, connect, hidden-network retry and DHCP wait.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(150);
@@ -173,6 +174,41 @@ impl Backend {
         self.command("wifictl", &["forget", ssid])
             .map(|_| ())
             .map_err(wifi_error)
+    }
+    /// The saved network the Wi-Fi switch rejoins once on, unless netplay
+    /// owns the radio (its network is not the saved one).
+    pub(super) fn rejoin_target(&self) -> Option<String> {
+        let cfg = self.cfg().ok()?;
+        if cfg.get_setting("wifi.adhoc.enabled", None, None).as_deref() == Some("1") {
+            return None;
+        }
+        cfg.get_setting("wifi.ssid", None, None)
+            .filter(|ssid| !ssid.is_empty())
+    }
+    /// Joins the saved network with its saved key: two arguments, so wifictl
+    /// reads the key from system.cfg and never asks for it again. `cancel`
+    /// kills wifictl's whole process group.
+    pub(super) fn rejoin(&self, ssid: &str, cancel: &AtomicBool) -> Result<(), String> {
+        let Err(error) =
+            self.command_until("wifictl", &["connect", ssid], None, CONNECT_TIMEOUT, cancel)
+        else {
+            return Ok(());
+        };
+        if cancel.load(Ordering::Relaxed) {
+            return Err("settings.wifi_connect_failed".into());
+        }
+        if self.joined(ssid) {
+            log::warn!("Wi-Fi: rejoined {ssid:?} although {error}");
+            return Ok(());
+        }
+        match wifi_error(error) {
+            adapter if adapter == "settings.wifi_no_adapter" => Err(adapter),
+            // The profile and the key stay: only this attempt failed.
+            _ => Err(archr_ui::settings::network::about(
+                "settings.wifi_rejoin_failed",
+                ssid,
+            )),
+        }
     }
     /// Like boot's background reconnect: the reply and the scan never wait for it.
     fn reconnect_detached(&self) {
@@ -383,7 +419,13 @@ impl Backend {
                     )
                     .map_err(wifi_error)?;
                     self.save(id, value)?;
-                    if value == "1" && self.cfg()?.get_setting("wifi.ssid", None, None).is_some() {
+                    // The saved network is rejoined on the Wi-Fi lane, where the
+                    // page follows it (`rejoin`); a netplay network stays detached.
+                    let cfg = self.cfg()?;
+                    if value == "1"
+                        && cfg.get_setting("wifi.ssid", None, None).is_some()
+                        && cfg.get_setting("wifi.adhoc.enabled", None, None).as_deref() == Some("1")
+                    {
                         self.reconnect_detached();
                     }
                     Ok(value.into())
@@ -717,7 +759,7 @@ mod tests {
         );
     }
     #[test]
-    fn enabling_wifi_returns_before_the_background_reconnect_finishes() {
+    fn enabling_wifi_leaves_the_rejoin_to_the_wifi_lane_but_netplay_stays_detached() {
         let (root, paths) = fixture("wifi.ssid=Casa\n");
         recorder(
             &root,
@@ -725,7 +767,7 @@ mod tests {
             "wifictl",
             "[ \"$1\" = connect ] && sleep 3\nexit 0",
         );
-        let backend = Backend::new(paths);
+        let backend = Backend::new(paths.clone());
         let started = std::time::Instant::now();
         assert_eq!(
             backend.apply_page(Id::WifiSwitch, "1"),
@@ -733,7 +775,54 @@ mod tests {
         );
         assert!(started.elapsed() < Duration::from_secs(2));
         thread::sleep(Duration::from_millis(300));
+        assert_eq!(calls(&root), "wifictl enable\n");
+        assert_eq!(backend.rejoin_target().as_deref(), Some("Casa"));
+        // Netplay's network is not the saved one: boot's detached reconnect.
+        fs::write(&paths.config, "wifi.ssid=Casa\nwifi.adhoc.enabled=1\n").unwrap();
+        fs::remove_file(root.path().join("calls")).unwrap();
+        assert_eq!(
+            backend.apply_page(Id::WifiSwitch, "1"),
+            Some(Ok("1".into()))
+        );
+        assert!(started.elapsed() < Duration::from_secs(3));
+        thread::sleep(Duration::from_millis(300));
         assert_eq!(calls(&root), "wifictl enable\nwifictl connect\n");
+        assert_eq!(backend.rejoin_target(), None);
+        fs::write(&paths.config, "wifi.ssid=\n").unwrap();
+        assert_eq!(backend.rejoin_target(), None);
+    }
+    #[test]
+    fn a_rejoin_uses_the_saved_key_and_a_failure_says_it_is_still_saved() {
+        let (root, paths) = fixture("wifi.ssid=Casa\nwifi.key=12345678\n");
+        recorder(&root, &paths, "wifictl", "exit 1");
+        let backend = Backend::new(paths.clone());
+        assert_eq!(
+            backend.rejoin("Casa", &AtomicBool::new(false)),
+            Err("settings.wifi_rejoin_failed|name=Casa".into())
+        );
+        // Two arguments: wifictl takes the key from system.cfg.
+        assert_eq!(calls(&root), "wifictl connect Casa\n");
+        let saved = SystemCfg::load(&paths.config).unwrap();
+        assert_eq!(
+            saved.get_setting("wifi.ssid", None, None).as_deref(),
+            Some("Casa")
+        );
+        assert_eq!(
+            saved.get_setting("wifi.key", None, None).as_deref(),
+            Some("12345678")
+        );
+        recorder(
+            &root,
+            &paths,
+            "wifictl",
+            "echo 'wifictl: no WiFi interface' >&2\nexit 1",
+        );
+        assert_eq!(
+            backend.rejoin("Casa", &AtomicBool::new(false)),
+            Err("settings.wifi_no_adapter".into())
+        );
+        recorder(&root, &paths, "wifictl", "exit 0");
+        assert_eq!(backend.rejoin("Casa", &AtomicBool::new(false)), Ok(()));
     }
     #[test]
     fn keyboard_layout_clears_variant_in_one_sway_command_then_persists_through_script() {

@@ -362,6 +362,8 @@
 "settings.wifi_no_adapter" = "No Wi-Fi adapter found."
 "settings.wifi_timeout" = "The connection took too long."
 "settings.wifi_connect_failed" = "Could not connect. Check the password."
+"settings.wifi_joined" = "Connected to {name}"
+"settings.wifi_rejoin_failed" = "Could not connect to {name}. The password is still saved."
 "settings.wifi_unsupported" = "WEP and 802.1X networks are not supported here."
 "settings.password_of" = "Password for {name}"
 "settings.open_allowed" = "Empty for an open network"

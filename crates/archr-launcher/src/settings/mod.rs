@@ -22,7 +22,12 @@ use archr_config::SystemCfg;
 use archr_ui::settings::{Id, Information, Page, Settings};
 pub use runtime::Runtime;
 use std::{
-    collections::BTreeMap, fs, process::Command, sync::atomic::AtomicBool, sync::mpsc, thread,
+    collections::BTreeMap,
+    fs,
+    process::Command,
+    sync::atomic::{AtomicBool, Ordering},
+    sync::mpsc,
+    thread,
     time::Duration,
 };
 
@@ -117,16 +122,22 @@ impl Backend {
         input: Option<&[u8]>,
         timeout: Duration,
     ) -> Result<String, String> {
+        self.command_until(name, args, input, timeout, &AtomicBool::new(false))
+    }
+    /// A command whose process group is killed once `cancel` is set.
+    fn command_until(
+        &self,
+        name: &str,
+        args: &[&str],
+        input: Option<&[u8]>,
+        timeout: Duration,
+        cancel: &AtomicBool,
+    ) -> Result<String, String> {
         let mut command = self.tool(name);
         command.args(args);
-        let output = crate::process::capture_with_input(
-            &mut command,
-            input,
-            timeout,
-            &AtomicBool::new(false),
-            64 * 1024,
-        )
-        .map_err(|e| format!("{name}: {e}"))?;
+        let output =
+            crate::process::capture_with_input(&mut command, input, timeout, cancel, 64 * 1024)
+                .map_err(|e| format!("{name}: {e}"))?;
         if output.status.success() {
             String::from_utf8(output.stdout)
                 .map(|s| s.trim().to_owned())
@@ -391,6 +402,10 @@ pub(super) enum Work {
     BtScan,
     Bt(archr_ui::settings::bluetooth::Action, String),
     Connect(String, String),
+    /// The saved network after the Wi-Fi switch went on, for that switch
+    /// generation, on the Wi-Fi lane: the network is read when its turn
+    /// comes, and the flag cancels it (skipped, or wifictl killed).
+    Rejoin(u64, std::sync::Arc<AtomicBool>),
     Forget(String),
     Variants(String),
     Login(String, String),
@@ -438,6 +453,9 @@ enum Reply {
     BtScan(Result<Vec<archr_ui::settings::bluetooth::Device>, String>),
     Bt(Result<(), String>),
     Connect(Result<(), String>),
+    /// The rejoin started, with this saved network.
+    Rejoining(u64, String),
+    Rejoined(u64, String, Result<(), String>),
     Forget(Result<(), String>),
     Variants(Vec<(String, String)>),
     Login(Result<(String, usize), String>),
@@ -471,6 +489,9 @@ enum Reply {
 const SCAN_TIMEOUT: Duration = Duration::from_secs(45);
 pub struct Worker {
     tx: mpsc::Sender<Work>,
+    /// Joins and forgets, one at a time: never two wifictl connects at once,
+    /// and a slow join never holds the switch or any other setting.
+    wifi: mpsc::Sender<Work>,
     scans: mpsc::Sender<u64>,
     bt_scans: mpsc::Sender<()>,
     profiles: mpsc::Sender<()>,
@@ -488,6 +509,8 @@ pub struct Worker {
     bt_rescan: bool,
     /// Bumped on every Wi-Fi switch change; older scans' replies are stale.
     generation: u64,
+    /// Set when the switch changes: the rejoin queued or running stops.
+    rejoin: Option<std::sync::Arc<AtomicBool>>,
     /// Level holds sent and not answered: a renewal waits for none.
     pub(super) levels: usize,
 }
@@ -508,6 +531,38 @@ impl Worker {
         let (store_results, store_paths) = (results.clone(), paths.clone());
         let (slow, slow_requests) = mpsc::channel();
         let (slow_results, slow_paths) = (results.clone(), paths.clone());
+        let (wifi, wifi_requests) = mpsc::channel();
+        let (wifi_results, wifi_paths) = (results.clone(), paths.clone());
+        thread::Builder::new()
+            .name("launcher-wifi".into())
+            .spawn(move || {
+                let backend = Backend::new(wifi_paths);
+                while let Ok(work) = wifi_requests.recv() {
+                    let reply = match work {
+                        Work::Connect(ssid, password) => {
+                            Reply::Connect(backend.connect(&ssid, &password))
+                        }
+                        Work::Rejoin(generation, cancel) => {
+                            // Read now, after earlier joins and forgets: a
+                            // forgotten network is not rejoined.
+                            let target = backend.rejoin_target();
+                            let Some(ssid) = target.filter(|_| !cancel.load(Ordering::Relaxed))
+                            else {
+                                continue;
+                            };
+                            let _ = wifi_results.send(Reply::Rejoining(generation, ssid.clone()));
+                            let result = backend.rejoin(&ssid, &cancel);
+                            Reply::Rejoined(generation, ssid, result)
+                        }
+                        Work::Forget(ssid) => Reply::Forget(backend.forget(&ssid)),
+                        _ => unreachable!("only joins and forgets use the Wi-Fi lane"),
+                    };
+                    if wifi_results.send(reply).is_err() {
+                        break;
+                    }
+                }
+            })
+            .map_err(|e| e.to_string())?;
         // Reports, checksums and pacman take seconds to minutes.
         thread::Builder::new()
             .name("launcher-diag".into())
@@ -592,10 +647,9 @@ impl Worker {
                         Work::Usb => Reply::Usb(backend.usb()),
                         Work::Scan | Work::BtScan => unreachable!("scans have their own lane"),
                         Work::Bt(action, addr) => Reply::Bt(backend.bt_act(action, &addr)),
-                        Work::Connect(ssid, password) => {
-                            Reply::Connect(backend.connect(&ssid, &password))
+                        Work::Connect(..) | Work::Rejoin(..) | Work::Forget(_) => {
+                            unreachable!("joins have the Wi-Fi lane")
                         }
-                        Work::Forget(ssid) => Reply::Forget(backend.forget(&ssid)),
                         Work::Variants(layout) => {
                             Reply::Variants(backend.keyboard_names(&["list-variants", &layout]))
                         }
@@ -645,6 +699,7 @@ impl Worker {
             .map_err(|e| e.to_string())?;
         Ok(Self {
             tx,
+            wifi,
             scans,
             bt_scans,
             profiles,
@@ -659,6 +714,7 @@ impl Worker {
             bt_scanning: false,
             bt_rescan: false,
             generation: 0,
+            rejoin: None,
             levels: 0,
         })
     }
@@ -714,8 +770,17 @@ impl Worker {
         if let Some(slow) = slow {
             return self.slow.send(slow).map_err(|e| e.to_string());
         }
+        if let Work::Rejoin(_, cancel) = &work {
+            self.rejoin = Some(cancel.clone());
+            return self.wifi.send(work).map_err(|e| e.to_string());
+        }
+        if matches!(work, Work::Connect(..) | Work::Forget(_)) {
+            self.wifi.send(work).map_err(|e| e.to_string())?;
+            self.pending += 1;
+            return Ok(());
+        }
         if matches!(work, Work::Set(Id::WifiSwitch, _)) {
-            self.generation += 1;
+            self.switched();
         }
         if matches!(work, Work::Level(..)) {
             self.levels += 1;
@@ -723,6 +788,26 @@ impl Worker {
         self.tx.send(work).map_err(|e| e.to_string())?;
         self.pending += 1;
         Ok(())
+    }
+    /// The Wi-Fi switch changed: older scans and the rejoin are stale.
+    fn switched(&mut self) {
+        self.generation += 1;
+        if let Some(cancel) = self.rejoin.take() {
+            cancel.store(true, Ordering::Relaxed);
+        }
+    }
+    /// A join's outcome: a brief confirmation and a fresh list, or the failure.
+    fn joined(&mut self, state: &mut Settings, ssid: &str, result: Result<(), String>) {
+        match result {
+            Ok(()) => {
+                state.note(archr_ui::settings::network::about(
+                    "settings.wifi_joined",
+                    ssid,
+                ));
+                let _ = self.send(Work::Scan);
+            }
+            Err(error) => state.fail(None, error),
+        }
     }
     /// Arrival order is not state order: the daemon owns the version.
     fn apply_level(&mut self, state: &mut Settings, id: Id, reading: &levels::Reading) -> bool {
@@ -774,6 +859,8 @@ impl Worker {
                 Reply::CheevosProfile(_)
                     | Reply::Store(_)
                     | Reply::Facts(_)
+                    | Reply::Rejoining(..)
+                    | Reply::Rejoined(..)
                     | Reply::Diag(_)
                     | Reply::Report(_)
                     | Reply::Bios(_)
@@ -826,7 +913,7 @@ impl Worker {
                 }
                 Reply::Set(id, result) => {
                     if id == Id::WifiSwitch {
-                        self.generation += 1;
+                        self.switched();
                     }
                     if let Err(error) = &result {
                         log::warn!("Setting {id:?} failed: {error}");
@@ -870,6 +957,9 @@ impl Worker {
                     match wifi {
                         Some(true) => {
                             let _ = self.send(Work::Scan);
+                            // The Wi-Fi lane rejoins the saved network, if any.
+                            let cancel = std::sync::Arc::new(AtomicBool::new(false));
+                            let _ = self.send(Work::Rejoin(self.generation, cancel));
                         }
                         Some(false) => {
                             state.networks.clear();
@@ -990,7 +1080,28 @@ impl Worker {
                         Err(error) => state.fail(None, error),
                     }
                 }
-                Reply::Connect(result) | Reply::Forget(result) => {
+                Reply::Connect(result) => {
+                    let ssid = state.connecting.take().unwrap_or_default();
+                    self.joined(state, &ssid, result);
+                }
+                // Switched since (off, or off and on again): not this join's page.
+                Reply::Rejoining(generation, _) | Reply::Rejoined(generation, ..)
+                    if generation != self.generation => {}
+                Reply::Rejoining(_, ssid) => {
+                    if state.connecting.is_none() {
+                        state.connecting = Some(ssid);
+                        state.rejoining = true;
+                    }
+                }
+                Reply::Rejoined(_, ssid, result) => {
+                    self.rejoin = None;
+                    if state.rejoining {
+                        state.connecting = None;
+                        state.rejoining = false;
+                    }
+                    self.joined(state, &ssid, result);
+                }
+                Reply::Forget(result) => {
                     state.connecting = None;
                     match result {
                         Ok(()) => {

@@ -362,6 +362,8 @@
 "settings.wifi_no_adapter" = "Адаптер Wi-Fi не найден."
 "settings.wifi_timeout" = "Подключение заняло слишком много времени."
 "settings.wifi_connect_failed" = "Не удалось подключиться. Проверьте пароль."
+"settings.wifi_joined" = "Подключено к {name}"
+"settings.wifi_rejoin_failed" = "Не удалось подключиться к {name}. Пароль сохранён."
 "settings.wifi_unsupported" = "Сети WEP и 802.1X здесь не поддерживаются."
 "settings.password_of" = "Пароль для {name}"
 "settings.open_allowed" = "Пусто для открытой сети"
