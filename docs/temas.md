@@ -96,8 +96,14 @@ cores, fontes e ícones.
 
 ## Medidas gerais
 
-Frações da tela: alturas, raios e tamanhos de fonte são frações da **altura**
-(480 px de referência); larguras e `x`, da **largura** (640 px).
+Há dois tipos de número. **Tamanhos** (fontes, alturas de linha, de
+cabeçalho e de rodapé, raios, `margin`) são frações de **480 px de
+referência**: `0.035416667` é 17 px numa tela de 640×480 e cresce ou
+encolhe com a tela, como todo o resto. **Retângulos** (`x y w h`) são
+frações da **tela**: `x` e `w` da largura, `y` e `h` da altura. Numa tela
+de outro formato os retângulos esticam com ela e os tamanhos não, então
+cabem mais linhas numa tela alta; veja [Telas de outros
+tamanhos](#telas-de-outros-tamanhos).
 
 ```toml
 font_size = 0.035416667      # 17 px
@@ -115,6 +121,52 @@ cover = { x = 0.640625, y = 0.1125, w = 0.328125, h = 0.583333333 }
 ```
 
 Essas medidas montam a visualização clássica, `lista`.
+
+## Telas de outros tamanhos
+
+O launcher roda em 640×480 (4:3), 720×720 (1:1, R36 Plus) e 480×320 (3:2,
+Odroid Go Advance, RGB10, RG351M; o painel é retrato e o launcher o
+desenha girado). O desenho de 640×480 é ampliado ou reduzido até caber
+inteiro: a escala é a menor entre largura/640 e altura/480, e o texto fica
+do mesmo tamanho físico em telas da mesma densidade. A sobra vai para o
+lado mais longo: a tela vale 640×640 px de referência em 720×720 e 720×480
+em 480×320.
+
+Sem nada no tema, os retângulos esticam com a tela. Para mudar o layout de
+um formato, use uma tabela `[aspect.<formato>]`:
+
+| formato | telas |
+|---|---|
+| `square` | até 6:5 (720×720) |
+| `classic` | entre 6:5 e 29:20 (640×480) |
+| `wide` | de 29:20 em diante (480×320, 16:9) |
+
+Tudo que vale no topo do `theme.toml` vale dentro dela, inclusive
+`[view.*]`, e ela se aplica por cima do próprio arquivo, chave por chave:
+tabelas (visualizações, `list`, `art`...) se misturam campo a campo; outro
+valor substitui. Um retângulo do topo (`cover`, `details_*`, `switcher_*`)
+vem inteiro, com os quatro campos. A ordem é: tema padrão, `[aspect]` do
+padrão, o seu tema, o `[aspect]` do seu tema; o que o seu tema escreve no
+topo vale também nos outros formatos, a menos que a tabela do formato o
+mude.
+
+```toml
+# Num aparelho quadrado, a lista de jogos mais estreita e a capa mais alta.
+[aspect.square.view.lista.games]
+list = { w = 0.5 }
+art = { x = 0.55, w = 0.4, h = 0.7 }
+
+[aspect.square]
+switcher_card = { x = 0.1875, y = 0.1, w = 0.625, h = 0.46875 }
+```
+
+O tema padrão usa `[aspect.square]` para manter em 4:3 as imagens do
+Alternador e da retomada. As Configurações não mudam com o tema: têm 640 px
+de referência de largura, centradas numa tela mais larga, e ganham linhas
+numa tela mais alta.
+
+Para ver um tema em outro tamanho no PC, as capturas de teste aceitam
+`ARCHR_CAPTURE_SIZE=720x720` (veja `crates/archr-ui/tests/support/`).
 
 ## Estilo
 
@@ -287,7 +339,8 @@ chaves `details_*` ficam no topo do `theme.toml` e valem para todas as
 visualizações.
 
 Cada valor é `{ x, y, w, h }`: `x` e `w` são frações da largura da tela,
-`y` e `h` frações da altura (referência 640×480). O retângulo precisa caber
+`y` e `h` frações da altura (referência 640×480; outros formatos em
+[Telas de outros tamanhos](#telas-de-outros-tamanhos)). O retângulo precisa caber
 na tela (`x + w <= 1`, `y + h <= 1`); um valor inválido volta ao padrão.
 
 | chave | conteúdo |
