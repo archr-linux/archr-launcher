@@ -45,7 +45,7 @@ impl Ui<'_, '_> {
         step: u32,
         theme: &Theme,
     ) -> Result<(), String> {
-        self.frame = Frame::from_size(self.canvas.output_size()?);
+        self.frame = Frame::from_size(self.size);
         (self.frame.font, self.frame.grid, self.frame.min) =
             (theme.font_scale, theme.font_grid, theme.font_min);
         if let Some(status) = &mut self.status {
@@ -56,7 +56,7 @@ impl Ui<'_, '_> {
         self.canvas.clear();
         self.roms_move(view, step, theme)?;
         self.capture()?;
-        self.canvas.present();
+        self.present()?;
         if let Some(status) = &mut self.status {
             status.start();
         }

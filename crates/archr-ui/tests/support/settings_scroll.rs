@@ -3,10 +3,22 @@ use super::*;
 fn variable_heights_keep_selection_and_section_visible_and_snap_on_page_change() {
     let now = Instant::now();
     let mut scroll = Scroll::default();
-    assert_eq!(scroll.offset(Page::System, 50., 90., 600., now), 0.);
-    assert_eq!(scroll.offset(Page::System, 533., 579., 600., now), 0.);
+    assert_eq!(
+        scroll.offset(Page::System, 50., 90., (600., VIEW_BOTTOM), now),
+        0.
+    );
+    assert_eq!(
+        scroll.offset(Page::System, 533., 579., (600., VIEW_BOTTOM), now),
+        0.
+    );
     assert!(scroll.tween.active(now));
-    let settled = scroll.offset(Page::System, 533., 579., 600., now + crate::motion::SELECT);
+    let settled = scroll.offset(
+        Page::System,
+        533.,
+        579.,
+        (600., VIEW_BOTTOM),
+        now + crate::motion::SELECT,
+    );
     assert_eq!(settled, 151.);
     assert!(533. - settled >= VIEW_TOP && 579. - settled <= VIEW_BOTTOM);
     let section = Placement {
@@ -22,19 +34,25 @@ fn variable_heights_keep_selection_and_section_visible_and_snap_on_page_change()
         Page::System,
         section.selected_top(),
         section.bottom(),
-        600.,
+        (600., VIEW_BOTTOM),
         now,
     );
     assert_eq!(
         scroll.tween.target, 109.,
         "scrolling up reveals the section header"
     );
-    assert_eq!(scroll.offset(Page::Region, 533., 579., 600., now), 151.);
+    assert_eq!(
+        scroll.offset(Page::Region, 533., 579., (600., VIEW_BOTTOM), now),
+        151.
+    );
     assert!(
         !scroll.tween.active(now),
         "page changes snap to the selected row, not zero"
     );
-    assert_eq!(scroll.offset(Page::Sound, 50., 90., 90., now), 0.);
+    assert_eq!(
+        scroll.offset(Page::Sound, 50., 90., (90., VIEW_BOTTOM), now),
+        0.
+    );
 }
 #[test]
 fn a_note_under_the_selected_row_scrolls_into_view_with_it() {
@@ -47,7 +65,13 @@ fn a_note_under_the_selected_row_scrolls_into_view_with_it() {
     };
     let mut scroll = Scroll::default();
     let now = Instant::now();
-    scroll.offset(Page::Services, row.selected_top(), row.end(), 700., now);
+    scroll.offset(
+        Page::Services,
+        row.selected_top(),
+        row.end(),
+        (700., VIEW_BOTTOM),
+        now,
+    );
     assert_eq!(scroll.tween.target, row.end() - VIEW_BOTTOM);
 }
 #[test]
@@ -124,7 +148,7 @@ fn capture_long_page_scrolled_in_both_languages() {
             Page::System,
             last.selected_top(),
             last.bottom(),
-            last.bottom(),
+            (last.bottom(), VIEW_BOTTOM),
             ui.frame.now,
         );
         ui.settings_scroll.tween.snap();

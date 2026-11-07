@@ -234,7 +234,7 @@ impl Ui<'_, '_> {
             let systems = &view.systems;
             let art = systems.art.map(|a| self.area(a.rect));
             let tile = (systems.list.mark == crate::layout::Mark::Tile)
-                .then_some((systems.list.selected * self.frame.height as f32) as u32);
+                .then_some(self.frame.size(systems.list.selected) as u32);
             for (w, h) in art
                 .map(|r| (r.width(), r.height()))
                 .into_iter()
@@ -329,7 +329,7 @@ impl Ui<'_, '_> {
         theme: &Theme,
         list: &List,
     ) -> Result<(), String> {
-        let Frame { height, now, .. } = self.frame;
+        let Frame { now, .. } = self.frame;
         let area = self.area(list.rect);
         if self.list.key != "@tiles" {
             self.list.key = "@tiles".into();
@@ -355,7 +355,7 @@ impl Ui<'_, '_> {
             art.want(&nearby(rows, cursor, 2));
         }
         let at = self.list.pill.value(now);
-        let [small, big, gap] = [list.row, list.selected, list.gap].map(|v| v * height as f32);
+        let [small, big, gap] = [list.row, list.selected, list.gap].map(|v| self.frame.size(v));
         let reach = big / 2. + gap + small / 2.;
         let (cx, cy) = (area.center().x() as f32, area.center().y() as f32);
         let span = (area.width() as f32 / (small + gap)).ceil() as usize / 2 + 2;
@@ -386,7 +386,7 @@ impl Ui<'_, '_> {
                 side.round().max(1.) as u32,
                 side.round().max(1.) as u32,
             );
-            let radius = list.radius * height as f32 * side / big;
+            let radius = self.frame.size(list.radius) * side / big;
             let fill = mix(theme.surface, theme.surface_elevated, focus);
             if i == cursor && lifted {
                 self.rounded(

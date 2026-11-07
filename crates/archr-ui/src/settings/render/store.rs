@@ -162,7 +162,7 @@ impl View<'_, '_, '_> {
         let first = row.saturating_sub(1) * COLUMNS;
         // A third row peeks under the second, clipped above the footer.
         let previous = self.ui.canvas.clip_rect();
-        let clip = self.rect((0., GRID_TOP - 2., 640., FOOTER - GRID_TOP + 2.));
+        let clip = self.rect((0., GRID_TOP - 2., 640., self.footer_top() - GRID_TOP + 2.));
         self.ui.canvas.set_clip_rect(clip);
         let drawn = (|| {
             for (n, card) in cards.iter().enumerate().skip(first).take(COLUMNS * 3) {

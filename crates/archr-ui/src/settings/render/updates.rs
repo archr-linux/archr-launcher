@@ -184,7 +184,7 @@ impl View<'_, '_, '_> {
             self.paragraph((x, y + 2., w), &self.tr("updates.no_packages"))?;
             y += 24.;
         }
-        let limit = VIEW_BOTTOM - NOTES_ROOM;
+        let limit = self.view_bottom() - NOTES_ROOM;
         for (n, package) in packages.iter().enumerate() {
             let height = 23.;
             // The last line left says how many more Y lists.
@@ -210,7 +210,7 @@ impl View<'_, '_, '_> {
         }
         let width = self.rect((x, y, w, 1.)).width();
         let mut lines = self.lines(news, 12., width)?;
-        let room = ((VIEW_BOTTOM - y) / 17.).floor().max(1.) as usize;
+        let room = ((self.view_bottom() - y) / 17.).floor().max(1.) as usize;
         let cut = lines.len() > room;
         lines.truncate(if cut { room - 1 } else { room });
         for (n, line) in lines.iter().enumerate() {
@@ -494,7 +494,7 @@ impl View<'_, '_, '_> {
             box_lines.len() as f32 * 14. + 16. + 12.
         };
         let total = 56. + 12. + 26. + 12. + body_height + 12. + box_height + 6. + 38.;
-        let mut y = (44. + (FOOTER - 44. - total) / 2.).round();
+        let mut y = (44. + (self.footer_top() - 44. - total) / 2.).round();
         let mark = self.rect((292., y, 56., 56.));
         self.ui
             .rounded(mark, mark.height() as f32 / 2., self.tinted(ink), None)?;

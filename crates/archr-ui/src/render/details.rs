@@ -167,7 +167,7 @@ impl Ui<'_, '_> {
     /// "Trail /" in muted 13 px, then the current place in 15 px semibold.
     pub(super) fn crumbs(&mut self, trail: &str, game: &str, theme: &Theme) -> Result<(), String> {
         let right = self.status_header(theme)?;
-        let h = (theme.header_height * self.frame.height as f32).round() as u32;
+        let h = self.frame.size(theme.header_height).round() as u32;
         let pad = self.px(24.);
         let gap = self.px(8.);
         let available = (right - self.px(16.) - pad).max(1);

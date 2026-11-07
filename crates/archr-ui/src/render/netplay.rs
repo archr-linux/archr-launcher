@@ -56,7 +56,7 @@ impl Ui<'_, '_> {
         if let Some(room) = lobby.rooms.get(lobby.cursor) {
             self.room_panel(room, theme)?;
         }
-        let footer = self.px(432.);
+        let footer = self.px(self.frame.reference().1 - 48.);
         self.divider(0, footer, self.frame.width, theme.border)?;
         let note = if lobby.loading && !lobby.rooms.is_empty() {
             Some("loading")
@@ -67,7 +67,7 @@ impl Ui<'_, '_> {
             self.label(
                 &self.catalog.text(key),
                 (Face::Regular, 13., theme.muted),
-                self.at((24., 432., 300., 48.)),
+                self.at((24., self.frame.reference().1 - 48., 300., 48.)),
             )?;
         }
         if let Some(selected) = lobby.menu {
@@ -133,7 +133,7 @@ impl Ui<'_, '_> {
         if selected {
             self.rounded(
                 rect,
-                theme.radius_item * self.frame.height as f32,
+                self.frame.size(theme.radius_item),
                 theme.highlight_bg,
                 None,
             )?;
@@ -192,7 +192,7 @@ impl Ui<'_, '_> {
         let outer = self.at((410., 48., 210., 202.));
         self.rounded(
             outer,
-            theme.radius_card * self.frame.height as f32,
+            self.frame.size(theme.radius_card),
             theme.surface,
             Some(theme.border),
         )?;
@@ -280,7 +280,7 @@ impl Ui<'_, '_> {
             if on {
                 self.rounded(
                     row,
-                    theme.radius_item * self.frame.height as f32,
+                    self.frame.size(theme.radius_item),
                     theme.highlight_bg,
                     None,
                 )?;
@@ -301,7 +301,7 @@ impl Ui<'_, '_> {
             )?;
         }
         let height = self.frame.height;
-        let footer = (theme.footer_height * height as f32).round().max(1.) as u32;
+        let footer = self.frame.size(theme.footer_height).round().max(1.) as u32;
         self.hints(
             &[('A', "hint.choose"), ('B', "hint.close")],
             theme,

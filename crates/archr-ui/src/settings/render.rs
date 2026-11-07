@@ -160,15 +160,15 @@ impl Scroll {
         page: Page,
         selected_top: f32,
         selected_bottom: f32,
-        content_bottom: f32,
+        (content_bottom, view_bottom): (f32, f32),
         now: Instant,
     ) -> f32 {
         let changed = self.page != Some(page);
         let previous = if changed { 0. } else { self.tween.target };
         let target = previous
             .min(selected_top - VIEW_TOP)
-            .max(selected_bottom - VIEW_BOTTOM)
-            .clamp(0., (content_bottom - VIEW_BOTTOM).max(0.));
+            .max(selected_bottom - view_bottom)
+            .clamp(0., (content_bottom - view_bottom).max(0.));
         self.tween.retarget(target, now);
         if changed {
             self.tween.snap();
@@ -260,10 +260,24 @@ impl Ui<'_, '_> {
             self.settings_scroll.tween.retarget(0., self.frame.now);
             self.settings_scroll.tween.snap();
         }
-        View { ui: self, theme }.draw(state)
+        // The 640-wide design, centered on a wider screen; a taller one
+        // gives the page more rows.
+        let tall = self.frame.reference().1;
+        self.staged((640., tall), |ui| View { ui, theme }.draw(state))
     }
 }
 impl View<'_, '_, '_> {
+    /// The bottom of the screen in reference pixels: 480, more on a taller screen.
+    fn bottom(&self) -> f32 {
+        self.ui.frame.reference().1
+    }
+    /// Where scrolled rows stop and the footer starts.
+    fn view_bottom(&self) -> f32 {
+        VIEW_BOTTOM + self.bottom() - 480.
+    }
+    fn footer_top(&self) -> f32 {
+        FOOTER + self.bottom() - 480.
+    }
     /// The one check box of the settings pages: an accent box with a tick
     /// when on, a thin ring over `back` when off.
     fn checkbox(
@@ -791,7 +805,7 @@ impl View<'_, '_, '_> {
                 (13., fade(self.theme.text), Align::Left),
             )?;
         }
-        let footer = FOOTER;
+        let footer = self.footer_top();
         self.ui.divider(
             0,
             self.ui.px(footer),
@@ -801,7 +815,7 @@ impl View<'_, '_, '_> {
         let (width, y, h) = (
             self.ui.frame.width,
             self.ui.px(footer),
-            self.ui.px(480. - footer) as u32,
+            self.ui.px(self.bottom() - footer) as u32,
         );
         let left = match self.module_hints(state) {
             Some(labels) => self.ui.hint_labels(&labels, self.theme, width, y, h)?,
@@ -1107,16 +1121,17 @@ impl View<'_, '_, '_> {
             // A list under something fixed keeps the selection below it.
             selected.selected_top() - (top - VIEW_TOP),
             selected.end(),
-            bottom,
+            (bottom, self.view_bottom()),
             self.ui.frame.now,
         );
         self.ui
             .canvas
-            .set_clip_rect(self.rect((16., top, right - 16., VIEW_BOTTOM - top)));
+            .set_clip_rect(self.rect((16., top, right - 16., self.view_bottom() - top)));
         let result = (|| {
             for (n, position) in positions.iter().enumerate() {
                 let y = position.top - offset;
-                if position.end() - offset < top || position.selected_top() - offset >= VIEW_BOTTOM
+                if position.end() - offset < top
+                    || position.selected_top() - offset >= self.view_bottom()
                 {
                     continue;
                 }

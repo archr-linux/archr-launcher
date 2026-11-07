@@ -80,7 +80,7 @@ impl View<'_, '_, '_> {
     /// above the footer instead of being cut.
     fn roms_note(&mut self, top: f32, (title, key): (&str, &str)) -> Result<(), String> {
         let (x, width) = (20., RIGHT - 24.);
-        let height = VIEW_BOTTOM - top;
+        let height = self.view_bottom() - top;
         if height < 48. {
             return Ok(());
         }

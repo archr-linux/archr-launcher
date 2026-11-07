@@ -46,6 +46,12 @@ use std::{
 mod system_art;
 use system_art::SystemArt;
 
+/// Screen pixels per reference pixel: the 640×480 design fits whole, so
+/// the same text keeps its size on screens of the same density.
+pub fn scale(width: u32, height: u32) -> f32 {
+    (width as f32 / 640.).min(height as f32 / 480.)
+}
+
 #[derive(Clone, Copy)]
 struct Frame {
     width: u32,
@@ -66,7 +72,7 @@ impl Frame {
         Self {
             width,
             height,
-            scale: height as f32 / 480.,
+            scale: scale(width, height),
             text: 1.,
             font: 1.,
             grid: 0.,
@@ -80,6 +86,18 @@ impl Frame {
     }
     fn from_size((width, height): (u32, u32)) -> Self {
         Self::new(width, height)
+    }
+    /// Pixels of a theme size: a fraction of the 480 px reference height.
+    fn size(self, fraction: f32) -> f32 {
+        fraction * 480. * self.scale
+    }
+    /// The screen in reference pixels: at least 640×480, the longer side
+    /// growing with the screen's shape (640×640 on a square screen).
+    fn reference(self) -> (f32, f32) {
+        (
+            self.width as f32 / self.scale,
+            self.height as f32 / self.scale,
+        )
     }
     fn px(self, value: f32) -> i32 {
         (value * self.scale).round().max(1.) as i32
@@ -373,6 +391,8 @@ pub struct Ui<'font, 'texture> {
     look: look::Look<'texture>,
     has_presented: bool,
     frame: Frame,
+    /// The screen as drawn.
+    size: (u32, u32),
     pub catalog: I18n,
     pub loading: bool,
     pub banner: Option<String>,
@@ -433,6 +453,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         }
         let window = builder.build().map_err(|e| e.to_string())?;
         startup_phase!(trace, "window creation");
+        let size = window.drawable_size();
         let renderer = window.into_canvas();
         let mut canvas = if video.current_video_driver() == "dummy" {
             renderer.software()
@@ -483,7 +504,8 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             effects: effects::Effects::default(),
             look: look::Look::default(),
             has_presented: false,
-            frame: Frame::new(width, height),
+            frame: Frame::new(size.0, size.1),
+            size,
             catalog: I18n::default(),
             loading: false,
             banner: None,
@@ -524,7 +546,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         mut prepared: PreparedText<'font>,
         root: Option<&Path>,
     ) -> Result<(), String> {
-        self.frame = Frame::from_size(self.canvas.output_size()?);
+        self.frame = Frame::from_size(self.size);
         self.frame.text = self.text_scale;
         self.creator = Some(creator);
         self.root = root.map(Path::to_path_buf);
@@ -874,12 +896,14 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         let browsing = self.lobby.is_none() && self.moonlight.is_none() && settings.is_none();
         self.look(theme, browsing);
         if let Some(lobby) = self.lobby.take() {
-            let drawn = self.lobby_page(&lobby, theme);
+            let tall = self.frame.reference().1;
+            let drawn = self.staged((640., tall), |ui| ui.lobby_page(&lobby, theme));
             self.lobby = Some(lobby);
             drawn?;
             self.animating = false;
         } else if let Some(moonlight) = self.moonlight.take() {
-            let result = self.moonlight_page(&moonlight, theme);
+            let tall = self.frame.reference().1;
+            let result = self.staged((640., tall), |ui| ui.moonlight_page(&moonlight, theme));
             self.moonlight = Some(moonlight);
             result?;
             self.animating = false;
@@ -1036,7 +1060,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         self.animating |= self.effects.active(now);
         self.capture()?;
         startup_phase!(self.startup, "first frame draw");
-        self.canvas.present();
+        self.present()?;
         self.has_presented = true;
         if self.startup.began().is_some() {
             self.startup.phase_once("first present");
@@ -1048,6 +1072,41 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             status.start();
         }
         Ok(())
+    }
+    /// The screen as drawn, in pixels.
+    pub fn size(&self) -> (u32, u32) {
+        self.size
+    }
+    fn present(&mut self) -> Result<(), String> {
+        self.canvas.present();
+        Ok(())
+    }
+    /// Runs `draw` for a composition designed `w`×`h` reference pixels,
+    /// centered on a screen with more room, which it then sees as the
+    /// whole screen. Anything the design does not reach keeps the background.
+    fn staged<T>(
+        &mut self,
+        (w, h): (f32, f32),
+        draw: impl FnOnce(&mut Self) -> Result<T, String>,
+    ) -> Result<T, String> {
+        let Frame {
+            width,
+            height,
+            scale,
+            ..
+        } = self.frame;
+        let w = ((w * scale).round() as u32).clamp(1, width);
+        let h = ((h * scale).round() as u32).clamp(1, height);
+        if (w, h) == (width, height) {
+            return draw(self);
+        }
+        let area = Rect::new(((width - w) / 2) as i32, ((height - h) / 2) as i32, w, h);
+        self.canvas.set_viewport(area);
+        (self.frame.width, self.frame.height) = (w, h);
+        let drawn = draw(self);
+        (self.frame.width, self.frame.height) = (width, height);
+        self.canvas.set_viewport(None);
+        drawn
     }
     /// Explicit debug readback; normal rendering does no disk I/O.
     fn capture(&mut self) -> Result<(), String> {
@@ -1062,8 +1121,8 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             .map_err(|e| e.to_string())
     }
     fn status_header(&mut self, theme: &Theme) -> Result<i32, String> {
-        let Frame { width, height, .. } = self.frame;
-        let h = (theme.header_height * height as f32).round() as u32;
+        let Frame { width, .. } = self.frame;
+        let h = self.frame.size(theme.header_height).round() as u32;
         let pad = self.px(24.);
         let status = self
             .status
@@ -1134,7 +1193,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         } else {
             self.frame.width as i32 - pad
         };
-        let h = (theme.header_height * self.frame.height as f32).round() as u32;
+        let h = self.frame.size(theme.header_height).round() as u32;
         if let Screen::Games { system } = screen {
             let title = system_title(system, data, &self.catalog);
             let total = data.games(system).len();
@@ -1221,12 +1280,12 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 false,
             ),
         };
-        let Frame { height, now, .. } = self.frame;
+        let Frame { now, .. } = self.frame;
         let area = self.area(l.rect);
         let (top, bottom, margin, list_width) = (area.y(), area.bottom(), area.x(), area.width());
         // Games never use tiles; such a theme gets the pill.
         let pill = l.mark != Mark::Bar;
-        let [row, selected, gap] = [l.row, l.selected, l.gap].map(|h| (h * height as f32).round());
+        let [row, selected, gap] = [l.row, l.selected, l.gap].map(|h| self.frame.size(h).round());
         let extra = selected - row;
         let separator = if collections > 0 {
             self.px(15.) as f32
@@ -1290,7 +1349,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         }
         // A lifted row sits slightly right of the list, in an outline.
         let lift = if lifted { self.px(6.) } else { 0 };
-        let radius = l.radius * height as f32;
+        let radius = self.frame.size(l.radius);
         let mark_y = top + (self.list.pill.value(now) - offset).round() as i32;
         if len > 0 && lifted {
             let pill = Rect::new(
@@ -1509,13 +1568,13 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         cover: Option<&Texture<'_>>,
         layout: &Layout,
     ) -> Result<(), String> {
-        let Frame { height, now, .. } = self.frame;
+        let Frame { now, .. } = self.frame;
         if let Some(panel) = layout.panel {
             let rect = self.area(panel.rect);
             self.panel_named(
                 "art",
                 rect,
-                panel.radius * height as f32,
+                self.frame.size(panel.radius),
                 (theme.surface, theme.border),
             )?;
         }
@@ -1564,7 +1623,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                     &mut self.canvas,
                     cover,
                     dst,
-                    art.radius * height as f32,
+                    self.frame.size(art.radius),
                     (self.cover_fade.value(now) * 255.).round() as u8,
                     part,
                 )?;
@@ -1648,7 +1707,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         layout: &Layout,
     ) -> Result<(), String> {
         let height = self.frame.height;
-        let h = (theme.footer_height * height as f32).round().max(1.) as u32;
+        let h = self.frame.size(theme.footer_height).round().max(1.) as u32;
         let y = height as i32 - h as i32;
         self.look.outlining = true;
         let drawn = self.footer_hints(app, data, theme, layout, (y, h));
@@ -1940,7 +1999,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         );
         self.panel(
             panel,
-            theme.radius_card * height as f32,
+            self.frame.size(theme.radius_card),
             theme.surface_elevated,
             theme.border,
         )?;
@@ -1953,7 +2012,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         })?;
         // Above the scrim and in place: they replace the footer's own hints.
         let Frame { width, height, .. } = self.frame;
-        let footer = (theme.footer_height * height as f32).round().max(1.) as u32;
+        let footer = self.frame.size(theme.footer_height).round().max(1.) as u32;
         self.hints(
             &[('A', "hint.choose"), ('B', "hint.close")],
             theme,
@@ -1969,7 +2028,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         data: &dyn DataSource,
         theme: &Theme,
     ) -> Result<(), String> {
-        let Frame { height, now, .. } = self.frame;
+        let Frame { now, .. } = self.frame;
         let items = app.quick_menu_items(data);
         // Rows with a value are taller: the core's, and MangoHud's subtitle.
         let extra = |item: &QuickItem| match item {
@@ -2048,7 +2107,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         );
         self.rounded(
             pill,
-            theme.radius_item * height as f32,
+            self.frame.size(theme.radius_item),
             theme.highlight_bg,
             None,
         )?;
@@ -2354,8 +2413,7 @@ pub fn prepare_first_frame<'font>(
     let list = &view.systems.list;
     let area = pixels(list.rect, width, height);
     let (top, bottom, margin, list_width) = (area.y(), area.bottom(), area.x(), area.width());
-    let [row, selected, gap] =
-        [list.row, list.selected, list.gap].map(|h| (h * height as f32).round());
+    let [row, selected, gap] = [list.row, list.selected, list.gap].map(|h| frame.size(h).round());
     let inset = if list.mark == Mark::Pill {
         frame.px(14.)
     } else {
@@ -2428,7 +2486,9 @@ pub fn prepare_first_frame<'font>(
             prepared.measure(text, face, frame.font_size(size))
         })?;
         // As the list draws it: wrapped when too long and the row holds two lines.
-        let rh = (if i == 0 { list.selected } else { list.row } * frame.height as f32).round();
+        let rh = frame
+            .size(if i == 0 { list.selected } else { list.row })
+            .round();
         let lines = if !fits && rh >= 2. * f32::from(frame.font_size(size)) {
             system_art::wrap(title, width, |text| {
                 prepared.measure(text, face, frame.font_size(size))

@@ -190,10 +190,7 @@ impl Names {
     }
 }
 
-/// Screen fractions from pixels of the 640×480 reference screen.
-const fn w(px: f32) -> f32 {
-    px / 640.
-}
+/// Fractions of the 480 px reference height.
 const fn h(px: f32) -> f32 {
     px / 480.
 }
@@ -201,14 +198,20 @@ const fn h(px: f32) -> f32 {
 impl View {
     /// The classic layout, from the theme's top-level geometry.
     pub fn lista(t: &Theme) -> Self {
-        let top = t.header_height + h(6.);
-        let bottom = 1. - t.footer_height - h(6.);
-        let margin = t.margin * 0.75;
+        // Reference pixels to screen fractions: across (`x`) and down (`y`).
+        // Sizes (gaps, radii, fonts) stay fractions of 480 (`h`).
+        let (across, down) = t.shape.reference;
+        let x = |px: f32| px / across;
+        let y = |px: f32| px / down;
+        let tall = 480. / down;
+        let top = t.header_height * tall + y(6.);
+        let bottom = 1. - t.footer_height * tall - y(6.);
+        let margin = t.margin * 0.75 * (640. / across);
         let panel = Rect01 {
-            x: 1. - margin - w(250.),
+            x: 1. - margin - x(250.),
             y: top,
-            w: w(250.),
-            h: 1. - t.footer_height - h(8.) - top,
+            w: x(250.),
+            h: 1. - t.footer_height * tall - y(8.) - top,
         };
         let list = |rect, row, selected, font| List {
             rect,
@@ -254,9 +257,9 @@ impl View {
                 }),
                 art: Some(Art {
                     rect: Rect01 {
-                        x: panel.x + w(20.),
-                        y: panel.y + h(46.),
-                        w: w(210.),
+                        x: panel.x + x(20.),
+                        y: panel.y + y(46.),
+                        w: x(210.),
                         h: h(160.),
                     },
                     fit: Fit::Contain,
@@ -264,10 +267,10 @@ impl View {
                 }),
                 info: Some(Info {
                     rect: Rect01 {
-                        x: panel.x + w(16.),
+                        x: panel.x + x(16.),
                         y: panel.y,
-                        w: panel.w - w(32.),
-                        h: panel.h - h(14.),
+                        w: panel.w - x(32.),
+                        h: panel.h - y(14.),
                     },
                     title: h(22.),
                     meta: h(12.),
@@ -276,7 +279,7 @@ impl View {
                     inline: false,
                 }),
                 ..base(list(
-                    column(margin, panel.x - w(14.) - margin),
+                    column(margin, panel.x - x(14.) - margin),
                     t.row_height,
                     t.selected_height,
                     t.font_size,
@@ -295,9 +298,9 @@ impl View {
                 meta: Some(Meta {
                     rect: Rect01 {
                         x: cover.x,
-                        y: (cover.y + cover.h + h(9.)).min(1. - h(20.)),
+                        y: (cover.y + cover.h + y(9.)).min(1. - y(20.)),
                         w: cover.w,
-                        h: h(20.),
+                        h: y(20.),
                     },
                     size: h(12.),
                 }),
