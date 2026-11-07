@@ -1008,7 +1008,11 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                     self.header(backdrop, cursor, data, theme, layout)?;
                 }
                 if matches!(app.screen, Screen::StartHub { .. }) {
-                    self.hub(app, data, theme)?;
+                    // The 640x480 composition, centered in the theme's
+                    // `start_area` (the whole screen unless a theme says).
+                    let area = self.area(theme.start_area);
+                    self.staged_in(area, (640., 480.), |ui| ui.hub(app, data, theme))?;
+                    self.hub_footer(theme)?;
                 } else {
                     let lifted = app.moving().is_some();
                     self.list(backdrop, (&rows, lifted), cursor, data, theme, layout)?;
@@ -1096,6 +1100,17 @@ impl<'font, 'texture> Ui<'font, 'texture> {
     /// whole screen. Anything the design does not reach keeps the background.
     fn staged<T>(
         &mut self,
+        size: (f32, f32),
+        draw: impl FnOnce(&mut Self) -> Result<T, String>,
+    ) -> Result<T, String> {
+        let screen = Rect::new(0, 0, self.frame.width, self.frame.height);
+        self.staged_in(screen, size, draw)
+    }
+    /// `staged`, centered in `area` (pixels of the current stage) instead
+    /// of the whole screen.
+    fn staged_in<T>(
+        &mut self,
+        area: Rect,
         (w, h): (f32, f32),
         draw: impl FnOnce(&mut Self) -> Result<T, String>,
     ) -> Result<T, String> {
@@ -1105,16 +1120,16 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             scale,
             ..
         } = self.frame;
-        let w = ((w * scale).round() as u32).clamp(1, width);
-        let h = ((h * scale).round() as u32).clamp(1, height);
-        if (w, h) == (width, height) {
+        let w = ((w * scale).round() as u32).clamp(1, area.width());
+        let h = ((h * scale).round() as u32).clamp(1, area.height());
+        if (area.x(), area.y(), w, h) == (0, 0, width, height) {
             return draw(self);
         }
         // Viewports are in screen pixels: a stage inside a stage adds up.
         let (x, y) = self.stage.map_or((0, 0), |outer| (outer.x(), outer.y()));
         let previous = self.stage.replace(Rect::new(
-            x + ((width - w) / 2) as i32,
-            y + ((height - h) / 2) as i32,
+            x + area.x() + ((area.width() - w) / 2) as i32,
+            y + area.y() + ((area.height() - h) / 2) as i32,
             w,
             h,
         ));
@@ -1905,6 +1920,13 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 HintButton::Start => [None, None],
             };
             let paired = buttons[1].is_some();
+            // The START badge holds its word, which the text floor may widen.
+            let start_w = if start {
+                self.px(45.)
+                    .max(self.measure("START", Face::Regular, 10.)? as i32 + self.px(10.))
+            } else {
+                0
+            };
             right = self.packed_label(
                 label,
                 (Face::Regular, 13., theme.muted),
@@ -1912,18 +1934,16 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 u32::MAX,
                 Align::Left,
             )? - self.px(6.)
-                - self.px(if start {
-                    45.
-                } else if paired {
-                    50.
+                - if start {
+                    start_w
                 } else {
-                    20.
-                });
+                    self.px(if paired { 50. } else { 20. })
+                };
             if start {
                 let badge = Rect::new(
                     right,
                     y + (h as i32 - self.px(20.)) / 2,
-                    self.px(45.) as u32,
+                    start_w as u32,
                     self.px(20.) as u32,
                 );
                 self.rounded(badge, self.px(5.) as f32, theme.badge, None)?;

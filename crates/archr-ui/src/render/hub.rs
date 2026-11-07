@@ -94,7 +94,7 @@ impl Ui<'_, '_> {
         theme: &Theme,
         (row, tile, shortcut): (usize, usize, usize),
     ) -> Result<(), String> {
-        let (width, height) = (self.frame.width, self.frame.height);
+        let width = self.frame.width;
         // Unlike `Ui::px`, offsets may be negative, so no lower clamp.
         let scale = self.frame.scale;
         let px = |n: f32| (n * scale).round() as i32;
@@ -437,16 +437,24 @@ impl Ui<'_, '_> {
                 Align::Center,
             )?;
         }
-        let footer_y = height as i32 - px(48.);
+        Ok(())
+    }
+    /// The Start menu's footer, at the bottom of the screen wherever the
+    /// composition sits.
+    pub(super) fn hub_footer(&mut self, theme: &Theme) -> Result<(), String> {
+        let (width, height) = (self.frame.width, self.frame.height);
+        let footer_y = height as i32 - self.px(48.);
+        self.look.outlining = true;
         self.divider(0, footer_y, width, theme.border)?;
-        self.hints(
+        let drawn = self.hints(
             &[('A', "hint.open"), ('B', "hint.back")],
             theme,
             width,
             footer_y,
-            px(48.) as u32,
-        )?;
-        Ok(())
+            self.px(48.) as u32,
+        );
+        self.look.outlining = false;
+        drawn.map(drop)
     }
     /// Module widgets (Start-widget): side by side in `start_widgets`; the
     /// module's icon and name, its value large with the detail beside it,

@@ -161,7 +161,10 @@ switcher_card = { x = 0.1875, y = 0.1, w = 0.625, h = 0.46875 }
 ```
 
 O tema padrão usa `[aspect.square]` para manter em 4:3 as imagens do
-Alternador e da retomada. As Configurações não mudam com o tema: têm 640 px
+Alternador e da retomada e centralizar o Menu Start, e `[aspect.wide]` para
+listas em letra maior (19 px de referência, 13 px numa tela de 480×320).
+Nenhum texto fica com menos de 10 px na tela, em qualquer resolução: numa
+tela pequena o texto mantém esse mínimo e o resto do desenho encolhe. As Configurações não mudam com o tema: têm 640 px
 de referência de largura, centradas numa tela mais larga, e ganham linhas
 numa tela mais alta.
 
@@ -376,6 +379,16 @@ Start-widget):
 
 ```toml
 start_widgets = { x = 0.153125, y = 0.454166667, w = 0.69375, h = 0.216666667 }
+```
+
+`start_area` (`{ x, y, w, h }`) é a caixa onde a composição do Menu Start
+(título, blocos, atalhos e widgets, desenhada para 640×480) fica
+centralizada; o rodapé fica sempre no fim da tela. O padrão é a tela
+inteira; numa tela quadrada o Grafite a põe entre o cabeçalho e o rodapé:
+
+```toml
+[aspect.square]
+start_area = { x = 0.0, y = 0.1796875, w = 1.0, h = 0.75 }
 ```
 
 As cores vêm das chaves gerais (`surface`, `border`, `text_secondary`,
