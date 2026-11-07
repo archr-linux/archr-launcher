@@ -862,7 +862,9 @@ impl View<'_, '_, '_> {
             let text = self.tr(&permission.detail);
             self.lines_face(&text, 11., px, Face::Regular)?
         };
-        let height = 14. + label_lines.len() as f32 * 17. + detail.len() as f32 * 14.;
+        let height = 14.
+            + label_lines.len() as f32 * self.pitch(13., 17.)
+            + detail.len() as f32 * self.pitch(11., 14.);
         Ok((label_lines, detail, height.max(30.)))
     }
     /// The permission column: amber for the sensitive ones, then the
@@ -938,22 +940,23 @@ impl View<'_, '_, '_> {
             for (n, text) in label.iter().enumerate() {
                 self.plain(
                     text,
-                    (x + 28., line_y, w - 36., 17.),
+                    (x + 28., line_y, w - 36., self.pitch(13., 17.)),
                     (Face::Regular, 13., theme.text),
                 )?;
                 if update && n == 0 {
                     let after = x + 28. + self.width(text, Face::Regular, 13.)? + 6.;
                     self.new_tag(after, line_y + 1.)?;
                 }
-                line_y += 17.;
+                line_y += self.pitch(13., 17.);
             }
+            let pitch = self.pitch(11., 14.);
             for text in detail {
                 self.plain(
                     text,
-                    (x + 28., line_y, w - 36., 14.),
+                    (x + 28., line_y, w - 36., pitch),
                     (Face::Regular, 11., theme.muted),
                 )?;
-                line_y += 14.;
+                line_y += pitch;
             }
             y += height + 6.;
         }
