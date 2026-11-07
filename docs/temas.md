@@ -125,8 +125,8 @@ Essas medidas montam a visualização clássica, `lista`.
 ## Telas de outros tamanhos
 
 O launcher roda em 640×480 (4:3), 720×720 (1:1, R36 Plus) e 480×320 (3:2,
-Odroid Go Advance, RGB10, RG351M; o painel é retrato e o launcher o
-desenha girado). O desenho de 640×480 é ampliado ou reduzido até caber
+Odroid Go Advance, RGB10, RG351M; o painel é retrato e o Sway o gira, então
+o launcher já recebe a tela deitada). O desenho de 640×480 é ampliado ou reduzido até caber
 inteiro: a escala é a menor entre largura/640 e altura/480, e o texto fica
 do mesmo tamanho físico em telas da mesma densidade. A sobra vai para o
 lado mais longo: a tela vale 640×640 px de referência em 720×720 e 720×480
