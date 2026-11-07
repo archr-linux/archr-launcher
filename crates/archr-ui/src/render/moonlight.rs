@@ -262,7 +262,12 @@ impl Ui<'_, '_> {
                 theme.warning,
             )?;
         }
-        self.divider(0, self.px(432.), self.frame.width, theme.border)?;
+        self.divider(
+            0,
+            self.px(self.frame.reference().1 - 48.),
+            self.frame.width,
+            theme.border,
+        )?;
         if let Some(keyboard) = &state.keyboard {
             self.moonlight_keyboard(keyboard, state.error, theme)?;
         }
@@ -346,7 +351,7 @@ impl Ui<'_, '_> {
             &hints,
             theme,
             self.frame.width,
-            self.px(432.),
+            self.px(self.frame.reference().1 - 48.),
             self.px(48.) as u32,
         )?;
         Ok(())

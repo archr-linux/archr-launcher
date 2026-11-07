@@ -150,7 +150,7 @@ impl View<'_, '_, '_> {
         let bottom = if system.installable() {
             BUTTON_TOP - 30.
         } else {
-            VIEW_BOTTOM - 24.
+            self.view_bottom() - 24.
         };
         let entries = system.files.len() + usize::from(free.is_some());
         let room = ((bottom - y) / 46.).floor().max(0.) as usize;
@@ -432,18 +432,25 @@ impl View<'_, '_, '_> {
         self.ui
             .canvas
             .set_draw_color(crate::text::color(theme.background));
-        self.ui
-            .canvas
-            .fill_rect(self.rect((0., FOOTER, 640., 480. - FOOTER)))?;
-        self.ui
-            .divider(0, self.ui.px(FOOTER), self.ui.frame.width, theme.border)?;
+        self.ui.canvas.fill_rect(self.rect((
+            0.,
+            self.footer_top(),
+            640.,
+            self.bottom() - self.footer_top(),
+        )))?;
+        self.ui.divider(
+            0,
+            self.ui.px(self.footer_top()),
+            self.ui.frame.width,
+            theme.border,
+        )?;
         self.ui
             .hints(
                 state.hints(),
                 theme,
                 self.ui.frame.width,
-                self.ui.px(FOOTER),
-                self.ui.px(480. - FOOTER) as u32,
+                self.ui.px(self.footer_top()),
+                self.ui.px(self.bottom() - self.footer_top()) as u32,
             )
             .map(|_| ())
     }

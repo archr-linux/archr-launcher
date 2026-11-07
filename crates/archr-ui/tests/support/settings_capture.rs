@@ -1,6 +1,17 @@
 use super::*;
 use crate::{appearance::Appearance, settings::network::Network, state::Button};
 
+/// Screen size of the manual captures: `ARCHR_CAPTURE_SIZE=720x720`, else 640x480.
+fn capture_size() -> (u32, u32) {
+    std::env::var("ARCHR_CAPTURE_SIZE")
+        .ok()
+        .and_then(|size| {
+            let (w, h) = size.split_once('x')?;
+            Some((w.parse().ok()?, h.parse().ok()?))
+        })
+        .unwrap_or((640, 480))
+}
+
 fn network(ssid: &str, security: &str, signal: u8, connected: bool) -> Network {
     Network {
         ssid: ssid.into(),
@@ -504,12 +515,13 @@ fn capture_network_and_games_pages() {
     );
     let ttf;
     let creator;
-    let mut ui = Ui::new(640, 480, true).unwrap();
+    let mut ui = Ui::new(capture_size().0, capture_size().1, true).unwrap();
     ttf = sdl2::ttf::init().unwrap();
     creator = ui.canvas.texture_creator();
     let theme = Theme::load(
         &std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../themes/default"),
     );
+    let theme = theme.fitted(capture_size().0, capture_size().1);
     ui.configure(&ttf, &creator, &theme, None).unwrap();
     let save = |ui: &mut Ui, name: String| {
         let pixels = ui
@@ -519,8 +531,8 @@ fn capture_network_and_games_pages() {
         image::save_buffer(
             output.join(name),
             &pixels,
-            640,
-            480,
+            capture_size().0,
+            capture_size().1,
             image::ColorType::Rgba8,
         )
         .unwrap();
@@ -600,7 +612,7 @@ fn capture_network_and_games_pages() {
             }
             save(&mut ui, format!("home-{name}-{language}.png"));
         }
-        let mut moonlight = crate::moonlight::State::new((640, 480));
+        let mut moonlight = crate::moonlight::State::new(capture_size());
         moonlight.busy = false;
         moonlight.keyboard = Some(crate::keyboard::Keyboard::new(
             crate::keyboard::Mode::Ipv4,
@@ -746,7 +758,7 @@ fn capture_views() {
     );
     let ttf;
     let creator;
-    let mut ui = Ui::new(640, 480, true).unwrap();
+    let mut ui = Ui::new(capture_size().0, capture_size().1, true).unwrap();
     ttf = sdl2::ttf::init().unwrap();
     creator = ui.canvas.texture_creator();
     let themes = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../themes");
@@ -760,8 +772,8 @@ fn capture_views() {
         image::save_buffer(
             output.join(name),
             &pixels,
-            640,
-            480,
+            capture_size().0,
+            capture_size().1,
             image::ColorType::Rgba8,
         )
         .unwrap();
@@ -781,7 +793,8 @@ fn capture_views() {
             .and_then(|n| n.to_str())
             .unwrap_or(folder);
         let default = themes.join("default");
-        let mut theme = Theme::load_over(&themes.join(folder), &Theme::load(&default));
+        let theme = Theme::load_over(&themes.join(folder), &Theme::load(&default));
+        let mut theme = theme.fitted(capture_size().0, capture_size().1);
         theme.active_view = view.into();
         let empty = output.join("no-art");
         ui.theme_dir = Some(if noart {
@@ -1024,11 +1037,12 @@ fn capture_achievements() {
     );
     let ttf;
     let creator;
-    let mut ui = Ui::new(640, 480, true).unwrap();
+    let mut ui = Ui::new(capture_size().0, capture_size().1, true).unwrap();
     ttf = sdl2::ttf::init().unwrap();
     creator = ui.canvas.texture_creator();
     let themes = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../themes");
     let theme = Theme::load(&themes.join("default"));
+    let theme = theme.fitted(capture_size().0, capture_size().1);
     ui.theme_dir = Some(themes.join("default"));
     ui.configure(&ttf, &creator, &theme, None).unwrap();
     let save = |ui: &mut Ui, name: String| {
@@ -1039,8 +1053,8 @@ fn capture_achievements() {
         image::save_buffer(
             output.join(name),
             &pixels,
-            640,
-            480,
+            capture_size().0,
+            capture_size().1,
             image::ColorType::Rgba8,
         )
         .unwrap();
@@ -1379,11 +1393,12 @@ fn capture_store() {
     );
     let ttf;
     let creator;
-    let mut ui = Ui::new(640, 480, true).unwrap();
+    let mut ui = Ui::new(capture_size().0, capture_size().1, true).unwrap();
     ttf = sdl2::ttf::init().unwrap();
     creator = ui.canvas.texture_creator();
     let themes = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../themes");
     let theme = Theme::load(&themes.join("default"));
+    let theme = theme.fitted(capture_size().0, capture_size().1);
     let images = tempfile::tempdir().unwrap();
     ui.theme_dir = Some(themes.join("default"));
     ui.configure(&ttf, &creator, &theme, None).unwrap();
@@ -1421,8 +1436,8 @@ fn capture_store() {
             image::save_buffer(
                 output.join(format!("{name}-{language}.png")),
                 &pixels,
-                640,
-                480,
+                capture_size().0,
+                capture_size().1,
                 image::ColorType::Rgba8,
             )
             .unwrap();
@@ -1604,12 +1619,13 @@ fn capture_updates() {
     );
     let ttf;
     let creator;
-    let mut ui = Ui::new(640, 480, true).unwrap();
+    let mut ui = Ui::new(capture_size().0, capture_size().1, true).unwrap();
     ttf = sdl2::ttf::init().unwrap();
     creator = ui.canvas.texture_creator();
     let theme = Theme::load(
         &std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../themes/default"),
     );
+    let theme = theme.fitted(capture_size().0, capture_size().1);
     ui.configure(&ttf, &creator, &theme, None).unwrap();
     let save = |ui: &mut Ui, name: String| {
         let pixels = ui
@@ -1619,8 +1635,8 @@ fn capture_updates() {
         image::save_buffer(
             output.join(name),
             &pixels,
-            640,
-            480,
+            capture_size().0,
+            capture_size().1,
             image::ColorType::Rgba8,
         )
         .unwrap();
@@ -1669,12 +1685,13 @@ fn update_versions_stay_inside_their_line() {
     std::env::set_var("SDL_VIDEODRIVER", "offscreen");
     let ttf;
     let creator;
-    let mut ui = Ui::new(640, 480, true).unwrap();
+    let mut ui = Ui::new(capture_size().0, capture_size().1, true).unwrap();
     ttf = sdl2::ttf::init().unwrap();
     creator = ui.canvas.texture_creator();
     let theme = Theme::load(
         &std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../themes/default"),
     );
+    let theme = theme.fitted(capture_size().0, capture_size().1);
     ui.configure(&ttf, &creator, &theme, None).unwrap();
     let pages: std::collections::HashMap<_, _> = updates_pages().into_iter().collect();
     let draw = |ui: &mut Ui, state: &Settings, area: sdl2::rect::Rect| {
@@ -2303,11 +2320,12 @@ fn capture_modules() {
     );
     let ttf;
     let creator;
-    let mut ui = Ui::new(640, 480, true).unwrap();
+    let mut ui = Ui::new(capture_size().0, capture_size().1, true).unwrap();
     ttf = sdl2::ttf::init().unwrap();
     creator = ui.canvas.texture_creator();
     let themes = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../themes");
     let theme = Theme::load(&themes.join("default"));
+    let theme = theme.fitted(capture_size().0, capture_size().1);
     let images = tempfile::tempdir().unwrap();
     ui.theme_dir = Some(themes.join("default"));
     ui.configure(&ttf, &creator, &theme, None).unwrap();
@@ -2347,8 +2365,8 @@ fn capture_modules() {
         image::save_buffer(
             output.join(name),
             &pixels,
-            640,
-            480,
+            capture_size().0,
+            capture_size().1,
             image::ColorType::Rgba8,
         )
         .unwrap();
@@ -2408,12 +2426,13 @@ fn capture_dongle_and_saves() {
     );
     let ttf;
     let creator;
-    let mut ui = Ui::new(640, 480, true).unwrap();
+    let mut ui = Ui::new(capture_size().0, capture_size().1, true).unwrap();
     ttf = sdl2::ttf::init().unwrap();
     creator = ui.canvas.texture_creator();
     let theme = Theme::load(
         &std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../themes/default"),
     );
+    let theme = theme.fitted(capture_size().0, capture_size().1);
     ui.configure(&ttf, &creator, &theme, None).unwrap();
     let advice = "seq\t3\nadded\t0bda:b733\n\
         dev\t0bda:b733\tRealtek RTL8733BU\twifi+bt\t2.4+5\t-\t-\t-\t-\tno_driver\n";
@@ -2489,8 +2508,8 @@ fn capture_dongle_and_saves() {
         image::save_buffer(
             output.join(name),
             &pixels,
-            640,
-            480,
+            capture_size().0,
+            capture_size().1,
             image::ColorType::Rgba8,
         )
         .unwrap();
@@ -2591,11 +2610,12 @@ fn capture_resume() {
     );
     let ttf;
     let creator;
-    let mut ui = Ui::new(640, 480, true).unwrap();
+    let mut ui = Ui::new(capture_size().0, capture_size().1, true).unwrap();
     ttf = sdl2::ttf::init().unwrap();
     creator = ui.canvas.texture_creator();
     let themes = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../themes");
     let theme = Theme::load(&themes.join("default"));
+    let theme = theme.fitted(capture_size().0, capture_size().1);
     ui.theme_dir = Some(themes.join("default"));
     ui.configure(&ttf, &creator, &theme, None).unwrap();
     let mut status =
@@ -2615,8 +2635,8 @@ fn capture_resume() {
         image::save_buffer(
             output.join(name),
             &pixels,
-            640,
-            480,
+            capture_size().0,
+            capture_size().1,
             image::ColorType::Rgba8,
         )
         .unwrap();
@@ -3047,11 +3067,12 @@ fn capture_tune() {
         std::env::var_os("ARCHR_SETTINGS_CAPTURE_DIR").expect("capture directory"),
     );
     let (ttf, creator);
-    let mut ui = Ui::new(640, 480, true).unwrap();
+    let mut ui = Ui::new(capture_size().0, capture_size().1, true).unwrap();
     ttf = sdl2::ttf::init().unwrap();
     creator = ui.canvas.texture_creator();
     let themes = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../themes");
     let theme = Theme::load(&themes.join("default"));
+    let theme = theme.fitted(capture_size().0, capture_size().1);
     let images = tempfile::tempdir().unwrap();
     ui.theme_dir = Some(themes.join("default"));
     ui.configure(&ttf, &creator, &theme, None).unwrap();
@@ -3092,11 +3113,213 @@ fn capture_tune() {
             image::save_buffer(
                 output.join(format!("{name}-{language}.png")),
                 &pixels,
-                640,
-                480,
+                capture_size().0,
+                capture_size().1,
                 image::ColorType::Rgba8,
             )
             .unwrap();
         }
     }
+}
+
+/// Frames 640x480 must keep, pixel for pixel (tests/golden/640x480): the
+/// systems list and tiles, games, details, the quick menu, the Start menu,
+/// the switcher, settings with a dialog settled and halfway through its
+/// fade. Everything that could vary is fixed: the shipped fonts, the clock
+/// and status, no console pictures, generated covers and screens, and the
+/// frame time of the fade. `ARCHR_GOLDEN_UPDATE=1` writes them again (after
+/// a deliberate change, or a FreeType that hints differently).
+#[test]
+fn golden_frames_at_640x480() {
+    let _sdl = crate::SDL_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    std::env::set_var("SDL_VIDEODRIVER", "offscreen");
+    let golden = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/golden/640x480");
+    let update = std::env::var_os("ARCHR_GOLDEN_UPDATE").is_some();
+    let ttf;
+    let creator;
+    let mut ui = Ui::new(640, 480, true).unwrap();
+    ttf = sdl2::ttf::init().unwrap();
+    creator = ui.canvas.texture_creator();
+    let themes = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../themes");
+    let theme = Theme::load(&themes.join("default"));
+    let empty = tempfile::tempdir().unwrap();
+    // No console pictures: the generated card, the same on every host.
+    ui.theme_dir = Some(empty.path().to_path_buf());
+    ui.default_theme_dir = Some(empty.path().to_path_buf());
+    ui.set_motion(crate::motion::Motion::Off);
+    ui.configure(&ttf, &creator, &theme, None).unwrap();
+    ui.catalog = I18n::load(std::path::Path::new("/nonexistent"), Some("pt_BR"), None);
+    let mut status = crate::status::Status::new(Some(empty.path()), Instant::now());
+    status.clock = "14:32".into();
+    status.wifi = true;
+    status.battery = Some(crate::status::Battery {
+        percent: 87,
+        charging: false,
+    });
+    ui.status = Some(status);
+    let cover = box_art(&creator);
+    let shelf = Shelf::new();
+    let picture = empty.path().join("screen.png");
+    scene(
+        &picture,
+        (
+            [92, 148, 252],
+            [156, 196, 255],
+            [63, 163, 77],
+            [200, 116, 58],
+        ),
+    );
+    let mut cache = crate::covers::CoverCache::new(&creator, empty.path().join("thumbs"), 640, 480);
+    let wanted = [picture.clone()];
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while cache.peek(&picture).is_none() && Instant::now() < deadline {
+        cache.request(&wanted);
+        cache.poll();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let mut frames: Vec<(&str, Vec<u8>)> = Vec::new();
+    let mut keep = |ui: &mut Ui, name| {
+        let pixels = ui
+            .canvas
+            .read_pixels(None, sdl2::pixels::PixelFormatEnum::RGBA32)
+            .unwrap();
+        frames.push((name, pixels));
+    };
+    let browse = |ui: &mut Ui, app: &crate::state::App, theme: &Theme, art| {
+        for _ in 0..2 {
+            ui.snap_animations();
+            ui.draw_with_settings(app, &shelf, theme, art, None)
+                .unwrap();
+        }
+    };
+    let with_cover = crate::render::Art {
+        cover: Some(&cover),
+        ..Default::default()
+    };
+    let mut app = crate::state::App::new(10);
+    app.set_view(&theme.view(&theme.active_view));
+    app.cursor = 1;
+    browse(&mut ui, &app, &theme, Default::default());
+    keep(&mut ui, "systems");
+    let mut vitrine = theme.clone();
+    vitrine.active_view = "vitrine".into();
+    browse(&mut ui, &app, &vitrine, Default::default());
+    keep(&mut ui, "systems-vitrine");
+    app.handle(crate::state::Button::A, &shelf);
+    app.cursor = 3;
+    browse(&mut ui, &app, &theme, with_cover);
+    keep(&mut ui, "games");
+    app.handle(crate::state::Button::Y, &shelf);
+    browse(&mut ui, &app, &theme, with_cover);
+    keep(&mut ui, "quick-menu");
+    app.screen = crate::state::Screen::Details {
+        system: "snes".into(),
+        game: 4,
+    };
+    browse(&mut ui, &app, &theme, with_cover);
+    keep(&mut ui, "details");
+    app.screen = crate::state::Screen::StartHub {
+        row: 0,
+        tile: 1,
+        shortcut: 0,
+    };
+    browse(&mut ui, &app, &theme, Default::default());
+    keep(&mut ui, "start");
+    app.screen = crate::state::Screen::Switcher;
+    app.switcher = vec![crate::resume::Recent {
+        system: "snes".into(),
+        game: 0,
+        name: shelf.games[0].name.clone(),
+        picture: Some(picture.clone()),
+        left: Some(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs()
+                - 20,
+        ),
+        entry: Some("--entryslot=auto".into()),
+    }];
+    app.cursor = 0;
+    let pictures = crate::render::Art {
+        pictures: Some(&cache),
+        ..Default::default()
+    };
+    browse(&mut ui, &app, &theme, pictures);
+    keep(&mut ui, "switcher");
+    // Settings read "updated 5 s ago" against this frame time.
+    let start = ui.born + Duration::from_secs(10);
+    let settled = |ui: &mut Ui, state: &Settings| {
+        for _ in 0..2 {
+            ui.frame.now = start;
+            ui.snap_animations();
+            ui.canvas.set_draw_color(color(theme.background));
+            ui.canvas.clear();
+            ui.settings_page(state, &theme).unwrap();
+        }
+    };
+    let mut root = Settings::default();
+    root.loading = false;
+    settled(&mut ui, &root);
+    keep(&mut ui, "settings");
+    let mut sound = root.clone();
+    sound.open(Page::Sound);
+    settled(&mut ui, &sound);
+    keep(&mut ui, "settings-sound");
+    let mut forget = pages()
+        .into_iter()
+        .find(|(name, _)| *name == "bluetooth-forget")
+        .unwrap()
+        .1;
+    forget.bt_scanned = start.checked_sub(Duration::from_secs(5));
+    settled(&mut ui, &forget);
+    keep(&mut ui, "settings-dialog");
+    // The same dialog 40 ms into its fade, at frame times set here.
+    ui.set_motion(crate::motion::Motion::On);
+    for (n, at) in [Duration::ZERO, Duration::from_millis(40)]
+        .into_iter()
+        .enumerate()
+    {
+        if n == 0 {
+            // A frame without the dialog, so it enters afresh.
+            ui.settle_entrances();
+            ui.frame.now = start;
+            ui.canvas.set_draw_color(color(theme.background));
+            ui.canvas.clear();
+            ui.settings_page(&root, &theme).unwrap();
+            ui.settle_entrances();
+        }
+        ui.frame.now = start + at;
+        ui.canvas.set_draw_color(color(theme.background));
+        ui.canvas.clear();
+        ui.settings_page(&forget, &theme).unwrap();
+        ui.settle_entrances();
+    }
+    keep(&mut ui, "settings-dialog-fading");
+    let mut changed = Vec::new();
+    for (name, pixels) in frames {
+        let path = golden.join(format!("{name}.png"));
+        if update {
+            std::fs::create_dir_all(&golden).unwrap();
+            image::save_buffer(&path, &pixels, 640, 480, image::ColorType::Rgba8).unwrap();
+            continue;
+        }
+        let expected = image::open(&path)
+            .unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+            .to_rgba8();
+        let off = expected
+            .as_raw()
+            .chunks_exact(4)
+            .zip(pixels.chunks_exact(4))
+            .filter(|(a, b)| a != b)
+            .count();
+        if off > 0 {
+            let actual = std::env::temp_dir().join(format!("archr-golden-{name}.png"));
+            image::save_buffer(&actual, &pixels, 640, 480, image::ColorType::Rgba8).unwrap();
+            changed.push(format!("{name}: {off} pixels (now {})", actual.display()));
+        }
+    }
+    assert!(changed.is_empty(), "640x480 changed: {changed:#?}");
 }

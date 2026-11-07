@@ -192,7 +192,7 @@ impl Ui<'_, '_> {
         }
 
         // Footer: where the list came from, then the buttons.
-        let h = (theme.footer_height * height as f32).round().max(1.) as u32;
+        let h = self.frame.size(theme.footer_height).round().max(1.) as u32;
         let y = height as i32 - h as i32;
         self.divider(0, y, width, theme.border)?;
         let hints = [

@@ -93,7 +93,7 @@ impl Ui<'_, '_> {
         theme: &Theme,
     ) -> Result<(), String> {
         let Frame { width, height, .. } = self.frame;
-        let h = (theme.footer_height * height as f32).round().max(1.) as u32;
+        let h = self.frame.size(theme.footer_height).round().max(1.) as u32;
         let y = height as i32 - h as i32;
         if !self.has_frame("footer") {
             self.divider(0, y, width, theme.border)?;
@@ -171,7 +171,7 @@ impl Ui<'_, '_> {
             let rect = Rect::new(list.x(), y, list.width(), row as u32);
             let selected = n == app.cursor;
             if selected && !self.framed("selected", rect)? {
-                let radius = theme.radius_item * height as f32;
+                let radius = self.frame.size(theme.radius_item);
                 self.rounded(rect, radius, theme.highlight_bg, None)?;
             }
             let thumb = Rect::new(
@@ -536,7 +536,7 @@ impl Ui<'_, '_> {
             (Face::Mono, 12., theme.text_secondary),
             Rect::new(self.px(20.), self.px(34.), room, self.px(16.) as u32),
         )?;
-        let footer = (theme.footer_height * height as f32).round().max(1.) as u32;
+        let footer = self.frame.size(theme.footer_height).round().max(1.) as u32;
         let y = height as i32 - footer as i32;
         if shot.details {
             let at = (self.px(20.), y - self.px(36.));
@@ -621,7 +621,7 @@ impl Ui<'_, '_> {
         };
         let play = confirm.action == Action::Play;
         let Frame { width, height, .. } = self.frame;
-        let footer = (theme.footer_height * height as f32).round().max(1.) as u32;
+        let footer = self.frame.size(theme.footer_height).round().max(1.) as u32;
         self.scrim(theme, 1.2)?;
         let w = self.px(360.).min(width as i32 - self.px(32.)).max(1);
         let pad = self.px(20.);

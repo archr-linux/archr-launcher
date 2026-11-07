@@ -153,13 +153,15 @@ fn run(
             startup_phase!(trace, "locale selection");
             let look = appearance::saved(config.as_ref());
             let (base, theme_path) = appearance::load_theme(paths, &look.theme);
-            let theme = look.apply(&base);
             startup_phase!(trace, "theme load");
             // No per-system scans, controller enumeration or cover work yet.
             let library = Library::initial_traced(paths.clone(), trace);
-            let size = size
+            let size: (u32, u32) = size
                 .recv()
                 .map_err(|_| "Video initialization failed".to_owned())?;
+            // The layout follows the screen's shape (square, 4:3, 3:2).
+            let base = base.fitted(size.0, size.1);
+            let theme = look.apply(&base);
             let mut prepared = prepare_first_frame(
                 ttf,
                 &theme,
@@ -391,7 +393,7 @@ fn run(
         }
         if let Some(look) = settings.state.applied.take() {
             let base = &settings.state.base_theme;
-            let next = look.apply(base);
+            let next = look.apply(&base.fitted(width, height));
             // Fonts and system art load with the theme; colors apply at once.
             let reload = next.font != theme.font
                 || next.font_semibold != theme.font_semibold

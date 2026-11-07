@@ -5,7 +5,7 @@ use crate::{appearance::mix, convert::Offer};
 impl Ui<'_, '_> {
     pub(crate) fn convert_question(&mut self, offer: &Offer, theme: &Theme) -> Result<(), String> {
         let Frame { width, height, .. } = self.frame;
-        let footer = (theme.footer_height * height as f32).round().max(1.) as u32;
+        let footer = self.frame.size(theme.footer_height).round().max(1.) as u32;
         self.scrim(theme, 1.2)?;
         let w = self.px(400.).min(width as i32 - self.px(32.)).max(1);
         let pad = self.px(20.);

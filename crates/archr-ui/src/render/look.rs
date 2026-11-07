@@ -149,7 +149,8 @@ impl<'t> Ui<'_, 't> {
                 canvas.copy(texture, src, None)?;
             }
         }
-        let h = |fraction: f32| (fraction * height as f32).round().max(1.) as u32;
+        let frame = self.frame;
+        let h = |fraction: f32| frame.size(fraction).round().max(1.) as u32;
         self.framed("header", Rect::new(0, 0, width, h(theme.header_height)))?;
         let footer = h(theme.footer_height);
         self.framed(

@@ -242,10 +242,21 @@ impl Nav {
             page,
         }
     }
-    /// From the screen's layout in the active view.
-    pub fn of(layout: &Layout) -> Self {
+    /// From the screen's layout in a view laid out for a `screen` (pixels):
+    /// the rows its list draws at once, spaced in whole pixels as drawn. A
+    /// list that scrolls at its edge counts the rows shown whole with the
+    /// taller selected one among them; a centered one, the rows it spans.
+    pub fn of(layout: &Layout, (width, height): (u32, u32)) -> Self {
         let list = &layout.list;
-        let page = (list.rect.h / (list.row + list.gap)).floor().max(1.) as usize;
+        let scale = crate::render::scale(width, height);
+        let area = crate::render::pixels(list.rect, width, height).height() as f32;
+        let pixels = |fraction: f32| (fraction * 480. * scale).round();
+        let pitch = (pixels(list.row) + pixels(list.gap)).max(1.);
+        let taller = match list.scroll {
+            crate::layout::Scroll::Edge => pixels(list.selected) - pixels(list.row),
+            crate::layout::Scroll::Center => 0.,
+        };
+        let page = ((area - taller) / pitch).floor().max(1.) as usize;
         Self {
             axis: list.axis,
             page,
@@ -354,8 +365,8 @@ impl App {
 
     /// Follows the active view; called again whenever the theme or the view changes.
     pub fn set_view(&mut self, view: &View) {
-        self.systems_nav = Nav::of(&view.systems);
-        self.games_nav = Nav::of(&view.games);
+        self.systems_nav = Nav::of(&view.systems, view.screen);
+        self.games_nav = Nav::of(&view.games, view.screen);
     }
 
     /// The undimmed screen beneath a modal, including collection identity.

@@ -12,8 +12,8 @@ pub mod theme;
 pub mod usb;
 
 pub use theme::{
-    resolve_theme, theme_dir, Frame9, Outline, Rect01, Rgba, ShadowStyle, SystemScreen, Theme,
-    DEFAULT_THEME_DIR,
+    resolve_theme, theme_dir, Aspect, Frame9, Outline, Rect01, Rgba, ShadowStyle, Shape,
+    SystemScreen, Theme, DEFAULT_THEME_DIR,
 };
 
 pub mod convert;

@@ -94,7 +94,7 @@ impl Ui<'_, '_> {
         theme: &Theme,
         (row, tile, shortcut): (usize, usize, usize),
     ) -> Result<(), String> {
-        let (width, height) = self.canvas.output_size()?;
+        let (width, height) = (self.frame.width, self.frame.height);
         // Unlike `Ui::px`, offsets may be negative, so no lower clamp.
         let scale = self.frame.scale;
         let px = |n: f32| (n * scale).round() as i32;
@@ -463,7 +463,7 @@ impl Ui<'_, '_> {
         }
         let scale = self.frame.scale;
         let px = |n: f32| (n * scale).round() as i32;
-        let (width, _) = self.canvas.output_size()?;
+        let width = self.frame.width;
         let offset = width as i32 / 2 - px(320.);
         let (bx, by, bw, bh) = Layout::new(theme.start_widgets, true).band;
         let gap = 16.;

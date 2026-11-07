@@ -313,7 +313,7 @@ impl View<'_, '_, '_> {
         // The buttons, bottom up: the page's action rows.
         let (x, w) = DETAIL_SIDE;
         for (n, row) in rows.iter().enumerate() {
-            let y = FOOTER - 2. - (rows.len() - n) as f32 * 48.;
+            let y = self.footer_top() - 2. - (rows.len() - n) as f32 * 48.;
             let icon = state.module_icon(row.id);
             let label = state.label(row);
             let icon = icon.as_deref().map(|svg| (Some(svg), ""));
@@ -415,7 +415,7 @@ impl View<'_, '_, '_> {
             return self.note((24., LIST_TOP, 592., 44.), &self.tr(key), 14.);
         }
         let step = CARD + CARD_GAP;
-        let visible = ((FOOTER - LIST_TOP) / step).floor().max(1.) as usize;
+        let visible = ((self.footer_top() - LIST_TOP) / step).floor().max(1.) as usize;
         let first = state.cursor.saturating_sub(visible - 1);
         let installed: Vec<(&str, &str)> = modules
             .view
@@ -884,7 +884,7 @@ impl View<'_, '_, '_> {
         let bottom = if button.is_some() {
             BUTTON - 8.
         } else {
-            FOOTER - 8.
+            self.footer_top() - 8.
         };
         let mut cards = Vec::new();
         for permission in list {

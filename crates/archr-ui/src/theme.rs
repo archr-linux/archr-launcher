@@ -78,6 +78,59 @@ pub enum ShadowStyle {
     None,
 }
 
+/// The shape of a screen, which picks a theme's `[aspect.<name>]` table:
+/// square up to 6:5, wide from 29:20 (3:2, 16:9), classic between (4:3).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Aspect {
+    Square,
+    Classic,
+    Wide,
+}
+impl Aspect {
+    pub fn of(width: u32, height: u32) -> Self {
+        let ratio = width as f32 / height.max(1) as f32;
+        if ratio < 1.2 {
+            Self::Square
+        } else if ratio > 1.45 {
+            Self::Wide
+        } else {
+            Self::Classic
+        }
+    }
+    fn key(self) -> &'static str {
+        match self {
+            Self::Square => "square",
+            Self::Classic => "classic",
+            Self::Wide => "wide",
+        }
+    }
+}
+
+/// The screen a theme was fitted to: its aspect and its size in reference
+/// pixels (at least 640×480; 640×640 on a square screen, 720×480 on 3:2).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Shape {
+    pub aspect: Aspect,
+    pub reference: (f32, f32),
+    /// The screen itself, in pixels.
+    pub screen: (u32, u32),
+}
+impl Shape {
+    pub const CLASSIC: Self = Self {
+        aspect: Aspect::Classic,
+        reference: (640., 480.),
+        screen: (640, 480),
+    };
+    pub fn of(width: u32, height: u32) -> Self {
+        let scale = crate::render::scale(width, height);
+        Self {
+            aspect: Aspect::of(width, height),
+            reference: (width as f32 / scale, height as f32 / scale),
+            screen: (width, height),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SystemScreen {
     List,
@@ -187,6 +240,21 @@ pub struct Theme {
     /// `[view.<id>]` tables in the order they apply: the builtin's, then the
     /// theme's own. "lista" always comes first.
     views: Vec<(String, Vec<toml::Table>)>,
+    /// The screen this theme is laid out for.
+    pub shape: Shape,
+    /// Each theme.toml this one is built from, builtin first, with its
+    /// folder: `fitted` lays them out again for another screen.
+    sources: Sources,
+}
+
+/// The theme.toml files a theme is built from, with their folders. Where a
+/// theme came from is not how it looks: themes compare by their fields.
+#[derive(Clone, Debug, Default)]
+struct Sources(Vec<(toml::Table, Option<PathBuf>)>);
+impl PartialEq for Sources {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
 }
 
 impl Theme {
@@ -197,7 +265,7 @@ impl Theme {
             .get_or_init(|| {
                 let table = toml::from_str(include_str!("../../../themes/default/theme.toml"))
                     .expect("bundled theme must be valid TOML");
-                Self::from_table(&table, None, None)
+                Self::from_table(&table, None, None, Shape::CLASSIC)
             })
             .clone()
     }
@@ -225,7 +293,7 @@ impl Theme {
                 return theme;
             }
         };
-        let mut theme = Self::from_table(&table, Some(dir), Some(&theme));
+        let mut theme = Self::from_table(&table, Some(dir), Some(&theme), theme.shape);
         if theme.name.get("en").is_none() {
             let folder = dir.file_name().unwrap_or_default().to_string_lossy();
             theme.name = Names::plain(&folder);
@@ -234,9 +302,43 @@ impl Theme {
     }
     /// A theme.toml's table over the builtin, without its folder (fonts unresolved).
     pub fn parse(table: &toml::Table) -> Self {
-        Self::from_table(table, None, Some(&Self::builtin()))
+        Self::from_table(table, None, Some(&Self::builtin()), Shape::CLASSIC)
     }
-    fn from_table(table: &toml::Table, dir: Option<&Path>, defaults: Option<&Self>) -> Self {
+    /// This theme laid out for a `width`×`height` screen: every theme.toml
+    /// it is built from again, each with its `[aspect.<shape>]` table over
+    /// it. Fonts, name and view stay as they are.
+    pub fn fitted(&self, width: u32, height: u32) -> Self {
+        let shape = Shape::of(width, height);
+        if shape == self.shape {
+            return self.clone();
+        }
+        let mut fitted: Option<Self> = None;
+        for (table, dir) in &self.sources.0 {
+            fitted = Some(Self::from_table(
+                table,
+                dir.as_deref(),
+                fitted.as_ref(),
+                shape,
+            ));
+        }
+        let mut fitted = fitted.unwrap_or_else(|| self.clone());
+        fitted.font.clone_from(&self.font);
+        fitted.font_semibold.clone_from(&self.font_semibold);
+        fitted.font_mono.clone_from(&self.font_mono);
+        fitted.font_mono_medium.clone_from(&self.font_mono_medium);
+        fitted.name = self.name.clone();
+        fitted.active_view.clone_from(&self.active_view);
+        fitted
+    }
+    fn from_table(
+        source: &toml::Table,
+        dir: Option<&Path>,
+        defaults: Option<&Self>,
+        shape: Shape,
+    ) -> Self {
+        let mut sources = defaults.map_or_else(Sources::default, |d| d.sources.clone());
+        sources.0.push((source.clone(), dir.map(Path::to_path_buf)));
+        let table = &for_aspect(source, shape.aspect);
         // One field list serves both the embedded theme and user overrides.
         // Only the embedded TOML must be complete and valid.
         macro_rules! token {
@@ -342,6 +444,8 @@ impl Theme {
             name: Names::parse(table.get("name"), "name"),
             active_view: LISTA.into(),
             views: view_tables(table, defaults),
+            shape,
+            sources,
         }
     }
     /// The layout `id` describes, or the classic one when the theme has no such view.
@@ -452,6 +556,7 @@ pub const KNOWN_KEYS: &[&str] = &[
     "text_outline",
     "background_image",
     "frames",
+    "aspect",
     // Store metadata (docs/temas.md, Publicar na Loja de temas).
     "description",
     "author",
@@ -459,6 +564,40 @@ pub const KNOWN_KEYS: &[&str] = &[
     "license",
     "min_launcher",
 ];
+
+/// `table` with its `[aspect.<aspect>]` table laid over it, key by key:
+/// tables merge, any other value replaces.
+fn for_aspect(table: &toml::Table, aspect: Aspect) -> toml::Table {
+    let mut merged = table.clone();
+    let Some(aspects) = merged.remove("aspect") else {
+        return merged;
+    };
+    let Some(aspects) = aspects.as_table() else {
+        log::warn!("Theme key aspect must hold [aspect.<shape>] tables; ignored");
+        return merged;
+    };
+    for key in aspects.keys() {
+        if !["square", "classic", "wide"].contains(&key.as_str()) {
+            log::warn!("Unknown theme aspect {key}; ignored");
+        }
+    }
+    match aspects.get(aspect.key()) {
+        Some(toml::Value::Table(over)) => merge(&mut merged, over),
+        Some(_) => log::warn!("Theme aspect.{} must be a table; ignored", aspect.key()),
+        None => {}
+    }
+    merged
+}
+fn merge(base: &mut toml::Table, over: &toml::Table) {
+    for (key, value) in over {
+        match (base.get_mut(key), value) {
+            (Some(toml::Value::Table(base)), toml::Value::Table(over)) => merge(base, over),
+            _ => {
+                base.insert(key.clone(), value.clone());
+            }
+        }
+    }
+}
 
 /// The inherited views, with this theme's tables laid over them.
 fn view_tables(table: &toml::Table, defaults: Option<&Theme>) -> Vec<(String, Vec<toml::Table>)> {

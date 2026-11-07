@@ -160,15 +160,15 @@ impl Scroll {
         page: Page,
         selected_top: f32,
         selected_bottom: f32,
-        content_bottom: f32,
+        (content_bottom, view_bottom): (f32, f32),
         now: Instant,
     ) -> f32 {
         let changed = self.page != Some(page);
         let previous = if changed { 0. } else { self.tween.target };
         let target = previous
             .min(selected_top - VIEW_TOP)
-            .max(selected_bottom - VIEW_BOTTOM)
-            .clamp(0., (content_bottom - VIEW_BOTTOM).max(0.));
+            .max(selected_bottom - view_bottom)
+            .clamp(0., (content_bottom - view_bottom).max(0.));
         self.tween.retarget(target, now);
         if changed {
             self.tween.snap();
@@ -260,10 +260,28 @@ impl Ui<'_, '_> {
             self.settings_scroll.tween.retarget(0., self.frame.now);
             self.settings_scroll.tween.snap();
         }
-        View { ui: self, theme }.draw(state)
+        // The 640-wide design, centered on a wider screen; a taller one
+        // gives the page more rows.
+        let tall = self.frame.reference().1;
+        self.staged((640., tall), |ui| View { ui, theme }.draw(state))
     }
 }
 impl View<'_, '_, '_> {
+    /// Width of `text` in reference pixels, like every other settings measure.
+    fn span(&mut self, text: &str, face: Face, size: f32) -> Result<f32, String> {
+        Ok(self.ui.measure(text, face, size)? as f32 / self.ui.frame.scale)
+    }
+    /// The bottom of the screen in reference pixels: 480, more on a taller screen.
+    fn bottom(&self) -> f32 {
+        self.ui.frame.reference().1
+    }
+    /// Where scrolled rows stop and the footer starts.
+    fn view_bottom(&self) -> f32 {
+        VIEW_BOTTOM + self.bottom() - 480.
+    }
+    fn footer_top(&self) -> f32 {
+        FOOTER + self.bottom() - 480.
+    }
     /// The one check box of the settings pages: an accent box with a tick
     /// when on, a thin ring over `back` when off.
     fn checkbox(
@@ -581,9 +599,9 @@ impl View<'_, '_, '_> {
         let widths = loop {
             let mut widths = Vec::new();
             for part in &trail {
-                widths.push(self.ui.measure(part, Face::Regular, small)? as f32 + 8.);
+                widths.push(self.span(part, Face::Regular, small)? + 8.);
             }
-            widths.push(self.ui.measure(&current, Face::Semibold, large)? as f32);
+            widths.push(self.span(&current, Face::Semibold, large)?);
             if widths.iter().sum::<f32>() <= right - 24. || small <= 12. {
                 break widths;
             }
@@ -613,12 +631,11 @@ impl View<'_, '_, '_> {
             let item = self.tr(crate::settings::information::ITEMS[index.min(5)].0);
             let title = format!("{base} › {item}");
             let mut size = 15.;
-            while size > 12. && self.ui.measure(&title, Face::Semibold, size)? as f32 > right - 24.
-            {
+            while size > 12. && self.span(&title, Face::Semibold, size)? > right - 24. {
                 size -= 1.;
             }
-            let base_width = self.ui.measure(&base, Face::Semibold, size)? as f32;
-            let arrow_width = self.ui.measure(" › ", Face::Semibold, size)? as f32;
+            let base_width = self.span(&base, Face::Semibold, size)?;
+            let arrow_width = self.span(" › ", Face::Semibold, size)?;
             self.text_face(
                 (24., 0., base_width, 44.),
                 &base,
@@ -791,7 +808,7 @@ impl View<'_, '_, '_> {
                 (13., fade(self.theme.text), Align::Left),
             )?;
         }
-        let footer = FOOTER;
+        let footer = self.footer_top();
         self.ui.divider(
             0,
             self.ui.px(footer),
@@ -801,7 +818,7 @@ impl View<'_, '_, '_> {
         let (width, y, h) = (
             self.ui.frame.width,
             self.ui.px(footer),
-            self.ui.px(480. - footer) as u32,
+            self.ui.px(self.bottom() - footer) as u32,
         );
         let left = match self.module_hints(state) {
             Some(labels) => self.ui.hint_labels(&labels, self.theme, width, y, h)?,
@@ -1016,7 +1033,10 @@ impl View<'_, '_, '_> {
             return self
                 .ui
                 .pop_in(crate::render::Pop::Dialog, &question, (theme, 1.), |ui| {
-                    View { ui, theme }.dialog(&question, detail.as_deref(), hints)
+                    // Designed on 640x480: centered on a taller screen.
+                    ui.staged((640., 480.), |ui| {
+                        View { ui, theme }.dialog(&question, detail.as_deref(), hints)
+                    })
                 });
         }
         Ok(())
@@ -1107,16 +1127,17 @@ impl View<'_, '_, '_> {
             // A list under something fixed keeps the selection below it.
             selected.selected_top() - (top - VIEW_TOP),
             selected.end(),
-            bottom,
+            (bottom, self.view_bottom()),
             self.ui.frame.now,
         );
         self.ui
             .canvas
-            .set_clip_rect(self.rect((16., top, right - 16., VIEW_BOTTOM - top)));
+            .set_clip_rect(self.rect((16., top, right - 16., self.view_bottom() - top)));
         let result = (|| {
             for (n, position) in positions.iter().enumerate() {
                 let y = position.top - offset;
-                if position.end() - offset < top || position.selected_top() - offset >= VIEW_BOTTOM
+                if position.end() - offset < top
+                    || position.selected_top() - offset >= self.view_bottom()
                 {
                     continue;
                 }
@@ -1230,10 +1251,7 @@ impl View<'_, '_, '_> {
         };
         let expand = subtitle.is_none()
             && (row.kind == Kind::Value || row.id == Id::MangohudItems)
-            && self
-                .ui
-                .measure(&state.display_value(row.id, &self.ui.catalog), face, 14.)?
-                as f32
+            && self.span(&state.display_value(row.id, &self.ui.catalog), face, 14.)?
                 > right - full - 66.;
         let label_width = if expand {
             // The items summary is the long value of a short title.
@@ -1242,7 +1260,7 @@ impl View<'_, '_, '_> {
             } else {
                 120.
             };
-            (self.ui.measure(&label, face, 15.)? as f32).clamp(least, full)
+            (self.span(&label, face, 15.)?).clamp(least, full)
         } else {
             full
         };

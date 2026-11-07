@@ -153,7 +153,7 @@ impl<'t> Ui<'_, 't> {
         self.effects.paging =
             target(self.effects.page.as_ref(), &mut self.canvas) && self.effects.page.is_some();
         if !self.effects.paging {
-            target(None, &mut self.canvas);
+            self.aim();
         }
         self.canvas.set_draw_color(color(theme.background));
         self.canvas.clear();
@@ -175,12 +175,12 @@ impl<'t> Ui<'_, 't> {
             // The last frame is opaque: a plain copy of its region.
             page.set_alpha_mod(255);
             let copied = self.canvas.copy(page, rect, None).is_ok();
-            target(None, &mut self.canvas);
+            self.aim();
             if copied {
                 self.effects.art = Some((kept, rect, Tween::starting(1., 0., duration, now)));
             }
         } else {
-            target(None, &mut self.canvas);
+            self.aim();
         }
     }
     /// The picture that gave way, fading out over the new one.
@@ -203,7 +203,7 @@ impl<'t> Ui<'_, 't> {
         if !self.effects.paging {
             return Ok(());
         }
-        target(None, &mut self.canvas);
+        self.aim();
         self.effects.paging = false;
         let Frame {
             width,
@@ -306,7 +306,7 @@ impl<'t> Ui<'_, 't> {
             return draw(self);
         };
         if !target(Some(&overlay), &mut self.canvas) {
-            target(None, &mut self.canvas);
+            self.aim();
             self.effects.overlay = Some(overlay);
             return draw(self);
         }
@@ -317,8 +317,11 @@ impl<'t> Ui<'_, 't> {
             a: 0,
         }));
         self.canvas.clear();
+        // The overlay is the stage itself: drawn from its own corner.
+        let stage = self.stage.take();
         let drawn = draw(self);
-        target(None, &mut self.canvas);
+        self.stage = stage;
+        self.aim();
         let mut overlay = overlay;
         let grow = if self.motion == Motion::On {
             0.94 + 0.06 * p

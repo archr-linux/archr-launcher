@@ -90,7 +90,7 @@ impl Ui<'_, '_> {
         art: Art<'_, '_>,
     ) -> Result<(), String> {
         let Frame { width, height, .. } = self.frame;
-        let header = (theme.header_height * height as f32).round() as u32;
+        let header = self.frame.size(theme.header_height).round() as u32;
         let right = self.status_header(theme)?;
         let title = self.catalog.text("switcher.title");
         let pad = self.px(24.);

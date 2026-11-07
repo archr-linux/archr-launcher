@@ -19,7 +19,7 @@ impl View<'_, '_, '_> {
         (x, top, width): (f32, f32, f32),
         text: &str,
     ) -> Result<(), String> {
-        let room = VIEW_BOTTOM - top;
+        let room = self.view_bottom() - top;
         let floor = self.ui.frame.min_size().max(11.);
         let mut size = NOTE_SIZE;
         let lines = loop {

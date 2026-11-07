@@ -167,7 +167,7 @@ impl Ui<'_, '_> {
     /// "Trail /" in muted 13 px, then the current place in 15 px semibold.
     pub(super) fn crumbs(&mut self, trail: &str, game: &str, theme: &Theme) -> Result<(), String> {
         let right = self.status_header(theme)?;
-        let h = (theme.header_height * self.frame.height as f32).round() as u32;
+        let h = self.frame.size(theme.header_height).round() as u32;
         let pad = self.px(24.);
         let gap = self.px(8.);
         let available = (right - self.px(16.) - pad).max(1);
@@ -513,7 +513,13 @@ impl Ui<'_, '_> {
             let mut widths = Vec::new();
             for (n, label) in labels.iter().enumerate() {
                 let extra = if icon(n) { self.px(size + 6.) } else { 0 };
-                let mut text = self.measure(label, Face::Semibold, size)? as i32;
+                // Drawn semibold when focused, regular otherwise; small
+                // hinted sizes can make either one the wider.
+                let mut text = self.measure(label, Face::Semibold, size)?.max(self.measure(
+                    label,
+                    Face::Regular,
+                    size,
+                )?) as i32;
                 if n == 2 {
                     let busy = self.measure(&scraping, Face::Semibold, size)? as i32;
                     text = text.max(busy + self.px(size * 1.8 + 6.));
