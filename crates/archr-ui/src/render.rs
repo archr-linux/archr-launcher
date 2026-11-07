@@ -2705,11 +2705,11 @@ mod tests {
                     .unwrap()
                     .contains(concat!("&mut self.ui.frame.", "floor, 0)"))
                 {
-                    opt_outs.push(path.file_name().unwrap().to_string_lossy().into_owned());
+                    opt_outs.push(path.file_stem().unwrap().to_string_lossy().into_owned());
                 }
             }
         }
-        assert_eq!(opt_outs, ["mangohud.rs"]);
+        assert_eq!(opt_outs, ["mangohud"]);
     }
     #[test]
     fn tools_are_neither_systems_nor_games_in_the_library_summary() {
