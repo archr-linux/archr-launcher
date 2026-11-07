@@ -544,6 +544,12 @@ mod tests {
                 render(&card, &a, (640, 480), 1.0)
                     .save_png(Path::new(&dir).join(format!("{name}.png")))
                     .unwrap();
+                // The same card on the square and the 3:2 screens.
+                for (w, h) in [(720, 720), (480, 320)] {
+                    render(&card, &a, (w, h), 1.0)
+                        .save_png(Path::new(&dir).join(format!("{name}-{w}x{h}.png")))
+                        .unwrap();
+                }
             }
         }
     }
