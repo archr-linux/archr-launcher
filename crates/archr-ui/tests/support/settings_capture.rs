@@ -1,6 +1,17 @@
 use super::*;
 use crate::{appearance::Appearance, settings::network::Network, state::Button};
 
+/// Screen size of the manual captures: `ARCHR_CAPTURE_SIZE=720x720`, else 640x480.
+fn capture_size() -> (u32, u32) {
+    std::env::var("ARCHR_CAPTURE_SIZE")
+        .ok()
+        .and_then(|size| {
+            let (w, h) = size.split_once('x')?;
+            Some((w.parse().ok()?, h.parse().ok()?))
+        })
+        .unwrap_or((640, 480))
+}
+
 fn network(ssid: &str, security: &str, signal: u8, connected: bool) -> Network {
     Network {
         ssid: ssid.into(),
@@ -504,7 +515,7 @@ fn capture_network_and_games_pages() {
     );
     let ttf;
     let creator;
-    let mut ui = Ui::new(640, 480, true).unwrap();
+    let mut ui = Ui::new(capture_size().0, capture_size().1, true).unwrap();
     ttf = sdl2::ttf::init().unwrap();
     creator = ui.canvas.texture_creator();
     let theme = Theme::load(
@@ -519,8 +530,8 @@ fn capture_network_and_games_pages() {
         image::save_buffer(
             output.join(name),
             &pixels,
-            640,
-            480,
+            capture_size().0,
+            capture_size().1,
             image::ColorType::Rgba8,
         )
         .unwrap();
@@ -600,7 +611,7 @@ fn capture_network_and_games_pages() {
             }
             save(&mut ui, format!("home-{name}-{language}.png"));
         }
-        let mut moonlight = crate::moonlight::State::new((640, 480));
+        let mut moonlight = crate::moonlight::State::new(capture_size());
         moonlight.busy = false;
         moonlight.keyboard = Some(crate::keyboard::Keyboard::new(
             crate::keyboard::Mode::Ipv4,
@@ -746,7 +757,7 @@ fn capture_views() {
     );
     let ttf;
     let creator;
-    let mut ui = Ui::new(640, 480, true).unwrap();
+    let mut ui = Ui::new(capture_size().0, capture_size().1, true).unwrap();
     ttf = sdl2::ttf::init().unwrap();
     creator = ui.canvas.texture_creator();
     let themes = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../themes");
@@ -760,8 +771,8 @@ fn capture_views() {
         image::save_buffer(
             output.join(name),
             &pixels,
-            640,
-            480,
+            capture_size().0,
+            capture_size().1,
             image::ColorType::Rgba8,
         )
         .unwrap();
@@ -1024,7 +1035,7 @@ fn capture_achievements() {
     );
     let ttf;
     let creator;
-    let mut ui = Ui::new(640, 480, true).unwrap();
+    let mut ui = Ui::new(capture_size().0, capture_size().1, true).unwrap();
     ttf = sdl2::ttf::init().unwrap();
     creator = ui.canvas.texture_creator();
     let themes = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../themes");
@@ -1039,8 +1050,8 @@ fn capture_achievements() {
         image::save_buffer(
             output.join(name),
             &pixels,
-            640,
-            480,
+            capture_size().0,
+            capture_size().1,
             image::ColorType::Rgba8,
         )
         .unwrap();
@@ -1379,7 +1390,7 @@ fn capture_store() {
     );
     let ttf;
     let creator;
-    let mut ui = Ui::new(640, 480, true).unwrap();
+    let mut ui = Ui::new(capture_size().0, capture_size().1, true).unwrap();
     ttf = sdl2::ttf::init().unwrap();
     creator = ui.canvas.texture_creator();
     let themes = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../themes");
@@ -1421,8 +1432,8 @@ fn capture_store() {
             image::save_buffer(
                 output.join(format!("{name}-{language}.png")),
                 &pixels,
-                640,
-                480,
+                capture_size().0,
+                capture_size().1,
                 image::ColorType::Rgba8,
             )
             .unwrap();
@@ -1604,7 +1615,7 @@ fn capture_updates() {
     );
     let ttf;
     let creator;
-    let mut ui = Ui::new(640, 480, true).unwrap();
+    let mut ui = Ui::new(capture_size().0, capture_size().1, true).unwrap();
     ttf = sdl2::ttf::init().unwrap();
     creator = ui.canvas.texture_creator();
     let theme = Theme::load(
@@ -1619,8 +1630,8 @@ fn capture_updates() {
         image::save_buffer(
             output.join(name),
             &pixels,
-            640,
-            480,
+            capture_size().0,
+            capture_size().1,
             image::ColorType::Rgba8,
         )
         .unwrap();
@@ -1669,7 +1680,7 @@ fn update_versions_stay_inside_their_line() {
     std::env::set_var("SDL_VIDEODRIVER", "offscreen");
     let ttf;
     let creator;
-    let mut ui = Ui::new(640, 480, true).unwrap();
+    let mut ui = Ui::new(capture_size().0, capture_size().1, true).unwrap();
     ttf = sdl2::ttf::init().unwrap();
     creator = ui.canvas.texture_creator();
     let theme = Theme::load(
@@ -2303,7 +2314,7 @@ fn capture_modules() {
     );
     let ttf;
     let creator;
-    let mut ui = Ui::new(640, 480, true).unwrap();
+    let mut ui = Ui::new(capture_size().0, capture_size().1, true).unwrap();
     ttf = sdl2::ttf::init().unwrap();
     creator = ui.canvas.texture_creator();
     let themes = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../themes");
@@ -2347,8 +2358,8 @@ fn capture_modules() {
         image::save_buffer(
             output.join(name),
             &pixels,
-            640,
-            480,
+            capture_size().0,
+            capture_size().1,
             image::ColorType::Rgba8,
         )
         .unwrap();
@@ -2408,7 +2419,7 @@ fn capture_dongle_and_saves() {
     );
     let ttf;
     let creator;
-    let mut ui = Ui::new(640, 480, true).unwrap();
+    let mut ui = Ui::new(capture_size().0, capture_size().1, true).unwrap();
     ttf = sdl2::ttf::init().unwrap();
     creator = ui.canvas.texture_creator();
     let theme = Theme::load(
@@ -2489,8 +2500,8 @@ fn capture_dongle_and_saves() {
         image::save_buffer(
             output.join(name),
             &pixels,
-            640,
-            480,
+            capture_size().0,
+            capture_size().1,
             image::ColorType::Rgba8,
         )
         .unwrap();
@@ -2591,7 +2602,7 @@ fn capture_resume() {
     );
     let ttf;
     let creator;
-    let mut ui = Ui::new(640, 480, true).unwrap();
+    let mut ui = Ui::new(capture_size().0, capture_size().1, true).unwrap();
     ttf = sdl2::ttf::init().unwrap();
     creator = ui.canvas.texture_creator();
     let themes = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../themes");
@@ -2615,8 +2626,8 @@ fn capture_resume() {
         image::save_buffer(
             output.join(name),
             &pixels,
-            640,
-            480,
+            capture_size().0,
+            capture_size().1,
             image::ColorType::Rgba8,
         )
         .unwrap();
@@ -3047,7 +3058,7 @@ fn capture_tune() {
         std::env::var_os("ARCHR_SETTINGS_CAPTURE_DIR").expect("capture directory"),
     );
     let (ttf, creator);
-    let mut ui = Ui::new(640, 480, true).unwrap();
+    let mut ui = Ui::new(capture_size().0, capture_size().1, true).unwrap();
     ttf = sdl2::ttf::init().unwrap();
     creator = ui.canvas.texture_creator();
     let themes = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../themes");
@@ -3092,8 +3103,8 @@ fn capture_tune() {
             image::save_buffer(
                 output.join(format!("{name}-{language}.png")),
                 &pixels,
-                640,
-                480,
+                capture_size().0,
+                capture_size().1,
                 image::ColorType::Rgba8,
             )
             .unwrap();
