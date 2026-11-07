@@ -138,6 +138,8 @@ pub struct View {
     pub id: String,
     pub systems: Layout,
     pub games: Layout,
+    /// The screen it was laid out for, in pixels.
+    pub screen: (u32, u32),
 }
 
 /// A display name, the same everywhere or per language (`en`, `pt_BR`, ...).
@@ -250,6 +252,7 @@ impl View {
         let cover = t.cover;
         Self {
             id: LISTA.into(),
+            screen: t.shape.screen,
             systems: Layout {
                 panel: Some(Panel {
                     rect: panel,

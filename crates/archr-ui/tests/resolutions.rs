@@ -357,3 +357,121 @@ fn every_screen_draws_at_every_size_and_640x480_matches_the_golden_frames() {
         }
     }
 }
+
+/// Twenty systems, the first with forty games, all without art.
+fn long_library() -> FakeData {
+    let systems: Vec<SystemEntry> = (0..20)
+        .map(|n| SystemEntry {
+            name: format!("s{n:02}"),
+            fullname: format!("System {n:02}"),
+            game_count: 40,
+            dir_mtime: 0,
+            source_fingerprint: 0,
+        })
+        .collect();
+    let games = (0..40)
+        .map(|n| Game {
+            path: format!("g{n:02}.rom").into(),
+            name: format!("Game {n:02}"),
+            image: None,
+            video: None,
+            favorite: false,
+            last_played: None,
+            year: None,
+            players: None,
+            details: Default::default(),
+        })
+        .collect();
+    FakeData {
+        systems,
+        games: [("s00".into(), games)].into(),
+        ..FakeData::default()
+    }
+}
+
+/// Top of the selection pill in a fresh frame with `cursor` selected: the
+/// first accent pixel down the middle of the list.
+fn pill_top(theme: &Theme, size: (u32, u32), games: bool, cursor: usize) -> i32 {
+    let ttf;
+    let creator;
+    let mut ui = Ui::new(size.0, size.1, true).unwrap();
+    ttf = sdl2::ttf::init().unwrap();
+    creator = ui.canvas.texture_creator();
+    let root = tempfile::tempdir().unwrap();
+    ui.theme_dir = Some(root.path().to_path_buf());
+    ui.set_motion(archr_ui::motion::Motion::Off);
+    ui.configure(&ttf, &creator, theme, Some(root.path()))
+        .unwrap();
+    let data = long_library();
+    let view = theme.view(&theme.active_view);
+    let mut app = App::new(10);
+    app.set_view(&view);
+    if games {
+        app.handle(Button::A, &data);
+    }
+    app.cursor = cursor;
+    ui.draw(&app, &data, theme, None).unwrap();
+    let pixels = ui
+        .canvas
+        .read_pixels(None, sdl2::pixels::PixelFormatEnum::RGBA32)
+        .unwrap();
+    let list = archr_ui::render::pixels(view.screen(games).list.rect, size.0, size.1);
+    let x = (list.x() + list.width() as i32 / 3) as u32;
+    let accent = theme.highlight_bg;
+    (list.y()..list.bottom())
+        .find(|&y| {
+            let at = ((y as u32 * size.0 + x) * 4) as usize;
+            pixels[at..at + 3] == [accent.r, accent.g, accent.b]
+        })
+        .expect("the pill is on screen")
+}
+
+#[test]
+fn l_and_r_page_by_the_rows_each_list_draws_at_every_size() {
+    std::env::set_var("SDL_VIDEODRIVER", "offscreen");
+    for (name, theme) in shipped_themes() {
+        for size in SIZES {
+            for (id, _) in theme.views() {
+                let mut theme = theme.fitted(size.0, size.1);
+                theme.active_view = id.clone();
+                let view = theme.view(&id);
+                let mut app = App::new(10);
+                app.set_view(&view);
+                for (games, layout, nav) in [
+                    (false, &view.systems, app.systems_nav),
+                    (true, &view.games, app.games_nav),
+                ] {
+                    let list = &layout.list;
+                    if size == (640, 480) {
+                        // The pages 640x480 always had.
+                        let before = (list.rect.h / (list.row + list.gap)).floor() as usize;
+                        assert_eq!(nav.page, before.max(1), "{name} {id} games={games}");
+                    }
+                    if list.axis != archr_ui::layout::Axis::Vertical
+                        || list.scroll != archr_ui::layout::Scroll::Edge
+                    {
+                        continue;
+                    }
+                    // The last row of a page is drawn where it belongs; the
+                    // first of the next one makes the list scroll.
+                    let top = archr_ui::render::pixels(list.rect, size.0, size.1).y();
+                    let scale = archr_ui::render::scale(size.0, size.1);
+                    let pitch = ((list.row * 480. * scale).round()
+                        + (list.gap * 480. * scale).round()) as i32;
+                    let what = format!("{name} {id} games={games} at {size:?}, page {}", nav.page);
+                    let last = nav.page - 1;
+                    assert_eq!(
+                        pill_top(&theme, size, games, last),
+                        top + last as i32 * pitch,
+                        "{what}: row {last} is not drawn whole"
+                    );
+                    assert!(
+                        pill_top(&theme, size, games, nav.page) < top + nav.page as i32 * pitch,
+                        "{what}: row {} is drawn whole too",
+                        nav.page
+                    );
+                }
+            }
+        }
+    }
+}

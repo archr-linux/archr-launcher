@@ -112,17 +112,21 @@ impl Aspect {
 pub struct Shape {
     pub aspect: Aspect,
     pub reference: (f32, f32),
+    /// The screen itself, in pixels.
+    pub screen: (u32, u32),
 }
 impl Shape {
     pub const CLASSIC: Self = Self {
         aspect: Aspect::Classic,
         reference: (640., 480.),
+        screen: (640, 480),
     };
     pub fn of(width: u32, height: u32) -> Self {
         let scale = crate::render::scale(width, height);
         Self {
             aspect: Aspect::of(width, height),
             reference: (width as f32 / scale, height as f32 / scale),
+            screen: (width, height),
         }
     }
 }
