@@ -4,6 +4,7 @@ use archr_scraper::{Credentials, Engine, Job, Media, Options, Stop};
 use archr_ui::settings::network::{parse_scanlist, wpa_valid, Network};
 use archr_ui::settings::MEDIA;
 use std::os::unix::process::CommandExt;
+use std::sync::atomic::Ordering;
 
 /// wifictl's worst case: scan, connect, hidden-network retry and DHCP wait.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(150);
@@ -185,12 +186,17 @@ impl Backend {
             .filter(|ssid| !ssid.is_empty())
     }
     /// Joins the saved network with its saved key: two arguments, so wifictl
-    /// reads the key from system.cfg and never asks for it again.
-    pub(super) fn rejoin(&self, ssid: &str) -> Result<(), String> {
-        let Err(error) = self.command_with_timeout("wifictl", &["connect", ssid], CONNECT_TIMEOUT)
+    /// reads the key from system.cfg and never asks for it again. `cancel`
+    /// kills wifictl's whole process group.
+    pub(super) fn rejoin(&self, ssid: &str, cancel: &AtomicBool) -> Result<(), String> {
+        let Err(error) =
+            self.command_until("wifictl", &["connect", ssid], None, CONNECT_TIMEOUT, cancel)
         else {
             return Ok(());
         };
+        if cancel.load(Ordering::Relaxed) {
+            return Err("settings.wifi_connect_failed".into());
+        }
         if self.joined(ssid) {
             log::warn!("Wi-Fi: rejoined {ssid:?} although {error}");
             return Ok(());
@@ -791,7 +797,7 @@ mod tests {
         recorder(&root, &paths, "wifictl", "exit 1");
         let backend = Backend::new(paths.clone());
         assert_eq!(
-            backend.rejoin("Casa"),
+            backend.rejoin("Casa", &AtomicBool::new(false)),
             Err("settings.wifi_rejoin_failed|name=Casa".into())
         );
         // Two arguments: wifictl takes the key from system.cfg.
@@ -812,11 +818,11 @@ mod tests {
             "echo 'wifictl: no WiFi interface' >&2\nexit 1",
         );
         assert_eq!(
-            backend.rejoin("Casa"),
+            backend.rejoin("Casa", &AtomicBool::new(false)),
             Err("settings.wifi_no_adapter".into())
         );
         recorder(&root, &paths, "wifictl", "exit 0");
-        assert_eq!(backend.rejoin("Casa"), Ok(()));
+        assert_eq!(backend.rejoin("Casa", &AtomicBool::new(false)), Ok(()));
     }
     #[test]
     fn keyboard_layout_clears_variant_in_one_sway_command_then_persists_through_script() {

@@ -866,7 +866,7 @@ mod tests {
         assert!(!runtime.state.brief);
     }
     #[test]
-    fn switching_wifi_off_during_the_rejoin_ignores_its_late_reply() {
+    fn switching_wifi_off_during_the_rejoin_kills_it_and_shows_nothing() {
         let (dir, mut runtime) = join_fixture("0", "0.6", 0);
         runtime.state.pending = Some(Id::WifiSwitch);
         runtime.apply(Effect::Set(Id::WifiSwitch, "1".into()));
@@ -882,18 +882,108 @@ mod tests {
         wait(&mut runtime, "switch waited", |r| {
             r.state.value(Id::WifiSwitch) == "0" && r.state.pending.is_none()
         });
-        assert!(!dir.path().join("joined").exists(), "the join still runs");
-        let joined = dir.path().join("joined");
-        wait(&mut runtime, "join never ended", |_| joined.exists());
-        let settle = Instant::now() + Duration::from_millis(200);
+        // The join was killed: past its 0.6 s it never finished.
+        let settle = Instant::now() + Duration::from_millis(900);
         while Instant::now() < settle {
             runtime.poll();
             thread_yield();
         }
-        assert_eq!(message(&runtime), None, "a late success is not shown");
+        assert!(!dir.path().join("joined").exists(), "wifictl was killed");
+        assert_eq!(message(&runtime), None, "no late reply is shown");
         assert!(runtime.state.connecting.is_none() && !runtime.state.rejoining);
         assert_eq!(runtime.state.value(Id::WifiSwitch), "0");
         assert!(runtime.state.networks.is_empty());
+    }
+    /// A saved "Casa" and a wifictl that logs each call; `forget` and
+    /// `connect` run the given shell lines.
+    fn lane_fixture(forget: &str, connect: &str) -> (tempfile::TempDir, Runtime) {
+        let (dir, runtime) = join_fixture("1", "0", 0);
+        fs::write(
+            dir.path().join("usr/bin/wifictl"),
+            format!(
+                "#!/bin/sh\nlog=\"$ARCHR_LAUNCHER_ROOT/calls\"\necho \"$*\" >> \"$log\"\n\
+                 case \"$1\" in\nforget) {forget} ;;\nconnect) {connect} ;;\nesac\nexit 0\n"
+            ),
+        )
+        .unwrap();
+        (dir, runtime)
+    }
+    fn switch(runtime: &mut Runtime, value: &str) {
+        runtime.state.pending = Some(Id::WifiSwitch);
+        runtime.apply(Effect::Set(Id::WifiSwitch, value.into()));
+        wait(runtime, "switch reply", |r| {
+            r.state.pending.is_none() && r.state.value(Id::WifiSwitch) == value
+        });
+    }
+    fn calls(dir: &tempfile::TempDir, line: &str) -> usize {
+        fs::read_to_string(dir.path().join("calls"))
+            .unwrap_or_default()
+            .lines()
+            .filter(|l| *l == line)
+            .count()
+    }
+    #[test]
+    fn a_network_forgotten_before_the_switch_comes_back_on_is_not_rejoined() {
+        let (dir, mut runtime) = lane_fixture("", "");
+        let config = runtime.paths.config.clone();
+        // wifictl forget clears the saved network, after a while.
+        fs::write(
+            dir.path().join("usr/bin/wifictl"),
+            format!(
+                "#!/bin/sh\necho \"$*\" >> \"$ARCHR_LAUNCHER_ROOT/calls\"\n\
+                 [ \"$1\" = forget ] && /bin/sleep 0.5 && echo wifi.enabled=1 > {}\nexit 0\n",
+                config.display()
+            ),
+        )
+        .unwrap();
+        runtime.apply(Effect::Forget("Casa".into()));
+        switch(&mut runtime, "0");
+        switch(&mut runtime, "1");
+        wait(&mut runtime, "forget never ended", |r| !r.busy());
+        let settle = Instant::now() + Duration::from_millis(300);
+        while Instant::now() < settle {
+            runtime.poll();
+            thread_yield();
+        }
+        assert_eq!(calls(&dir, "forget Casa"), 1);
+        assert_eq!(calls(&dir, "connect Casa"), 0, "the forgotten network");
+        assert!(runtime.state.connecting.is_none() && !runtime.state.rejoining);
+        assert_eq!(message(&runtime), None, "Wi-Fi is simply on");
+        assert_eq!(runtime.state.value(Id::WifiSwitch), "1");
+    }
+    #[test]
+    fn cancelled_rejoins_are_killed_or_skipped_and_never_hold_the_lane() {
+        // A join that hangs far past the test, and a forget that holds the lane.
+        let (dir, mut runtime) =
+            lane_fixture("/bin/sleep 1", "/bin/sleep 30; echo finished >> \"$log\"");
+        switch(&mut runtime, "0");
+        // Running attempts: B kills each, and the next one starts at once.
+        for round in 1..=3 {
+            switch(&mut runtime, "1");
+            wait(&mut runtime, "rejoin not started", |r| r.state.rejoining);
+            assert_eq!(calls(&dir, "connect Casa"), round);
+            let effect = runtime.state.handle(archr_ui::state::Button::B);
+            runtime.apply(effect);
+            wait(&mut runtime, "switch off", |r| {
+                r.state.pending.is_none() && r.state.value(Id::WifiSwitch) == "0"
+            });
+        }
+        // Queued attempts: cancelled behind a forget, they never run.
+        runtime.apply(Effect::Forget("Old".into()));
+        for _ in 0..3 {
+            switch(&mut runtime, "1");
+            switch(&mut runtime, "0");
+        }
+        switch(&mut runtime, "1");
+        wait(&mut runtime, "latest rejoin not started", |r| {
+            r.state.rejoining
+        });
+        assert_eq!(calls(&dir, "connect Casa"), 4, "only the latest one ran");
+        assert_eq!(calls(&dir, "finished"), 0, "killed, never finished");
+        assert_eq!(runtime.state.connecting.as_deref(), Some("Casa"));
+        assert_eq!(message(&runtime), None);
+        let effect = runtime.state.handle(archr_ui::state::Button::B);
+        runtime.apply(effect);
     }
     fn thread_yield() {
         std::thread::sleep(Duration::from_millis(5));
