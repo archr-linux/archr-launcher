@@ -2674,7 +2674,7 @@ mod tests {
     fn no_text_under_ten_screen_pixels_and_640x480_keeps_its_sizes() {
         for size in [8., 9., 10., 11., 12., 13., 15., 17., 22.] {
             let classic = Frame::new(640, 480).font_size(size);
-            assert_eq!(classic, (size as f32).round() as u16, "640x480 at {size}");
+            assert_eq!(classic, size.round() as u16, "640x480 at {size}");
             assert!(Frame::new(720, 720).font_size(size) >= classic);
             let small = Frame::new(480, 320).font_size(size);
             // Never under 10 px, nor under what 640x480 draws when that is less.
