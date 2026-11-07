@@ -1,7 +1,8 @@
 //! The launcher at 640x480 (4:3), 720x720 (1:1, R36 Plus) and 480x320
-//! (3:2, a portrait panel drawn turned): every shipped theme's layout fits
-//! each screen, `[aspect.*]` tables apply to their shape only, and 640x480
-//! still draws the frames it always did (tests/golden/640x480).
+//! (3:2, a portrait panel the compositor turns): every shipped theme's
+//! layout fits each screen, `[aspect.*]` tables apply to their shape only,
+//! and L/R page by the rows drawn. The 640x480 golden frames are checked
+//! inside the crate (tests/support/settings_capture.rs).
 mod common;
 use archr_index::{cache::SystemEntry, Game};
 use archr_ui::{
@@ -308,55 +309,19 @@ fn frames(theme: &Theme, size: (u32, u32)) -> Vec<(&'static str, Vec<u8>)> {
     shots
 }
 
-/// Pixels that differ by more than a hint of antialiasing, outside the
-/// clock in the header's right corner.
-fn changed(a: &[u8], b: &[u8], width: usize) -> usize {
-    a.chunks_exact(4)
-        .zip(b.chunks_exact(4))
-        .enumerate()
-        .filter(|(n, _)| !(n % width >= 520 && n / width < 40))
-        .filter(|(_, (p, q))| p.iter().zip(*q).any(|(x, y)| x.abs_diff(*y) > 24))
-        .count()
-}
-
 #[test]
-fn every_screen_draws_at_every_size_and_640x480_matches_the_golden_frames() {
+fn every_screen_draws_at_every_size() {
     let _sdl = SDL.lock().unwrap_or_else(|e| e.into_inner());
     std::env::set_var("SDL_VIDEODRIVER", "offscreen");
-    std::env::set_var("TZ", "UTC");
-    let golden = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/640x480");
-    let update = std::env::var_os("ARCHR_GOLDEN_UPDATE").is_some();
     let default = Theme::load(&themes_dir().join("default"));
     for size in SIZES {
-        let shots = frames(&default, size);
-        for (name, pixels) in &shots {
+        for (name, pixels) in frames(&default, size) {
             assert_eq!(pixels.len(), (size.0 * size.1 * 4) as usize, "{name}");
             // Something besides the background was drawn.
             let first = &pixels[..4];
             assert!(
                 pixels.chunks_exact(4).filter(|p| p != &first).count() > 1000,
                 "{name} at {size:?} is empty"
-            );
-        }
-        if size != (640, 480) {
-            continue;
-        }
-        for (name, pixels) in shots {
-            let path = golden.join(format!("{name}.png"));
-            if update {
-                std::fs::create_dir_all(&golden).unwrap();
-                image::save_buffer(&path, &pixels, 640, 480, image::ColorType::Rgba8).unwrap();
-                continue;
-            }
-            let expected = image::open(&path)
-                .unwrap_or_else(|e| panic!("{}: {e}", path.display()))
-                .to_rgba8();
-            let off = changed(expected.as_raw(), &pixels, 640);
-            // Font hinting may move a few edge pixels between FreeType
-            // versions; a moved box or line moves thousands.
-            assert!(
-                off <= 640 * 480 / 500,
-                "{name} at 640x480 changed in {off} pixels"
             );
         }
     }
