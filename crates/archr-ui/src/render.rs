@@ -454,6 +454,8 @@ pub struct Ui<'font, 'texture> {
     /// Degrees the picture turns on its way to a panel mounted turned,
     /// and the texture it is drawn on meanwhile.
     turned: (u16, Option<Texture<'texture>>),
+    /// The screen area of the composition being staged, if any.
+    stage: Option<Rect>,
     pub catalog: I18n,
     pub loading: bool,
     pub banner: Option<String>,
@@ -577,6 +579,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             frame: Frame::new(size.0, size.1),
             size,
             turned: (turn, None),
+            stage: None,
             catalog: I18n::default(),
             loading: false,
             banner: None,
@@ -626,7 +629,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 .map_err(|e| e.to_string())?;
             target.set_blend_mode(BlendMode::None);
             self.turned = (turn, Some(target));
-            self.aim(true);
+            self.aim();
         }
         self.root = root.map(Path::to_path_buf);
         self.art = None;
@@ -1156,23 +1159,27 @@ impl<'font, 'texture> Ui<'font, 'texture> {
     pub fn size(&self) -> (u32, u32) {
         self.size
     }
-    /// Draws on the turned picture (`true`) or straight on the screen.
-    fn aim(&mut self, picture: bool) {
-        let target = match &self.turned.1 {
-            Some(target) if picture => target.raw(),
-            _ => std::ptr::null_mut(),
-        };
+    /// Draws on the screen again, after a texture: the turned picture on a
+    /// turned panel, within the composition being staged.
+    fn aim(&mut self) {
+        let target = self
+            .turned
+            .1
+            .as_ref()
+            .map_or(std::ptr::null_mut(), Texture::raw);
         // SAFETY: the renderer and the texture it created are both alive;
         // a null target is the screen itself.
         unsafe { sdl2::sys::SDL_SetRenderTarget(self.canvas.raw(), target) };
+        self.canvas.set_viewport(self.stage);
     }
     /// Shows the frame; on a turned panel, the picture turned onto it.
     fn present(&mut self) -> Result<(), String> {
-        if self.turned.1.is_none() {
+        let Some(target) = &self.turned.1 else {
             self.canvas.present();
             return Ok(());
-        }
-        self.aim(false);
+        };
+        // SAFETY: as in `aim`; null is the screen.
+        unsafe { sdl2::sys::SDL_SetRenderTarget(self.canvas.raw(), std::ptr::null_mut()) };
         let (w, h) = self.size;
         let (across, down) = self.canvas.output_size()?;
         let at = Rect::new(
@@ -1182,14 +1189,11 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             h,
         );
         let angle = f64::from(self.turned.0);
-        let copied = match &self.turned.1 {
-            Some(target) => self
-                .canvas
-                .copy_ex(target, None, at, angle, None, false, false),
-            None => Ok(()),
-        };
+        let copied = self
+            .canvas
+            .copy_ex(target, None, at, angle, None, false, false);
         self.canvas.present();
-        self.aim(true);
+        self.aim();
         copied
     }
     /// Runs `draw` for a composition designed `w`×`h` reference pixels,
@@ -1211,12 +1215,20 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         if (w, h) == (width, height) {
             return draw(self);
         }
-        let area = Rect::new(((width - w) / 2) as i32, ((height - h) / 2) as i32, w, h);
-        self.canvas.set_viewport(area);
+        // Viewports are in screen pixels: a stage inside a stage adds up.
+        let (x, y) = self.stage.map_or((0, 0), |outer| (outer.x(), outer.y()));
+        let previous = self.stage.replace(Rect::new(
+            x + ((width - w) / 2) as i32,
+            y + ((height - h) / 2) as i32,
+            w,
+            h,
+        ));
+        self.canvas.set_viewport(self.stage);
         (self.frame.width, self.frame.height) = (w, h);
         let drawn = draw(self);
         (self.frame.width, self.frame.height) = (width, height);
-        self.canvas.set_viewport(None);
+        self.stage = previous;
+        self.canvas.set_viewport(self.stage);
         drawn
     }
     /// Explicit debug readback; normal rendering does no disk I/O.

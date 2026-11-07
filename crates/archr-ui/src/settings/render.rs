@@ -1033,7 +1033,10 @@ impl View<'_, '_, '_> {
             return self
                 .ui
                 .pop_in(crate::render::Pop::Dialog, &question, (theme, 1.), |ui| {
-                    View { ui, theme }.dialog(&question, detail.as_deref(), hints)
+                    // Designed on 640x480: centered on a taller screen.
+                    ui.staged((640., 480.), |ui| {
+                        View { ui, theme }.dialog(&question, detail.as_deref(), hints)
+                    })
                 });
         }
         Ok(())
