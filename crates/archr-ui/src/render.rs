@@ -46,64 +46,6 @@ use std::{
 mod system_art;
 use system_art::SystemArt;
 
-/// Degrees (clockwise) the picture turns to stand upright on a panel of
-/// `width`×`height`: `ARCHR_ROTATE` (0, 90, 180 or 270) when set; on a
-/// portrait panel, its device-tree `rotation` (counterclockwise mounting,
-/// which the same clockwise turn undoes), else 270; a landscape one, none.
-pub fn rotation((width, height): (u32, u32)) -> u16 {
-    let chosen = std::env::var("ARCHR_ROTATE")
-        .ok()
-        .and_then(|value| value.trim().parse().ok())
-        .filter(|turn| [0, 90, 180, 270].contains(turn));
-    match chosen {
-        Some(turn) => turn,
-        None if height > width => panel_rotation(Path::new("/proc/device-tree"))
-            .filter(|turn| [90, 270].contains(turn))
-            .unwrap_or(270),
-        None => 0,
-    }
-}
-/// The landscape size a screen of `size` is drawn at.
-pub fn upright(size: (u32, u32)) -> (u32, u32) {
-    if rotation(size) % 180 == 90 {
-        (size.1, size.0)
-    } else {
-        size
-    }
-}
-/// `rotation` of the first `panel*` node one or two levels under `root`
-/// (a DSI panel sits under its host), a big-endian cell.
-fn panel_rotation(root: &Path) -> Option<u16> {
-    let children = |dir: &Path| {
-        std::fs::read_dir(dir)
-            .into_iter()
-            .flatten()
-            .filter_map(Result::ok)
-            .map(|entry| entry.path())
-            .filter(|path| path.is_dir())
-            .collect::<Vec<_>>()
-    };
-    children(root)
-        .into_iter()
-        .flat_map(|node| {
-            let mut found = vec![node.clone()];
-            found.extend(children(&node));
-            found
-        })
-        .filter(|node| {
-            node.file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|n| n.starts_with("panel"))
-        })
-        .find_map(|panel| {
-            let cell: [u8; 4] = std::fs::read(panel.join("rotation"))
-                .ok()?
-                .try_into()
-                .ok()?;
-            u16::try_from(u32::from_be_bytes(cell)).ok()
-        })
-}
-
 /// Screen pixels per reference pixel: the 640×480 design fits whole, so
 /// the same text keeps its size on screens of the same density.
 pub fn scale(width: u32, height: u32) -> f32 {
@@ -449,11 +391,6 @@ pub struct Ui<'font, 'texture> {
     look: look::Look<'texture>,
     has_presented: bool,
     frame: Frame,
-    /// The screen as drawn: landscape, even on a portrait panel.
-    size: (u32, u32),
-    /// Degrees the picture turns on its way to a panel mounted turned,
-    /// and the texture it is drawn on meanwhile.
-    turned: (u16, Option<Texture<'texture>>),
     /// The screen area of the composition being staged, if any.
     stage: Option<Rect>,
     pub catalog: I18n,
@@ -516,17 +453,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         }
         let window = builder.build().map_err(|e| e.to_string())?;
         startup_phase!(trace, "window creation");
-        let output = window.drawable_size();
-        let turn = rotation(output);
-        let size = if turn % 180 == 90 {
-            (output.1, output.0)
-        } else {
-            output
-        };
-        let mut renderer = window.into_canvas();
-        if turn != 0 {
-            renderer = renderer.target_texture();
-        }
+        let renderer = window.into_canvas();
         let mut canvas = if video.current_video_driver() == "dummy" {
             renderer.software()
         } else {
@@ -576,9 +503,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             effects: effects::Effects::default(),
             look: look::Look::default(),
             has_presented: false,
-            frame: Frame::new(size.0, size.1),
-            size,
-            turned: (turn, None),
+            frame: Frame::new(width, height),
             stage: None,
             catalog: I18n::default(),
             loading: false,
@@ -620,17 +545,9 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         mut prepared: PreparedText<'font>,
         root: Option<&Path>,
     ) -> Result<(), String> {
-        self.frame = Frame::from_size(self.size);
+        self.frame = Frame::from_size(self.canvas.output_size()?);
         self.frame.text = self.text_scale;
         self.creator = Some(creator);
-        if let (turn @ 1.., None) = (self.turned.0, &self.turned.1) {
-            let mut target = creator
-                .create_texture_target(None, self.size.0, self.size.1)
-                .map_err(|e| e.to_string())?;
-            target.set_blend_mode(BlendMode::None);
-            self.turned = (turn, Some(target));
-            self.aim();
-        }
         self.root = root.map(Path::to_path_buf);
         self.art = None;
         self.shadow = prepared
@@ -1142,7 +1059,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         self.animating |= self.effects.active(now);
         self.capture()?;
         startup_phase!(self.startup, "first frame draw");
-        self.present()?;
+        self.canvas.present();
         self.has_presented = true;
         if self.startup.began().is_some() {
             self.startup.phase_once("first present");
@@ -1155,46 +1072,12 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         }
         Ok(())
     }
-    /// The screen as drawn, in pixels: landscape, even on a portrait panel.
-    pub fn size(&self) -> (u32, u32) {
-        self.size
-    }
-    /// Draws on the screen again, after a texture: the turned picture on a
-    /// turned panel, within the composition being staged.
+    /// Draws on the screen again after a texture, within the composition
+    /// being staged.
     fn aim(&mut self) {
-        let target = self
-            .turned
-            .1
-            .as_ref()
-            .map_or(std::ptr::null_mut(), Texture::raw);
-        // SAFETY: the renderer and the texture it created are both alive;
-        // a null target is the screen itself.
-        unsafe { sdl2::sys::SDL_SetRenderTarget(self.canvas.raw(), target) };
-        self.canvas.set_viewport(self.stage);
-    }
-    /// Shows the frame; on a turned panel, the picture turned onto it.
-    fn present(&mut self) -> Result<(), String> {
-        let Some(target) = &self.turned.1 else {
-            self.canvas.present();
-            return Ok(());
-        };
-        // SAFETY: as in `aim`; null is the screen.
+        // SAFETY: the renderer is alive; a null target is the screen itself.
         unsafe { sdl2::sys::SDL_SetRenderTarget(self.canvas.raw(), std::ptr::null_mut()) };
-        let (w, h) = self.size;
-        let (across, down) = self.canvas.output_size()?;
-        let at = Rect::new(
-            (across as i32 - w as i32) / 2,
-            (down as i32 - h as i32) / 2,
-            w,
-            h,
-        );
-        let angle = f64::from(self.turned.0);
-        let copied = self
-            .canvas
-            .copy_ex(target, None, at, angle, None, false, false);
-        self.canvas.present();
-        self.aim();
-        copied
+        self.canvas.set_viewport(self.stage);
     }
     /// Runs `draw` for a composition designed `w`×`h` reference pixels,
     /// centered on a screen with more room, which it then sees as the
@@ -2744,22 +2627,6 @@ fn font_paths(theme: &Theme, root: Option<&Path>, default: &Path) -> [Vec<PathBu
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn a_portrait_panel_turns_by_its_device_tree_rotation() {
-        let root = tempfile::tempdir().unwrap();
-        assert_eq!(panel_rotation(root.path()), None);
-        let panel = root.path().join("dsi@ff450000/panel@0");
-        std::fs::create_dir_all(&panel).unwrap();
-        std::fs::write(panel.join("rotation"), 270u32.to_be_bytes()).unwrap();
-        assert_eq!(panel_rotation(root.path()), Some(270));
-        std::fs::write(panel.join("rotation"), 90u32.to_be_bytes()).unwrap();
-        assert_eq!(panel_rotation(root.path()), Some(90));
-        // A landscape screen is never turned, whatever the tree says.
-        assert_eq!(rotation((640, 480)), 0);
-        assert_eq!(upright((720, 720)), (720, 720));
-        assert_eq!(upright((320, 480)), (480, 320));
-    }
-
     use super::*;
 
     #[test]

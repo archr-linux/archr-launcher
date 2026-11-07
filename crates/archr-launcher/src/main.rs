@@ -207,8 +207,7 @@ fn run(
             (640, 480)
         } else {
             let mode = video.desktop_display_mode(0)?;
-            // A portrait panel is drawn turned: the launcher sees it landscape.
-            archr_ui::render::upright((mode.w.max(1) as u32, mode.h.max(1) as u32))
+            (mode.w.max(1) as u32, mode.h.max(1) as u32)
         };
         // A stopped receiver is reported by join, preserving the worker error.
         let _ = sized.send(size);
@@ -270,7 +269,7 @@ fn run(
     );
     audio.play(Sound::Boot);
     let mut seen_errors = 0;
-    let (width, height) = ui.size();
+    let (width, height) = ui.canvas.output_size()?;
     let saved_number = |key: &str, default: u64| {
         startup_config
             .as_ref()
