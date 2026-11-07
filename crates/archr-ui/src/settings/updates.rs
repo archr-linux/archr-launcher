@@ -13,8 +13,9 @@ pub const UPDATES: &[Row] = &[
     )
     .kind(Kind::Action),
     row(Id::UpdateCheck, "updates.check", Kind::Action),
-    described(Id::UpdateChannel, "updates.channel", "updates.channels").under(OPTIONS),
-    row(Id::UpdateBoot, "updates.at_startup", Kind::Toggle),
+    // The channel picker returns when repo-next / repo-dev are published:
+    // until then archr-update reads every channel as stable.
+    row(Id::UpdateBoot, "updates.at_startup", Kind::Toggle).under(OPTIONS),
     row(Id::UpdateNotify, "updates.notify", Kind::Toggle),
 ];
 /// Where archr-update writes everything, pacman included.
@@ -321,7 +322,7 @@ mod tests {
         );
     }
     #[test]
-    fn y_lists_the_packages_and_a_new_channel_checks_again() {
+    fn y_lists_the_packages() {
         let mut state = page(3);
         assert_eq!(state.hints()[1], (HintButton::Key('Y'), "updates.packages"));
         state.handle(Button::Y);
@@ -332,12 +333,12 @@ mod tests {
         assert_eq!(state.cursor, 3, "three packages and the notes");
         state.handle(Button::B);
         assert_eq!(state.page(), Page::Updates);
-        state.cursor = 2;
-        assert_eq!(
-            state.handle(Button::R),
-            Effect::Set(Id::UpdateChannel, "next".into())
-        );
-        state.complete(Id::UpdateChannel, Ok("next".into()));
-        assert!(state.updates.wants_check());
+    }
+    #[test]
+    fn only_published_channels_are_offered() {
+        // archr-update reads any unpublished channel as stable; the page
+        // must neither offer one nor show it as the current channel.
+        assert!(!UPDATES.iter().any(|row| row.id == Id::UpdateChannel));
+        assert_eq!(Id::UpdateChannel.choices(), &["stable"]);
     }
 }
