@@ -100,6 +100,22 @@ resume_shot = { x = 0.25, y = 0.15, w = 0.5, h = 0.375 }
 resume_info = { x = 0.0, y = 0.58, w = 1.0, h = 0.258333333 }
 # The Start menu's 640x480 composition centered between header and footer.
 start_area = { x = 0.0, y = 0.1796875, w = 1.0, h = 0.75 }
+# Covers keep a box-art shape: a narrower game list, a wider cover. The
+# details picture and table share the column's height.
+list_width = 0.5
+cover = { x = 0.555, y = 0.1125, w = 0.41, h = 0.583333333 }
+details_shot = { x = 0.0375, y = 0.104166667, w = 0.390625, h = 0.38 }
+details_info = { x = 0.0375, y = 0.505, w = 0.390625, h = 0.38 }
+
+# The console picture sits in the middle of the taller systems panel.
+[aspect.square.view.lista.systems]
+art = { y = 0.22, h = 0.36 }
+
+[aspect.square.view.vitrine.games]
+list = { w = 0.43 }
+panel = { x = 0.51, w = 0.45, h = 0.62 }
+art = { x = 0.51, w = 0.45, h = 0.62 }
+meta = { x = 0.51, y = 0.78, w = 0.45 }
 
 # On a 3:2 screen (480x320) the lists read in 13 px text: 19 px of reference.
 [aspect.wide]
