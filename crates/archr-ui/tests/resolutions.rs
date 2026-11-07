@@ -14,6 +14,9 @@ use archr_ui::{
 use common::FakeData;
 use std::path::{Path, PathBuf};
 
+/// SDL video runs one window at a time per process.
+static SDL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 const SIZES: [(u32, u32); 3] = [(640, 480), (720, 720), (480, 320)];
 
 fn themes_dir() -> PathBuf {
@@ -318,6 +321,7 @@ fn changed(a: &[u8], b: &[u8], width: usize) -> usize {
 
 #[test]
 fn every_screen_draws_at_every_size_and_640x480_matches_the_golden_frames() {
+    let _sdl = SDL.lock().unwrap_or_else(|e| e.into_inner());
     std::env::set_var("SDL_VIDEODRIVER", "offscreen");
     std::env::set_var("TZ", "UTC");
     let golden = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/640x480");
@@ -428,6 +432,7 @@ fn pill_top(theme: &Theme, size: (u32, u32), games: bool, cursor: usize) -> i32 
 
 #[test]
 fn l_and_r_page_by_the_rows_each_list_draws_at_every_size() {
+    let _sdl = SDL.lock().unwrap_or_else(|e| e.into_inner());
     std::env::set_var("SDL_VIDEODRIVER", "offscreen");
     for (name, theme) in shipped_themes() {
         for size in SIZES {
