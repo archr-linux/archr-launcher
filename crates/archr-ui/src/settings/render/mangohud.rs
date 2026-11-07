@@ -44,7 +44,10 @@ impl View<'_, '_, '_> {
         // A wide overlay never spills out of the scene.
         let scene = self.rect((PREVIEW_X, SCENE_Y, PREVIEW_W, SCENE_H));
         self.ui.canvas.set_clip_rect(scene);
+        // A miniature of the game's overlay: its text scales with it.
+        let floor = std::mem::replace(&mut self.ui.frame.floor, 0);
         let overlay = self.overlay(state);
+        self.ui.frame.floor = floor;
         self.ui.canvas.set_clip_rect(None);
         overlay?;
         let note = if state.mangohud_supported {

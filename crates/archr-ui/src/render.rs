@@ -48,8 +48,8 @@ use system_art::SystemArt;
 
 /// No text is drawn smaller than this many screen pixels, on any screen:
 /// on a small one the text keeps it while the design shrinks around it.
-/// Only a miniature the design itself draws smaller (the MangoHud preview)
-/// keeps its own size.
+/// A size the design draws smaller at 640x480 keeps that size, and the
+/// MangoHud preview, a miniature of the game's overlay, scales freely.
 const MIN_TEXT: i32 = 10;
 
 /// Screen pixels per reference pixel: the 640×480 design fits whole, so
@@ -70,6 +70,8 @@ struct Frame {
     grid: f32,
     /// Smallest text, in reference pixels.
     min: f32,
+    /// Smallest text, in screen pixels (`MIN_TEXT`; 0 inside a miniature).
+    floor: i32,
     now: Instant,
     unix: u64,
 }
@@ -83,6 +85,7 @@ impl Frame {
             font: 1.,
             grid: 0.,
             min: 8.,
+            floor: MIN_TEXT,
             now: Instant::now(),
             unix: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -135,14 +138,18 @@ impl Frame {
         };
         // The floor never lifts text above the size the design gives it
         // at 640x480: a miniature drawn small there stays as small.
-        let floor = MIN_TEXT.min(size.round() as i32);
+        let floor = self.floor.min(size.round() as i32);
         self.px(size).max(floor).clamp(8, 128) as u16
     }
     /// The smallest size worth asking for, before the text multipliers.
     fn min_size(self) -> f32 {
         // Below the screen-pixel floor every size looks the same; at 640x480
         // and up, fitting may still go down to 8 px as it always did.
-        let floor = if self.scale < 1. { MIN_TEXT as f32 } else { 8. };
+        let floor = if self.scale < 1. {
+            (self.floor as f32).max(8.)
+        } else {
+            8.
+        };
         self.min.max(floor / self.scale) / (self.text * self.font)
     }
 }

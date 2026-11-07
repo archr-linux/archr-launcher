@@ -121,6 +121,9 @@ meta = { x = 0.51, y = 0.78, w = 0.45 }
 [aspect.wide]
 font_size = 0.039583333
 
+[aspect.wide.view.vitrine.games]
+list = { font = 0.0375 }
+
 # Sounds: the files in sounds/ named after each event play without any
 # declaration. A [sounds] table is only needed to rename or silence one
 # (move = "sounds/tick.wav", select = ""); see docs/temas.md.
