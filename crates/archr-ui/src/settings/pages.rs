@@ -212,6 +212,14 @@ impl Settings {
     }
     pub(super) fn page_input(&mut self, button: Button) -> Option<Effect> {
         if self.connecting.is_some() {
+            // Only the rejoin after the switch went on can be left: B switches
+            // Wi-Fi off again, and the host ignores the join's late reply.
+            if self.rejoining && button == Button::B {
+                self.connecting = None;
+                self.rejoining = false;
+                self.pending = Some(Id::WifiSwitch);
+                return Some(Effect::Set(Id::WifiSwitch, "0".into()));
+            }
             return Some(Effect::None);
         }
         if let Some(effect) = self.storage_input(button) {
@@ -557,6 +565,43 @@ mod tests {
         assert_eq!(state.connecting.as_deref(), Some("Casa"));
         assert_eq!(state.handle(Button::B), Effect::None);
         assert_eq!(state.page(), Page::Wifi);
+    }
+    #[test]
+    fn the_switch_on_rejoin_waits_but_b_switches_wifi_off_again() {
+        let mut state = wifi();
+        state.connecting = Some("Casa".into());
+        state.rejoining = true;
+        assert_eq!(state.handle(Button::A), Effect::None);
+        assert_eq!(state.handle(Button::Down), Effect::None);
+        assert_eq!(state.connecting.as_deref(), Some("Casa"), "still waiting");
+        assert_eq!(
+            state.handle(Button::B),
+            Effect::Set(Id::WifiSwitch, "0".into())
+        );
+        assert!(state.connecting.is_none() && !state.rejoining);
+        assert_eq!(state.pending, Some(Id::WifiSwitch));
+        assert_eq!(state.page(), Page::Wifi);
+    }
+    #[test]
+    fn a_confirmation_is_brief_silent_and_any_button_clears_it() {
+        let mut state = wifi();
+        state.fail(None, "settings.wifi_timeout".into());
+        let errors = state.error_seq;
+        state.note(crate::settings::network::about(
+            "settings.wifi_joined",
+            "Casa",
+        ));
+        assert!(state.brief);
+        assert_eq!(state.error_seq, errors, "no error sound");
+        assert_eq!(state.note_seq, 1);
+        assert_eq!(
+            state.error.as_ref().map(|e| e.1.as_str()),
+            Some("settings.wifi_joined|name=Casa")
+        );
+        state.handle(Button::Down);
+        assert!(state.error.is_none());
+        state.fail(None, "settings.wifi_timeout".into());
+        assert!(!state.brief, "a failure keeps its full time");
     }
     #[test]
     fn open_hidden_network_confirms_an_empty_password_with_start() {

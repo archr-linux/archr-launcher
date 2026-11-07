@@ -90,6 +90,12 @@ impl Usb {
     }
 }
 
+/// A banner message naming a network: the locale key and its `{name}`. The
+/// message's fields split at `|`, so a bar in an SSID becomes a broken bar.
+pub fn about(key: &str, ssid: &str) -> String {
+    format!("{key}|name={}", ssid.replace('|', "\u{a6}"))
+}
+
 /// WPA passphrase (8-63 bytes) or raw 64-digit hex key.
 pub fn wpa_valid(key: &str) -> bool {
     (8..=63).contains(&key.len()) || (key.len() == 64 && key.bytes().all(|b| b.is_ascii_hexdigit()))
@@ -99,6 +105,16 @@ pub fn wpa_valid(key: &str) -> bool {
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_named_message_keeps_the_whole_ssid() {
+        let catalog =
+            crate::i18n::I18n::load(std::path::Path::new("/nonexistent"), Some("en"), None);
+        let text = |ssid| {
+            crate::settings::information::value(&catalog, &about("settings.wifi_joined", ssid))
+        };
+        assert_eq!(text("Casa"), "Connected to Casa");
+        assert_eq!(text("a|b=c"), "Connected to a\u{a6}b=c");
+    }
     #[test]
     fn scanlist_detail_keeps_ssid_and_ignores_malformed_records() {
         let output = "Café 5G\twpa2\t78\t1\t0\ninvalid\nGuest\topen\t52\t0\t1\n";

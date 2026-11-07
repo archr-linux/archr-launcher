@@ -391,6 +391,9 @@ pub(super) enum Work {
     BtScan,
     Bt(archr_ui::settings::bluetooth::Action, String),
     Connect(String, String),
+    /// The saved network after the Wi-Fi switch went on, for that switch
+    /// generation: on the Wi-Fi lane, like `Connect`.
+    Rejoin(u64, String),
     Forget(String),
     Variants(String),
     Login(String, String),
@@ -438,6 +441,9 @@ enum Reply {
     BtScan(Result<Vec<archr_ui::settings::bluetooth::Device>, String>),
     Bt(Result<(), String>),
     Connect(Result<(), String>),
+    /// The switch went on and this network is saved: rejoin it.
+    Rejoin(String),
+    Rejoined(u64, String, Result<(), String>),
     Forget(Result<(), String>),
     Variants(Vec<(String, String)>),
     Login(Result<(String, usize), String>),
@@ -471,6 +477,9 @@ enum Reply {
 const SCAN_TIMEOUT: Duration = Duration::from_secs(45);
 pub struct Worker {
     tx: mpsc::Sender<Work>,
+    /// Joins and forgets, one at a time: never two wifictl connects at once,
+    /// and a slow join never holds the switch or any other setting.
+    wifi: mpsc::Sender<Work>,
     scans: mpsc::Sender<u64>,
     bt_scans: mpsc::Sender<()>,
     profiles: mpsc::Sender<()>,
@@ -508,6 +517,30 @@ impl Worker {
         let (store_results, store_paths) = (results.clone(), paths.clone());
         let (slow, slow_requests) = mpsc::channel();
         let (slow_results, slow_paths) = (results.clone(), paths.clone());
+        let (wifi, wifi_requests) = mpsc::channel();
+        let (wifi_results, wifi_paths) = (results.clone(), paths.clone());
+        thread::Builder::new()
+            .name("launcher-wifi".into())
+            .spawn(move || {
+                let backend = Backend::new(wifi_paths);
+                while let Ok(work) = wifi_requests.recv() {
+                    let reply = match work {
+                        Work::Connect(ssid, password) => {
+                            Reply::Connect(backend.connect(&ssid, &password))
+                        }
+                        Work::Rejoin(generation, ssid) => {
+                            let result = backend.rejoin(&ssid);
+                            Reply::Rejoined(generation, ssid, result)
+                        }
+                        Work::Forget(ssid) => Reply::Forget(backend.forget(&ssid)),
+                        _ => unreachable!("only joins and forgets use the Wi-Fi lane"),
+                    };
+                    if wifi_results.send(reply).is_err() {
+                        break;
+                    }
+                }
+            })
+            .map_err(|e| e.to_string())?;
         // Reports, checksums and pacman take seconds to minutes.
         thread::Builder::new()
             .name("launcher-diag".into())
@@ -576,10 +609,16 @@ impl Worker {
                             Reply::SetLevel(id, backend.set_level(id, &value))
                         }
                         Work::Set(id, value) => {
-                            let reply = Reply::Set(id, backend.apply(id, &value));
+                            let result = backend.apply(id, &value);
+                            let on = id == Id::WifiSwitch && result.as_deref() == Ok("1");
+                            let reply = Reply::Set(id, result);
                             if id == Id::MergedStorage {
                                 let _ = results.send(reply);
                                 Reply::Facts(Box::new(backend.storage()))
+                            } else if let Some(ssid) = on.then(|| backend.rejoin_target()).flatten()
+                            {
+                                let _ = results.send(reply);
+                                Reply::Rejoin(ssid)
                             } else {
                                 reply
                             }
@@ -592,10 +631,9 @@ impl Worker {
                         Work::Usb => Reply::Usb(backend.usb()),
                         Work::Scan | Work::BtScan => unreachable!("scans have their own lane"),
                         Work::Bt(action, addr) => Reply::Bt(backend.bt_act(action, &addr)),
-                        Work::Connect(ssid, password) => {
-                            Reply::Connect(backend.connect(&ssid, &password))
+                        Work::Connect(..) | Work::Rejoin(..) | Work::Forget(_) => {
+                            unreachable!("joins have the Wi-Fi lane")
                         }
-                        Work::Forget(ssid) => Reply::Forget(backend.forget(&ssid)),
                         Work::Variants(layout) => {
                             Reply::Variants(backend.keyboard_names(&["list-variants", &layout]))
                         }
@@ -645,6 +683,7 @@ impl Worker {
             .map_err(|e| e.to_string())?;
         Ok(Self {
             tx,
+            wifi,
             scans,
             bt_scans,
             profiles,
@@ -714,6 +753,14 @@ impl Worker {
         if let Some(slow) = slow {
             return self.slow.send(slow).map_err(|e| e.to_string());
         }
+        if matches!(work, Work::Rejoin(..)) {
+            return self.wifi.send(work).map_err(|e| e.to_string());
+        }
+        if matches!(work, Work::Connect(..) | Work::Forget(_)) {
+            self.wifi.send(work).map_err(|e| e.to_string())?;
+            self.pending += 1;
+            return Ok(());
+        }
         if matches!(work, Work::Set(Id::WifiSwitch, _)) {
             self.generation += 1;
         }
@@ -723,6 +770,19 @@ impl Worker {
         self.tx.send(work).map_err(|e| e.to_string())?;
         self.pending += 1;
         Ok(())
+    }
+    /// A join's outcome: a brief confirmation and a fresh list, or the failure.
+    fn joined(&mut self, state: &mut Settings, ssid: &str, result: Result<(), String>) {
+        match result {
+            Ok(()) => {
+                state.note(archr_ui::settings::network::about(
+                    "settings.wifi_joined",
+                    ssid,
+                ));
+                let _ = self.send(Work::Scan);
+            }
+            Err(error) => state.fail(None, error),
+        }
     }
     /// Arrival order is not state order: the daemon owns the version.
     fn apply_level(&mut self, state: &mut Settings, id: Id, reading: &levels::Reading) -> bool {
@@ -774,6 +834,8 @@ impl Worker {
                 Reply::CheevosProfile(_)
                     | Reply::Store(_)
                     | Reply::Facts(_)
+                    | Reply::Rejoin(_)
+                    | Reply::Rejoined(..)
                     | Reply::Diag(_)
                     | Reply::Report(_)
                     | Reply::Bios(_)
@@ -990,7 +1052,32 @@ impl Worker {
                         Err(error) => state.fail(None, error),
                     }
                 }
-                Reply::Connect(result) | Reply::Forget(result) => {
+                Reply::Connect(result) => {
+                    let ssid = state.connecting.take().unwrap_or_default();
+                    self.joined(state, &ssid, result);
+                }
+                Reply::Rejoin(ssid) => {
+                    // Right behind the switch's reply: still on, nothing newer
+                    // sent, and no join already shown.
+                    if state.value(Id::WifiSwitch) == "1"
+                        && state.pending != Some(Id::WifiSwitch)
+                        && state.connecting.is_none()
+                    {
+                        state.connecting = Some(ssid.clone());
+                        state.rejoining = true;
+                        let _ = self.send(Work::Rejoin(self.generation, ssid));
+                    }
+                }
+                // Switched since (off, or off and on again): not this join's page.
+                Reply::Rejoined(generation, ..) if generation != self.generation => {}
+                Reply::Rejoined(_, ssid, result) => {
+                    if state.rejoining {
+                        state.connecting = None;
+                        state.rejoining = false;
+                    }
+                    self.joined(state, &ssid, result);
+                }
+                Reply::Forget(result) => {
                     state.connecting = None;
                     match result {
                         Ok(()) => {

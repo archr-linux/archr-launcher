@@ -912,6 +912,10 @@ pub struct Settings {
     pub error: Option<(Option<Id>, String)>,
     /// Bumped by every `fail`, so a repeated identical message restarts its timer.
     pub error_seq: u64,
+    /// The message is a confirmation (`note`): shown briefly, without the error sound.
+    pub brief: bool,
+    /// Bumped by every `note`, like `error_seq`.
+    pub note_seq: u64,
     /// Locale key of the question asking to reboot now.
     pub reboot_prompt: Option<&'static str>,
     pub info: Information,
@@ -924,6 +928,9 @@ pub struct Settings {
     pub scanning: bool,
     /// SSID being joined; input waits for the host's reply.
     pub connecting: Option<String>,
+    /// The join is the saved network's, after the Wi-Fi switch went on:
+    /// B cancels it by switching Wi-Fi off again.
+    pub rejoining: bool,
     pub confirm_forget: Option<String>,
     pub keyboard: Option<Keyboard>,
     pub keyboard_target: Option<Id>,
@@ -989,6 +996,8 @@ impl Default for Settings {
             loading: true,
             error: None,
             error_seq: 0,
+            brief: false,
+            note_seq: 0,
             reboot_prompt: None,
             info: Information::default(),
             networks: Vec::new(),
@@ -998,6 +1007,7 @@ impl Default for Settings {
             scanned: None,
             scanning: false,
             connecting: None,
+            rejoining: false,
             confirm_forget: None,
             keyboard: None,
             keyboard_target: None,
@@ -1613,7 +1623,15 @@ impl Settings {
     }
     pub fn fail(&mut self, id: Option<Id>, error: String) {
         self.error = Some((id, error));
+        self.brief = false;
         self.error_seq += 1;
+    }
+    /// A short confirmation in the same banner: it leaves sooner than a
+    /// failure, on its own or at any button, and plays no error sound.
+    pub fn note(&mut self, message: String) {
+        self.error = Some((None, message));
+        self.brief = true;
+        self.note_seq += 1;
     }
     pub fn complete(&mut self, id: Id, result: Result<String, String>) {
         self.pending = None;

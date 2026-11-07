@@ -177,8 +177,10 @@ impl Scroll {
         self.tween.value(now)
     }
 }
-/// How long a message stays up, and the fade that removes it.
+/// How long a message stays up, a confirmation (`brief`) for less, and the
+/// fade that removes it.
 const BANNER_TIME: Duration = Duration::from_secs(4);
+const BRIEF_TIME: Duration = Duration::from_secs(2);
 const BANNER_FADE: Duration = crate::motion::NOTICE;
 /// The visible message: fades out on a timer or when the state drops it, and
 /// a different message shows at once and restarts the timer.
@@ -186,6 +188,7 @@ pub(super) struct Banner {
     shown: Option<(Option<Id>, String)>,
     seq: u64,
     since: Instant,
+    hold: Duration,
     pub(super) fade: Tween,
 }
 impl Default for Banner {
@@ -194,24 +197,31 @@ impl Default for Banner {
             shown: None,
             seq: 0,
             since: Instant::now(),
+            hold: BANNER_TIME,
             fade: Tween::new(0., BANNER_FADE),
         }
     }
 }
 impl Banner {
-    /// Opacity (0..=1) to draw `error` with this frame.
-    fn alpha(&mut self, error: Option<&(Option<Id>, String)>, seq: u64, now: Instant) -> f32 {
+    /// Opacity (0..=1) to draw `error` with this frame; it stays up `hold`.
+    fn alpha(
+        &mut self,
+        error: Option<&(Option<Id>, String)>,
+        (seq, hold): (u64, Duration),
+        now: Instant,
+    ) -> f32 {
         match error {
             Some(error) if self.shown.as_ref() != Some(error) || self.seq != seq => {
                 self.shown = Some(error.clone());
                 self.seq = seq;
                 self.since = now;
+                self.hold = hold;
                 // Rises into place from transparent.
                 self.fade.retarget(0., now);
                 self.fade.snap();
                 self.fade.retarget(1., now);
             }
-            Some(_) if now.saturating_duration_since(self.since) >= BANNER_TIME => {
+            Some(_) if now.saturating_duration_since(self.since) >= self.hold => {
                 self.fade.retarget(0., now)
             }
             Some(_) => {}
@@ -229,7 +239,7 @@ impl Banner {
         self.fade.active(now)
             || (self.shown.is_some()
                 && self.fade.target > 0.
-                && now.saturating_duration_since(self.since) < BANNER_TIME + BANNER_FADE)
+                && now.saturating_duration_since(self.since) < self.hold + BANNER_FADE)
     }
 }
 type Bounds = (f32, f32, f32, f32);
@@ -788,10 +798,13 @@ impl View<'_, '_, '_> {
             !matches!(state.page(), Page::Info | Page::InfoDetail(_))
                 && (id.is_none() || rows.iter().any(|r| Some(r.id) == *id))
         });
+        // Failures and confirmations count apart; either restarts the timer.
+        let seq = state.error_seq.wrapping_add(state.note_seq);
+        let hold = if state.brief { BRIEF_TIME } else { BANNER_TIME };
         let alpha = self
             .ui
             .settings_banner
-            .alpha(error, state.error_seq, self.ui.frame.now);
+            .alpha(error, (seq, hold), self.ui.frame.now);
         if let Some((id, error)) = self.ui.settings_banner.shown.clone().filter(|_| alpha > 0.) {
             let fade = |c: Rgba| Rgba {
                 a: (f32::from(c.a) * alpha) as u8,
@@ -1046,13 +1059,16 @@ impl View<'_, '_, '_> {
                     Some(&[(Key('B'), "hint.back")]),
                 ))
             } else {
+                // The rejoin after the switch went on can be cancelled.
+                const CANCEL: &[(crate::HintButton, &str)] =
+                    &[(crate::HintButton::Key('B'), "hint.cancel")];
                 state.connecting.as_ref().map(|ssid| {
                     (
                         self.ui
                             .catalog
                             .format("settings.connecting", &[("name", ssid)]),
                         Some(self.tr("settings.wait")),
-                        None,
+                        state.rejoining.then_some(CANCEL),
                     )
                 })
             };
@@ -1607,44 +1623,71 @@ mod banner_tests {
         let (mut banner, t0) = (Banner::default(), Instant::now());
         let first = error("settings.failed");
         // It rises into view.
-        assert_eq!(banner.alpha(first.as_ref(), 0, t0), 0.);
-        assert_eq!(banner.alpha(first.as_ref(), 0, t0 + BANNER_FADE), 1.);
+        assert_eq!(banner.alpha(first.as_ref(), (0, BANNER_TIME), t0), 0.);
+        assert_eq!(
+            banner.alpha(first.as_ref(), (0, BANNER_TIME), t0 + BANNER_FADE),
+            1.
+        );
         let late = t0 + Duration::from_millis(3900);
-        assert_eq!(banner.alpha(first.as_ref(), 0, late), 1.);
+        assert_eq!(banner.alpha(first.as_ref(), (0, BANNER_TIME), late), 1.);
         // A different message replaces it, rising again, and restarts the clock.
         let second = error("settings.wifi_timeout");
-        assert_eq!(banner.alpha(second.as_ref(), 1, late), 0.);
-        assert_eq!(banner.alpha(second.as_ref(), 1, late + BANNER_FADE), 1.);
+        assert_eq!(banner.alpha(second.as_ref(), (1, BANNER_TIME), late), 0.);
+        assert_eq!(
+            banner.alpha(second.as_ref(), (1, BANNER_TIME), late + BANNER_FADE),
+            1.
+        );
         let later = late + Duration::from_millis(3900);
-        assert_eq!(banner.alpha(second.as_ref(), 1, later), 1.);
+        assert_eq!(banner.alpha(second.as_ref(), (1, BANNER_TIME), later), 1.);
         // Past the timer the message fades, then stays gone while the state keeps it.
         let gone = later + Duration::from_millis(300);
-        banner.alpha(second.as_ref(), 1, gone);
+        banner.alpha(second.as_ref(), (1, BANNER_TIME), gone);
         let end = gone + BANNER_FADE + Duration::from_millis(10);
-        assert_eq!(banner.alpha(second.as_ref(), 1, end), 0.);
+        assert_eq!(banner.alpha(second.as_ref(), (1, BANNER_TIME), end), 0.);
         assert!(!banner.busy(end));
-        assert_eq!(banner.alpha(second.as_ref(), 1, end), 0.);
+        assert_eq!(banner.alpha(second.as_ref(), (1, BANNER_TIME), end), 0.);
     }
     #[test]
     fn an_identical_message_arriving_again_restarts_the_timer() {
         let (mut banner, t0) = (Banner::default(), Instant::now());
         let message = error("settings.failed");
-        banner.alpha(message.as_ref(), 1, t0);
+        banner.alpha(message.as_ref(), (1, BANNER_TIME), t0);
         let late = t0 + Duration::from_millis(3900);
-        banner.alpha(message.as_ref(), 2, late);
-        assert_eq!(banner.alpha(message.as_ref(), 2, late + BANNER_FADE), 1.);
+        banner.alpha(message.as_ref(), (2, BANNER_TIME), late);
+        assert_eq!(
+            banner.alpha(message.as_ref(), (2, BANNER_TIME), late + BANNER_FADE),
+            1.
+        );
         let later = late + Duration::from_millis(3900);
-        assert_eq!(banner.alpha(message.as_ref(), 2, later), 1.);
+        assert_eq!(banner.alpha(message.as_ref(), (2, BANNER_TIME), later), 1.);
+    }
+    #[test]
+    fn a_confirmation_leaves_after_two_seconds() {
+        let (mut banner, t0) = (Banner::default(), Instant::now());
+        let note = error("settings.wifi_joined|name=Casa");
+        banner.alpha(note.as_ref(), (1, BRIEF_TIME), t0);
+        let up = t0 + Duration::from_millis(1900);
+        assert_eq!(banner.alpha(note.as_ref(), (1, BRIEF_TIME), up), 1.);
+        let past = t0 + BRIEF_TIME;
+        banner.alpha(note.as_ref(), (1, BRIEF_TIME), past);
+        let end = past + BANNER_FADE + Duration::from_millis(10);
+        assert_eq!(banner.alpha(note.as_ref(), (1, BRIEF_TIME), end), 0.);
+        assert!(!banner.busy(end));
+        // A failure after it keeps the full time.
+        let failure = error("settings.wifi_timeout");
+        banner.alpha(failure.as_ref(), (2, BANNER_TIME), end);
+        let later = end + Duration::from_millis(3900);
+        assert_eq!(banner.alpha(failure.as_ref(), (2, BANNER_TIME), later), 1.);
     }
     #[test]
     fn input_dropping_the_message_fades_it_out_early() {
         let (mut banner, t0) = (Banner::default(), Instant::now());
-        banner.alpha(error("settings.failed").as_ref(), 0, t0);
+        banner.alpha(error("settings.failed").as_ref(), (0, BANNER_TIME), t0);
         let now = t0 + Duration::from_millis(500);
-        banner.alpha(None, 0, now);
+        banner.alpha(None, (0, BANNER_TIME), now);
         assert!(banner.busy(now));
         let end = now + BANNER_FADE + Duration::from_millis(10);
-        assert_eq!(banner.alpha(None, 0, end), 0.);
+        assert_eq!(banner.alpha(None, (0, BANNER_TIME), end), 0.);
         assert!(banner.shown.is_none());
     }
 }

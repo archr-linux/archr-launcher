@@ -776,6 +776,125 @@ mod tests {
             "the store lane never holds the settings worker"
         );
     }
+    /// A saved "Casa" and a wifictl whose connect takes `delay` seconds,
+    /// marks `joined` and exits with `status`; nothing else does anything.
+    fn join_fixture(switch: &str, delay: &str, status: u8) -> (tempfile::TempDir, Runtime) {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::new(Some(dir.path().into()));
+        fs::create_dir_all(paths.config.parent().unwrap()).unwrap();
+        fs::create_dir_all(paths.lock.parent().unwrap()).unwrap();
+        fs::write(
+            &paths.config,
+            format!("wifi.enabled={switch}\nwifi.ssid=Casa\nwifi.key=12345678\n"),
+        )
+        .unwrap();
+        let bin = dir.path().join("usr/bin");
+        fs::create_dir_all(&bin).unwrap();
+        let wifictl = bin.join("wifictl");
+        fs::write(
+            &wifictl,
+            format!(
+                "#!/bin/sh\necho \"$*\" >> \"$ARCHR_LAUNCHER_ROOT/calls\"\n\
+                 [ \"$1\" = connect ] || exit 0\n/bin/sleep {delay}\n\
+                 echo > \"$ARCHR_LAUNCHER_ROOT/joined\"\nexit {status}\n"
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&wifictl, fs::Permissions::from_mode(0o755)).unwrap();
+        let mut runtime = Runtime::new(paths);
+        runtime.active = true;
+        runtime.state.loading = false;
+        runtime.state.open(Page::Wifi);
+        runtime.state.values.insert(Id::WifiSwitch, switch.into());
+        (dir, runtime)
+    }
+    fn wait(runtime: &mut Runtime, what: &str, done: impl Fn(&Runtime) -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !done(runtime) {
+            runtime.poll();
+            assert!(Instant::now() < deadline, "{what}");
+            thread_yield();
+        }
+    }
+    fn message(runtime: &Runtime) -> Option<&str> {
+        runtime.state.error.as_ref().map(|(_, text)| text.as_str())
+    }
+    #[test]
+    fn a_joined_network_is_confirmed_briefly_until_any_button() {
+        let (_dir, mut runtime) = join_fixture("1", "0.2", 0);
+        runtime.state.connecting = Some("Casa".into());
+        runtime.apply(Effect::Connect("Casa".into(), "12345678".into()));
+        wait(&mut runtime, "no reply", |r| r.state.connecting.is_none());
+        assert_eq!(message(&runtime), Some("settings.wifi_joined|name=Casa"));
+        assert!(runtime.state.brief, "a confirmation, not a failure");
+        assert_eq!(runtime.state.error_seq, 0, "no error sound");
+        runtime.state.handle(archr_ui::state::Button::Down);
+        assert_eq!(message(&runtime), None);
+    }
+    #[test]
+    fn switching_wifi_on_follows_the_saved_networks_rejoin() {
+        let (dir, mut runtime) = join_fixture("0", "0.4", 0);
+        runtime.state.pending = Some(Id::WifiSwitch);
+        runtime.apply(Effect::Set(Id::WifiSwitch, "1".into()));
+        wait(&mut runtime, "rejoin not shown", |r| {
+            r.state.connecting.as_deref() == Some("Casa")
+        });
+        assert!(runtime.state.rejoining);
+        assert_eq!(runtime.state.value(Id::WifiSwitch), "1");
+        assert!(runtime.mutations_pending(), "settings wait for it");
+        wait(&mut runtime, "no rejoin reply", |r| {
+            r.state.connecting.is_none()
+        });
+        assert!(!runtime.state.rejoining);
+        assert_eq!(message(&runtime), Some("settings.wifi_joined|name=Casa"));
+        assert!(runtime.state.brief);
+        let calls = fs::read_to_string(dir.path().join("calls")).unwrap();
+        assert_eq!(calls.matches("connect").count(), 1, "{calls}");
+        assert!(calls.contains("connect Casa\n"), "the saved key: {calls}");
+        // A failed rejoin says the network is still saved.
+        let (_dir, mut runtime) = join_fixture("0", "0.1", 1);
+        runtime.state.pending = Some(Id::WifiSwitch);
+        runtime.apply(Effect::Set(Id::WifiSwitch, "1".into()));
+        wait(&mut runtime, "rejoin not shown", |r| r.state.rejoining);
+        wait(&mut runtime, "no rejoin reply", |r| {
+            r.state.connecting.is_none()
+        });
+        assert_eq!(
+            message(&runtime),
+            Some("settings.wifi_rejoin_failed|name=Casa")
+        );
+        assert!(!runtime.state.brief);
+    }
+    #[test]
+    fn switching_wifi_off_during_the_rejoin_ignores_its_late_reply() {
+        let (dir, mut runtime) = join_fixture("0", "0.6", 0);
+        runtime.state.pending = Some(Id::WifiSwitch);
+        runtime.apply(Effect::Set(Id::WifiSwitch, "1".into()));
+        wait(&mut runtime, "rejoin not shown", |r| r.state.rejoining);
+        let effect = runtime.state.handle(archr_ui::state::Button::B);
+        assert_eq!(effect, Effect::Set(Id::WifiSwitch, "0".into()));
+        runtime.apply(effect);
+        assert!(
+            runtime.state.connecting.is_none(),
+            "the dialog closes at once"
+        );
+        // The switch never waits for the join.
+        wait(&mut runtime, "switch waited", |r| {
+            r.state.value(Id::WifiSwitch) == "0" && r.state.pending.is_none()
+        });
+        assert!(!dir.path().join("joined").exists(), "the join still runs");
+        let joined = dir.path().join("joined");
+        wait(&mut runtime, "join never ended", |_| joined.exists());
+        let settle = Instant::now() + Duration::from_millis(200);
+        while Instant::now() < settle {
+            runtime.poll();
+            thread_yield();
+        }
+        assert_eq!(message(&runtime), None, "a late success is not shown");
+        assert!(runtime.state.connecting.is_none() && !runtime.state.rejoining);
+        assert_eq!(runtime.state.value(Id::WifiSwitch), "0");
+        assert!(runtime.state.networks.is_empty());
+    }
     fn thread_yield() {
         std::thread::sleep(Duration::from_millis(5));
     }
