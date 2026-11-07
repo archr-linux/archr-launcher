@@ -46,6 +46,12 @@ use std::{
 mod system_art;
 use system_art::SystemArt;
 
+/// No text is drawn smaller than this many screen pixels, on any screen:
+/// on a small one the text keeps it while the design shrinks around it.
+/// Only a miniature the design itself draws smaller (the MangoHud preview)
+/// keeps its own size.
+const MIN_TEXT: i32 = 10;
+
 /// Screen pixels per reference pixel: the 640×480 design fits whole, so
 /// the same text keeps its size on screens of the same density.
 pub fn scale(width: u32, height: u32) -> f32 {
@@ -127,11 +133,17 @@ impl Frame {
         } else {
             size
         };
-        self.px(size).clamp(8, 128) as u16
+        // The floor never lifts text above the size the design gives it
+        // at 640x480: a miniature drawn small there stays as small.
+        let floor = MIN_TEXT.min(size.round() as i32);
+        self.px(size).max(floor).clamp(8, 128) as u16
     }
     /// The smallest size worth asking for, before the text multipliers.
     fn min_size(self) -> f32 {
-        self.min.max(8. / self.scale) / (self.text * self.font)
+        // Below the screen-pixel floor every size looks the same; at 640x480
+        // and up, fitting may still go down to 8 px as it always did.
+        let floor = if self.scale < 1. { MIN_TEXT as f32 } else { 8. };
+        self.min.max(floor / self.scale) / (self.text * self.font)
     }
 }
 fn localized_error(catalog: &I18n, error: String) -> String {
@@ -1956,7 +1968,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                     self.look.outlining = outlining;
                     continue;
                 }
-                let size = self.px(11.).clamp(8, 128) as u16;
+                let size = self.px(11.).clamp(MIN_TEXT, 128) as u16;
                 self.text
                     .as_mut()
                     .ok_or_else(|| self.catalog.text("error.font_init"))?
