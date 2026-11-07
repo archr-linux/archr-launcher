@@ -521,6 +521,7 @@ fn capture_network_and_games_pages() {
     let theme = Theme::load(
         &std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../themes/default"),
     );
+    let theme = theme.fitted(capture_size().0, capture_size().1);
     ui.configure(&ttf, &creator, &theme, None).unwrap();
     let save = |ui: &mut Ui, name: String| {
         let pixels = ui
@@ -792,7 +793,8 @@ fn capture_views() {
             .and_then(|n| n.to_str())
             .unwrap_or(folder);
         let default = themes.join("default");
-        let mut theme = Theme::load_over(&themes.join(folder), &Theme::load(&default));
+        let theme = Theme::load_over(&themes.join(folder), &Theme::load(&default));
+        let mut theme = theme.fitted(capture_size().0, capture_size().1);
         theme.active_view = view.into();
         let empty = output.join("no-art");
         ui.theme_dir = Some(if noart {
@@ -1040,6 +1042,7 @@ fn capture_achievements() {
     creator = ui.canvas.texture_creator();
     let themes = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../themes");
     let theme = Theme::load(&themes.join("default"));
+    let theme = theme.fitted(capture_size().0, capture_size().1);
     ui.theme_dir = Some(themes.join("default"));
     ui.configure(&ttf, &creator, &theme, None).unwrap();
     let save = |ui: &mut Ui, name: String| {
@@ -1395,6 +1398,7 @@ fn capture_store() {
     creator = ui.canvas.texture_creator();
     let themes = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../themes");
     let theme = Theme::load(&themes.join("default"));
+    let theme = theme.fitted(capture_size().0, capture_size().1);
     let images = tempfile::tempdir().unwrap();
     ui.theme_dir = Some(themes.join("default"));
     ui.configure(&ttf, &creator, &theme, None).unwrap();
@@ -1621,6 +1625,7 @@ fn capture_updates() {
     let theme = Theme::load(
         &std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../themes/default"),
     );
+    let theme = theme.fitted(capture_size().0, capture_size().1);
     ui.configure(&ttf, &creator, &theme, None).unwrap();
     let save = |ui: &mut Ui, name: String| {
         let pixels = ui
@@ -1686,6 +1691,7 @@ fn update_versions_stay_inside_their_line() {
     let theme = Theme::load(
         &std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../themes/default"),
     );
+    let theme = theme.fitted(capture_size().0, capture_size().1);
     ui.configure(&ttf, &creator, &theme, None).unwrap();
     let pages: std::collections::HashMap<_, _> = updates_pages().into_iter().collect();
     let draw = |ui: &mut Ui, state: &Settings, area: sdl2::rect::Rect| {
@@ -2319,6 +2325,7 @@ fn capture_modules() {
     creator = ui.canvas.texture_creator();
     let themes = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../themes");
     let theme = Theme::load(&themes.join("default"));
+    let theme = theme.fitted(capture_size().0, capture_size().1);
     let images = tempfile::tempdir().unwrap();
     ui.theme_dir = Some(themes.join("default"));
     ui.configure(&ttf, &creator, &theme, None).unwrap();
@@ -2425,6 +2432,7 @@ fn capture_dongle_and_saves() {
     let theme = Theme::load(
         &std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../themes/default"),
     );
+    let theme = theme.fitted(capture_size().0, capture_size().1);
     ui.configure(&ttf, &creator, &theme, None).unwrap();
     let advice = "seq\t3\nadded\t0bda:b733\n\
         dev\t0bda:b733\tRealtek RTL8733BU\twifi+bt\t2.4+5\t-\t-\t-\t-\tno_driver\n";
@@ -2607,6 +2615,7 @@ fn capture_resume() {
     creator = ui.canvas.texture_creator();
     let themes = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../themes");
     let theme = Theme::load(&themes.join("default"));
+    let theme = theme.fitted(capture_size().0, capture_size().1);
     ui.theme_dir = Some(themes.join("default"));
     ui.configure(&ttf, &creator, &theme, None).unwrap();
     let mut status =
@@ -3063,6 +3072,7 @@ fn capture_tune() {
     creator = ui.canvas.texture_creator();
     let themes = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../themes");
     let theme = Theme::load(&themes.join("default"));
+    let theme = theme.fitted(capture_size().0, capture_size().1);
     let images = tempfile::tempdir().unwrap();
     ui.theme_dir = Some(themes.join("default"));
     ui.configure(&ttf, &creator, &theme, None).unwrap();
