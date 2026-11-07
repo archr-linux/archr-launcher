@@ -600,7 +600,8 @@ impl Id {
             | Self::ModulesAuto
             | Self::DebugMode
             | Self::SwitcherOn => &["0", "1"],
-            Self::UpdateChannel => &["stable", "next", "dev"],
+            // Only published channels (archr-update reads the rest as stable).
+            Self::UpdateChannel => &["stable"],
             Self::MangohudGame => &["", "1", "0"],
             Self::Filter | Self::StateSlot => &["", "0", "1"],
             Self::MangohudLayout => &mangohud::LAYOUTS,
@@ -1074,8 +1075,6 @@ impl Settings {
                 };
             }
             (Id::UpdateInstall | Id::UpdateCheck, _) => return "›".into(),
-            (Id::UpdateChannel, "next") => "updates.next",
-            (Id::UpdateChannel, "dev") => "updates.dev",
             (Id::UpdateChannel, _) => "updates.stable",
             (Id::Language, "en_US") => "settings.lang_en",
             (Id::Language, "pt_BR") => "settings.lang_pt",
