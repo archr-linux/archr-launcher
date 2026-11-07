@@ -1008,10 +1008,12 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                     self.header(backdrop, cursor, data, theme, layout)?;
                 }
                 if matches!(app.screen, Screen::StartHub { .. }) {
-                    // The 640x480 composition, centered in the theme's
-                    // `start_area` (the whole screen unless a theme says).
+                    // The composition, 480 reference px high and as wide as
+                    // the theme's `start_area` (the whole screen unless a
+                    // theme says), centered in it; tiles may run to its edges.
                     let area = self.area(theme.start_area);
-                    self.staged_in(area, (640., 480.), |ui| ui.hub(app, data, theme))?;
+                    let wide = area.width() as f32 / self.frame.scale;
+                    self.staged_in(area, (wide, 480.), |ui| ui.hub(app, data, theme))?;
                     self.hub_footer(theme)?;
                 } else {
                     let lifted = app.moving().is_some();
