@@ -293,7 +293,7 @@ impl View<'_, '_, '_> {
         };
         let rule = rule.map(|key| self.tr(key));
         let rule_width = match &rule {
-            Some(rule) => self.ui.measure(rule, Face::Regular, 12.)? as f32 + 8.,
+            Some(rule) => self.span(rule, Face::Regular, 12.)? + 8.,
             None => 0.,
         };
         self.note((24., 48., 592. - rule_width, 20.), &caption, 12.)?;
@@ -313,7 +313,7 @@ impl View<'_, '_, '_> {
         )?;
         let text = keyboard.display();
         let mut size = 18.;
-        while size > 12. && self.ui.measure(&text, Face::Mono, size)? as f32 > 530. {
+        while size > 12. && self.span(&text, Face::Mono, size)? > 530. {
             size -= 1.;
         }
         let width = self.ui.measure(&text, Face::Mono, size)? as f32 / self.ui.frame.scale;

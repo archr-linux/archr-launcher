@@ -513,7 +513,13 @@ impl Ui<'_, '_> {
             let mut widths = Vec::new();
             for (n, label) in labels.iter().enumerate() {
                 let extra = if icon(n) { self.px(size + 6.) } else { 0 };
-                let mut text = self.measure(label, Face::Semibold, size)? as i32;
+                // Drawn semibold when focused, regular otherwise; small
+                // hinted sizes can make either one the wider.
+                let mut text = self.measure(label, Face::Semibold, size)?.max(self.measure(
+                    label,
+                    Face::Regular,
+                    size,
+                )?) as i32;
                 if n == 2 {
                     let busy = self.measure(&scraping, Face::Semibold, size)? as i32;
                     text = text.max(busy + self.px(size * 1.8 + 6.));

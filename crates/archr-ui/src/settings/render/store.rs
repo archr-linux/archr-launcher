@@ -98,7 +98,7 @@ impl View<'_, '_, '_> {
         (size, ink): (f32, Rgba),
     ) -> Result<f32, String> {
         let text = count.to_string();
-        let width = self.ui.measure(&text, Face::Regular, size)? as f32;
+        let width = self.span(&text, Face::Regular, size)?;
         let left = right - width - size - 3.;
         let icon = self.rect((left, y + (h - size) / 2., size, size));
         self.ui.icon(Glyph::Star, icon, ink)?;
@@ -121,7 +121,7 @@ impl View<'_, '_, '_> {
             } else {
                 Face::Regular
             };
-            let w = self.ui.measure(&label, face, 12.)? as f32 + 20.;
+            let w = self.span(&label, face, 12.)? + 20.;
             let (fill, ink) = if n == chosen {
                 (theme.highlight_bg, theme.highlight_text)
             } else {
@@ -137,7 +137,7 @@ impl View<'_, '_, '_> {
             x += w + 8.;
         }
         let note = self.tr(note);
-        if self.ui.measure(&note, Face::Regular, 12.)? as f32 <= 620. - x {
+        if self.span(&note, Face::Regular, 12.)? <= 620. - x {
             self.text(
                 (x, top, 620. - x, height),
                 &note,
@@ -209,7 +209,7 @@ impl View<'_, '_, '_> {
         let right = x + w - 8.;
         let left = if state.store.is_installed(card) {
             let badge = self.tr("store.installed_badge");
-            let width = self.ui.measure(&badge, Face::Regular, 11.)? as f32;
+            let width = self.span(&badge, Face::Regular, 11.)?;
             self.text(
                 (right - width, line.0, width + 1., line.1),
                 &badge,
@@ -292,7 +292,7 @@ impl View<'_, '_, '_> {
         if state.page() == Page::StoreTheme {
             let card = store.detail.as_ref().map(|d| &d.card)?;
             let address = format!("github.com/{}/{}", card.owner, card.repo);
-            let width = self.ui.measure(&address, Face::Regular, 13.).ok()? as f32;
+            let width = self.span(&address, Face::Regular, 13.).ok()?;
             return (width <= room).then_some(address);
         }
         if let Some(problem) = store.problem.filter(|_| !store.cards().is_empty()) {
@@ -388,7 +388,7 @@ impl View<'_, '_, '_> {
         y += 8.;
         for (label, value) in self.facts(detail, &language) {
             let label = self.tr(label);
-            let label_w = self.ui.measure(&label, Face::Regular, 12.)? as f32 + 12.;
+            let label_w = self.span(&label, Face::Regular, 12.)? + 12.;
             let width = self.rect((0., 0., w - label_w, 1.)).width();
             let lines = self.lines(&value, 12., width)?;
             let height = lines.len() as f32 * 15. + 6.;
@@ -419,7 +419,7 @@ impl View<'_, '_, '_> {
         }
         // Main action and the star count (Instalar, ★ 214).
         let count = detail.card.stars.to_string();
-        let pill = self.ui.measure(&count, Face::Regular, 14.)? as f32 + 14. + 4. + 24.;
+        let pill = self.span(&count, Face::Regular, 14.)? + 14. + 4. + 24.;
         let pill_x = x + w - pill;
         self.ui.rounded(
             self.rect((pill_x, BUTTONS, pill, 36.)),

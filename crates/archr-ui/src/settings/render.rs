@@ -267,6 +267,10 @@ impl Ui<'_, '_> {
     }
 }
 impl View<'_, '_, '_> {
+    /// Width of `text` in reference pixels, like every other settings measure.
+    fn span(&mut self, text: &str, face: Face, size: f32) -> Result<f32, String> {
+        Ok(self.ui.measure(text, face, size)? as f32 / self.ui.frame.scale)
+    }
     /// The bottom of the screen in reference pixels: 480, more on a taller screen.
     fn bottom(&self) -> f32 {
         self.ui.frame.reference().1
@@ -595,9 +599,9 @@ impl View<'_, '_, '_> {
         let widths = loop {
             let mut widths = Vec::new();
             for part in &trail {
-                widths.push(self.ui.measure(part, Face::Regular, small)? as f32 + 8.);
+                widths.push(self.span(part, Face::Regular, small)? + 8.);
             }
-            widths.push(self.ui.measure(&current, Face::Semibold, large)? as f32);
+            widths.push(self.span(&current, Face::Semibold, large)?);
             if widths.iter().sum::<f32>() <= right - 24. || small <= 12. {
                 break widths;
             }
@@ -627,12 +631,11 @@ impl View<'_, '_, '_> {
             let item = self.tr(crate::settings::information::ITEMS[index.min(5)].0);
             let title = format!("{base} › {item}");
             let mut size = 15.;
-            while size > 12. && self.ui.measure(&title, Face::Semibold, size)? as f32 > right - 24.
-            {
+            while size > 12. && self.span(&title, Face::Semibold, size)? > right - 24. {
                 size -= 1.;
             }
-            let base_width = self.ui.measure(&base, Face::Semibold, size)? as f32;
-            let arrow_width = self.ui.measure(" › ", Face::Semibold, size)? as f32;
+            let base_width = self.span(&base, Face::Semibold, size)?;
+            let arrow_width = self.span(" › ", Face::Semibold, size)?;
             self.text_face(
                 (24., 0., base_width, 44.),
                 &base,
@@ -1245,10 +1248,7 @@ impl View<'_, '_, '_> {
         };
         let expand = subtitle.is_none()
             && (row.kind == Kind::Value || row.id == Id::MangohudItems)
-            && self
-                .ui
-                .measure(&state.display_value(row.id, &self.ui.catalog), face, 14.)?
-                as f32
+            && self.span(&state.display_value(row.id, &self.ui.catalog), face, 14.)?
                 > right - full - 66.;
         let label_width = if expand {
             // The items summary is the long value of a short title.
@@ -1257,7 +1257,7 @@ impl View<'_, '_, '_> {
             } else {
                 120.
             };
-            (self.ui.measure(&label, face, 15.)? as f32).clamp(least, full)
+            (self.span(&label, face, 15.)?).clamp(least, full)
         } else {
             full
         };
