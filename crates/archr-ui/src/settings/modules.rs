@@ -355,7 +355,8 @@ impl Settings {
         self.modules.problem = None;
         Effect::Module(Request::Store(StoreAction::List(tab, refresh)))
     }
-    /// From a Start tile: Settings opens on a module's page.
+    /// From a START tile: Settings opens on a module's page, over System ›
+    /// Modules like the page opened from there, and B on it returns to START.
     pub fn open_module_page(&mut self, module: &str, page: u8) {
         let Some(index) = self
             .modules
@@ -366,10 +367,22 @@ impl Settings {
         else {
             return;
         };
-        self.modules.opened = index;
+        self.home();
+        self.cursor = super::CATEGORIES
+            .iter()
+            .position(|c| c.0 == Page::System)
+            .unwrap_or(0);
+        self.open(Page::System);
+        self.cursor = Page::System
+            .rows()
+            .iter()
+            .position(|r| r.id == Id::ModulesLink)
+            .unwrap_or(0);
         self.open(Page::Modules);
+        self.modules.opened = index;
         self.cursor = index;
         self.open(Page::Module(index as u8, page));
+        self.entry = Some(self.stack.len());
         self.sync_modules();
     }
     pub(super) fn modules_input(&mut self, button: Button) -> Option<Effect> {
@@ -1185,6 +1198,8 @@ mod tests {
         assert_eq!(state.handle(Button::A), invoke("maximo", "zelda"));
         state.handle(Button::B);
         assert_eq!(state.page(), Page::Module(0, 0));
+        assert_eq!(state.cursor, 1, "back on the item it opened");
+        assert_eq!(state.handle(Button::B), Effect::Close, "then START");
     }
 
     #[test]
@@ -1271,8 +1286,138 @@ mod tests {
                 call: None
             })
         );
+        assert_eq!(state.handle(Button::B), Effect::Close, "back to START");
+    }
+
+    /// Issue #51: B on a module page opened from its START tile left for
+    /// System › Modules, a page the user never saw.
+    #[test]
+    fn b_on_a_page_opened_from_start_returns_to_start() {
+        let mut state = Settings {
+            loading: false,
+            ..Settings::default()
+        };
+        state.set_modules(view());
+        state.open_module_page("bateria", 0);
+        assert_eq!(state.page(), Page::Module(0, 0));
+        assert_eq!(state.parent_page(), Page::Modules, "the same trail");
+        state.handle(Button::Down);
+        assert_eq!(state.handle(Button::B), Effect::Close);
+        assert_eq!(state.page(), Page::Root, "Settings opens on the categories");
+        let system = super::super::CATEGORIES
+            .iter()
+            .position(|c| c.0 == Page::System);
+        assert_eq!(Some(state.cursor), system, "on System, the module's home");
+        // Opened from START again, over a page Settings was left on.
+        state.open(Page::Wifi);
+        state.open_module_page("bateria", 0);
+        assert_eq!(state.handle(Button::B), Effect::Close);
+        assert_eq!(state.page(), Page::Root);
+        // Settings opened normally walks back page by page.
+        state.open(Page::System);
+        state.open(Page::Modules);
+        state.cursor = 0;
+        state.handle(Button::Y);
+        state.handle(Button::A);
+        assert_eq!(state.page(), Page::Module(0, 0), "Open from the details");
+        assert_eq!(state.handle(Button::B), Effect::None);
+        assert_eq!(state.page(), Page::ModuleInfo);
         assert_eq!(state.handle(Button::B), Effect::None);
         assert_eq!(state.page(), Page::Modules);
+        assert_eq!(state.handle(Button::B), Effect::None);
+        assert_eq!(state.page(), Page::System);
+    }
+
+    /// Every way into a module's details leaves with B, on the row it came
+    /// from: the list (Y, and A before a first run) and the store.
+    #[test]
+    fn b_leaves_the_details_from_every_entry() {
+        let mut state = settings();
+        for (cursor, button) in [(0, Button::Y), (1, Button::Y), (1, Button::A)] {
+            state.cursor = cursor;
+            state.handle(button);
+            assert_eq!(state.page(), Page::ModuleInfo);
+            state.handle(Button::Down);
+            assert_eq!(state.handle(Button::B), Effect::None);
+            assert_eq!(state.page(), Page::Modules);
+            assert_eq!(state.cursor, cursor);
+        }
+        // Remove asked, then cancelled: B still leaves.
+        state.cursor = 0;
+        state.handle(Button::Y);
+        state.handle(Button::X);
+        assert_eq!(state.handle(Button::B), Effect::None);
+        assert_eq!(state.page(), Page::ModuleInfo, "only the question went");
+        state.handle(Button::B);
+        assert_eq!(state.page(), Page::Modules);
+        // The store's Reviewed tab: the installed module's offer.
+        state.cursor = 3;
+        state.handle(Button::A);
+        assert_eq!(state.page(), Page::ModuleStore);
+        let card = |repo: &str| Card {
+            owner: "archr-linux".into(),
+            repo: repo.into(),
+            ..Card::default()
+        };
+        state.module_store_reply(StoreReply::Listed {
+            tab: Tab::Reviewed,
+            cards: vec![card("a"), card("archr-module-bateria-detalhada")],
+            problem: None,
+        });
+        state.handle(Button::Down);
+        state.handle(Button::A);
+        assert_eq!(state.page(), Page::ModuleOffer);
+        state.module_store_reply(StoreReply::Offer(
+            "archr-linux/archr-module-bateria-detalhada".into(),
+            Ok(Box::new(Offer {
+                card: card("archr-module-bateria-detalhada"),
+                version: "1.0.0".into(),
+                installed: Some("1.0.0".into()),
+                ..Offer::default()
+            })),
+        ));
+        assert_eq!(state.offer_action(), Some("modules.installed"));
+        assert_eq!(state.handle(Button::B), Effect::None);
+        assert_eq!(state.page(), Page::ModuleStore);
+        assert_eq!(state.cursor, 1);
+        // The Installed tab (L from Reviewed): the same module's offer.
+        assert_eq!(
+            state.handle(Button::L),
+            Effect::Module(Request::Store(StoreAction::List(Tab::Installed, false)))
+        );
+        assert_eq!(state.modules.tab, Tab::Installed);
+        state.module_store_reply(StoreReply::Listed {
+            tab: Tab::Installed,
+            cards: vec![
+                card("archr-module-ajuste-cpu"),
+                card("archr-module-bateria-detalhada"),
+            ],
+            problem: None,
+        });
+        state.handle(Button::Down);
+        let Effect::Module(Request::Store(StoreAction::Open(opened))) = state.handle(Button::A)
+        else {
+            panic!("no open");
+        };
+        assert_eq!(opened.repo, "archr-module-bateria-detalhada");
+        assert_eq!(state.page(), Page::ModuleOffer);
+        state.module_store_reply(StoreReply::Offer(
+            "archr-linux/archr-module-bateria-detalhada".into(),
+            Ok(Box::new(Offer {
+                card: card("archr-module-bateria-detalhada"),
+                version: "1.0.0".into(),
+                installed: Some("1.0.0".into()),
+                ..Offer::default()
+            })),
+        ));
+        assert_eq!(state.offer_action(), Some("modules.installed"));
+        assert_eq!(state.handle(Button::B), Effect::None);
+        assert_eq!(state.page(), Page::ModuleStore);
+        assert_eq!(state.modules.tab, Tab::Installed, "the tab stays");
+        assert_eq!(state.cursor, 1);
+        assert_eq!(state.handle(Button::B), Effect::None);
+        assert_eq!(state.page(), Page::Modules);
+        assert_eq!(state.cursor, 3);
     }
 
     #[test]

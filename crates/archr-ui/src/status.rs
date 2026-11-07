@@ -1,6 +1,7 @@
 //! Cached status: only the status worker touches sysfs. It starts after
 //! present; the render thread consumes a typed snapshot without waiting.
 //! Battery is re-read every 2 s, the radio every 30 s; only changes publish.
+//! While the radio is on, the Wi-Fi link is looked at with the battery.
 //! The USB adapter advice is looked at with the battery and read again only
 //! when the file changed.
 use std::{
@@ -75,10 +76,43 @@ impl BatterySource {
         Some(self.dir.as_deref().and_then(battery_at))
     }
 }
+/// What the status bar shows for Wi-Fi.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Wifi {
+    /// The radio is off: no icon.
+    #[default]
+    Off,
+    /// The radio is on, with no network joined: a dim icon.
+    On,
+    /// Joined to a network: the lit icon.
+    Connected,
+}
+impl Wifi {
+    /// The radio is on, joined or not (the Start menu's switch).
+    pub fn radio(self) -> bool {
+        self != Self::Off
+    }
+}
+/// Joined to a network: any network interface with a `wireless` directory
+/// has operstate "up". Read with the battery while the radio is on. iwd
+/// holds the link dormant until the handshake ends and it stays up through
+/// DHCP, so the icon does not blink while an address is obtained. The list
+/// is read every time (a handful of sysfs entries): an adapter plugged,
+/// unplugged or renamed counts at once.
+pub fn wifi_joined(root: &Path) -> bool {
+    let Ok(entries) = fs::read_dir(root.join("sys/class/net")) else {
+        return false;
+    };
+    entries.flatten().map(|e| e.path()).any(|dir| {
+        dir.join("wireless").is_dir()
+            && archr_io::read_utf8(&dir.join("operstate"), 64, archr_io::Symlinks::Follow)
+                .is_ok_and(|s| s.trim() == "up")
+    })
+}
 #[derive(Clone, Copy, Default, PartialEq)]
 struct Snapshot {
     battery: Option<Battery>,
-    wifi: bool,
+    wifi: Wifi,
     roms: Option<&'static str>,
     /// The USB advice's sequence: it changed when this does.
     usb: u64,
@@ -135,12 +169,14 @@ impl Worker {
                 }
                 let mut usb_stamp = None;
                 let mut source = BatterySource::new(path.clone(), Instant::now());
+                let mut radio = false;
                 let mut snapshot = Snapshot::default();
                 let mut next_wifi = Instant::now();
                 loop {
                     let now = Instant::now();
                     let mut next = snapshot;
-                    if let Some(battery) = source.poll(now) {
+                    let battery_tick = source.poll(now);
+                    if let Some(battery) = battery_tick {
                         next.battery = battery;
                         let advice = path.join(crate::usb::ADVICE.trim_start_matches('/'));
                         let stamp = fs::metadata(&advice).and_then(|m| m.modified()).ok();
@@ -151,10 +187,18 @@ impl Worker {
                             usb_published.lock().expect("usb advice").0 = Some(parsed);
                         }
                     }
-                    if now >= next_wifi {
-                        next.wifi = wifi_on(&path);
+                    let radio_tick = now >= next_wifi;
+                    if radio_tick {
+                        radio = wifi_on(&path);
                         next.roms = roms_fault(&path);
                         next_wifi = now + REFRESH;
+                    }
+                    if radio_tick || battery_tick.is_some() {
+                        next.wifi = match (radio, radio && wifi_joined(&path)) {
+                            (false, _) => Wifi::Off,
+                            (true, false) => Wifi::On,
+                            (true, true) => Wifi::Connected,
+                        };
                     }
                     // Publish only real changes; the render thread redraws on them.
                     if next != snapshot {
@@ -192,7 +236,7 @@ impl Drop for Worker {
 }
 pub struct Status {
     pub battery: Option<Battery>,
-    pub wifi: bool,
+    pub wifi: Wifi,
     /// The ROMs partition cannot be written: the catalog key that says why.
     pub roms: Option<&'static str>,
     pub clock: String,
@@ -212,7 +256,7 @@ impl Status {
         let path = root.map_or_else(|| PathBuf::from("/"), Path::to_owned);
         let mut status = Self {
             battery: None,
-            wifi: false,
+            wifi: Wifi::Off,
             roms: None,
             clock: String::new(),
             usb: None,
@@ -450,7 +494,7 @@ mod tests {
         ] {
             let snapshot = Snapshot {
                 battery: percent.map(|percent| Battery { percent, charging }),
-                wifi,
+                wifi: if wifi { Wifi::Connected } else { Wifi::Off },
                 roms: None,
                 usb: 0,
             };
@@ -528,14 +572,93 @@ mod tests {
             std::thread::sleep(Duration::from_millis(2));
             status.poll(Instant::now());
         }
-        assert!(status.battery.is_some() && !status.wifi);
+        assert!(status.battery.is_some() && status.wifi == Wifi::Off);
         radio(root.path(), "rfkill0", "wlan", "0");
         status.refresh_signal().unwrap()();
-        while !status.wifi && Instant::now() < deadline {
+        while !status.wifi.radio() && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(2));
             status.poll(Instant::now());
         }
-        assert!(status.wifi);
+        assert_eq!(status.wifi, Wifi::On, "no interface has joined");
+    }
+
+    fn interface(root: &Path, name: &str, state: &str) {
+        let dir = root.join("sys/class/net").join(name);
+        fs::create_dir_all(dir.join("wireless")).unwrap();
+        fs::write(dir.join("operstate"), format!("{state}\n")).unwrap();
+    }
+
+    /// Issue #51: the icon showed the radio, read as "connected".
+    #[test]
+    fn the_link_tells_joined_from_only_switched_on() {
+        let root = tempfile::tempdir().unwrap();
+        let joined = || wifi_joined(root.path());
+        assert!(!joined(), "no interface");
+        let wired = root.path().join("sys/class/net/eth0");
+        fs::create_dir_all(&wired).unwrap();
+        fs::write(wired.join("operstate"), "up\n").unwrap();
+        assert!(!joined(), "a cable is not Wi-Fi");
+        // Joining: iwd holds the link dormant until the handshake ends.
+        interface(root.path(), "wlan0", "dormant");
+        assert!(!joined());
+        interface(root.path(), "wlan0", "up");
+        assert!(joined());
+        interface(root.path(), "wlan0", "down");
+        assert!(!joined());
+        // The adapter is unplugged and comes back under another name.
+        fs::remove_dir_all(root.path().join("sys/class/net/wlan0")).unwrap();
+        assert!(!joined());
+        interface(root.path(), "wlan1", "up");
+        assert!(joined());
+    }
+
+    #[test]
+    fn any_of_two_adapters_joined_counts() {
+        let root = tempfile::tempdir().unwrap();
+        let joined = || wifi_joined(root.path());
+        interface(root.path(), "wlan0", "down");
+        interface(root.path(), "wlan1", "up");
+        assert!(joined(), "the second adapter joined");
+        interface(root.path(), "wlan1", "down");
+        assert!(!joined(), "both down");
+        // An earlier-named adapter appears joined while wlan1 is down.
+        interface(root.path(), "wlan0", "up");
+        assert!(joined());
+        interface(root.path(), "wlan0", "down");
+        interface(root.path(), "wlan1", "up");
+        assert!(joined());
+        // The joined one is unplugged: the other is only on.
+        fs::remove_dir_all(root.path().join("sys/class/net/wlan1")).unwrap();
+        assert!(!joined());
+    }
+
+    #[test]
+    fn the_worker_shows_off_on_and_connected() {
+        let root = tempfile::tempdir().unwrap();
+        radio(root.path(), "rfkill0", "wlan", "0");
+        interface(root.path(), "wlan0", "down");
+        let mut status = Status::new(Some(root.path()), Instant::now());
+        status.start();
+        let wait = |status: &mut Status, want: Wifi| {
+            let deadline = Instant::now() + BATTERY_REFRESH + Duration::from_secs(1);
+            while status.wifi != want {
+                assert!(Instant::now() < deadline, "never {want:?}");
+                std::thread::sleep(Duration::from_millis(5));
+                status.poll(Instant::now());
+            }
+        };
+        wait(&mut status, Wifi::On);
+        // Joined: seen with the battery, without the radio's 30 s cycle.
+        interface(root.path(), "wlan0", "up");
+        wait(&mut status, Wifi::Connected);
+        interface(root.path(), "wlan0", "down");
+        wait(&mut status, Wifi::On);
+        interface(root.path(), "wlan0", "up");
+        wait(&mut status, Wifi::Connected);
+        // Switched off: the refresh the switch sends hides it at once.
+        radio(root.path(), "rfkill0", "wlan", "1");
+        status.refresh_signal().unwrap()();
+        wait(&mut status, Wifi::Off);
     }
 
     #[test]

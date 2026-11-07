@@ -17,7 +17,7 @@ impl Settings {
     /// From the announcement over any screen: Settings › Network › USB
     /// adapters, so B walks back through Network.
     pub fn open_usb(&mut self) -> Effect {
-        self.stack.truncate(1);
+        self.home();
         self.cursor = 0;
         self.open(Page::Wifi);
         self.cursor = self.wifi_rows() - 1;

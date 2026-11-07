@@ -148,7 +148,7 @@ impl Updates {
 impl Settings {
     /// Opens the page from anywhere (the START menu), over System.
     pub fn open_updates(&mut self) {
-        self.stack.truncate(1);
+        self.home();
         self.cursor = super::CATEGORIES
             .iter()
             .position(|c| c.0 == Page::System)

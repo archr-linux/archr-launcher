@@ -2616,6 +2616,68 @@ fn scene(
     .unwrap();
 }
 
+/// The status bar's Wi-Fi in its three states, in every bundled theme:
+/// `ARCHR_STATUS_CAPTURE_DIR`, at `ARCHR_CAPTURE_SIZE`.
+#[test]
+#[ignore = "manual capture, ARCHR_STATUS_CAPTURE_DIR required"]
+fn capture_status_wifi() {
+    use crate::status::Wifi;
+    std::env::set_var("SDL_VIDEODRIVER", "offscreen");
+    let output = std::path::PathBuf::from(
+        std::env::var_os("ARCHR_STATUS_CAPTURE_DIR").expect("capture directory"),
+    );
+    let (width, height) = capture_size();
+    let ttf;
+    let creator;
+    let mut ui = Ui::new(width, height, true).unwrap();
+    ttf = sdl2::ttf::init().unwrap();
+    creator = ui.canvas.texture_creator();
+    let themes = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../themes");
+    let shelf = Shelf::new();
+    for name in ["default", "praia"] {
+        let theme = Theme::load(&themes.join(name)).fitted(width, height);
+        ui.theme_dir = Some(themes.join(name));
+        ui.set_motion(crate::motion::Motion::Off);
+        ui.configure(&ttf, &creator, &theme, None).unwrap();
+        let mut app = crate::state::App::new(10);
+        app.set_view(&theme.view(&theme.active_view));
+        for (state, label) in [
+            (Wifi::Off, "off"),
+            (Wifi::On, "on"),
+            (Wifi::Connected, "connected"),
+        ] {
+            let mut status = crate::status::Status::new(
+                Some(std::path::Path::new("/nonexistent")),
+                Instant::now(),
+            );
+            status.clock = "14:32".into();
+            status.wifi = state;
+            status.battery = Some(crate::status::Battery {
+                percent: 87,
+                charging: false,
+            });
+            ui.status = Some(status);
+            for _ in 0..2 {
+                ui.snap_animations();
+                ui.draw_with_settings(&app, &shelf, &theme, Default::default(), None)
+                    .unwrap();
+            }
+            let pixels = ui
+                .canvas
+                .read_pixels(None, sdl2::pixels::PixelFormatEnum::RGBA32)
+                .unwrap();
+            image::save_buffer(
+                output.join(format!("status-{name}-{width}x{height}-{label}.png")),
+                &pixels,
+                width,
+                height,
+                image::ColorType::Rgba8,
+            )
+            .unwrap();
+        }
+    }
+}
+
 #[test]
 #[ignore = "manual capture, ARCHR_RESUME_CAPTURE_DIR required"]
 fn capture_resume() {
@@ -2636,7 +2698,7 @@ fn capture_resume() {
     let mut status =
         crate::status::Status::new(Some(std::path::Path::new("/nonexistent")), Instant::now());
     status.clock = "14:32".into();
-    status.wifi = true;
+    status.wifi = crate::status::Wifi::Connected;
     status.battery = Some(crate::status::Battery {
         percent: 87,
         charging: false,
@@ -3168,7 +3230,7 @@ fn golden_frames_at_640x480() {
     ui.catalog = I18n::load(std::path::Path::new("/nonexistent"), Some("pt_BR"), None);
     let mut status = crate::status::Status::new(Some(empty.path()), Instant::now());
     status.clock = "14:32".into();
-    status.wifi = true;
+    status.wifi = crate::status::Wifi::Connected;
     status.battery = Some(crate::status::Battery {
         percent: 87,
         charging: false,
