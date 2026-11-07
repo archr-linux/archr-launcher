@@ -46,10 +46,11 @@ use std::{
 mod system_art;
 use system_art::SystemArt;
 
-/// No text is drawn smaller than this many screen pixels, on any screen:
-/// on a small one the text keeps it while the design shrinks around it.
-/// A size the design draws smaller at 640x480 keeps that size, and the
-/// MangoHud preview, a miniature of the game's overlay, scales freely.
+/// No text is drawn smaller than this many screen pixels, on any screen
+/// and at any text size: on a small screen the text keeps it while the
+/// design shrinks around it. The one exception is the MangoHud preview, a
+/// miniature of the game's overlay, which sets `Frame::floor` to 0 while
+/// it draws.
 const MIN_TEXT: i32 = 10;
 
 /// Screen pixels per reference pixel: the 640×480 design fits whole, so
@@ -136,26 +137,22 @@ impl Frame {
         } else {
             size
         };
-        // The floor never lifts text above the size the design gives it
-        // at 640x480: a miniature drawn small there stays as small.
-        let floor = self.floor.min(size.round() as i32);
-        // A miniature may go under 8 px where the screen is smaller than
-        // the design; elsewhere 8 px stays the least, as it always was.
+        // Nothing under the floor; a miniature (floor 0) shrinks with the
+        // screen from the 8 px it has at 640x480.
         let least = if self.floor == 0 {
             (8. * self.scale.min(1.)).round() as i32
         } else {
-            8
+            self.floor
         };
-        self.px(size).max(floor).clamp(least, 128) as u16
+        self.px(size).clamp(least, 128) as u16
     }
     /// The smallest size worth asking for, before the text multipliers.
     fn min_size(self) -> f32 {
-        // Below the screen-pixel floor every size looks the same; at 640x480
-        // and up, fitting may still go down to 8 px as it always did.
-        let floor = if self.scale < 1. {
-            (self.floor as f32).max(8.)
-        } else {
+        // Below the screen-pixel floor every size looks the same.
+        let floor = if self.floor == 0 {
             8.
+        } else {
+            self.floor as f32
         };
         self.min.max(floor / self.scale) / (self.text * self.font)
     }
@@ -2678,20 +2675,42 @@ mod tests {
     use super::*;
 
     #[test]
-    fn no_text_under_ten_screen_pixels_and_640x480_keeps_its_sizes() {
-        for size in [8., 9., 10., 11., 12., 13., 15., 17., 22.] {
-            let classic = Frame::new(640, 480).font_size(size);
-            assert_eq!(classic, size.round() as u16, "640x480 at {size}");
-            assert!(Frame::new(720, 720).font_size(size) >= classic);
-            let small = Frame::new(480, 320).font_size(size);
-            // Never under 10 px, nor under what 640x480 draws when that is less.
-            assert!(small >= classic.min(10), "480x320 at {size}: {small}");
+    fn no_text_under_ten_screen_pixels_at_any_size_or_scale() {
+        for (width, height) in [(640, 480), (720, 720), (480, 320)] {
+            for scale in [1., 0.5] {
+                let mut frame = Frame::new(width, height);
+                (frame.text, frame.font) = (scale, scale);
+                for size in [0., 6., 8., 9., 10., 12., 13., 15., 17., 22.] {
+                    let px = frame.font_size(size);
+                    assert!(px >= 10, "{width}x{height} x{scale} at {size}: {px} px");
+                }
+                assert!(frame.font_size(frame.min_size()) >= 10);
+            }
+            // At 640x480 sizes from 10 px up are drawn as they are asked.
+            assert_eq!(Frame::new(640, 480).font_size(13.), 13);
         }
+        // The miniature, and only it, goes under the floor.
         let mut miniature = Frame::new(480, 320);
         miniature.floor = 0;
         assert_eq!(miniature.font_size(12.), 8);
+        let sources = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut opt_outs = Vec::new();
+        let mut dirs = vec![sources];
+        while let Some(dir) = dirs.pop() {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    dirs.push(path);
+                } else if std::fs::read_to_string(&path)
+                    .unwrap()
+                    .contains(concat!("&mut self.ui.frame.", "floor, 0)"))
+                {
+                    opt_outs.push(path.file_name().unwrap().to_string_lossy().into_owned());
+                }
+            }
+        }
+        assert_eq!(opt_outs, ["mangohud.rs"]);
     }
-
     #[test]
     fn tools_are_neither_systems_nor_games_in_the_library_summary() {
         struct Data(Vec<archr_index::cache::SystemEntry>);
