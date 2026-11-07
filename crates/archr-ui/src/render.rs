@@ -588,7 +588,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         Ok(())
     }
     pub fn wifi_enabled(&self) -> bool {
-        self.status.as_ref().is_some_and(|s| s.wifi)
+        self.status.as_ref().is_some_and(|s| s.wifi.radio())
     }
     pub fn wifi_refresh_signal(&self) -> Option<impl FnOnce() + Send + 'static> {
         self.status.as_ref().and_then(|s| s.refresh_signal())
@@ -1182,8 +1182,14 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 .as_deref()
                 .map(|s| self.measure(s, Face::Mono, 13.))
                 .transpose()?;
-            let layout =
-                status_layout(right, h, self.frame.scale, clock_width, percent_width, wifi);
+            let layout = status_layout(
+                right,
+                h,
+                self.frame.scale,
+                clock_width,
+                percent_width,
+                wifi.radio(),
+            );
             self.rounded(
                 layout.pill,
                 layout.pill.height() as f32 / 2.,
@@ -1191,7 +1197,13 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 Some(theme.border),
             )?;
             if let Some(icon) = layout.wifi {
-                self.icon(Glyph::Wifi, icon, theme.highlight_bg)?;
+                // Lit when joined; on but with no network, dim like the clock.
+                let ink = if wifi == crate::status::Wifi::Connected {
+                    theme.highlight_bg
+                } else {
+                    theme.muted
+                };
+                self.icon(Glyph::Wifi, icon, ink)?;
             }
             self.label(&clock, (Face::Mono, 13., theme.muted), layout.clock)?;
             if let (Some(b), Some(icon), Some(panel), Some(text)) =
