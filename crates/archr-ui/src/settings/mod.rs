@@ -900,6 +900,9 @@ pub struct Scrape {
 #[derive(Clone)]
 pub struct Settings {
     stack: Vec<(Page, usize)>,
+    /// Depth of a page opened from outside Settings (a START tile): B on
+    /// it closes Settings, back where the user came from.
+    entry: Option<usize>,
     pub cursor: usize,
     pub values: BTreeMap<Id, String>,
     pub options: BTreeMap<Id, Vec<String>>,
@@ -984,6 +987,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             stack: vec![(Page::Root, 0)],
+            entry: None,
             cursor: 0,
             values: BTreeMap::new(),
             options: [Id::Gpu, Id::Language, Id::Idle, Id::IdleGame]
@@ -1608,8 +1612,19 @@ impl Settings {
             self.mangohud_saved = self.mangohud_draft();
         }
     }
+    /// Back to the categories, for a page opened from outside Settings.
+    fn home(&mut self) {
+        self.stack.truncate(1);
+        self.entry = None;
+    }
     fn back(&mut self) -> Effect {
         if self.stack.len() == 1 {
+            return Effect::Close;
+        }
+        if self.entry == Some(self.stack.len()) {
+            // The next opening starts on the categories again.
+            self.home();
+            self.cursor = self.stack[0].1;
             return Effect::Close;
         }
         self.stack.pop();
