@@ -264,16 +264,13 @@ impl Audio {
         else {
             return;
         };
-        let began = Instant::now();
+        // A failure (the sound server restarting) stays parked: the next
+        // press tries again.
         if let Err(error) = open_output() {
-            log::warn!("Theme sounds are off: {error}");
-            self.device = Device::Mute;
+            log::warn!("Cannot reopen the sound output: {error}");
+            self.device = Device::Parked(chunks, spec);
             return;
         }
-        log::debug!(
-            "Sound output reopened in {} ms",
-            began.elapsed().as_millis()
-        );
         self.last = Instant::now();
         if mixer::query_spec().is_ok_and(|now| now == spec) {
             self.device = Device::Ready(chunks);
