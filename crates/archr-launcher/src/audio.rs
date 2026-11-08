@@ -24,8 +24,9 @@ use std::{
 const SYSTEM_DELAY: Duration = Duration::from_millis(350);
 /// Longest wait for a closing sound (opening a game) before releasing the device.
 const RELEASE_WAIT: Duration = Duration::from_millis(450);
-/// Quiet this long, the output is parked.
-const PARK_AFTER: Duration = Duration::from_secs(5);
+/// Quiet this long, the output is parked. Long enough that browsing slowly
+/// rarely meets the ~200 ms the sound server takes to reopen it.
+const PARK_AFTER: Duration = Duration::from_secs(30);
 /// How often the loop looks for an output being opened.
 const OPENING_POLL_MS: u32 = 4;
 /// What the output is asked for; the chunks are converted to what it gave.
