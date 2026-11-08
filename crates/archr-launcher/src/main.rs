@@ -350,7 +350,7 @@ fn run(
         // A successful power request owns the screen until the OS stops us.
         // Store is already flushed; no more input, scans, scripts or handoffs.
         if ui.transition.is_some() {
-            match events.wait_event_timeout(1000) {
+            match idle_wait(&mut events, 1000) {
                 Some(Event::Quit { .. }) => return Ok(()),
                 Some(Event::Window {
                     win_event: WindowEvent::Exposed | WindowEvent::SizeChanged(..),
@@ -880,7 +880,7 @@ fn run(
                 }
             }
         }
-        if let Some(event) = events.wait_event_timeout(if button.is_some() || ui.animating() {
+        let timeout = if button.is_some() || ui.animating() {
             0
         } else {
             let now = Instant::now();
@@ -891,7 +891,15 @@ fn run(
                 .min(audio.wait_ms(now))
                 .min(preview.wait_ms(now))
                 .min(countdown)
-        }) {
+        };
+        // A held button keeps SDL's own (1 ms) wait: its release and repeats
+        // stay exactly as before. Otherwise the idle wait below.
+        let event = if repeat.holding() {
+            events.wait_event_timeout(timeout)
+        } else {
+            idle_wait(&mut events, timeout)
+        };
+        if let Some(event) = event {
             match event {
                 Event::Quit { .. } => close_requested = true,
                 Event::KeyDown {
@@ -1323,5 +1331,28 @@ fn init_logging() {
     static LOGGER: Stderr = Stderr;
     if log::set_logger(&LOGGER).is_ok() {
         log::set_max_level(log::LevelFilter::Warn);
+    }
+}
+
+/// Longest nap between input checks while idle: one frame.
+const INPUT_TICK: Duration = Duration::from_millis(16);
+
+/// Waits up to `timeout_ms` for an event. With a pad open, SDL 2's own wait
+/// checks for input every 1 ms (EVENT_POLL_INTERVAL_MS): about a thousand
+/// wake-ups a second on an idle menu. This checks once a frame instead, so a
+/// press is seen at most 16 ms later; a zero timeout is a plain poll.
+fn idle_wait(events: &mut sdl2::EventPump, timeout_ms: u32) -> Option<Event> {
+    let deadline = Instant::now().checked_add(Duration::from_millis(u64::from(timeout_ms)));
+    loop {
+        if let Some(event) = events.poll_event() {
+            return Some(event);
+        }
+        let left = deadline.map_or(INPUT_TICK, |at| {
+            at.saturating_duration_since(Instant::now())
+        });
+        if left.is_zero() {
+            return None;
+        }
+        std::thread::sleep(left.min(INPUT_TICK));
     }
 }

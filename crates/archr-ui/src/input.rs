@@ -51,6 +51,10 @@ impl Repeat {
     pub fn is_held(&self, button: Button) -> bool {
         self.held.map(|(held, _)| held) == Some(button)
     }
+    /// A direction or shoulder is held (its repeat is armed).
+    pub fn holding(&self) -> bool {
+        self.held.is_some()
+    }
     pub fn release(&mut self, button: Button) {
         if self.held.map(|(b, _)| b) == Some(button) {
             self.held = None;
