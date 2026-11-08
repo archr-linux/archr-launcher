@@ -26,6 +26,8 @@ const SYSTEM_DELAY: Duration = Duration::from_millis(350);
 const RELEASE_WAIT: Duration = Duration::from_millis(450);
 /// Quiet this long, the output is parked.
 const PARK_AFTER: Duration = Duration::from_secs(5);
+/// How often the loop looks for an output being opened.
+const OPENING_POLL_MS: u32 = 4;
 /// What the output is asked for; the chunks are converted to what it gave.
 const FREQUENCY: i32 = 44100;
 const CHUNK_SIZE: i32 = 1024;
@@ -49,6 +51,9 @@ enum Device {
     /// Quiet for a while: the output is closed, the decoded files kept for
     /// the spec they were converted to.
     Parked(Chunks, Spec),
+    /// Reopening a parked output on a worker: the sound server takes over
+    /// 100 ms to answer, and the press that asked must not wait for it.
+    Reopening(JoinHandle<Result<Spec, String>>, Chunks, Spec),
     /// The output could not be opened; the launcher stays silent.
     Mute,
 }
@@ -60,7 +65,8 @@ pub struct Audio {
     device: Device,
     /// Handed off to another program: stays closed until the next input.
     released: bool,
-    /// A notice-like sound asked for while the files were still loading.
+    /// A notice-like sound asked for while the files were still loading,
+    /// or any sound asked for while the output reopens.
     queued: Option<Event>,
     dwell: Dwell,
     /// The last sound started, or the output opened.
@@ -82,9 +88,12 @@ impl Audio {
         audio.open();
         audio
     }
-    /// The output is open (loading or ready); parked counts as closed.
+    /// The output is open (or opening); parked counts as closed.
     pub fn is_open(&self) -> bool {
-        matches!(self.device, Device::Loading(_) | Device::Ready(_))
+        matches!(
+            self.device,
+            Device::Loading(_) | Device::Reopening(..) | Device::Ready(_)
+        )
     }
     /// The settings changed (enabled switch and 0-100 volume).
     pub fn configure(&mut self, enabled: bool, volume: u8) {
@@ -137,6 +146,12 @@ impl Audio {
         match std::mem::replace(&mut self.device, Device::Closed) {
             Device::Closed => return,
             Device::Mute | Device::Parked(..) => {}
+            Device::Reopening(opener, chunks, _) => {
+                if matches!(opener.join(), Ok(Ok(_))) {
+                    mixer::close_audio();
+                }
+                drop(chunks);
+            }
             Device::Loading(loader) => {
                 let _ = loader.join();
                 mixer::close_audio();
@@ -152,6 +167,9 @@ impl Audio {
     /// Before handing the screen and sound to another program: finish a
     /// closing sound (briefly), then free the output.
     pub fn release(&mut self) {
+        // A press that reopened the output (a launch from idle) still gets
+        // its sound.
+        self.reopened(true);
         let deadline = Instant::now() + RELEASE_WAIT;
         while matches!(self.device, Device::Ready(_))
             && OTHER.is_playing()
@@ -162,9 +180,9 @@ impl Audio {
         self.close();
         self.released = true;
     }
-    /// Input after a release (waking from suspend, or a cancelled hand-off).
-    /// Any press: a parked output reopens before the press is handled, so
-    /// its sound is ready.
+    /// Any press: a parked output starts reopening before the press is
+    /// handled, and the press's own sound plays once it is back. After a
+    /// release (waking from suspend, or a cancelled hand-off) it opens again.
     pub fn wake(&mut self) {
         self.unpark();
         // Pressing on keeps it open, sound or not.
@@ -182,9 +200,8 @@ impl Audio {
             return;
         }
         match (event, &self.device) {
-            (Event::Boot | Event::Error | Event::Notice, Device::Loading(_)) => {
-                self.queued = Some(event)
-            }
+            (Event::Boot | Event::Error | Event::Notice, Device::Loading(_))
+            | (_, Device::Reopening(..)) => self.queued = Some(event),
             (_, Device::Ready(chunks)) => {
                 if let Some(chunk) = self.sounds.event(event).and_then(|file| chunks.get(file)) {
                     let channel = match event {
@@ -228,6 +245,7 @@ impl Audio {
                 self.play(event);
             }
         }
+        self.reopened(false);
         if let (Device::Ready(chunks), Some(system)) = (&self.device, self.dwell.due(now)) {
             if let Some(chunk) = self.sounds.system(&system).and_then(|f| chunks.get(f)) {
                 start(SYSTEM, &chunk.0, self.volume);
@@ -254,36 +272,66 @@ impl Audio {
             self.device = Device::Parked(chunks, spec);
         }
     }
-    /// Reopens a parked output. Its chunks are kept only when the output
-    /// comes back with the same spec; otherwise the files load again.
+    /// Starts reopening a parked output on a worker.
     fn unpark(&mut self) {
         if !matches!(self.device, Device::Parked(..)) {
             return;
         }
-        let Device::Parked(chunks, spec) = std::mem::replace(&mut self.device, Device::Closed)
+        if let Device::Parked(chunks, spec) = std::mem::replace(&mut self.device, Device::Closed) {
+            let opener = std::thread::spawn(|| {
+                open_output()?;
+                mixer::query_spec()
+            });
+            self.device = Device::Reopening(opener, chunks, spec);
+        }
+    }
+    /// Takes a finished reopen (or waits for it): the chunks are kept only
+    /// when the output came back with their spec, otherwise the files load
+    /// again. A failure (the sound server restarting) stays parked and the
+    /// next press tries again.
+    fn reopened(&mut self, wait: bool) {
+        if !matches!(&self.device, Device::Reopening(opener, ..) if wait || opener.is_finished()) {
+            return;
+        }
+        let Device::Reopening(opener, chunks, spec) =
+            std::mem::replace(&mut self.device, Device::Closed)
         else {
             return;
         };
-        // A failure (the sound server restarting) stays parked: the next
-        // press tries again.
-        if let Err(error) = open_output() {
-            log::warn!("Cannot reopen the sound output: {error}");
-            self.device = Device::Parked(chunks, spec);
-            return;
-        }
-        self.last = Instant::now();
-        if mixer::query_spec().is_ok_and(|now| now == spec) {
-            self.device = Device::Ready(chunks);
-        } else {
-            drop(chunks);
-            mixer::close_audio();
-            self.open();
+        match opener.join() {
+            Ok(Ok(now)) if now == spec => {
+                self.last = Instant::now();
+                self.device = Device::Ready(chunks);
+                if let Some(event) = self.queued.take() {
+                    self.play(event);
+                }
+            }
+            Ok(Ok(_)) => {
+                drop(chunks);
+                mixer::close_audio();
+                self.open();
+            }
+            Ok(Err(error)) => {
+                log::warn!("Cannot reopen the sound output: {error}");
+                self.device = Device::Parked(chunks, spec);
+                self.queued = None;
+            }
+            Err(_) => {
+                self.device = Device::Parked(chunks, spec);
+                self.queued = None;
+            }
         }
     }
-    /// Longest the event loop may sleep without missing a system sound.
+    /// Longest the event loop may sleep without missing a system sound or
+    /// leaving an opening output (and the sound it holds) waiting.
     /// (Parking needs no wake-up of its own: the idle loop turns every 100 ms.)
     pub fn wait_ms(&self, now: Instant) -> u32 {
-        self.dwell.wait_ms(now)
+        match self.device {
+            Device::Loading(_) | Device::Reopening(..) => {
+                self.dwell.wait_ms(now).min(OPENING_POLL_MS)
+            }
+            _ => self.dwell.wait_ms(now),
+        }
     }
 }
 
@@ -603,6 +651,16 @@ mod tests {
         assert!(mixer::query_spec().is_err(), "a parked output is closed");
     }
 
+    /// Polls until a reopen in flight is taken.
+    fn reopen(audio: &mut Audio) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while matches!(audio.device, Device::Reopening(..)) && Instant::now() < deadline {
+            audio.poll();
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(!matches!(audio.device, Device::Reopening(..)));
+    }
+
     fn wait_ready(audio: &mut Audio) {
         let deadline = Instant::now() + Duration::from_secs(5);
         while !matches!(audio.device, Device::Ready(_)) && Instant::now() < deadline {
@@ -666,19 +724,37 @@ mod tests {
         audio.poll_at(played + PARK_AFTER);
         assert!(matches!(audio.device, Device::Parked(..)));
         assert!(mixer::query_spec().is_err());
-        // A press reopens it with the files it had: nothing loads again.
+        // A press reopens it, without waiting, with the files it had.
         audio.wake();
-        assert!(matches!(audio.device, Device::Ready(_)));
-        // Pressing on, or playing, never opens it a second time: one close
-        // (the mixer counts opens) frees it.
+        assert!(matches!(audio.device, Device::Reopening(..)));
+        assert!(audio.is_open());
+        assert!(audio.wait_ms(Instant::now()) <= OPENING_POLL_MS);
+        // Pressing on never opens it a second time: one close (the mixer
+        // counts opens) frees it. The press's sound plays once it is back.
         audio.wake();
         audio.play(Event::Move);
+        reopen(&mut audio);
+        assert!(matches!(audio.device, Device::Ready(_)));
+        assert!(NAVIGATION.is_playing(), "the press's sound waited for it");
         audio.wake();
+        audio.play(Event::Move);
         park(&mut audio);
         // A sound asked for by itself (a notice) reopens it too, and plays.
         audio.play(Event::Launch);
+        reopen(&mut audio);
         assert!(matches!(audio.device, Device::Ready(_)));
         assert!(OTHER.is_playing());
+        // A launch from idle: the hand-off waits for the reopen and plays
+        // the launch sound before freeing the output.
+        park(&mut audio);
+        audio.wake();
+        audio.play(Event::Launch);
+        audio.reopened(true); // release() starts with this
+        assert!(OTHER.is_playing(), "the launch sound plays");
+        audio.release();
+        assert!(mixer::query_spec().is_err());
+        audio.wake();
+        wait_ready(&mut audio);
         // Presses without a sound keep it open.
         wait_quiet();
         audio.last = Instant::now() - PARK_AFTER;
@@ -733,6 +809,8 @@ mod tests {
         park(&mut audio);
         audio.focus(Some("snes"), now);
         audio.poll_at(now);
+        assert!(matches!(audio.device, Device::Reopening(..)));
+        reopen(&mut audio);
         assert!(matches!(audio.device, Device::Ready(_)));
         audio.last = now - PARK_AFTER * 2;
         audio.poll_at(now + SYSTEM_DELAY / 2);
@@ -754,6 +832,7 @@ mod tests {
         // Someone else holds the output at another rate: the reopen shares it.
         mixer::open_audio(22050, mixer::AUDIO_S16LSB, 2, CHUNK_SIZE).unwrap();
         audio.wake();
+        reopen(&mut audio);
         assert!(matches!(audio.device, Device::Loading(_)));
         wait_ready(&mut audio);
         audio.close();
