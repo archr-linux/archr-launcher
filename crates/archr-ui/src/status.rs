@@ -105,7 +105,9 @@ pub fn wifi_joined(root: &Path) -> bool {
     };
     entries.flatten().map(|e| e.path()).any(|dir| {
         dir.join("wireless").is_dir()
-            && archr_io::read_utf8(&dir.join("operstate"), 64, archr_io::Symlinks::Follow)
+            // 4096: every sysfs attribute reports a page as its size, and a
+            // smaller limit rejects the file before reading it.
+            && archr_io::read_utf8(&dir.join("operstate"), 4096, archr_io::Symlinks::Follow)
                 .is_ok_and(|s| s.trim() == "up")
     })
 }
@@ -585,7 +587,12 @@ mod tests {
     fn interface(root: &Path, name: &str, state: &str) {
         let dir = root.join("sys/class/net").join(name);
         fs::create_dir_all(dir.join("wireless")).unwrap();
-        fs::write(dir.join("operstate"), format!("{state}\n")).unwrap();
+        // sysfs reports a page as every attribute's size; a reader with a
+        // smaller limit rejected the real file (issue #51: always "on").
+        // Newline padding keeps that size and the same trimmed value.
+        let mut text = format!("{state}\n").into_bytes();
+        text.resize(4096, b'\n');
+        fs::write(dir.join("operstate"), text).unwrap();
     }
 
     /// Issue #51: the icon showed the radio, read as "connected".
