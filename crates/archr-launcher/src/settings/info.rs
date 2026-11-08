@@ -813,10 +813,15 @@ impl Backend {
                 .trim()
                 .to_owned()
         };
-        let electrical = |name, divisor, unit, precision| {
-            battery_value(name)
-                .parse::<i64>()
-                .ok()
+        // The rk817 gauge (R36S) only exposes the averaged readings, so a
+        // missing or unreadable *_now falls back to *_avg.
+        let electrical = |name: &str, divisor, unit, precision| {
+            let read = |name: &str| battery_value(name).parse::<i64>().ok();
+            read(name)
+                .or_else(|| {
+                    name.strip_suffix("_now")
+                        .and_then(|base| read(&format!("{base}_avg")))
+                })
                 .map(|v| format!("@{:.*} {unit}", precision, v as f64 / divisor))
                 .unwrap_or_default()
         };
