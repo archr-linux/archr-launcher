@@ -405,6 +405,32 @@ fn battery_formats_integer_current_and_capacity_without_a_restart_timer() {
 }
 
 #[test]
+fn battery_falls_back_to_the_averaged_readings_of_the_rk817_gauge() {
+    let (dir, backend) = fixture();
+    for (name, value) in [
+        ("capacity", "94"),
+        ("status", "Discharging"),
+        ("voltage_avg", "3999330"),
+        ("current_avg", "-380000"),
+    ] {
+        let path = dir.path().join("sys/class/power_supply/battery").join(name);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, value).unwrap();
+    }
+    let info = backend.load().unwrap().info;
+    let rows = &info.cards[5].detail.rows;
+    for (key, expected) in [
+        ("settings.voltage", "@4.00 V"),
+        ("settings.current", "@-380 mA"),
+    ] {
+        assert!(
+            rows.iter().any(|(k, v)| *k == key && v == expected),
+            "{key}"
+        );
+    }
+}
+
+#[test]
 fn stale_saved_audio_device_is_never_offered_and_one_sink_is_read_only() {
     use archr_ui::{settings::Page, state::Button};
     let (dir, backend) = fixture();
