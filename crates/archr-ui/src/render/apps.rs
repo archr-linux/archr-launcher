@@ -156,24 +156,21 @@ impl Ui<'_, '_> {
         for chip in &screen.chips {
             widths.push(self.measure(&chip.label, Face::Semibold, 12.)? as i32 + self.px(20.));
         }
-        // The row starts late enough for the selected chip to show.
-        let room = right - band.x();
         let selected = screen.chips.iter().position(|c| c.selected).unwrap_or(0);
-        let mut first = 0;
-        while first < selected
-            && widths[first..=selected]
-                .iter()
-                .map(|w| w + gap)
-                .sum::<i32>()
-                > room
-        {
-            first += 1;
+        let arrow = self.px(16.);
+        let (first, end) = chip_window(&widths, gap, right - band.x(), selected, arrow);
+        let (left, cut) = (first > 0, end < widths.len());
+        let middle = y + (h - self.px(14.)) / 2;
+        if left {
+            let at = self.frame.square(band.x(), middle, 14.);
+            self.icon(Glyph::ChevronLeft, at, theme.muted)?;
         }
-        let mut x = band.x();
-        for (chip, &w) in screen.chips.iter().zip(&widths).skip(first) {
-            if x + w > right {
-                break;
-            }
+        if cut {
+            let at = self.frame.square(right - self.px(14.), middle, 14.);
+            self.icon(Glyph::ChevronRight, at, theme.muted)?;
+        }
+        let mut x = band.x() + if left { arrow } else { 0 };
+        for (chip, &w) in screen.chips.iter().zip(&widths).take(end).skip(first) {
             let rect = Rect::new(x, y, w as u32, h as u32);
             let (fill, edge, ink) = if chip.selected {
                 (theme.highlight_bg, None, theme.highlight_text)
@@ -455,5 +452,73 @@ impl Ui<'_, '_> {
             self.catalog.text("apps.search"),
         );
         self.keyboard_keys(keyboard, 172., (&labels.0, &labels.1), theme)
+    }
+}
+
+/// The chips that fit in `room` (pixels), as `first..end`: the row scrolls
+/// so the selected one shows, keeping `arrow` free on each side it cuts.
+fn chip_window(widths: &[i32], gap: i32, room: i32, selected: usize, arrow: i32) -> (usize, usize) {
+    let span =
+        |range: std::ops::Range<usize>| widths[range].iter().map(|w| w + gap).sum::<i32>() - gap;
+    if widths.is_empty() || span(0..widths.len()) <= room {
+        return (0, widths.len());
+    }
+    let selected = selected.min(widths.len() - 1);
+    // Room for the selected chip and those before it, behind the arrows.
+    let mut first = 0;
+    while first < selected
+        && span(first..selected + 1) > room - arrow * (1 + usize::from(first > 0) as i32)
+    {
+        first += 1;
+    }
+    let inner = room - arrow * (usize::from(first > 0) as i32);
+    let mut end = first + 1;
+    while end < widths.len() {
+        let rest = if end + 1 < widths.len() { arrow } else { 0 };
+        if span(first..end + 1) > inner - rest {
+            break;
+        }
+        end += 1;
+    }
+    (first, end)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::chip_window;
+
+    #[test]
+    fn the_chips_scroll_to_the_selected_one() {
+        // Eight chips, room for about five: All, GB, GBC, GBA, NES, Mega Drive, PICO-8, PortMaster.
+        let widths = [40, 36, 44, 44, 44, 90, 66, 90];
+        let (gap, room, arrow) = (6, 300, 16);
+        let fits = |(first, end): (usize, usize)| {
+            let used: i32 = widths[first..end].iter().map(|w| w + gap).sum::<i32>() - gap;
+            let arrows = arrow * (i32::from(first > 0) + i32::from(end < widths.len()));
+            used + arrows <= room
+        };
+        for selected in 0..widths.len() {
+            let window = chip_window(&widths, gap, room, selected, arrow);
+            assert!(
+                window.0 <= selected && selected < window.1,
+                "{selected}: {window:?}"
+            );
+            assert!(fits(window), "{selected}: {window:?}");
+        }
+        assert_eq!(chip_window(&widths, gap, room, 0, arrow).0, 0);
+        assert!(
+            chip_window(&widths, gap, room, 0, arrow).1 < widths.len(),
+            "an arrow says more"
+        );
+        assert_eq!(
+            chip_window(&widths, gap, room, 7, arrow).1,
+            widths.len(),
+            "the last shows"
+        );
+        assert_eq!(
+            chip_window(&widths[..3], gap, room, 2, arrow),
+            (0, 3),
+            "all fit"
+        );
     }
 }

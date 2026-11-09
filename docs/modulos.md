@@ -846,6 +846,12 @@ vezes por segundo (juntos com os `ui.update`); mais de 256 esperando são
 descartados com aviso no log. Um patch só refaz os itens que mudou ou
 acrescentou; de vários `screen.toast` juntos, só o último aparece.
 
+Ids de telas, itens, chips e botões e nomes de ações têm de 1 a 128
+caracteres, sem caracteres de controle; um item sem id válido fica de fora.
+Campos que o launcher não conhece (num botão, num item) são ignorados. Os
+chips que não cabem rolam com L/R, sempre com o escolhido à vista, e setas
+nas pontas dizem que há mais.
+
 **Imagens** (`image`, `gallery`): só arquivos dentro do `HOME` do módulo
 (`module-data/<id>`), por caminho relativo. O launcher abre o caminho uma
 pasta por vez sem seguir nenhum link (`openat` com `O_NOFOLLOW`): recusa `..`,

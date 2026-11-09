@@ -354,11 +354,14 @@ impl Reader<'_> {
 fn list(value: &Json, most: usize) -> impl Iterator<Item = &Json> {
     value.as_array().into_iter().flatten().take(most)
 }
+/// The module's own names (ids, actions): long enough for `port:<catalog
+/// name>`, which a 64-byte limit dropped from a list without a word.
+const ID: usize = 128;
 /// The module's own short names: ids, actions.
 fn name(value: &Json) -> Option<String> {
     value
         .as_str()
-        .filter(|t| (1..=64).contains(&t.len()) && !t.chars().any(char::is_control))
+        .filter(|t| (1..=ID).contains(&t.len()) && !t.chars().any(char::is_control))
         .map(str::to_owned)
 }
 fn percent(value: &Json) -> Option<u8> {
@@ -992,6 +995,18 @@ mod tests {
         let path = publish(dir.path(), "A", ".gb", |f| io::Write::write_all(f, b"new")).unwrap();
         assert_eq!(path, dir.path().join("A (2).gb"));
         assert_eq!(fs::read(&rom).unwrap(), b"rom");
+    }
+
+    #[test]
+    fn a_port_item_keeps_its_long_id() {
+        let port = format!("port:{}.zip", "a".repeat(60));
+        assert_eq!(
+            name(&json!(port)),
+            Some(port.clone()),
+            "never dropped from a list"
+        );
+        assert!(name(&json!("x".repeat(ID + 1))).is_none());
+        assert!(name(&json!("a\nb")).is_none());
     }
 
     #[test]
