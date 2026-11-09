@@ -84,8 +84,18 @@ pub const APPEARANCE: &[Row] = &[
     row(Id::Accent, "settings.accent", Kind::Value),
     row(Id::Background, "settings.background", Kind::Value),
     row(Id::Font, "settings.font", Kind::Value),
+    row(Id::FontWeight, "settings.font_weight", Kind::Value),
     row(Id::TextSize, "settings.text_size", Kind::Value),
     row(Id::Animations, "settings.animations", Kind::Value),
+    row(Id::BatteryPercent, "settings.battery_percent", Kind::Toggle),
+    row(Id::GameArt, "settings.game_art", Kind::Toggle).under("settings.games_screen"),
+    row(Id::ArtWidth, "settings.art_width", Kind::Value),
+    row(Id::ArtRadius, "settings.art_radius", Kind::Value),
+    row(
+        Id::SwitcherCurtain,
+        "settings.switcher_curtain",
+        Kind::Value,
+    ),
     row(Id::Restore, "settings.restore", Kind::Action),
 ];
 pub const NETPLAY: &[Row] = &[
@@ -380,6 +390,12 @@ impl Settings {
             text_size: text(Id::TextSize),
             animations: crate::motion::Motion::parse(self.value(Id::Animations)),
             view: text(Id::View),
+            font_weight: text(Id::FontWeight),
+            battery_percent: text(Id::BatteryPercent),
+            game_art: text(Id::GameArt),
+            art_width: text(Id::ArtWidth),
+            art_radius: text(Id::ArtRadius),
+            switcher_curtain: text(Id::SwitcherCurtain),
         }
     }
     /// B saves the draft only when something changed.
@@ -448,14 +464,7 @@ impl Settings {
             }
             // Everything back to what the chosen theme says.
             Id::Restore => {
-                for id in [
-                    Id::View,
-                    Id::Accent,
-                    Id::Background,
-                    Id::Font,
-                    Id::TextSize,
-                    Id::Animations,
-                ] {
+                for id in Appearance::IDS.into_iter().filter(|id| *id != Id::Theme) {
                     self.values.insert(id, id.default_value().into());
                 }
             }

@@ -90,6 +90,24 @@ impl Ui<'_, '_> {
         art: Art<'_, '_>,
     ) -> Result<(), String> {
         let Frame { width, height, .. } = self.frame;
+        // The selected game behind everything, under the curtain chosen in
+        // Appearance; a game without a picture keeps the background.
+        if let Some(curtain) = theme.user.switcher_curtain {
+            let at = app.cursor.min(app.switcher.len().saturating_sub(1));
+            let game = app.switcher.get(at);
+            let picture = game
+                .and_then(|g| g.picture.as_ref())
+                .and_then(|path| art.pictures.and_then(|cache| cache.peek(path)));
+            if let (Some(game), Some(_)) = (game, picture) {
+                let screen = Rect::new(0, 0, width, height);
+                self.recent_picture(game, screen, (0., 255), theme, &art)?;
+                let shade = Rgba {
+                    a: (u16::from(curtain.min(100)) * 255 / 100) as u8,
+                    ..theme.background
+                };
+                self.rounded(screen, 0., shade, None)?;
+            }
+        }
         let header = self.frame.size(theme.header_height).round() as u32;
         let right = self.status_header(theme)?;
         let title = self.catalog.text("switcher.title");

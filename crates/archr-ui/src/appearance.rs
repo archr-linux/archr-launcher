@@ -8,6 +8,13 @@ pub const ACCENT_RGB: [u32; 6] = [0x1E88FF, 0x14B8A6, 0x8B5CF6, 0xF59E0B, 0x22C5
 pub const BACKGROUNDS: [&str; 3] = ["", "black", "slate"];
 pub const FONTS: [&str; 3] = ["", "mono", "system"];
 pub const TEXT_SIZES: [&str; 3] = ["small", "normal", "large"];
+pub const FONT_WEIGHTS: [&str; 2] = ["", "bold"];
+/// Box art width in percent of the screen; empty keeps the view's.
+pub const ART_WIDTHS: [&str; 6] = ["", "35", "40", "45", "50", "55"];
+/// Box art corner radius in reference pixels; empty keeps the view's.
+pub const ART_RADII: [&str; 5] = ["", "0", "6", "12", "20"];
+/// Switcher curtain over the game's picture, in percent; empty: no picture.
+pub const CURTAINS: [&str; 4] = ["", "40", "60", "80"];
 
 /// background, surface, surface_elevated, border, badge.
 const SURFACES: [[u32; 5]; 2] = [
@@ -25,6 +32,13 @@ pub struct Appearance {
     pub animations: crate::motion::Motion,
     /// Id of one of the theme's views.
     pub view: String,
+    pub font_weight: String,
+    /// "1" or "0", as the toggles store them.
+    pub battery_percent: String,
+    pub game_art: String,
+    pub art_width: String,
+    pub art_radius: String,
+    pub switcher_curtain: String,
 }
 
 pub(crate) fn rgb(hex: u32) -> Rgba {
@@ -114,6 +128,25 @@ pub fn rgb_to_hsv(rgb: u32) -> (u16, u8, u8) {
 }
 
 impl Appearance {
+    /// Every setting of the Appearance page, saved together on leaving it.
+    pub const IDS: [crate::settings::Id; 13] = {
+        use crate::settings::Id::*;
+        [
+            Theme,
+            View,
+            Accent,
+            Background,
+            Font,
+            FontWeight,
+            TextSize,
+            Animations,
+            BatteryPercent,
+            GameArt,
+            ArtWidth,
+            ArtRadius,
+            SwitcherCurtain,
+        ]
+    };
     /// Multiplier for every interface text size.
     pub fn text_scale(&self) -> f32 {
         match self.text_size.as_str() {
@@ -159,6 +192,18 @@ impl Appearance {
             }
             _ => {}
         }
+        // Bold is the semibold face (for mono, set just above to its medium).
+        if self.font_weight == "bold" && theme.font_semibold.is_some() {
+            theme.font = theme.font_semibold.clone();
+        }
+        let number = |text: &str| text.parse::<u8>().ok();
+        theme.user = crate::theme::UserLook {
+            battery_percent: self.battery_percent != "0",
+            game_art: self.game_art != "0",
+            art_width: number(&self.art_width).map(|p| f32::from(p) / 100.),
+            art_radius: number(&self.art_radius).map(f32::from),
+            switcher_curtain: number(&self.switcher_curtain),
+        };
         theme
     }
 }
@@ -174,6 +219,39 @@ mod tests {
             font: font.into(),
             ..Appearance::default()
         }
+    }
+    #[test]
+    fn user_look_reaches_the_theme_and_the_games_layout() {
+        let theme = Theme::builtin();
+        let base = theme.view(&theme.active_view).games;
+        let mut look = Appearance {
+            font_weight: "bold".into(),
+            battery_percent: "0".into(),
+            art_width: "50".into(),
+            art_radius: "0".into(),
+            switcher_curtain: "60".into(),
+            ..Appearance::default()
+        };
+        let styled = look.apply(&theme);
+        assert_eq!(styled.font, theme.font_semibold);
+        assert!(!styled.user.battery_percent);
+        assert_eq!(styled.user.switcher_curtain, Some(60));
+        let games = styled.view(&styled.active_view).games;
+        let (art, old) = (games.art.unwrap(), base.art.unwrap());
+        // Wider from the same right edge; the list keeps its gap to it.
+        assert!((art.rect.w - 0.5).abs() < 1e-4);
+        assert!((art.rect.x + art.rect.w - (old.rect.x + old.rect.w)).abs() < 1e-4);
+        assert_eq!(art.radius, 0.);
+        let gap = |l: &crate::layout::Layout, a: crate::layout::Art| {
+            a.rect.x - (l.list.rect.x + l.list.rect.w)
+        };
+        assert!((gap(&games, art) - gap(&base, old)).abs() < 1e-4);
+        // No art: the list takes the whole width, between equal margins.
+        look.game_art = "0".into();
+        let bare = look.apply(&theme).view(&theme.active_view).games;
+        assert!(bare.art.is_none() && bare.meta.is_none());
+        let list = bare.list.rect;
+        assert!((list.x + list.w + list.x - 1.).abs() < 1e-4);
     }
     #[test]
     fn empty_choices_keep_the_theme() {

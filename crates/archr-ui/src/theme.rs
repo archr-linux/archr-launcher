@@ -245,9 +245,38 @@ pub struct Theme {
     views: Vec<(String, Vec<toml::Table>)>,
     /// The screen this theme is laid out for.
     pub shape: Shape,
+    /// The user's Appearance choices that reshape the theme's screens.
+    pub user: UserLook,
     /// Each theme.toml this one is built from, builtin first, with its
     /// folder: `fitted` lays them out again for another screen.
     sources: Sources,
+}
+
+/// Appearance choices laid over every theme (none is a theme.toml key).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct UserLook {
+    /// The number beside the battery icon.
+    pub battery_percent: bool,
+    /// Box art on the games screen; off gives the list the whole width.
+    pub game_art: bool,
+    /// Box art width as a screen-width fraction, over the view's.
+    pub art_width: Option<f32>,
+    /// Box art corner radius in reference pixels, over the view's.
+    pub art_radius: Option<f32>,
+    /// Switcher: the selected game's picture fills the screen behind it,
+    /// under a curtain of this opacity (0-100); None keeps the background.
+    pub switcher_curtain: Option<u8>,
+}
+impl Default for UserLook {
+    fn default() -> Self {
+        Self {
+            battery_percent: true,
+            game_art: true,
+            art_width: None,
+            art_radius: None,
+            switcher_curtain: None,
+        }
+    }
 }
 
 /// The theme.toml files a theme is built from, with their folders. Where a
@@ -331,6 +360,7 @@ impl Theme {
         fitted.font_mono_medium.clone_from(&self.font_mono_medium);
         fitted.name = self.name.clone();
         fitted.active_view.clone_from(&self.active_view);
+        fitted.user = self.user;
         fitted
     }
     fn from_table(
@@ -447,6 +477,7 @@ impl Theme {
             font_mono_medium,
             name: Names::parse(table.get("name"), "name"),
             active_view: LISTA.into(),
+            user: UserLook::default(),
             views: view_tables(table, defaults),
             shape,
             sources,
@@ -464,6 +495,7 @@ impl Theme {
         for table in tables {
             view.overlay(table, &format!("view.{id}"));
         }
+        view.games.fit_art(&self.user);
         view
     }
     /// The file of the decoration image `image`, if it is inside the theme.

@@ -59,6 +59,12 @@ pub fn saved(cfg: Option<&SystemCfg>) -> Appearance {
         text_size: get(Id::TextSize),
         animations: archr_ui::motion::Motion::parse(&get(Id::Animations)),
         view: get(Id::View),
+        font_weight: get(Id::FontWeight),
+        battery_percent: get(Id::BatteryPercent),
+        game_art: get(Id::GameArt),
+        art_width: get(Id::ArtWidth),
+        art_radius: get(Id::ArtRadius),
+        switcher_curtain: get(Id::SwitcherCurtain),
     }
 }
 

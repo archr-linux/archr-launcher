@@ -3333,6 +3333,11 @@ fn golden_frames_at_640x480() {
     };
     browse(&mut ui, &app, &theme, pictures);
     keep(&mut ui, "switcher");
+    // Appearance: the game's picture behind the switcher, under a curtain.
+    let mut curtained = theme.clone();
+    curtained.user.switcher_curtain = Some(60);
+    browse(&mut ui, &app, &curtained, pictures);
+    keep(&mut ui, "switcher-curtain");
     // Settings read "updated 5 s ago" against this frame time.
     let start = ui.born + Duration::from_secs(10);
     let settled = |ui: &mut Ui, state: &Settings| {

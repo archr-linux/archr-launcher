@@ -256,6 +256,14 @@ pub enum Id {
     Font,
     TextSize,
     Animations,
+    FontWeight,
+    BatteryPercent,
+    /// Box art on the games screen, its width and corners.
+    GameArt,
+    ArtWidth,
+    ArtRadius,
+    /// The selected game's picture behind the switcher, under a curtain.
+    SwitcherCurtain,
     /// Details screen: the scraped video plays, muted, over the screen shot.
     PreviewVideo,
     Restore,
@@ -432,6 +440,12 @@ impl Id {
             Self::Font => ("launcher.font", ""),
             Self::TextSize => ("launcher.text_size", "normal"),
             Self::Animations => ("launcher.animations", "on"),
+            Self::FontWeight => ("launcher.font_weight", ""),
+            Self::BatteryPercent => ("launcher.battery_percent", "1"),
+            Self::GameArt => ("launcher.game_art", "1"),
+            Self::ArtWidth => ("launcher.art_width", ""),
+            Self::ArtRadius => ("launcher.art_radius", ""),
+            Self::SwitcherCurtain => ("launcher.switcher_curtain", ""),
             Self::PreviewVideo => ("launcher.preview_video", "1"),
             // Read by the automount script at boot.
             Self::Automount => ("system.automount", "1"),
@@ -584,6 +598,8 @@ impl Id {
             | Self::MissingGames
             | Self::ScraperMissing
             | Self::PreviewVideo
+            | Self::BatteryPercent
+            | Self::GameArt
             | Self::Autosave
             | Self::Automount
             | Self::MergedStorage
@@ -631,6 +647,10 @@ impl Id {
             Self::Font => &appearance::FONTS,
             Self::TextSize => &appearance::TEXT_SIZES,
             Self::Animations => &crate::motion::Motion::CODES,
+            Self::FontWeight => &appearance::FONT_WEIGHTS,
+            Self::ArtWidth => &appearance::ART_WIDTHS,
+            Self::ArtRadius => &appearance::ART_RADII,
+            Self::SwitcherCurtain => &appearance::CURTAINS,
             _ => &[],
         }
     }
@@ -1129,6 +1149,12 @@ impl Settings {
             (Id::TextSize, "small") => "appearance.text_small",
             (Id::TextSize, "normal") => "appearance.text_normal",
             (Id::TextSize, "large") => "appearance.text_large",
+            (Id::FontWeight | Id::ArtWidth | Id::ArtRadius, "") => "appearance.from_theme",
+            (Id::FontWeight, _) => "appearance.weight_bold",
+            (Id::ArtWidth, v) => return format!("{v}%"),
+            (Id::ArtRadius, v) => return format!("{v} px"),
+            (Id::SwitcherCurtain, "") => "appearance.curtain_off",
+            (Id::SwitcherCurtain, v) => return format!("{v}%"),
             (Id::Animations, v) => match crate::motion::Motion::parse(v) {
                 crate::motion::Motion::On => "appearance.anim_on",
                 crate::motion::Motion::Reduced => "appearance.anim_reduced",
@@ -1334,6 +1360,7 @@ impl Settings {
                 Id::CustomServer => self.value(Id::Relay) == "custom",
                 Id::UsbCompat | Id::UsbAddress | Id::UsbState => self.usb_network(),
                 Id::SecondCard => self.storage.second.is_some(),
+                Id::ArtWidth | Id::ArtRadius => self.value(Id::GameArt) == "1",
                 Id::UnifiedCard => self.storage.unified.is_some(),
                 Id::RomsLink => self.storage.roms.shown(),
                 Id::ReportLast => self.diag_visible(row.id),
@@ -2042,7 +2069,7 @@ mod appearance_tests {
         assert_eq!(state.handle(Button::R), Effect::Theme("night".into()));
         // Restoring keeps the theme and returns the rest to it.
         state.values.insert(Id::Accent, "pink".into());
-        state.cursor = 8;
+        state.cursor = restore_row(&state);
         assert_eq!(state.handle(Button::A), Effect::None);
         assert_eq!(state.value(Id::Theme), "night");
         assert_eq!(state.value(Id::Accent), "");
@@ -2129,7 +2156,7 @@ mod appearance_tests {
         ] {
             state.values.insert(id, value.into());
         }
-        state.cursor = 8;
+        state.cursor = restore_row(&state);
         assert_eq!(state.handle(Button::A), Effect::None);
         assert_eq!(
             state.appearance(),
@@ -2138,9 +2165,15 @@ mod appearance_tests {
                 theme: "default".into(),
                 animations: crate::motion::Motion::On,
                 view: "lista".into(),
+                battery_percent: "1".into(),
+                game_art: "1".into(),
                 ..Appearance::default()
             }
         );
+    }
+    fn restore_row(state: &Settings) -> usize {
+        let rows = state.visible_rows();
+        rows.iter().position(|r| r.id == Id::Restore).unwrap()
     }
     #[test]
     fn the_view_row_offers_the_previewed_theme_views_by_name() {

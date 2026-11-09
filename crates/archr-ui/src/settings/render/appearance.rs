@@ -154,7 +154,11 @@ impl View<'_, '_, '_> {
         )?;
         self.text_face(
             pill,
-            "14:32 · 87%",
+            if theme.user.battery_percent {
+                "14:32 · 87%"
+            } else {
+                "14:32"
+            },
             (10., theme.muted, Align::Center),
             Face::Mono,
         )?;
