@@ -266,6 +266,10 @@ pub struct UserLook {
     /// Switcher: the selected game's picture fills the screen behind it,
     /// under a curtain of this opacity (0-100); None keeps the background.
     pub switcher_curtain: Option<u8>,
+    /// Footer hints as plain letters, without the round buttons.
+    pub text_hints: bool,
+    /// The games list over the system's background picture, when it has one.
+    pub system_background: bool,
 }
 impl Default for UserLook {
     fn default() -> Self {
@@ -275,6 +279,8 @@ impl Default for UserLook {
             art_width: None,
             art_radius: None,
             switcher_curtain: None,
+            text_hints: false,
+            system_background: true,
         }
     }
 }

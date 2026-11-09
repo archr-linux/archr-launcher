@@ -978,7 +978,15 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                     key.map(|key| (key, self.area(picture.rect)))
                 });
             self.begin_page(games, picture, theme)?;
-            self.backdrop_pictures(theme)?;
+            let system = match backdrop {
+                Screen::Games { system } | Screen::Details { system, .. }
+                    if !system.starts_with('@') =>
+                {
+                    Some(system.as_str())
+                }
+                _ => None,
+            };
+            self.backdrop_pictures(theme, system)?;
             // The Start menu, Saves and Screenshots are fixed compositions:
             // no decorations over them.
             let hub = matches!(app.screen, Screen::StartHub { .. });
@@ -1975,7 +1983,9 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                     start_w as u32,
                     self.px(20.) as u32,
                 );
-                self.rounded(badge, self.px(5.) as f32, theme.badge, None)?;
+                if !theme.user.text_hints {
+                    self.rounded(badge, self.px(5.) as f32, theme.badge, None)?;
+                }
                 self.label_aligned(
                     "START",
                     (Face::Regular, 10., theme.text),
@@ -1997,6 +2007,20 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                     y + (h as i32 - self.px(20.)) / 2,
                     20.,
                 );
+                // Appearance: the letter alone, in the text colour.
+                if theme.user.text_hints {
+                    if button == '↕' {
+                        self.icon(Glyph::ArrowUpDown, badge, theme.text)?;
+                    } else {
+                        self.label_aligned(
+                            &button.to_string(),
+                            (Face::Semibold, 14., theme.text),
+                            badge,
+                            Align::Center,
+                        )?;
+                    }
+                    continue;
+                }
                 if self.framed("badge", badge)? {
                     if button == '↕' {
                         let icon = self.frame.square(

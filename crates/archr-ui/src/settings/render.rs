@@ -1543,6 +1543,17 @@ impl View<'_, '_, '_> {
                     }
                     let width = width / self.ui.frame.scale;
                     let left = (x + w - 20. - width - 20.).max(x);
+                    if let Some(hex) = crate::appearance::parse_hex(state.value(id))
+                        .filter(|_| Settings::is_colour(id))
+                    {
+                        let dot = (left - 20., y + (h - 14.) / 2., 14., 14.);
+                        self.ui.rounded(
+                            self.rect(dot),
+                            self.ui.px(7.) as f32,
+                            crate::appearance::rgb(hex),
+                            Some(self.theme.border),
+                        )?;
+                    }
                     self.ui.icon(
                         Glyph::ChevronLeft,
                         self.rect((left, y + (h - 14.) / 2., 14., 14.)),

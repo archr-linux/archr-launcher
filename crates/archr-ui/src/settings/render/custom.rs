@@ -1,7 +1,7 @@
 //! Custom accent page (Aparencia / Cor personalizada): a sample, three
 //! sliders on gradient tracks, the hex code and the live preview.
 use super::*;
-use crate::appearance::{hex, hsv_to_rgb, mix, rgb, Appearance};
+use crate::appearance::{hex, hsv_to_rgb, mix, rgb};
 
 const LEFT: f32 = 16.;
 const LIST_RIGHT: f32 = 372.;
@@ -90,10 +90,8 @@ impl View<'_, '_, '_> {
             self.rect((344., y + (HEX_ROW - 14.) / 2., 14., 14.)),
             self.ink(selected),
         )?;
-        let draft = Appearance {
-            accent: hex(custom.rgb()),
-            ..state.appearance()
-        };
+        let mut draft = state.appearance();
+        draft.set_colour(state.custom_target, hex(custom.rgb()));
         self.draft_preview(state, &draft)?;
         self.note(
             (PREVIEW_X, 292., PREVIEW_W, 60.),

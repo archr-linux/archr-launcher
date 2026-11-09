@@ -29,7 +29,16 @@ pub(super) struct Look<'t> {
     /// view.
     wanted: Vec<PathBuf>,
     wanted_for: Option<(Option<PathBuf>, String)>,
+    /// Each system's background picture, once looked for (None: it has none).
+    system_pictures: std::collections::HashMap<String, Option<PathBuf>>,
 }
+
+/// Where a system's background picture is looked for, first match wins:
+/// the user's folder, then the theme's and the default theme's.
+const USER_BACKGROUNDS: &str = "storage/.config/archr-launcher/backgrounds";
+/// The games list stays legible over any picture: this much of the theme
+/// background covers it.
+const SYSTEM_CURTAIN: u8 = 150;
 
 impl<'t> Ui<'_, 't> {
     /// Takes the theme's pictures, and starts their loader for its folder.
@@ -60,6 +69,7 @@ impl<'t> Ui<'_, 't> {
             );
             look.images = Some((key.0.clone(), key.1, cache));
             look.wanted_for = None;
+            look.system_pictures.clear();
         }
         let view = Some((key.0, theme.active_view.clone()));
         if look.wanted_for != view {
@@ -132,11 +142,44 @@ impl<'t> Ui<'_, 't> {
         }
         Ok(true)
     }
-    /// The background picture over the whole screen, and the header and
-    /// footer frames.
-    pub(super) fn backdrop_pictures(&mut self, theme: &Theme) -> Result<(), String> {
+    /// The background picture of `system`, if the user or the theme has one.
+    fn system_picture(&mut self, system: &str) -> Option<PathBuf> {
+        if let Some(found) = self.look.system_pictures.get(system) {
+            return found.clone();
+        }
+        let root = self.root.clone().unwrap_or_else(|| PathBuf::from("/"));
+        let dirs = [
+            Some(root.join(USER_BACKGROUNDS)),
+            self.theme_dir.as_ref().map(|d| d.join("backgrounds")),
+            self.default_theme_dir
+                .as_ref()
+                .map(|d| d.join("backgrounds")),
+        ];
+        let found = dirs.into_iter().flatten().find_map(|dir| {
+            ["png", "jpg"]
+                .iter()
+                .map(|ext| dir.join(format!("{system}.{ext}")))
+                .find(|path| path.is_file())
+        });
+        self.look
+            .system_pictures
+            .insert(system.to_owned(), found.clone());
+        found
+    }
+    /// The background picture over the whole screen (on a system's games
+    /// list, that system's own when there is one, under a curtain), and the
+    /// header and footer frames.
+    pub(super) fn backdrop_pictures(
+        &mut self,
+        theme: &Theme,
+        system: Option<&str>,
+    ) -> Result<(), String> {
         let Frame { width, height, .. } = self.frame;
-        if let Some(path) = self.look.background.clone() {
+        let own = system
+            .filter(|_| theme.user.system_background)
+            .and_then(|system| self.system_picture(system));
+        let curtain = own.is_some();
+        if let Some(path) = own.or_else(|| self.look.background.clone()) {
             if let Some((texture, canvas)) = self.picture(&path) {
                 let size = texture.query();
                 let part = crop((size.width, size.height), (width, height));
@@ -147,6 +190,13 @@ impl<'t> Ui<'_, 't> {
                     (part[3] * size.height as f32).round().max(1.) as u32,
                 );
                 canvas.copy(texture, src, None)?;
+                if curtain {
+                    let shade = Rgba {
+                        a: SYSTEM_CURTAIN,
+                        ..theme.background
+                    };
+                    self.rounded(Rect::new(0, 0, width, height), 0., shade, None)?;
+                }
             }
         }
         let frame = self.frame;

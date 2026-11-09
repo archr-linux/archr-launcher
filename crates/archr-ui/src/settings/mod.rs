@@ -264,6 +264,15 @@ pub enum Id {
     ArtRadius,
     /// The selected game's picture behind the switcher, under a curtain.
     SwitcherCurtain,
+    /// Custom colours over the theme's: text, text on the selection, and
+    /// secondary text (hints, counts, details). Empty keeps the theme's.
+    TextColor,
+    SelectedTextColor,
+    SecondaryColor,
+    /// Footer hints as plain letters, without the round buttons.
+    TextHints,
+    /// The games list over the system's own background picture.
+    SystemBackground,
     /// Details screen: the scraped video plays, muted, over the screen shot.
     PreviewVideo,
     Restore,
@@ -446,6 +455,11 @@ impl Id {
             Self::ArtWidth => ("launcher.art_width", ""),
             Self::ArtRadius => ("launcher.art_radius", ""),
             Self::SwitcherCurtain => ("launcher.switcher_curtain", ""),
+            Self::TextColor => ("launcher.text_color", ""),
+            Self::SelectedTextColor => ("launcher.selected_text_color", ""),
+            Self::SecondaryColor => ("launcher.secondary_color", ""),
+            Self::TextHints => ("launcher.text_hints", "0"),
+            Self::SystemBackground => ("launcher.system_background", "1"),
             Self::PreviewVideo => ("launcher.preview_video", "1"),
             // Read by the automount script at boot.
             Self::Automount => ("system.automount", "1"),
@@ -600,6 +614,8 @@ impl Id {
             | Self::PreviewVideo
             | Self::BatteryPercent
             | Self::GameArt
+            | Self::TextHints
+            | Self::SystemBackground
             | Self::Autosave
             | Self::Automount
             | Self::MergedStorage
@@ -992,6 +1008,10 @@ pub struct Settings {
     pub capture: Option<Capture>,
     /// The remembered custom colour while the editor shows another one.
     custom_kept: Custom,
+    /// The row the colour editor sets.
+    pub custom_target: Id,
+    /// Each colour row's own colour, kept while the row shows the theme's.
+    kept_colours: BTreeMap<Id, u32>,
     pub updates: updates::Updates,
     pub raimport: raimport::RaImport,
     pub roms: roms::Roms,
@@ -1057,6 +1077,8 @@ impl Default for Settings {
             mangohud_saved: Default::default(),
             capture: None,
             custom_kept: Custom::default(),
+            custom_target: Id::Accent,
+            kept_colours: BTreeMap::new(),
             held: 0,
             updates: updates::Updates::default(),
             raimport: raimport::RaImport::default(),
@@ -1149,7 +1171,17 @@ impl Settings {
             (Id::TextSize, "small") => "appearance.text_small",
             (Id::TextSize, "normal") => "appearance.text_normal",
             (Id::TextSize, "large") => "appearance.text_large",
-            (Id::FontWeight | Id::ArtWidth | Id::ArtRadius, "") => "appearance.from_theme",
+            (
+                Id::FontWeight
+                | Id::ArtWidth
+                | Id::ArtRadius
+                | Id::TextColor
+                | Id::SelectedTextColor
+                | Id::SecondaryColor,
+                "",
+            ) => "appearance.from_theme",
+            (Id::TextColor | Id::SelectedTextColor | Id::SecondaryColor, v) => return v.into(),
+            (Id::Background, v) if v.starts_with('#') => return v.into(),
             (Id::FontWeight, _) => "appearance.weight_bold",
             (Id::ArtWidth, v) => return format!("{v}%"),
             (Id::ArtRadius, v) => return format!("{v} px"),
@@ -1494,8 +1526,10 @@ impl Settings {
                 (Key('B'), "hint.cancel"),
             ],
             Page::Appearance
-                if self.accent_is_custom()
-                    && self.visible_rows().get(self.cursor).map(|r| r.id) == Some(Id::Accent) =>
+                if self.visible_rows().get(self.cursor).is_some_and(|r| {
+                    (r.id == Id::Accent && self.accent_is_custom())
+                        || (Self::is_colour(r.id) && r.id != Id::Accent)
+                }) =>
             {
                 &[
                     (Pair('L', 'R'), "settings.change"),
@@ -1797,6 +1831,12 @@ impl Settings {
                         return effect;
                     }
                 }
+                // A colour row leaving its own colour keeps it to come back to.
+                if let Some(rgb) = appearance::parse_hex(self.value(row.id))
+                    .filter(|_| Self::is_colour(row.id) && row.kind == Kind::Value)
+                {
+                    self.kept_colours.insert(row.id, rgb);
+                }
                 let old = self.value(row.id);
                 let next = match row.kind {
                     Kind::Toggle => {
@@ -1837,6 +1877,7 @@ impl Settings {
                         let options = match self.options.get(&row.id).filter(|v| !v.is_empty()) {
                             Some(options) => options.clone(),
                             None if row.id == Id::Accent => self.accent_choices(),
+                            None if Self::is_colour(row.id) => self.colour_choices(row.id),
                             None if row.id == Id::View => {
                                 self.base_theme.views().into_iter().map(|v| v.0).collect()
                             }
@@ -2167,8 +2208,43 @@ mod appearance_tests {
                 view: "lista".into(),
                 battery_percent: "1".into(),
                 game_art: "1".into(),
+                text_hints: "0".into(),
+                system_background: "1".into(),
                 ..Appearance::default()
             }
+        );
+    }
+    #[test]
+    fn a_colour_row_opens_the_editor_for_itself_and_takes_its_colour() {
+        let mut state = page();
+        let row = |state: &Settings, id| {
+            state
+                .visible_rows()
+                .iter()
+                .position(|r| r.id == id)
+                .unwrap()
+        };
+        state.cursor = row(&state, Id::TextColor);
+        assert_eq!(state.value(Id::TextColor), "");
+        state.handle(Button::A);
+        assert_eq!(
+            (state.page(), state.custom_target),
+            (Page::AccentColor, Id::TextColor)
+        );
+        state.custom = super::Custom::from_rgb(0x33CC66);
+        state.handle(Button::A);
+        assert_eq!(state.value(Id::TextColor), "#33CC66");
+        assert_eq!(state.value(Id::Accent), "");
+        // L/R go between the theme's colour and this one.
+        state.cursor = row(&state, Id::TextColor);
+        state.handle(Button::R);
+        assert_eq!(state.value(Id::TextColor), "");
+        state.handle(Button::R);
+        assert_eq!(state.value(Id::TextColor), "#33CC66");
+        // The background keeps its presets before its own colour.
+        assert_eq!(
+            state.colour_choices(Id::Background)[..3],
+            ["".to_owned(), "black".into(), "slate".into()]
         );
     }
     fn restore_row(state: &Settings) -> usize {

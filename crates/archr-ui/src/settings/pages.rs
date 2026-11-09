@@ -83,14 +83,27 @@ pub const APPEARANCE: &[Row] = &[
     row(Id::View, "settings.view", Kind::Value),
     row(Id::Accent, "settings.accent", Kind::Value),
     row(Id::Background, "settings.background", Kind::Value),
+    row(Id::TextColor, "settings.text_color", Kind::Value),
+    row(
+        Id::SelectedTextColor,
+        "settings.selected_text_color",
+        Kind::Value,
+    ),
+    row(Id::SecondaryColor, "settings.secondary_color", Kind::Value),
     row(Id::Font, "settings.font", Kind::Value),
     row(Id::FontWeight, "settings.font_weight", Kind::Value),
     row(Id::TextSize, "settings.text_size", Kind::Value),
     row(Id::Animations, "settings.animations", Kind::Value),
     row(Id::BatteryPercent, "settings.battery_percent", Kind::Toggle),
+    row(Id::TextHints, "settings.text_hints", Kind::Toggle),
     row(Id::GameArt, "settings.game_art", Kind::Toggle).under("settings.games_screen"),
     row(Id::ArtWidth, "settings.art_width", Kind::Value),
     row(Id::ArtRadius, "settings.art_radius", Kind::Value),
+    row(
+        Id::SystemBackground,
+        "settings.system_background",
+        Kind::Toggle,
+    ),
     row(
         Id::SwitcherCurtain,
         "settings.switcher_curtain",
@@ -292,7 +305,7 @@ impl Settings {
         self.error = None;
         self.back();
         match target {
-            Id::Accent => {
+            id if Self::is_colour(id) => {
                 if let Some(rgb) = parse_hex(&value) {
                     self.custom = super::Custom::from_rgb(rgb);
                 }
@@ -396,6 +409,11 @@ impl Settings {
             art_width: text(Id::ArtWidth),
             art_radius: text(Id::ArtRadius),
             switcher_curtain: text(Id::SwitcherCurtain),
+            text_color: text(Id::TextColor),
+            selected_text_color: text(Id::SelectedTextColor),
+            secondary_color: text(Id::SecondaryColor),
+            text_hints: text(Id::TextHints),
+            system_background: text(Id::SystemBackground),
         }
     }
     /// B saves the draft only when something changed.
@@ -412,7 +430,7 @@ impl Settings {
     /// A on rows that open something instead of changing a value.
     pub(super) fn activate(&mut self, id: Id) -> Option<Effect> {
         match id {
-            Id::Accent => self.open_custom(),
+            id if Self::is_colour(id) => self.open_custom(id),
             Id::ThemeStore => return Some(self.open_store()),
             Id::ModulesLink => self.open(Page::Modules),
             // Every visit looks at the folder again.
