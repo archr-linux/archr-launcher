@@ -283,16 +283,13 @@ impl Runtime {
             }
             Effect::Theme(name) => self.send(Work::Theme(name)),
             Effect::Appearance => {
-                let look = self.state.appearance();
-                self.send(Work::Appearance(vec![
-                    (Id::Theme, look.theme),
-                    (Id::View, look.view),
-                    (Id::Accent, look.accent),
-                    (Id::Background, look.background),
-                    (Id::Font, look.font),
-                    (Id::TextSize, look.text_size),
-                    (Id::Animations, look.animations.code().into()),
-                ]))
+                let state = &self.state;
+                self.send(Work::Appearance(
+                    archr_ui::appearance::Appearance::IDS
+                        .into_iter()
+                        .map(|id| (id, id.normalize(state.value(id))))
+                        .collect(),
+                ))
             }
             Effect::Storage(action) => self.send(Work::Storage(action)),
             Effect::Store(action) => self.send(Work::Store(action)),

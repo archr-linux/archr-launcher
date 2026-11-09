@@ -1176,7 +1176,9 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             .map(|s| (s.clock.clone(), s.battery, s.wifi));
         let mut right = width as i32 - pad;
         if let Some((clock, battery, wifi)) = status {
-            let percent = battery.map(|b| format!("{}%", b.percent));
+            let percent = battery
+                .filter(|_| theme.user.battery_percent)
+                .map(|b| format!("{}%", b.percent));
             let clock_width = self.measure(&clock, Face::Mono, 13.)?;
             let percent_width = percent
                 .as_deref()

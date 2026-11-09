@@ -335,6 +335,54 @@ impl View {
 }
 
 impl Layout {
+    /// The user's box art choices (`UserLook`) over this games layout. The
+    /// list beside the art keeps its gap to it: it grows into the room
+    /// the art leaves, or shrinks out of the way of a wider one.
+    pub(crate) fn fit_art(&mut self, user: &crate::theme::UserLook) {
+        let Some(art) = self.art.as_mut() else {
+            return;
+        };
+        let old = art.rect;
+        let same = |rect: Rect01| (rect.x - old.x).abs() < 1e-3 && (rect.w - old.w).abs() < 1e-3;
+        let list = &mut self.list.rect;
+        let beside = list.x + list.w <= old.x + 1e-3;
+        let gap = old.x - (list.x + list.w);
+        if !user.game_art {
+            if beside {
+                list.w = 1. - 2. * list.x;
+            }
+            self.art = None;
+            self.meta = None;
+            self.backdrop = None;
+            if self.panel.is_some_and(|p| same(p.rect)) {
+                self.panel = None;
+            }
+            return;
+        }
+        if let Some(w) = user.art_width {
+            // The right edge stays where the theme put it.
+            let right = old.x + old.w;
+            art.rect.x = (right - w).max(0.);
+            art.rect.w = right - art.rect.x;
+            if beside {
+                list.w = (art.rect.x - gap - list.x).max(0.1);
+            }
+            if let Some(meta) = self.meta.as_mut() {
+                meta.rect.x = art.rect.x;
+                meta.rect.w = art.rect.w;
+            }
+        }
+        if let Some(r) = user.art_radius {
+            art.radius = h(r);
+        }
+        let art = *art;
+        if let Some(panel) = self.panel.as_mut().filter(|p| same(p.rect)) {
+            panel.rect = art.rect;
+            if user.art_radius.is_some() {
+                panel.radius = art.radius + h(1.);
+            }
+        }
+    }
     fn overlay(&mut self, t: &Table, at: &str) {
         known(
             t,
