@@ -43,6 +43,61 @@ pub fn update_gamelist(
     updates: &[GameUpdate],
     overwrite: bool,
 ) -> io::Result<()> {
+    edit(system_dir, true, |doc| {
+        for update in updates {
+            let key = game_path_key(&update.rom);
+            let found = doc.items.iter_mut().find_map(|item| match item {
+                Item::Game(game) if key.is_some() && game.path(system_dir) == key => Some(game),
+                _ => None,
+            });
+            let game = match found {
+                Some(game) => game,
+                None => {
+                    let relative = relative(system_dir, &update.rom);
+                    doc.items.push(Item::Game(Game {
+                        open: "<game>".into(),
+                        children: vec![Child::new("path", &relative)],
+                    }));
+                    let Some(Item::Game(game)) = doc.items.last_mut() else {
+                        unreachable!()
+                    };
+                    game
+                }
+            };
+            for (tag, value) in &update.fields {
+                if value.trim().is_empty() {
+                    continue;
+                }
+                let value = if PATH_TAGS.contains(tag) {
+                    relative(system_dir, Path::new(value))
+                } else {
+                    value.clone()
+                };
+                match game.children.iter_mut().find(|c| c.tag == *tag) {
+                    Some(child) if !overwrite && child.occupied(system_dir) => {}
+                    Some(child) => *child = Child::new(tag, &value),
+                    None => game.children.push(Child::new(tag, &value)),
+                }
+            }
+        }
+    })
+}
+
+/// Takes these ROMs' entries off a system's gamelist; everything else
+/// stays as written. No gamelist: nothing to do.
+pub fn remove_games(system_dir: &Path, roms: &[PathBuf]) -> io::Result<()> {
+    let keys: Vec<PathBuf> = roms.iter().filter_map(|rom| game_path_key(rom)).collect();
+    edit(system_dir, false, |doc| {
+        doc.items.retain(|item| match item {
+            Item::Game(game) => game.path(system_dir).is_none_or(|k| !keys.contains(&k)),
+            Item::Raw(_) => true,
+        });
+    })
+}
+
+/// Reads, changes and writes back one gamelist; `create` starts an empty
+/// one when there is none.
+fn edit(system_dir: &Path, create: bool, change: impl FnOnce(&mut Doc)) -> io::Result<()> {
     // One writer per process: scraper threads may finish games of one system together.
     static WRITE: Mutex<()> = Mutex::new(());
     let _one = WRITE.lock().unwrap_or_else(|e| e.into_inner());
@@ -55,6 +110,7 @@ pub fn update_gamelist(
                 mode,
             )
         }
+        Err(error) if error.kind() == io::ErrorKind::NotFound && !create => return Ok(()),
         Err(error) if error.kind() == io::ErrorKind::NotFound => (
             "<?xml version=\"1.0\"?>\n<gameList>\n</gameList>\n".into(),
             0o644,
@@ -62,42 +118,7 @@ pub fn update_gamelist(
         Err(error) => return Err(error),
     };
     let mut doc = Doc::parse(&source).ok_or_else(|| invalid_data("gamelist does not parse"))?;
-    for update in updates {
-        let key = game_path_key(&update.rom);
-        let found = doc.items.iter_mut().find_map(|item| match item {
-            Item::Game(game) if key.is_some() && game.path(system_dir) == key => Some(game),
-            _ => None,
-        });
-        let game = match found {
-            Some(game) => game,
-            None => {
-                let relative = relative(system_dir, &update.rom);
-                doc.items.push(Item::Game(Game {
-                    open: "<game>".into(),
-                    children: vec![Child::new("path", &relative)],
-                }));
-                let Some(Item::Game(game)) = doc.items.last_mut() else {
-                    unreachable!()
-                };
-                game
-            }
-        };
-        for (tag, value) in &update.fields {
-            if value.trim().is_empty() {
-                continue;
-            }
-            let value = if PATH_TAGS.contains(tag) {
-                relative(system_dir, Path::new(value))
-            } else {
-                value.clone()
-            };
-            match game.children.iter_mut().find(|c| c.tag == *tag) {
-                Some(child) if !overwrite && child.occupied(system_dir) => {}
-                Some(child) => *child = Child::new(tag, &value),
-                None => game.children.push(Child::new(tag, &value)),
-            }
-        }
-    }
+    change(&mut doc);
     let text = doc.render();
     atomic_publish(&path, true, |file| {
         use io::Write;
