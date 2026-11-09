@@ -65,9 +65,6 @@ const APP_TASKS: u32 = 32;
 const SCREENS: usize = 256;
 /// One `rom.install` per module in this time.
 const INSTALL_EVERY: Duration = Duration::from_secs(1);
-/// An action of the user in the app allows one `rom.install` this long
-/// after it (downloads take a while), or one `port.install` within `GESTURE`.
-const TOKEN: Duration = Duration::from_secs(600);
 /// Lines of one process waiting for the host; more and it is stopped.
 const LINES: usize = 256;
 
@@ -287,7 +284,7 @@ enum Done {
         install: bool,
         /// Its launch script's game key and what its files take, when
         /// PortMaster says it installed it.
-        result: Result<Option<(String, u64)>, String>,
+        result: Result<Option<(String, u64)>, (i64, String)>,
         /// The job's stop switch: only this job's end frees the lane.
         job: Arc<std::sync::atomic::AtomicBool>,
     },
@@ -2126,8 +2123,8 @@ impl Host {
             .as_ref()
             .map_or_else(|| PathBuf::from("/storage/roms"), |p| p.at("/storage/roms"))
     }
-    /// One install token, from the user's last action in the app, if it is
-    /// no older than `within`.
+    /// One install, right after the user's action in the app (an A, X or Y
+    /// within `within`).
     fn token(&mut self, id: &str, within: Duration) -> Result<(), (i64, &'static str)> {
         match self.tokens.remove(id) {
             Some(at) if at.elapsed() < within => Ok(()),
@@ -2174,7 +2171,7 @@ impl Host {
                 {
                     return Err((-32003, "too many requests"));
                 }
-                self.token(&id, TOKEN)?;
+                self.token(&id, GESTURE)?;
                 self.installed_at.insert(id.clone(), now);
                 self.copying = true;
                 let inbox = self.inbox.clone();
@@ -2402,9 +2399,9 @@ impl Host {
                             Some(app::PORTS.to_owned()),
                         )
                     }
-                    (Err(text), _, _) => {
+                    (Err((code, text)), _, _) => {
                         log::warn!("Module {id}: archr-port-install {name}: {text}");
-                        (Err((-32000, text)), None)
+                        (Err((code, text)), None)
                     }
                 }
             }

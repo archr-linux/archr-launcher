@@ -223,6 +223,8 @@ pub struct Session {
     pub busy: Option<String>,
     pub offline: Option<String>,
     pub ask: Option<Ask>,
+    /// A question asked while another was open.
+    waiting: Option<Ask>,
     pub keyboard: Option<Keyboard>,
 }
 impl Session {
@@ -249,7 +251,15 @@ impl Session {
         match message {
             Message::Show(screen) => self.show(*screen),
             Message::Patch(patch) => self.patch(*patch),
-            Message::Confirm(ask) => self.ask = Some(ask),
+            // The launcher's question is never hidden by the module's: the
+            // one asked second waits for the first to be answered.
+            Message::Confirm(ask) => match &self.ask {
+                Some(open) if open.launcher && !ask.launcher => self.waiting = Some(ask),
+                Some(open) if ask.launcher && !open.launcher => {
+                    self.waiting = self.ask.replace(ask);
+                }
+                _ => self.ask = Some(ask),
+            },
             Message::Busy(text) => self.busy = text,
             Message::Offline(text) => self.offline = text,
             // The main loop shows these in its banner.
@@ -367,7 +377,7 @@ impl Session {
                 Button::B => false,
                 _ => return None,
             };
-            let ask = self.ask.take().unwrap_or_default();
+            let ask = std::mem::replace(&mut self.ask, self.waiting.take()).unwrap_or_default();
             if ask.launcher {
                 return Some(Effect::Event("launcher.answer", json!({"yes": yes})));
             }
@@ -743,6 +753,43 @@ mod tests {
             session.top().unwrap().footer.is_empty(),
             "another screen's patch"
         );
+    }
+
+    #[test]
+    fn the_launchers_question_is_never_hidden() {
+        let mut session = Session::new("demo", "Demo", false);
+        session.apply(Message::Show(Box::new(detail())));
+        let ours = Ask {
+            text: "Pixel Hop".into(),
+            launcher: true,
+            ..Ask::default()
+        };
+        session.apply(Message::Confirm(ours.clone()));
+        session.apply(Message::Confirm(Ask {
+            id: "module".into(),
+            ..Ask::default()
+        }));
+        assert!(
+            session.ask.as_ref().unwrap().launcher,
+            "still the launcher's"
+        );
+        let (name, _) = event(session.handle(Button::A, 8));
+        assert_eq!(name, "launcher.answer");
+        assert_eq!(
+            session.ask.as_ref().unwrap().id,
+            "module",
+            "then the module's"
+        );
+        // Asked while the module's is open, the launcher's comes first.
+        session.apply(Message::Confirm(ours));
+        let (name, _) = event(session.handle(Button::B, 8));
+        assert_eq!(name, "launcher.answer");
+        let (name, data) = event(session.handle(Button::B, 8));
+        assert_eq!(
+            (name, data["id"].as_str()),
+            ("screen.answer", Some("module"))
+        );
+        assert!(session.ask.is_none());
     }
 
     #[test]

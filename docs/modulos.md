@@ -898,17 +898,22 @@ tela sai do app.
 | `port.remove` | `{name}` | `{removed: true \| false}` |
 
 **Só depois de uma ação do usuário:** cada A, X ou Y numa tela do app
-(`action.invoke`) libera **um** `rom.install` nos 10 min seguintes (downloads
-demoram) ou **um** `port.install` nos 5 s seguintes; sem isso, `-32001`.
+(`action.invoke`) libera **um** `rom.install` ou `port.install` nos 5 s
+seguintes; sem isso, `-32001`. Por isso o app baixa primeiro e instala com um
+botão próprio ("Instalar"). A licença vale para uma instalação, não para um
+item: o launcher não sabe qual item o botão do módulo representa (aceito).
 
 `rom.install`: o sistema precisa estar em `install`, no catálogo de sistemas,
-ser uma pasta de jogos dentro de `/storage/roms`, sem comando de lançamento
-próprio e sem nenhuma extensão de programa (`.sh`, `.bash`, `.run`,
-`.appimage`, `.desktop`, `.py`, `.pl`, `.bat`, `.cmd`, `.exe`): o que fica
-nessas pastas roda como root. `tools`, `windows`, `moonlight`, `music`,
-`idtech` e `scummvm` são recusados já no manifesto. `file` (dentro do `HOME`,
-mesmas regras das imagens) tem uma extensão do sistema que não seja de
-programa (`.zip` só se o sistema aceita), até 64 MiB. O arquivo é aberto uma
+ser uma pasta dentro de `/storage/roms` e ser **emulado**: lançado por
+`/usr/bin/runemu.sh` (não `%RUNCOMMAND%` nem `/bin/sh %ROM%`), fora dos ramos
+de shell do `runemu.sh` (`ports`, `windows`, `setup`, `shell`) e sem nenhuma
+extensão que o próprio aparelho executa (`.sh`, `.bash`, `.run`, `.appimage`,
+`.desktop`, `.py`, `.pl`, `.jar`): o que fica nessas pastas roda como root.
+`.exe`, `.bat` e `.com` de um sistema emulado (DOS) rodam dentro do emulador e
+valem. `tools`, `windows`, `setup`, `shell`, `moonlight`, `music`, `idtech`,
+`scummvm` e `j2me` são recusados já no manifesto. `file` (dentro do `HOME`,
+mesmas regras das imagens) tem uma extensão do sistema que não seja das de
+cima (`.zip` só se o sistema aceita), até 64 MiB. O arquivo é aberto uma
 vez, na checagem, e a cópia lê essa abertura (no máximo o tamanho que ele
 tinha, senão falha): o módulo não troca o que é copiado depois de conferido.
 Uma `cover` que não seja imagem válida fica de fora; o jogo entra. O launcher
@@ -926,15 +931,19 @@ A cópia acontece fora da thread do módulo: a resposta vem quando termina.
 **Remover:** o módulo só manda `rom.remove` ou `port.remove`, para algo que
 **ele mesmo instalou** (`-32001` senão; uma ROM que mudou de tamanho ou data
 desde a instalação também é recusada). O launcher mostra **a pergunta dele**
-("Remover <nome>?", com Cancelar no foco, nos textos do launcher, uma por vez)
-e só age com o "sim"; a resposta vem depois: `{removed: true}` ou
+("Remover <nome>?", com Cancelar no foco, nos textos do launcher, uma por vez;
+um `screen.confirm` do módulo nunca a esconde: espera ela ser respondida) e só
+age com o "sim"; a resposta vem depois: `{removed: true}` ou
 `{removed: false}`. O módulo não ouve essa pergunta. `rom.remove` apaga a ROM,
 a capa e a entrada do `gamelist.xml`.
 
 `port.install` (com `"ports"` em `install`): `name` é o nome de um arquivo do
 catálogo do PortMaster, `^[a-z0-9][a-z0-9._-]*\.zip$` (até 64). Um port que
 já está instalado e não é do módulo é recusado com `-32005` ("port already
-installed"). O launcher **nunca** recebe arquivos do módulo para ports (os
+installed"): pelo `port.json` antes de rodar o script, e pelo próprio script
+(saída 3, quando algum arquivo do port já existe em `ports/`); fora do
+catálogo do PortMaster (saída 4), `-32004` ("not found"); outra falha,
+`-32000` com a última linha de erro do script. O launcher **nunca** recebe arquivos do módulo para ports (os
 scripts deles rodam como root): ele roda o script do sistema
 `/usr/bin/archr-port-install install <name>` (`uninstall` para
 `port.remove`), que usa o próprio PortMaster para baixar do lançamento
@@ -944,7 +953,9 @@ oficial, conferir o md5 e extrair. Um por vez, até 15 min; linhas
 jogo começando), o script recebe `SIGTERM` para desfazer o que começou e, 15 s
 depois, `SIGKILL`. O port passa a ser do módulo só quando o `port.json` que o
 PortMaster deixa com esse `name` aponta um script de início (`items`); o
-tamanho dos arquivos dele conta na cota. `game.launch` funciona para esse
+tamanho dos arquivos dele conta na cota; como esse tamanho só é conhecido
+depois da instalação, um port pode passar da cota uma vez (aceito), e o
+próximo pedido já é recusado. `game.launch` funciona para esse
 script (`system: "ports"`, o `game_key` da resposta); outros ports e
 ferramentas continuam fora.
 

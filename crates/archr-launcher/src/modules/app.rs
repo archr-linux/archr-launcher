@@ -36,8 +36,9 @@ const TEXT: usize = 4000;
 pub const LEDGER: &str = "installed.toml";
 /// The system folder PortMaster's launch scripts live in.
 pub const PORTS: &str = "ports";
-/// Files the device would run, never installed as a game; nor into a system
-/// that takes them (its entries are programs, run as root).
+/// Files the device itself would run (a shell, a JVM, a desktop entry),
+/// never installed as a game, nor into a system that takes them: its
+/// entries run as root. `.exe`/`.bat` of an emulated PC are fine.
 pub const SCRIPTS: &[&str] = &[
     ".sh",
     ".bash",
@@ -46,10 +47,10 @@ pub const SCRIPTS: &[&str] = &[
     ".desktop",
     ".py",
     ".pl",
-    ".bat",
-    ".cmd",
-    ".exe",
+    ".jar",
 ];
+/// The systems runemu.sh starts in a shell instead of an emulator.
+const SHELLS: &[&str] = &["ports", "windows", "setup", "shell"];
 /// A PortMaster install downloads up to a few hundred MB; stopped, the
 /// script gets this long to take back what it began.
 const PORT_TIMEOUT: Duration = Duration::from_secs(15 * 60);
@@ -500,8 +501,10 @@ pub fn check(
         .ok_or((-32004, "no such system"))?;
     // Only a ROM folder of games: never one whose entries the device runs.
     let script = |ext: &str| SCRIPTS.iter().any(|s| s.eq_ignore_ascii_case(ext));
+    // Only an emulated system: launched by runemu.sh, not in its shell.
     if !def.path.starts_with(roms)
-        || !def.command.is_empty()
+        || !def.command.trim_start().starts_with("/usr/bin/runemu.sh")
+        || SHELLS.contains(&def.name.as_str())
         || def.extensions.iter().any(|e| script(e))
     {
         return Err((-32001, "not a games folder"));
@@ -630,11 +633,38 @@ fn publish(
     write: impl FnOnce(&mut fs::File) -> io::Result<()>,
 ) -> io::Result<PathBuf> {
     use std::os::unix::ffi::OsStrExt;
-    let temp = dir.join(format!(".archr-install-{}.tmp", std::process::id()));
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&temp)?;
+    // A name of its own (time, process, try); what a crash left behind
+    // over an hour ago goes.
+    let hour = std::time::SystemTime::now() - Duration::from_secs(3600);
+    for entry in fs::read_dir(dir)?.flatten() {
+        let stale = entry
+            .file_name()
+            .to_str()
+            .is_some_and(|n| n.starts_with(".archr-install-") && n.ends_with(".tmp"))
+            && entry
+                .metadata()
+                .and_then(|m| m.modified())
+                .is_ok_and(|t| t < hour);
+        if stale {
+            let _ = fs::remove_file(entry.path());
+        }
+    }
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    let (temp, mut file) = (0..100)
+        .find_map(|n| {
+            let temp = dir.join(format!(
+                ".archr-install-{}-{nanos}-{n}.tmp",
+                std::process::id()
+            ));
+            let file = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&temp);
+            file.ok().map(|f| (temp, f))
+        })
+        .ok_or_else(|| io::Error::other("no temporary name"))?;
     let written = write(&mut file).and_then(|()| file.sync_all());
     if let Err(error) = written {
         let _ = fs::remove_file(&temp);
@@ -725,9 +755,9 @@ pub fn run_port(
     name: &str,
     stop: &AtomicBool,
     progress: impl Fn(u8) + Send + 'static,
-) -> Result<(), String> {
-    let mut command = port_command(bin, install, name).ok_or("name")?;
-    let mut child = command.spawn().map_err(|e| e.to_string())?;
+) -> Result<(), (i64, String)> {
+    let mut command = port_command(bin, install, name).ok_or((-32602, "name".to_owned()))?;
+    let mut child = command.spawn().map_err(|e| (-32000, e.to_string()))?;
     let last = Arc::new(Mutex::new(String::new()));
     if let Some(stdout) = child.stdout.take() {
         thread::spawn(move || {
@@ -769,21 +799,28 @@ pub fn run_port(
                 // SAFETY: as above.
                 unsafe { libc::kill(group, libc::SIGKILL) };
                 let _ = child.wait();
-                return Err("stopped".into());
+                return Err((-32000, "stopped".into()));
             }
         }
     };
-    if status.success() {
-        return Ok(());
+    // The script's own answers: 3 already installed, 4 not in the catalog.
+    match status.code() {
+        Some(0) => return Ok(()),
+        Some(3) => return Err((-32005, "port already installed".into())),
+        Some(4) => return Err((-32004, "not found".into())),
+        _ => {}
     }
     // Its last words, once the reader caught up.
     thread::sleep(Duration::from_millis(50));
     let last = last.lock().unwrap_or_else(|e| e.into_inner()).clone();
-    Err(if last.is_empty() {
-        "failed".into()
-    } else {
-        last
-    })
+    Err((
+        -32000,
+        if last.is_empty() {
+            "failed".into()
+        } else {
+            last
+        },
+    ))
 }
 /// What PortMaster installed for a catalog `name`, from the `port.json`
 /// of a folder in `ports` that names it: its launch script and what its
@@ -1009,8 +1046,53 @@ mod tests {
             fullname: "Game Boy".into(),
             path: root.join("roms/gb"),
             extensions: vec![".gb".into(), ".zip".into()],
+            command: RUNEMU.into(),
             ..SystemDef::default()
         }
+    }
+    const RUNEMU: &str = "/usr/bin/runemu.sh %ROM% -P%SYSTEM% --core=%CORE% --emulator=%EMULATOR%";
+
+    /// The device's own catalog: every emulated system takes games; the
+    /// ones whose entries the device runs take nothing.
+    #[test]
+    fn the_shipped_catalog_installs_into_emulated_systems_only() {
+        let catalog = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/es_systems.cfg");
+        let systems = archr_index::load_systems(&catalog).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        let roms = Path::new("/storage/roms");
+        let mut refused = Vec::new();
+        for def in &systems {
+            let ext = def.extensions.first().cloned().unwrap_or_default();
+            let file = format!("game{ext}");
+            fs::write(home.join(&file), b"rom").unwrap();
+            let params = json!({"system": def.name, "file": file, "name": "Game"});
+            let allowed = [def.name.clone()];
+            if check(home, &params, &allowed, (&systems, roms), 0).is_err() {
+                refused.push(def.name.as_str());
+            }
+        }
+        refused.sort_unstable();
+        for runner in [
+            "idtech",
+            "j2me",
+            "moonlight",
+            "music",
+            "ports",
+            "scummvm",
+            "tools",
+            "windows",
+        ] {
+            assert!(refused.contains(&runner), "{runner}: {refused:?}");
+        }
+        assert!(refused.len() <= 10, "{refused:?}");
+        for emulated in ["gb", "gba", "nes", "megadrive", "pico-8", "psx"] {
+            assert!(!refused.contains(&emulated), "{emulated}");
+        }
+        // A PC game is an .exe inside DOSBox: it goes in.
+        fs::write(home.join("Game.exe"), b"MZ").unwrap();
+        let pc = json!({"system": "pc", "file": "Game.exe"});
+        assert!(check(home, &pc, &["pc".to_owned()], (&systems, roms), 0).is_ok());
     }
 
     #[test]
@@ -1096,6 +1178,7 @@ mod tests {
             name: "tools".into(),
             path: dir.path().join("roms/tools"),
             extensions: vec![".sh".into(), ".gb".into()],
+            command: "%RUNCOMMAND%".into(),
             ..SystemDef::default()
         };
         let mut away = system(dir.path());

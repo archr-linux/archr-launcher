@@ -34,7 +34,8 @@ fn root() -> tempfile::TempDir {
     fs::write(
         config.join("systems.cfg"),
         "<systemList><system><name>gb</name><fullname>Game Boy</fullname>\
-         <path>/storage/roms/gb</path><extension>.gb .zip</extension></system>\
+         <path>/storage/roms/gb</path><extension>.gb .zip</extension>\
+         <command>/usr/bin/runemu.sh %ROM% -P%SYSTEM% --core=%CORE%</command></system>\
          <system><name>ports</name><fullname>Ports</fullname>\
          <path>/storage/roms/ports</path><extension>.sh</extension></system></systemList>",
     )

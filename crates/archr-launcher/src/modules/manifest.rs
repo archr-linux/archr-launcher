@@ -586,10 +586,13 @@ fn read_permissions(
 pub const RUNNERS: &[&str] = &[
     "tools",
     "windows",
+    "setup",
+    "shell",
     "moonlight",
     "music",
     "idtech",
     "scummvm",
+    "j2me",
 ];
 /// A system's folder name (`gb`, `pico-8`), checked against the catalog
 /// only when a game is installed.
