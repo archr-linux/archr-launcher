@@ -15,6 +15,7 @@ use archr_io::{atomic_publish, read_bytes, Symlinks::Follow};
 use bincode::Options;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
+use crate::games::{is_media_folder, max_depth};
 use crate::{scan_system_with_mapper, Game, SystemDef};
 
 const MAGIC: &[u8; 4] = b"ALAX";
@@ -103,7 +104,6 @@ pub fn save_overview(cache_dir: &Path, overview: &Overview) -> io::Result<()> {
 
 /// Load cached games when the directory/gamelist/media fingerprint matches.
 /// Otherwise scan and best-effort rewrite the cache; write errors never hide ROMs.
-/// Changes confined to nested ROM subfolders still need a parent/gamelist update.
 pub fn load_games(cache_dir: &Path, sys: &SystemDef) -> Vec<Game> {
     load_games_with_mapper(cache_dir, sys, &Path::to_owned)
 }
@@ -192,7 +192,8 @@ fn system_filename(name: &str) -> PathBuf {
     PathBuf::from(filename)
 }
 
-/// A fixed number of stat calls per root, never directory listings. Missing
+/// A fixed number of stat calls per root, plus a listing of each ROM folder
+/// (`stamp_folders`); never a stat per ROM. Missing
 /// optional paths are ignored; other metadata errors disable cache reuse rather
 /// than turning an unreadable fingerprint into an apparently valid one. Each
 /// root (first card, second card) is hashed with its path, so cards that come
@@ -242,6 +243,48 @@ fn fingerprint(sys: &SystemDef) -> Option<(u64, u64)> {
             };
             stamp.hash(&mut hash);
         }
+        stamp_folders(root, max_depth(sys), &mut hash, &mut newest)?;
     }
     found.then(|| (newest, hash.finish()))
+}
+
+/// The ROM folders below `directory`, as deep as the scan goes: a game added
+/// to `gba/RPGs/` changes that folder's time only. One listing per folder,
+/// and a stat per subfolder (files are told apart by the listing alone).
+fn stamp_folders(
+    directory: &Path,
+    depth: usize,
+    hash: &mut DefaultHasher,
+    newest: &mut u64,
+) -> Option<()> {
+    if depth == 0 {
+        return Some(());
+    }
+    let mut folders = Vec::new();
+    for entry in fs::read_dir(directory).ok()?.flatten() {
+        let name = entry.file_name();
+        if name.as_encoded_bytes().starts_with(b".") || is_media_folder(&name) {
+            continue;
+        }
+        let kind = entry.file_type().ok()?;
+        if kind.is_dir() || kind.is_symlink() {
+            folders.push(entry.path());
+        }
+    }
+    folders.sort();
+    for folder in folders {
+        // A link to a file, or a dangling one, is not a folder.
+        let Ok(metadata) = fs::metadata(&folder) else {
+            continue;
+        };
+        if !metadata.is_dir() {
+            continue;
+        }
+        let modified = metadata.modified().ok()?.duration_since(UNIX_EPOCH).ok()?;
+        let nanos = u64::try_from(modified.as_nanos()).ok()?;
+        *newest = (*newest).max(nanos);
+        (folder.file_name(), nanos).hash(hash);
+        stamp_folders(&folder, depth - 1, hash, newest)?;
+    }
+    Some(())
 }

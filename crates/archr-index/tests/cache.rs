@@ -118,6 +118,31 @@ fn stale_mtime_triggers_rescan() {
     assert_eq!(games[1].name, "Second");
 }
 
+/// ROMs kept in folders (`gba/RPGs/`): a game added to a folder changes only
+/// that folder, never the system's own folder.
+#[test]
+fn a_game_added_inside_a_folder_triggers_rescan() {
+    let dir = tempfile::tempdir().unwrap();
+    let roms = dir.path().join("roms");
+    let folder = roms.join("RPGs/Square");
+    fs::create_dir_all(&folder).unwrap();
+    fs::write(folder.join("First.sfc"), []).unwrap();
+    for path in [&roms, &roms.join("RPGs"), &folder] {
+        set_mtime(path, 1_700_000_000_000_000_001);
+    }
+    let sys = system(&roms);
+    let cache = dir.path().join("cache");
+    assert_eq!(load_games(&cache, &sys).len(), 1);
+    fs::write(folder.join("Second.sfc"), []).unwrap();
+    set_mtime(&folder, 1_700_000_000_000_000_002);
+    set_mtime(&roms, 1_700_000_000_000_000_001);
+    let names: Vec<_> = load_games(&cache, &sys)
+        .into_iter()
+        .map(|g| g.name)
+        .collect();
+    assert_eq!(names, ["First", "Second"]);
+}
+
 #[test]
 fn system_identity_changes_invalidate_games_and_overview() {
     for change in [
