@@ -2100,7 +2100,14 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             _ => 0.,
         };
         let has_core = matches!(items.first(), Some(QuickItem::Core));
-        let has_divider = items.contains(&QuickItem::Reboot);
+        // The power actions (Sleep, Restart, Power off) sit under a divider.
+        let power = |item: &QuickItem| {
+            matches!(
+                item,
+                QuickItem::Suspend | QuickItem::Reboot | QuickItem::Shutdown
+            )
+        };
+        let has_divider = items.iter().any(power);
         let panel_h = 80.
             + 42. * items.len() as f32
             + if has_divider { 10. } else { 0. }
@@ -2143,10 +2150,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         )?;
         let top = panel.y() + self.px(64.);
         let row = self.px(42.);
-        let divider_index = items
-            .iter()
-            .position(|item| *item == QuickItem::Reboot)
-            .unwrap_or(usize::MAX);
+        let divider_index = items.iter().position(power).unwrap_or(usize::MAX);
         let separator = self.px(10.);
         let offsets: Vec<i32> = (0..items.len().max(1))
             .map(|index| {
