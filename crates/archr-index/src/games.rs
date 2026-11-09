@@ -79,7 +79,7 @@ pub fn clean_name(file_stem: &str) -> String {
     }
 }
 
-/// Scan at most three subdirectory levels. Missing/unreadable inputs are
+/// Scan at most three subdirectory levels (ports: the top only). Missing/unreadable inputs are
 /// optional: malformed gamelists fall back atomically to names and folder media.
 pub fn scan_system(sys: &SystemDef) -> Vec<Game> {
     scan_system_with_mapper(sys, &Path::to_owned)
@@ -159,6 +159,16 @@ fn scan_root(sys: &SystemDef, dir: &Path, mapper: &dyn Fn(&Path) -> PathBuf) -> 
         .collect()
 }
 
+/// Subfolder levels searched for games. A port's folder holds its data and
+/// its own helper scripts: only the launch scripts at the top are ports.
+fn max_depth(sys: &SystemDef) -> usize {
+    if sys.name == "ports" {
+        0
+    } else {
+        3
+    }
+}
+
 fn scan_directory(
     directory: &Path,
     sys: &SystemDef,
@@ -215,7 +225,7 @@ fn scan_directory(
         });
         if matching_extension {
             games.push(path);
-        } else if kind.is_dir() && depth < 3 {
+        } else if kind.is_dir() && depth < max_depth(sys) {
             let Ok(canonical) = path.canonicalize() else {
                 continue;
             };
