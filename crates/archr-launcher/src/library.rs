@@ -26,6 +26,8 @@ pub struct Library {
     pub tune: crate::modules::Tune,
     /// The save state the next launch starts from.
     pub entry: Option<crate::saves::Entry>,
+    /// The carousel rows of the open-able apps (API 4), from the modules.
+    pub apps: Vec<archr_ui::apps::Row>,
     moonlight_available: bool,
     overview: Overview,
     definitions: Vec<SystemDef>,
@@ -98,6 +100,7 @@ impl Library {
             write_failed: false,
             tune: Default::default(),
             entry: None,
+            apps: Vec::new(),
             overview,
             definitions,
             games: HashMap::new(),
@@ -164,6 +167,15 @@ impl Library {
                 self.requested.insert(name.clone(), true);
             }
         }
+    }
+    /// A module installed or removed a game of `system`: its list and the
+    /// counts are read again, even for a system never opened (it may just
+    /// have got its first game).
+    pub fn installed(&mut self, system: &str) {
+        if self.send(Work::Reload(system.to_owned())).is_ok() {
+            self.requested.insert(system.to_owned(), true);
+        }
+        let _ = self.send(Work::Count);
     }
     /// Launch choices saved elsewhere (the Games settings page) apply next launch.
     pub fn reload_config(&self) {
@@ -507,6 +519,11 @@ impl Library {
             .find(|&n| self.game_key(system, n).as_deref() == Some(key))?;
         self.current_core(system, index).map(|_| index)
     }
+    /// Any game with this key (a port an app installed); its system loads.
+    pub fn find(&mut self, system: &str, key: &str) -> Option<usize> {
+        self.ensure(system);
+        (0..self.games(system).len()).find(|&n| self.game_key(system, n).as_deref() == Some(key))
+    }
     /// Keeps where this launch was chosen (`App::place`), by the game's key,
     /// for the next start. A launch from no list or row (the switcher, the
     /// resume) comes back to the launched game's own system.
@@ -635,6 +652,9 @@ impl DataSource for Library {
     }
     fn system_order(&self) -> &[String] {
         self.store.order()
+    }
+    fn apps(&self) -> &[archr_ui::apps::Row] {
+        &self.apps
     }
     fn hidden_systems(&self) -> &[String] {
         self.store.hidden()

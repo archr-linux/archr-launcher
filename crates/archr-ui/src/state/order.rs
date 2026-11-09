@@ -15,6 +15,7 @@ impl App {
             .into_iter()
             .filter(|name| data.collection_len(name) > 0)
             .map(str::to_owned)
+            .chain(data.apps().iter().map(|app| app.key.clone()))
             .chain(
                 data.systems()
                     .iter()

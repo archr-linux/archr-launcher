@@ -3304,6 +3304,97 @@ fn golden_frames_at_640x480() {
     };
     browse(&mut ui, &app, &theme, with_cover);
     keep(&mut ui, "details");
+    // An app (API 4): its catalog in the games layout, an item's detail in
+    // the details layout, with the module's own picture.
+    {
+        use crate::apps::{Action, Chip, Fact, Item, Layout, Message, Screen as Page, Session};
+        use crate::modules::Tone;
+        let mut session = Session::new("demo", "Demo catalog", true);
+        let items = ["Pixel Hop", "Blue Lines", "Red Shift", "Violet Sky"]
+            .iter()
+            .enumerate()
+            .map(|(n, title)| Item {
+                id: format!("g{n}"),
+                title: (*title).into(),
+                subtitle: "Game Boy · ArchR · 2026".into(),
+                badge: if n == 1 { "Instalado" } else { "Grátis" }.into(),
+                tone: if n == 1 { Tone::Good } else { Tone::Info },
+                image: Some(picture.clone()),
+            })
+            .collect();
+        let chips = ["Todos", "GB", "GBC", "GBA", "NES"]
+            .iter()
+            .enumerate()
+            .map(|(n, label)| Chip {
+                id: format!("c{n}"),
+                label: (*label).into(),
+                selected: n == 1,
+            })
+            .collect();
+        session.apply(Message::Show(Box::new(Page {
+            id: "catalog".into(),
+            title: "Catálogo".into(),
+            chips,
+            items,
+            y: Some(Action {
+                label: "Ordenar".into(),
+                action: "sort".into(),
+                ..Action::default()
+            }),
+            footer: "1.240 jogos".into(),
+            ..Page::default()
+        })));
+        session.top_mut().unwrap().cursor = 1;
+        ui.app = Some(session);
+        browse(&mut ui, &app, &theme, with_cover);
+        keep(&mut ui, "app-collection");
+        let detail = Page {
+            id: "game:g1".into(),
+            title: "Blue Lines".into(),
+            layout: Layout::Detail,
+            subtitle: "Game Boy · ArchR · 2025".into(),
+            facts: vec![
+                Fact {
+                    title: "Preço".into(),
+                    value: "Grátis".into(),
+                    tone: Tone::Good,
+                },
+                Fact {
+                    title: "Tamanho".into(),
+                    value: "128 KB".into(),
+                    tone: Tone::Plain,
+                },
+            ],
+            text: "Um cartucho de teste do catálogo de demonstração. ".repeat(12),
+            buttons: vec![
+                Action {
+                    id: "get".into(),
+                    label: "Baixando".into(),
+                    action: "get".into(),
+                    progress: Some(42),
+                    ..Action::default()
+                },
+                Action {
+                    id: "page".into(),
+                    label: "Página".into(),
+                    action: "page".into(),
+                    ..Action::default()
+                },
+            ],
+            ..Page::default()
+        };
+        ui.app
+            .as_mut()
+            .unwrap()
+            .apply(Message::Show(Box::new(detail)));
+        let shot = crate::render::Art {
+            shot: Some(&cover),
+            ..Default::default()
+        };
+        browse(&mut ui, &app, &theme, shot);
+        keep(&mut ui, "app-detail");
+        ui.app = None;
+    }
     app.screen = crate::state::Screen::StartHub {
         row: 0,
         tile: 1,

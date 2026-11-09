@@ -54,3 +54,92 @@ impl DataSource for FakeData {
         self.current.get(&(system.into(), game)).cloned()
     }
 }
+
+/// An open app (API 4) with a catalog, and its detail when `detail`.
+#[allow(dead_code)]
+pub fn app_session(detail: bool) -> archr_ui::apps::Session {
+    use archr_ui::apps::{Action, Chip, Fact, Item, Layout, Message, Screen, Session};
+    use archr_ui::modules::Tone;
+    let mut session = Session::new("demo", "Demo catalog", true);
+    let items = [
+        "Pixel Hop",
+        "Blue Lines",
+        "Red Shift",
+        "Violet Sky",
+        "An extraordinarily long game title that has to fit",
+    ]
+    .iter()
+    .enumerate()
+    .map(|(n, title)| Item {
+        id: format!("g{n}"),
+        title: (*title).into(),
+        subtitle: "Game Boy · ArchR · 2026".into(),
+        badge: if n == 1 { "Installed" } else { "Free" }.into(),
+        tone: if n == 1 { Tone::Good } else { Tone::Info },
+        image: None,
+    })
+    .collect();
+    let chips = ["All", "GB", "GBC", "GBA", "NES", "Mega Drive", "PICO-8"]
+        .iter()
+        .enumerate()
+        .map(|(n, label)| Chip {
+            id: format!("c{n}"),
+            label: (*label).into(),
+            selected: n == 0,
+        })
+        .collect();
+    session.apply(Message::Show(Box::new(Screen {
+        id: "catalog".into(),
+        title: "Catalog".into(),
+        chips,
+        items,
+        more: true,
+        y: Some(Action {
+            id: "y".into(),
+            label: "Sort".into(),
+            action: "sort".into(),
+            ..Action::default()
+        }),
+        footer: "1.240 games".into(),
+        ..Screen::default()
+    })));
+    session.top_mut().unwrap().cursor = 1;
+    if detail {
+        session.apply(Message::Show(Box::new(Screen {
+            id: "game:g1".into(),
+            title: "Blue Lines".into(),
+            layout: Layout::Detail,
+            subtitle: "Game Boy · ArchR · 2025".into(),
+            facts: vec![
+                Fact {
+                    title: "Price".into(),
+                    value: "Free".into(),
+                    tone: Tone::Good,
+                },
+                Fact {
+                    title: "Size".into(),
+                    value: "128 KB".into(),
+                    tone: Tone::Plain,
+                },
+            ],
+            text: "A test cartridge. ".repeat(30),
+            buttons: vec![
+                Action {
+                    id: "get".into(),
+                    label: "Downloading".into(),
+                    action: "get".into(),
+                    progress: Some(42),
+                    ..Action::default()
+                },
+                Action {
+                    id: "page".into(),
+                    label: "Page".into(),
+                    action: "page".into(),
+                    ..Action::default()
+                },
+            ],
+            ..Screen::default()
+        })));
+    }
+    session
+}

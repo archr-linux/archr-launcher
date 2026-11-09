@@ -21,6 +21,7 @@ use archr_launcher::{
     wifi,
 };
 use archr_ui::{
+    apps::{Effect as AppEffect, Session},
     controllers::Controllers,
     covers::CoverCache,
     i18n::I18n,
@@ -326,6 +327,23 @@ fn run(
     let cell = |w: f32| (w * height as f32 / 480.).round().max(1.) as u32;
     let mut thumbs = CoverCache::new(&creator, paths.cache.join("thumbs"), cell(138.), cell(104.));
     let mut pictures = CoverCache::new(&creator, paths.cache.join("thumbs"), width, height);
+    // An app's pictures (API 4), from its own folder: the list's at the
+    // cover's size, the detail's at the screen shot box's.
+    let mut app_covers = CoverCache::new(
+        &creator,
+        paths.cache.join("thumbs/apps"),
+        cover_box.0,
+        cover_box.1,
+    );
+    let mut app_shots = CoverCache::new(&creator, paths.cache.join("thumbs/apps"), shot_w, shot_h);
+    // The host's copies of the pictures the app's screen asked for, by the
+    // module's relative path, and what was asked last.
+    let mut app_copies: std::collections::HashMap<PathBuf, PathBuf> = Default::default();
+    let mut app_asked: Vec<PathBuf> = Vec::new();
+    // `screen.visible`: the window last told to the app, and since when the
+    // one drawn now differs (told once it rests `VISIBLE`).
+    let mut visible_told: Option<(String, String, usize, usize)> = None;
+    let mut visible_since: Option<Instant> = None;
     let mut progress = archr_launcher::saves::Worker::new(&paths);
     let mut preview = Preview::new(&creator);
     let mut cheevos: Option<Lookup> = None;
@@ -429,6 +447,12 @@ fn run(
                     cover_box.0,
                     cover_box.1,
                 );
+                app_covers = CoverCache::new(
+                    &creator,
+                    paths.cache.join("thumbs/apps"),
+                    cover_box.0,
+                    cover_box.1,
+                );
             }
             dirty = true;
         }
@@ -478,15 +502,70 @@ fn run(
                             images.insert(game.clone(), image);
                         }
                     }
+                    // App rows come and go: the cursor stays on its row.
+                    let apps = view.apps();
+                    if library.apps != apps {
+                        let row = app.rows(&library).get(app.cursor).cloned();
+                        library.apps = apps;
+                        let rows = app.rows(&library);
+                        if let Some(at) = row.and_then(|r| rows.iter().position(|n| *n == r)) {
+                            if app.screen == Screen::Systems {
+                                app.cursor = at;
+                            }
+                        }
+                    }
                     app.modules = view.clone();
                     settings.state.set_modules(view);
                 }
+                modules::Event::Screens(module, messages) => {
+                    if let Some(session) = ui.app.as_mut().filter(|s| s.module == module) {
+                        // Only the batch's last toast shows, with one sound.
+                        let mut toast = None;
+                        for message in messages {
+                            match message {
+                                archr_ui::apps::Message::Toast(text, tone) => {
+                                    toast = Some((text, tone))
+                                }
+                                message => session.apply(message),
+                            }
+                        }
+                        if let Some((text, tone)) = toast {
+                            let bad = tone == archr_ui::modules::Tone::Bad;
+                            let severity = if bad { Severity::Error } else { Severity::Info };
+                            ui.banner = Some(text);
+                            banner_timer.restart(severity, Instant::now());
+                            audio.play(Sound::Notice);
+                        }
+                    }
+                }
+                modules::Event::Pictures(module, copies) => {
+                    if ui.app.as_ref().is_some_and(|s| s.module == module) {
+                        app_copies.extend(copies);
+                    }
+                }
+                modules::Event::AppClosed(module) => {
+                    // Gone without the user leaving it.
+                    if let Some(session) = ui.app.take_if(|s| s.module == module) {
+                        let text = ui
+                            .catalog
+                            .format("apps.stopped", &[("name", &session.name)]);
+                        ui.banner = Some(text);
+                        banner_timer.restart(Severity::Error, Instant::now());
+                    }
+                }
+                modules::Event::Installed(system) => library.installed(&system),
                 modules::Event::Store(reply) => settings.state.module_store_reply(reply),
                 modules::Event::Config => library.reload_config(),
-                modules::Event::Launch { system, game_key } => {
+                modules::Event::Launch {
+                    system,
+                    game_key,
+                    owned,
+                } => {
                     // Through the same path as the user's own choice: the
                     // hand-off, the module stop and the pending writes.
-                    let game = library.emulated(&system, &game_key);
+                    let game = library
+                        .emulated(&system, &game_key)
+                        .or_else(|| owned.then(|| library.find(&system, &game_key)).flatten());
                     if let (Some(game), None, None, false) =
                         (game, &deferred, &ui.lobby, moonlight.active)
                     {
@@ -566,7 +645,7 @@ fn run(
         modules.private(settings.active);
         // What the user rests on, for modules (debounced by the host).
         let focus = match &app.screen {
-            _ if settings.active => None,
+            _ if settings.active || ui.app.is_some() => None,
             Screen::Systems => selected_system.clone().map(|s| (s, None)),
             Screen::Games { system } => library.origin(system, app.cursor).map(|(real, game)| {
                 let key = library.game_key(&real, game).unwrap_or_default();
@@ -819,12 +898,57 @@ fn run(
         let (small, large) = app.progress_paths();
         thumbs.request(&small);
         pictures.request(&large);
+        let (app_cover, app_near, app_shot) = app_art(ui.app.as_ref());
+        // Only what the screen shows now is copied, like the covers of a list.
+        let wanted: Vec<PathBuf> = app_near.iter().chain(&app_shot).cloned().collect();
+        match &ui.app {
+            Some(session) if wanted != app_asked => {
+                modules.request(archr_ui::modules::Request::AppPictures {
+                    module: session.module.clone(),
+                    wanted: wanted.clone(),
+                });
+                app_asked = wanted;
+            }
+            None if !app_asked.is_empty() || !app_copies.is_empty() => {
+                app_asked.clear();
+                app_copies.clear();
+            }
+            _ => {}
+        }
+        let visible = ui.app.as_ref().and_then(|s| {
+            let (screen, from, to) = s.visible(app.games_nav.page)?;
+            Some((s.module.clone(), screen, from, to))
+        });
+        if visible == visible_told {
+            visible_since = None;
+        } else if let Some((module, screen, from, to)) = visible.clone() {
+            let since = *visible_since.get_or_insert_with(Instant::now);
+            if since.elapsed() >= VISIBLE {
+                modules.request(archr_ui::modules::Request::AppEvent {
+                    module,
+                    name: "screen.visible",
+                    data: serde_json::json!({"screen": screen, "from": from, "to": to}),
+                });
+                visible_told = visible;
+                visible_since = None;
+            }
+        } else {
+            visible_told = None;
+        }
+        let copy = |rel: &PathBuf| app_copies.get(rel).cloned();
+        let app_cover = app_cover.as_ref().and_then(copy);
+        let app_shot = app_shot.as_ref().and_then(copy);
+        let app_near: Vec<PathBuf> = app_near.iter().filter_map(copy).collect();
+        app_covers.request(&app_near);
+        app_shots.request(app_shot.as_slice());
         dirty |= covers.poll()
             | shots.poll()
             | logos.poll()
             | badges.poll()
             | thumbs.poll()
-            | pictures.poll();
+            | pictures.poll()
+            | app_covers.poll()
+            | app_shots.poll();
         let video = match &app.screen {
             Screen::Details { system, game }
                 if !settings.active && settings.state.value(Id::PreviewVideo) == "1" =>
@@ -847,9 +971,18 @@ fn run(
         dirty |= preview.poll(video, Instant::now());
         if dirty {
             ui.moonlight = moonlight.active.then(|| moonlight.state.clone());
+            let open = ui.app.is_some();
             let art = Art {
-                cover: selected.as_ref().and_then(|path| covers.get(path)),
-                shot: shot.as_ref().and_then(|path| shots.get(path)),
+                cover: if open {
+                    app_cover.as_ref().and_then(|path| app_covers.get(path))
+                } else {
+                    selected.as_ref().and_then(|path| covers.get(path))
+                },
+                shot: if open {
+                    app_shot.as_ref().and_then(|path| app_shots.get(path))
+                } else {
+                    shot.as_ref().and_then(|path| shots.get(path))
+                },
                 logo: logo.as_ref().and_then(|path| logos.get(path)),
                 video: preview.frame(),
                 badges: Some(&badges),
@@ -865,6 +998,9 @@ fn run(
                 settings.active.then_some(&settings.state),
             )?;
             app.details_overflow = ui.details_overflow;
+            if let Some(screen) = ui.app.as_mut().and_then(Session::top_mut) {
+                screen.overflow = ui.details_overflow;
+            }
             app.sheet_page = ui.achievements_page;
             app.saves_page = ui.saves_page;
             (app.shots_columns, app.shots_page) = ui.shots_grid;
@@ -905,11 +1041,16 @@ fn run(
             let now = Instant::now();
             // The resume countdown moves its bar.
             let countdown = if resuming.is_some() { 40 } else { u32::MAX };
+            // A visible window waiting to be told wakes the loop.
+            let told = visible_since.map_or(u32::MAX, |at| {
+                VISIBLE.saturating_sub(at.elapsed()).as_millis() as u32 + 1
+            });
             repeat
                 .wait_ms(now)
                 .min(audio.wait_ms(now))
                 .min(preview.wait_ms(now))
                 .min(countdown)
+                .min(told)
         };
         // A held button keeps SDL's own (1 ms) wait: its release and repeats
         // stay exactly as before. Otherwise the idle wait below.
@@ -990,7 +1131,7 @@ fn run(
             let mark = settings
                 .active
                 .then(|| audio::Mark::of(&settings.state, true));
-            let overlay = ui.lobby.is_some() || moonlight.active;
+            let overlay = ui.lobby.is_some() || moonlight.active || ui.app.is_some();
             let requested = if ui.lobby.is_some() {
                 lobby_input(&mut ui.lobby, &mut rooms, button)
             } else if moonlight.active {
@@ -998,6 +1139,15 @@ fn run(
             } else if settings.active {
                 settings.state.held = repeat.repeats();
                 settings.handle(button)
+            } else if ui.app.is_some() {
+                app_input(
+                    &mut ui.app,
+                    button,
+                    app.games_nav.page,
+                    &modules,
+                    &mut settings,
+                );
+                Outcome::None
             } else {
                 app.handle(button, &library)
             };
@@ -1140,6 +1290,14 @@ fn run(
                         settings.open();
                         settings.state.open_module_page(module, *page);
                     }
+                    archr_ui::modules::Request::OpenApp(module) => {
+                        let found = app.modules.modules.iter().find(|m| m.id == *module);
+                        if let Some(m) = found {
+                            let name = m.app.as_ref().map_or(&m.name, |a| &a.name);
+                            ui.app = Some(Session::new(module, name, !m.pages.is_empty()));
+                            modules.request(request.clone());
+                        }
+                    }
                     request => modules.request(request.clone()),
                 }
                 outcome = Some(Outcome::None);
@@ -1188,9 +1346,12 @@ fn run(
                 Some(Outcome::Netplay(_) | Outcome::MoonlightStream(_)) => Some((String::new(), 0)),
                 _ => None,
             };
-            // No preview outlives the launcher's screen.
+            // No preview outlives the launcher's screen, nor an app.
             if close_requested || outcome.as_ref().is_some_and(transition::is_terminal) {
                 preview.stop();
+                if let Some(session) = ui.app.take() {
+                    modules.request(archr_ui::modules::Request::CloseApp(session.module));
+                }
             }
             if let Some((system, index)) = &game {
                 let key = library.game_key(system, *index).unwrap_or_default();
@@ -1261,6 +1422,54 @@ fn lobby_input(
         _ => {}
     }
     Outcome::None
+}
+/// A button on the open app: what its module hears, START's pages, or B
+/// leaving it.
+fn app_input(
+    open: &mut Option<Session>,
+    button: Button,
+    page: usize,
+    modules: &Modules,
+    settings: &mut archr_launcher::settings::Runtime,
+) {
+    let Some(session) = open.as_mut() else { return };
+    let module = session.module.clone();
+    use archr_ui::modules::Request;
+    match session.handle(button, page) {
+        Some(AppEffect::Event(name, data)) => {
+            modules.request(Request::AppEvent { module, name, data })
+        }
+        Some(AppEffect::Invoke(action, call)) => modules.request(Request::Invoke {
+            module,
+            action,
+            call: Some(call),
+        }),
+        Some(AppEffect::Settings) => {
+            settings.open();
+            settings.state.open_module_page(&module, 0);
+        }
+        Some(AppEffect::Close) => {
+            *open = None;
+            modules.request(Request::CloseApp(module));
+        }
+        None => {}
+    }
+}
+/// The open app's pictures: the selected item's, the ones near it, and the
+/// detail's.
+fn app_art(open: Option<&Session>) -> (Option<PathBuf>, Vec<PathBuf>, Option<PathBuf>) {
+    let Some(screen) = open.and_then(Session::top) else {
+        return (None, Vec::new(), None);
+    };
+    let image = |n: usize| screen.items.get(n).and_then(|i| i.image.clone());
+    let selected = image(screen.cursor);
+    let mut near: Vec<PathBuf> = selected.iter().cloned().collect();
+    for n in screen.cursor.saturating_sub(2)..=screen.cursor + 2 {
+        if let Some(path) = image(n).filter(|p| !near.contains(p)) {
+            near.push(path);
+        }
+    }
+    (selected, near, screen.shown().cloned())
 }
 /// Screen shot and logo of the game on the details screen, if any.
 fn details_art(app: &App, data: &dyn DataSource) -> (Option<PathBuf>, Option<PathBuf>) {
@@ -1360,6 +1569,8 @@ fn init_logging() {
     }
 }
 
+/// The visible window of an app's screen rests this long before it is told.
+const VISIBLE: Duration = Duration::from_millis(150);
 /// Longest nap between input checks while idle: one frame.
 const INPUT_TICK: Duration = Duration::from_millis(16);
 

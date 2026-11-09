@@ -834,6 +834,14 @@ impl View<'_, '_, '_> {
         let asks = module.permissions.clone();
         self.asks(state, &asks, &[], &[], "modules.you_allowed")
     }
+    /// A permission's label; a detail starting with `|` holds its
+    /// arguments (`|systems=Game Boy, NES`) instead of a second line.
+    fn permission(&self, permission: &Permission) -> String {
+        match permission.detail.strip_prefix('|') {
+            Some(_) => self.tr(&format!("{}{}", permission.key, permission.detail)),
+            None => self.tr(permission.key),
+        }
+    }
     /// One permission card's lines: the label, then the detail, wrapped to
     /// the card; and its height.
     fn ask_lines(
@@ -850,13 +858,13 @@ impl View<'_, '_, '_> {
         } else {
             0
         };
-        let label = self.tr(permission.key);
+        let label = self.permission(permission);
         let mut label_lines =
             self.lines_face(&label, 13., px.saturating_sub(tag).max(1), Face::Regular)?;
         if label_lines.is_empty() {
             label_lines.push(String::new());
         }
-        let detail = if permission.detail.is_empty() {
+        let detail = if permission.detail.is_empty() || permission.detail.starts_with('|') {
             Vec::new()
         } else {
             let text = self.tr(&permission.detail);
@@ -1004,7 +1012,7 @@ impl View<'_, '_, '_> {
             let names: Vec<String> = kept
                 .iter()
                 .map(|p| {
-                    let name = self.tr(p.key);
+                    let name = self.permission(p);
                     let mut chars = name.chars();
                     chars
                         .next()

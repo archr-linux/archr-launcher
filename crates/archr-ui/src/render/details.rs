@@ -22,6 +22,37 @@ pub struct Art<'a, 't> {
     pub pictures: Option<&'a crate::covers::CoverCache<'t>>,
 }
 
+/// What the details layout shows (Jogo-detalhes), from a game or an app.
+pub(super) struct Sheet<'s> {
+    pub title: &'s str,
+    /// Joined with " · "; the last parts go first when the line is tight.
+    pub subtitle: Vec<String>,
+    /// Label, value and the value's ink.
+    pub facts: Vec<(String, String, Rgba)>,
+    pub rating: Option<u8>,
+    pub text: &'s str,
+    /// In the picture's box while there is no picture.
+    pub placeholder: String,
+    pub buttons: Vec<Button<'s>>,
+    pub focus: usize,
+    pub scroll: usize,
+}
+pub(super) struct Button<'s> {
+    pub label: String,
+    pub icon: Option<Icon<'s>>,
+    /// The text of its working state, which its width also holds.
+    pub busy: Option<String>,
+    pub working: bool,
+    pub disabled: bool,
+    pub progress: Option<u8>,
+}
+pub(super) enum Icon<'s> {
+    /// The favorite star, amber when the game is a favorite.
+    Star(bool),
+    /// A module's Lucide SVG.
+    Svg(&'s str),
+}
+
 /// Wrapped description lines, kept until the text, width or size changes.
 #[derive(Default)]
 pub(super) struct Wrapped {
@@ -219,6 +250,63 @@ impl Ui<'_, '_> {
         let Some(game) = data.games(system).get(index) else {
             return Ok(());
         };
+        let details = &game.details;
+        let mut facts = Vec::new();
+        let mut add = |key, value: &str| {
+            if !value.trim().is_empty() {
+                facts.push((self.catalog.text(key), value.trim().to_owned(), theme.text));
+            }
+        };
+        add("details.genre", &details.genre);
+        add("details.players", game.players.as_deref().unwrap_or(""));
+        add(
+            "details.released",
+            &game.year.map(|y| y.to_string()).unwrap_or_default(),
+        );
+        add("details.developer", &details.developer);
+        if details.publisher != details.developer {
+            add("details.publisher", &details.publisher);
+        }
+        // System and last played; the date goes before the text ever shrinks away.
+        let mut subtitle = vec![system_title(system, data, &self.catalog)];
+        if let Some(played) = game.last_played {
+            subtitle.push(self.catalog.relative_time(played, self.frame.unix));
+        }
+        let buttons = DETAILS_ACTIONS
+            .iter()
+            .enumerate()
+            .map(|(n, key)| Button {
+                label: self.catalog.text(key),
+                icon: (n == 1).then_some(Icon::Star(game.favorite)),
+                // Sized for both of its states (resting, and dots with
+                // "Scraping…"), so a running job never moves the row.
+                busy: (n == 2).then(|| self.catalog.text("details.rescraping")),
+                working: n == 2 && app.rescraping,
+                disabled: n == 2 && (!app.can_rescrape || app.rescraping),
+                progress: None,
+            })
+            .collect();
+        let sheet = Sheet {
+            title: &game.name,
+            subtitle,
+            facts,
+            rating: details.rating,
+            text: details.description.trim(),
+            placeholder: system_title(system, data, &self.catalog),
+            buttons,
+            focus: app.details_focus,
+            scroll: app.details_scroll,
+        };
+        self.sheet(&sheet, theme, art)
+    }
+
+    /// The details layout over any content: a game's, or an app's (API 4).
+    pub(super) fn sheet(
+        &mut self,
+        sheet: &Sheet<'_>,
+        theme: &Theme,
+        art: Art<'_, '_>,
+    ) -> Result<(), String> {
         let Frame { width, height, .. } = self.frame;
         let rect = |r| pixels(r, width, height);
 
@@ -266,7 +354,7 @@ impl Ui<'_, '_> {
             )?;
         } else {
             self.label_aligned(
-                &system_title(system, data, &self.catalog),
+                &sheet.placeholder,
                 (Face::Regular, 13., theme.dim_text),
                 shot,
                 Align::Center,
@@ -275,32 +363,15 @@ impl Ui<'_, '_> {
 
         // Facts table: label left, value right; values shrink, then wrap.
         let info = rect(theme.details_info);
-        let details = &game.details;
-        let mut facts: Vec<(&str, String)> = Vec::new();
-        let mut add = |key, value: &str| {
-            if !value.trim().is_empty() {
-                facts.push((key, value.trim().to_owned()));
-            }
-        };
-        add("details.genre", &details.genre);
-        add("details.players", game.players.as_deref().unwrap_or(""));
-        add(
-            "details.released",
-            &game.year.map(|y| y.to_string()).unwrap_or_default(),
-        );
-        add("details.developer", &details.developer);
-        if details.publisher != details.developer {
-            add("details.publisher", &details.publisher);
-        }
         let mut y = info.y();
         // Lines follow the text size, which a theme may scale.
         let line = (f32::from(self.frame.font_size(12.)) * 1.25)
             .round()
             .max(1.) as i32;
         let pad = self.px(3.);
-        for (key, value) in facts {
-            let label = self.catalog.text(key);
-            let lw = self.measure(&label, Face::Regular, 12.)?;
+        for (label, value, ink) in &sheet.facts {
+            let (value, ink) = (value.clone(), *ink);
+            let lw = self.measure(label, Face::Regular, 12.)?;
             let beside = info.width().saturating_sub(lw + self.px(12.) as u32).max(1);
             // A value that does not fit beside its label goes whole to the
             // lines below, across the table; words are never split.
@@ -317,14 +388,14 @@ impl Ui<'_, '_> {
                 break;
             }
             self.label(
-                &label,
+                label,
                 (Face::Regular, 12., theme.muted),
                 Rect::new(info.x(), y + pad, lw.max(1), line as u32),
             )?;
             for (n, text) in lines.iter().enumerate() {
                 self.label_aligned(
                     text,
-                    (Face::Regular, size, theme.text),
+                    (Face::Regular, size, ink),
                     Rect::new(
                         info.right() - room as i32,
                         y + pad + line * (n + below) as i32,
@@ -337,10 +408,7 @@ impl Ui<'_, '_> {
             y += row;
             self.divider(info.x(), y - 1, info.width(), theme.border)?;
         }
-        if let Some(rating) = details
-            .rating
-            .filter(|_| y + line + pad * 2 <= info.bottom())
-        {
+        if let Some(rating) = sheet.rating.filter(|_| y + line + pad * 2 <= info.bottom()) {
             let label = self.catalog.text("details.rating");
             let lw = self.measure(&label, Face::Regular, 12.)?;
             self.label(
@@ -392,43 +460,40 @@ impl Ui<'_, '_> {
             self.canvas.copy(logo, None, dst)?;
         } else {
             let size = self
-                .shrink(&game.name, Face::Semibold, 26., 18., title.width())?
+                .shrink(sheet.title, Face::Semibold, 26., 18., title.width())?
                 .unwrap_or(18.);
-            self.label(&game.name, (Face::Semibold, size, theme.text), title)?;
+            self.label(sheet.title, (Face::Semibold, size, theme.text), title)?;
         }
 
-        // System and last played; the date goes before the text ever shrinks away.
         let sub = rect(theme.details_subtitle);
-        let mut parts = vec![system_title(system, data, &self.catalog)];
-        if let Some(played) = game.last_played {
-            parts.push(self.catalog.relative_time(played, self.frame.unix));
-        }
-        loop {
+        let mut parts = sheet.subtitle.clone();
+        while !parts.is_empty() {
             let text = parts.join(" · ");
             if let Some(size) = self.shrink(&text, Face::Regular, 12., 10., sub.width())? {
                 self.label(&text, (Face::Regular, size, theme.muted), sub)?;
                 break;
             }
-            if parts.len() == 1 {
+            if parts.len() <= 1 {
                 let lines = self.wrap(&text, Face::Regular, 10., sub.width())?;
-                self.label(&lines[0], (Face::Regular, 10., theme.muted), sub)?;
+                if let Some(line) = lines.first() {
+                    self.label(line, (Face::Regular, 10., theme.muted), sub)?;
+                }
                 break;
             }
             parts.pop();
         }
 
-        self.details_text(app, game, rect(theme.details_text), theme)?;
-        self.details_actions(app, game.favorite, rect(theme.details_actions), theme)
+        self.details_text(sheet.text, sheet.scroll, rect(theme.details_text), theme)?;
+        self.details_actions(sheet, rect(theme.details_actions), theme)
     }
 
     fn details_text(
         &mut self,
-        app: &App,
-        game: &archr_index::Game,
+        text: &str,
+        scroll: usize,
         area: Rect,
         theme: &Theme,
     ) -> Result<(), String> {
-        let text = game.details.description.trim();
         if text.is_empty() {
             self.details_overflow = 0;
             let lines = self.wrap(
@@ -456,7 +521,7 @@ impl Ui<'_, '_> {
         let visible = ((area.height() as f32 / step).floor() as usize).max(1);
         let total = self.details_wrap.lines.len();
         self.details_overflow = total.saturating_sub(visible);
-        let first = app.details_scroll.min(self.details_overflow);
+        let first = scroll.min(self.details_overflow);
         for n in 0..visible.min(total - first) {
             let line = self.details_wrap.lines[first + n].clone();
             let y = area.y() + (step * n as f32).round() as i32;
@@ -490,20 +555,14 @@ impl Ui<'_, '_> {
 
     fn details_actions(
         &mut self,
-        app: &App,
-        favorite: bool,
+        sheet: &Sheet<'_>,
         area: Rect,
         theme: &Theme,
     ) -> Result<(), String> {
-        // Sized for both of the last button's states (resting, and dots
-        // with "Scraping…"), so a running job never moves the row.
-        let labels: Vec<String> = DETAILS_ACTIONS
-            .iter()
-            .map(|key| self.catalog.text(key))
-            .collect();
-        let scraping = self.catalog.text("details.rescraping");
-        // Shrink text and padding together until the three buttons fit.
-        let icon = |n: usize| n == 1;
+        let buttons = &sheet.buttons;
+        let labels: Vec<&String> = buttons.iter().map(|b| &b.label).collect();
+        // Shrink text and padding together until the buttons fit.
+        let icon = |n: usize| buttons[n].icon.is_some();
         let mut size = 14.;
         let floor = self.frame.min_size().max(10. / self.frame.font.max(1.));
         let mut gap = self.px(8.);
@@ -520,8 +579,8 @@ impl Ui<'_, '_> {
                     Face::Regular,
                     size,
                 )?) as i32;
-                if n == 2 {
-                    let busy = self.measure(&scraping, Face::Semibold, size)? as i32;
+                if let Some(busy) = &buttons[n].busy {
+                    let busy = self.measure(busy, Face::Semibold, size)? as i32;
                     text = text.max(busy + self.px(size * 1.8 + 6.));
                 }
                 widths.push(text + pad * 2 + extra);
@@ -543,7 +602,7 @@ impl Ui<'_, '_> {
             let mut least = Vec::new();
             for (n, label) in labels.iter().enumerate() {
                 // In the face it is drawn with: semibold only when focused.
-                let face = if n == app.details_focus {
+                let face = if n == sheet.focus {
                     Face::Semibold
                 } else {
                     Face::Regular
@@ -564,19 +623,30 @@ impl Ui<'_, '_> {
             };
         }
         let mut x = area.x();
-        for (n, label) in labels.iter().enumerate() {
-            let focused = n == app.details_focus;
-            let button = Rect::new(x, area.y(), widths[n] as u32, area.height());
+        for (n, (label, button)) in labels.iter().zip(buttons).enumerate() {
+            let focused = n == sheet.focus;
+            let rect = Rect::new(x, area.y(), widths[n] as u32, area.height());
             if focused {
-                if !self.framed("button_selected", button)? {
-                    self.rounded(button, self.px(10.) as f32, theme.highlight_bg, None)?;
+                if !self.framed("button_selected", rect)? {
+                    self.rounded(rect, self.px(10.) as f32, theme.highlight_bg, None)?;
                 }
             } else {
                 let colors = (theme.surface, theme.border);
-                self.panel_named("button", button, self.px(10.) as f32, colors)?;
+                self.panel_named("button", rect, self.px(10.) as f32, colors)?;
             }
-            let disabled = n == 2 && (!app.can_rescrape || app.rescraping);
-            let ink = match (focused, disabled) {
+            // Work in progress fills the button from the left.
+            if let Some(progress) = button.progress {
+                let done = (rect.width() as f32 * f32::from(progress.min(100)) / 100.).round();
+                if done >= 1. {
+                    let fill = Rgba {
+                        a: 72,
+                        ..selection(focused, theme.highlight_bg, theme.highlight_text)
+                    };
+                    let bar = Rect::new(rect.x(), rect.y(), done as u32, rect.height());
+                    self.rounded(bar, self.px(10.) as f32, fill, None)?;
+                }
+            }
+            let ink = match (focused, button.disabled) {
                 (true, _) => theme.highlight_text,
                 (false, true) => theme.dim_text,
                 (false, false) => theme.text,
@@ -586,44 +656,41 @@ impl Ui<'_, '_> {
             } else {
                 Face::Regular
             };
-            if n == 2 && app.rescraping {
-                self.scraping(button, (face, size, ink), pad, focused, theme)?;
+            if let (true, Some(busy)) = (button.working, &button.busy) {
+                self.scraping(rect, (busy, (face, size, ink)), pad, focused, theme)?;
                 x += widths[n] + gap;
                 continue;
             }
-            let mut text_x = button.x() + pad;
-            if icon(n) {
+            let mut text_x = rect.x() + pad;
+            if let Some(glyph) = &button.icon {
                 let side = self.px(size);
-                let star = if favorite { theme.warning } else { ink };
-                self.icon(
-                    Glyph::Star,
-                    Rect::new(
-                        text_x,
-                        button.y() + (button.height() as i32 - side) / 2,
-                        side as u32,
-                        side as u32,
-                    ),
-                    star,
-                )?;
+                let at = Rect::new(
+                    text_x,
+                    rect.y() + (rect.height() as i32 - side) / 2,
+                    side as u32,
+                    side as u32,
+                );
+                match glyph {
+                    Icon::Star(favorite) => {
+                        let star = if *favorite { theme.warning } else { ink };
+                        self.icon(Glyph::Star, at, star)?;
+                    }
+                    Icon::Svg(svg) => self.module_icon((Some(svg), ""), at, ink)?,
+                }
                 text_x += side + self.px(6.);
             }
-            let room = (button.right() - text_x - pad.min(text_x - button.x())).max(1) as u32;
+            let room = (rect.right() - text_x - pad.min(text_x - rect.x())).max(1) as u32;
             let lines = if self.measure(label, face, size)? > room {
                 self.wrap(label, face, size, room)?
             } else {
-                vec![label.clone()]
+                vec![(*label).clone()]
             };
-            let step = button.height() as i32 / lines.len() as i32;
+            let step = rect.height() as i32 / lines.len().max(1) as i32;
             for (k, line) in lines.iter().enumerate() {
                 self.label(
                     line,
                     (face, size, ink),
-                    Rect::new(
-                        text_x,
-                        button.y() + step * k as i32,
-                        room,
-                        step.max(1) as u32,
-                    ),
+                    Rect::new(text_x, rect.y() + step * k as i32, room, step.max(1) as u32),
                 )?;
             }
             x += widths[n] + gap;
@@ -634,10 +701,10 @@ impl Ui<'_, '_> {
     /// "Scrape again" while its job runs: the Wi-Fi search's pulsing dots,
     /// then "Scraping…" when it fits on one line; the dots alone, centered,
     /// when it does not. Looping state comes from the clock, never stored.
-    fn scraping(
+    pub(super) fn scraping(
         &mut self,
         button: Rect,
-        (face, size, ink): (Face, f32, Rgba),
+        (text, (face, size, ink)): (&str, (Face, f32, Rgba)),
         pad: i32,
         focused: bool,
         theme: &Theme,
@@ -645,10 +712,9 @@ impl Ui<'_, '_> {
         // The dots take 1.8 × the text size, as measured for the row.
         let (dot, step) = (self.px(size * 0.4).max(2), self.px(size * 0.7));
         let dots = step * 2 + dot;
-        let text = self.catalog.text("details.rescraping");
         let lead = self.px(size * 1.8 + 6.);
         let room = button.width() as i32 - pad * 2 - lead;
-        let shown = self.measure(&text, face, size)? as i32 <= room;
+        let shown = self.measure(text, face, size)? as i32 <= room;
         let mut left = if shown {
             button.x() + pad
         } else {
@@ -678,7 +744,7 @@ impl Ui<'_, '_> {
         if shown {
             left += lead;
             let area = Rect::new(left, button.y(), room.max(1) as u32, button.height());
-            self.label(&text, (face, size, ink), area)?;
+            self.label(text, (face, size, ink), area)?;
         }
         Ok(())
     }

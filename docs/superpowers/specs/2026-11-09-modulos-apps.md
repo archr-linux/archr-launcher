@@ -56,7 +56,7 @@ art = "art/app.png"        # opcional: imagem do carrossel (1:1, até 512 px)
 home = "catalog"           # id da primeira tela
 
 [permissions]
-install = ["gb", "gbc", "gba", "nes", "megadrive", "pico-8"]
+install = ["gb", "gbc", "gba", "nes", "megadrive", "pico-8", "ports"]
 launch = true              # "Jogar" depois de baixar (já existe na API 2)
 ```
 
@@ -73,7 +73,7 @@ launch = true              # "Jogar" depois de baixar (já existe na API 2)
 | permissão | o que libera | texto na Loja |
 |---|---|---|
 | `[app]` | telas próprias, abertas pelo carrossel | "Tem telas próprias" |
-| `install = [...]` | `rom.install`/`rom.remove` nesses sistemas, só para jogos que o próprio módulo instalou | "Instala jogos em: Game Boy, …" |
+| `install = [...]` | `rom.install`/`rom.remove` nesses sistemas, só para jogos que o próprio módulo instalou; `"ports"` libera `port.install`/`port.remove` (PortMaster) | "Instala jogos em: Game Boy, …, Ports (PortMaster)" |
 
 `net` e `launch` continuam como hoje. Não há permissão de escrita em pastas: a
 instalação passa pelo launcher (seção 6).
@@ -194,12 +194,45 @@ O launcher:
    alcance do módulo) e relê o sistema; o jogo aparece na lista na hora.
 
 `rom.remove {game_key}` só remove jogos que esse módulo instalou (ROM, capa e
-entrada do gamelist), depois de `screen.confirm`. `rom.list` devolve os jogos
+entrada do gamelist), depois de o launcher perguntar ao usuário com a pergunta
+dele ("Remover <nome>?"); o módulo recebe `{removed}`. `rom.list` devolve os jogos
 que o módulo instalou e ainda existem (`game_key`, `system`, tamanho, data),
 para o app marcar "baixado" e "atualização disponível".
 
 O módulo nunca lê a pasta de ROMs nem a biblioteca: só sabe o que ele mesmo
 instalou.
+
+### 6.1 Ports do PortMaster (decisão de 2026-11-09)
+
+O app Itch.io também lista jogos do itch.io que têm um port pronto no
+PortMaster, e os instala. Com `"ports"` em `install`:
+
+```json
+{"id":9,"method":"port.install","params":{"name":"tobutobugirl.zip"}}
+→ {"result":{"game_key":"ports/Tobu Tobu Girl.sh"}}
+```
+
+- `name` é o nome de um arquivo do catálogo do PortMaster,
+  `^[a-z0-9][a-z0-9._-]*\.zip$`, até 64 caracteres.
+- O launcher **nunca** recebe arquivos do módulo para ports (os scripts deles
+  rodam como root). Ele roda o script do sistema
+  `/usr/bin/archr-port-install install <name>` (`uninstall <name>` para
+  `port.remove`), um comando fechado como os de `system.call`; o script
+  (repositório da distribuição) usa o `harbourmaster` do próprio PortMaster,
+  que baixa do lançamento oficial, confere o md5, extrai e busca os runtimes.
+- Um por vez, como tarefa de fundo, até 15 min (downloads de ~250 MB); a
+  resposta vem quando termina (`{game_key}` do script de início que apareceu
+  na pasta de ports, ou erro `-32000` com a última linha de erro do script).
+  Linhas `PROGRESS <0-100>` do script viram a notificação
+  `port.progress {name, progress}` para o app. Um jogo começando interrompe a
+  instalação: `SIGTERM` (o script desfaz o que começou), `SIGKILL` 15 s depois.
+- Dono: o port fica registrado como do módulo (`installed.toml`, como as
+  ROMs) só se o `port.json` com esse nome aponta um script de início; um port
+  já instalado que não é dele é recusado (`-32005`); `port.remove` só para
+  ports que ele instalou, depois da pergunta do launcher; `port.list` devolve `{ports: [{name, game_key, date}]}`.
+- Depois de instalar ou remover, o launcher relê o sistema `ports`; o script
+  novo aparece na lista. `game.launch` vale para o script de um port que o
+  próprio módulo instalou (os demais ports e ferramentas continuam fora).
 
 ## 7. Segurança (o que a revisão deve olhar)
 
@@ -208,8 +241,23 @@ instalou.
   (canonicalizar dentro de `HOME`, recusar links), tamanho e formato de
   imagens, nome e extensão do jogo instalado, quantidade de mensagens (as
   telas juntam patches a 4 por segundo, como `ui.update`).
-- `rom.install`: no máximo 1 por segundo; total de 2 GiB por módulo
-  (`rom.list` informa o uso).
+- `rom.install`: no máximo 1 por segundo; total de 2 GiB por módulo, ports
+  incluídos (`rom.list` informa o uso); só nos 5 s depois de uma ação do
+  usuário no app (o app baixa e instala com um botão "Instalar"); só em
+  sistemas emulados pelo `runemu.sh`, nunca nos que o aparelho executa
+  (`tools`, `ports`, `windows`, extensões `.sh`, `.jar`...). Aceito: a
+  licença é por instalação, não por item; um port pode passar da cota uma vez
+  (o tamanho só se sabe depois).
+- Remoções: a pergunta é do launcher, nunca do módulo.
+- Arquivos do módulo (ROM, capa, imagens das telas) são abertos uma vez, uma
+  pasta por vez, sem seguir links (`openat` + `O_NOFOLLOW`), e o launcher lê
+  só essa abertura: a ROM e a capa são copiadas dela, e as imagens das telas
+  são copiadas para uma pasta do launcher antes de decodificar. Trocar um
+  nome por um link depois da checagem não faz o launcher (root) ler outro
+  arquivo.
+- Ports: o módulo só dá um nome de catálogo (conferido por expressão
+  regular); quem baixa e instala é o script do sistema com o PortMaster, de
+  fonte oficial e md5 conferido. Nenhum arquivo do módulo vira script.
 - Conteúdo de terceiros: o app mostra o que o serviço publica. Um app que
   pode mostrar conteúdo adulto deixa a escolha ao usuário num ajuste próprio,
   desligado por padrão e ligado só depois de confirmação de idade; a Loja exige

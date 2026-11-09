@@ -42,6 +42,8 @@ pub struct Plan {
     /// The system's resolv.conf, for a `net` module's DNS.
     pub resolv: String,
     pub memory_mb: u32,
+    /// Processes and threads; never fewer than 16.
+    pub tasks: u32,
 }
 
 pub trait Executor: Send + Sync {
@@ -177,7 +179,6 @@ pub fn sandbox(plan: &Plan, seccomp: bool) -> Vec<String> {
         // in /run/userdb, which nss-systemd reads directly without them.
         "-p InaccessiblePaths=-/run/systemd/userdb",
         "-p MemorySwapMax=0",
-        "-p TasksMax=16",
         "-p CPUWeight=20",
         "-p Nice=10",
         "-p IOWeight=20",
@@ -235,6 +236,7 @@ pub fn sandbox(plan: &Plan, seccomp: bool) -> Vec<String> {
         }
     }
     property(format!("MemoryMax={}M", plan.memory_mb));
+    property(format!("TasksMax={}", plan.tasks.max(16)));
     property(format!("WorkingDirectory={}", plan.dir.display()));
     args
 }
@@ -349,16 +351,37 @@ pub fn spawn(
     let stderr = child.stderr.take().expect("piped stderr");
     let id = plan.id.clone();
     thread::spawn(move || {
-        // A bounded share of stderr reaches the launcher's log.
-        for text in BufReader::new(stderr)
-            .lines()
-            .map_while(Result::ok)
-            .take(STDERR_LINES)
-        {
-            log::warn!(
-                "Module {id}: {}",
-                text.chars().take(200).collect::<String>()
-            );
+        // The first lines and, at the end, the last ones (a crash's panic)
+        // reach the launcher's log; what lies between is only counted.
+        let mut reader = BufReader::new(stderr);
+        let (mut count, mut tail) = (0usize, std::collections::VecDeque::new());
+        loop {
+            let mut bytes = Vec::new();
+            match (&mut reader).take(4096).read_until(b'\n', &mut bytes) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {}
+            }
+            let text: String = String::from_utf8_lossy(&bytes)
+                .trim_end()
+                .chars()
+                .take(200)
+                .collect();
+            if count < STDERR_LINES {
+                log::warn!("Module {id}: {text}");
+            } else {
+                tail.push_back(text);
+                if tail.len() > STDERR_LINES {
+                    tail.pop_front();
+                }
+            }
+            count += 1;
+        }
+        let skipped = count.saturating_sub(STDERR_LINES + tail.len());
+        if skipped > 0 {
+            log::warn!("Module {id}: ({skipped} lines)");
+        }
+        for text in tail {
+            log::warn!("Module {id}: {text}");
         }
     });
     thread::spawn(move || {
@@ -458,6 +481,16 @@ mod tests {
             assert!(args.contains(expected), "{expected} in {args}");
         }
         assert!(!args.contains("archr-mod "), "no shared user: {args}");
+        assert!(args.contains("-p TasksMax=16"), "the least: {args}");
+        let app = sandbox(
+            &Plan {
+                tasks: 32,
+                ..plan.clone()
+            },
+            true,
+        )
+        .join(" ");
+        assert!(app.contains("-p TasksMax=32"), "an app's: {app}");
         let online = sandbox(
             &Plan {
                 net: true,

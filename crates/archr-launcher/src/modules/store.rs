@@ -44,7 +44,7 @@ pub const REVIEW_KEY: [u8; 32] = [
 /// The oldest reviewed list this build accepts, even with nothing recorded
 /// (a new device, a wiped `modules-reviewed.serial`): raise it at release
 /// time to the serial then published.
-pub const MIN_SERIAL: u64 = 1;
+pub const MIN_SERIAL: u64 = 3;
 /// `reviewed.json.sig`: the Ed25519 signature of the whole `reviewed.json`,
 /// 64 bytes as 128 hex digits (one line; spaces and line ends ignored).
 pub fn signed(body: &[u8], signature: &[u8], key: &[u8; 32]) -> bool {
@@ -104,6 +104,8 @@ pub struct Shop {
     /// The launcher's language, for names and descriptions by language;
     /// the host changes it when the user does.
     language: Arc<RwLock<String>>,
+    /// The systems catalog, for the systems a module installs games in.
+    systems: Option<PathBuf>,
     /// A different reviewed list was kept since the last `kept_new_list`.
     new_list: AtomicBool,
 }
@@ -115,7 +117,13 @@ impl Shop {
             review_key: REVIEW_KEY,
             language: Arc::new(RwLock::new("en".into())),
             new_list: AtomicBool::new(false),
+            systems: None,
         }
+    }
+    /// The catalog that names the systems of `install`.
+    pub fn with_systems(mut self, catalog: PathBuf) -> Self {
+        self.systems = Some(catalog);
+        self
     }
     /// Names and descriptions in this language when the manifest has it.
     pub fn with_language(self, language: &str) -> Self {
@@ -365,6 +373,7 @@ impl Shop {
         let installed = record
             .filter(|r| r.source == card.source())
             .map(|r| r.version.clone());
+        let names = registry::system_names(self.systems.as_deref());
         // Access permissions only, without what it adds to the screens.
         let access = |permissions: manifest::Permissions| {
             let mut bare = manifest.clone();
@@ -374,8 +383,9 @@ impl Shop {
             bare.widgets.clear();
             bare.quick.clear();
             bare.pages.clear();
+            bare.app = None;
             bare.mode = manifest::Mode::Oneshot;
-            registry::permissions(&bare)
+            registry::permissions(&bare, &names)
                 .into_iter()
                 .filter(|p| p.key != "modules.perm_none")
                 .collect::<Vec<_>>()
@@ -413,7 +423,7 @@ impl Shop {
             license: manifest.license.clone(),
             size: package.size,
             digest: package.digest.clone(),
-            permissions: registry::permissions(&manifest),
+            permissions: registry::permissions(&manifest, &names),
             added,
             kept,
             preview,
@@ -749,9 +759,12 @@ fn new_surface(new: &Manifest, old: Option<&Manifest>) -> Vec<archr_ui::modules:
             ),
         ),
         (
+            "modules.perm_app",
+            new.app.is_some() && old.is_none_or(|o| o.app.is_none()),
+        ),
+        (
             "modules.perm_daemon",
-            new.mode == manifest::Mode::Daemon
-                && old.is_none_or(|o| o.mode != manifest::Mode::Daemon),
+            super::permanent(new) && old.is_none_or(|o| !super::permanent(o)),
         ),
     ];
     kinds

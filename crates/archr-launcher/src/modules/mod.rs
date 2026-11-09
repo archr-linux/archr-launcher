@@ -2,6 +2,7 @@
 //! JSON-RPC lines (docs/modulos.md). Processes, files and the network live on
 //! the host thread and its helpers; the screens only read the `View` it
 //! publishes, and the event loop only calls `poll`.
+pub mod app;
 pub mod manifest;
 pub mod process;
 pub mod registry;
@@ -57,6 +58,30 @@ const CONFIG_SET: Duration = Duration::from_secs(1);
 const CONFIG_HOURLY: usize = 10;
 const HOUR: Duration = Duration::from_secs(3600);
 const LAST_LAUNCH: &str = "last-launch.json";
+/// An app's process (API 4): its resources, apart from the daemons'.
+const APP_MEMORY: u32 = 96;
+const APP_TASKS: u32 = 32;
+/// Screen messages waiting for the next publish, at most.
+const SCREENS: usize = 256;
+/// One `rom.install` per module in this time.
+const INSTALL_EVERY: Duration = Duration::from_secs(1);
+/// Lines of one process waiting for the host; more and it is stopped.
+const LINES: usize = 256;
+
+/// Where the pictures an app's screens show are copied, beside the data
+/// folders and out of every module's reach (no id starts with a dot).
+fn pictures(dirs: &Dirs, id: &str) -> PathBuf {
+    dirs.data.join(".pictures").join(id)
+}
+/// The daemons map knows an app's process by this key; `_` is never in a
+/// module id.
+fn app_key(id: &str) -> String {
+    format!("{id}_app")
+}
+/// The module a process key belongs to.
+fn module_id(key: &str) -> &str {
+    key.strip_suffix("_app").unwrap_or(key)
+}
 
 /// Where and how modules run.
 pub struct Config {
@@ -92,12 +117,15 @@ pub struct Config {
     pub cpufreq: PathBuf,
     /// What archr-perf-probe measured in the last game (runemu.sh --measure).
     pub perf: PathBuf,
+    /// The library's paths: the systems `rom.install` writes to (API 4).
+    pub library: Option<crate::paths::Paths>,
 }
 impl Config {
     /// The device's sandbox, or the plain runner for a fixture root.
     pub fn production(paths: &crate::paths::Paths, language: &str) -> Self {
         let dirs = Dirs::new(&paths.store);
-        let shop = store::Shop::production(paths.cache.join("store/modules"), dirs.clone());
+        let shop = store::Shop::production(paths.cache.join("store/modules"), dirs.clone())
+            .with_systems(paths.systems.clone());
         let (executor, direct, userdb): (Arc<dyn Executor>, _, _) = if paths.root.is_some() {
             log::warn!("Modules run without a sandbox (fixture root)");
             let direct = Arc::new(Direct::default());
@@ -128,6 +156,7 @@ impl Config {
             shop: Some(shop),
             cpufreq: paths.at("/sys/devices/system/cpu/cpufreq/policy0"),
             perf: paths.at("/run/archr/perf-last.json"),
+            library: Some(paths.clone()),
         }
     }
 }
@@ -139,11 +168,22 @@ pub enum Event {
     Store(StoreReply),
     /// A module changed system.cfg: whoever caches it reads it again.
     Config,
-    /// A module asks to open this game, as if the user chose it.
+    /// A module asks to open this game, as if the user chose it; `owned`:
+    /// a port it installed itself (API 4), which may open too.
     Launch {
         system: String,
         game_key: String,
+        owned: bool,
     },
+    /// What the open app sent since the last publish (API 4).
+    Screens(String, Vec<archr_ui::apps::Message>),
+    /// The app's process is gone: the screens close it.
+    AppClosed(String),
+    /// Copies of the app's pictures the screens asked for: the module's
+    /// relative path, the launcher's copy.
+    Pictures(String, Vec<(PathBuf, PathBuf)>),
+    /// A module installed or removed a game here: the library reads it again.
+    Installed(String),
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Notice {
@@ -207,6 +247,16 @@ enum Input {
         code: Option<i32>,
     },
     Store(Box<(StoreReply, Option<store::Installed>)>),
+    /// A `rom.*` or `port.*` job ended: the process that asked, its request,
+    /// and what to record.
+    Job(Job, Done),
+    /// A PortMaster script said how far it is.
+    PortProgress {
+        key: String,
+        generation: u64,
+        name: String,
+        progress: u8,
+    },
     /// A reconciliation's result: the modules whose badge holds, by id with
     /// the package digest and content it held for.
     /// The store kept a new reviewed list: every badge is checked again.
@@ -217,6 +267,36 @@ enum Input {
 /// Module id, package digest, content hash: the badge holds for exactly
 /// these.
 type Badge = (String, String, String);
+/// A request of the app being worked on: the process that asked (its
+/// key and run) and the request's id.
+struct Job {
+    key: String,
+    generation: u64,
+    request: Json,
+}
+impl Job {
+    fn finish(self, inbox: &mpsc::Sender<Input>, done: Done) {
+        let _ = inbox.send(Input::Job(self, done));
+    }
+}
+/// What an install job did.
+enum Done {
+    Rom(Result<app::Game, (i64, &'static str)>),
+    Port {
+        name: String,
+        install: bool,
+        /// Its launch script's game key and what its files take, when
+        /// PortMaster says it installed it.
+        result: Result<Option<(String, u64)>, (i64, String)>,
+        /// The job's stop switch: only this job's end frees the lane.
+        job: Arc<std::sync::atomic::AtomicBool>,
+    },
+}
+/// What a removal the user is asked about takes away.
+enum Remove {
+    Rom(app::Game),
+    Port(String),
+}
 
 /// The event loop's handle on the host thread.
 pub struct Modules {
@@ -306,6 +386,8 @@ struct Daemon {
     tx: mpsc::SyncSender<String>,
     generation: u64,
     ready: bool,
+    /// Its lines sent to the host and not handled yet (`LINES` at most).
+    queued: Arc<std::sync::atomic::AtomicUsize>,
 }
 #[derive(Debug)]
 enum Waiting {
@@ -373,6 +455,25 @@ struct Host {
     /// A launch waiting for `launch.before`: where the answer goes and what
     /// each module chose.
     before: Option<(Governor, BTreeMap<String, Tune>)>,
+    /// The open app's module (API 4), what it sent for the screens since
+    /// the last publish, and the icons its screens named.
+    app: Option<String>,
+    screens: Vec<archr_ui::apps::Message>,
+    icons: BTreeMap<(String, String), Option<Arc<str>>>,
+    /// When the user last said yes to each app's question.
+    /// A removal waiting for the user's answer to the launcher's question.
+    removing: Option<(Job, Remove)>,
+    /// Each app's last user action: one install may follow it.
+    tokens: BTreeMap<String, Instant>,
+    /// The pictures the open app's screens were given.
+    pictures: app::Pictures,
+    /// Each module's last `rom.install`.
+    installed_at: BTreeMap<String, Instant>,
+    /// A game is being copied, or a port installed (its stop switch).
+    copying: bool,
+    porting: Option<Arc<std::sync::atomic::AtomicBool>>,
+    /// The systems' full names, for the permission lines.
+    names: BTreeMap<String, String>,
 }
 
 impl Host {
@@ -437,6 +538,16 @@ impl Host {
             auto_queue: std::collections::VecDeque::new(),
             auto_busy: false,
             before: None,
+            app: None,
+            screens: Vec::new(),
+            icons: BTreeMap::new(),
+            removing: None,
+            tokens: BTreeMap::new(),
+            pictures: app::Pictures::default(),
+            installed_at: BTreeMap::new(),
+            copying: false,
+            porting: None,
+            names: BTreeMap::new(),
             config,
             inbox,
             out,
@@ -517,6 +628,8 @@ impl Host {
     // ---- registry ----
 
     fn reload(&mut self) {
+        let catalog = self.config.library.as_ref().map(|p| p.systems.clone());
+        self.names = registry::system_names(catalog.as_deref());
         self.state = State::load(&self.config.dirs.state);
         self.installed = registry::scan(&self.config.dirs, &self.config.language);
         let before = self.state.clone();
@@ -539,7 +652,7 @@ impl Host {
                     &self.config.dirs,
                     i,
                     self.state.modules.get(&i.id),
-                    &self.config.language,
+                    (&self.config.language, &self.names),
                 );
                 module.reviewed = self.badge(&module.id);
                 if let Some(seen) = old.iter().find(|m| m.id == module.id) {
@@ -646,6 +759,10 @@ impl Host {
         self.dirty = None;
         self.published = Instant::now();
         let _ = self.out.send(Event::View(Arc::new(self.view.clone())));
+        if let (Some(id), false) = (&self.app, self.screens.is_empty()) {
+            let screens = std::mem::take(&mut self.screens);
+            let _ = self.out.send(Event::Screens(id.clone(), screens));
+        }
     }
     fn touch(&mut self) {
         if self.dirty.is_none() {
@@ -734,9 +851,8 @@ impl Host {
                     _ => None,
                 };
                 if let (true, Some(key)) = (ok, said) {
-                    let _ = self
-                        .out
-                        .send(Event::Notice(Notice::System(self.name(&id), key)));
+                    let name = self.name(module_id(&id));
+                    let _ = self.out.send(Event::Notice(Notice::System(name, key)));
                 }
             }
             Input::Stop(ack) => {
@@ -754,11 +870,11 @@ impl Host {
                 generation,
                 line,
             } => {
-                if self
-                    .daemons
-                    .get(&id)
-                    .is_some_and(|d| d.generation == generation)
-                {
+                let daemon = self.daemons.get(&id).filter(|d| d.generation == generation);
+                if let Some(daemon) = daemon {
+                    daemon
+                        .queued
+                        .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
                     match line {
                         Some(line) => {
                             if !self.line(&id, line, false) {
@@ -794,6 +910,22 @@ impl Host {
                     self.punish(&id, why);
                 }
             }
+            Input::Job(job, done) => self.job_done(job, done),
+            Input::PortProgress {
+                key,
+                generation,
+                name,
+                progress,
+            } => {
+                if self
+                    .daemons
+                    .get(&key)
+                    .is_some_and(|d| d.generation == generation)
+                {
+                    let data = json!({"name": name, "progress": progress});
+                    self.send(&key, &notice("port.progress", &data));
+                }
+            }
             Input::Store(answer) => {
                 let (reply, installed) = *answer;
                 let auto = matches!(reply, StoreReply::Updated(..) | StoreReply::Checked(_));
@@ -827,15 +959,66 @@ impl Host {
                 }
             }
             Request::Open { .. } => {}
+            Request::OpenApp(id) => self.open_app(&id),
+            Request::CloseApp(id) => {
+                if self.app.as_deref() == Some(id.as_str()) {
+                    self.close_app();
+                }
+            }
+            Request::AppPictures { module, wanted } => {
+                if self.app.as_deref() != Some(module.as_str()) {
+                    return;
+                }
+                let (home, store) = (
+                    self.config.dirs.data_dir(&module),
+                    pictures(&self.config.dirs, &module),
+                );
+                let needed: Vec<String> = wanted.iter().map(|p| p.display().to_string()).collect();
+                let copies = needed
+                    .iter()
+                    .filter_map(|rel| {
+                        let copy = self.pictures.get(&home, rel, &store, &needed)?;
+                        Some((PathBuf::from(rel), copy))
+                    })
+                    .collect();
+                let _ = self.out.send(Event::Pictures(module, copies));
+            }
+            Request::AppEvent { module, name, data } => {
+                // The launcher's own question: never the module's to hear.
+                if name == "launcher.answer" {
+                    self.removal_answered(&module, data["yes"] == true);
+                    return;
+                }
+                let key = app_key(&module);
+                if self.daemons.get(&key).is_some_and(|d| d.ready) {
+                    self.send(&key, &notice(name, &data));
+                }
+            }
         }
     }
     fn invoke(&mut self, id: &str, action: &str, call: Option<Call>) {
         let Some(mode) = self.active(id).map(|(_, m)| m.mode) else {
             return;
         };
-        let context = call.map_or(json!({}), |c| match c.item {
-            Some(item) => json!({"item": item}),
-            None => json!({"system": c.system, "game_key": c.game_key, "rom": c.rom}),
+        // From an app screen, or from its pages while only the app runs.
+        let app = app_key(id);
+        let main = self.daemons.get(id).is_some_and(|d| d.ready);
+        let to_app = call.as_ref().is_some_and(|c| c.screen.is_some())
+            || (!main && self.daemons.get(&app).is_some_and(|d| d.ready));
+        let key = if to_app { app } else { id.to_owned() };
+        let context = call.map_or(json!({}), |c| match (c.screen, c.item) {
+            (Some(screen), item) => {
+                let mut context = json!({"screen": screen});
+                if let Some(item) = item {
+                    context["item"] = item.into();
+                }
+                if let Some(button) = c.button {
+                    context["button"] = button.into();
+                }
+                context
+            }
+            (None, Some(item)) => json!({"item": item}),
+            (None, None) => json!({"system": c.system, "game_key": c.game_key, "rom": c.rom}),
         });
         let params = json!({"action": action, "context": context});
         self.next += 1;
@@ -846,22 +1029,25 @@ impl Host {
                 self.oneshot(id, message, Some((request_id, action.to_owned())));
                 true
             }
-            Mode::Daemon if self.daemons.get(id).is_some_and(|d| d.ready) => {
+            Mode::Daemon if self.daemons.get(&key).is_some_and(|d| d.ready) => {
                 self.pending.insert(
                     request_id,
                     (
-                        id.to_owned(),
+                        key.clone(),
                         Waiting::Invoke(action.to_owned()),
                         Instant::now() + INVOKE,
                     ),
                 );
-                self.send(id, &message);
+                self.send(&key, &message);
                 true
             }
             _ => false,
         };
         if sent {
             self.gestures.insert(id.to_owned(), Instant::now());
+            if to_app {
+                self.tokens.insert(id.to_owned(), Instant::now());
+            }
             self.view.busy.insert((id.to_owned(), action.to_owned()));
             self.publish();
         }
@@ -906,9 +1092,11 @@ impl Host {
         }
         let json = registry::settings_json(&manifest, &module.settings);
         self.publish();
-        if self.daemons.get(id).is_some_and(|d| d.ready) {
-            let data = json!({"key": key, "value": json[key]});
-            self.send(id, &self.event_for(id, "settings.changed", &data));
+        let data = json!({"key": key, "value": json[key]});
+        for process in [id.to_owned(), app_key(id)] {
+            if self.daemons.get(&process).is_some_and(|d| d.ready) {
+                self.send(&process, &self.event_for(id, "settings.changed", &data));
+            }
         }
     }
     fn enable(&mut self, id: &str, on: bool, grant: bool) {
@@ -919,7 +1107,7 @@ impl Host {
         let daemon = self
             .find(id)
             .and_then(|i| i.manifest.as_ref())
-            .is_some_and(|m| m.mode == Mode::Daemon);
+            .is_some_and(permanent);
         let running = self
             .view
             .modules
@@ -928,7 +1116,7 @@ impl Host {
             .filter(|m| {
                 self.find(&m.id)
                     .and_then(|i| i.manifest.as_ref())
-                    .is_some_and(|m| m.mode == Mode::Daemon)
+                    .is_some_and(permanent)
             })
             .count();
         if on && daemon && running >= DAEMONS {
@@ -964,10 +1152,20 @@ impl Host {
         for dir in [dirs.module(id), dirs.previous(id)] {
             let _ = fs::remove_dir_all(dir);
         }
+        // What it installed stays the user's: no later module of this id
+        // may take it away.
+        let ledger = dirs.data.join(app::LEDGER);
+        let mut owned = app::Ledger::load(&ledger);
+        if owned.modules.remove(id).is_some() {
+            if let Err(error) = owned.save(&ledger) {
+                log::warn!("Cannot save what modules installed: {error}");
+            }
+        }
         if data {
             let _ = fs::remove_dir_all(dirs.data_dir(id));
             let _ = fs::remove_file(dirs.settings_file(id));
             let _ = fs::remove_file(dirs.secrets_file(id));
+            let _ = fs::remove_dir_all(pictures(dirs, id));
             self.state.uids.remove(id);
         }
         self.state.modules.remove(id);
@@ -992,7 +1190,7 @@ impl Host {
         let daemon = self
             .find(&installed.id)
             .and_then(|i| i.manifest.as_ref())
-            .is_some_and(|m| m.mode == Mode::Daemon);
+            .is_some_and(permanent);
         if daemon && self.started && !self.stopped {
             self.spawn_daemon(&installed.id);
         }
@@ -1034,7 +1232,7 @@ impl Host {
         let daemon = self
             .find(&id)
             .and_then(|i| i.manifest.as_ref())
-            .is_some_and(|m| m.mode == Mode::Daemon);
+            .is_some_and(permanent);
         if daemon && self.started && !self.stopped && self.active(&id).is_some() {
             self.spawn_daemon(&id);
         }
@@ -1073,7 +1271,11 @@ impl Host {
 
     // ---- processes ----
 
-    fn plan(&self, id: &str, unit: String) -> Option<Plan> {
+    /// How process `key` of a module runs: its daemon or one-shot, or its
+    /// app (`<id>_app`).
+    fn plan(&self, key: &str, unit: String) -> Option<Plan> {
+        let id = module_id(key);
+        let app = key != id;
         let (installed, manifest) = self.active(id)?;
         let dirs = &self.config.dirs;
         let uid = self.state.uids.get(id).copied()?;
@@ -1098,6 +1300,10 @@ impl Host {
             ("ARCHR_MODULE_SECRETS", path(&secrets)),
             ("ARCHR_LANG", self.config.language.clone()),
             ("ARCHR_DEVICE", self.config.device.clone()),
+            (
+                "ARCHR_MODULE_ROLE",
+                if app { "app" } else { "daemon" }.into(),
+            ),
         ]
         .into_iter()
         .map(|(k, v)| (k.to_owned(), v))
@@ -1120,7 +1326,8 @@ impl Host {
                 .filter_map(|a| manifest::ALIASES.iter().find(|(n, _)| n == a))
                 .map(|(_, p)| PathBuf::from(p))
                 .collect(),
-            memory_mb: manifest.memory_mb,
+            memory_mb: if app { APP_MEMORY } else { manifest.memory_mb },
+            tasks: if app { APP_TASKS } else { 16 },
             resolv: if manifest.permissions.net {
                 archr_io::read_utf8(
                     std::path::Path::new("/etc/resolv.conf"),
@@ -1191,23 +1398,40 @@ impl Host {
             self.touch();
         }
     }
-    fn spawn_daemon(&mut self, id: &str) {
-        if self.daemons.contains_key(id) || self.daemons.len() >= DAEMONS || !self.prepare(id) {
+    /// Starts a module's daemon, or its app with `key` = `app_key(id)`:
+    /// one app at a time, outside the daemons' limit.
+    fn spawn_daemon(&mut self, key: &str) {
+        let id = module_id(key).to_owned();
+        let app = key != id;
+        let daemons = self.daemons.keys().filter(|k| module_id(k) == *k).count();
+        if self.daemons.contains_key(key) || (!app && daemons >= DAEMONS) || !self.prepare(&id) {
             return;
         }
+        let id = id.as_str();
         self.ran(id);
-        let Some(plan) = self.plan(id, format!("archr-mod-{id}")) else {
+        let Some(plan) = self.plan(key, format!("archr-mod-{key}")) else {
             return;
         };
         self.next += 1;
         let generation = self.next;
         let inbox = self.inbox.clone();
-        let owner = id.to_owned();
+        let owner = key.to_owned();
+        let queued = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let waiting = Arc::clone(&queued);
         let spawned = process::spawn(
             self.config.executor.as_ref(),
             self.config.direct.as_deref(),
             &plan,
             move |line| {
+                // A process that writes faster than the host reads breaks
+                // the protocol once, and is stopped; the rest is dropped.
+                let before = waiting.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let line = match (line, before) {
+                    (None, _) => None,
+                    (_, n) if n == LINES => Some(Err(())),
+                    (_, n) if n > LINES => return,
+                    (line, _) => line,
+                };
                 let _ = inbox.send(Input::Line {
                     id: owner.clone(),
                     generation,
@@ -1218,18 +1442,19 @@ impl Host {
         let (child, stdin) = match spawned {
             Ok(spawned) => spawned,
             Err(error) => {
-                log::warn!("Module {id} cannot start: {error}");
+                log::warn!("Module {key} cannot start: {error}");
                 self.punish(id, "cannot start");
                 return;
             }
         };
         self.daemons.insert(
-            id.to_owned(),
+            key.to_owned(),
             Daemon {
                 child,
                 tx: process::writer(stdin),
                 generation,
                 ready: false,
+                queued,
             },
         );
         let module = self.module(id).cloned().unwrap_or_default();
@@ -1247,11 +1472,38 @@ impl Host {
         self.pending.insert(
             request,
             (
-                id.to_owned(),
+                key.to_owned(),
                 Waiting::Initialize,
                 Instant::now() + INITIALIZE,
             ),
         );
+        let mut capabilities = vec![
+            "ui.update",
+            "ui.notify",
+            "settings.set",
+            "config.get",
+            "config.set",
+            "game.launch",
+            "launch.before",
+            "system.call",
+            "log",
+        ];
+        if app {
+            capabilities.extend([
+                "screen.show",
+                "screen.patch",
+                "screen.toast",
+                "screen.confirm",
+                "screen.busy",
+                "screen.offline",
+                "rom.install",
+                "rom.list",
+                "rom.remove",
+                "port.install",
+                "port.list",
+                "port.remove",
+            ]);
+        }
         let mut params = json!({
             "api_version": manifest::API_VERSION,
             "launcher_version": env!("CARGO_PKG_VERSION"),
@@ -1259,17 +1511,67 @@ impl Host {
             "device": self.config.device,
             "settings": settings,
             "permissions": permissions,
-            "capabilities": ["ui.update", "ui.notify", "settings.set", "config.get",
-                "config.set", "game.launch", "launch.before", "system.call", "log"],
+            "capabilities": capabilities,
+            "role": if app { "app" } else { "daemon" },
         });
         if permissions.iter().any(|p| p == "system:cpu-tune") {
             let opps = self.cpu_opps();
             params["cpu"] = json!({"opps": opps, "max_khz": opps.last()});
         }
         self.send(
-            id,
+            key,
             &json!({"jsonrpc": "2.0", "id": request, "method": "initialize", "params": params}),
         );
+    }
+    /// The user opened an app's row: its process starts and is told to
+    /// show its first screen once it answered `initialize`.
+    fn open_app(&mut self, id: &str) {
+        let has_app = self.active(id).is_some_and(|(_, m)| m.app.is_some());
+        if self.stopped || !has_app {
+            let _ = self.out.send(Event::AppClosed(id.to_owned()));
+            return;
+        }
+        if self.app.as_deref().is_some_and(|open| open != id) {
+            self.close_app();
+        }
+        self.app = Some(id.to_owned());
+        self.screens.clear();
+        self.tokens.remove(id);
+        self.removing = None;
+        self.pictures = app::Pictures::default();
+        // The last session's pictures go; this one copies what it shows.
+        let _ = fs::remove_dir_all(pictures(&self.config.dirs, id));
+        self.spawn_daemon(&app_key(id));
+        if !self.daemons.contains_key(&app_key(id)) {
+            self.app = None;
+            let _ = self.out.send(Event::AppClosed(id.to_owned()));
+        }
+    }
+    /// Leaving the app: `shutdown`, 500 ms, then it is killed. Its unsent
+    /// screens go with it.
+    fn close_app(&mut self) {
+        let Some(id) = self.app.take() else { return };
+        self.screens.clear();
+        self.removing = None;
+        let key = app_key(&id);
+        self.next += 1;
+        let request = self.next;
+        self.pending
+            .insert(request, (key.clone(), Waiting::Shutdown, Instant::now()));
+        self.send(
+            &key,
+            &json!({"jsonrpc": "2.0", "id": request, "method": "shutdown", "params": {}}),
+        );
+        let deadline = Instant::now() + SHUTDOWN;
+        while Instant::now() < deadline
+            && self
+                .daemons
+                .get_mut(&key)
+                .is_some_and(|d| matches!(d.child.try_wait(), Ok(None)))
+        {
+            thread::sleep(Duration::from_millis(10));
+        }
+        self.end_daemon(&key, false);
     }
     fn oneshot(&mut self, id: &str, message: Json, request: Option<(u64, String)>) {
         if !self.prepare(id) {
@@ -1329,23 +1631,40 @@ impl Host {
             self.punish(id, "not reading");
         }
     }
-    /// Ends a daemon now; `failed` counts it against the module.
-    fn end_daemon(&mut self, id: &str, failed: bool) {
-        self.pending.retain(|_, p| p.0 != id);
-        if let Some(mut daemon) = self.daemons.remove(id) {
-            self.config.executor.kill(Some(&format!("archr-mod-{id}")));
+    /// Ends a process now; `failed` counts it against the module. A
+    /// module's daemon goes with its app.
+    fn end_daemon(&mut self, key: &str, failed: bool) {
+        self.pending.retain(|_, p| p.0 != key);
+        if let Some(mut daemon) = self.daemons.remove(key) {
+            self.config.executor.kill(Some(&format!("archr-mod-{key}")));
             let _ = daemon.child.kill();
             let _ = daemon.child.wait();
         }
+        let id = module_id(key);
+        if key == id && self.daemons.contains_key(&app_key(id)) {
+            self.end_daemon(&app_key(id), false);
+        }
+        if key != id {
+            self.app_gone(id);
+        }
         if failed {
-            self.punish(id, "broke the protocol");
+            self.punish(key, "broke the protocol");
         }
     }
-    fn daemon_exited(&mut self, id: &str) {
-        let Some(mut daemon) = self.daemons.remove(id) else {
+    /// The app's process is over: the screens close it.
+    fn app_gone(&mut self, id: &str) {
+        if self.app.as_deref() == Some(id) {
+            self.app = None;
+            self.screens.clear();
+            self.removing = None;
+            let _ = self.out.send(Event::AppClosed(id.to_owned()));
+        }
+    }
+    fn daemon_exited(&mut self, key: &str) {
+        let Some(mut daemon) = self.daemons.remove(key) else {
             return;
         };
-        self.pending.retain(|_, p| p.0 != id);
+        self.pending.retain(|_, p| p.0 != key);
         let mut code = None;
         for _ in 0..20 {
             if let Ok(Some(status)) = daemon.child.try_wait() {
@@ -1359,6 +1678,15 @@ impl Host {
             let _ = daemon.child.wait();
         }
         if self.stopped {
+            return;
+        }
+        let id = module_id(key);
+        if key != id {
+            // Apps are never started again on their own.
+            self.app_gone(id);
+            if code != Some(0) {
+                self.punish(id, "app exited with an error");
+            }
             return;
         }
         if code != Some(0) {
@@ -1375,6 +1703,13 @@ impl Host {
         self.stopped = true;
         self.restarts.clear();
         self.focus = None;
+        if let Some(id) = self.app.clone() {
+            self.app_gone(&id);
+        }
+        // A PortMaster install never runs under a game.
+        if let Some(stop) = self.porting.take() {
+            stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
         for id in self.daemons.keys().cloned().collect::<Vec<_>>() {
             self.next += 1;
             let request = self.next;
@@ -1423,6 +1758,16 @@ impl Host {
         let params = &message["params"];
         match (message["method"].as_str(), message.get("id")) {
             (Some(method), None) => self.notification(id, method, params),
+            (
+                Some(method @ ("rom.install" | "rom.remove" | "port.install" | "port.remove")),
+                Some(request),
+            ) if !oneshot && module_id(id) != id => {
+                if let Err((code, text)) = self.job(id, method, request, params) {
+                    let reply = json!({"jsonrpc": "2.0", "id": request,
+                        "error": {"code": code, "message": text}});
+                    self.send(id, &reply);
+                }
+            }
             (Some("system.call"), Some(request)) if !oneshot => {
                 if let Err((code, text)) = self.system_call(id, request, params) {
                     let reply = json!({"jsonrpc": "2.0", "id": request,
@@ -1456,7 +1801,15 @@ impl Host {
                     daemon.ready = true;
                 }
                 self.restarts.remove(id);
-                self.commit(id);
+                self.commit(module_id(id));
+                if module_id(id) != id {
+                    // The app shows its first screen now.
+                    let home = self.active(module_id(id)).and_then(|(_, m)| m.app.clone());
+                    if let Some(app) = home {
+                        self.send(id, &notice("screen.opened", &json!({"screen": app.home})));
+                    }
+                    return;
+                }
                 if self.greeted.insert(id.to_owned()) {
                     let subscribed = self.subscribed(id);
                     for (name, data) in self.boot.clone() {
@@ -1468,7 +1821,7 @@ impl Host {
             }
             Waiting::Initialize => self.end_daemon(id, true),
             Waiting::Invoke(action) => {
-                self.view.busy.remove(&(id.to_owned(), action));
+                self.view.busy.remove(&(module_id(id).to_owned(), action));
                 self.touch();
             }
             Waiting::Shutdown => {}
@@ -1478,11 +1831,47 @@ impl Host {
             }
         }
     }
-    fn notification(&mut self, id: &str, method: &str, params: &Json) {
-        let Some(installed) = self.find(id) else {
+    fn notification(&mut self, key: &str, method: &str, params: &Json) {
+        let id = module_id(key);
+        let Some(installed) = self.installed.iter().find(|i| i.id == id) else {
             return;
         };
         match method {
+            method if method.starts_with("screen.") => {
+                if key == id || self.app.as_deref() != Some(id) {
+                    return;
+                }
+                if self.screens.len() >= SCREENS {
+                    log::warn!("Module {id}: too many screen messages, some dropped");
+                    return;
+                }
+                let icons = &mut self.icons;
+                let mut icon = |name: &str| -> Option<Arc<str>> {
+                    let found = icons
+                        .entry((id.to_owned(), name.to_owned()))
+                        .or_insert_with(|| {
+                            let path = installed.dir.join("icons").join(format!("{name}.svg"));
+                            archr_io::read_utf8(&path, 16 << 10, archr_io::Symlinks::Reject)
+                                .ok()
+                                .filter(|svg| manifest::lucide(svg.as_bytes()))
+                                .map(Into::into)
+                        });
+                    found.clone()
+                };
+                let mut reader = app::Reader {
+                    installed,
+                    icon: &mut icon,
+                };
+                match reader.message(method, params) {
+                    Some(message) => {
+                        self.screens.push(message);
+                        self.touch();
+                    }
+                    // Unknown ones (screen.qr, of a later phase) are ignored.
+                    None if method == "screen.qr" => {}
+                    None => log::warn!("Module {id}: {method} refused"),
+                }
+            }
             "ui.update" => {
                 let Some(target) = params["target"]
                     .as_str()
@@ -1593,7 +1982,14 @@ impl Host {
         }
     }
     /// A module's request: only the brokered operations of API 1.
-    fn call(&mut self, id: &str, method: &str, params: &Json) -> Result<Json, (i64, &'static str)> {
+    fn call(
+        &mut self,
+        process: &str,
+        method: &str,
+        params: &Json,
+    ) -> Result<Json, (i64, &'static str)> {
+        let id = module_id(process);
+        let app = process != id;
         let manifest = self
             .find(id)
             .and_then(|i| i.manifest.clone())
@@ -1685,11 +2081,356 @@ impl Host {
                     _ => return Err((-32001, "only after the user's action")),
                 }
                 log::info!("Module {id} launches {system}/{game_key}");
-                let _ = self.out.send(Event::Launch { system, game_key });
+                let ledger = app::Ledger::load(&self.config.dirs.data.join(app::LEDGER));
+                let owned = system == app::PORTS
+                    && ledger
+                        .modules
+                        .get(id)
+                        .is_some_and(|o| o.ports.iter().any(|p| p.game_key == game_key));
+                let _ = self.out.send(Event::Launch {
+                    system,
+                    game_key,
+                    owned,
+                });
                 Ok(json!({}))
+            }
+            "rom.list" => {
+                let ledger = app::Ledger::load(&self.config.dirs.data.join(app::LEDGER));
+                let owned = ledger.modules.get(id).cloned().unwrap_or_default();
+                let (games, used) = (owned.present().0, owned.used());
+                let games: Vec<Json> = games
+                    .iter()
+                    .map(|g| {
+                        json!({"game_key": g.game_key, "system": g.system,
+                            "size": g.size, "date": g.installed})
+                    })
+                    .collect();
+                Ok(json!({"games": games, "used": used, "limit": app::MODULE_BYTES}))
+            }
+            "port.list" => {
+                let ledger = app::Ledger::load(&self.config.dirs.data.join(app::LEDGER));
+                let ports: Vec<Json> = ledger
+                    .modules
+                    .get(id)
+                    .into_iter()
+                    .flat_map(|o| &o.ports)
+                    .map(|p| json!({"name": p.name, "game_key": p.game_key, "date": p.installed}))
+                    .collect();
+                Ok(json!({"ports": ports}))
+            }
+            "rom.install" | "rom.remove" | "port.install" | "port.remove" if !app => {
+                Err((-32001, "only from the app"))
             }
             _ => Err((-32601, "method not found")),
         }
+    }
+    /// The systems as the library reads them: where games go.
+    fn systems(&self) -> Vec<archr_index::SystemDef> {
+        self.config
+            .library
+            .as_ref()
+            .and_then(|paths| crate::worker::definitions(paths).ok())
+            .unwrap_or_default()
+    }
+    /// The ROMs folder every system `rom.install` writes to lies in.
+    fn roms(&self) -> PathBuf {
+        self.config
+            .library
+            .as_ref()
+            .map_or_else(|| PathBuf::from("/storage/roms"), |p| p.at("/storage/roms"))
+    }
+    /// One install, right after the user's action in the app (an A, X or Y
+    /// within `within`).
+    fn token(&mut self, id: &str, within: Duration) -> Result<(), (i64, &'static str)> {
+        match self.tokens.remove(id) {
+            Some(at) if at.elapsed() < within => Ok(()),
+            _ => Err((-32001, "only after the user's action")),
+        }
+    }
+    /// `rom.install`, `rom.remove`, `port.install` and `port.remove`, from
+    /// the app: checked here, done in a worker or after the user's answer,
+    /// answered when they end. One copy, one port and one question at a time.
+    fn job(
+        &mut self,
+        key: &str,
+        method: &str,
+        request: &Json,
+        params: &Json,
+    ) -> Result<(), (i64, &'static str)> {
+        let id = module_id(key).to_owned();
+        let allowed = self
+            .active(&id)
+            .map(|(_, m)| m.permissions.install.clone())
+            .ok_or((-32004, "not found"))?;
+        let ledger = app::Ledger::load(&self.config.dirs.data.join(app::LEDGER));
+        let owned = ledger.modules.get(&id).cloned().unwrap_or_default();
+        let generation = self.daemons.get(key).map_or(0, |d| d.generation);
+        let job = Job {
+            key: key.to_owned(),
+            generation,
+            request: request.clone(),
+        };
+        match method {
+            "rom.install" => {
+                // What is asked is checked first; only a sound request counts.
+                let (systems, home) = (self.systems(), self.config.dirs.data_dir(&id));
+                let roms = self.roms();
+                let copy = app::check(&home, params, &allowed, (&systems, &roms), owned.used())?;
+                if self.copying {
+                    return Err((-32003, "another install is running"));
+                }
+                let now = Instant::now();
+                if self
+                    .installed_at
+                    .get(&id)
+                    .is_some_and(|at| now.duration_since(*at) < INSTALL_EVERY)
+                {
+                    return Err((-32003, "too many requests"));
+                }
+                self.token(&id, GESTURE)?;
+                self.installed_at.insert(id.clone(), now);
+                self.copying = true;
+                let inbox = self.inbox.clone();
+                thread::spawn(move || job.finish(&inbox, Done::Rom(copy.run())));
+            }
+            "rom.remove" => {
+                let game_key = params["game_key"].as_str().ok_or((-32602, "game_key"))?;
+                let game = owned
+                    .games
+                    .iter()
+                    .find(|g| g.game_key == game_key)
+                    .cloned()
+                    .ok_or((-32001, "not installed by this module"))?;
+                if !app::unchanged(&game) {
+                    return Err((-32001, "the file changed since it was installed"));
+                }
+                let name = game
+                    .rom
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().into_owned());
+                self.ask_removal(job, name.unwrap_or_default(), Remove::Rom(game))?;
+            }
+            _ => {
+                let install = method == "port.install";
+                if !allowed.iter().any(|s| s == app::PORTS) {
+                    return Err((-32001, "permission denied"));
+                }
+                let name = params["name"]
+                    .as_str()
+                    .filter(|n| app::port_ok(n))
+                    .ok_or((-32602, "name"))?
+                    .to_owned();
+                let mine = owned.ports.iter().any(|p| p.name == name);
+                if !install {
+                    if !mine {
+                        return Err((-32001, "not installed by this module"));
+                    }
+                    let shown = name.trim_end_matches(".zip").to_owned();
+                    return self.ask_removal(job, shown, Remove::Port(name));
+                }
+                let ports = self.ports_dir().ok_or((-32004, "no ports folder"))?;
+                // Somebody else's port is never the module's to replace.
+                if !mine && app::port_files(&ports, &name).is_some() {
+                    return Err((-32005, "port already installed"));
+                }
+                if owned.used() >= app::MODULE_BYTES {
+                    return Err((-32003, "quota exceeded"));
+                }
+                if self.porting.is_some() {
+                    return Err((-32003, "another port is being installed"));
+                }
+                self.token(&id, GESTURE)?;
+                self.port_job(job, name, true);
+            }
+        }
+        Ok(())
+    }
+    fn ports_dir(&self) -> Option<PathBuf> {
+        let ports = self.systems().into_iter().find(|s| s.name == app::PORTS)?;
+        Some(ports.path)
+    }
+    /// The script for one port, in a worker; its `PROGRESS` goes to the app.
+    fn port_job(&mut self, job: Job, name: String, install: bool) {
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.porting = Some(stop.clone());
+        let (bin, ports) = (self.config.bin.clone(), self.ports_dir());
+        let inbox = self.inbox.clone();
+        log::info!("Module {}: archr-port-install {name}", job.key);
+        thread::spawn(move || {
+            let progress = {
+                let (name, key, inbox) = (name.clone(), job.key.clone(), inbox.clone());
+                let generation = job.generation;
+                move |progress: u8| {
+                    let _ = inbox.send(Input::PortProgress {
+                        key: key.clone(),
+                        generation,
+                        name: name.clone(),
+                        progress,
+                    });
+                }
+            };
+            let result = app::run_port(&bin, install, &name, &stop, progress).map(|()| {
+                // What PortMaster says it installed for this name.
+                ports.as_deref().and_then(|dir| {
+                    let (script, size) = app::port_files(dir, &name)?;
+                    let script = script?;
+                    let key = script.file_name()?.to_str()?;
+                    Some((format!("{}/{key}", app::PORTS), size))
+                })
+            });
+            let done = Done::Port {
+                name,
+                install,
+                result,
+                job: stop,
+            };
+            job.finish(&inbox, done);
+        });
+    }
+    /// The launcher's own question before a removal: the module only hears
+    /// `{removed}` once the user answered.
+    fn ask_removal(
+        &mut self,
+        job: Job,
+        name: String,
+        what: Remove,
+    ) -> Result<(), (i64, &'static str)> {
+        if self.removing.is_some() || self.porting.is_some() && matches!(what, Remove::Port(_)) {
+            return Err((-32003, "another removal is waiting"));
+        }
+        self.screens
+            .push(archr_ui::apps::Message::Confirm(archr_ui::apps::Ask {
+                text: name,
+                launcher: true,
+                ..Default::default()
+            }));
+        self.touch();
+        self.removing = Some((job, what));
+        Ok(())
+    }
+    /// The user answered the launcher's removal question.
+    fn removal_answered(&mut self, id: &str, yes: bool) {
+        let Some((job, what)) = self.removing.take_if(|(job, _)| module_id(&job.key) == id) else {
+            return;
+        };
+        if !yes {
+            self.reply(&job, Ok(json!({"removed": false})));
+            return;
+        }
+        match what {
+            Remove::Rom(game) => {
+                app::remove(&game, &self.systems());
+                let path = self.config.dirs.data.join(app::LEDGER);
+                let mut ledger = app::Ledger::load(&path);
+                if let Some(owned) = ledger.modules.get_mut(id) {
+                    owned.games.retain(|g| g.game_key != game.game_key);
+                }
+                if let Err(error) = ledger.save(&path) {
+                    log::warn!("Cannot save what modules installed: {error}");
+                }
+                log::info!("Module {id} removed {}", game.game_key);
+                let _ = self.out.send(Event::Installed(game.system));
+                self.reply(&job, Ok(json!({"removed": true})));
+            }
+            Remove::Port(name) => self.port_job(job, name, false),
+        }
+    }
+    /// The answer to the process that asked, if it is still the same one.
+    fn reply(&mut self, job: &Job, result: Result<Json, (i64, String)>) {
+        if self
+            .daemons
+            .get(&job.key)
+            .is_some_and(|d| d.generation == job.generation)
+        {
+            let reply = match result {
+                Ok(answer) => json!({"jsonrpc": "2.0", "id": job.request, "result": answer}),
+                Err((code, text)) => json!({"jsonrpc": "2.0", "id": job.request,
+                    "error": {"code": code, "message": text}}),
+            };
+            let key = job.key.clone();
+            self.send(&key, &reply);
+        }
+    }
+    /// A job ended: what it did is recorded, the library reads the system
+    /// again, and the process that asked hears how it went.
+    fn job_done(&mut self, job: Job, done: Done) {
+        let id = module_id(&job.key).to_owned();
+        let path = self.config.dirs.data.join(app::LEDGER);
+        let mut ledger = app::Ledger::load(&path);
+        let owned = ledger.modules.entry(id.clone()).or_default();
+        let (result, system) = match done {
+            Done::Rom(result) => {
+                self.copying = false;
+                match result {
+                    Ok(game) => {
+                        log::info!("Module {id} installed {}", game.game_key);
+                        let answer = json!({"game_key": game.game_key});
+                        let system = game.system.clone();
+                        owned.games.push(game);
+                        (Ok(answer), Some(system))
+                    }
+                    Err((code, text)) => (Err((code, text.to_owned())), None),
+                }
+            }
+            Done::Port {
+                name,
+                install,
+                result,
+                job: stop,
+            } => {
+                if self.porting.as_ref().is_some_and(|p| Arc::ptr_eq(p, &stop)) {
+                    self.porting = None;
+                }
+                let before = owned.ports.iter().position(|p| p.name == name);
+                match (result, install, before) {
+                    (Ok(_), false, _) => {
+                        owned.ports.retain(|p| p.name != name);
+                        (Ok(json!({"removed": true})), Some(app::PORTS.to_owned()))
+                    }
+                    // Its own only when its launch script is there.
+                    (Ok(Some((game_key, size))), true, _) => {
+                        owned.ports.retain(|p| p.name != name);
+                        owned.ports.push(app::Port {
+                            name,
+                            game_key: game_key.clone(),
+                            size,
+                            installed: now_secs(),
+                        });
+                        (
+                            Ok(json!({"game_key": game_key})),
+                            Some(app::PORTS.to_owned()),
+                        )
+                    }
+                    (Ok(None), true, Some(at)) => {
+                        let game_key = owned.ports[at].game_key.clone();
+                        (
+                            Ok(json!({"game_key": game_key})),
+                            Some(app::PORTS.to_owned()),
+                        )
+                    }
+                    (Ok(None), true, None) => {
+                        log::warn!("Module {id}: {name} brought no launch script");
+                        (
+                            Err((-32000, "the port brought no launch script".to_owned())),
+                            Some(app::PORTS.to_owned()),
+                        )
+                    }
+                    (Err((code, text)), _, _) => {
+                        log::warn!("Module {id}: archr-port-install {name}: {text}");
+                        (Err((code, text)), None)
+                    }
+                }
+            }
+        };
+        if system.is_some() {
+            if let Err(error) = ledger.save(&path) {
+                log::warn!("Cannot save what modules installed: {error}");
+            }
+        }
+        if let Some(system) = system {
+            let _ = self.out.send(Event::Installed(system));
+        }
+        self.reply(&job, result);
     }
     fn subscribed(&self, id: &str) -> BTreeSet<&'static str> {
         let hooks = self
@@ -1816,10 +2557,11 @@ impl Host {
     /// screenshot while Settings are open.
     fn system_call(
         &mut self,
-        id: &str,
+        process: &str,
         request: &Json,
         params: &Json,
     ) -> Result<(), (i64, &'static str)> {
+        let id = module_id(process);
         let manifest = self
             .find(id)
             .and_then(|i| i.manifest.clone())
@@ -1889,11 +2631,11 @@ impl Host {
         if soon(self.system_at.get(&key), each) || soon(self.system_all.get(name), all) {
             return Err((-32003, "too many requests"));
         }
-        let generation = self.daemons.get(id).map_or(0, |d| d.generation);
-        let (id, request) = (id.to_owned(), request.clone());
+        let generation = self.daemons.get(process).map_or(0, |d| d.generation);
+        let (owner, request) = (process.to_owned(), request.clone());
         let inbox = self.inbox.clone();
         let done = {
-            let (id, inbox) = (id.clone(), inbox.clone());
+            let (id, inbox) = (owner, inbox.clone());
             move |ok: bool| {
                 let _ = inbox.send(Input::System {
                     id,
@@ -1946,7 +2688,7 @@ impl Host {
             }
         }
         log::info!("Module {id} asks the system for {name}");
-        self.system_at.insert((id, name), now);
+        self.system_at.insert((id.to_owned(), name), now);
         self.system_all.insert(name, now);
         self.system_running.insert(name);
         Ok(())
@@ -2047,7 +2789,8 @@ impl Host {
 
     // ---- failures ----
 
-    fn punish(&mut self, id: &str, why: &str) {
+    fn punish(&mut self, key: &str, why: &str) {
+        let id = module_id(key);
         log::warn!("Module {id} {why}");
         let now = Instant::now();
         let list = self.failures.entry(id.to_owned()).or_default();
@@ -2151,7 +2894,7 @@ impl Host {
             let next = self.view.modules.iter().map(|m| m.id.clone()).find(|id| {
                 !self.daemons.contains_key(id)
                     && !self.restarts.contains_key(id)
-                    && self.active(id).is_some_and(|(_, m)| m.mode == Mode::Daemon)
+                    && self.active(id).is_some_and(|(_, m)| permanent(m))
                     // A recent failure waits out the longest back-off; an
                     // old one never keeps it down (e.g. after a game).
                     && self
@@ -2188,11 +2931,13 @@ impl Host {
                 Some(Waiting::Initialize) => {
                     log::warn!("Module {id} did not initialize in time");
                     self.end_daemon(&id, true);
-                    self.restarts
-                        .insert(id, (now + Duration::from_secs(BACKOFF[1]), 1));
+                    if module_id(&id) == id {
+                        self.restarts
+                            .insert(id, (now + Duration::from_secs(BACKOFF[1]), 1));
+                    }
                 }
                 Some(Waiting::Invoke(action)) => {
-                    self.view.busy.remove(&(id.clone(), action));
+                    self.view.busy.remove(&(module_id(&id).to_owned(), action));
                     self.touch();
                     self.punish(&id, "timed out");
                 }
@@ -2238,10 +2983,28 @@ fn s(words: &[&str]) -> Vec<String> {
 fn event(name: &str, data: &Json) -> Json {
     json!({"jsonrpc": "2.0", "method": "event", "params": {"name": name, "data": data}})
 }
+/// What an app hears about its screens: a notification of its own.
+fn notice(method: &str, params: &Json) -> Json {
+    json!({"jsonrpc": "2.0", "method": method, "params": params})
+}
 fn now_secs() -> u64 {
     SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs())
+}
+
+/// A daemon that runs while the launcher is on screen. An app-only module
+/// (API 4) runs just while its app is open, unless it also has something
+/// live elsewhere: Start entries, Y items or hooks.
+pub(crate) fn permanent(m: &manifest::Manifest) -> bool {
+    m.mode == Mode::Daemon
+        && (m.app.is_none()
+            || !(m.tiles.is_empty()
+                && m.shortcuts.is_empty()
+                && m.widgets.is_empty()
+                && m.quick.is_empty()
+                && m.hooks.is_empty()
+                && m.permissions.hooks.is_empty()))
 }
 
 /// `--check-module <dir>`: the problems, one per line; `Ok` when none.

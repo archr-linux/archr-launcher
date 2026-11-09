@@ -82,6 +82,7 @@ fn start_with(
         shop: None,
         cpufreq: base.join("cpufreq/policy0"),
         perf: base.join("run/perf-last.json"),
+        library: Some(archr_launcher::paths::Paths::new(Some(base.to_owned()))),
     })
 }
 /// The host's handle with what it published so far.
@@ -113,7 +114,13 @@ impl Probe {
                     Event::Notice(notice) => self.notices.push(notice),
                     Event::Store(_) => {}
                     Event::Config => self.configs += 1,
-                    Event::Launch { system, game_key } => self.launches.push((system, game_key)),
+                    Event::Launch {
+                        system, game_key, ..
+                    } => self.launches.push((system, game_key)),
+                    Event::Screens(..)
+                    | Event::AppClosed(_)
+                    | Event::Installed(_)
+                    | Event::Pictures(..) => {}
                 }
             }
             if done(&self.view, &self.notices) {
@@ -1229,6 +1236,7 @@ fn no_module_gets_the_network_before_the_modules_firewall_is_up() {
             shop: None,
             cpufreq: base.join("cpufreq/policy0"),
             perf: base.join("run/perf-last.json"),
+            library: None,
         }),
         view: Arc::default(),
         notices: Vec::new(),

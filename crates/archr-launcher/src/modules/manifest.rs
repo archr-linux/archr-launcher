@@ -8,12 +8,14 @@ use std::{collections::BTreeSet, fs, path::Path};
 use toml::{Table, Value};
 
 /// The newest API this launcher speaks; every one from 1 up runs.
-pub const API_VERSION: i64 = 3;
+pub const API_VERSION: i64 = 4;
 /// The API that brought `config_write`, `hooks`, `system` and `launch`.
 const API_2: i64 = 2;
 /// The API that brought `cpu-tune`, the detail page and the rows and
 /// fields it draws (`stats`, `header`, `bars`, `facts`).
 pub const API_3: i64 = 3;
+/// The API that brought apps (`[app]`) and `install`.
+pub const API_4: i64 = 4;
 pub const FILE: &str = "module.toml";
 /// Path aliases a module may read; never a free path.
 pub const ALIASES: &[(&str, &str)] = &[
@@ -100,15 +102,18 @@ pub struct Permissions {
     pub system: Vec<String>,
     /// `game.launch` right after the user chose one of its actions.
     pub launch: bool,
+    /// Systems `rom.install` may write to (API 4); `ports` is PortMaster.
+    pub install: Vec<String>,
 }
 impl Permissions {
-    fn lists(&self) -> [(&'static str, &Vec<String>); 5] {
+    fn lists(&self) -> [(&'static str, &Vec<String>); 6] {
         [
             ("read", &self.read),
             ("config_read", &self.config_read),
             ("config_write", &self.config_write),
             ("hooks", &self.hooks),
             ("system", &self.system),
+            ("install", &self.install),
         ]
     }
     /// What a grant records, to tell which permissions an update adds.
@@ -142,6 +147,7 @@ impl Permissions {
             hooks: new("hooks", &self.hooks),
             system: new("system", &self.system),
             launch: self.launch && !has("launch"),
+            install: new("install", &self.install),
         }
     }
     /// Only what `granted` already holds.
@@ -158,6 +164,7 @@ impl Permissions {
             hooks: old(&self.hooks, &new.hooks),
             system: old(&self.system, &new.system),
             launch: self.launch && !new.launch,
+            install: old(&self.install, &new.install),
         }
     }
     /// Anything API 1 did not have.
@@ -209,7 +216,23 @@ pub struct Manifest {
     pub quick: Vec<Quick>,
     pub pages: Vec<Page>,
     pub widgets: Vec<Entry>,
+    /// API 4: its own screens, opened from a carousel row.
+    pub app: Option<App>,
 }
+
+/// `[app]`: the carousel row and the first screen (API 4).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct App {
+    pub label: String,
+    pub subtitle: String,
+    pub icon: Option<String>,
+    /// A picture inside the module, for the carousel.
+    pub art: Option<String>,
+    /// The id of the first screen, sent with `screen.opened`.
+    pub home: String,
+}
+/// The carousel picture of an app is at most this big.
+pub const ART_BYTES: u64 = 1 << 20;
 
 /// `id` rules: `[a-z0-9-]{3,40}`.
 pub fn id_ok(id: &str) -> bool {
@@ -329,6 +352,7 @@ pub fn parse(source: &str) -> Result<(Manifest, Vec<String>), Vec<String>> {
         "start",
         "quick",
         "settings",
+        "app",
     ]);
     let id = top.text("id").filter(|id| id_ok(id));
     let version = top.text("version").filter(|v| semver_ok(v));
@@ -348,6 +372,7 @@ pub fn parse(source: &str) -> Result<(Manifest, Vec<String>), Vec<String>> {
     let start = top.table("start");
     let quick = top.tables("quick");
     let settings = top.table("settings");
+    let app = table.contains_key("app").then(|| top.table("app"));
     for (ok, problem) in [
         (id.is_some(), "id: required, [a-z0-9-]{3,40}"),
         (version.is_some(), "version: required, x.y.z"),
@@ -401,7 +426,11 @@ pub fn parse(source: &str) -> Result<(Manifest, Vec<String>), Vec<String>> {
             "permissions.system: cpu-tune needs api_version = {API_3}"
         ));
     }
+    if !permissions.install.is_empty() && api_version.is_some_and(|v| v < API_4) {
+        errors.push(format!("permissions.install: needs api_version = {API_4}"));
+    }
     let api = api_version.unwrap_or(1);
+    let app = app.and_then(|app| read_app(&app, api, mode, &mut warnings, &mut errors));
     let hooks = hooks
         .iter()
         .filter_map(|hook| {
@@ -479,6 +508,7 @@ pub fn parse(source: &str) -> Result<(Manifest, Vec<String>), Vec<String>> {
                     quick,
                     pages,
                     widgets,
+                    app,
                 },
                 warnings,
             ))
@@ -505,6 +535,7 @@ fn read_permissions(
             "hooks",
             "system",
             "launch",
+            "install",
         ]
         .contains(&key.as_str())
         {
@@ -529,6 +560,16 @@ fn read_permissions(
     let config_write = list("config_write", WRITABLE);
     let hooks = list("hooks", HOOKS);
     let system = list("system", SYSTEM);
+    let install = reader.texts("install");
+    for value in &install {
+        if !system_ok(value) {
+            errors.push(format!("permissions.install: {value} is not a system name"));
+        } else if RUNNERS.contains(&value.as_str()) {
+            errors.push(format!(
+                "permissions.install: {value} runs programs, not games"
+            ));
+        }
+    }
     Permissions {
         net,
         read,
@@ -537,7 +578,64 @@ fn read_permissions(
         hooks,
         system,
         launch,
+        install,
     }
+}
+/// Systems whose entries are programs the device runs: never `install`.
+/// The catalog's own extensions are checked again at each install.
+pub const RUNNERS: &[&str] = &[
+    "tools",
+    "windows",
+    "setup",
+    "shell",
+    "moonlight",
+    "music",
+    "idtech",
+    "scummvm",
+    "j2me",
+];
+/// A system's folder name (`gb`, `pico-8`), checked against the catalog
+/// only when a game is installed.
+pub fn system_ok(name: &str) -> bool {
+    (1..=40).contains(&name.len())
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"-_".contains(&b))
+}
+
+/// `[app]`: API 4 and a daemon only; an older manifest gets a warning.
+fn read_app(
+    table: &Table,
+    api: i64,
+    mode: Option<Mode>,
+    warnings: &mut Vec<String>,
+    errors: &mut Vec<String>,
+) -> Option<App> {
+    if api < API_4 {
+        warnings.push(format!("app: needs api_version = {API_4}, ignored"));
+        return None;
+    }
+    if mode == Some(Mode::Oneshot) {
+        errors.push("app: needs run.mode = daemon".into());
+        return None;
+    }
+    let mut app = reader(table, "app.", warnings);
+    app.check(&["label", "subtitle", "icon", "art", "home"]);
+    let home = app.text("home").filter(|h| key_ok(h));
+    let art = app.text("art").filter(|a| {
+        !a.starts_with(['/', '.']) && a.split('/').all(|part| !part.is_empty() && part != "..")
+    });
+    let Some(home) = home else {
+        errors.push("app.home: required, the id of the first screen".into());
+        return None;
+    };
+    Some(App {
+        label: app.text("label").unwrap_or_default(),
+        subtitle: app.text("subtitle").unwrap_or_default(),
+        icon: app.text("icon").filter(|i| icon_ok(i)),
+        art,
+        home,
+    })
 }
 
 fn read_entry(
@@ -897,6 +995,7 @@ pub fn check(dir: &Path) -> Result<(Manifest, Vec<String>), Vec<String>> {
                 .chain(&manifest.widgets)
                 .filter_map(|e| e.icon.as_deref()),
         )
+        .chain(manifest.app.iter().filter_map(|a| a.icon.as_deref()))
         .chain(
             manifest
                 .pages
@@ -914,6 +1013,13 @@ pub fn check(dir: &Path) -> Result<(Manifest, Vec<String>), Vec<String>> {
             Ok(svg) if lucide(&svg) => {}
             Ok(_) => errors.push(format!("icons/{icon}.svg: not an unmodified Lucide icon")),
             Err(_) => errors.push(format!("icons/{icon}.svg: missing")),
+        }
+    }
+    if let Some(art) = manifest.app.as_ref().and_then(|a| a.art.as_ref()) {
+        match read_bytes(&dir.join(art), ART_BYTES, Symlinks::Reject) {
+            Ok(bytes) if super::app::picture(&bytes) => {}
+            Ok(_) => errors.push(format!("app.art: {art} is not a PNG, JPEG or WebP")),
+            Err(_) => errors.push(format!("app.art: {art} is missing or over 1 MiB")),
         }
     }
     if errors.is_empty() {
@@ -1088,7 +1194,7 @@ id = "jogos"
                 .join("\n");
             assert!(parse(&bad).is_err(), "{line}");
         }
-        assert!(api_ok(1) && api_ok(2) && api_ok(3) && !api_ok(4) && !api_ok(0));
+        assert!(api_ok(1) && api_ok(3) && api_ok(4) && !api_ok(5) && !api_ok(0));
     }
 
     #[test]
@@ -1189,6 +1295,63 @@ icon = "zap"
                 "{expected}: {warnings:?}"
             );
         }
+    }
+
+    #[test]
+    fn api_4_brings_apps_and_install() {
+        let four = r#"
+id = "catalogo"
+version = "1.0.0"
+api_version = 4
+[run]
+runtime = "sh"
+entry = "main.sh"
+mode = "daemon"
+[app]
+label = "@app"
+icon = "store"
+art = "art/app.png"
+home = "catalog"
+[permissions]
+net = true
+install = ["gb", "ports"]
+launch = true
+"#;
+        assert!(
+            parse(&four.replace("\"gb\"", "\"tools\"")).is_err(),
+            "never a runner"
+        );
+        let (manifest, warnings) = parse(four).unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let app = manifest.app.clone().unwrap();
+        assert_eq!(app.home, "catalog");
+        assert_eq!(app.art.as_deref(), Some("art/app.png"));
+        assert!(manifest.permissions.tokens().contains("install:ports"));
+        assert!(
+            !super::super::permanent(&manifest),
+            "only while the app is open"
+        );
+        // An app is a daemon, and says where it starts.
+        let oneshot = four.replace("mode = \"daemon\"", "mode = \"oneshot\"");
+        assert!(parse(&oneshot)
+            .unwrap_err()
+            .iter()
+            .any(|e| e.contains("app")));
+        assert!(parse(&four.replace("home = \"catalog\"", "")).is_err());
+        let escape = four.replace("art/app.png", "../x.png");
+        assert!(parse(&escape).unwrap().0.app.unwrap().art.is_none());
+        assert!(parse(&four.replace("\"gb\", ", "\"../gb\", ")).is_err());
+        // Older manifests: install is refused, [app] ignored with a warning.
+        let three = four.replace("api_version = 4", "api_version = 3");
+        let errors = parse(&three).unwrap_err();
+        assert!(errors.iter().any(|e| e.contains("install")), "{errors:?}");
+        let three = three.replace("install = [\"gb\", \"ports\"]\n", "");
+        let (manifest, warnings) = parse(&three).unwrap();
+        assert!(manifest.app.is_none());
+        assert!(
+            warnings.iter().any(|w| w.starts_with("app:")),
+            "{warnings:?}"
+        );
     }
 
     #[test]
