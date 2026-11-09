@@ -65,6 +65,28 @@ alternativas. Trocar de tema leva junto tudo que está em "do tema"; o que o
 usuário escolheu explicitamente continua. **Restaurar padrão** volta tudo para
 o tema escolhido.
 
+### Opções do usuário que agem sobre o tema
+
+Em Aparência há escolhas gravadas no `system.cfg` que valem por cima de **qualquer** tema. Nenhuma é chave do `theme.toml`: o tema não as declara nem as desliga, e elas se aplicam depois de ele ser lido.
+
+| opção (`system.cfg`) | valores | efeito |
+|---|---|---|
+| Peso da fonte (`launcher.font_weight`) | do tema (vazio) / `bold` | `bold` usa a `font_semibold` do tema (com a fonte mono, a `font_mono_medium`). Tema sem essa face continua na regular. |
+| Porcentagem da bateria (`launcher.battery_percent`) | ligada (padrão) / desligada | desligada esconde o número na pílula de status; o ícone fica. |
+| Capa do jogo (`launcher.game_art`) | ligada (padrão) / desligada | desligada remove da tela de jogos `art`, `meta`, `backdrop` e o `panel` que coincide com a capa. |
+| Largura da capa (`launcher.art_width`) | do tema / 35, 40, 45, 50, 55 % da largura da tela | a capa mantém a borda direita; a lista à esquerda mantém a folga até ela; `meta` acompanha a capa. |
+| Cantos da capa (`launcher.art_radius`) | do tema / 0, 6, 12, 20 px de referência | substitui o `radius` da `art` da visualização; o `panel` acompanha. |
+| Fundo do alternador (`launcher.switcher_curtain`) | fundo do tema / 40, 60, 80 % | a imagem do jogo selecionado preenche a tela atrás do alternador, sob uma cortina da cor `background` do tema nessa opacidade. Jogo sem imagem fica com o fundo do tema. |
+
+Detalhes que importam a quem faz tema:
+
+- **Capa desligada**: uma lista posicionada à esquerda da capa passa a ocupar toda a largura, entre margens iguais (a `x` da lista dos dois lados). O `panel` só some junto se tiver o mesmo `x` e `w` da `art`; um `panel` com outro retângulo (um cartão maior, uma moldura de enfeite) continua desenhado.
+- **Capa mais larga**: o retângulo `art` é refeito a partir da borda direita que o tema escolheu, e a lista que estiver à esquerda dela encolhe, mantendo a folga original. Uma lista que não está à esquerda da capa não é mexida.
+- **Cantos**: valem para a `art` e, se o `panel` coincide com ela, para o `panel` (1 px de referência a mais, para a moldura envolver a capa).
+- **Alternador**: a cortina usa o `background` do tema; escolha um `background` que combine com capas claras e escuras.
+
+Para o tema continuar bom com essas escolhas: ponha a lista à esquerda da capa; mantenha `art` e `panel` iguais quando o painel é o cartão da capa; não dependa de um tamanho exato de capa nem de a capa existir (o título e as informações precisam funcionar sozinhos). Teste o tema com a capa desligada, mais larga (55 %), com cantos 0 e 20, com peso Negrito e com a cortina do alternador em 40 e 80 %.
+
 ## Fontes
 
 ```toml
