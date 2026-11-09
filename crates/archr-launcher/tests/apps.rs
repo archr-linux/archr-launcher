@@ -227,6 +227,7 @@ fn the_demo_catalog_installs_and_removes_a_game() {
         p.shown("game:g1")
             .is_some_and(|s| s.buttons[0].id == "play")
     });
+    probe.wait("the action answered", |p| p.view.busy.is_empty());
     // Removing asks first; the host takes the game away only after a yes.
     let count = probe.installed.len();
     invoke(&probe.modules, "remove");

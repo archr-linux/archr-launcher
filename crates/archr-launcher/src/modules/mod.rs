@@ -1746,7 +1746,7 @@ impl Host {
             }
             Waiting::Initialize => self.end_daemon(id, true),
             Waiting::Invoke(action) => {
-                self.view.busy.remove(&(id.to_owned(), action));
+                self.view.busy.remove(&(module_id(id).to_owned(), action));
                 self.touch();
             }
             Waiting::Shutdown => {}
@@ -2761,7 +2761,7 @@ impl Host {
                     }
                 }
                 Some(Waiting::Invoke(action)) => {
-                    self.view.busy.remove(&(id.clone(), action));
+                    self.view.busy.remove(&(module_id(&id).to_owned(), action));
                     self.touch();
                     self.punish(&id, "timed out");
                 }
