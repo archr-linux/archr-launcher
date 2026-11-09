@@ -109,59 +109,106 @@ pub fn picture_bytes(home: &Path, relative: &str) -> Option<Vec<u8>> {
     file.take(IMAGE_BYTES + 1).read_to_end(&mut bytes).ok()?;
     (bytes.len() as u64 <= IMAGE_BYTES && picture(&bytes)).then_some(bytes)
 }
-/// A picture of the module's screens, copied from the handle into `store`
-/// (the launcher's, out of the module's reach) under a name from its
-/// content: the screens decode that copy, never the module's file.
-pub fn image(
-    home: &Path,
-    relative: &str,
-    store: &Path,
-    pictures: &mut Pictures,
-) -> Option<PathBuf> {
-    use sha2::{Digest, Sha256};
-    use std::os::unix::fs::MetadataExt;
-    let (file, size) = open_inside(home, relative, IMAGE_BYTES)?;
-    let meta = file.metadata().ok()?;
-    let seen = (
-        meta.dev(),
-        meta.ino(),
-        size,
-        meta.mtime(),
-        meta.mtime_nsec(),
-    );
-    if let Some(path) = pictures.seen.get(&seen) {
-        return Some(path.clone());
-    }
-    if pictures.seen.len() >= PICTURES || pictures.bytes + size > PICTURE_BYTES {
-        log::warn!("An app's screens hold too many pictures: {relative} refused");
-        return None;
-    }
-    let mut bytes = Vec::with_capacity(size as usize);
-    file.take(IMAGE_BYTES + 1).read_to_end(&mut bytes).ok()?;
-    if bytes.len() as u64 > IMAGE_BYTES || !picture(&bytes) {
-        return None;
-    }
-    let digest = Sha256::digest(&bytes);
-    let name: String = digest[..12].iter().map(|b| format!("{b:02x}")).collect();
-    let path = store.join(format!("{name}.{}", kind(&bytes)));
-    if !path.is_file() {
-        fs::create_dir_all(store).ok()?;
-        archr_io::atomic_publish(&path, false, |file| io::Write::write_all(file, &bytes)).ok()?;
-    }
-    pictures.bytes += size;
-    pictures.seen.insert(seen, path.clone());
-    Some(path)
-}
-/// Pictures one app session copied, by the file they came from (device,
-/// inode, size, change time): read once, and no more than `PICTURES` files
-/// nor `PICTURE_BYTES` in all.
+/// The pictures the open app's screens show, copied on demand from the
+/// module's folder (through a handle opened beneath it) into `store`, the
+/// launcher's: the screens decode those copies, never the module's files.
+/// At most `PICTURES` files and `PICTURE_BYTES`; when full, the least
+/// recently used copies go, never one the screen needs now.
 #[derive(Default)]
 pub struct Pictures {
-    seen: std::collections::HashMap<(u64, u64, u64, i64, i64), PathBuf>,
-    bytes: u64,
+    /// By the module's relative path.
+    copies: std::collections::HashMap<String, Copied>,
+    clock: u64,
+}
+struct Copied {
+    path: PathBuf,
+    size: u64,
+    /// Device, inode, size and change time of the module's file: the same
+    /// file is not read again.
+    file: (u64, u64, u64, i64, i64),
+    used: u64,
 }
 const PICTURES: usize = 256;
 const PICTURE_BYTES: u64 = 64 << 20;
+impl Pictures {
+    /// The copy of `relative`, made now if needed; `needed` (the pictures
+    /// the screen wants now, `relative` among them) is never evicted.
+    pub fn get(
+        &mut self,
+        home: &Path,
+        relative: &str,
+        store: &Path,
+        needed: &[String],
+    ) -> Option<PathBuf> {
+        use sha2::{Digest, Sha256};
+        use std::os::unix::fs::MetadataExt;
+        let (file, size) = open_inside(home, relative, IMAGE_BYTES)?;
+        let meta = file.metadata().ok()?;
+        let identity = (
+            meta.dev(),
+            meta.ino(),
+            size,
+            meta.mtime(),
+            meta.mtime_nsec(),
+        );
+        self.clock += 1;
+        if let Some(copy) = self
+            .copies
+            .get_mut(relative)
+            .filter(|c| c.file == identity && c.path.is_file())
+        {
+            copy.used = self.clock;
+            return Some(copy.path.clone());
+        }
+        let mut bytes = Vec::with_capacity(size as usize);
+        file.take(IMAGE_BYTES + 1).read_to_end(&mut bytes).ok()?;
+        if bytes.len() as u64 > IMAGE_BYTES || !picture(&bytes) {
+            return None;
+        }
+        self.copies.remove(relative);
+        self.evict(size, needed);
+        let digest = Sha256::digest(&bytes);
+        let name: String = digest[..12].iter().map(|b| format!("{b:02x}")).collect();
+        let path = store.join(format!("{name}.{}", kind(&bytes)));
+        if !path.is_file() {
+            fs::create_dir_all(store).ok()?;
+            archr_io::atomic_publish(&path, false, |file| io::Write::write_all(file, &bytes))
+                .ok()?;
+        }
+        let used = self.clock;
+        let copy = Copied {
+            path: path.clone(),
+            size,
+            file: identity,
+            used,
+        };
+        self.copies.insert(relative.to_owned(), copy);
+        Some(path)
+    }
+    /// Room for `size` more bytes and one more file, oldest first.
+    fn evict(&mut self, size: u64, needed: &[String]) {
+        loop {
+            let bytes: u64 = self.copies.values().map(|c| c.size).sum();
+            if self.copies.len() < PICTURES && bytes + size <= PICTURE_BYTES {
+                return;
+            }
+            let oldest = self
+                .copies
+                .iter()
+                .filter(|(key, _)| !needed.contains(key))
+                .min_by_key(|(_, c)| c.used)
+                .map(|(key, _)| key.clone());
+            let Some(key) = oldest else { return };
+            let Some(gone) = self.copies.remove(&key) else {
+                return;
+            };
+            // The same content may serve another name.
+            if !self.copies.values().any(|c| c.path == gone.path) {
+                let _ = fs::remove_file(&gone.path);
+            }
+        }
+    }
+}
 /// The extension of a `picture`.
 fn kind(bytes: &[u8]) -> &'static str {
     match bytes.first() {
@@ -172,13 +219,9 @@ fn kind(bytes: &[u8]) -> &'static str {
 }
 
 /// What turns a module's message into what the screens draw: its texts,
-/// its folder for pictures and its icons.
+/// and its icons.
 pub struct Reader<'a> {
     pub installed: &'a Installed,
-    pub home: &'a Path,
-    /// Where the pictures the screens show are copied, and what was.
-    pub store: &'a Path,
-    pub pictures: &'a mut Pictures,
     /// A Lucide name to the module's own unmodified SVG.
     pub icon: &'a mut dyn FnMut(&str) -> Option<Arc<str>>,
 }
@@ -197,8 +240,16 @@ impl Reader<'_> {
             .take(TEXT)
             .collect()
     }
+    /// A picture is named by its path in the module's folder; the launcher
+    /// copies it when a screen shows it (`Pictures`).
     fn image(&mut self, value: &Json) -> Option<PathBuf> {
-        image(self.home, value.as_str()?, self.store, self.pictures)
+        let relative = value.as_str()?;
+        let plain = (1..=256).contains(&relative.len())
+            && !relative.chars().any(char::is_control)
+            && relative
+                .split('/')
+                .all(|part| !part.is_empty() && part != ".." && part != ".");
+        plain.then(|| PathBuf::from(relative))
     }
     fn item(&mut self, value: &Json) -> Option<Item> {
         Some(Item {
@@ -920,21 +971,52 @@ mod tests {
             assert!(image(&home, bad, &store, &mut pictures).is_none(), "{bad}");
         }
         assert!(open_inside(&home, "cache/A.txt", 4).is_none(), "too big");
-        // The same file again is not read again; past the session's cap,
-        // nothing more is copied.
-        fs::remove_file(&copy).unwrap();
         assert_eq!(
             image(&home, "cache/A.png", &store, &mut pictures),
-            Some(copy.clone())
+            Some(copy)
         );
-        assert!(!copy.exists(), "known by its inode, not read");
-        let mut full = Pictures {
-            bytes: PICTURE_BYTES,
-            ..Pictures::default()
-        };
-        assert!(image(&home, "cache/B.png", &store, &mut full).is_none());
         assert!(picture(b"\xff\xd8\xff\xe0") && picture(b"RIFF\0\0\0\0WEBPVP8 "));
         assert!(!picture(b"GIF89a"));
+    }
+
+    fn image(
+        home: &Path,
+        relative: &str,
+        store: &Path,
+        pictures: &mut Pictures,
+    ) -> Option<PathBuf> {
+        pictures.get(home, relative, store, &[relative.to_owned()])
+    }
+
+    /// A catalog of 300 covers scrolled from top to bottom: every cover the
+    /// screen needs is copied, the oldest go, and the session stays bounded.
+    #[test]
+    fn pictures_scroll_through_a_long_catalog() {
+        let dir = tempfile::tempdir().unwrap();
+        let (home, store) = (dir.path().join("home"), dir.path().join("store"));
+        fs::create_dir_all(home.join("covers")).unwrap();
+        for n in 0..300 {
+            let mut png = PNG.to_vec();
+            png.extend(n.to_string().bytes());
+            fs::write(home.join(format!("covers/{n}.png")), png).unwrap();
+        }
+        let mut pictures = Pictures::default();
+        for cursor in 0..300usize {
+            let near: Vec<String> = (cursor.saturating_sub(2)..(cursor + 3).min(300))
+                .map(|n| format!("covers/{n}.png"))
+                .collect();
+            for rel in &near {
+                let copy = pictures.get(&home, rel, &store, &near);
+                assert!(copy.is_some_and(|c| c.is_file()), "{rel} at {cursor}");
+            }
+            assert!(pictures.copies.len() <= PICTURES);
+            assert!(fs::read_dir(&store).unwrap().count() <= PICTURES);
+        }
+        // Back at the top: the first covers come again.
+        let top = vec!["covers/0.png".to_owned()];
+        assert!(pictures
+            .get(&home, &top[0], &store, &top)
+            .is_some_and(|c| c.is_file()));
     }
 
     /// The copy reads the handle opened while checking: a name swapped for

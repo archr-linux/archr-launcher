@@ -388,6 +388,7 @@ const CONFIG_KEYS: &[&str] = &[
     "screen.opened",
     "screen.patch",
     "screen.search",
+    "screen.visible",
     "screen.select",
     "screen.show",
     "screen.toast",

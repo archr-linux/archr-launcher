@@ -528,6 +528,12 @@ pub enum Request {
     OpenApp(String),
     /// Stop it (B on its first screen).
     CloseApp(String),
+    /// The pictures (paths in the module's folder) the open app's screen
+    /// shows now; the host copies them and answers with `Pictures`.
+    AppPictures {
+        module: String,
+        wanted: Vec<std::path::PathBuf>,
+    },
     /// An event to the open app (`screen.select`, `screen.answer`...).
     AppEvent {
         module: String,

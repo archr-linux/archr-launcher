@@ -117,7 +117,10 @@ impl Probe {
                     Event::Launch {
                         system, game_key, ..
                     } => self.launches.push((system, game_key)),
-                    Event::Screens(..) | Event::AppClosed(_) | Event::Installed(_) => {}
+                    Event::Screens(..)
+                    | Event::AppClosed(_)
+                    | Event::Installed(_)
+                    | Event::Pictures(..) => {}
                 }
             }
             if done(&self.view, &self.notices) {

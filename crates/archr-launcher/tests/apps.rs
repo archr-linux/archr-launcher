@@ -83,6 +83,7 @@ struct Probe {
     screens: Vec<Message>,
     installed: Vec<String>,
     closed: Vec<String>,
+    pictures: Vec<(std::path::PathBuf, std::path::PathBuf)>,
 }
 impl Probe {
     fn new(modules: Modules) -> Self {
@@ -92,6 +93,7 @@ impl Probe {
             screens: Vec::new(),
             installed: Vec::new(),
             closed: Vec::new(),
+            pictures: Vec::new(),
         }
     }
     fn wait(&mut self, what: &str, done: impl Fn(&Self) -> bool) {
@@ -103,6 +105,7 @@ impl Probe {
                     Event::Screens(_, messages) => self.screens.extend(messages),
                     Event::Installed(system) => self.installed.push(system),
                     Event::AppClosed(id) => self.closed.push(id),
+                    Event::Pictures(_, copies) => self.pictures.extend(copies),
                     _ => {}
                 }
             }
@@ -172,10 +175,24 @@ fn the_demo_catalog_installs_and_removes_a_game() {
         .image
         .clone()
         .expect("its cover, from its folder");
-    // The screens decode the launcher's copy, never the module's file.
-    assert!(cover.starts_with(base.join("module-data/.pictures/catalogo-demo")));
     assert_eq!(
-        fs::read(&cover).unwrap(),
+        cover,
+        Path::new("cache/covers/g1.png"),
+        "a path in its folder"
+    );
+    // Copied when the screen shows it; the screens decode the launcher's
+    // copy, never the module's file.
+    probe.modules.request(Request::AppPictures {
+        module: id.into(),
+        wanted: vec![cover.clone(), "../../etc/passwd".into()],
+    });
+    probe.wait("the copy", |p| !p.pictures.is_empty());
+    assert_eq!(probe.pictures.len(), 1, "only the one inside its folder");
+    let (named, copy) = &probe.pictures[0];
+    assert_eq!(named, &cover);
+    assert!(copy.starts_with(base.join("module-data/.pictures/catalogo-demo")));
+    assert_eq!(
+        fs::read(copy).unwrap(),
         fs::read(base.join("module-data/catalogo-demo/cache/covers/g1.png")).unwrap()
     );
     probe.wait("its summary", |p| {

@@ -351,16 +351,37 @@ pub fn spawn(
     let stderr = child.stderr.take().expect("piped stderr");
     let id = plan.id.clone();
     thread::spawn(move || {
-        // A bounded share of stderr reaches the launcher's log.
-        for text in BufReader::new(stderr)
-            .lines()
-            .map_while(Result::ok)
-            .take(STDERR_LINES)
-        {
-            log::warn!(
-                "Module {id}: {}",
-                text.chars().take(200).collect::<String>()
-            );
+        // The first lines and, at the end, the last ones (a crash's panic)
+        // reach the launcher's log; what lies between is only counted.
+        let mut reader = BufReader::new(stderr);
+        let (mut count, mut tail) = (0usize, std::collections::VecDeque::new());
+        loop {
+            let mut bytes = Vec::new();
+            match (&mut reader).take(4096).read_until(b'\n', &mut bytes) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {}
+            }
+            let text: String = String::from_utf8_lossy(&bytes)
+                .trim_end()
+                .chars()
+                .take(200)
+                .collect();
+            if count < STDERR_LINES {
+                log::warn!("Module {id}: {text}");
+            } else {
+                tail.push_back(text);
+                if tail.len() > STDERR_LINES {
+                    tail.pop_front();
+                }
+            }
+            count += 1;
+        }
+        let skipped = count.saturating_sub(STDERR_LINES + tail.len());
+        if skipped > 0 {
+            log::warn!("Module {id}: ({skipped} lines)");
+        }
+        for text in tail {
+            log::warn!("Module {id}: {text}");
         }
     });
     thread::spawn(move || {

@@ -336,6 +336,14 @@ fn run(
         cover_box.1,
     );
     let mut app_shots = CoverCache::new(&creator, paths.cache.join("thumbs/apps"), shot_w, shot_h);
+    // The host's copies of the pictures the app's screen asked for, by the
+    // module's relative path, and what was asked last.
+    let mut app_copies: std::collections::HashMap<PathBuf, PathBuf> = Default::default();
+    let mut app_asked: Vec<PathBuf> = Vec::new();
+    // `screen.visible`: the window last told to the app, and since when the
+    // one drawn now differs (told once it rests `VISIBLE`).
+    let mut visible_told: Option<(String, String, usize, usize)> = None;
+    let mut visible_since: Option<Instant> = None;
     let mut progress = archr_launcher::saves::Worker::new(&paths);
     let mut preview = Preview::new(&creator);
     let mut cheevos: Option<Lookup> = None;
@@ -528,6 +536,11 @@ fn run(
                             banner_timer.restart(severity, Instant::now());
                             audio.play(Sound::Notice);
                         }
+                    }
+                }
+                modules::Event::Pictures(module, copies) => {
+                    if ui.app.as_ref().is_some_and(|s| s.module == module) {
+                        app_copies.extend(copies);
                     }
                 }
                 modules::Event::AppClosed(module) => {
@@ -886,6 +899,46 @@ fn run(
         thumbs.request(&small);
         pictures.request(&large);
         let (app_cover, app_near, app_shot) = app_art(ui.app.as_ref());
+        // Only what the screen shows now is copied, like the covers of a list.
+        let wanted: Vec<PathBuf> = app_near.iter().chain(&app_shot).cloned().collect();
+        match &ui.app {
+            Some(session) if wanted != app_asked => {
+                modules.request(archr_ui::modules::Request::AppPictures {
+                    module: session.module.clone(),
+                    wanted: wanted.clone(),
+                });
+                app_asked = wanted;
+            }
+            None if !app_asked.is_empty() || !app_copies.is_empty() => {
+                app_asked.clear();
+                app_copies.clear();
+            }
+            _ => {}
+        }
+        let visible = ui.app.as_ref().and_then(|s| {
+            let (screen, from, to) = s.visible(app.games_nav.page)?;
+            Some((s.module.clone(), screen, from, to))
+        });
+        if visible == visible_told {
+            visible_since = None;
+        } else if let Some((module, screen, from, to)) = visible.clone() {
+            let since = *visible_since.get_or_insert_with(Instant::now);
+            if since.elapsed() >= VISIBLE {
+                modules.request(archr_ui::modules::Request::AppEvent {
+                    module,
+                    name: "screen.visible",
+                    data: serde_json::json!({"screen": screen, "from": from, "to": to}),
+                });
+                visible_told = visible;
+                visible_since = None;
+            }
+        } else {
+            visible_told = None;
+        }
+        let copy = |rel: &PathBuf| app_copies.get(rel).cloned();
+        let app_cover = app_cover.as_ref().and_then(copy);
+        let app_shot = app_shot.as_ref().and_then(copy);
+        let app_near: Vec<PathBuf> = app_near.iter().filter_map(copy).collect();
         app_covers.request(&app_near);
         app_shots.request(app_shot.as_slice());
         dirty |= covers.poll()
@@ -988,11 +1041,16 @@ fn run(
             let now = Instant::now();
             // The resume countdown moves its bar.
             let countdown = if resuming.is_some() { 40 } else { u32::MAX };
+            // A visible window waiting to be told wakes the loop.
+            let told = visible_since.map_or(u32::MAX, |at| {
+                VISIBLE.saturating_sub(at.elapsed()).as_millis() as u32 + 1
+            });
             repeat
                 .wait_ms(now)
                 .min(audio.wait_ms(now))
                 .min(preview.wait_ms(now))
                 .min(countdown)
+                .min(told)
         };
         // A held button keeps SDL's own (1 ms) wait: its release and repeats
         // stay exactly as before. Otherwise the idle wait below.
@@ -1511,6 +1569,8 @@ fn init_logging() {
     }
 }
 
+/// The visible window of an app's screen rests this long before it is told.
+const VISIBLE: Duration = Duration::from_millis(150);
 /// Longest nap between input checks while idle: one frame.
 const INPUT_TICK: Duration = Duration::from_millis(16);
 

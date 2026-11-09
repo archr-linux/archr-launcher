@@ -351,6 +351,22 @@ impl Session {
         }
     }
 
+    /// What the top screen shows now, for `screen.visible`: a collection's
+    /// drawn items (0-based, inclusive; `page` rows each side of the cursor
+    /// covers any way the list scrolls), or the detail's picture.
+    pub fn visible(&self, page: usize) -> Option<(String, usize, usize)> {
+        let screen = self.top()?;
+        match screen.layout {
+            Layout::Collection if !screen.items.is_empty() => {
+                let last = screen.items.len() - 1;
+                let from = screen.cursor.saturating_sub(page);
+                Some((screen.id.clone(), from, (screen.cursor + page).min(last)))
+            }
+            Layout::Collection => None,
+            Layout::Detail => Some((screen.id.clone(), screen.picture, screen.picture)),
+        }
+    }
+
     /// A button press: what the module should hear, if anything. `page` is
     /// how many rows the list shows, for L and R without chips.
     pub fn handle(&mut self, button: Button, page: usize) -> Option<Effect> {
@@ -790,6 +806,21 @@ mod tests {
             ("screen.answer", Some("module"))
         );
         assert!(session.ask.is_none());
+    }
+
+    #[test]
+    fn the_visible_window_follows_the_cursor() {
+        let mut session = Session::new("demo", "Demo", false);
+        assert_eq!(session.visible(4), None);
+        session.apply(Message::Show(Box::new(catalog(20))));
+        assert_eq!(session.visible(4), Some(("catalog".into(), 0, 4)));
+        for _ in 0..10 {
+            session.handle(Button::Down, 4);
+        }
+        assert_eq!(session.visible(4), Some(("catalog".into(), 6, 14)));
+        session.apply(Message::Show(Box::new(detail())));
+        session.handle(Button::X, 4);
+        assert_eq!(session.visible(4), Some(("game:g1".into(), 1, 1)));
     }
 
     #[test]

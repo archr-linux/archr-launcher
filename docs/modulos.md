@@ -857,13 +857,21 @@ nas pontas dizem que há mais.
 pasta por vez sem seguir nenhum link (`openat` com `O_NOFOLLOW`): recusa `..`,
 caminho absoluto, qualquer link simbólico no caminho, arquivo com outro nome
 (link físico), arquivo acima de 4 MiB e formato que não seja PNG, JPEG ou WebP
-(pelos primeiros bytes); a imagem recusada some e a tela segue. Os bytes lidos
-dessa abertura vão para uma cópia do launcher (`module-data/.pictures/<id>`,
-fora do alcance do módulo, apagada a cada abertura do app), e é essa cópia que
-ele decodifica e reduz ao tamanho de uso fora da thread de desenho, num cache
+(pelos primeiros bytes); a imagem recusada some e a tela segue. Só as imagens
+que a tela mostra agora (o item escolhido e os vizinhos, a imagem do detalhe)
+são lidas, como as capas de uma lista de jogos. Os bytes lidos dessa abertura
+vão para uma cópia do launcher (`module-data/.pictures/<id>`, fora do alcance
+do módulo, apagada a cada abertura do app; até 256 cópias e 64 MiB, saindo as
+usadas há mais tempo, nunca uma que a tela mostra), e é essa cópia que ele
+decodifica e reduz ao tamanho de uso fora da thread de desenho, num cache
 próprio (`thumbs/apps`): trocar o arquivo depois da checagem não muda o que
 aparece. **Ícones**: nome Lucide, com o SVG intacto em `icons/` do módulo
 (conferido na hora).
+
+Um item pode chegar sem `image` e ganhá-la depois com
+`screen.patch {screen, target: "item:<id>", image}`; até lá, a tela mostra o
+quadro vazio. Com `screen.visible` (10.4) o app baixa só as capas da janela
+que a tela mostra.
 
 **Textos:** `@chave` e `{key, args}` como no resto; outro texto (nome e
 descrição de um jogo vindos da rede) é texto puro: nada de HTML ou formatação.
@@ -881,6 +889,7 @@ Notificações (sem `id`), com o nome do evento como método:
 | `screen.search` | `{screen, text}` | SELECT abriu o teclado do launcher (até 64 bytes) e o usuário confirmou |
 | `screen.answer` | `{id, yes}` | a resposta de um `screen.confirm` (B é "não") |
 | `screen.back` | `{screen}` | B fechou essa tela; a de baixo volta |
+| `screen.visible` | `{screen, from, to}` | os itens que a coleção desenha (índices a partir de 0, inclusive), ao abrir e quando a janela muda (rolagem, chip, `append`), depois de 150 ms parada; num detalhe, `from = to` = a imagem mostrada (0 é `image`, depois a galeria) |
 | `port.progress` | `{name, progress}` | o script do PortMaster disse quanto falta |
 
 Os botões do módulo chegam como `action.invoke` (pedido, como hoje), com
@@ -972,8 +981,7 @@ usuário). `rom.list` e `port.list` devolvem só o que ainda existe. O módulo
 nunca lê a pasta de ROMs nem a biblioteca.
 
 **Limites do processo do app:** até 256 linhas esperando o launcher (mais é
-quebra de protocolo e o processo para); até 256 imagens e 64 MiB de imagens
-por abertura do app (uma imagem já vista, pelo mesmo arquivo, não é lida de
-novo). O `initialize` lista em `capabilities` os métodos `screen.*` que o
+quebra de protocolo e o processo para); as cópias das imagens, como em 10.3
+(uma imagem já vista, pelo mesmo arquivo, não é lida de novo). O `initialize` lista em `capabilities` os métodos `screen.*` que o
 launcher desenha; `screen.qr` ainda não existe: como notificação é ignorado,
 como pedido recebe `-32601`, e o app deve seguir sem ele.

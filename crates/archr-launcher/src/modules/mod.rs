@@ -179,6 +179,9 @@ pub enum Event {
     Screens(String, Vec<archr_ui::apps::Message>),
     /// The app's process is gone: the screens close it.
     AppClosed(String),
+    /// Copies of the app's pictures the screens asked for: the module's
+    /// relative path, the launcher's copy.
+    Pictures(String, Vec<(PathBuf, PathBuf)>),
     /// A module installed or removed a game here: the library reads it again.
     Installed(String),
 }
@@ -961,6 +964,24 @@ impl Host {
                 if self.app.as_deref() == Some(id.as_str()) {
                     self.close_app();
                 }
+            }
+            Request::AppPictures { module, wanted } => {
+                if self.app.as_deref() != Some(module.as_str()) {
+                    return;
+                }
+                let (home, store) = (
+                    self.config.dirs.data_dir(&module),
+                    pictures(&self.config.dirs, &module),
+                );
+                let needed: Vec<String> = wanted.iter().map(|p| p.display().to_string()).collect();
+                let copies = needed
+                    .iter()
+                    .filter_map(|rel| {
+                        let copy = self.pictures.get(&home, rel, &store, &needed)?;
+                        Some((PathBuf::from(rel), copy))
+                    })
+                    .collect();
+                let _ = self.out.send(Event::Pictures(module, copies));
             }
             Request::AppEvent { module, name, data } => {
                 // The launcher's own question: never the module's to hear.
@@ -1824,7 +1845,6 @@ impl Host {
                     log::warn!("Module {id}: too many screen messages, some dropped");
                     return;
                 }
-                let home = self.config.dirs.data_dir(id);
                 let icons = &mut self.icons;
                 let mut icon = |name: &str| -> Option<Arc<str>> {
                     let found = icons
@@ -1838,12 +1858,8 @@ impl Host {
                         });
                     found.clone()
                 };
-                let store = pictures(&self.config.dirs, id);
                 let mut reader = app::Reader {
                     installed,
-                    home: &home,
-                    store: &store,
-                    pictures: &mut self.pictures,
                     icon: &mut icon,
                 };
                 match reader.message(method, params) {
