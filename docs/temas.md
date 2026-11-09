@@ -87,12 +87,18 @@ font_scale = 1.4        # 0,5 a 2: multiplica todo tamanho de texto (com o do us
 font_grid = 8           # 0 a 32 px: tamanhos ficam no múltiplo mais próximo (0 = livre)
 font_smoothing = false  # sem suavização: letras de borda dura, para fontes pixel
 font_min = 12           # 6 a 32 px: nenhum texto fica menor; o que não cabe quebra linha
-                        # (rótulos dos blocos do Menu Start podem ficar 2 px abaixo)
+                        # (rótulos dos blocos do Menu Start podem ficar 2 px abaixo, nunca abaixo de 8)
 ```
 
 `font_grid` serve a fontes desenhadas numa grade (Press Start 2P fica nítida
 em múltiplos de 8 px). Vale também nas Configurações, onde o tema só muda
-cores, fontes e ícones.
+cores, fontes e ícones. Padrões: `1.0`, `0`, `true` e `8`.
+
+`font_min` e `font_grid` são px de referência (480 px de altura) e mudam
+com a tela. Por cima deles vale um piso fixo de **10 px de tela**: nenhum
+texto é desenhado menor que isso, em qualquer resolução, com qualquer
+`font_scale`, `font_min` ou tamanho de texto escolhido pelo usuário (veja
+[Telas de outros tamanhos](#telas-de-outros-tamanhos)).
 
 ## Medidas gerais
 
@@ -124,31 +130,66 @@ Essas medidas montam a visualização clássica, `lista`.
 
 ## Telas de outros tamanhos
 
-O launcher roda em 640×480 (4:3), 720×720 (1:1, R36 Plus) e 480×320 (3:2,
-Odroid Go Advance, RGB10, RG351M; o painel é retrato e o Sway o gira, então
-o launcher já recebe a tela deitada). O desenho de 640×480 é ampliado ou reduzido até caber
-inteiro: a escala é a menor entre largura/640 e altura/480, e o texto fica
-do mesmo tamanho físico em telas da mesma densidade. A sobra vai para o
-lado mais longo: a tela vale 640×640 px de referência em 720×720 e 720×480
-em 480×320.
+O launcher roda em 640×480 (4:3: R36S e a maioria dos portáteis RK3326),
+720×720 (1:1, R36 Plus) e 480×320 (3:2: Odroid Go Advance, RGB10, RG351M;
+o painel é retrato e o Sway o gira, então o launcher já recebe a tela
+deitada). Uma tela 16:9 (854×480, 1280×720) cai no mesmo formato da de 3:2.
 
-Sem nada no tema, os retângulos esticam com a tela. Para mudar o layout de
-um formato, use uma tabela `[aspect.<formato>]`:
+O desenho de 640×480 é ampliado ou reduzido até caber inteiro: a escala é a
+menor entre largura/640 e altura/480, e o texto fica do mesmo tamanho
+físico em telas da mesma densidade. A sobra vai para o lado mais longo, em
+px de referência:
 
-| formato | telas |
-|---|---|
-| `square` | até 6:5 (720×720) |
-| `classic` | entre 6:5 e 29:20 (640×480) |
-| `wide` | de 29:20 em diante (480×320, 16:9) |
+| tela | escala | tela em px de referência | formato |
+|---|---|---|---|
+| 640×480 | 1 | 640×480 | `classic` |
+| 720×720 | 1,125 | 640×640 | `square` |
+| 480×320 | 0,667 | 720×480 | `wide` |
+| 1280×720 | 1,5 | 853×480 | `wide` |
+
+O que isso faz com cada número do tema:
+
+- **Tamanhos** (fontes, alturas de linha, cabeçalho, rodapé, raios,
+  `margin`) não mudam em px de referência. Numa tela quadrada a lista de
+  jogos tem linhas do mesmo tamanho e mostra mais delas (pelo menos 13 em
+  vez de 10 no Grafite); L/R viram a página pelas linhas que a lista mostra.
+- **Retângulos** (`cover`, `details_*`, `switcher_*`, `x y w h` das
+  visualizações) são frações da tela e esticam com ela. Uma capa que é
+  retrato em 640×480 fica mais alta e estreita em 720×720.
+- A geometria embutida da `lista` (painel do sistema com 250 px de largura,
+  margens, folgas sob o cabeçalho) é calculada em px de referência para a
+  tela de verdade; ela não estica.
+
+### Tabelas `[aspect.<formato>]`
+
+Para mudar o layout de um formato, use uma tabela `[aspect.<formato>]`. O
+formato sai da razão largura/altura da tela:
+
+| formato | razão | telas |
+|---|---|---|
+| `square` | menor que 1,2 (6:5) | 720×720 |
+| `classic` | de 1,2 a 1,45 (29:20), inclusive | 640×480, 800×600 |
+| `wide` | maior que 1,45 | 480×320 (3:2), 854×480 e 1280×720 (16:9) |
+
+Outro nome (`[aspect.tall]`) é ignorado com aviso no log.
 
 Tudo que vale no topo do `theme.toml` vale dentro dela, inclusive
-`[view.*]`, e ela se aplica por cima do próprio arquivo, chave por chave:
-tabelas (visualizações, `list`, `art`...) se misturam campo a campo; outro
-valor substitui. Um retângulo do topo (`cover`, `details_*`, `switcher_*`)
-vem inteiro, com os quatro campos. A ordem é: tema padrão, `[aspect]` do
-padrão, o seu tema, o `[aspect]` do seu tema; o que o seu tema escreve no
-topo vale também nos outros formatos, a menos que a tabela do formato o
-mude.
+`[view.*]`, `frames`, `background_image` e `text_outline`, e ela se aplica
+por cima do próprio arquivo, chave por chave: tabelas (visualizações,
+`list`, `art`...) se misturam campo a campo; outro valor substitui. Um
+retângulo do topo (`cover`, `details_*`, `switcher_*`, `start_area`) vem
+inteiro, com os quatro campos.
+
+A ordem é: tema padrão, `[aspect]` do padrão, o seu tema, o `[aspect]` do
+seu tema. Duas consequências:
+
+- Um tema sem nenhuma tabela `[aspect]` herda as do Grafite: num aparelho
+  quadrado ele já ganha o Alternador em 4:3, o Menu Start centralizado e a
+  capa mais larga.
+- O que o seu tema escreve no topo vale em todos os formatos e passa por
+  cima do `[aspect]` do padrão. Se o tema muda `cover` ou `list_width` no
+  topo, a capa e a lista do Grafite para telas quadradas deixam de valer;
+  escreva o seu `[aspect.square]` para elas.
 
 ```toml
 # Num aparelho quadrado, a lista de jogos mais estreita e a capa mais alta.
@@ -160,16 +201,71 @@ art = { x = 0.55, w = 0.4, h = 0.7 }
 switcher_card = { x = 0.1875, y = 0.1, w = 0.625, h = 0.46875 }
 ```
 
-O tema padrão usa `[aspect.square]` para manter em 4:3 as imagens do
-Alternador e da retomada e centralizar o Menu Start, e `[aspect.wide]` para
-listas em letra maior (19 px de referência, 13 px numa tela de 480×320).
-Nenhum texto fica com menos de 10 px na tela, em qualquer resolução: numa
-tela pequena o texto mantém esse mínimo e o resto do desenho encolhe. As Configurações não mudam com o tema: têm 640 px
-de referência de largura, centradas numa tela mais larga, e ganham linhas
-numa tela mais alta.
+Como toda tabela TOML, `[aspect.square]` vem depois das chaves do topo; uma
+chave do topo escrita depois dela passa a valer só no formato quadrado.
 
-Para ver um tema em outro tamanho no PC, as capturas de teste aceitam
-`ARCHR_CAPTURE_SIZE=720x720` (veja `crates/archr-ui/tests/support/`).
+O que não muda por formato: os arquivos de fonte (`font`,
+`font_semibold`, `font_mono`, `font_mono_medium`), o `name`, os sons, os
+ícones e as imagens de console. `font_size`, `font_scale` e `font_min`
+mudam normalmente.
+
+O tema padrão usa:
+
+- `[aspect.square]`: Alternador e retomada em 4:3, Menu Start centralizado
+  entre cabeçalho e rodapé (`start_area`), lista de jogos mais estreita e
+  capa mais larga (`list_width`, `cover`), imagem e tabela dos detalhes
+  dividindo a coluna, imagem do console no meio do painel e, na `vitrine`,
+  capa mais larga;
+- `[aspect.wide]`: listas em letra maior, 19 px de referência
+  (`font_size = 0.039583333`, 13 px numa tela de 480×320), e a lista de
+  jogos da `vitrine` em 18 px.
+
+O tema Praia de exemplo repete a mudança da capa para o seu lado esquerdo
+em `[aspect.square.view.lista.games]`.
+
+### Texto: o piso de 10 px
+
+Nenhum texto fica com menos de **10 px na tela**, em qualquer resolução. O
+piso é absoluto: vale por cima de `font_min`, `font_scale` e do tamanho de
+texto do usuário, e não é configurável. Numa tela pequena o texto mantém
+esse mínimo e o resto do desenho encolhe; o que não cabe quebra linha ou
+termina em reticências nas Configurações. Em 480×320 isso equivale a 15 px
+de referência: um tamanho menor que esse (o padrão das linhas de apoio, 12
+px) é desenhado com 10 px de tela. A única exceção é a miniatura do
+MangoHud nas Configurações, que encolhe como imagem.
+
+O teto é 128 px de tela.
+
+### Menu Start: `start_area`
+
+O Menu Start (título, blocos, atalhos e widgets) é uma composição de
+640×480 px de referência. `start_area` (`{ x, y, w, h }`, frações da tela)
+é a caixa onde ela fica: a composição tem 480 px de referência de altura,
+a largura da caixa, e fica centralizada nela; os blocos podem ir até as
+bordas da caixa. O rodapé fica sempre no fim da tela. O padrão é a tela
+inteira; numa tela quadrada o Grafite a põe entre o cabeçalho e o rodapé
+(0,75 de 640 px são os 480 px da composição):
+
+```toml
+[aspect.square]
+start_area = { x = 0.0, y = 0.1796875, w = 1.0, h = 0.75 }
+```
+
+Uma caixa com menos de 480 px de referência de altura aperta a composição.
+`start_widgets` (ver [Widgets de módulos no Menu
+Start](#widgets-de-módulos-no-menu-start)) é medido dentro dessa
+composição, não na tela.
+
+### Configurações
+
+As Configurações não mudam com o tema: têm 640 px de referência de largura,
+centradas numa tela mais larga, e ganham linhas numa tela mais alta.
+
+### Ver o tema em cada tamanho
+
+No PC, as capturas de teste aceitam `ARCHR_CAPTURE_SIZE` (veja [Testar no
+PC](#testar-no-pc)); o teste `resolutions` confere se o layout de cada tema
+de `themes/` cabe nas três telas.
 
 ## Estilo
 
@@ -368,7 +464,8 @@ details_actions = { x = 0.45625, y = 0.8125, w = 0.50625, h = 0.070833333 }
 
 ### Widgets de módulos no Menu Start
 
-`start_widgets` (`{ x, y, w, h }`, mesmas regras) é a faixa dos widgets 2×1
+`start_widgets` (`{ x, y, w, h }`, mesmas regras, mas em frações da
+composição de 640×480 do Menu Start, não da tela) é a faixa dos widgets 2×1
 dos módulos (até 2, lado a lado, divididos por igual). Quando há widget, os
 blocos sobem e encolhem para caber acima da faixa e os atalhos vão para logo
 abaixo dela; sem widget, o Menu Start fica como sempre. A faixa é
@@ -381,15 +478,9 @@ Start-widget):
 start_widgets = { x = 0.153125, y = 0.454166667, w = 0.69375, h = 0.216666667 }
 ```
 
-`start_area` (`{ x, y, w, h }`) é a caixa onde a composição do Menu Start
-(título, blocos, atalhos e widgets, desenhada para 640×480) fica
-centralizada; o rodapé fica sempre no fim da tela. O padrão é a tela
-inteira; numa tela quadrada o Grafite a põe entre o cabeçalho e o rodapé:
-
-```toml
-[aspect.square]
-start_area = { x = 0.0, y = 0.1796875, w = 1.0, h = 0.75 }
-```
+`start_area` (`{ x, y, w, h }`, frações da tela) é a caixa onde essa
+composição fica centralizada; o padrão é a tela inteira. Veja [Menu Start:
+`start_area`](#menu-start-start_area).
 
 As cores vêm das chaves gerais (`surface`, `border`, `text_secondary`,
 `muted`, `accent`, `warning` para as estrelas). Linhas da tabela que não
@@ -687,3 +778,32 @@ cargo test -p archr-ui --lib capture_views -- --ignored
 relativa a `themes/` do repositório, ou um caminho absoluto (um tema que vive
 no próprio repositório, como os da Loja). No
 aparelho, os avisos sobre chaves inválidas ficam no log do launcher.
+
+As capturas saem em 640×480. Para outra tela, acrescente
+`ARCHR_CAPTURE_SIZE=<largura>x<altura>`; os nomes dos arquivos não mudam,
+então use uma pasta por tamanho:
+
+```sh
+for tamanho in 640x480 720x720 480x320; do
+  mkdir -p /tmp/capturas/$tamanho
+  ARCHR_CAPTURE_SIZE=$tamanho \
+  ARCHR_SETTINGS_CAPTURE_DIR=/tmp/capturas/$tamanho \
+  ARCHR_CAPTURE_VIEWS=praia:lista,praia:vitrine \
+  cargo test -p archr-ui --lib capture_views -- --ignored
+done
+```
+
+Qualquer tamanho vale (`854x480` para 16:9). As outras capturas manuais do
+`archr-ui` (Configurações, conquistas, retomada, barra de status) leem a
+mesma variável.
+
+O teste `resolutions` confere, em 640×480, 720×720 e 480×320, cada tema com
+`theme.toml` em `themes/` e cada visualização dele: lista abaixo do
+cabeçalho, nada fora da tela, painel, imagem, texto e pontos sem cobrir a
+lista, e os retângulos dos detalhes, saves, Alternador e retomada sem se
+sobrepor. Para conferir um tema seu, copie a pasta para `themes/` do
+repositório e rode:
+
+```sh
+cargo test -p archr-ui --test resolutions
+```
