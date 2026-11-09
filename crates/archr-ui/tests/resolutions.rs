@@ -308,6 +308,21 @@ fn frames(theme: &Theme, size: (u32, u32)) -> Vec<(&'static str, Vec<u8>)> {
     shot(&mut ui, "app-silent", &app, None);
     ui.app = Some(common::app_session(false));
     shot(&mut ui, "app-collection", &app, None);
+    // Working: the wait never covers a row; with no items, no "0 of 0".
+    ui.app.as_mut().unwrap().busy = Some("Loading the catalog".into());
+    shot(&mut ui, "app-busy", &app, None);
+    let mut empty = archr_ui::apps::Session::new("demo", "Demo catalog", true);
+    empty.apply(archr_ui::apps::Message::Show(Box::new(
+        archr_ui::apps::Screen {
+            id: "catalog".into(),
+            title: "Catalog".into(),
+            footer: "0 games".into(),
+            ..Default::default()
+        },
+    )));
+    empty.busy = Some("Loading the catalog".into());
+    ui.app = Some(empty);
+    shot(&mut ui, "app-busy-empty", &app, None);
     ui.app = Some(common::app_session(true));
     shot(&mut ui, "app-detail", &app, None);
     ui.app.as_mut().unwrap().ask = Some(archr_ui::apps::Ask {

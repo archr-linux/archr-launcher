@@ -46,14 +46,7 @@ impl Ui<'_, '_> {
             // Started, its first screen not here yet.
             self.begin_page(true, None, theme)?;
             self.backdrop_pictures(theme, None)?;
-            // The app's name as the screen's title, as its screens will have it.
-            let right = self.status_header(theme)?;
-            let (pad, h) = (
-                self.px(24.),
-                self.frame.size(theme.header_height).round() as u32,
-            );
-            let title = Rect::new(pad, 0, (right - pad - self.px(10.)).max(1) as u32, h);
-            self.label(&session.name, (Face::Semibold, 15., theme.text), title)?;
+            self.app_title(&session.name, theme)?;
             let list = self.area(layout.list.rect);
             if session.waiting(self.frame.now) == Some(true) {
                 let text = self
@@ -67,26 +60,8 @@ impl Ui<'_, '_> {
                     self.label_aligned(line, (Face::Regular, 15., theme.muted), at, Align::Center)?;
                 }
             } else {
-                // The busy pill, in the middle of the empty list.
                 let text = self.catalog.text("loading");
-                let w = self.measure(&text, Face::Regular, 13.)? as i32 + self.px(76.);
-                let h = self.px(36.);
-                let pill = Rect::new(
-                    list.center().x() - w / 2,
-                    list.center().y() - h / 2,
-                    w.max(1) as u32,
-                    h as u32,
-                );
-                let edge = Some(theme.border);
-                self.rounded(pill, h as f32 / 2., theme.surface_elevated, edge)?;
-                let pad = self.px(16.);
-                self.scraping(
-                    pill,
-                    (&text, (Face::Regular, 13., theme.text)),
-                    pad,
-                    false,
-                    theme,
-                )?;
+                self.app_busy(&text, list, true, theme)?;
             }
             self.app_footer(session, None, theme)?;
             return self.end_page(theme);
@@ -99,9 +74,6 @@ impl Ui<'_, '_> {
             Kind::Detail => self.app_detail(session, screen, theme, layout, art)?,
         }
         let tall = self.frame.reference().1;
-        if let Some(text) = &session.busy {
-            self.staged((640., tall), |ui| ui.app_busy(text, theme))?;
-        }
         if let Some(ask) = &session.ask {
             self.staged((640., tall), |ui| ui.app_ask(ask, theme))?;
         }
@@ -149,15 +121,29 @@ impl Ui<'_, '_> {
         let games = Screen::Games {
             system: key.clone(),
         };
-        self.header(&games, cursor, data, theme, &layout)?;
+        // Nothing listed yet: the title alone, never "0 of 0".
+        if screen.items.is_empty() {
+            self.app_title(&data.systems()[0].fullname, theme)?;
+        } else {
+            self.header(&games, cursor, data, theme, &layout)?;
+        }
         if let Some(band) = band {
             self.app_chips(screen, session.offline.as_deref(), band, theme)?;
         }
-        let loading = std::mem::replace(&mut self.loading, session.busy.is_some());
-        let drawn = self.list(&games, (&[], false), cursor, data, theme, &layout);
-        self.loading = loading;
-        drawn?;
+        let list = self.area(layout.list.rect);
+        match &session.busy {
+            // Waiting for its first items: the wait, in the list's place.
+            Some(text) if screen.items.is_empty() => self.app_busy(text, list, true, theme)?,
+            _ => self.list(&games, (&[], false), cursor, data, theme, &layout)?,
+        }
         self.cover(&key, cursor, data, theme, art.cover, &layout)?;
+        // Waiting with a list: over the bottom of the picture, never a row.
+        if let (Some(text), false) = (&session.busy, screen.items.is_empty()) {
+            let area = layout
+                .art
+                .map_or_else(|| self.footer_left(theme), |a| self.area(a.rect));
+            self.app_busy(text, area, false, theme)?;
+        }
         self.app_footer(session, Some(screen), theme)?;
         self.decor(theme, &layout.decor, false)?;
         self.end_page(theme)
@@ -275,6 +261,10 @@ impl Ui<'_, '_> {
             ..Art::default()
         };
         self.sheet(&sheet, theme, art)?;
+        if let Some(text) = &session.busy {
+            let shot = self.area(theme.details_shot);
+            self.app_busy(text, shot, false, theme)?;
+        }
         self.app_footer(session, Some(screen), theme)?;
         self.decor(theme, &layout.decor, false)?;
         self.end_page(theme)
@@ -323,7 +313,9 @@ impl Ui<'_, '_> {
         }
         hints.push(('B'.into(), text(self, "hint.back")));
         self.look.outlining = true;
-        let drawn = self.app_hints(screen, &hints, theme, (y, h));
+        // While it works, the wait takes the footer's note place.
+        let noted = screen.filter(|_| session.busy.is_none());
+        let drawn = self.app_hints(noted, &hints, theme, (y, h));
         self.look.outlining = false;
         drawn
     }
@@ -336,7 +328,9 @@ impl Ui<'_, '_> {
     ) -> Result<(), String> {
         let width = self.frame.width;
         let left = self.hint_labels(hints, theme, width, y, h)?;
-        let note = screen.map_or("", |s| s.footer.as_str());
+        let note = screen
+            .filter(|s| !(s.items.is_empty() && s.layout == Kind::Collection))
+            .map_or("", |s| s.footer.as_str());
         if !note.is_empty() {
             let room = (left - self.px(40.)).max(1) as u32;
             self.label(
@@ -349,30 +343,57 @@ impl Ui<'_, '_> {
     }
 
     /// `screen.busy`: the search's dots and the module's text, in a pill.
-    fn app_busy(&mut self, text: &str, theme: &Theme) -> Result<(), String> {
-        let tall = self.frame.reference().1;
-        let w = (self.measure(text, Face::Regular, 13.)? as f32 / self.frame.scale + 76.).min(560.);
-        let rect = Rect::new(
-            self.px(320. - w / 2.),
-            self.px(tall - 96.),
-            self.px(w) as u32,
-            self.px(36.) as u32,
-        );
-        self.rounded(
-            rect,
-            rect.height() as f32 / 2.,
-            theme.surface_elevated,
-            Some(theme.border),
-        )?;
+    fn app_busy(
+        &mut self,
+        text: &str,
+        area: Rect,
+        centered: bool,
+        theme: &Theme,
+    ) -> Result<(), String> {
+        let h = self.px(36.);
+        let w = (self.measure(text, Face::Regular, 13.)? as i32 + self.px(76.))
+            .min(area.width() as i32 - self.px(16.))
+            .max(h);
+        let y = if centered {
+            area.center().y() - h / 2
+        } else {
+            area.bottom() - h - self.px(10.)
+        };
+        let pill = Rect::new(area.center().x() - w / 2, y, w as u32, h as u32);
+        let edge = Some(theme.border);
+        self.rounded(pill, h as f32 / 2., theme.surface_elevated, edge)?;
         let pad = self.px(16.);
         self.scraping(
-            rect,
+            pill,
             (text, (Face::Regular, 13., theme.text)),
             pad,
             false,
             theme,
-        )?;
-        Ok(())
+        )
+    }
+    /// A screen's name alone in the header, without a position.
+    fn app_title(&mut self, name: &str, theme: &Theme) -> Result<(), String> {
+        let right = self.status_header(theme)?;
+        let (pad, h) = (
+            self.px(24.),
+            self.frame.size(theme.header_height).round() as u32,
+        );
+        let title = Rect::new(pad, 0, (right - pad - self.px(10.)).max(1) as u32, h);
+        self.look.outlining = true;
+        let drawn = self.label(name, (Face::Semibold, 15., theme.text), title);
+        self.look.outlining = false;
+        drawn
+    }
+    /// The footer's left part, beside the hints, for a view with no picture.
+    fn footer_left(&self, theme: &Theme) -> Rect {
+        let h = self.frame.size(theme.footer_height).round().max(1.) as u32;
+        let w = (self.frame.width as f32 * 0.4) as u32;
+        Rect::new(
+            0,
+            self.frame.height as i32 - h as i32 - self.px(46.),
+            w.max(1),
+            h + self.px(46.) as u32,
+        )
     }
 
     /// `screen.confirm`: the question and its two answers.
