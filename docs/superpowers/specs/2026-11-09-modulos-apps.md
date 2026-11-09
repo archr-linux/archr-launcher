@@ -242,9 +242,12 @@ PortMaster, e os instala. Com `"ports"` em `install`:
   imagens, nome e extensão do jogo instalado, quantidade de mensagens (as
   telas juntam patches a 4 por segundo, como `ui.update`).
 - `rom.install`: no máximo 1 por segundo; total de 2 GiB por módulo, ports
-  incluídos (`rom.list` informa o uso); só depois de uma ação do usuário no
-  app (10 min para ROMs, 5 s para ports); nunca arquivos de programa nem
-  sistemas cujas entradas o aparelho executa (`tools`, ...).
+  incluídos (`rom.list` informa o uso); só nos 5 s depois de uma ação do
+  usuário no app (o app baixa e instala com um botão "Instalar"); só em
+  sistemas emulados pelo `runemu.sh`, nunca nos que o aparelho executa
+  (`tools`, `ports`, `windows`, extensões `.sh`, `.jar`...). Aceito: a
+  licença é por instalação, não por item; um port pode passar da cota uma vez
+  (o tamanho só se sabe depois).
 - Remoções: a pergunta é do launcher, nunca do módulo.
 - Arquivos do módulo (ROM, capa, imagens das telas) são abertos uma vez, uma
   pasta por vez, sem seguir links (`openat` + `O_NOFOLLOW`), e o launcher lê
