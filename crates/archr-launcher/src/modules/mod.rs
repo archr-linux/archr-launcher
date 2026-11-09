@@ -2077,6 +2077,13 @@ impl Host {
             .and_then(|paths| crate::worker::definitions(paths).ok())
             .unwrap_or_default()
     }
+    /// The ROMs folder every system `rom.install` writes to lies in.
+    fn roms(&self) -> PathBuf {
+        self.config
+            .library
+            .as_ref()
+            .map_or_else(|| PathBuf::from("/storage/roms"), |p| p.at("/storage/roms"))
+    }
     /// A removal only right after the user said yes to the app, once.
     fn confirmed(&mut self, id: &str) -> Result<(), (i64, &'static str)> {
         match self.answered.remove(id) {
@@ -2118,7 +2125,14 @@ impl Host {
         if method == "rom.install" {
             // What is asked is checked first; only a sound request counts.
             let (systems, home) = (self.systems(), self.config.dirs.data_dir(&id));
-            let copy = app::check(&home, params, &allowed, &systems, owned.present().1)?;
+            let roms = self.roms();
+            let copy = app::check(
+                &home,
+                params,
+                &allowed,
+                (&systems, &roms),
+                owned.present().1,
+            )?;
             if self.copying {
                 return Err((-32003, "another install is running"));
             }

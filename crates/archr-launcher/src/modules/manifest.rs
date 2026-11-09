@@ -564,6 +564,10 @@ fn read_permissions(
     for value in &install {
         if !system_ok(value) {
             errors.push(format!("permissions.install: {value} is not a system name"));
+        } else if RUNNERS.contains(&value.as_str()) {
+            errors.push(format!(
+                "permissions.install: {value} runs programs, not games"
+            ));
         }
     }
     Permissions {
@@ -577,6 +581,16 @@ fn read_permissions(
         install,
     }
 }
+/// Systems whose entries are programs the device runs: never `install`.
+/// The catalog's own extensions are checked again at each install.
+pub const RUNNERS: &[&str] = &[
+    "tools",
+    "windows",
+    "moonlight",
+    "music",
+    "idtech",
+    "scummvm",
+];
 /// A system's folder name (`gb`, `pico-8`), checked against the catalog
 /// only when a game is installed.
 pub fn system_ok(name: &str) -> bool {
@@ -1300,6 +1314,10 @@ net = true
 install = ["gb", "ports"]
 launch = true
 "#;
+        assert!(
+            parse(&four.replace("\"gb\"", "\"tools\"")).is_err(),
+            "never a runner"
+        );
         let (manifest, warnings) = parse(four).unwrap();
         assert!(warnings.is_empty(), "{warnings:?}");
         let app = manifest.app.clone().unwrap();

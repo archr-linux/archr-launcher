@@ -261,25 +261,23 @@ impl Installed {
         let text = match value {
             Json::String(text) => self.tr(text),
             Json::Object(map) => {
-                let mut text = self.tr(map.get("key")?.as_str()?);
-                for (name, arg) in map
-                    .get("args")
-                    .and_then(Json::as_object)
-                    .into_iter()
-                    .flatten()
-                {
-                    let arg = match arg {
-                        Json::String(s) => s.clone(),
-                        Json::Number(n) => n.to_string(),
-                        _ => continue,
-                    };
-                    text = text.replace(&format!("{{{name}}}"), &arg);
-                }
-                text
+                let args = map.get("args").and_then(Json::as_object);
+                fill(&self.tr(map.get("key")?.as_str()?), |name| {
+                    match args?.get(name)? {
+                        Json::String(s) => Some(s.clone()),
+                        Json::Number(n) => Some(n.to_string()),
+                        _ => None,
+                    }
+                })
             }
             _ => return None,
         };
-        Some(text.chars().filter(|c| !c.is_control()).take(200).collect())
+        Some(
+            text.chars()
+                .filter(|c| !c.is_control())
+                .take(MESSAGE)
+                .collect(),
+        )
     }
     /// `name` or `description`: `@key`, text, or a table by language.
     fn names(&self, value: Option<&Value>, language: &str) -> String {
@@ -293,6 +291,38 @@ impl Installed {
         }
     }
 }
+
+/// A message's text: `{name}` filled from `arg` in one pass over the
+/// template, never over what an argument brought, and no longer than
+/// `MESSAGE` characters however long the arguments are.
+fn fill(template: &str, arg: impl Fn(&str) -> Option<String>) -> String {
+    let mut out = String::new();
+    let mut rest = template;
+    while out.chars().count() < MESSAGE {
+        let Some(open) = rest.find('{') else {
+            out.push_str(rest);
+            break;
+        };
+        out.push_str(&rest[..open]);
+        let after = &rest[open + 1..];
+        match after
+            .find('}')
+            .and_then(|close| Some((close, arg(&after[..close])?)))
+        {
+            Some((close, value)) => {
+                out.extend(value.chars().take(MESSAGE));
+                rest = &after[close + 1..];
+            }
+            None => {
+                out.push('{');
+                rest = after;
+            }
+        }
+    }
+    out.chars().take(MESSAGE).collect()
+}
+/// The longest text a module's message becomes.
+const MESSAGE: usize = 200;
 
 /// Every module folder, by id; staging and previous versions are skipped.
 pub fn scan(dirs: &Dirs, language: &str) -> Vec<Installed> {
@@ -890,6 +920,20 @@ mod tests {
         );
         assert_eq!(lines[1].detail, "|systems=Game Boy, Ports (PortMaster), zz");
         assert!(lines[1].sensitive);
+    }
+
+    #[test]
+    fn arguments_fill_the_template_once_and_stay_short() {
+        let big = "{a}".repeat(100);
+        let args = |name: &str| (name == "a").then(|| big.clone());
+        let text = fill("{a}{a}{a} {b}", args);
+        assert_eq!(text.chars().count(), 200, "capped");
+        assert!(
+            text.starts_with("{a}{a}"),
+            "an argument is never filled again"
+        );
+        assert_eq!(fill("x {b} {", |_| None), "x {b} {");
+        assert_eq!(fill("{n} games", |_| Some("4".into())), "4 games");
     }
 
     #[test]

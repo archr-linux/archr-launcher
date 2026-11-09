@@ -36,6 +36,20 @@ const TEXT: usize = 4000;
 pub const LEDGER: &str = "installed.toml";
 /// The system folder PortMaster's launch scripts live in.
 pub const PORTS: &str = "ports";
+/// Files the device would run, never installed as a game; nor into a system
+/// that takes them (its entries are programs, run as root).
+pub const SCRIPTS: &[&str] = &[
+    ".sh",
+    ".bash",
+    ".run",
+    ".appimage",
+    ".desktop",
+    ".py",
+    ".pl",
+    ".bat",
+    ".cmd",
+    ".exe",
+];
 /// A PortMaster install downloads up to a few hundred MB.
 const PORT_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 
@@ -401,17 +415,17 @@ pub fn install(
     home: &Path,
     params: &Json,
     allowed: &[String],
-    systems: &[SystemDef],
+    (systems, roms): (&[SystemDef], &Path),
     used: u64,
 ) -> Result<Game, Refusal> {
-    check(home, params, allowed, systems, used)?.run()
+    check(home, params, allowed, (systems, roms), used)?.run()
 }
 /// Everything `rom.install` checks before it copies anything.
 pub fn check(
     home: &Path,
     params: &Json,
     allowed: &[String],
-    systems: &[SystemDef],
+    (systems, roms): (&[SystemDef], &Path),
     used: u64,
 ) -> Result<Copy, Refusal> {
     let system = params["system"].as_str().ok_or((-32602, "system"))?;
@@ -422,6 +436,14 @@ pub fn check(
         .iter()
         .find(|s| s.name == system)
         .ok_or((-32004, "no such system"))?;
+    // Only a ROM folder of games: never one whose entries the device runs.
+    let script = |ext: &str| SCRIPTS.iter().any(|s| s.eq_ignore_ascii_case(ext));
+    if !def.path.starts_with(roms)
+        || !def.command.is_empty()
+        || def.extensions.iter().any(|e| script(e))
+    {
+        return Err((-32001, "not a games folder"));
+    }
     let file = params["file"].as_str().ok_or((-32602, "file"))?;
     let (source, size) = open_inside(home, file, ROM_BYTES).ok_or((-32602, "file"))?;
     let named = Path::new(file);
@@ -430,16 +452,16 @@ pub fn check(
         .and_then(|e| e.to_str())
         .map(|e| format!(".{}", e.to_lowercase()))
         .ok_or((-32602, "extension"))?;
-    if !def.extensions.iter().any(|e| e.to_lowercase() == ext) {
+    if script(&ext) || !def.extensions.iter().any(|e| e.to_lowercase() == ext) {
         return Err((-32602, "extension"));
     }
     if used + size > MODULE_BYTES {
         return Err((-32003, "too much installed"));
     }
-    let cover = match params.get("cover").and_then(Json::as_str) {
-        Some(cover) => Some(picture_bytes(home, cover).ok_or((-32602, "cover"))?),
-        None => None,
-    };
+    // A cover that is not a sound picture is left out; the game is not.
+    let cover = params["cover"]
+        .as_str()
+        .and_then(|cover| picture_bytes(home, cover));
     let stem = named.file_stem().and_then(|s| s.to_str()).unwrap_or("");
     let name = Some(safe_name(params["name"].as_str().unwrap_or("")))
         .filter(|n| !n.is_empty())
@@ -718,15 +740,16 @@ mod tests {
         fs::write(home.join("downloads/a.gb"), b"game").unwrap();
         fs::write(dir.path().join("shadow"), b"root:secret").unwrap();
         let systems = [system(dir.path())];
+        let roms = dir.path().join("roms");
         let params = json!({"system": "gb", "file": "downloads/a.gb", "name": "A"});
-        let checked = check(&home, &params, &["gb".to_owned()], &systems, 0).unwrap();
+        let checked = check(&home, &params, &["gb".to_owned()], (&systems, &roms), 0).unwrap();
         fs::remove_file(home.join("downloads/a.gb")).unwrap();
         symlink(dir.path().join("shadow"), home.join("downloads/a.gb")).unwrap();
         let game = checked.run().unwrap();
         assert_eq!(fs::read(&game.rom).unwrap(), b"game");
         // Checked now, the link is refused.
         assert_eq!(
-            check(&home, &params, &["gb".to_owned()], &systems, 0).err(),
+            check(&home, &params, &["gb".to_owned()], (&systems, &roms), 0).err(),
             Some((-32602, "file"))
         );
     }
@@ -796,11 +819,12 @@ mod tests {
         fs::write(home.join("downloads/tobu.nes"), b"rom").unwrap();
         fs::write(home.join("Cover.png"), PNG).unwrap();
         let systems = [system(dir.path())];
+        let roms = dir.path().join("roms");
         let allowed = vec!["gb".to_owned()];
         let params = json!({"system": "gb", "file": "downloads/tobu.gb",
             "name": "Tobu Tobu Girl", "cover": "Cover.png",
             "meta": {"developer": "tangram games", "description": "Up.", "year": 2017}});
-        let game = install(&home, &params, &allowed, &systems, 0).unwrap();
+        let game = install(&home, &params, &allowed, (&systems, &roms), 0).unwrap();
         assert_eq!(game.game_key, "gb/Tobu Tobu Girl.gb");
         assert_eq!(game.size, 1024);
         assert!(game.rom.is_file());
@@ -819,10 +843,10 @@ mod tests {
             assert!(gamelist.contains(expected), "{expected} in {gamelist}");
         }
         // The same game again: a name of its own, never over the first.
-        let again = install(&home, &params, &allowed, &systems, 1024).unwrap();
+        let again = install(&home, &params, &allowed, (&systems, &roms), 1024).unwrap();
         assert_eq!(again.game_key, "gb/Tobu Tobu Girl (2).gb");
         let refused = |params: Json, allowed: &[String], used: u64| {
-            install(&home, &params, allowed, &systems, used)
+            install(&home, &params, allowed, (&systems, &roms), used)
                 .unwrap_err()
                 .1
         };
@@ -855,10 +879,38 @@ mod tests {
             ),
             "file"
         );
-        assert_eq!(
-            refused(with("cover", json!("downloads/tobu.gb")), &allowed, 0),
-            "cover"
+        let bare = install(
+            &home,
+            &with("cover", json!("downloads/tobu.gb")),
+            &allowed,
+            (&systems, &roms),
+            0,
         );
+        assert_eq!(bare.unwrap().cover, None, "a bad cover is left out");
+        // Never a script, nor into a folder of programs or outside the ROMs.
+        fs::write(home.join("downloads/run.sh"), b"reboot").unwrap();
+        let tools = SystemDef {
+            name: "tools".into(),
+            path: dir.path().join("roms/tools"),
+            extensions: vec![".sh".into(), ".gb".into()],
+            ..SystemDef::default()
+        };
+        let mut away = system(dir.path());
+        away.name = "away".into();
+        away.path = dir.path().join("elsewhere");
+        let more = [systems[0].clone(), tools, away];
+        let all = vec!["gb".to_owned(), "tools".to_owned(), "away".to_owned()];
+        for (system, file) in [
+            ("tools", "downloads/tobu.gb"),
+            ("away", "downloads/tobu.gb"),
+            ("gb", "downloads/run.sh"),
+        ] {
+            let p = json!({"system": system, "file": file});
+            assert!(
+                install(&home, &p, &all, (&more, &roms), 0).is_err(),
+                "{system} {file}"
+            );
+        }
         assert_eq!(
             refused(params.clone(), &allowed, MODULE_BYTES),
             "too much installed"
