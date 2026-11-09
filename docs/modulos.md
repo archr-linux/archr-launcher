@@ -789,7 +789,10 @@ launch = true              # "Jogar" depois de instalar
 
 ### 10.2 Execução
 
-- A no item inicia o **processo do app**: o mesmo sandbox, com
+- A no item abre o app **na hora**: o nome dele no cabeçalho, o indicador de
+  espera na lista vazia e só B (sai do app) até chegar a primeira
+  `screen.show`; sem nenhuma em 30 s, o launcher diz que o app não está
+  respondendo, e B sai. O mesmo A inicia o **processo do app**: o mesmo sandbox, com
   `ARCHR_MODULE_ROLE=app` (`daemon` nos outros), `MemoryMax=96M`,
   `TasksMax=32`, fora do limite de 3 daemons; um app aberto por vez. O
   `initialize` traz `role: "app"`; depois do `{"ready": true}` o launcher manda

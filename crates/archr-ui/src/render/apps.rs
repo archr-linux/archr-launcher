@@ -46,15 +46,48 @@ impl Ui<'_, '_> {
             // Started, its first screen not here yet.
             self.begin_page(true, None, theme)?;
             self.backdrop_pictures(theme, None)?;
-            self.crumbs(&session.name, "", theme)?;
+            // The app's name as the screen's title, as its screens will have it.
+            let right = self.status_header(theme)?;
+            let (pad, h) = (
+                self.px(24.),
+                self.frame.size(theme.header_height).round() as u32,
+            );
+            let title = Rect::new(pad, 0, (right - pad - self.px(10.)).max(1) as u32, h);
+            self.label(&session.name, (Face::Semibold, 15., theme.text), title)?;
             let list = self.area(layout.list.rect);
-            let text = self.catalog.text("loading");
-            self.label_aligned(
-                &text,
-                (Face::Regular, 16., theme.muted),
-                list,
-                Align::Center,
-            )?;
+            if session.waiting(self.frame.now) == Some(true) {
+                let text = self
+                    .catalog
+                    .format("apps.silent", &[("name", &session.name)]);
+                let lines = self.wrap(&text, Face::Regular, 15., list.width())?;
+                let step = self.px(22.);
+                let top = list.center().y() - step * lines.len() as i32 / 2;
+                for (n, line) in lines.iter().enumerate() {
+                    let at = Rect::new(list.x(), top + step * n as i32, list.width(), step as u32);
+                    self.label_aligned(line, (Face::Regular, 15., theme.muted), at, Align::Center)?;
+                }
+            } else {
+                // The busy pill, in the middle of the empty list.
+                let text = self.catalog.text("loading");
+                let w = self.measure(&text, Face::Regular, 13.)? as i32 + self.px(76.);
+                let h = self.px(36.);
+                let pill = Rect::new(
+                    list.center().x() - w / 2,
+                    list.center().y() - h / 2,
+                    w.max(1) as u32,
+                    h as u32,
+                );
+                let edge = Some(theme.border);
+                self.rounded(pill, h as f32 / 2., theme.surface_elevated, edge)?;
+                let pad = self.px(16.);
+                self.scraping(
+                    pill,
+                    (&text, (Face::Regular, 13., theme.text)),
+                    pad,
+                    false,
+                    theme,
+                )?;
+            }
             self.app_footer(session, None, theme)?;
             return self.end_page(theme);
         };
@@ -285,7 +318,7 @@ impl Ui<'_, '_> {
             }
             None => {}
         }
-        if session.settings {
+        if session.settings && screen.is_some() {
             hints.push((HintButton::Start, text(self, "apps.settings")));
         }
         hints.push(('B'.into(), text(self, "hint.back")));

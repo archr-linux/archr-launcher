@@ -226,15 +226,26 @@ pub struct Session {
     /// A question asked while another was open.
     waiting: Option<Ask>,
     pub keyboard: Option<Keyboard>,
+    /// When the app was opened, for its first screen's wait.
+    pub opened: Option<std::time::Instant>,
 }
+/// An app that shows no screen this long after opening is not responding.
+pub const SILENT: std::time::Duration = std::time::Duration::from_secs(30);
 impl Session {
     pub fn new(module: &str, name: &str, settings: bool) -> Self {
         Self {
             module: module.to_owned(),
             name: name.to_owned(),
             settings,
+            opened: Some(std::time::Instant::now()),
             ..Self::default()
         }
+    }
+    /// Opened and still without a screen: `Some(true)` once it has waited
+    /// `SILENT` (the app is not responding).
+    pub fn waiting(&self, now: std::time::Instant) -> Option<bool> {
+        let opened = self.opened.filter(|_| self.stack.is_empty())?;
+        Some(now.saturating_duration_since(opened) >= SILENT)
     }
     pub fn top(&self) -> Option<&Screen> {
         self.stack.last()
@@ -402,6 +413,10 @@ impl Session {
                 "screen.answer",
                 json!({"id": id, "yes": yes}),
             ));
+        }
+        // Until its first screen, only B (leave) counts.
+        if self.stack.is_empty() {
+            return (button == Button::B).then_some(Effect::Close);
         }
         if button == Button::Start && self.settings {
             return Some(Effect::Settings);
@@ -821,6 +836,29 @@ mod tests {
         session.apply(Message::Show(Box::new(detail())));
         session.handle(Button::X, 4);
         assert_eq!(session.visible(4), Some(("game:g1".into(), 1, 1)));
+    }
+
+    #[test]
+    fn until_its_first_screen_only_b_counts() {
+        let mut session = Session::new("demo", "Demo", true);
+        let now = std::time::Instant::now();
+        assert_eq!(session.waiting(now), Some(false));
+        assert_eq!(session.waiting(now + SILENT), Some(true), "not responding");
+        for button in [
+            Button::A,
+            Button::Start,
+            Button::Down,
+            Button::Select,
+            Button::Y,
+        ] {
+            assert_eq!(session.handle(button, 8), None, "{button:?}");
+        }
+        assert!(session.keyboard.is_none());
+        session.apply(Message::Show(Box::new(catalog(3))));
+        assert_eq!(session.waiting(now + SILENT), None, "its screen came");
+        assert_eq!(session.handle(Button::Start, 8), Some(Effect::Settings));
+        let mut fresh = Session::new("demo", "Demo", true);
+        assert_eq!(fresh.handle(Button::B, 8), Some(Effect::Close));
     }
 
     #[test]

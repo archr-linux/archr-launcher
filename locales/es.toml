@@ -960,6 +960,7 @@
 "apps.pictures" = "Imágenes {n}"
 "apps.offline" = "Sin conexión"
 "apps.stopped" = "{name} se detuvo"
+"apps.silent" = "{name} no responde. B para salir."
 "apps.remove_question" = "¿Quitar {name}?"
 "apps.remove" = "Quitar"
 "modules.remove" = "Quitar"

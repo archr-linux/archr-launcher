@@ -956,7 +956,12 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 || self.list.pill.active(now)
                 || self.cover_fade.active(now)
                 || (self.app.as_ref().is_some_and(|s| s.busy.is_some())
-                    && self.motion != Motion::Off);
+                    && self.motion != Motion::Off)
+                // Waiting for its first screen: the dots, then the notice.
+                || self
+                    .app
+                    .as_ref()
+                    .is_some_and(|s| s.waiting(now) == Some(false));
         } else if matches!(app.screen, Screen::Switcher | Screen::Resume) {
             // Fixed compositions in their theme rectangles, no decorations.
             self.begin_page(false, None, theme)?;
