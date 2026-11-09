@@ -3291,6 +3291,13 @@ fn golden_frames_at_640x480() {
     app.handle(crate::state::Button::Y, &shelf);
     browse(&mut ui, &app, &theme, with_cover);
     keep(&mut ui, "quick-menu");
+    // The systems menu: the divider sits above the power actions.
+    let mut systems_menu = crate::state::App::new(10);
+    systems_menu.set_view(&theme.view(&theme.active_view));
+    systems_menu.cursor = 1;
+    systems_menu.handle(crate::state::Button::Y, &shelf);
+    browse(&mut ui, &systems_menu, &theme, Default::default());
+    keep(&mut ui, "systems-menu");
     app.screen = crate::state::Screen::Details {
         system: "snes".into(),
         game: 4,
