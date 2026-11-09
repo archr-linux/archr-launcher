@@ -93,7 +93,8 @@ impl Ui<'_, '_> {
         // The selected game behind everything, under the curtain chosen in
         // Appearance; a game without a picture keeps the background.
         if let Some(curtain) = theme.user.switcher_curtain {
-            let game = app.switcher.get(app.cursor);
+            let at = app.cursor.min(app.switcher.len().saturating_sub(1));
+            let game = app.switcher.get(at);
             let picture = game
                 .and_then(|g| g.picture.as_ref())
                 .and_then(|path| art.pictures.and_then(|cache| cache.peek(path)));

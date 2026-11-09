@@ -336,20 +336,33 @@ impl View {
 
 impl Layout {
     /// The user's box art choices (`UserLook`) over this games layout. The
-    /// list beside the art keeps its gap to it: it grows into the room
-    /// the art leaves, or shrinks out of the way of a wider one.
+    /// art keeps its outer edge (the one away from the list) and the list
+    /// beside it keeps its gap: it grows into the room the art leaves, or
+    /// steps back from a wider one. A list not beside the art is left alone.
     pub(crate) fn fit_art(&mut self, user: &crate::theme::UserLook) {
         let Some(art) = self.art.as_mut() else {
             return;
         };
         let old = art.rect;
-        let same = |rect: Rect01| (rect.x - old.x).abs() < 1e-3 && (rect.w - old.w).abs() < 1e-3;
         let list = &mut self.list.rect;
-        let beside = list.x + list.w <= old.x + 1e-3;
-        let gap = old.x - (list.x + list.w);
+        // Which side of the list the art is on, and the gap between them.
+        let right = list.x + list.w <= old.x + 1e-3;
+        let left = old.x + old.w <= list.x + 1e-3;
+        let gap = if right {
+            old.x - (list.x + list.w)
+        } else {
+            list.x - (old.x + old.w)
+        };
+        let same = |rect: Rect01| (rect.x - old.x).abs() < 1e-3 && (rect.w - old.w).abs() < 1e-3;
         if !user.game_art {
-            if beside {
-                list.w = 1. - 2. * list.x;
+            let margin = if right {
+                list.x
+            } else {
+                1. - (list.x + list.w)
+            };
+            if right || left {
+                list.x = margin;
+                list.w = 1. - 2. * margin;
             }
             self.art = None;
             self.meta = None;
@@ -360,12 +373,18 @@ impl Layout {
             return;
         }
         if let Some(w) = user.art_width {
-            // The right edge stays where the theme put it.
-            let right = old.x + old.w;
-            art.rect.x = (right - w).max(0.);
-            art.rect.w = right - art.rect.x;
-            if beside {
-                list.w = (art.rect.x - gap - list.x).max(0.1);
+            if left {
+                art.rect.w = w.min(1. - old.x);
+                let end = list.x + list.w;
+                list.x = art.rect.x + art.rect.w + gap;
+                list.w = (end - list.x).max(0.1);
+            } else {
+                let edge = old.x + old.w;
+                art.rect.x = (edge - w).max(0.);
+                art.rect.w = edge - art.rect.x;
+                if right {
+                    list.w = (art.rect.x - gap - list.x).max(0.1);
+                }
             }
             if let Some(meta) = self.meta.as_mut() {
                 meta.rect.x = art.rect.x;

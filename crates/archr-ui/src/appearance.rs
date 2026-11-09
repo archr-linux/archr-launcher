@@ -192,15 +192,9 @@ impl Appearance {
             }
             _ => {}
         }
-        if self.font_weight == "bold" {
-            let bold = if self.font == "mono" {
-                &theme.font_mono_medium
-            } else {
-                &theme.font_semibold
-            };
-            if bold.is_some() {
-                theme.font = bold.clone();
-            }
+        // Bold is the semibold face (for mono, set just above to its medium).
+        if self.font_weight == "bold" && theme.font_semibold.is_some() {
+            theme.font = theme.font_semibold.clone();
         }
         let number = |text: &str| text.parse::<u8>().ok();
         theme.user = crate::theme::UserLook {

@@ -314,16 +314,15 @@ fn status_layout(
     header_height: u32,
     scale: f32,
     clock_width: u32,
-    // With a battery: its number's width, 0 when the number is hidden.
-    percent_width: Option<u32>,
+    // The battery icon, and the width of its number when that shows.
+    (battery, number): (bool, Option<u32>),
     wifi: bool,
 ) -> StatusLayout {
-    let number = percent_width.filter(|w| *w > 0);
     let px = |v: f32| (v * scale).round().max(1.) as u32;
     let width = px(12.) * 2
         + clock_width
         + if wifi { px(16.) + px(12.) } else { 0 }
-        + percent_width.map_or(0, |_| px(12.) + px(24.))
+        + if battery { px(12.) + px(24.) } else { 0 }
         + number.map_or(0, |w| px(6.) + w);
     let center = header_height as i32 / 2;
     let pill = Rect::new(
@@ -344,7 +343,7 @@ fn status_layout(
         pill,
         wifi: panel(wifi.then_some(px(16.)), px(16.), px(12.)),
         clock: panel(Some(clock_width), px(16.), px(12.)).expect("clock is always visible"),
-        battery: panel(percent_width.map(|_| px(24.)), px(24.), px(6.)),
+        battery: panel(battery.then_some(px(24.)), px(24.), px(6.)),
         percent: panel(number, px(16.), 0),
     }
 }
@@ -1183,17 +1182,16 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 .filter(|_| theme.user.battery_percent)
                 .map(|b| format!("{}%", b.percent));
             let clock_width = self.measure(&clock, Face::Mono, 13.)?;
-            let percent_width = match (battery, percent.as_deref()) {
-                (Some(_), Some(s)) => Some(self.measure(s, Face::Mono, 13.)?),
-                (Some(_), None) => Some(0),
-                _ => None,
-            };
+            let percent_width = percent
+                .as_deref()
+                .map(|s| self.measure(s, Face::Mono, 13.))
+                .transpose()?;
             let layout = status_layout(
                 right,
                 h,
                 self.frame.scale,
                 clock_width,
-                percent_width,
+                (battery.is_some(), percent_width),
                 wifi.radio(),
             );
             self.rounded(
@@ -2941,7 +2939,10 @@ mod tests {
                         (44. * scale) as u32,
                         scale,
                         (39. * scale) as u32,
-                        percent_width.map(|w| (w as f32 * scale) as u32),
+                        (
+                            percent_width.is_some(),
+                            percent_width.map(|w| (w as f32 * scale) as u32),
+                        ),
                         wifi,
                     );
                     assert_eq!(layout.pill.right(), (616. * scale) as i32);
@@ -2973,8 +2974,8 @@ mod tests {
                 }
             }
         }
-        let on = status_layout(616, 44, 1., 39, Some(24), true);
-        let off = status_layout(616, 44, 1., 39, Some(24), false);
+        let on = status_layout(616, 44, 1., 39, (true, Some(24)), true);
+        let off = status_layout(616, 44, 1., 39, (true, Some(24)), false);
         assert_eq!(on.pill.width(), 157);
         assert_eq!(off.pill.width(), 129);
         assert_eq!(on.clock.x() - on.wifi.unwrap().right(), 12);
@@ -2983,7 +2984,7 @@ mod tests {
         assert_eq!(on.battery.unwrap().x() - on.clock.right(), 12);
         assert_eq!(on.percent.unwrap().x() - on.battery.unwrap().right(), 6);
         // The number hidden in Appearance: the icon stays and ends the pill.
-        let bare = status_layout(616, 44, 1., 39, Some(0), true);
+        let bare = status_layout(616, 44, 1., 39, (true, None), true);
         assert_eq!(bare.percent, None);
         assert_eq!(bare.pill.right() - bare.battery.unwrap().right(), 12);
         assert_eq!(bare.pill.width(), 157 - 6 - 24);
