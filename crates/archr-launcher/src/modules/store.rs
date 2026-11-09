@@ -44,7 +44,7 @@ pub const REVIEW_KEY: [u8; 32] = [
 /// The oldest reviewed list this build accepts, even with nothing recorded
 /// (a new device, a wiped `modules-reviewed.serial`): raise it at release
 /// time to the serial then published.
-pub const MIN_SERIAL: u64 = 1;
+pub const MIN_SERIAL: u64 = 3;
 /// `reviewed.json.sig`: the Ed25519 signature of the whole `reviewed.json`,
 /// 64 bytes as 128 hex digits (one line; spaces and line ends ignored).
 pub fn signed(body: &[u8], signature: &[u8], key: &[u8; 32]) -> bool {
