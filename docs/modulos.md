@@ -6,10 +6,11 @@ conversa por JSON. O módulo **declara** no `module.toml` o que acrescenta
 receber) e o launcher desenha tudo com os próprios componentes. O módulo nunca
 desenha pixels, nunca lê o controle e nunca roda como root.
 
-Este guia descreve a **API 3**. Módulos com `api_version = 1` e `2`
+Este guia descreve a **API 4**. Módulos com `api_version` de 1 a 3
 continuam rodando; as permissões `config_write`, `hooks`, `system` e `launch`
 exigem `api_version = 2`; o `cpu-tune` e a página de detalhe exigem
-`api_version = 3` (seção 9). A especificação completa das fases 2 e 3 (ameaças,
+`api_version = 3` (seção 9); o app com telas próprias e a permissão `install`
+exigem `api_version = 4` (seção 10). A especificação completa das fases 2 e 3 (ameaças,
 mitigações, o que ainda aguarda) está em
 `docs/superpowers/specs/2026-10-29-modulos-fases-2-3.md`. Linguagens garantidas na imagem:
 **sh/bash + `jq`** e **binários aarch64**. Python pode existir na imagem, mas
@@ -18,8 +19,9 @@ um módulo não pode depender dele (`runtime = "python3"` é recusado).
 Exemplos completos e funcionando: `examples/modules/bateria-detalhada`
 (daemon) e `examples/modules/perfil-cpu` (oneshot), publicados na Loja como
 `archr-linux/archr-module-bateria-detalhada` e
-`archr-linux/archr-module-perfil-cpu`; e `examples/modules/ajuste-cpu`
-(API 3, o módulo oficial de ajuste automático de CPU, ainda não publicado).
+`archr-linux/archr-module-perfil-cpu`; `examples/modules/ajuste-cpu`
+(API 3, o módulo oficial de ajuste automático de CPU, ainda não publicado); e
+`examples/modules/catalogo-demo` (API 4, um app com telas próprias, sem rede).
 
 ## 1. Pacote
 
@@ -48,7 +50,7 @@ tipos errados) aparecem mas não impedem.
 ```toml
 id = "bateria-detalhada"        # [a-z0-9-]{3,40}, único no aparelho
 version = "1.0.0"               # x.y.z
-api_version = 3                 # 1, 2 ou 3
+api_version = 4                 # de 1 a 4
 min_launcher = "0.1.0"          # opcional
 name = "@name"                  # texto, "@chave" do locales/, ou tabela por idioma
 description = "@description"
@@ -73,6 +75,7 @@ memory_mb = 16                  # padrão 32, entre 8 e 64
 # hooks = ["launch"]                      # API 2
 # system = ["cpu-profile"]                # API 2
 # launch = true                           # API 2
+# install = ["gb", "ports"]               # API 4
 
 [[hooks]]
 event = "focus.game"
@@ -185,6 +188,8 @@ usuário do próprio módulo. O valor também chega no `initialize` e no
 | `system = ["wifi"]` | `system.call` liga ou desliga o Wi-Fi (API 2) | "Liga e desliga o Wi-Fi" (âmbar) |
 | `system = ["screenshot"]` | `system.call` tira uma captura da tela do launcher (API 2) | "Tira capturas da tela do launcher" |
 | `launch = true` | `game.launch` logo após o usuário escolher uma ação do módulo (API 2) | "Abre jogos" |
+| `install = ["gb", ...]` | `rom.install`/`rom.list`/`rom.remove` nesses sistemas, `port.*` com `"ports"`, só para o que o próprio módulo instalou (API 4) | "Instala jogos em: Game Boy, …, Ports (PortMaster)" (âmbar) |
+| `[app]` | um item próprio no carrossel e telas do módulo (API 4) | "Tem telas próprias" |
 
 As permissões em âmbar aparecem primeiro na lista.
 
@@ -274,7 +279,8 @@ Para ver a saída de erro no aparelho: `journalctl -u 'archr-mod-<id>*'`.
 - Iniciar um processo custa ~190 ms no R36S. Por isso eventos de foco só vão
   para **daemons**.
 - Daemons sobem um por vez, depois do primeiro quadro, ~2 s após o início.
-  No máximo **3 daemons** ligados; o quarto é recusado com aviso.
+  No máximo **3 daemons** ligados; o quarto é recusado com aviso. O processo
+  de um app (API 4) não conta: só vive com o app aberto (seção 10).
 - **Nenhum módulo roda durante um jogo.** Antes de entregar a tela ao jogo o
   launcher manda `game.started`, depois `shutdown`, espera 500 ms e mata o
   que restou. Quando o launcher volta, o daemon recebe `game.ended`.
@@ -736,3 +742,193 @@ teto e descarta sessões curtas ou ociosas; N64, PSP, Dreamcast e Saturn
 ficam fora. A lista vai em páginas de 18 jogos (os que estão aprendendo, depois
 os de fora, depois os aprendidos), com itens `open: false` para a página
 seguinte e a anterior, no máximo 20 itens por atualização. Teste no PC: `bash examples/modules/ajuste-cpu.test.sh`.
+
+## 10. API 4 — apps
+
+Um módulo com a API 4 pode ter **um app**: um item próprio no carrossel que
+abre telas inteiras do módulo (catálogo, detalhe, busca, avisos) e que pode
+instalar jogos e ports na biblioteca. Como no resto, o módulo **descreve** e o
+launcher **desenha**: as telas usam os layouts do tema (`games` e
+`details_*`), a paleta e o tamanho de texto do usuário, em 640×480, 720×720 e
+480×320. A proposta completa está em
+`docs/superpowers/specs/2026-11-09-modulos-apps.md`. Exemplo funcionando:
+`examples/modules/catalogo-demo` (sh + jq, catálogo local, sem rede); teste no
+PC: `sh examples/modules/catalogo-demo.test.sh`.
+
+### 10.1 Manifesto
+
+```toml
+api_version = 4
+[run]
+mode = "daemon"            # obrigatório para apps
+
+[app]
+label = "@app.name"        # nome no carrossel; padrão: o nome do módulo
+subtitle = "@app.subtitle" # linha no painel enquanto não há resumo
+icon = "store"             # Lucide; padrão: o ícone do módulo
+art = "art/app.png"        # opcional: PNG, JPEG ou WebP do pacote, até 1 MiB
+home = "catalog"           # id da primeira tela
+
+[permissions]
+install = ["gb", "gbc", "ports"]
+launch = true              # "Jogar" depois de instalar
+```
+
+- Um `[app]` por módulo. Com `mode = "oneshot"` ou sem `home` o módulo não
+  roda; num manifesto com `api_version` menor que 4, `[app]` vira aviso e é
+  ignorado, e `install` é erro. O `--check-module` confere o ícone e a arte.
+- `install` lista pastas de sistema (`gb`, `pico-8`) e `"ports"` (PortMaster);
+  o sistema só é conferido contra o catálogo de sistemas na hora de instalar.
+  A Loja mostra "Tem telas próprias" e "Instala jogos em: <nomes dos
+  sistemas>" (âmbar) antes de instalar.
+- **Carrossel:** a linha `@app:<id>` entra depois das coleções e se move, se
+  esconde e guarda a ordem como um sistema (Y › Mover, Ocultar). Arte:
+  `systems/app-<id>.png` do usuário ou do tema, depois a `art` do módulo,
+  depois o ícone grande. O resumo à direita e no painel vem de `ui.update`
+  para `app:summary` (`value`).
+
+### 10.2 Execução
+
+- A no item inicia o **processo do app**: o mesmo sandbox, com
+  `ARCHR_MODULE_ROLE=app` (`daemon` nos outros), `MemoryMax=96M`,
+  `TasksMax=32`, fora do limite de 3 daemons; um app aberto por vez. O
+  `initialize` traz `role: "app"`; depois do `{"ready": true}` o launcher manda
+  `screen.opened {screen: "<home>"}`. O módulo pode também mostrar a primeira
+  tela logo depois do `initialize`.
+- Um módulo só com `[app]` (e páginas em Configurações) **não tem daemon
+  permanente**: roda só com o app aberto. Com blocos, atalhos, widgets, itens
+  do Y ou eventos, são dois processos: o de sempre e o do app. Os dois
+  recebem `settings.changed`; uma ação das páginas vai ao daemon, ou ao app
+  quando só ele roda.
+- O app termina (`shutdown`, 500 ms, depois é morto) com B na primeira tela,
+  ao abrir um jogo, ao suspender ou desligar pelo launcher e ao fechar o
+  launcher. Nunca é reiniciado sozinho; se morre, a tela fecha com "X parou"
+  e uma saída com erro conta como falha (seção 3).
+- START, em qualquer tela do app, abre as páginas do módulo em Configurações
+  (se ele tem); ao sair delas, o app continua onde estava.
+
+### 10.3 Telas (módulo → launcher, notificações)
+
+| método | params |
+|---|---|
+| `screen.show` | `{id, title, layout: "collection" \| "detail", ...}` (abaixo) |
+| `screen.patch` | `{screen?, append?, more?, chips?, footer?, target?, ...}` (abaixo) |
+| `screen.toast` | `{text, tone?}`: a faixa de aviso do launcher, sem o limite de 10 s do `ui.notify` |
+| `screen.confirm` | `{id, text, yes?, no?}`: a pergunta do launcher, com "não" no foco; resposta `screen.answer` |
+| `screen.busy` | `{text}`: indicador de espera até a próxima `show` ou `patch`; `{text: null}` tira |
+| `screen.offline` | `{text?}`: selo "Sem conexão" (ou o texto) na faixa dos chips; `{text: null}` tira |
+
+**Coleção** (`layout = "collection"`), desenhada com o layout `games` da
+visualização ativa: `chips` (até 8, `{id, label, selected}`), `items` (até 50
+por mensagem e 1000 por tela, `{id, title, subtitle?, badge?, tone?,
+image?}`), `more` (há mais), `buttons: {x?: {label, action}, y?: {...}}` e
+`footer` (texto à esquerda dos botões no rodapé). O `subtitle` do item vai na
+linha de informação sob a capa e o `badge` é um selo à direita da linha, na cor
+do `tone` (`good`, `info`, `bad`, `muted`).
+
+**Detalhe** (`layout = "detail"`), desenhado com os retângulos `details_*`:
+`image`, `gallery` (até 8), `subtitle`, `facts` (até 8, `{title, value,
+tone?}`), `text` (até 4000 caracteres, com quebras de linha; rola com ↑↓) e
+`buttons` (até 4, `{id, label, icon?, action, progress?}`; `progress` 0–100
+preenche o botão).
+
+Um `screen.show` com o id de uma tela que já está na pilha a **substitui no
+lugar**, mantendo a posição do usuário e as telas acima dela (para atualizar
+depois de mudar um ajuste); um id novo vai para o topo (até 8 telas; além
+disso, a nova toma o lugar do topo).
+
+`screen.patch` muda a tela `screen` (o id; sem ele, a do topo): `append`
+acrescenta itens, `more` e `footer` trocam, `chips` substitui os chips, e
+`target` muda uma parte: `"item:<id>"` com `title`/`label`, `subtitle`,
+`badge`, `tone`, `image`; `"button:<id>"` com `label`, `action` e
+`progress` (`null` tira a barra). Patches e shows chegam à tela no máximo 4
+vezes por segundo (juntos com os `ui.update`); mais de 256 esperando são
+descartados com aviso no log.
+
+**Imagens** (`image`, `gallery`): só arquivos dentro do `HOME` do módulo
+(`module-data/<id>`), por caminho relativo. O launcher abre o caminho uma
+pasta por vez sem seguir nenhum link (`openat` com `O_NOFOLLOW`): recusa `..`,
+caminho absoluto, qualquer link simbólico no caminho, arquivo com outro nome
+(link físico), arquivo acima de 4 MiB e formato que não seja PNG, JPEG ou WebP
+(pelos primeiros bytes); a imagem recusada some e a tela segue. Os bytes lidos
+dessa abertura vão para uma cópia do launcher (`module-data/.pictures/<id>`,
+fora do alcance do módulo, apagada a cada abertura do app), e é essa cópia que
+ele decodifica e reduz ao tamanho de uso fora da thread de desenho, num cache
+próprio (`thumbs/apps`): trocar o arquivo depois da checagem não muda o que
+aparece. **Ícones**: nome Lucide, com o SVG intacto em `icons/` do módulo
+(conferido na hora).
+
+**Textos:** `@chave` e `{key, args}` como no resto; outro texto (nome e
+descrição de um jogo vindos da rede) é texto puro: nada de HTML ou formatação.
+
+### 10.4 O que o app ouve (launcher → app)
+
+Notificações (sem `id`), com o nome do evento como método:
+
+| método | params | quando |
+|---|---|---|
+| `screen.opened` | `{screen}` | o app abriu; `screen` é o `home` |
+| `screen.select` | `{screen, item}` | A num item |
+| `screen.chip` | `{screen, chip}` | L/R trocaram o chip escolhido |
+| `screen.more` | `{screen, count}` | o cursor chegou a 5 itens do fim de uma lista com `more`; uma vez até o próximo `append` |
+| `screen.search` | `{screen, text}` | SELECT abriu o teclado do launcher (até 64 bytes) e o usuário confirmou |
+| `screen.answer` | `{id, yes}` | a resposta de um `screen.confirm` (B é "não") |
+| `screen.back` | `{screen}` | B fechou essa tela; a de baixo volta |
+| `port.progress` | `{name, progress}` | o script do PortMaster disse quanto falta |
+
+Os botões do módulo chegam como `action.invoke` (pedido, como hoje), com
+`context: {screen, item?}` para X e Y de uma coleção (`item` é o item
+escolhido) e `context: {screen, button}` para um botão do detalhe. Na coleção:
+↑↓ movem, L/R trocam o chip (sem chips, pulam uma página), A escolhe, X/Y são
+do módulo, SELECT busca, START abre os ajustes, B volta. No detalhe: ↑↓ rolam
+o texto, L/R passam pelos botões (como no detalhe de um jogo), A aperta o
+botão, X passa para a próxima imagem da galeria, START, B volta. B na primeira
+tela sai do app.
+
+### 10.5 Instalar jogos e ports (pedidos, só do processo do app)
+
+| método | params | result |
+|---|---|---|
+| `rom.install` | `{system, file, name?, cover?, meta?: {developer, description, year}}` | `{game_key}` |
+| `rom.list` | `{}` | `{games: [{game_key, system, size, date}], used, limit}` |
+| `rom.remove` | `{game_key}` | `{}` |
+| `port.install` | `{name}` | `{game_key}` (o script de início que apareceu em `ports/`, ou `""`) |
+| `port.list` | `{}` | `{ports: [{name, game_key, date}]}` |
+| `port.remove` | `{name}` | `{}` |
+
+`rom.install`: o sistema precisa estar em `install` (e no catálogo de
+sistemas), `file` (dentro do `HOME`, mesmas regras das imagens) com uma
+extensão do sistema (`.zip` só se o sistema aceita), até 64 MiB; `cover`, se
+houver, é uma imagem válida. O arquivo é aberto uma vez, na checagem, e a
+cópia lê essa abertura (no máximo o tamanho que ele tinha, senão falha): o
+módulo não troca o que é copiado depois de conferido. O launcher dá um nome seguro a partir de `name`
+(sem `/`, `..`, caracteres de controle; colisão ganha ` (2)`), copia o
+arquivo para a primeira pasta do sistema (onde uma cópia pela rede também
+cai), a capa para `media/images/` e grava `name`, `desc`, `developer` e
+`releasedate` no `gamelist.xml` (o mesmo editor do raspador); o sistema é lido
+de novo e o jogo aparece na hora. No máximo uma cópia por vez, um
+`rom.install` por segundo por módulo e 2 GiB instalados por módulo (`-32003`);
+o que está errado no pedido é recusado antes (`-32602`, `-32001`) e não conta.
+A cópia acontece fora da thread do módulo: a resposta vem quando termina.
+
+`rom.remove` e `port.remove` só valem para o que **o próprio módulo
+instalou** e só nos **30 s seguintes a um "sim"** do usuário a um
+`screen.confirm` desse app, uma vez (`-32001` fora disso). `rom.remove` apaga
+a ROM, a capa e a entrada do `gamelist.xml`.
+
+`port.install` (com `"ports"` em `install`): `name` é o nome de um arquivo do
+catálogo do PortMaster, `^[a-z0-9][a-z0-9._-]*\.zip$` (até 64). O launcher
+**nunca** recebe arquivos do módulo para ports (os scripts deles rodam como
+root): ele roda o script do sistema `/usr/bin/archr-port-install install
+<name>` (`uninstall` para `port.remove`), que usa o próprio PortMaster para
+baixar do lançamento oficial, conferir o md5 e extrair. Um por vez, até 15 min;
+linhas `PROGRESS <0-100>` na saída do script viram `port.progress` para o app;
+o erro (`-32000`) traz a última linha de erro do script. Um jogo começando
+interrompe a instalação. `game.launch` funciona para o script de um port que
+o módulo instalou (`system: "ports"`, o `game_key` da resposta); outros ports e
+ferramentas continuam fora.
+
+O que cada módulo instalou fica em `module-data/installed.toml`, fora do
+alcance dele (o módulo só vê `module-data/<id>`); `rom.list` e `port.list`
+devolvem só o que ainda existe. O módulo nunca lê a pasta de ROMs nem a
+biblioteca.

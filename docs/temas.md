@@ -13,7 +13,8 @@ chave por chave.
   theme.toml          obrigatório
   fonts/              fontes .ttf citadas no theme.toml (opcional)
   icons/              ícones Lucide .svg que substituem os embutidos (opcional)
-  systems/            imagens de console: snes.png, gba.webp... (opcional)
+  systems/            imagens de console: snes.png, gba.webp... (opcional);
+                      app-<id>.png troca a arte de um app de módulo
   sounds/             sons da interface .ogg/.wav (opcional, ver Sons)
 ```
 
@@ -533,6 +534,29 @@ As cores vêm das chaves gerais (`surface`, `border`, `text_secondary`,
 `muted`, `accent`, `warning` para as estrelas). Linhas da tabela que não
 cabem em `details_info` são omitidas; texto nunca é cortado com reticências:
 encolhe e quebra linha.
+
+## Apps de módulos
+
+Um módulo com a API 4 pode ter **um app**: uma linha própria no carrossel
+(`@app:<id do módulo>`, depois das coleções) que abre telas inteiras do módulo
+(`docs/modulos.md`, seção 10). Nada novo no `theme.toml`: todo tema já funciona
+com apps.
+
+- **Arte no carrossel:** `systems/app-<id>.png` (ou `.jpg`, `.webp`), com as
+  mesmas regras das imagens de console (a pasta do usuário, depois o tema,
+  depois o padrão); sem ela, a arte do próprio módulo; sem nenhuma, o ícone
+  do módulo em tamanho grande, no lugar do nome gerado.
+- **Lista do app** (`layout = "collection"`): o layout `games` da visualização
+  ativa (lista, capa ou fundo com a capa, linha de informação, rodapé). Os
+  chips de filtro ficam numa faixa no topo da lista, nas cores do tema
+  (`highlight_bg` no escolhido, `surface` e `border` nos outros); os selos dos
+  itens usam `success`, `danger`, `muted` e a mistura de `highlight_bg` com
+  `text`.
+- **Detalhe do app** (`layout = "detail"`): os retângulos `details_*` desta
+  seção acima, com a imagem do módulo em `details_shot` e os botões do módulo
+  em `details_actions` (a barra de progresso preenche o botão).
+- Teclado da busca, pergunta (`screen.confirm`) e indicador de espera são os
+  do launcher, nas cores do tema. Texto nunca abaixo de 10 px, como em tudo.
 
 ## Conquistas do jogo
 
