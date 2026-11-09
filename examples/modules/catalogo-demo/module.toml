@@ -1,0 +1,40 @@
+id = "catalogo-demo"
+version = "1.0.0"
+api_version = 4
+min_launcher = "0.1.0"
+name = { en = "Demo catalog", pt_BR = "Catálogo de demonstração", es = "Catálogo de demostración", ru = "Демо-каталог" }
+description = { en = "An app with its own screens: a local catalog of test games it installs in Game Boy, without network.", pt_BR = "Um app com telas próprias: um catálogo local de jogos de teste que ele instala no Game Boy, sem rede.", es = "Una app con pantallas propias: un catálogo local de juegos de prueba que instala en Game Boy, sin red.", ru = "Приложение со своими экранами: локальный каталог тестовых игр для Game Boy, без сети." }
+author = "ArchR <contato@archr.dev>"
+license = "MIT"
+homepage = "https://github.com/archr-linux/archr-launcher"
+icon = "gamepad-2"
+
+[run]
+runtime = "sh"
+entry = "main.sh"
+mode = "daemon"
+
+# Its own item in the carousel; the process runs only while it is open.
+[app]
+label = "@app.name"
+subtitle = "@app.subtitle"
+icon = "gamepad-2"
+art = "art.png"
+home = "catalog"
+
+# Games only into Game Boy, and "Play" right after the user chose it.
+# No network: the catalog and its covers come with the module.
+[permissions]
+install = ["gb"]
+launch = true
+
+[[settings.pages]]
+id = "main"
+title = "@title"
+
+[[settings.pages.rows]]
+type = "toggle"
+key = "tags"
+label = "@row.tags"
+subtitle = "@row.tags_sub"
+default = true

@@ -1,0 +1,10 @@
+[
+  {"id": "g1", "title": "Pixel Hop", "developer": "ArchR", "year": 2026, "size": "32 KB",
+   "text": "A test cartridge for the demo catalog: 32 KB of zeros. The launcher copies it into your Game Boy folder, adds its cover and its entry, and it shows in the list at once."},
+  {"id": "g2", "title": "Blue Lines", "developer": "ArchR", "year": 2025, "size": "32 KB",
+   "text": "Another test cartridge. Remove it from here: the launcher asks first, and only takes away the games this module installed."},
+  {"id": "g3", "title": "Red Shift", "developer": "ArchR", "year": 2024, "size": "32 KB",
+   "text": "The third test cartridge, for the list to scroll."},
+  {"id": "g4", "title": "Violet Sky", "developer": "ArchR", "year": 2023, "size": "32 KB",
+   "text": "The fourth one comes only when the list reaches its end: the launcher asks for more with screen.more."}
+]
