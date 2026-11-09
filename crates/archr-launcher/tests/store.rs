@@ -1,6 +1,6 @@
 use std::{fs, io::Read};
 
-use archr_launcher::store::Store;
+use archr_launcher::store::{Place, Store};
 use tempfile::tempdir;
 
 #[test]
@@ -245,4 +245,36 @@ fn keys_are_relative_to_the_card_holding_the_rom() {
         Some("snes/Sub/B.sfc")
     );
     assert_eq!(key("/elsewhere/C.sfc"), None);
+}
+
+#[test]
+fn hidden_rows_and_the_last_place_roundtrip() {
+    let root = tempdir().unwrap();
+    let dir = root.path().join("config/launcher");
+    let mut store = Store::load(&dir);
+    store.push_recent("snes/a.sfc");
+    store.hide("ports");
+    store.hide("@recent");
+    store.hide("ports");
+    let place = Place {
+        row: "snes".into(),
+        game: Some("snes/sub/b.sfc".into()),
+    };
+    store.set_place(Some(place.clone()));
+    store.save(&dir).unwrap();
+    let mut loaded = Store::load(&dir);
+    assert_eq!(loaded.hidden(), ["ports", "@recent"]);
+    assert_eq!(loaded.place(), Some(&place));
+    loaded.show_all();
+    loaded.set_place(Some(Place {
+        row: "nes".into(),
+        game: None,
+    }));
+    loaded.save(&dir).unwrap();
+    let loaded = Store::load(&dir);
+    assert!(loaded.hidden().is_empty());
+    assert_eq!(
+        loaded.place().map(|p| (p.row.as_str(), p.game.as_deref())),
+        Some(("nes", None))
+    );
 }

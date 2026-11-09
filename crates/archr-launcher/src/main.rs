@@ -235,6 +235,10 @@ fn run(
     // The switcher waits for the records; the resume for its game's system.
     let mut records = None;
     let mut resuming = None;
+    // Back where the last game was chosen, on a plain start.
+    let mut returning = matches!(start, Start::Plain)
+        .then(|| library.place().cloned())
+        .flatten();
     match start {
         Start::Plain => {}
         Start::Switcher => {
@@ -585,6 +589,21 @@ fn run(
                 }
             }
             dirty = true;
+        }
+        if app.screen != Screen::Systems {
+            returning = None;
+        }
+        if let Some(place) = returning.as_ref() {
+            if let Some(game) = library.locate(place) {
+                if let Some(row) = App::system_rows(&library)
+                    .iter()
+                    .position(|r| *r == place.row)
+                {
+                    app.return_to(row, game, &library);
+                }
+                returning = None;
+                dirty = true;
+            }
         }
         // The switcher's games, once the records and the recent games are read.
         if let Some((reader, read)) = records.as_mut() {
@@ -966,6 +985,8 @@ fn run(
             ui.snap_animations();
             audio.wake();
             let before = (app.screen.clone(), app.cursor);
+            // A button before the list is back: the user goes their own way.
+            returning = None;
             let mark = settings
                 .active
                 .then(|| audio::Mark::of(&settings.state, true));
@@ -1187,6 +1208,9 @@ fn run(
                 }
                 library.tune = modules.hand_off(about);
             }
+            if let Some(Outcome::Launch { .. }) = &outcome {
+                library.remember_place(app.place(&library));
+            }
             if transition::apply(
                 &mut ui,
                 &mut audio,
@@ -1202,6 +1226,8 @@ fn run(
             if game.is_some() {
                 modules.resume();
             }
+            // Rows that came back (hidden systems) keep the cursor on its row.
+            app.follow_row(&library);
             dirty = true;
             // Back from a failed hand-off (or a suspend): the output returns.
             audio.wake();

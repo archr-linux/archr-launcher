@@ -161,6 +161,10 @@ pub enum Outcome {
     },
     /// The resume at power on was refused: it is not offered again.
     SkipResume,
+    /// Take this row (a system or a collection) off the systems screen.
+    HideSystem(String),
+    /// Bring every hidden row back.
+    ShowSystems,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -178,6 +182,12 @@ pub enum QuickItem {
     Mangohud,
     Move,
     RestoreOrder,
+    /// Take the system the menu was opened on off the systems screen.
+    Hide,
+    /// Bring the hidden systems back, when there are any.
+    ShowHidden,
+    /// Off the recent games, in the menu of a Recently played game.
+    ForgetRecent,
     Suspend,
     Reboot,
     Shutdown,
@@ -210,6 +220,10 @@ pub trait DataSource {
     }
     /// Saved system ids in user order; empty while the default order applies.
     fn system_order(&self) -> &[String] {
+        &[]
+    }
+    /// Rows the user took off the systems screen.
+    fn hidden_systems(&self) -> &[String] {
         &[]
     }
     fn cores(&self, system: &str) -> Vec<(String, String)>;
@@ -321,6 +335,8 @@ pub struct App {
     pub boot: Option<crate::resume::Boot>,
     history: Vec<(Screen, usize)>,
     moving: Option<order::Moving>,
+    /// The systems row to find again once the host changed the rows.
+    keep_row: Option<String>,
     selected_core: Option<(String, String)>,
     /// The open game menu's MangoHud: the game's value, the system's.
     selected_mangohud: (String, String),
@@ -346,6 +362,7 @@ impl App {
             updates: 0,
             history: Vec::new(),
             moving: None,
+            keep_row: None,
             selected_core: None,
             selected_mangohud: Default::default(),
             modules: std::sync::Arc::default(),
@@ -410,6 +427,9 @@ impl App {
         if self.mangohud {
             items.push(Mangohud);
         }
+        if self.on_recent_list() {
+            items.push(ForgetRecent);
+        }
         items.extend(self.module_items(Context::Game, system));
         items
     }
@@ -422,22 +442,23 @@ impl App {
                 game: Some((system, game)),
             } => self.game_menu_items(data, (system, *game), from_details),
             Screen::QuickMenu { game: None } => {
-                let items: &[QuickItem] = match (self.netplay, data.system_order().is_empty()) {
-                    (false, true) => &[Settings, Move, Suspend, Reboot, Shutdown],
-                    (false, false) => &[Settings, Move, RestoreOrder, Suspend, Reboot, Shutdown],
-                    (true, true) => &[Settings, Netplay, Move, Suspend, Reboot, Shutdown],
-                    (true, false) => &[
-                        Settings,
-                        Netplay,
-                        Move,
-                        RestoreOrder,
-                        Suspend,
-                        Reboot,
-                        Shutdown,
-                    ],
-                };
-                let mut items = items.to_vec();
-                let system = self.quick_system(data).unwrap_or_default();
+                let system = self.quick_system(data);
+                let mut items = vec![Settings];
+                if self.netplay {
+                    items.push(Netplay);
+                }
+                items.push(Move);
+                if !data.system_order().is_empty() {
+                    items.push(RestoreOrder);
+                }
+                if system.is_some() {
+                    items.push(Hide);
+                }
+                if !data.hidden_systems().is_empty() {
+                    items.push(ShowHidden);
+                }
+                items.extend([Suspend, Reboot, Shutdown]);
+                let system = system.unwrap_or_default();
                 let at = items.len() - 3;
                 items.splice(at..at, self.module_items(Context::System, &system));
                 items
@@ -449,6 +470,13 @@ impl App {
         (0..self.modules.quick(context, system).len())
             .map(|n| QuickItem::Module(n as u8))
             .collect()
+    }
+    /// The game menu was opened on the Recently played list.
+    fn on_recent_list(&self) -> bool {
+        matches!(
+            self.history.last(),
+            Some((Screen::Games { system }, _)) if system == "@recent"
+        )
     }
     /// The system a systems-screen quick menu was opened on.
     fn quick_system(&self, data: &dyn DataSource) -> Option<String> {
@@ -661,6 +689,23 @@ impl App {
                     (Button::A, Some(QuickItem::RestoreOrder)) => {
                         self.back();
                         return self.restore_order(data);
+                    }
+                    (Button::A, Some(QuickItem::Hide)) => {
+                        let row = self.quick_system(data);
+                        self.back();
+                        if let Some(row) = row {
+                            return Outcome::HideSystem(row);
+                        }
+                    }
+                    (Button::A, Some(QuickItem::ShowHidden)) => {
+                        self.back();
+                        return self.show_hidden(data);
+                    }
+                    (Button::A, Some(QuickItem::ForgetRecent)) => {
+                        self.back();
+                        if let Some((system, game)) = game {
+                            return Outcome::ForgetRecent { system, game };
+                        }
                     }
                     (Button::A, Some(QuickItem::Suspend)) => {
                         return Outcome::Action(SessionAction::Suspend);
@@ -1091,6 +1136,42 @@ impl App {
             system,
             game,
             value,
+        }
+    }
+
+    /// Where a game launched now was chosen: the systems row, and the
+    /// game's position when it came from a list (`Screen::Games`).
+    pub fn place(&self, data: &dyn DataSource) -> Option<(String, Option<usize>)> {
+        let screens = std::iter::once((&self.screen, self.cursor)).chain(
+            self.history
+                .iter()
+                .rev()
+                .map(|(screen, cursor)| (screen, *cursor)),
+        );
+        for (screen, cursor) in screens {
+            match screen {
+                Screen::Games { system } => return Some((system.clone(), Some(cursor))),
+                Screen::Systems => {
+                    return Self::system_rows(data)
+                        .get(cursor)
+                        .map(|row| (row.clone(), None))
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
+    /// Back to where the last game was chosen: its row, then its list.
+    pub fn return_to(&mut self, row: usize, game: Option<usize>, data: &dyn DataSource) {
+        let Some(system) = Self::system_rows(data).get(row).cloned() else {
+            return;
+        };
+        self.screen = Screen::Systems;
+        self.cursor = row;
+        if let Some(game) = game {
+            self.enter(Screen::Games { system });
+            self.cursor = game;
         }
     }
 

@@ -26,6 +26,19 @@ pub struct Store {
     order: Vec<String>,
     imported_systems: BTreeSet<String>,
     imported_times: HashMap<String, u64>,
+    /// Rows (systems and collections) taken off the systems screen.
+    hidden: Vec<String>,
+    /// Where the last game was launched from, to come back to it.
+    place: Option<Place>,
+}
+
+/// A row of the systems screen and, when the game was chosen from its list,
+/// that game's key.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+pub struct Place {
+    pub row: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub game: Option<String>,
 }
 
 impl Store {
@@ -190,6 +203,28 @@ impl Store {
 
     pub fn clear_order(&mut self) {
         self.order.clear();
+    }
+
+    pub fn hidden(&self) -> &[String] {
+        &self.hidden
+    }
+
+    pub fn hide(&mut self, row: &str) {
+        if !self.hidden.iter().any(|hidden| hidden == row) {
+            self.hidden.push(row.to_owned());
+        }
+    }
+
+    pub fn show_all(&mut self) {
+        self.hidden.clear();
+    }
+
+    pub fn place(&self) -> Option<&Place> {
+        self.place.as_ref()
+    }
+
+    pub fn set_place(&mut self, place: Option<Place>) {
+        self.place = place;
     }
 
     pub fn is_favorite(&self, key: &str) -> bool {

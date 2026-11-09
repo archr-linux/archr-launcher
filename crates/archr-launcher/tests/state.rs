@@ -331,22 +331,17 @@ fn y_opens_quick_menu_and_b_closes() {
 
 #[test]
 fn quick_menu_from_systems_works_even_without_systems() {
-    for data in [FakeData::default(), FakeData::library()] {
+    for (data, hide) in [(FakeData::default(), false), (FakeData::library(), true)] {
         let mut app = App::new(5);
         app.handle(Button::Down, &data);
         let cursor = app.cursor;
         app.handle(Button::Y, &data);
         assert_eq!(app.screen, Screen::QuickMenu { game: None });
-        assert_eq!(
-            app.quick_menu_items(&data),
-            [
-                QuickItem::Settings,
-                QuickItem::Move,
-                QuickItem::Suspend,
-                QuickItem::Reboot,
-                QuickItem::Shutdown
-            ]
-        );
+        let mut items = vec![QuickItem::Settings, QuickItem::Move];
+        // Hiding needs a row under the menu.
+        items.extend(hide.then_some(QuickItem::Hide));
+        items.extend([QuickItem::Suspend, QuickItem::Reboot, QuickItem::Shutdown]);
+        assert_eq!(app.quick_menu_items(&data), items);
         app.handle(Button::Down, &data);
         app.handle(Button::B, &data);
         assert_eq!(app.screen, Screen::Systems);
@@ -424,7 +419,7 @@ fn quick_menu_tools_and_ports_hide_core_and_power_lives_in_the_system_menu() {
     .into_iter()
     .enumerate()
     {
-        app.cursor = index + 2;
+        app.cursor = index + 3;
         assert_eq!(app.handle(Button::A, &data), Outcome::Action(action));
         assert!(matches!(app.screen, Screen::QuickMenu { .. }));
     }
@@ -807,6 +802,117 @@ fn restore_item_exists_only_with_a_custom_order_and_keeps_the_cursor_on_its_row(
     app.handle(Button::Down, &data);
     assert_eq!(app.handle(Button::A, &data), Outcome::SetOrder(Vec::new()));
     assert_eq!((app.screen.clone(), app.cursor), (Screen::Systems, 1));
+}
+
+fn choose(app: &mut App, data: &FakeData, item: QuickItem) -> Outcome {
+    let at = app.quick_menu_items(data).iter().position(|i| *i == item);
+    let at = at.unwrap_or_else(|| panic!("{item:?} not in the menu"));
+    while app.cursor < at {
+        app.handle(Button::Down, data);
+    }
+    app.handle(Button::A, data)
+}
+
+#[test]
+fn hide_takes_the_menus_system_off_and_show_hidden_brings_all_back() {
+    let mut data = FakeData::library();
+    let mut app = App::new(5);
+    app.handle(Button::Down, &data);
+    app.handle(Button::Y, &data);
+    assert!(!app.quick_menu_items(&data).contains(&QuickItem::ShowHidden));
+    assert_eq!(
+        choose(&mut app, &data, QuickItem::Hide),
+        Outcome::HideSystem("snes".into())
+    );
+    assert_eq!((app.screen.clone(), app.cursor), (Screen::Systems, 1));
+    data.hidden = vec!["snes".into()];
+    assert_eq!(App::system_rows(&data), ["nes"]);
+    app.handle(Button::Up, &data);
+    app.handle(Button::Y, &data);
+    assert_eq!(
+        choose(&mut app, &data, QuickItem::ShowHidden),
+        Outcome::ShowSystems
+    );
+    data.hidden.clear();
+    app.follow_row(&data);
+    assert_eq!(App::system_rows(&data)[app.cursor], "nes");
+}
+
+#[test]
+fn hide_is_offered_only_on_a_row() {
+    let data = FakeData::default();
+    let mut app = App::new(5);
+    app.handle(Button::Y, &data);
+    assert!(!app.quick_menu_items(&data).contains(&QuickItem::Hide));
+}
+
+#[test]
+fn a_recently_played_game_can_leave_the_list_from_its_menu() {
+    let mut data = FakeData::library();
+    data.collections();
+    let mut app = in_games("@recent", 0);
+    app.handle(Button::Y, &data);
+    assert_eq!(
+        choose(&mut app, &data, QuickItem::ForgetRecent),
+        Outcome::ForgetRecent {
+            system: "snes".into(),
+            game: 7
+        }
+    );
+    assert_eq!(
+        app.screen,
+        Screen::Games {
+            system: "@recent".into()
+        }
+    );
+    // Not from the system's own list, nor from the favorites.
+    for list in ["snes", "@favorites"] {
+        let mut app = in_games(list, 0);
+        app.handle(Button::Y, &data);
+        assert!(!app
+            .quick_menu_items(&data)
+            .contains(&QuickItem::ForgetRecent));
+    }
+}
+
+#[test]
+fn the_place_of_a_launch_is_its_list_and_game_or_its_row() {
+    let mut data = FakeData::library();
+    data.collections();
+    let mut app = App::new(5);
+    app.handle(Button::Down, &data);
+    app.handle(Button::Down, &data);
+    assert_eq!(app.place(&data), Some(("nes".into(), None)));
+    app.handle(Button::A, &data);
+    app.handle(Button::Down, &data);
+    assert_eq!(app.place(&data), Some(("nes".into(), Some(1))));
+    // The game menu and the details screen keep the list's place.
+    app.handle(Button::Y, &data);
+    assert_eq!(app.place(&data), Some(("nes".into(), Some(1))));
+}
+
+#[test]
+fn return_to_opens_the_list_on_the_game_and_b_goes_to_its_row() {
+    let mut data = FakeData::library();
+    data.collections();
+    let mut app = App::new(5);
+    app.return_to(3, Some(9), &data);
+    assert_eq!(
+        (app.screen.clone(), app.cursor),
+        (
+            Screen::Games {
+                system: "snes".into()
+            },
+            9
+        )
+    );
+    app.handle(Button::B, &data);
+    assert_eq!((app.screen.clone(), app.cursor), (Screen::Systems, 3));
+    let mut app = App::new(5);
+    app.return_to(2, None, &data);
+    assert_eq!((app.screen.clone(), app.cursor), (Screen::Systems, 2));
+    app.return_to(9, Some(0), &data);
+    assert_eq!((app.screen.clone(), app.cursor), (Screen::Systems, 2));
 }
 
 /// An app following `view` of the builtin theme.
