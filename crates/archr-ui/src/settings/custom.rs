@@ -98,11 +98,9 @@ impl Settings {
         u32::from(c.r) << 16 | u32::from(c.g) << 8 | u32::from(c.b)
     }
     /// The theme's own colour (empty), the presets (background only) and the
-    /// draft's own colour, or the one on screen when there is none yet.
+    /// row's own colour, once the editor made one.
     pub fn colour_choices(&self, id: Id) -> Vec<String> {
-        let own = parse_hex(self.value(id))
-            .or_else(|| self.kept_colours.get(&id).copied())
-            .unwrap_or_else(|| self.colour_in_effect(id));
+        let own = parse_hex(self.value(id)).or_else(|| self.kept_colours.get(&id).copied());
         let presets: &[&str] = if id == Id::Background {
             &BACKGROUNDS
         } else {
@@ -111,7 +109,7 @@ impl Settings {
         presets
             .iter()
             .map(|p| (*p).into())
-            .chain([hex(own)])
+            .chain(own.map(hex))
             .collect()
     }
     /// A on a colour row opens the editor at the colour in effect.
@@ -143,6 +141,10 @@ impl Settings {
             Button::A if sliding => {
                 self.values
                     .insert(self.custom_target, hex(self.custom.rgb()));
+                // The accent's remembered custom colour stays its own.
+                if self.custom_target != Id::Accent {
+                    self.custom = self.custom_kept;
+                }
                 return self.back();
             }
             Button::A => {

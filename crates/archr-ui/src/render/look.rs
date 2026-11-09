@@ -29,8 +29,11 @@ pub(super) struct Look<'t> {
     /// view.
     wanted: Vec<PathBuf>,
     wanted_for: Option<(Option<PathBuf>, String)>,
-    /// Each system's background picture, once looked for (None: it has none).
+    /// Each system's background picture, once looked for (None: it has none),
+    /// and their own loader, which keeps them at screen size: full-size
+    /// pictures would push the theme's out of its budget.
     system_pictures: std::collections::HashMap<String, Option<PathBuf>>,
+    backgrounds: Option<CoverCache<'t>>,
 }
 
 /// Where a system's background picture is looked for, first match wins:
@@ -70,6 +73,7 @@ impl<'t> Ui<'_, 't> {
             look.images = Some((key.0.clone(), key.1, cache));
             look.wanted_for = None;
             look.system_pictures.clear();
+            look.backgrounds = None;
         }
         let view = Some((key.0, theme.active_view.clone()));
         if look.wanted_for != view {
@@ -92,6 +96,7 @@ impl<'t> Ui<'_, 't> {
     pub(super) fn look_tick(&mut self) -> bool {
         let due = self.look.due.is_some_and(|due| Instant::now() >= due);
         let look = &mut self.look;
+        let backgrounds = look.backgrounds.as_mut().is_some_and(CoverCache::poll);
         let loaded = look.images.as_mut().is_some_and(|(_, _, cache)| {
             let loaded = cache.poll();
             // Arrived (or found missing) once: never asked for again here, so
@@ -102,7 +107,7 @@ impl<'t> Ui<'_, 't> {
             }
             loaded
         });
-        due || loaded
+        due || loaded || backgrounds
     }
     /// The theme picture at `path`, asking the loader for it the first time.
     fn picture(&mut self, path: &Path) -> Option<(&mut Texture<'t>, &mut Canvas<Window>)> {
@@ -178,8 +183,38 @@ impl<'t> Ui<'_, 't> {
         let own = system
             .filter(|_| theme.user.system_background)
             .and_then(|system| self.system_picture(system));
-        let curtain = own.is_some();
-        if let Some(path) = own.or_else(|| self.look.background.clone()) {
+        // The system's picture once it has loaded; until then, or when it
+        // cannot load, the theme's background.
+        if let (Some(path), Some(creator)) = (own, self.creator) {
+            let root = self.root.clone().unwrap_or_else(|| PathBuf::from("/"));
+            let cache = self.look.backgrounds.get_or_insert_with(|| {
+                CoverCache::scaled(
+                    creator,
+                    root.join("storage/.cache/archr-launcher/thumbs/backgrounds"),
+                    (width, height),
+                    theme.pixel_images,
+                )
+            });
+            cache.request(std::slice::from_ref(&path));
+            if let Some(texture) = cache.get_mut(&path) {
+                let size = texture.query();
+                let part = crop((size.width, size.height), (width, height));
+                let src = Rect::new(
+                    (part[0] * size.width as f32) as i32,
+                    (part[1] * size.height as f32) as i32,
+                    (part[2] * size.width as f32).round().max(1.) as u32,
+                    (part[3] * size.height as f32).round().max(1.) as u32,
+                );
+                self.canvas.copy(texture, src, None)?;
+                let shade = Rgba {
+                    a: SYSTEM_CURTAIN,
+                    ..theme.background
+                };
+                self.rounded(Rect::new(0, 0, width, height), 0., shade, None)?;
+                return self.frames_over(theme);
+            }
+        }
+        if let Some(path) = self.look.background.clone() {
             if let Some((texture, canvas)) = self.picture(&path) {
                 let size = texture.query();
                 let part = crop((size.width, size.height), (width, height));
@@ -190,15 +225,13 @@ impl<'t> Ui<'_, 't> {
                     (part[3] * size.height as f32).round().max(1.) as u32,
                 );
                 canvas.copy(texture, src, None)?;
-                if curtain {
-                    let shade = Rgba {
-                        a: SYSTEM_CURTAIN,
-                        ..theme.background
-                    };
-                    self.rounded(Rect::new(0, 0, width, height), 0., shade, None)?;
-                }
             }
         }
+        self.frames_over(theme)
+    }
+    /// The header and footer frames over the background.
+    fn frames_over(&mut self, theme: &Theme) -> Result<(), String> {
+        let Frame { width, height, .. } = self.frame;
         let frame = self.frame;
         let h = |fraction: f32| frame.size(fraction).round().max(1.) as u32;
         self.framed("header", Rect::new(0, 0, width, h(theme.header_height)))?;

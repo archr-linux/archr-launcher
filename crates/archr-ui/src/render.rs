@@ -2010,14 +2010,21 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 // Appearance: the letter alone, in the text colour.
                 if theme.user.text_hints {
                     if button == '↕' {
-                        self.icon(Glyph::ArrowUpDown, badge, theme.text)?;
+                        let icon = self.frame.square(
+                            badge.x() + (badge.width() as i32 - self.px(14.)) / 2,
+                            badge.y() + (badge.height() as i32 - self.px(14.)) / 2,
+                            14.,
+                        );
+                        self.icon(Glyph::ArrowUpDown, icon, theme.text)?;
                     } else {
+                        let outlining = std::mem::replace(&mut self.look.outlining, false);
                         self.label_aligned(
                             &button.to_string(),
                             (Face::Semibold, 14., theme.text),
                             badge,
                             Align::Center,
                         )?;
+                        self.look.outlining = outlining;
                     }
                     continue;
                 }

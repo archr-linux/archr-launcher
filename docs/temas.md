@@ -350,7 +350,7 @@ Na lista de jogos e nos detalhes de um sistema, o launcher usa a imagem do siste
 - Ordem de busca: primeiro a pasta do usuário `/storage/.config/archr-launcher/backgrounds/`, depois o `backgrounds/` do tema, depois o `backgrounds/` do tema padrão.
 - A imagem cobre a tela inteira (cortada para preencher) sob uma cortina da cor `background` do tema, a cerca de 59 % de opacidade (alfa 150), para o texto continuar legível. Ela substitui o `background_image` do tema nessas telas.
 - As coleções (`@favorites`, `@recent`) mantêm o fundo do tema.
-- Imagens com mais de 2048 px de lado são recusadas. Deixe-as no tamanho da tela, por exemplo 640×480 ou 1280×720.
+- A imagem é reduzida ao tamanho da tela quando carrega, então qualquer tamanho funciona; no tamanho da tela (640×480, 720×720 ou 1280×720) ela carrega mais rápido no aparelho.
 - Sem imagem para o sistema, vale o fundo do tema. Escolha um `background` que combine com a cortina.
 
 ### Molduras (9-slice)

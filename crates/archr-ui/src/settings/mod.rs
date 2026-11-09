@@ -2226,6 +2226,9 @@ mod appearance_tests {
         };
         state.cursor = row(&state, Id::TextColor);
         assert_eq!(state.value(Id::TextColor), "");
+        // Nothing to go to before the editor made a colour.
+        assert_eq!(state.colour_choices(Id::TextColor), [String::new()]);
+        let accent_custom = state.custom;
         state.handle(Button::A);
         assert_eq!(
             (state.page(), state.custom_target),
@@ -2235,6 +2238,8 @@ mod appearance_tests {
         state.handle(Button::A);
         assert_eq!(state.value(Id::TextColor), "#33CC66");
         assert_eq!(state.value(Id::Accent), "");
+        // The accent keeps its own remembered custom colour.
+        assert_eq!(state.custom, accent_custom);
         // L/R go between the theme's colour and this one.
         state.cursor = row(&state, Id::TextColor);
         state.handle(Button::R);
