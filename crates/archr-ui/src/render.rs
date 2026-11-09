@@ -314,14 +314,17 @@ fn status_layout(
     header_height: u32,
     scale: f32,
     clock_width: u32,
+    // With a battery: its number's width, 0 when the number is hidden.
     percent_width: Option<u32>,
     wifi: bool,
 ) -> StatusLayout {
+    let number = percent_width.filter(|w| *w > 0);
     let px = |v: f32| (v * scale).round().max(1.) as u32;
     let width = px(12.) * 2
         + clock_width
         + if wifi { px(16.) + px(12.) } else { 0 }
-        + percent_width.map_or(0, |w| px(12.) + px(24.) + px(6.) + w);
+        + percent_width.map_or(0, |_| px(12.) + px(24.))
+        + number.map_or(0, |w| px(6.) + w);
     let center = header_height as i32 / 2;
     let pill = Rect::new(
         right - width as i32,
@@ -342,7 +345,7 @@ fn status_layout(
         wifi: panel(wifi.then_some(px(16.)), px(16.), px(12.)),
         clock: panel(Some(clock_width), px(16.), px(12.)).expect("clock is always visible"),
         battery: panel(percent_width.map(|_| px(24.)), px(24.), px(6.)),
-        percent: panel(percent_width, px(16.), 0),
+        percent: panel(number, px(16.), 0),
     }
 }
 
@@ -1180,10 +1183,11 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 .filter(|_| theme.user.battery_percent)
                 .map(|b| format!("{}%", b.percent));
             let clock_width = self.measure(&clock, Face::Mono, 13.)?;
-            let percent_width = percent
-                .as_deref()
-                .map(|s| self.measure(s, Face::Mono, 13.))
-                .transpose()?;
+            let percent_width = match (battery, percent.as_deref()) {
+                (Some(_), Some(s)) => Some(self.measure(s, Face::Mono, 13.)?),
+                (Some(_), None) => Some(0),
+                _ => None,
+            };
             let layout = status_layout(
                 right,
                 h,
@@ -1208,10 +1212,10 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 self.icon(Glyph::Wifi, icon, ink)?;
             }
             self.label(&clock, (Face::Mono, 13., theme.muted), layout.clock)?;
-            if let (Some(b), Some(icon), Some(panel), Some(text)) =
-                (battery, layout.battery, layout.percent, percent)
-            {
-                self.label(&text, (Face::Mono, 13., theme.muted), panel)?;
+            if let (Some(b), Some(icon)) = (battery, layout.battery) {
+                if let (Some(panel), Some(text)) = (layout.percent, percent) {
+                    self.label(&text, (Face::Mono, 13., theme.muted), panel)?;
+                }
                 self.icon(
                     battery_glyph(b),
                     icon,
@@ -2978,5 +2982,10 @@ mod tests {
         assert_eq!(off.clock.x() - off.pill.x(), 12);
         assert_eq!(on.battery.unwrap().x() - on.clock.right(), 12);
         assert_eq!(on.percent.unwrap().x() - on.battery.unwrap().right(), 6);
+        // The number hidden in Appearance: the icon stays and ends the pill.
+        let bare = status_layout(616, 44, 1., 39, Some(0), true);
+        assert_eq!(bare.percent, None);
+        assert_eq!(bare.pill.right() - bare.battery.unwrap().right(), 12);
+        assert_eq!(bare.pill.width(), 157 - 6 - 24);
     }
 }

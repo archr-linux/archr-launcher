@@ -91,7 +91,11 @@ pub const APPEARANCE: &[Row] = &[
     row(Id::GameArt, "settings.game_art", Kind::Toggle).under("settings.games_screen"),
     row(Id::ArtWidth, "settings.art_width", Kind::Value),
     row(Id::ArtRadius, "settings.art_radius", Kind::Value),
-    row(Id::SwitcherCurtain, "settings.switcher_curtain", Kind::Value),
+    row(
+        Id::SwitcherCurtain,
+        "settings.switcher_curtain",
+        Kind::Value,
+    ),
     row(Id::Restore, "settings.restore", Kind::Action),
 ];
 pub const NETPLAY: &[Row] = &[

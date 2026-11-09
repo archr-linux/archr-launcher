@@ -132,8 +132,19 @@ impl Appearance {
     pub const IDS: [crate::settings::Id; 13] = {
         use crate::settings::Id::*;
         [
-            Theme, View, Accent, Background, Font, FontWeight, TextSize, Animations,
-            BatteryPercent, GameArt, ArtWidth, ArtRadius, SwitcherCurtain,
+            Theme,
+            View,
+            Accent,
+            Background,
+            Font,
+            FontWeight,
+            TextSize,
+            Animations,
+            BatteryPercent,
+            GameArt,
+            ArtWidth,
+            ArtRadius,
+            SwitcherCurtain,
         ]
     };
     /// Multiplier for every interface text size.
