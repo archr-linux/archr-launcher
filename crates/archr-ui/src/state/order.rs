@@ -1,5 +1,5 @@
 //! User ordering of the systems list: the merge rules and the move mode.
-use super::{App, Button, DataSource, Outcome};
+use super::{App, Button, DataSource, Outcome, Screen};
 
 /// An uncommitted reorder: the working rows and where the item started.
 pub(super) struct Moving {
@@ -10,6 +10,7 @@ pub(super) struct Moving {
 impl App {
     /// Rows in their default order: collections first, then systems with games.
     pub fn default_rows(data: &dyn DataSource) -> Vec<String> {
+        let hidden = data.hidden_systems();
         ["@favorites", "@recent"]
             .into_iter()
             .filter(|name| data.collection_len(name) > 0)
@@ -20,6 +21,7 @@ impl App {
                     .filter(|system| system.game_count > 0)
                     .map(|system| system.name.clone()),
             )
+            .filter(|row| !hidden.contains(row))
             .collect()
     }
 
@@ -83,6 +85,28 @@ impl App {
         moving.rows.swap(self.cursor, to);
         self.cursor = to;
         Outcome::None
+    }
+
+    /// Keeps the cursor on the same row while the hidden ones come back.
+    pub(super) fn show_hidden(&mut self, data: &dyn DataSource) -> Outcome {
+        self.keep_row = Self::system_rows(data).get(self.cursor).cloned();
+        Outcome::ShowSystems
+    }
+
+    /// The row the cursor was on before the rows changed, once the host
+    /// changed them: the cursor finds it again.
+    /// On the systems screen a row taken off (hidden) leaves the cursor on
+    /// the row that took its place, or the last one.
+    pub fn follow_row(&mut self, data: &dyn DataSource) {
+        let rows = Self::system_rows(data);
+        if let Some(row) = self.keep_row.take() {
+            if let Some(index) = rows.iter().position(|r| *r == row) {
+                self.cursor = index;
+            }
+        }
+        if self.screen == Screen::Systems && self.moving.is_none() {
+            self.cursor = self.cursor.min(rows.len().saturating_sub(1));
+        }
     }
 
     /// Keeps the cursor on the same row while it returns to its default place.

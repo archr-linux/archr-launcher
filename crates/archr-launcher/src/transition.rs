@@ -427,7 +427,7 @@ esac
         drop(ui);
         std::env::set_var("ARCHR_LAUNCHER_ROOT", root.path());
         std::env::set_var("ARCHR_TEST_SYSTEMCTL", &systemctl);
-        for (target, command) in [(4, "poweroff\n"), (3, "reboot\n")] {
+        for (target, command) in [(5, "poweroff\n"), (4, "reboot\n")] {
             fs::create_dir_all(paths.lock.parent().unwrap()).unwrap();
             fs::write(&paths.lock, std::process::id().to_string()).unwrap();
             let mut phase = 0;
@@ -480,18 +480,19 @@ esac
                             // Power actions live in the system menu, not the game's.
                             5 if deferred.is_some() => Some(Keycode::Backspace),
                             6 if matches!(app.screen, Screen::Systems) => Some(Keycode::Y),
-                            // Settings, Move, Suspend, Reboot (3), Shutdown (4).
+                            // Settings, Move, Hide, Suspend, Reboot (4), Shutdown (5).
                             7 if app.cursor == 0 => Some(Keycode::Down),
                             8 if app.cursor == 1 => Some(Keycode::Down),
                             9 if app.cursor == 2 => Some(Keycode::Down),
-                            10 if target == 4 && app.cursor == 3 => Some(Keycode::Down),
-                            10 | 11 if app.cursor == target => {
+                            10 if app.cursor == 3 => Some(Keycode::Down),
+                            11 if target == 5 && app.cursor == 4 => Some(Keycode::Down),
+                            11 | 12 if app.cursor == target => {
                                 assert_eq!(library.pending_writes, 1);
                                 fs::remove_file(&paths.lock).unwrap();
-                                phase = 12;
+                                phase = 13;
                                 None
                             }
-                            12 if library.pending_writes == 0 => {
+                            13 if library.pending_writes == 0 => {
                                 assert!(!library.write_failed);
                                 assert!(
                                     matches!(deferred, Some(Outcome::Launch { system, game: 0 }) if system == "nes")
@@ -520,7 +521,7 @@ esac
                 );
                 result.unwrap();
             });
-            assert_eq!(phase, 13, "power input followed a real pending core write");
+            assert_eq!(phase, 14, "power input followed a real pending core write");
             assert_eq!(
                 fs::read_to_string(root.path().join("commands")).unwrap(),
                 command

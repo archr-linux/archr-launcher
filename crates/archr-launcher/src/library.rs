@@ -4,7 +4,7 @@ use crate::{
     paths::Paths,
     persistence::StoreWriter,
     state::{App, DataSource, Outcome},
-    store::{game_key, Store},
+    store::{game_key, Place, Store},
     worker::{self, Update, Work, Worker},
 };
 use archr_config::SystemCfg;
@@ -291,6 +291,14 @@ impl Library {
             | Outcome::Achievements { .. }
             | Outcome::SkipResume
             | Outcome::Module(_) => {}
+            Outcome::HideSystem(row) => {
+                self.store.hide(&row);
+                self.queue_store();
+            }
+            Outcome::ShowSystems => {
+                self.store.show_all();
+                self.queue_store();
+            }
             Outcome::ForgetRecent { system, game } => {
                 let key = self.game_key(&system, game).ok_or("error.game_missing")?;
                 self.store.forget_recent(&key);
@@ -499,6 +507,45 @@ impl Library {
             .find(|&n| self.game_key(system, n).as_deref() == Some(key))?;
         self.current_core(system, index).map(|_| index)
     }
+    /// Keeps where this launch was chosen (`App::place`), by the game's key,
+    /// for the next start. A launch from no list or row (the switcher, the
+    /// resume) comes back to the launched game's own system.
+    pub fn remember_place(
+        &mut self,
+        place: Option<(String, Option<usize>)>,
+        launched: (&str, usize),
+    ) {
+        let (row, game) = place.unwrap_or_else(|| (launched.0.to_owned(), Some(launched.1)));
+        let game = game.and_then(|n| {
+            let (system, index) = self.origin(&row, n)?;
+            self.game_key(&system, index)
+        });
+        self.store.set_place(Some(Place { row, game }));
+    }
+    pub fn place(&self) -> Option<&Place> {
+        self.store.place()
+    }
+    /// The place's game in its row's list, once that list is loaded (None
+    /// until then); Some(None) when the place has no game or it is gone.
+    pub fn locate(&mut self, place: &Place) -> Option<Option<usize>> {
+        let Some(key) = &place.game else {
+            return Some(None);
+        };
+        // A row taken off the systems screen opens no list.
+        if !App::system_rows(self).contains(&place.row) {
+            return Some(None);
+        }
+        self.ensure(&place.row);
+        if self.loading(&place.row) {
+            return None;
+        }
+        Some((0..self.games(&place.row).len()).find(|&n| {
+            self.origin(&place.row, n)
+                .and_then(|(system, index)| self.game_key(&system, index))
+                .as_ref()
+                == Some(key)
+        }))
+    }
     pub fn game_key(&self, system: &str, index: usize) -> Option<String> {
         game_key(
             self.definition(system)?,
@@ -588,6 +635,9 @@ impl DataSource for Library {
     }
     fn system_order(&self) -> &[String] {
         self.store.order()
+    }
+    fn hidden_systems(&self) -> &[String] {
+        self.store.hidden()
     }
     fn is_tools(&self, system: &str) -> bool {
         self.definition(system).is_some_and(crate::store::is_tools)

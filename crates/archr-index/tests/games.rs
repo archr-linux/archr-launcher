@@ -114,6 +114,31 @@ fn scan_recurses_three_directories_and_skips_hidden_and_media_entries() {
     assert_eq!(names, ["First", "Root", "Second", "Third"]);
 }
 
+/// PortMaster keeps each port's data (and its own helper scripts) in a folder
+/// beside the launch script: only the scripts at the top are ports.
+#[test]
+fn ports_lists_only_the_launch_scripts_at_the_top() {
+    let directory = tempfile::tempdir().unwrap();
+    for name in [
+        "Cave Story.sh",
+        "Stardew.AppImage",
+        "cavestory/cavestory.sh",
+        "cavestory/lib/helper.sh",
+        "PortMaster/PortMaster.sh",
+        "PortMaster/pugwash.sh",
+    ] {
+        touch(directory.path(), name);
+    }
+    let ports = SystemDef {
+        name: "ports".into(),
+        extensions: vec![".sh".into(), ".appimage".into()],
+        ..system(directory.path())
+    };
+    let games = scan_system(&ports);
+    let names: Vec<_> = games.iter().map(|game| game.name.as_str()).collect();
+    assert_eq!(names, ["Cave Story", "Stardew"]);
+}
+
 #[test]
 fn extension_matching_directories_are_games_not_containers() {
     let directory = tempfile::tempdir().unwrap();
