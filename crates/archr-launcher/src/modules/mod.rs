@@ -69,6 +69,11 @@ const INSTALL_EVERY: Duration = Duration::from_secs(1);
 /// to one of the app's `screen.confirm`s, once.
 const CONFIRMED: Duration = Duration::from_secs(30);
 
+/// Where the pictures an app's screens show are copied, beside the data
+/// folders and out of every module's reach (no id starts with a dot).
+fn pictures(dirs: &Dirs, id: &str) -> PathBuf {
+    dirs.data.join(".pictures").join(id)
+}
 /// The daemons map knows an app's process by this key; `_` is never in a
 /// module id.
 fn app_key(id: &str) -> String {
@@ -1107,6 +1112,7 @@ impl Host {
             let _ = fs::remove_dir_all(dirs.data_dir(id));
             let _ = fs::remove_file(dirs.settings_file(id));
             let _ = fs::remove_file(dirs.secrets_file(id));
+            let _ = fs::remove_dir_all(pictures(dirs, id));
             self.state.uids.remove(id);
         }
         self.state.modules.remove(id);
@@ -1461,6 +1467,8 @@ impl Host {
         self.app = Some(id.to_owned());
         self.screens.clear();
         self.answered.remove(id);
+        // The last session's pictures go; this one copies what it shows.
+        let _ = fs::remove_dir_all(pictures(&self.config.dirs, id));
         self.spawn_daemon(&app_key(id));
         if !self.daemons.contains_key(&app_key(id)) {
             self.app = None;
@@ -1776,9 +1784,11 @@ impl Host {
                         });
                     found.clone()
                 };
+                let store = pictures(&self.config.dirs, id);
                 let mut reader = app::Reader {
                     installed,
                     home: &home,
+                    store: &store,
                     icon: &mut icon,
                 };
                 match reader.message(method, params) {

@@ -170,12 +170,13 @@ fn the_demo_catalog_installs_and_removes_a_game() {
     let cover = catalog.items[0]
         .image
         .clone()
-        .expect("its cover, in its folder");
-    assert!(cover.starts_with(
-        base.join("module-data/catalogo-demo")
-            .canonicalize()
-            .unwrap()
-    ));
+        .expect("its cover, from its folder");
+    // The screens decode the launcher's copy, never the module's file.
+    assert!(cover.starts_with(base.join("module-data/.pictures/catalogo-demo")));
+    assert_eq!(
+        fs::read(&cover).unwrap(),
+        fs::read(base.join("module-data/catalogo-demo/cache/covers/g1.png")).unwrap()
+    );
     probe.wait("its summary", |p| {
         p.view.apps()[0].summary == "4 test games"
     });

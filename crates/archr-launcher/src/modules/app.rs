@@ -15,6 +15,7 @@ use std::{
     collections::BTreeMap,
     fs,
     io::{self, BufRead, BufReader, Read},
+    os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd},
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -45,35 +46,74 @@ pub fn picture(bytes: &[u8]) -> bool {
         || (bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP")
 }
 
-/// A file inside `home` by a relative path: no `..`, no absolute path, no
-/// link out of it, at most `limit` bytes. Its real path and size.
-pub fn inside(home: &Path, relative: &str, limit: u64) -> Option<(PathBuf, u64)> {
+/// A regular file inside `home` by a relative path (no `..`, no absolute
+/// path), opened one folder at a time without following any link, at most
+/// `limit` bytes and with no other name. What is checked is the handle the
+/// launcher then reads: renaming or linking afterwards changes nothing.
+pub fn open_inside(home: &Path, relative: &str, limit: u64) -> Option<(fs::File, u64)> {
+    use std::os::unix::fs::MetadataExt;
+    let parts: Vec<&str> = relative.split('/').collect();
     let plain = !relative.is_empty()
         && relative.len() <= 256
-        && !relative.starts_with('/')
         && !relative.chars().any(char::is_control)
-        && relative
-            .split('/')
-            .all(|part| !part.is_empty() && part != ".." && part != ".");
+        && parts
+            .iter()
+            .all(|part| !part.is_empty() && *part != ".." && *part != ".");
     if !plain {
         return None;
     }
-    let root = home.canonicalize().ok()?;
-    let path = root.join(relative);
-    let meta = fs::symlink_metadata(&path).ok()?;
-    if !meta.is_file() || meta.len() > limit {
-        return None;
+    let flags = libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+    let mut dir = openat(libc::AT_FDCWD, home.as_os_str(), flags | libc::O_DIRECTORY)?;
+    let (last, folders) = parts.split_last()?;
+    for part in folders {
+        dir = openat(dir.as_raw_fd(), part.as_ref(), flags | libc::O_DIRECTORY)?;
     }
-    // A linked folder on the way may still lead out.
-    let real = path.canonicalize().ok()?;
-    real.starts_with(&root).then_some((real, meta.len()))
+    // Non-blocking: a FIFO never holds the host.
+    let file = fs::File::from(openat(
+        dir.as_raw_fd(),
+        last.as_ref(),
+        flags | libc::O_NONBLOCK,
+    )?);
+    let meta = file.metadata().ok()?;
+    (meta.is_file() && meta.len() <= limit && meta.nlink() == 1).then_some((file, meta.len()))
 }
-/// A picture inside `home` the launcher will decode.
-pub fn image(home: &Path, relative: &str) -> Option<PathBuf> {
-    let (path, _) = inside(home, relative, IMAGE_BYTES)?;
-    let mut head = [0u8; 12];
-    fs::File::open(&path).ok()?.read_exact(&mut head).ok()?;
-    picture(&head).then_some(path)
+fn openat(dir: RawFd, name: &std::ffi::OsStr, flags: i32) -> Option<OwnedFd> {
+    use std::os::unix::ffi::OsStrExt;
+    let name = std::ffi::CString::new(name.as_bytes()).ok()?;
+    // SAFETY: a valid C string and a directory descriptor (or AT_FDCWD).
+    let fd = unsafe { libc::openat(dir, name.as_ptr(), flags) };
+    // SAFETY: a descriptor openat just returned, owned from here on.
+    (fd >= 0).then(|| unsafe { OwnedFd::from_raw_fd(fd) })
+}
+/// The bytes of a picture inside `home`: up to 4 MiB of PNG, JPEG or WebP.
+pub fn picture_bytes(home: &Path, relative: &str) -> Option<Vec<u8>> {
+    let (file, size) = open_inside(home, relative, IMAGE_BYTES)?;
+    let mut bytes = Vec::with_capacity(size as usize);
+    file.take(IMAGE_BYTES + 1).read_to_end(&mut bytes).ok()?;
+    (bytes.len() as u64 <= IMAGE_BYTES && picture(&bytes)).then_some(bytes)
+}
+/// A picture of the module's screens, copied from the handle into `store`
+/// (the launcher's, out of the module's reach) under a name from its
+/// content: the screens decode that copy, never the module's file.
+pub fn image(home: &Path, relative: &str, store: &Path) -> Option<PathBuf> {
+    use sha2::{Digest, Sha256};
+    let bytes = picture_bytes(home, relative)?;
+    let digest = Sha256::digest(&bytes);
+    let name: String = digest[..12].iter().map(|b| format!("{b:02x}")).collect();
+    let path = store.join(format!("{name}.{}", kind(&bytes)));
+    if !path.is_file() {
+        fs::create_dir_all(store).ok()?;
+        archr_io::atomic_publish(&path, false, |file| io::Write::write_all(file, &bytes)).ok()?;
+    }
+    Some(path)
+}
+/// The extension of a `picture`.
+fn kind(bytes: &[u8]) -> &'static str {
+    match bytes.first() {
+        Some(0x89) => "png",
+        Some(0xff) => "jpg",
+        _ => "webp",
+    }
 }
 
 /// What turns a module's message into what the screens draw: its texts,
@@ -81,6 +121,8 @@ pub fn image(home: &Path, relative: &str) -> Option<PathBuf> {
 pub struct Reader<'a> {
     pub installed: &'a Installed,
     pub home: &'a Path,
+    /// Where the pictures the screens show are copied.
+    pub store: &'a Path,
     /// A Lucide name to the module's own unmodified SVG.
     pub icon: &'a mut dyn FnMut(&str) -> Option<Arc<str>>,
 }
@@ -100,7 +142,7 @@ impl Reader<'_> {
             .collect()
     }
     fn image(&self, value: &Json) -> Option<PathBuf> {
-        image(self.home, value.as_str()?)
+        image(self.home, value.as_str()?, self.store)
     }
     fn item(&self, value: &Json) -> Option<Item> {
         Some(Item {
@@ -381,8 +423,9 @@ pub fn check(
         .find(|s| s.name == system)
         .ok_or((-32004, "no such system"))?;
     let file = params["file"].as_str().ok_or((-32602, "file"))?;
-    let (source, size) = inside(home, file, ROM_BYTES).ok_or((-32602, "file"))?;
-    let ext = source
+    let (source, size) = open_inside(home, file, ROM_BYTES).ok_or((-32602, "file"))?;
+    let named = Path::new(file);
+    let ext = named
         .extension()
         .and_then(|e| e.to_str())
         .map(|e| format!(".{}", e.to_lowercase()))
@@ -394,10 +437,10 @@ pub fn check(
         return Err((-32003, "too much installed"));
     }
     let cover = match params.get("cover").and_then(Json::as_str) {
-        Some(cover) => Some(image(home, cover).ok_or((-32602, "cover"))?),
+        Some(cover) => Some(picture_bytes(home, cover).ok_or((-32602, "cover"))?),
         None => None,
     };
-    let stem = source.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+    let stem = named.file_stem().and_then(|s| s.to_str()).unwrap_or("");
     let name = Some(safe_name(params["name"].as_str().unwrap_or("")))
         .filter(|n| !n.is_empty())
         .unwrap_or_else(|| safe_name(stem));
@@ -414,14 +457,15 @@ pub fn check(
         meta: params["meta"].clone(),
     })
 }
-/// A checked `rom.install`, for a worker to carry out.
+/// A checked `rom.install`, for a worker to carry out: the game's file is
+/// the handle opened while checking, the cover the bytes read then.
 pub struct Copy {
     def: SystemDef,
-    source: PathBuf,
+    source: fs::File,
     size: u64,
     ext: String,
     name: String,
-    cover: Option<PathBuf>,
+    cover: Option<Vec<u8>>,
     meta: Json,
 }
 impl Copy {
@@ -435,70 +479,64 @@ impl Copy {
             cover,
             meta,
         } = self;
-        place(&def, (&source, size, &ext), &name, cover, &meta)
+        let root = &def.path;
+        fs::create_dir_all(root).map_err(|_| (-32000, "cannot write"))?;
+        let rom = free_name(root, &name, &ext);
+        copy(source, size, &rom).map_err(|_| (-32000, "cannot write"))?;
+        let cover = cover.and_then(|bytes| {
+            let images = root.join("media/images");
+            let stem = rom.file_stem()?.to_str()?;
+            let target = free_name(&images, stem, &format!(".{}", kind(&bytes)));
+            fs::create_dir_all(&images).ok()?;
+            archr_io::atomic_publish(&target, true, |file| io::Write::write_all(file, &bytes))
+                .ok()
+                .map(|()| target)
+        });
+        let field = |key: &str, max: usize| -> String {
+            meta[key]
+                .as_str()
+                .unwrap_or("")
+                .chars()
+                .filter(|c| *c == '\n' || !c.is_control())
+                .take(max)
+                .collect()
+        };
+        let mut fields = vec![("name", name.clone())];
+        fields.push(("desc", field("description", TEXT)));
+        fields.push(("developer", field("developer", 120)));
+        if let Some(year) = meta["year"].as_u64().filter(|y| (1950..=2100).contains(y)) {
+            fields.push(("releasedate", format!("{year}0101T000000")));
+        }
+        if let Some(cover) = &cover {
+            fields.push(("image", cover.display().to_string()));
+        }
+        let update = archr_index::GameUpdate {
+            rom: rom.clone(),
+            fields,
+        };
+        if let Err(error) = archr_index::update_gamelist(root, &[update], true) {
+            log::warn!("Cannot add {} to the gamelist: {error}", rom.display());
+        }
+        Ok(Game {
+            game_key: crate::store::game_key(&def, &rom).unwrap_or_default(),
+            system: def.name.clone(),
+            rom,
+            cover,
+            size,
+            installed: super::now_secs(),
+        })
     }
 }
-fn place(
-    def: &SystemDef,
-    (source, size, ext): (&Path, u64, &str),
-    name: &str,
-    cover: Option<PathBuf>,
-    meta: &Json,
-) -> Result<Game, Refusal> {
-    let root = &def.path;
-    fs::create_dir_all(root).map_err(|_| (-32000, "cannot write"))?;
-    let rom = free_name(root, name, ext);
-    copy(source, &rom).map_err(|_| (-32000, "cannot write"))?;
-    let cover = cover.and_then(|picture| {
-        let images = root.join("media/images");
-        let ext = picture
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("png")
-            .to_lowercase();
-        let stem = rom.file_stem()?.to_str()?;
-        let target = free_name(&images, stem, &format!(".{ext}"));
-        fs::create_dir_all(&images).ok()?;
-        copy(&picture, &target).ok().map(|()| target)
-    });
-    let field = |key: &str, max: usize| -> String {
-        meta[key]
-            .as_str()
-            .unwrap_or("")
-            .chars()
-            .filter(|c| *c == '\n' || !c.is_control())
-            .take(max)
-            .collect()
-    };
-    let mut fields = vec![("name", name.to_owned())];
-    fields.push(("desc", field("description", TEXT)));
-    fields.push(("developer", field("developer", 120)));
-    if let Some(year) = meta["year"].as_u64().filter(|y| (1950..=2100).contains(y)) {
-        fields.push(("releasedate", format!("{year}0101T000000")));
-    }
-    if let Some(cover) = &cover {
-        fields.push(("image", cover.display().to_string()));
-    }
-    let update = archr_index::GameUpdate {
-        rom: rom.clone(),
-        fields,
-    };
-    if let Err(error) = archr_index::update_gamelist(root, &[update], true) {
-        log::warn!("Cannot add {} to the gamelist: {error}", rom.display());
-    }
-    Ok(Game {
-        game_key: crate::store::game_key(def, &rom).unwrap_or_default(),
-        system: def.name.clone(),
-        rom,
-        cover,
-        size,
-        installed: super::now_secs(),
+/// The checked handle copied whole, exactly the size it had, or nothing.
+fn copy(source: fs::File, size: u64, to: &Path) -> io::Result<()> {
+    archr_io::atomic_publish(to, true, |file| {
+        let copied = io::copy(&mut source.take(size + 1), file)?;
+        if copied == size {
+            Ok(())
+        } else {
+            Err(io::Error::other("the file changed while it was copied"))
+        }
     })
-}
-/// The copy lands whole or not at all.
-fn copy(from: &Path, to: &Path) -> io::Result<()> {
-    let mut source = fs::File::open(from)?;
-    archr_io::atomic_publish(to, true, |file| io::copy(&mut source, file).map(|_| ()))
 }
 /// `rom.remove`: the ROM, its cover and its gamelist entry.
 pub fn remove(game: &Game, systems: &[SystemDef]) {
@@ -636,14 +674,21 @@ mod tests {
     #[test]
     fn pictures_and_files_stay_inside_the_home() {
         let dir = tempfile::tempdir().unwrap();
-        let home = dir.path().join("home");
+        let (home, store) = (dir.path().join("home"), dir.path().join("store"));
         fs::create_dir_all(home.join("cache")).unwrap();
         fs::write(home.join("cache/A.png"), PNG).unwrap();
         fs::write(home.join("cache/A.txt"), b"hello world!").unwrap();
         fs::write(dir.path().join("Secret.png"), PNG).unwrap();
         symlink(dir.path().join("Secret.png"), home.join("Link.png")).unwrap();
         symlink(dir.path(), home.join("out")).unwrap();
-        assert!(image(&home, "cache/A.png").is_some());
+        fs::write(home.join("cache/B.png"), PNG).unwrap();
+        fs::hard_link(home.join("cache/B.png"), home.join("Twin.png")).unwrap();
+        let copy = image(&home, "cache/A.png", &store).unwrap();
+        assert!(
+            copy.starts_with(&store),
+            "the screens read the launcher's copy"
+        );
+        assert_eq!(fs::read(&copy).unwrap(), PNG);
         for bad in [
             "cache/A.txt",
             "../Secret.png",
@@ -654,12 +699,36 @@ mod tests {
             "./cache/A.png",
             "",
             "cache/Missing.png",
+            "Twin.png",
         ] {
-            assert!(image(&home, bad).is_none(), "{bad}");
+            assert!(image(&home, bad, &store).is_none(), "{bad}");
         }
-        assert!(inside(&home, "cache/A.txt", 4).is_none(), "too big");
+        assert!(open_inside(&home, "cache/A.txt", 4).is_none(), "too big");
         assert!(picture(b"\xff\xd8\xff\xe0") && picture(b"RIFF\0\0\0\0WEBPVP8 "));
         assert!(!picture(b"GIF89a"));
+    }
+
+    /// The copy reads the handle opened while checking: a name swapped for
+    /// a link afterwards copies nothing else.
+    #[test]
+    fn a_swap_after_the_check_changes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        fs::create_dir_all(home.join("downloads")).unwrap();
+        fs::write(home.join("downloads/a.gb"), b"game").unwrap();
+        fs::write(dir.path().join("shadow"), b"root:secret").unwrap();
+        let systems = [system(dir.path())];
+        let params = json!({"system": "gb", "file": "downloads/a.gb", "name": "A"});
+        let checked = check(&home, &params, &["gb".to_owned()], &systems, 0).unwrap();
+        fs::remove_file(home.join("downloads/a.gb")).unwrap();
+        symlink(dir.path().join("shadow"), home.join("downloads/a.gb")).unwrap();
+        let game = checked.run().unwrap();
+        assert_eq!(fs::read(&game.rom).unwrap(), b"game");
+        // Checked now, the link is refused.
+        assert_eq!(
+            check(&home, &params, &["gb".to_owned()], &systems, 0).err(),
+            Some((-32602, "file"))
+        );
     }
 
     #[test]
