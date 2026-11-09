@@ -60,7 +60,7 @@ com o `accent_text` do próprio tema. As seis cores prontas vêm depois (a que f
 igual à do tema some) e a personalizada por último. Quando o usuário escolhe outra
 cor, o texto sobre ela fica preto ou branco automaticamente, pelo contraste.
 
-O Fundo começa em **Do tema** (as superfícies do tema); Preto e Azul-noite são
+O Fundo começa em **Do tema** (as superfícies do tema); Preto, Azul-noite e uma cor personalizada são
 alternativas. Trocar de tema leva junto tudo que está em "do tema"; o que o
 usuário escolheu explicitamente continua. **Restaurar padrão** volta tudo para
 o tema escolhido.
@@ -77,15 +77,24 @@ Em Aparência há escolhas gravadas no `system.cfg` que valem por cima de **qual
 | Largura da capa (`launcher.art_width`) | do tema / 35, 40, 45, 50, 55 % da largura da tela | a capa mantém a borda de fora (a que fica longe da lista); a lista ao lado mantém a folga até ela; `meta` acompanha a capa. |
 | Cantos da capa (`launcher.art_radius`) | do tema / 0, 6, 12, 20 px de referência | substitui o `radius` da `art` da visualização; o `panel` acompanha. |
 | Fundo do alternador (`launcher.switcher_curtain`) | fundo do tema / 40, 60, 80 % | a imagem do jogo selecionado preenche a tela atrás do alternador, sob uma cortina da cor `background` do tema nessa opacidade. Jogo sem imagem fica com o fundo do tema. |
+| Cor do texto (`launcher.text_color`) | do tema (vazio) / `#RRGGBB` | substitui o `text` do tema; o `text_secondary` é derivado (25 % em direção ao `background`). |
+| Cor do texto selecionado (`launcher.selected_text_color`) | do tema (vazio) / `#RRGGBB` | substitui o `highlight_text` do tema e o `accent_text_secondary` que o acompanha. |
+| Cor do texto secundário (`launcher.secondary_color`) | do tema (vazio) / `#RRGGBB` | substitui o `muted` do tema e o `dim_text` que o acompanha. |
+| Fundo (`launcher.background`) | do tema (vazio) / `black` / `midnight` / `#RRGGBB` | com `#RRGGBB`, vira o `background`; `surface`, `surface_elevated`, `border` e `badge` são derivados misturando em direção ao branco (4, 7, 12 e 12 %). |
+| Dicas só com texto (`launcher.text_hints`) | desligada (padrão) / ligada | as dicas de botão do rodapé mostram só a letra do botão na cor `text` do tema, sem o círculo `badge` nem a moldura `badge`; o START mantém a palavra, sem a caixa. |
+| Fundo por sistema (`launcher.system_background`) | ligada (padrão) / desligada | na lista de jogos e nos detalhes de um sistema, o fundo da tela é a imagem desse sistema (veja "Fundos por sistema"). |
 
 Detalhes que importam a quem faz tema:
 
+- **Cores**: cada uma das três cores de texto abre o editor de cor (matiz, saturação, brilho e código hex). Vazio mantém o tema. Como substituem `text`, `highlight_text` e `muted`, escolha no tema valores que ainda funcionem com um texto de outra cor: não dependa de a cor ser exatamente a sua.
+- **Dicas só com texto**: o tema não precisa fazer nada; o texto usa o `text` do tema, então ele deve ter contraste com o `background`.
+- **Fundo por sistema**: é um recurso que o tema pode usar (próxima seção, "Fundos por sistema"); a opção só liga ou desliga.
 - **Capa desligada**: uma lista ao lado da capa, à esquerda ou à direita, passa a ocupar toda a largura, entre margens iguais (a margem da lista do lado oposto à capa, repetida dos dois lados). O `panel` só some junto se tiver o mesmo `x` e `w` da `art`; um `panel` com outro retângulo (um cartão maior, uma moldura de enfeite) continua desenhado.
 - **Capa mais larga**: o retângulo `art` é refeito a partir da borda de fora que o tema escolheu (a direita, se a capa está à direita da lista; a esquerda, se está à esquerda), e a lista ao lado recua, mantendo a folga original e a sua outra borda. Uma lista que não está ao lado da capa (acima ou abaixo dela) não é mexida.
 - **Cantos**: valem para a `art` e, se o `panel` coincide com ela, para o `panel` (1 px de referência a mais, para a moldura envolver a capa).
 - **Alternador**: a cortina usa o `background` do tema; escolha um `background` que combine com capas claras e escuras.
 
-Para o tema continuar bom com essas escolhas: ponha a lista ao lado da capa; mantenha `art` e `panel` iguais quando o painel é o cartão da capa; não dependa de um tamanho exato de capa nem de a capa existir (o título e as informações precisam funcionar sozinhos). Teste o tema com a capa desligada, mais larga (55 %), com cantos 0 e 20, com peso Negrito e com a cortina do alternador em 40 e 80 %.
+Para o tema continuar bom com essas escolhas: ponha a lista ao lado da capa; mantenha `art` e `panel` iguais quando o painel é o cartão da capa; não dependa de um tamanho exato de capa nem de a capa existir (o título e as informações precisam funcionar sozinhos). Teste o tema com a capa desligada, mais larga (55 %), com cantos 0 e 20, com peso Negrito e com a cortina do alternador em 40 e 80 %. Teste também com as dicas só com texto, com cores de texto e de fundo personalizadas e com um fundo por sistema.
 
 ## Fontes
 
@@ -327,6 +336,22 @@ background_image = "images/fundo.png"   # cobre a tela inteira, cortado no centr
 
 Com `image_scaling = "pixel"` a imagem é ampliada sem suavizar (desenhe-a em
 320×240 para pixels 2×2).
+
+### Fundos por sistema
+
+Na lista de jogos e nos detalhes de um sistema, o launcher usa a imagem do sistema como fundo da tela, se a opção Fundo por sistema (`launcher.system_background`, ligada por padrão) estiver ligada. O tema pode trazer essas imagens na pasta `backgrounds/`:
+
+```
+<tema>/backgrounds/snes.png
+<tema>/backgrounds/gba.jpg
+```
+
+- O nome do arquivo é o id do sistema, como no `es_systems` (`snes`, `gba`, `psx`...), em `.png` ou `.jpg`.
+- Ordem de busca: primeiro a pasta do usuário `/storage/.config/archr-launcher/backgrounds/`, depois o `backgrounds/` do tema, depois o `backgrounds/` do tema padrão.
+- A imagem cobre a tela inteira (cortada para preencher) sob uma cortina da cor `background` do tema, a cerca de 59 % de opacidade (alfa 150), para o texto continuar legível. Ela substitui o `background_image` do tema nessas telas.
+- As coleções (`@favorites`, `@recent`) mantêm o fundo do tema.
+- A imagem é reduzida ao tamanho da tela quando carrega, então qualquer tamanho funciona; no tamanho da tela (640×480, 720×720 ou 1280×720) ela carrega mais rápido no aparelho.
+- Sem imagem para o sistema, vale o fundo do tema. Escolha um `background` que combine com a cortina.
 
 ### Molduras (9-slice)
 

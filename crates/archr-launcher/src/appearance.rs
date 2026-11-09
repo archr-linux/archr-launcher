@@ -65,6 +65,11 @@ pub fn saved(cfg: Option<&SystemCfg>) -> Appearance {
         art_width: get(Id::ArtWidth),
         art_radius: get(Id::ArtRadius),
         switcher_curtain: get(Id::SwitcherCurtain),
+        text_color: get(Id::TextColor),
+        selected_text_color: get(Id::SelectedTextColor),
+        secondary_color: get(Id::SecondaryColor),
+        text_hints: get(Id::TextHints),
+        system_background: get(Id::SystemBackground),
     }
 }
 

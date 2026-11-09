@@ -39,6 +39,12 @@ pub struct Appearance {
     pub art_width: String,
     pub art_radius: String,
     pub switcher_curtain: String,
+    /// `#RRGGBB` over the theme's text, selected text and secondary text.
+    pub text_color: String,
+    pub selected_text_color: String,
+    pub secondary_color: String,
+    pub text_hints: String,
+    pub system_background: String,
 }
 
 pub(crate) fn rgb(hex: u32) -> Rgba {
@@ -129,24 +135,40 @@ pub fn rgb_to_hsv(rgb: u32) -> (u16, u8, u8) {
 
 impl Appearance {
     /// Every setting of the Appearance page, saved together on leaving it.
-    pub const IDS: [crate::settings::Id; 13] = {
+    pub const IDS: [crate::settings::Id; 18] = {
         use crate::settings::Id::*;
         [
             Theme,
             View,
             Accent,
             Background,
+            TextColor,
+            SelectedTextColor,
+            SecondaryColor,
             Font,
             FontWeight,
             TextSize,
             Animations,
             BatteryPercent,
+            TextHints,
             GameArt,
             ArtWidth,
             ArtRadius,
+            SystemBackground,
             SwitcherCurtain,
         ]
     };
+    /// The draft with `value` in the colour row `id`.
+    pub fn set_colour(&mut self, id: crate::settings::Id, value: String) {
+        use crate::settings::Id;
+        *match id {
+            Id::Background => &mut self.background,
+            Id::TextColor => &mut self.text_color,
+            Id::SelectedTextColor => &mut self.selected_text_color,
+            Id::SecondaryColor => &mut self.secondary_color,
+            _ => &mut self.accent,
+        } = value;
+    }
     /// Multiplier for every interface text size.
     pub fn text_scale(&self) -> f32 {
         match self.text_size.as_str() {
@@ -173,8 +195,17 @@ impl Appearance {
             theme.highlight_text = ink;
             theme.accent_text_secondary = mix(accent, ink, 0.8);
         }
-        if let Some(n) = BACKGROUNDS[1..].iter().position(|b| *b == self.background) {
-            let [background, surface, elevated, border, badge] = SURFACES[n].map(rgb);
+        let surfaces = BACKGROUNDS[1..]
+            .iter()
+            .position(|b| *b == self.background)
+            .map(|n| SURFACES[n].map(rgb))
+            .or_else(|| {
+                // A custom background: the boxes step up from it in white.
+                let base = rgb(parse_hex(&self.background)?);
+                let up = |part| mix(base, rgb(0xFFFFFF), part);
+                Some([base, up(0.04), up(0.07), up(0.12), up(0.12)])
+            });
+        if let Some([background, surface, elevated, border, badge]) = surfaces {
             theme.background = background;
             theme.surface = surface;
             theme.surface_elevated = elevated;
@@ -196,6 +227,19 @@ impl Appearance {
         if self.font_weight == "bold" && theme.font_semibold.is_some() {
             theme.font = theme.font_semibold.clone();
         }
+        let colour = |text: &str| parse_hex(text).map(rgb);
+        if let Some(text) = colour(&self.text_color) {
+            theme.text = text;
+            theme.text_secondary = mix(text, theme.background, 0.25);
+        }
+        if let Some(ink) = colour(&self.selected_text_color) {
+            theme.highlight_text = ink;
+            theme.accent_text_secondary = mix(theme.highlight_bg, ink, 0.8);
+        }
+        if let Some(muted) = colour(&self.secondary_color) {
+            theme.muted = muted;
+            theme.dim_text = mix(muted, theme.background, 0.3);
+        }
         let number = |text: &str| text.parse::<u8>().ok();
         theme.user = crate::theme::UserLook {
             battery_percent: self.battery_percent != "0",
@@ -203,6 +247,8 @@ impl Appearance {
             art_width: number(&self.art_width).map(|p| f32::from(p) / 100.),
             art_radius: number(&self.art_radius).map(f32::from),
             switcher_curtain: number(&self.switcher_curtain),
+            text_hints: self.text_hints == "1",
+            system_background: self.system_background != "0",
         };
         theme
     }
@@ -252,6 +298,31 @@ mod tests {
         assert!(bare.art.is_none() && bare.meta.is_none());
         let list = bare.list.rect;
         assert!((list.x + list.w + list.x - 1.).abs() < 1e-4);
+    }
+    #[test]
+    fn palette_colours_and_a_custom_background_reach_the_theme() {
+        let theme = Theme::builtin();
+        let look = Appearance {
+            background: "#202040".into(),
+            text_color: "#F0E0C0".into(),
+            selected_text_color: "#101010".into(),
+            secondary_color: "#8090A0".into(),
+            text_hints: "1".into(),
+            ..Appearance::default()
+        };
+        let styled = look.apply(&theme);
+        assert_eq!(styled.background, rgb(0x202040));
+        assert_eq!(styled.surface, mix(rgb(0x202040), rgb(0xFFFFFF), 0.04));
+        assert_eq!(styled.text, rgb(0xF0E0C0));
+        assert_eq!(styled.highlight_text, rgb(0x101010));
+        assert_eq!(styled.muted, rgb(0x8090A0));
+        assert!(styled.user.text_hints && styled.user.system_background);
+        // Not a colour: the theme's stays.
+        let plain = Appearance {
+            text_color: "pink".into(),
+            ..Appearance::default()
+        };
+        assert_eq!(plain.apply(&theme).text, theme.text);
     }
     #[test]
     fn empty_choices_keep_the_theme() {
