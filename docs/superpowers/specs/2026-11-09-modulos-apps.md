@@ -49,7 +49,7 @@ mode = "daemon"            # obrigatório para apps (ver 4)
 net = true
 
 [app]
-label = "@app.name"        # "Jogos do itch.io"
+label = "@app.name"        # "Itch.io"
 subtitle = "@app.subtitle" # linha abaixo do nome no carrossel
 icon = "store"             # Lucide, como os demais pontos de extensão
 art = "art/app.png"        # opcional: imagem do carrossel (1:1, até 512 px)
@@ -224,7 +224,7 @@ apps. Novidades para autores de tema, a documentar em `docs/temas.md`, no site
 e na skill: a arte `systems/app-<id>.png` no carrossel e a aparência dos
 chips de filtro (cores do tema, sem chave nova na fase 1).
 
-## 9. O app "Jogos do itch.io" (módulo oficial)
+## 9. O app "Itch.io" (módulo oficial)
 
 Binário aarch64 em Rust (rede, HTML e JSON em sh+jq ficariam frágeis), no
 repositório `archr-linux/archr-module-itchio`.
@@ -285,10 +285,11 @@ faltar; a tela de ajustes diz isso.
 3. **Extras:** `screen.qr` e jogos pagos; downloads que continuam com o app
    fechado (se fizer falta).
 
-## 11. Decisões para o Douglas
+## 11. Decisões (2026-11-09)
 
-- Nome do app na tela: "Jogos do itch.io" ou "itch.io".
-- Sistemas na primeira versão: os seis acima, ou só GB/GBC (onde há mais jogos
-  homebrew prontos).
-- Apps de terceiros: liberar a API 4 para qualquer módulo na Loja desde o
-  início, ou só para módulos revisados até a API amadurecer.
+- Nome na tela: **Itch.io** (Douglas).
+- Sistemas na primeira versão: os seis (gb, gbc, gba, nes, megadrive, pico-8);
+  o ajuste "Sistemas mostrados" deixa o usuário esconder os que não quiser.
+- A API 4 vale para qualquer módulo da Loja, como as demais permissões: a Loja
+  mostra "Tem telas próprias" e "Instala jogos em: …" antes de instalar, e o
+  selo de revisado continua por pacote.
