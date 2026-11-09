@@ -16,7 +16,19 @@ impl View<'_, '_, '_> {
     pub(super) fn custom_page(&mut self, state: &Settings) -> Result<(), String> {
         let custom = state.custom;
         let color = rgb(custom.rgb());
-        self.sample(color)?;
+        // The accent tells where its colour goes; the other rows say which
+        // colour this is.
+        let accent = state.custom_target == Id::Accent;
+        let title = if accent {
+            self.tr("appearance.custom")
+        } else {
+            Page::Appearance
+                .rows()
+                .iter()
+                .find(|row| row.id == state.custom_target)
+                .map_or_else(String::new, |row| self.tr(row.label))
+        };
+        self.sample(color, &title, accent)?;
         let labels = [
             "appearance.hue",
             "appearance.saturation",
@@ -93,6 +105,9 @@ impl View<'_, '_, '_> {
         let mut draft = state.appearance();
         draft.set_colour(state.custom_target, hex(custom.rgb()));
         self.draft_preview(state, &draft)?;
+        if !accent {
+            return Ok(());
+        }
         self.note(
             (PREVIEW_X, 292., PREVIEW_W, 60.),
             &self.tr("appearance.contrast_note"),
@@ -100,7 +115,7 @@ impl View<'_, '_, '_> {
         )
     }
     /// The colour as a large dot with a ring, and what it is.
-    fn sample(&mut self, color: Rgba) -> Result<(), String> {
+    fn sample(&mut self, color: Rgba, title: &str, accent: bool) -> Result<(), String> {
         for (size, fill) in [
             (54., self.theme.text),
             (50., self.theme.background),
@@ -112,10 +127,13 @@ impl View<'_, '_, '_> {
         }
         self.text_face(
             (86., 57., 274., 20.),
-            &self.tr("appearance.custom"),
+            title,
             (15., self.theme.text, Align::Left),
             Face::Semibold,
         )?;
+        if !accent {
+            return Ok(());
+        }
         self.note(
             (86., 79., 274., 17.),
             &self.tr("appearance.custom_note"),
