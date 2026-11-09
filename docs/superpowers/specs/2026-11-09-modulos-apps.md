@@ -210,9 +210,10 @@ instalou.
   telas juntam patches a 4 por segundo, como `ui.update`).
 - `rom.install`: no máximo 1 por segundo; total de 2 GiB por módulo
   (`rom.list` informa o uso).
-- Conteúdo de terceiros: o app mostra o que o serviço publica. Cada app deve
-  ter filtros de conteúdo próprios; a Loja exige o aviso "não oficial" quando o
-  app usa um serviço de terceiros.
+- Conteúdo de terceiros: o app mostra o que o serviço publica. Um app que
+  pode mostrar conteúdo adulto deixa a escolha ao usuário num ajuste próprio,
+  desligado por padrão e ligado só depois de confirmação de idade; a Loja exige
+  o aviso "não oficial" quando o app usa um serviço de terceiros.
 - Selo "Revisado pelo ArchR" continua sendo por pacote publicado.
 
 ## 8. Tema
@@ -251,7 +252,24 @@ chave da API do usuário; lista os jogos comprados (`api.itch.io`).
 
 **Telas:** Catálogo (chips: Todos, GB, GBC, GBA, NES, Mega Drive, PICO-8;
 ordem: Populares, Novos, A-Z), Busca, Detalhe (Baixar, Jogar, Remover, QR da
-página), Ajustes (filtros de conteúdo, sistemas mostrados, apagar cache).
+página), Ajustes.
+
+**Ajustes** (páginas de Configurações do módulo, abertas por START dentro do
+app ou por Configurações › Sistema › Módulos):
+
+| linha | padrão | efeito |
+|---|---|---|
+| Conteúdo adulto | desligado | ligado mostra jogos que o autor marcou como adultos no itch.io; para ligar, o app pede `screen.confirm` "Tenho 18 anos ou mais e quero ver conteúdo adulto" |
+| Violência e terror | ligado | jogos marcados com violência intensa ou terror |
+| Jogos pagos | ligado | lista também jogos à venda (comprar pelo QR no celular) |
+| Sistemas mostrados | todos | quais chips aparecem no catálogo |
+| Ordem | Populares | ordem inicial do catálogo |
+| Apagar capas e listas guardadas | — | limpa `HOME/cache` |
+
+Diferente do Pak, nenhum filtro é imposto: o usuário escolhe cada um, e só o
+conteúdo adulto vem desligado. O filtro vale no catálogo, na busca e nas
+atualizações. A classificação vem das marcações dos autores no itch.io e pode
+faltar; a tela de ajustes diz isso.
 
 ## 10. Fases
 
