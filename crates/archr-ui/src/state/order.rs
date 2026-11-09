@@ -1,5 +1,5 @@
 //! User ordering of the systems list: the merge rules and the move mode.
-use super::{App, Button, DataSource, Outcome};
+use super::{App, Button, DataSource, Outcome, Screen};
 
 /// An uncommitted reorder: the working rows and where the item started.
 pub(super) struct Moving {
@@ -95,11 +95,17 @@ impl App {
 
     /// The row the cursor was on before the rows changed, once the host
     /// changed them: the cursor finds it again.
+    /// On the systems screen a row taken off (hidden) leaves the cursor on
+    /// the row that took its place, or the last one.
     pub fn follow_row(&mut self, data: &dyn DataSource) {
+        let rows = Self::system_rows(data);
         if let Some(row) = self.keep_row.take() {
-            if let Some(index) = Self::system_rows(data).iter().position(|r| *r == row) {
+            if let Some(index) = rows.iter().position(|r| *r == row) {
                 self.cursor = index;
             }
+        }
+        if self.screen == Screen::Systems && self.moving.is_none() {
+            self.cursor = self.cursor.min(rows.len().saturating_sub(1));
         }
     }
 

@@ -144,6 +144,32 @@ fn a_game_added_inside_a_folder_triggers_rescan() {
 }
 
 #[test]
+fn an_unreadable_folder_keeps_the_rest_of_the_cache() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let roms = dir.path().join("roms");
+    let locked = roms.join("Locked");
+    fs::create_dir_all(&locked).unwrap();
+    fs::write(roms.join("First.sfc"), []).unwrap();
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+    if fs::read_dir(&locked).is_ok() {
+        return; // root reads anything: nothing to check
+    }
+    let sys = system(&roms);
+    let cache = dir.path().join("cache");
+    assert_eq!(load_games(&cache, &sys).len(), 1);
+    // Taken from the cache: a ROM written behind the cache's back stays out.
+    let mtime = fs::metadata(&roms).unwrap().modified().unwrap();
+    fs::write(roms.join("Second.sfc"), []).unwrap();
+    File::open(&roms)
+        .unwrap()
+        .set_times(FileTimes::new().set_modified(mtime))
+        .unwrap();
+    assert_eq!(load_games(&cache, &sys).len(), 1);
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+#[test]
 fn system_identity_changes_invalidate_games_and_overview() {
     for change in [
         "extensions",

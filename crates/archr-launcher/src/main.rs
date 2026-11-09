@@ -1208,8 +1208,8 @@ fn run(
                 }
                 library.tune = modules.hand_off(about);
             }
-            if let Some(Outcome::Launch { .. }) = &outcome {
-                library.remember_place(app.place(&library));
+            if let Some(Outcome::Launch { system, game }) = &outcome {
+                library.remember_place(app.place(&library), (system, *game));
             }
             if transition::apply(
                 &mut ui,

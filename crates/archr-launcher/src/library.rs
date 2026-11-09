@@ -508,11 +508,14 @@ impl Library {
         self.current_core(system, index).map(|_| index)
     }
     /// Keeps where this launch was chosen (`App::place`), by the game's key,
-    /// for the next start. A launch from no list or row keeps the last place.
-    pub fn remember_place(&mut self, place: Option<(String, Option<usize>)>) {
-        let Some((row, game)) = place else {
-            return;
-        };
+    /// for the next start. A launch from no list or row (the switcher, the
+    /// resume) comes back to the launched game's own system.
+    pub fn remember_place(
+        &mut self,
+        place: Option<(String, Option<usize>)>,
+        launched: (&str, usize),
+    ) {
+        let (row, game) = place.unwrap_or_else(|| (launched.0.to_owned(), Some(launched.1)));
         let game = game.and_then(|n| {
             let (system, index) = self.origin(&row, n)?;
             self.game_key(&system, index)
@@ -528,6 +531,10 @@ impl Library {
         let Some(key) = &place.game else {
             return Some(None);
         };
+        // A row taken off the systems screen opens no list.
+        if !App::system_rows(self).contains(&place.row) {
+            return Some(None);
+        }
         self.ensure(&place.row);
         if self.loading(&place.row) {
             return None;

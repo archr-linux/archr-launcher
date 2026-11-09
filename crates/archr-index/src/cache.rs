@@ -260,14 +260,22 @@ fn stamp_folders(
     if depth == 0 {
         return Some(());
     }
+    // An unreadable folder is skipped by the scan as well: it is marked, and
+    // the rest of the system keeps its cache.
+    let Ok(entries) = fs::read_dir(directory) else {
+        None::<u64>.hash(hash);
+        return Some(());
+    };
     let mut folders = Vec::new();
-    for entry in fs::read_dir(directory).ok()?.flatten() {
+    for entry in entries.flatten() {
         let name = entry.file_name();
         if name.as_encoded_bytes().starts_with(b".") || is_media_folder(&name) {
             continue;
         }
-        let kind = entry.file_type().ok()?;
-        if kind.is_dir() || kind.is_symlink() {
+        if entry
+            .file_type()
+            .is_ok_and(|kind| kind.is_dir() || kind.is_symlink())
+        {
             folders.push(entry.path());
         }
     }
@@ -280,8 +288,12 @@ fn stamp_folders(
         if !metadata.is_dir() {
             continue;
         }
-        let modified = metadata.modified().ok()?.duration_since(UNIX_EPOCH).ok()?;
-        let nanos = u64::try_from(modified.as_nanos()).ok()?;
+        let nanos = metadata
+            .modified()
+            .ok()
+            .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+            .and_then(|time| u64::try_from(time.as_nanos()).ok())
+            .unwrap_or_default();
         *newest = (*newest).max(nanos);
         (folder.file_name(), nanos).hash(hash);
         stamp_folders(&folder, depth - 1, hash, newest)?;

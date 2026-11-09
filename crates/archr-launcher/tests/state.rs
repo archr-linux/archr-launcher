@@ -839,6 +839,21 @@ fn hide_takes_the_menus_system_off_and_show_hidden_brings_all_back() {
 }
 
 #[test]
+fn hiding_the_last_row_leaves_the_cursor_on_the_new_last_one() {
+    let mut data = FakeData::library();
+    let mut app = App::new(5);
+    app.handle(Button::Down, &data);
+    app.handle(Button::Y, &data);
+    assert_eq!(
+        choose(&mut app, &data, QuickItem::Hide),
+        Outcome::HideSystem("snes".into())
+    );
+    data.hidden = vec!["snes".into()];
+    app.follow_row(&data);
+    assert_eq!((app.screen.clone(), app.cursor), (Screen::Systems, 0));
+}
+
+#[test]
 fn hide_is_offered_only_on_a_row() {
     let data = FakeData::default();
     let mut app = App::new(5);
