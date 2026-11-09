@@ -195,6 +195,8 @@ pub struct Ask {
     pub yes: String,
     pub no: String,
     pub on_yes: bool,
+    /// The launcher's own question (a removal): its words, its answer.
+    pub launcher: bool,
 }
 
 /// What a button does for the module.
@@ -280,7 +282,9 @@ impl Session {
         let Some(screen) = screen else { return };
         if !patch.append.is_empty() {
             let room = ITEMS.saturating_sub(screen.items.len());
-            screen.items.extend(patch.append.into_iter().take(room));
+            let new: Vec<Item> = patch.append.into_iter().take(room).collect();
+            screen.games.extend(new.iter().map(game));
+            screen.items.extend(new);
             screen.asked = false;
         }
         if let Some(more) = patch.more {
@@ -294,7 +298,8 @@ impl Session {
         }
         match patch.target {
             Some((Target::Item(id), change)) => {
-                if let Some(item) = screen.items.iter_mut().find(|i| i.id == id) {
+                if let Some(at) = screen.items.iter().position(|i| i.id == id) {
+                    let item = &mut screen.items[at];
                     let Change {
                         label,
                         subtitle,
@@ -310,6 +315,8 @@ impl Session {
                     if image.is_some() {
                         item.image = image;
                     }
+                    // Only the changed item, never the whole list again.
+                    screen.games[at] = game(item);
                 }
             }
             Some((Target::Button(id), change)) => {
@@ -332,7 +339,6 @@ impl Session {
             }
             None => {}
         }
-        screen.mirror();
     }
 
     /// A button press: what the module should hear, if anything. `page` is
@@ -361,7 +367,11 @@ impl Session {
                 Button::B => false,
                 _ => return None,
             };
-            let id = self.ask.take().map(|a| a.id).unwrap_or_default();
+            let ask = self.ask.take().unwrap_or_default();
+            if ask.launcher {
+                return Some(Effect::Event("launcher.answer", json!({"yes": yes})));
+            }
+            let id = ask.id;
             return Some(Effect::Event(
                 "screen.answer",
                 json!({"id": id, "yes": yes}),

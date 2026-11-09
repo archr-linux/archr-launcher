@@ -65,9 +65,11 @@ const APP_TASKS: u32 = 32;
 const SCREENS: usize = 256;
 /// One `rom.install` per module in this time.
 const INSTALL_EVERY: Duration = Duration::from_secs(1);
-/// `rom.remove` and `port.remove` only this soon after the user said yes
-/// to one of the app's `screen.confirm`s, once.
-const CONFIRMED: Duration = Duration::from_secs(30);
+/// An action of the user in the app allows one `rom.install` this long
+/// after it (downloads take a while), or one `port.install` within `GESTURE`.
+const TOKEN: Duration = Duration::from_secs(600);
+/// Lines of one process waiting for the host; more and it is stopped.
+const LINES: usize = 256;
 
 /// Where the pictures an app's screens show are copied, beside the data
 /// folders and out of every module's reach (no id starts with a dot).
@@ -247,12 +249,7 @@ enum Input {
     Store(Box<(StoreReply, Option<store::Installed>)>),
     /// A `rom.*` or `port.*` job ended: the process that asked, its request,
     /// and what to record.
-    Job {
-        key: String,
-        generation: u64,
-        request: Json,
-        done: Done,
-    },
+    Job(Job, Done),
     /// A PortMaster script said how far it is.
     PortProgress {
         key: String,
@@ -270,15 +267,35 @@ enum Input {
 /// Module id, package digest, content hash: the badge holds for exactly
 /// these.
 type Badge = (String, String, String);
+/// A request of the app being worked on: the process that asked (its
+/// key and run) and the request's id.
+struct Job {
+    key: String,
+    generation: u64,
+    request: Json,
+}
+impl Job {
+    fn finish(self, inbox: &mpsc::Sender<Input>, done: Done) {
+        let _ = inbox.send(Input::Job(self, done));
+    }
+}
 /// What an install job did.
 enum Done {
     Rom(Result<app::Game, (i64, &'static str)>),
     Port {
         name: String,
         install: bool,
-        /// The game key of its launch script, when one came.
-        result: Result<Option<String>, String>,
+        /// Its launch script's game key and what its files take, when
+        /// PortMaster says it installed it.
+        result: Result<Option<(String, u64)>, String>,
+        /// The job's stop switch: only this job's end frees the lane.
+        job: Arc<std::sync::atomic::AtomicBool>,
     },
+}
+/// What a removal the user is asked about takes away.
+enum Remove {
+    Rom(app::Game),
+    Port(String),
 }
 
 /// The event loop's handle on the host thread.
@@ -369,6 +386,8 @@ struct Daemon {
     tx: mpsc::SyncSender<String>,
     generation: u64,
     ready: bool,
+    /// Its lines sent to the host and not handled yet (`LINES` at most).
+    queued: Arc<std::sync::atomic::AtomicUsize>,
 }
 #[derive(Debug)]
 enum Waiting {
@@ -442,7 +461,12 @@ struct Host {
     screens: Vec<archr_ui::apps::Message>,
     icons: BTreeMap<(String, String), Option<Arc<str>>>,
     /// When the user last said yes to each app's question.
-    answered: BTreeMap<String, Instant>,
+    /// A removal waiting for the user's answer to the launcher's question.
+    removing: Option<(Job, Remove)>,
+    /// Each app's last user action: one install may follow it.
+    tokens: BTreeMap<String, Instant>,
+    /// The pictures the open app's screens were given.
+    pictures: app::Pictures,
     /// Each module's last `rom.install`.
     installed_at: BTreeMap<String, Instant>,
     /// A game is being copied, or a port installed (its stop switch).
@@ -517,7 +541,9 @@ impl Host {
             app: None,
             screens: Vec::new(),
             icons: BTreeMap::new(),
-            answered: BTreeMap::new(),
+            removing: None,
+            tokens: BTreeMap::new(),
+            pictures: app::Pictures::default(),
             installed_at: BTreeMap::new(),
             copying: false,
             porting: None,
@@ -844,11 +870,11 @@ impl Host {
                 generation,
                 line,
             } => {
-                if self
-                    .daemons
-                    .get(&id)
-                    .is_some_and(|d| d.generation == generation)
-                {
+                let daemon = self.daemons.get(&id).filter(|d| d.generation == generation);
+                if let Some(daemon) = daemon {
+                    daemon
+                        .queued
+                        .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
                     match line {
                         Some(line) => {
                             if !self.line(&id, line, false) {
@@ -884,12 +910,7 @@ impl Host {
                     self.punish(&id, why);
                 }
             }
-            Input::Job {
-                key,
-                generation,
-                request,
-                done,
-            } => self.job_done(&key, generation, &request, done),
+            Input::Job(job, done) => self.job_done(job, done),
             Input::PortProgress {
                 key,
                 generation,
@@ -945,8 +966,10 @@ impl Host {
                 }
             }
             Request::AppEvent { module, name, data } => {
-                if name == "screen.answer" && data["yes"] == true {
-                    self.answered.insert(module.clone(), Instant::now());
+                // The launcher's own question: never the module's to hear.
+                if name == "launcher.answer" {
+                    self.removal_answered(&module, data["yes"] == true);
+                    return;
                 }
                 let key = app_key(&module);
                 if self.daemons.get(&key).is_some_and(|d| d.ready) {
@@ -1004,6 +1027,9 @@ impl Host {
         };
         if sent {
             self.gestures.insert(id.to_owned(), Instant::now());
+            if to_app {
+                self.tokens.insert(id.to_owned(), Instant::now());
+            }
             self.view.busy.insert((id.to_owned(), action.to_owned()));
             self.publish();
         }
@@ -1107,6 +1133,15 @@ impl Host {
         let dirs = &self.config.dirs;
         for dir in [dirs.module(id), dirs.previous(id)] {
             let _ = fs::remove_dir_all(dir);
+        }
+        // What it installed stays the user's: no later module of this id
+        // may take it away.
+        let ledger = dirs.data.join(app::LEDGER);
+        let mut owned = app::Ledger::load(&ledger);
+        if owned.modules.remove(id).is_some() {
+            if let Err(error) = owned.save(&ledger) {
+                log::warn!("Cannot save what modules installed: {error}");
+            }
         }
         if data {
             let _ = fs::remove_dir_all(dirs.data_dir(id));
@@ -1363,11 +1398,22 @@ impl Host {
         let generation = self.next;
         let inbox = self.inbox.clone();
         let owner = key.to_owned();
+        let queued = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let waiting = Arc::clone(&queued);
         let spawned = process::spawn(
             self.config.executor.as_ref(),
             self.config.direct.as_deref(),
             &plan,
             move |line| {
+                // A process that writes faster than the host reads breaks
+                // the protocol once, and is stopped; the rest is dropped.
+                let before = waiting.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let line = match (line, before) {
+                    (None, _) => None,
+                    (_, n) if n == LINES => Some(Err(())),
+                    (_, n) if n > LINES => return,
+                    (line, _) => line,
+                };
                 let _ = inbox.send(Input::Line {
                     id: owner.clone(),
                     generation,
@@ -1390,6 +1436,7 @@ impl Host {
                 tx: process::writer(stdin),
                 generation,
                 ready: false,
+                queued,
             },
         );
         let module = self.module(id).cloned().unwrap_or_default();
@@ -1425,7 +1472,12 @@ impl Host {
         ];
         if app {
             capabilities.extend([
-                "screen",
+                "screen.show",
+                "screen.patch",
+                "screen.toast",
+                "screen.confirm",
+                "screen.busy",
+                "screen.offline",
                 "rom.install",
                 "rom.list",
                 "rom.remove",
@@ -1466,7 +1518,9 @@ impl Host {
         }
         self.app = Some(id.to_owned());
         self.screens.clear();
-        self.answered.remove(id);
+        self.tokens.remove(id);
+        self.removing = None;
+        self.pictures = app::Pictures::default();
         // The last session's pictures go; this one copies what it shows.
         let _ = fs::remove_dir_all(pictures(&self.config.dirs, id));
         self.spawn_daemon(&app_key(id));
@@ -1480,6 +1534,7 @@ impl Host {
     fn close_app(&mut self) {
         let Some(id) = self.app.take() else { return };
         self.screens.clear();
+        self.removing = None;
         let key = app_key(&id);
         self.next += 1;
         let request = self.next;
@@ -1583,6 +1638,7 @@ impl Host {
         if self.app.as_deref() == Some(id) {
             self.app = None;
             self.screens.clear();
+            self.removing = None;
             let _ = self.out.send(Event::AppClosed(id.to_owned()));
         }
     }
@@ -1684,9 +1740,10 @@ impl Host {
         let params = &message["params"];
         match (message["method"].as_str(), message.get("id")) {
             (Some(method), None) => self.notification(id, method, params),
-            (Some(method @ ("rom.install" | "port.install" | "port.remove")), Some(request))
-                if !oneshot && module_id(id) != id =>
-            {
+            (
+                Some(method @ ("rom.install" | "rom.remove" | "port.install" | "port.remove")),
+                Some(request),
+            ) if !oneshot && module_id(id) != id => {
                 if let Err((code, text)) = self.job(id, method, request, params) {
                     let reply = json!({"jsonrpc": "2.0", "id": request,
                         "error": {"code": code, "message": text}});
@@ -1789,6 +1846,7 @@ impl Host {
                     installed,
                     home: &home,
                     store: &store,
+                    pictures: &mut self.pictures,
                     icon: &mut icon,
                 };
                 match reader.message(method, params) {
@@ -1796,6 +1854,8 @@ impl Host {
                         self.screens.push(message);
                         self.touch();
                     }
+                    // Unknown ones (screen.qr, of a later phase) are ignored.
+                    None if method == "screen.qr" => {}
                     None => log::warn!("Module {id}: {method} refused"),
                 }
             }
@@ -2024,7 +2084,7 @@ impl Host {
             "rom.list" => {
                 let ledger = app::Ledger::load(&self.config.dirs.data.join(app::LEDGER));
                 let owned = ledger.modules.get(id).cloned().unwrap_or_default();
-                let (games, used) = owned.present();
+                let (games, used) = (owned.present().0, owned.used());
                 let games: Vec<Json> = games
                     .iter()
                     .map(|g| {
@@ -2048,24 +2108,6 @@ impl Host {
             "rom.install" | "rom.remove" | "port.install" | "port.remove" if !app => {
                 Err((-32001, "only from the app"))
             }
-            "rom.remove" => {
-                let game_key = params["game_key"].as_str().ok_or((-32602, "game_key"))?;
-                let path = self.config.dirs.data.join(app::LEDGER);
-                let mut ledger = app::Ledger::load(&path);
-                let owned = ledger.modules.entry(id.to_owned()).or_default();
-                let at = owned
-                    .games
-                    .iter()
-                    .position(|g| g.game_key == game_key)
-                    .ok_or((-32001, "not installed by this module"))?;
-                self.confirmed(id)?;
-                let game = owned.games.remove(at);
-                app::remove(&game, &self.systems());
-                ledger.save(&path).map_err(|_| (-32000, "cannot save"))?;
-                log::info!("Module {id} removed {game_key}");
-                let _ = self.out.send(Event::Installed(game.system));
-                Ok(json!({}))
-            }
             _ => Err((-32601, "method not found")),
         }
     }
@@ -2084,16 +2126,17 @@ impl Host {
             .as_ref()
             .map_or_else(|| PathBuf::from("/storage/roms"), |p| p.at("/storage/roms"))
     }
-    /// A removal only right after the user said yes to the app, once.
-    fn confirmed(&mut self, id: &str) -> Result<(), (i64, &'static str)> {
-        match self.answered.remove(id) {
-            Some(at) if at.elapsed() < CONFIRMED => Ok(()),
-            _ => Err((-32001, "only after the user confirmed")),
+    /// One install token, from the user's last action in the app, if it is
+    /// no older than `within`.
+    fn token(&mut self, id: &str, within: Duration) -> Result<(), (i64, &'static str)> {
+        match self.tokens.remove(id) {
+            Some(at) if at.elapsed() < within => Ok(()),
+            _ => Err((-32001, "only after the user's action")),
         }
     }
-    /// `rom.install`, `port.install` and `port.remove`, from the app:
-    /// checked here, done in a worker, answered when they end. One copy and
-    /// one port at a time.
+    /// `rom.install`, `rom.remove`, `port.install` and `port.remove`, from
+    /// the app: checked here, done in a worker or after the user's answer,
+    /// answered when they end. One copy, one port and one question at a time.
     fn job(
         &mut self,
         key: &str,
@@ -2109,72 +2152,104 @@ impl Host {
         let ledger = app::Ledger::load(&self.config.dirs.data.join(app::LEDGER));
         let owned = ledger.modules.get(&id).cloned().unwrap_or_default();
         let generation = self.daemons.get(key).map_or(0, |d| d.generation);
-        let (inbox, request, process) = (self.inbox.clone(), request.clone(), key.to_owned());
-        let finish = {
-            let inbox = inbox.clone();
-            let process = process.clone();
-            move |done: Done| {
-                let _ = inbox.send(Input::Job {
-                    key: process,
-                    generation,
-                    request,
-                    done,
-                });
-            }
+        let job = Job {
+            key: key.to_owned(),
+            generation,
+            request: request.clone(),
         };
-        if method == "rom.install" {
-            // What is asked is checked first; only a sound request counts.
-            let (systems, home) = (self.systems(), self.config.dirs.data_dir(&id));
-            let roms = self.roms();
-            let copy = app::check(
-                &home,
-                params,
-                &allowed,
-                (&systems, &roms),
-                owned.present().1,
-            )?;
-            if self.copying {
-                return Err((-32003, "another install is running"));
+        match method {
+            "rom.install" => {
+                // What is asked is checked first; only a sound request counts.
+                let (systems, home) = (self.systems(), self.config.dirs.data_dir(&id));
+                let roms = self.roms();
+                let copy = app::check(&home, params, &allowed, (&systems, &roms), owned.used())?;
+                if self.copying {
+                    return Err((-32003, "another install is running"));
+                }
+                let now = Instant::now();
+                if self
+                    .installed_at
+                    .get(&id)
+                    .is_some_and(|at| now.duration_since(*at) < INSTALL_EVERY)
+                {
+                    return Err((-32003, "too many requests"));
+                }
+                self.token(&id, TOKEN)?;
+                self.installed_at.insert(id.clone(), now);
+                self.copying = true;
+                let inbox = self.inbox.clone();
+                thread::spawn(move || job.finish(&inbox, Done::Rom(copy.run())));
             }
-            let now = Instant::now();
-            let last = self.installed_at.insert(id.clone(), now);
-            if last.is_some_and(|at| now.duration_since(at) < INSTALL_EVERY) {
-                return Err((-32003, "too many requests"));
+            "rom.remove" => {
+                let game_key = params["game_key"].as_str().ok_or((-32602, "game_key"))?;
+                let game = owned
+                    .games
+                    .iter()
+                    .find(|g| g.game_key == game_key)
+                    .cloned()
+                    .ok_or((-32001, "not installed by this module"))?;
+                if !app::unchanged(&game) {
+                    return Err((-32001, "the file changed since it was installed"));
+                }
+                let name = game
+                    .rom
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().into_owned());
+                self.ask_removal(job, name.unwrap_or_default(), Remove::Rom(game))?;
             }
-            self.copying = true;
-            thread::spawn(move || finish(Done::Rom(copy.run())));
-            return Ok(());
-        }
-        let install = method == "port.install";
-        if !allowed.iter().any(|s| s == app::PORTS) {
-            return Err((-32001, "permission denied"));
-        }
-        let name = params["name"]
-            .as_str()
-            .filter(|n| app::port_ok(n))
-            .ok_or((-32602, "name"))?
-            .to_owned();
-        if !install {
-            if !owned.ports.iter().any(|p| p.name == name) {
-                return Err((-32001, "not installed by this module"));
+            _ => {
+                let install = method == "port.install";
+                if !allowed.iter().any(|s| s == app::PORTS) {
+                    return Err((-32001, "permission denied"));
+                }
+                let name = params["name"]
+                    .as_str()
+                    .filter(|n| app::port_ok(n))
+                    .ok_or((-32602, "name"))?
+                    .to_owned();
+                let mine = owned.ports.iter().any(|p| p.name == name);
+                if !install {
+                    if !mine {
+                        return Err((-32001, "not installed by this module"));
+                    }
+                    let shown = name.trim_end_matches(".zip").to_owned();
+                    return self.ask_removal(job, shown, Remove::Port(name));
+                }
+                let ports = self.ports_dir().ok_or((-32004, "no ports folder"))?;
+                // Somebody else's port is never the module's to replace.
+                if !mine && app::port_files(&ports, &name).is_some() {
+                    return Err((-32005, "port already installed"));
+                }
+                if owned.used() >= app::MODULE_BYTES {
+                    return Err((-32003, "quota exceeded"));
+                }
+                if self.porting.is_some() {
+                    return Err((-32003, "another port is being installed"));
+                }
+                self.token(&id, GESTURE)?;
+                self.port_job(job, name, true);
             }
-            self.confirmed(&id)?;
         }
-        if self.porting.is_some() {
-            return Err((-32003, "another port is being installed"));
-        }
+        Ok(())
+    }
+    fn ports_dir(&self) -> Option<PathBuf> {
+        let ports = self.systems().into_iter().find(|s| s.name == app::PORTS)?;
+        Some(ports.path)
+    }
+    /// The script for one port, in a worker; its `PROGRESS` goes to the app.
+    fn port_job(&mut self, job: Job, name: String, install: bool) {
         let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
         self.porting = Some(stop.clone());
-        let bin = self.config.bin.clone();
-        let ports = self.systems().into_iter().find(|s| s.name == app::PORTS);
-        log::info!("Module {id}: archr-port-install {method} {name}");
+        let (bin, ports) = (self.config.bin.clone(), self.ports_dir());
+        let inbox = self.inbox.clone();
+        log::info!("Module {}: archr-port-install {name}", job.key);
         thread::spawn(move || {
-            let before = ports.as_ref().map(app::scripts).unwrap_or_default();
             let progress = {
-                let (name, process) = (name.clone(), process.clone());
+                let (name, key, inbox) = (name.clone(), job.key.clone(), inbox.clone());
+                let generation = job.generation;
                 move |progress: u8| {
                     let _ = inbox.send(Input::PortProgress {
-                        key: process.clone(),
+                        key: key.clone(),
                         generation,
                         name: name.clone(),
                         progress,
@@ -2182,25 +2257,91 @@ impl Host {
                 }
             };
             let result = app::run_port(&bin, install, &name, &stop, progress).map(|()| {
-                // The launch script the install brought, for "Play".
-                let def = ports.as_ref()?;
-                let new = app::scripts(def)
-                    .into_iter()
-                    .find(|s| !before.contains(s))?;
-                crate::store::game_key(def, &new)
+                // What PortMaster says it installed for this name.
+                ports.as_deref().and_then(|dir| {
+                    let (script, size) = app::port_files(dir, &name)?;
+                    let script = script?;
+                    let key = script.file_name()?.to_str()?;
+                    Some((format!("{}/{key}", app::PORTS), size))
+                })
             });
-            finish(Done::Port {
+            let done = Done::Port {
                 name,
                 install,
                 result,
-            });
+                job: stop,
+            };
+            job.finish(&inbox, done);
         });
+    }
+    /// The launcher's own question before a removal: the module only hears
+    /// `{removed}` once the user answered.
+    fn ask_removal(
+        &mut self,
+        job: Job,
+        name: String,
+        what: Remove,
+    ) -> Result<(), (i64, &'static str)> {
+        if self.removing.is_some() || self.porting.is_some() && matches!(what, Remove::Port(_)) {
+            return Err((-32003, "another removal is waiting"));
+        }
+        self.screens
+            .push(archr_ui::apps::Message::Confirm(archr_ui::apps::Ask {
+                text: name,
+                launcher: true,
+                ..Default::default()
+            }));
+        self.touch();
+        self.removing = Some((job, what));
         Ok(())
+    }
+    /// The user answered the launcher's removal question.
+    fn removal_answered(&mut self, id: &str, yes: bool) {
+        let Some((job, what)) = self.removing.take_if(|(job, _)| module_id(&job.key) == id) else {
+            return;
+        };
+        if !yes {
+            self.reply(&job, Ok(json!({"removed": false})));
+            return;
+        }
+        match what {
+            Remove::Rom(game) => {
+                app::remove(&game, &self.systems());
+                let path = self.config.dirs.data.join(app::LEDGER);
+                let mut ledger = app::Ledger::load(&path);
+                if let Some(owned) = ledger.modules.get_mut(id) {
+                    owned.games.retain(|g| g.game_key != game.game_key);
+                }
+                if let Err(error) = ledger.save(&path) {
+                    log::warn!("Cannot save what modules installed: {error}");
+                }
+                log::info!("Module {id} removed {}", game.game_key);
+                let _ = self.out.send(Event::Installed(game.system));
+                self.reply(&job, Ok(json!({"removed": true})));
+            }
+            Remove::Port(name) => self.port_job(job, name, false),
+        }
+    }
+    /// The answer to the process that asked, if it is still the same one.
+    fn reply(&mut self, job: &Job, result: Result<Json, (i64, String)>) {
+        if self
+            .daemons
+            .get(&job.key)
+            .is_some_and(|d| d.generation == job.generation)
+        {
+            let reply = match result {
+                Ok(answer) => json!({"jsonrpc": "2.0", "id": job.request, "result": answer}),
+                Err((code, text)) => json!({"jsonrpc": "2.0", "id": job.request,
+                    "error": {"code": code, "message": text}}),
+            };
+            let key = job.key.clone();
+            self.send(&key, &reply);
+        }
     }
     /// A job ended: what it did is recorded, the library reads the system
     /// again, and the process that asked hears how it went.
-    fn job_done(&mut self, key: &str, generation: u64, request: &Json, done: Done) {
-        let id = module_id(key).to_owned();
+    fn job_done(&mut self, job: Job, done: Done) {
+        let id = module_id(&job.key).to_owned();
         let path = self.config.dirs.data.join(app::LEDGER);
         let mut ledger = app::Ledger::load(&path);
         let owned = ledger.modules.entry(id.clone()).or_default();
@@ -2222,27 +2363,46 @@ impl Host {
                 name,
                 install,
                 result,
+                job: stop,
             } => {
-                self.porting = None;
-                match result {
-                    Ok(game_key) => {
-                        let before = owned.ports.iter().find(|p| p.name == name).cloned();
+                if self.porting.as_ref().is_some_and(|p| Arc::ptr_eq(p, &stop)) {
+                    self.porting = None;
+                }
+                let before = owned.ports.iter().position(|p| p.name == name);
+                match (result, install, before) {
+                    (Ok(_), false, _) => {
                         owned.ports.retain(|p| p.name != name);
-                        // A reinstall keeps the script it found the first time.
-                        let game_key = game_key.or(before.map(|p| p.game_key)).unwrap_or_default();
-                        let answer = if install {
-                            owned.ports.push(app::Port {
-                                name,
-                                game_key: game_key.clone(),
-                                installed: now_secs(),
-                            });
-                            json!({"game_key": game_key})
-                        } else {
-                            json!({})
-                        };
-                        (Ok(answer), Some(app::PORTS.to_owned()))
+                        (Ok(json!({"removed": true})), Some(app::PORTS.to_owned()))
                     }
-                    Err(text) => {
+                    // Its own only when its launch script is there.
+                    (Ok(Some((game_key, size))), true, _) => {
+                        owned.ports.retain(|p| p.name != name);
+                        owned.ports.push(app::Port {
+                            name,
+                            game_key: game_key.clone(),
+                            size,
+                            installed: now_secs(),
+                        });
+                        (
+                            Ok(json!({"game_key": game_key})),
+                            Some(app::PORTS.to_owned()),
+                        )
+                    }
+                    (Ok(None), true, Some(at)) => {
+                        let game_key = owned.ports[at].game_key.clone();
+                        (
+                            Ok(json!({"game_key": game_key})),
+                            Some(app::PORTS.to_owned()),
+                        )
+                    }
+                    (Ok(None), true, None) => {
+                        log::warn!("Module {id}: {name} brought no launch script");
+                        (
+                            Err((-32000, "the port brought no launch script".to_owned())),
+                            Some(app::PORTS.to_owned()),
+                        )
+                    }
+                    (Err(text), _, _) => {
                         log::warn!("Module {id}: archr-port-install {name}: {text}");
                         (Err((-32000, text)), None)
                     }
@@ -2257,18 +2417,7 @@ impl Host {
         if let Some(system) = system {
             let _ = self.out.send(Event::Installed(system));
         }
-        if self
-            .daemons
-            .get(key)
-            .is_some_and(|d| d.generation == generation)
-        {
-            let reply = match result {
-                Ok(answer) => json!({"jsonrpc": "2.0", "id": request, "result": answer}),
-                Err((code, text)) => json!({"jsonrpc": "2.0", "id": request,
-                    "error": {"code": code, "message": text}}),
-            };
-            self.send(key, &reply);
-        }
+        self.reply(&job, result);
     }
     fn subscribed(&self, id: &str) -> BTreeSet<&'static str> {
         let hooks = self

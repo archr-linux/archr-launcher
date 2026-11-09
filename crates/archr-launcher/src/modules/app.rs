@@ -50,8 +50,10 @@ pub const SCRIPTS: &[&str] = &[
     ".cmd",
     ".exe",
 ];
-/// A PortMaster install downloads up to a few hundred MB.
+/// A PortMaster install downloads up to a few hundred MB; stopped, the
+/// script gets this long to take back what it began.
 const PORT_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+pub const PORT_GRACE: Duration = Duration::from_secs(15);
 
 /// PNG, JPEG or WebP, by their first bytes.
 pub fn picture(bytes: &[u8]) -> bool {
@@ -109,9 +111,35 @@ pub fn picture_bytes(home: &Path, relative: &str) -> Option<Vec<u8>> {
 /// A picture of the module's screens, copied from the handle into `store`
 /// (the launcher's, out of the module's reach) under a name from its
 /// content: the screens decode that copy, never the module's file.
-pub fn image(home: &Path, relative: &str, store: &Path) -> Option<PathBuf> {
+pub fn image(
+    home: &Path,
+    relative: &str,
+    store: &Path,
+    pictures: &mut Pictures,
+) -> Option<PathBuf> {
     use sha2::{Digest, Sha256};
-    let bytes = picture_bytes(home, relative)?;
+    use std::os::unix::fs::MetadataExt;
+    let (file, size) = open_inside(home, relative, IMAGE_BYTES)?;
+    let meta = file.metadata().ok()?;
+    let seen = (
+        meta.dev(),
+        meta.ino(),
+        size,
+        meta.mtime(),
+        meta.mtime_nsec(),
+    );
+    if let Some(path) = pictures.seen.get(&seen) {
+        return Some(path.clone());
+    }
+    if pictures.seen.len() >= PICTURES || pictures.bytes + size > PICTURE_BYTES {
+        log::warn!("An app's screens hold too many pictures: {relative} refused");
+        return None;
+    }
+    let mut bytes = Vec::with_capacity(size as usize);
+    file.take(IMAGE_BYTES + 1).read_to_end(&mut bytes).ok()?;
+    if bytes.len() as u64 > IMAGE_BYTES || !picture(&bytes) {
+        return None;
+    }
     let digest = Sha256::digest(&bytes);
     let name: String = digest[..12].iter().map(|b| format!("{b:02x}")).collect();
     let path = store.join(format!("{name}.{}", kind(&bytes)));
@@ -119,8 +147,20 @@ pub fn image(home: &Path, relative: &str, store: &Path) -> Option<PathBuf> {
         fs::create_dir_all(store).ok()?;
         archr_io::atomic_publish(&path, false, |file| io::Write::write_all(file, &bytes)).ok()?;
     }
+    pictures.bytes += size;
+    pictures.seen.insert(seen, path.clone());
     Some(path)
 }
+/// Pictures one app session copied, by the file they came from (device,
+/// inode, size, change time): read once, and no more than `PICTURES` files
+/// nor `PICTURE_BYTES` in all.
+#[derive(Default)]
+pub struct Pictures {
+    seen: std::collections::HashMap<(u64, u64, u64, i64, i64), PathBuf>,
+    bytes: u64,
+}
+const PICTURES: usize = 256;
+const PICTURE_BYTES: u64 = 64 << 20;
 /// The extension of a `picture`.
 fn kind(bytes: &[u8]) -> &'static str {
     match bytes.first() {
@@ -135,8 +175,9 @@ fn kind(bytes: &[u8]) -> &'static str {
 pub struct Reader<'a> {
     pub installed: &'a Installed,
     pub home: &'a Path,
-    /// Where the pictures the screens show are copied.
+    /// Where the pictures the screens show are copied, and what was.
     pub store: &'a Path,
+    pub pictures: &'a mut Pictures,
     /// A Lucide name to the module's own unmodified SVG.
     pub icon: &'a mut dyn FnMut(&str) -> Option<Arc<str>>,
 }
@@ -155,10 +196,10 @@ impl Reader<'_> {
             .take(TEXT)
             .collect()
     }
-    fn image(&self, value: &Json) -> Option<PathBuf> {
-        image(self.home, value.as_str()?, self.store)
+    fn image(&mut self, value: &Json) -> Option<PathBuf> {
+        image(self.home, value.as_str()?, self.store, self.pictures)
     }
-    fn item(&self, value: &Json) -> Option<Item> {
+    fn item(&mut self, value: &Json) -> Option<Item> {
         Some(Item {
             id: name(&value["id"])?,
             title: self.text(&value["title"]),
@@ -168,7 +209,7 @@ impl Reader<'_> {
             image: self.image(&value["image"]),
         })
     }
-    fn items(&self, value: &Json) -> Vec<Item> {
+    fn items(&mut self, value: &Json) -> Vec<Item> {
         list(value, PAGE).filter_map(|v| self.item(v)).collect()
     }
     fn chips(&self, value: &Json) -> Vec<Chip> {
@@ -293,6 +334,7 @@ impl Reader<'_> {
                 yes: text("yes").unwrap_or_default(),
                 no: text("no").unwrap_or_default(),
                 on_yes: false,
+                launcher: false,
             }),
             "screen.busy" => Message::Busy(text("text")),
             // `text: null` (or `offline: false`) takes the tag away.
@@ -343,6 +385,9 @@ pub struct Game {
     pub rom: PathBuf,
     pub cover: Option<PathBuf>,
     pub size: u64,
+    /// When the copy was last changed (nanoseconds since 1970): a file
+    /// changed since is not the game installed, and is not removed.
+    pub mtime: u64,
     /// Seconds since 1970.
     pub installed: u64,
 }
@@ -350,8 +395,10 @@ pub struct Game {
 #[serde(default)]
 pub struct Port {
     pub name: String,
-    /// Its launch script, `ports/<file>`, when the install brought one.
+    /// Its launch script, `ports/<file>`.
     pub game_key: String,
+    /// What its files took after the install.
+    pub size: u64,
     pub installed: u64,
 }
 impl Ledger {
@@ -375,6 +422,21 @@ impl Owned {
         let bytes = games.iter().map(|g| g.size).sum();
         (games, bytes)
     }
+    /// What its games and ports take, against `MODULE_BYTES`.
+    pub fn used(&self) -> u64 {
+        self.present().1 + self.ports.iter().map(|p| p.size).sum::<u64>()
+    }
+}
+/// The game is still the file that was installed.
+pub fn unchanged(game: &Game) -> bool {
+    fs::symlink_metadata(&game.rom)
+        .is_ok_and(|m| m.is_file() && m.len() == game.size && mtime(&m) == game.mtime)
+}
+fn mtime(meta: &fs::Metadata) -> u64 {
+    meta.modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_nanos() as u64)
 }
 
 /// A file name the user's folders take: no path, no control characters,
@@ -456,7 +518,7 @@ pub fn check(
         return Err((-32602, "extension"));
     }
     if used + size > MODULE_BYTES {
-        return Err((-32003, "too much installed"));
+        return Err((-32003, "quota exceeded"));
     }
     // A cover that is not a sound picture is left out; the game is not.
     let cover = params["cover"]
@@ -503,16 +565,24 @@ impl Copy {
         } = self;
         let root = &def.path;
         fs::create_dir_all(root).map_err(|_| (-32000, "cannot write"))?;
-        let rom = free_name(root, &name, &ext);
-        copy(source, size, &rom).map_err(|_| (-32000, "cannot write"))?;
+        let rom = publish(root, &name, &ext, |file| {
+            let copied = io::copy(&mut (&source).take(size + 1), file)?;
+            if copied == size {
+                Ok(())
+            } else {
+                Err(io::Error::other("the file changed while it was copied"))
+            }
+        })
+        .map_err(|_| (-32000, "cannot write"))?;
         let cover = cover.and_then(|bytes| {
             let images = root.join("media/images");
             let stem = rom.file_stem()?.to_str()?;
-            let target = free_name(&images, stem, &format!(".{}", kind(&bytes)));
             fs::create_dir_all(&images).ok()?;
-            archr_io::atomic_publish(&target, true, |file| io::Write::write_all(file, &bytes))
-                .ok()
-                .map(|()| target)
+            let ext = format!(".{}", kind(&bytes));
+            publish(&images, stem, &ext, |file| {
+                io::Write::write_all(file, &bytes)
+            })
+            .ok()
         });
         let field = |key: &str, max: usize| -> String {
             meta[key]
@@ -540,6 +610,7 @@ impl Copy {
             log::warn!("Cannot add {} to the gamelist: {error}", rom.display());
         }
         Ok(Game {
+            mtime: fs::metadata(&rom).map_or(0, |m| mtime(&m)),
             game_key: crate::store::game_key(&def, &rom).unwrap_or_default(),
             system: def.name.clone(),
             rom,
@@ -549,16 +620,56 @@ impl Copy {
         })
     }
 }
-/// The checked handle copied whole, exactly the size it had, or nothing.
-fn copy(source: fs::File, size: u64, to: &Path) -> io::Result<()> {
-    archr_io::atomic_publish(to, true, |file| {
-        let copied = io::copy(&mut source.take(size + 1), file)?;
-        if copied == size {
-            Ok(())
-        } else {
-            Err(io::Error::other("the file changed while it was copied"))
+/// Writes a new file `<name><ext>` in `dir` (or `<name> (2)<ext>`...),
+/// whole, and never over one that is there, even one that appears while it
+/// is written: it is renamed into place only where no file is.
+fn publish(
+    dir: &Path,
+    name: &str,
+    ext: &str,
+    write: impl FnOnce(&mut fs::File) -> io::Result<()>,
+) -> io::Result<PathBuf> {
+    use std::os::unix::ffi::OsStrExt;
+    let temp = dir.join(format!(".archr-install-{}.tmp", std::process::id()));
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temp)?;
+    let written = write(&mut file).and_then(|()| file.sync_all());
+    if let Err(error) = written {
+        let _ = fs::remove_file(&temp);
+        return Err(error);
+    }
+    let from = std::ffi::CString::new(temp.as_os_str().as_bytes()).map_err(io::Error::other)?;
+    for _ in 0..1000 {
+        let to = free_name(dir, name, ext);
+        let target = std::ffi::CString::new(to.as_os_str().as_bytes()).map_err(io::Error::other)?;
+        // SAFETY: two valid C strings; renameat2 only reads them.
+        let done = unsafe {
+            libc::syscall(
+                libc::SYS_renameat2,
+                libc::AT_FDCWD,
+                from.as_ptr(),
+                libc::AT_FDCWD,
+                target.as_ptr(),
+                libc::RENAME_NOREPLACE,
+            )
+        };
+        if done == 0 {
+            return Ok(to);
         }
-    })
+        match io::Error::last_os_error().raw_os_error() {
+            Some(libc::EEXIST) => continue,
+            // A filesystem without it: the name was free a moment ago.
+            Some(libc::EINVAL | libc::ENOSYS) if fs::symlink_metadata(&to).is_err() => {
+                fs::rename(&temp, &to)?;
+                return Ok(to);
+            }
+            _ => break,
+        }
+    }
+    let _ = fs::remove_file(&temp);
+    Err(io::Error::other("no name to write to"))
 }
 /// `rom.remove`: the ROM, its cover and its gamelist entry.
 pub fn remove(game: &Game, systems: &[SystemDef]) {
@@ -646,8 +757,17 @@ pub fn run_port(
                 thread::sleep(Duration::from_millis(100));
             }
             _ => {
+                // TERM first: the script takes back a half install, for up
+                // to `PORT_GRACE`; then the group is killed.
+                let group = -(child.id() as i32);
                 // SAFETY: signalling the process group the script leads.
-                unsafe { libc::kill(-(child.id() as i32), libc::SIGKILL) };
+                unsafe { libc::kill(group, libc::SIGTERM) };
+                let grace = Instant::now() + PORT_GRACE;
+                while matches!(child.try_wait(), Ok(None)) && Instant::now() < grace {
+                    thread::sleep(Duration::from_millis(100));
+                }
+                // SAFETY: as above.
+                unsafe { libc::kill(group, libc::SIGKILL) };
                 let _ = child.wait();
                 return Err("stopped".into());
             }
@@ -665,19 +785,52 @@ pub fn run_port(
         last
     })
 }
-/// The launch scripts in the ports folder now (its system's extensions).
-pub fn scripts(ports: &SystemDef) -> Vec<PathBuf> {
-    fs::read_dir(&ports.path)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .map(|e| e.path())
-        .filter(|path| {
-            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-            let ext = format!(".{}", ext.to_lowercase());
-            path.is_file() && ports.extensions.contains(&ext)
-        })
-        .collect()
+/// What PortMaster installed for a catalog `name`, from the `port.json`
+/// of a folder in `ports` that names it: its launch script and what its
+/// files take. `None` when no port of that name is installed.
+pub fn port_files(ports: &Path, name: &str) -> Option<(Option<PathBuf>, u64)> {
+    for entry in fs::read_dir(ports).ok()?.flatten() {
+        let json = entry.path().join("port.json");
+        let Ok(text) = archr_io::read_utf8(&json, 256 << 10, archr_io::Symlinks::Reject) else {
+            continue;
+        };
+        let Ok(port) = serde_json::from_str::<Json>(&text) else {
+            continue;
+        };
+        if port["name"].as_str() != Some(name) {
+            continue;
+        }
+        // Only names of the ports folder itself: never a path elsewhere.
+        let items: Vec<PathBuf> = list(&port["items"], 64)
+            .filter_map(Json::as_str)
+            .map(|item| item.trim_end_matches('/'))
+            .filter(|item| !item.is_empty() && !item.contains('/') && !item.starts_with('.'))
+            .map(|item| ports.join(item))
+            .collect();
+        let script = items
+            .iter()
+            .find(|p| {
+                p.extension().is_some_and(|e| e.eq_ignore_ascii_case("sh"))
+                    && fs::symlink_metadata(p).is_ok_and(|m| m.is_file())
+            })
+            .cloned();
+        let size = items.iter().map(|p| tree_size(p)).sum();
+        return Some((script, size));
+    }
+    None
+}
+/// Bytes of a file, or of a folder's files, never through a link.
+fn tree_size(path: &Path) -> u64 {
+    match fs::symlink_metadata(path) {
+        Ok(m) if m.is_dir() => fs::read_dir(path)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| tree_size(&e.path()))
+            .sum(),
+        Ok(m) if m.is_file() => m.len(),
+        _ => 0,
+    }
 }
 /// `PROGRESS <0-100>` lines of the script.
 pub fn port_progress(line: &str) -> Option<u8> {
@@ -705,7 +858,8 @@ mod tests {
         symlink(dir.path(), home.join("out")).unwrap();
         fs::write(home.join("cache/B.png"), PNG).unwrap();
         fs::hard_link(home.join("cache/B.png"), home.join("Twin.png")).unwrap();
-        let copy = image(&home, "cache/A.png", &store).unwrap();
+        let mut pictures = Pictures::default();
+        let copy = image(&home, "cache/A.png", &store, &mut pictures).unwrap();
         assert!(
             copy.starts_with(&store),
             "the screens read the launcher's copy"
@@ -723,9 +877,22 @@ mod tests {
             "cache/Missing.png",
             "Twin.png",
         ] {
-            assert!(image(&home, bad, &store).is_none(), "{bad}");
+            assert!(image(&home, bad, &store, &mut pictures).is_none(), "{bad}");
         }
         assert!(open_inside(&home, "cache/A.txt", 4).is_none(), "too big");
+        // The same file again is not read again; past the session's cap,
+        // nothing more is copied.
+        fs::remove_file(&copy).unwrap();
+        assert_eq!(
+            image(&home, "cache/A.png", &store, &mut pictures),
+            Some(copy.clone())
+        );
+        assert!(!copy.exists(), "known by its inode, not read");
+        let mut full = Pictures {
+            bytes: PICTURE_BYTES,
+            ..Pictures::default()
+        };
+        assert!(image(&home, "cache/B.png", &store, &mut full).is_none());
         assert!(picture(b"\xff\xd8\xff\xe0") && picture(b"RIFF\0\0\0\0WEBPVP8 "));
         assert!(!picture(b"GIF89a"));
     }
@@ -752,6 +919,42 @@ mod tests {
             check(&home, &params, &["gb".to_owned()], (&systems, &roms), 0).err(),
             Some((-32602, "file"))
         );
+    }
+
+    #[test]
+    fn ports_are_known_by_their_port_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let ports = dir.path();
+        fs::create_dir_all(ports.join("tobu")).unwrap();
+        fs::write(ports.join("tobu/data.bin"), vec![0u8; 100]).unwrap();
+        fs::write(ports.join("Tobu Tobu Girl.sh"), b"#!/bin/sh\n").unwrap();
+        fs::write(ports.join("Other.sh"), b"#!/bin/sh\n").unwrap();
+        let json = json!({"name": "1tobu.zip", "items": ["Tobu Tobu Girl.sh", "tobu/", "../etc"]});
+        fs::write(ports.join("tobu/port.json"), json.to_string()).unwrap();
+        let (script, size) = port_files(ports, "1tobu.zip").unwrap();
+        assert_eq!(script, Some(ports.join("Tobu Tobu Girl.sh")));
+        assert!(size >= 100 + 10, "its folder and its script: {size}");
+        assert!(port_files(ports, "2048.zip").is_none());
+    }
+
+    #[test]
+    fn a_game_changed_since_its_install_is_not_the_same() {
+        let dir = tempfile::tempdir().unwrap();
+        let rom = dir.path().join("A.gb");
+        fs::write(&rom, b"rom").unwrap();
+        let mut game = Game {
+            rom: rom.clone(),
+            size: 3,
+            mtime: mtime(&fs::metadata(&rom).unwrap()),
+            ..Game::default()
+        };
+        assert!(unchanged(&game));
+        game.mtime += 1;
+        assert!(!unchanged(&game));
+        // Never over a file that is there, even one written meanwhile.
+        let path = publish(dir.path(), "A", ".gb", |f| io::Write::write_all(f, b"new")).unwrap();
+        assert_eq!(path, dir.path().join("A (2).gb"));
+        assert_eq!(fs::read(&rom).unwrap(), b"rom");
     }
 
     #[test]
@@ -913,7 +1116,7 @@ mod tests {
         }
         assert_eq!(
             refused(params.clone(), &allowed, MODULE_BYTES),
-            "too much installed"
+            "quota exceeded"
         );
         let gone = Game {
             cover: Some(cover.clone()),

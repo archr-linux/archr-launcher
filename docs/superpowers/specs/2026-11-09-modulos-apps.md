@@ -194,7 +194,8 @@ O launcher:
    alcance do módulo) e relê o sistema; o jogo aparece na lista na hora.
 
 `rom.remove {game_key}` só remove jogos que esse módulo instalou (ROM, capa e
-entrada do gamelist), depois de `screen.confirm`. `rom.list` devolve os jogos
+entrada do gamelist), depois de o launcher perguntar ao usuário com a pergunta
+dele ("Remover <nome>?"); o módulo recebe `{removed}`. `rom.list` devolve os jogos
 que o módulo instalou e ainda existem (`game_key`, `system`, tamanho, data),
 para o app marcar "baixado" e "atualização disponível".
 
@@ -224,10 +225,11 @@ PortMaster, e os instala. Com `"ports"` em `install`:
   na pasta de ports, ou erro `-32000` com a última linha de erro do script).
   Linhas `PROGRESS <0-100>` do script viram a notificação
   `port.progress {name, progress}` para o app. Um jogo começando interrompe a
-  instalação.
+  instalação: `SIGTERM` (o script desfaz o que começou), `SIGKILL` 15 s depois.
 - Dono: o port fica registrado como do módulo (`installed.toml`, como as
-  ROMs); `port.remove` só para ports que ele instalou, depois de
-  `screen.confirm`; `port.list` devolve `{ports: [{name, game_key, date}]}`.
+  ROMs) só se o `port.json` com esse nome aponta um script de início; um port
+  já instalado que não é dele é recusado (`-32005`); `port.remove` só para
+  ports que ele instalou, depois da pergunta do launcher; `port.list` devolve `{ports: [{name, game_key, date}]}`.
 - Depois de instalar ou remover, o launcher relê o sistema `ports`; o script
   novo aparece na lista. `game.launch` vale para o script de um port que o
   próprio módulo instalou (os demais ports e ferramentas continuam fora).
@@ -239,8 +241,11 @@ PortMaster, e os instala. Com `"ports"` em `install`:
   (canonicalizar dentro de `HOME`, recusar links), tamanho e formato de
   imagens, nome e extensão do jogo instalado, quantidade de mensagens (as
   telas juntam patches a 4 por segundo, como `ui.update`).
-- `rom.install`: no máximo 1 por segundo; total de 2 GiB por módulo
-  (`rom.list` informa o uso).
+- `rom.install`: no máximo 1 por segundo; total de 2 GiB por módulo, ports
+  incluídos (`rom.list` informa o uso); só depois de uma ação do usuário no
+  app (10 min para ROMs, 5 s para ports); nunca arquivos de programa nem
+  sistemas cujas entradas o aparelho executa (`tools`, ...).
+- Remoções: a pergunta é do launcher, nunca do módulo.
 - Arquivos do módulo (ROM, capa, imagens das telas) são abertos uma vez, uma
   pasta por vez, sem seguir links (`openat` + `O_NOFOLLOW`), e o launcher lê
   só essa abertura: a ROM e a capa são copiadas dela, e as imagens das telas

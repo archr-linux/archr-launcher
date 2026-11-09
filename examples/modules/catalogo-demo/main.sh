@@ -98,10 +98,8 @@ act() { # action, item
         about) toast "@about.text" ;;
         get) get "$2" ;;
         play) request game.launch "{\"system\":\"gb\",\"game_key\":$(jq -cn --arg k "$(key_of "$2")" '$k')}" play "$2" ;;
-        remove)
-            send "$(jq -c --arg id "$2" '.[] | select(.id == $id) | {jsonrpc:"2.0",method:"screen.confirm",params:{
-                id:("remove:" + .id), text:{key:"@remove.question",args:{name:.title}}, yes:"@remove", no:"@keep"}}' "$CATALOG")"
-            ;;
+        # The launcher asks the user itself, and answers {removed}.
+        remove) request rom.remove "{\"game_key\":$(jq -cn --arg k "$(key_of "$2")" '$k')}" remove "$2" ;;
     esac
 }
 # The answer to the request being waited for: $1 the whole line.
@@ -116,7 +114,10 @@ answered() {
     fi
     case "$3" in
         install) remember "$4" "$key"; show_detail "$4"; retag "$4"; toast "@installed" good ;;
-        remove) remember "$4" ""; show_detail "$4"; retag "$4"; toast "@removed" ;;
+        remove)
+            [ "$removed" = true ] || return
+            remember "$4" ""; show_detail "$4"; retag "$4"; toast "@removed"
+            ;;
         list)
             # Only what the launcher says is still there counts.
             keys=$(printf '%s' "$1" | jq -c '[.result.games[].game_key]')
@@ -133,15 +134,10 @@ on() { # method
         screen.chip) FILTER=$chip; show_catalog ;;
         screen.more) more ;;
         screen.search) search "$text" ;;
-        screen.answer)
-            if [ "$yes" = true ]; then
-                request rom.remove "{\"game_key\":$(jq -cn --arg k "$(key_of "${answer#remove:}")" '$k')}" remove "${answer#remove:}"
-            fi
-            ;;
     esac
 }
 handle() {
-    eval "$(printf '%s' "$1" | jq -r '@sh "id=\(.id // "null") method=\(.method // "") action=\(.params.action // "") screen=\(.params.context.screen // "") item=\(.params.item // .params.context.item // "") chip=\(.params.chip // "") text=\(.params.text // "") answer=\(.params.id // "") yes=\(.params.yes // false) failed=\(.error.message // "") key=\(.result.game_key // "")"')" || return
+    eval "$(printf '%s' "$1" | jq -r '@sh "id=\(.id // "null") method=\(.method // "") action=\(.params.action // "") screen=\(.params.context.screen // "") item=\(.params.item // .params.context.item // "") chip=\(.params.chip // "") text=\(.params.text // "") failed=\(.error.message // "") key=\(.result.game_key // "") removed=\(.result.removed // false)"')" || return
     case "$method" in
         initialize)
             prepare

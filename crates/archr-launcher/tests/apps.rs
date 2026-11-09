@@ -228,15 +228,15 @@ fn the_demo_catalog_installs_and_removes_a_game() {
             .is_some_and(|s| s.buttons[0].id == "play")
     });
     probe.wait("the action answered", |p| p.view.busy.is_empty());
-    // Removing asks first; the host takes the game away only after a yes.
+    // Removing: the launcher asks the user itself, and acts on the answer.
     let count = probe.installed.len();
     invoke(&probe.modules, "remove");
     probe.wait("the question", |p| {
         p.screens
             .iter()
-            .any(|m| matches!(m, Message::Confirm(ask) if ask.id == "remove:g1"))
+            .any(|m| matches!(m, Message::Confirm(ask) if ask.launcher && ask.text == "Pixel Hop"))
     });
-    probe.event(id, "screen.answer", json!({"id": "remove:g1", "yes": true}));
+    probe.event(id, "launcher.answer", json!({"yes": true}));
     probe.wait("removed", |p| p.installed.len() > count);
     assert!(!rom.exists());
     let ledger = Ledger::load(&base.join("module-data").join(LEDGER));
@@ -273,6 +273,8 @@ while IFS= read -r line; do
             send '{"jsonrpc":"2.0","id":4,"method":"rom.remove","params":{"game_key":"gb/Other.gb"}}'
             send '{"jsonrpc":"2.0","id":5,"method":"port.install","params":{"name":"x;reboot.zip"}}'
             send '{"jsonrpc":"2.0","id":6,"method":"port.install","params":{"name":"2048.zip"}}'
+            printf 'rom' >"$HOME/d/ok.gb"
+            send '{"jsonrpc":"2.0","id":7,"method":"rom.install","params":{"system":"gb","file":"d/ok.gb"}}'
             send '{"jsonrpc":"2.0","method":"screen.show","params":{"id":"s","layout":"collection","items":[{"id":"a","title":"A","image":"../../../etc/x.png"}]}}'
             ;;
         "") printf '%s\n' "$line" >>"$log" ;;
@@ -307,8 +309,8 @@ fn an_app_gets_nothing_it_may_not_have() {
     probe.wait("its row", |p| p.view.apps().len() == 1);
     probe.modules.request(Request::OpenApp("rogue".into()));
     let log = base.join("module-data/rogue/answers.log");
-    probe.wait("six answers", |_| {
-        fs::read_to_string(&log).is_ok_and(|t| t.lines().count() >= 6)
+    probe.wait("seven answers", |_| {
+        fs::read_to_string(&log).is_ok_and(|t| t.lines().count() >= 7)
     });
     let answers: Vec<serde_json::Value> = fs::read_to_string(&log)
         .unwrap()
@@ -327,6 +329,11 @@ fn an_app_gets_nothing_it_may_not_have() {
     assert_eq!(code(4), Some(-32001), "a game it did not install");
     assert_eq!(code(5), Some(-32001), "no ports permission");
     assert_eq!(code(6), Some(-32001), "no ports permission");
+    assert_eq!(
+        code(7),
+        Some(-32001),
+        "no install without the user's action"
+    );
     assert_eq!(fs::read(&other).unwrap(), b"mine");
     assert!(!root.path().join("storage/roms/nes").exists());
     probe.wait("its screen", |p| p.shown("s").is_some());
@@ -345,16 +352,19 @@ send() { printf '%s\n' "$1"; }
 while IFS= read -r line; do
     id=$(jq -r '.id // "null"' <<<"$line")
     method=$(jq -r '.method // ""' <<<"$line")
+    action=$(jq -r '.params.action // ""' <<<"$line")
     case "$method" in
         initialize) send "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"ready\":true}}" ;;
         shutdown) send "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{}}"; exit 0 ;;
-        screen.opened)
-            send '{"jsonrpc":"2.0","id":1,"method":"port.install","params":{"name":"2048.zip"}}' ;;
+        action.invoke)
+            send "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{}}"
+            case "$action" in
+                install) send '{"jsonrpc":"2.0","id":1,"method":"port.install","params":{"name":"2048.zip"}}' ;;
+                theirs) send '{"jsonrpc":"2.0","id":2,"method":"port.install","params":{"name":"user.zip"}}' ;;
+                remove) send '{"jsonrpc":"2.0","id":3,"method":"port.remove","params":{"name":"2048.zip"}}' ;;
+            esac
+            ;;
         port.progress) printf '%s\n' "$line" >>"$log" ;;
-        remove)
-            send '{"jsonrpc":"2.0","id":2,"method":"port.remove","params":{"name":"2048.zip"}}' ;;
-        screen.answer)
-            send '{"jsonrpc":"2.0","id":3,"method":"port.remove","params":{"name":"2048.zip"}}' ;;
         "") printf '%s\n' "$line" >>"$log" ;;
     esac
 done
@@ -380,17 +390,25 @@ fn ports_go_through_the_system_script() {
          [app]\nhome = \"main\"\n[permissions]\ninstall = [\"ports\"]\n",
     )
     .unwrap();
-    // The fake archr-port-install: what it was asked, a bar, success.
+    // The user's own port, which the module must not take over.
+    let ports = root.path().join("storage/roms/ports");
+    fs::create_dir_all(ports.join("user")).unwrap();
+    fs::write(
+        ports.join("user/port.json"),
+        r#"{"name":"user.zip","items":["User.sh","user/"]}"#,
+    )
+    .unwrap();
+    // The fake archr-port-install: what it was asked, a bar, PortMaster's files.
     let bin = root.path().join("bin");
     fs::create_dir_all(&bin).unwrap();
     let calls = root.path().join("calls");
-    let ports = root.path().join("storage/roms/ports");
-    fs::create_dir_all(&ports).unwrap();
     let script = format!(
-        "#!/bin/sh\necho \"$@\" >>{}\necho 'PROGRESS 50'\n\
-         [ \"$1\" = install ] && touch '{}/2048.sh'\necho 'PROGRESS 100'\n",
-        calls.display(),
-        ports.display()
+        "#!/bin/sh\necho \"$@\" >>{calls}\necho 'PROGRESS 50'\ncd '{ports}'\n\
+         if [ \"$1\" = install ]; then mkdir -p 2048 && echo x >2048.sh && \
+         echo '{{\"name\":\"2048.zip\",\"items\":[\"2048.sh\",\"2048/\"]}}' >2048/port.json; \
+         else rm -rf 2048 2048.sh; fi\necho 'PROGRESS 100'\n",
+        calls = calls.display(),
+        ports = ports.display()
     );
     fs::write(bin.join("archr-port-install"), script).unwrap();
     fs::set_permissions(
@@ -401,7 +419,8 @@ fn ports_go_through_the_system_script() {
     let mut probe = Probe::new(start(root.path(), "porter", &["install:ports"]));
     probe.wait("its row", |p| p.view.apps().len() == 1);
     probe.modules.request(Request::OpenApp("porter".into()));
-    probe.wait("installed", |p| p.installed.iter().any(|s| s == "ports"));
+    probe.wait("open", |p| p.view.modules.iter().all(|m| m.failures == 0));
+    std::thread::sleep(Duration::from_millis(500));
     let log = base.join("module-data/porter/answers.log");
     let answer = |id: u64| {
         fs::read_to_string(&log)
@@ -410,25 +429,47 @@ fn ports_go_through_the_system_script() {
             .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
             .find(|a| a["id"] == id)
     };
+    let act = |modules: &Modules, action: &str| {
+        modules.request(Request::Invoke {
+            module: "porter".into(),
+            action: action.into(),
+            call: Some(Call {
+                screen: Some("main".into()),
+                ..Call::default()
+            }),
+        })
+    };
+    act(&probe.modules, "theirs");
+    probe.wait("refused", |_| answer(2).is_some());
+    assert_eq!(answer(2).unwrap()["error"]["code"], -32005);
+    act(&probe.modules, "install");
+    probe.wait("installed", |p| p.installed.iter().any(|s| s == "ports"));
     probe.wait("the answer", |_| answer(1).is_some());
     let text = fs::read_to_string(&log).unwrap();
     assert!(text.contains("\"progress\":50"), "{text}");
     assert_eq!(
         answer(1).unwrap()["result"]["game_key"],
         "ports/2048.sh",
-        "its launch script, for Play"
+        "for Play"
     );
     assert_eq!(fs::read_to_string(&calls).unwrap(), "install 2048.zip\n");
     let ledger = Ledger::load(&base.join("module-data").join(LEDGER));
-    assert_eq!(ledger.modules["porter"].ports[0].name, "2048.zip");
-    assert_eq!(ledger.modules["porter"].ports[0].game_key, "ports/2048.sh");
-    // Without the user's yes, no removal; after it, the script uninstalls.
-    probe.event("porter", "remove", json!({}));
-    probe.wait("refused", |_| answer(2).is_some());
-    assert_eq!(answer(2).unwrap()["error"]["code"], -32001);
-    probe.event("porter", "screen.answer", json!({"id": "x", "yes": true}));
+    let port = &ledger.modules["porter"].ports[0];
+    assert_eq!(
+        (port.name.as_str(), port.game_key.as_str()),
+        ("2048.zip", "ports/2048.sh")
+    );
+    assert!(port.size > 0, "counted against its quota");
+    // Removing: the launcher's question, then the script; a no keeps it.
+    act(&probe.modules, "remove");
+    probe.wait("the question", |p| {
+        p.screens
+            .iter()
+            .any(|m| matches!(m, Message::Confirm(ask) if ask.launcher))
+    });
+    probe.event("porter", "launcher.answer", json!({"yes": true}));
     probe.wait("removed", |_| answer(3).is_some());
-    assert_eq!(answer(3).unwrap()["result"], json!({}));
+    assert_eq!(answer(3).unwrap()["result"], json!({"removed": true}));
     assert_eq!(
         fs::read_to_string(&calls).unwrap(),
         "install 2048.zip\nuninstall 2048.zip\n"

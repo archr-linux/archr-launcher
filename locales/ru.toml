@@ -960,6 +960,8 @@
 "apps.pictures" = "Изображения {n}"
 "apps.offline" = "Нет сети"
 "apps.stopped" = "{name} остановлено"
+"apps.remove_question" = "Удалить {name}?"
+"apps.remove" = "Удалить"
 "modules.remove" = "Удалить"
 "modules.remove_all" = "Удалить с данными"
 "modules.remove_question" = "Удалить {name}?"

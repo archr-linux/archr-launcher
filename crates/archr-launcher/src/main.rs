@@ -511,16 +511,22 @@ fn run(
                 }
                 modules::Event::Screens(module, messages) => {
                     if let Some(session) = ui.app.as_mut().filter(|s| s.module == module) {
+                        // Only the batch's last toast shows, with one sound.
+                        let mut toast = None;
                         for message in messages {
-                            if let archr_ui::apps::Message::Toast(text, tone) = message {
-                                let bad = tone == archr_ui::modules::Tone::Bad;
-                                let severity = if bad { Severity::Error } else { Severity::Info };
-                                ui.banner = Some(text);
-                                banner_timer.restart(severity, Instant::now());
-                                audio.play(Sound::Notice);
-                            } else {
-                                session.apply(message);
+                            match message {
+                                archr_ui::apps::Message::Toast(text, tone) => {
+                                    toast = Some((text, tone))
+                                }
+                                message => session.apply(message),
                             }
+                        }
+                        if let Some((text, tone)) = toast {
+                            let bad = tone == archr_ui::modules::Tone::Bad;
+                            let severity = if bad { Severity::Error } else { Severity::Info };
+                            ui.banner = Some(text);
+                            banner_timer.restart(severity, Instant::now());
+                            audio.play(Sound::Notice);
                         }
                     }
                 }

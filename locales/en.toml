@@ -960,6 +960,8 @@
 "apps.pictures" = "Pictures {n}"
 "apps.offline" = "Offline"
 "apps.stopped" = "{name} stopped"
+"apps.remove_question" = "Remove {name}?"
+"apps.remove" = "Remove"
 "modules.remove" = "Remove"
 "modules.remove_all" = "Remove with data"
 "modules.remove_question" = "Remove {name}?"

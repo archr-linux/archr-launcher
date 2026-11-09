@@ -349,7 +349,14 @@ impl Ui<'_, '_> {
     fn app_ask(&mut self, ask: &crate::apps::Ask, theme: &Theme) -> Result<(), String> {
         self.scrim(theme, 1.2)?;
         let tall = self.frame.reference().1;
-        let lines = self.wrap(&ask.text, Face::Semibold, 16., self.px(392.) as u32)?;
+        // A removal is the launcher's question, in its own words.
+        let text = if ask.launcher {
+            self.catalog
+                .format("apps.remove_question", &[("name", &ask.text)])
+        } else {
+            ask.text.clone()
+        };
+        let lines = self.wrap(&text, Face::Semibold, 16., self.px(392.) as u32)?;
         let lines = &lines[..lines.len().min(6)];
         let h = 40. + lines.len() as f32 * 22. + 72.;
         let top = (tall - h) / 2.;
@@ -382,10 +389,17 @@ impl Ui<'_, '_> {
                 text.to_owned()
             }
         };
-        let (no, yes) = (
-            answer(&ask.no, "hint.cancel"),
-            answer(&ask.yes, "hint.confirm"),
-        );
+        let (no, yes) = if ask.launcher {
+            (
+                self.catalog.text("hint.cancel"),
+                self.catalog.text("apps.remove"),
+            )
+        } else {
+            (
+                answer(&ask.no, "hint.cancel"),
+                answer(&ask.yes, "hint.confirm"),
+            )
+        };
         for (n, (label, on)) in [(&no, !ask.on_yes), (&yes, ask.on_yes)]
             .into_iter()
             .enumerate()

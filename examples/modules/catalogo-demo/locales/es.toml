@@ -21,7 +21,5 @@
 "getting" = "Descargando…"
 "play" = "Jugar"
 "remove" = "Quitar"
-"keep" = "Mantener"
-"remove.question" = "¿Quitar {name} de tus juegos?"
 "installed" = "Instalado en Game Boy"
 "removed" = "Quitado"

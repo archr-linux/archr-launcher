@@ -814,7 +814,7 @@ launch = true              # "Jogar" depois de instalar
 | `screen.show` | `{id, title, layout: "collection" \| "detail", ...}` (abaixo) |
 | `screen.patch` | `{screen?, append?, more?, chips?, footer?, target?, ...}` (abaixo) |
 | `screen.toast` | `{text, tone?}`: a faixa de aviso do launcher, sem o limite de 10 s do `ui.notify` |
-| `screen.confirm` | `{id, text, yes?, no?}`: a pergunta do launcher, com "não" no foco; resposta `screen.answer` |
+| `screen.confirm` | `{id, text, yes?, no?}`: a pergunta do launcher, com "não" no foco; resposta `screen.answer` (para remover jogos e ports, o launcher pergunta ele mesmo: 10.5) |
 | `screen.busy` | `{text}`: indicador de espera até a próxima `show` ou `patch`; `{text: null}` tira |
 | `screen.offline` | `{text?}`: selo "Sem conexão" (ou o texto) na faixa dos chips; `{text: null}` tira |
 
@@ -843,7 +843,8 @@ acrescenta itens, `more` e `footer` trocam, `chips` substitui os chips, e
 `badge`, `tone`, `image`; `"button:<id>"` com `label`, `action` e
 `progress` (`null` tira a barra). Patches e shows chegam à tela no máximo 4
 vezes por segundo (juntos com os `ui.update`); mais de 256 esperando são
-descartados com aviso no log.
+descartados com aviso no log. Um patch só refaz os itens que mudou ou
+acrescentou; de vários `screen.toast` juntos, só o último aparece.
 
 **Imagens** (`image`, `gallery`): só arquivos dentro do `HOME` do módulo
 (`module-data/<id>`), por caminho relativo. O launcher abre o caminho uma
@@ -890,45 +891,72 @@ tela sai do app.
 | método | params | result |
 |---|---|---|
 | `rom.install` | `{system, file, name?, cover?, meta?: {developer, description, year}}` | `{game_key}` |
-| `rom.list` | `{}` | `{games: [{game_key, system, size, date}], used, limit}` |
-| `rom.remove` | `{game_key}` | `{}` |
-| `port.install` | `{name}` | `{game_key}` (o script de início que apareceu em `ports/`, ou `""`) |
-| `port.list` | `{}` | `{ports: [{name, game_key, date}]}` |
-| `port.remove` | `{name}` | `{}` |
+| `rom.list` | `{}` | `{games: [{game_key, system, size, date}], used, limit}` (bytes; os ports contam) |
+| `rom.remove` | `{game_key}` | `{removed: true \| false}` |
+| `port.install` | `{name}` | `{game_key}` (o script de início do port, para "Jogar") |
+| `port.list` | `{}` | `{ports: [{name, game_key, date}]}`, só os que o módulo instalou |
+| `port.remove` | `{name}` | `{removed: true \| false}` |
 
-`rom.install`: o sistema precisa estar em `install` (e no catálogo de
-sistemas), `file` (dentro do `HOME`, mesmas regras das imagens) com uma
-extensão do sistema (`.zip` só se o sistema aceita), até 64 MiB; `cover`, se
-houver, é uma imagem válida. O arquivo é aberto uma vez, na checagem, e a
-cópia lê essa abertura (no máximo o tamanho que ele tinha, senão falha): o
-módulo não troca o que é copiado depois de conferido. O launcher dá um nome seguro a partir de `name`
-(sem `/`, `..`, caracteres de controle; colisão ganha ` (2)`), copia o
-arquivo para a primeira pasta do sistema (onde uma cópia pela rede também
-cai), a capa para `media/images/` e grava `name`, `desc`, `developer` e
-`releasedate` no `gamelist.xml` (o mesmo editor do raspador); o sistema é lido
-de novo e o jogo aparece na hora. No máximo uma cópia por vez, um
-`rom.install` por segundo por módulo e 2 GiB instalados por módulo (`-32003`);
+**Só depois de uma ação do usuário:** cada A, X ou Y numa tela do app
+(`action.invoke`) libera **um** `rom.install` nos 10 min seguintes (downloads
+demoram) ou **um** `port.install` nos 5 s seguintes; sem isso, `-32001`.
+
+`rom.install`: o sistema precisa estar em `install`, no catálogo de sistemas,
+ser uma pasta de jogos dentro de `/storage/roms`, sem comando de lançamento
+próprio e sem nenhuma extensão de programa (`.sh`, `.bash`, `.run`,
+`.appimage`, `.desktop`, `.py`, `.pl`, `.bat`, `.cmd`, `.exe`): o que fica
+nessas pastas roda como root. `tools`, `windows`, `moonlight`, `music`,
+`idtech` e `scummvm` são recusados já no manifesto. `file` (dentro do `HOME`,
+mesmas regras das imagens) tem uma extensão do sistema que não seja de
+programa (`.zip` só se o sistema aceita), até 64 MiB. O arquivo é aberto uma
+vez, na checagem, e a cópia lê essa abertura (no máximo o tamanho que ele
+tinha, senão falha): o módulo não troca o que é copiado depois de conferido.
+Uma `cover` que não seja imagem válida fica de fora; o jogo entra. O launcher
+dá um nome seguro a partir de `name` (sem `/`, `..`, caracteres de controle;
+colisão ganha ` (2)`), grava o arquivo inteiro com outro nome e só então o
+põe no lugar, sem nunca sobrescrever um arquivo que já esteja lá, na primeira
+pasta do sistema (onde uma cópia pela rede também cai); a capa vai para
+`media/images/` e `name`, `desc`, `developer` e `releasedate` vão para o
+`gamelist.xml` (o mesmo editor do raspador); o sistema é lido de novo e o jogo
+aparece na hora. No máximo uma cópia por vez, um `rom.install` por segundo por
+módulo e 2 GiB por módulo, jogos e ports juntos (`-32003`, "quota exceeded");
 o que está errado no pedido é recusado antes (`-32602`, `-32001`) e não conta.
 A cópia acontece fora da thread do módulo: a resposta vem quando termina.
 
-`rom.remove` e `port.remove` só valem para o que **o próprio módulo
-instalou** e só nos **30 s seguintes a um "sim"** do usuário a um
-`screen.confirm` desse app, uma vez (`-32001` fora disso). `rom.remove` apaga
-a ROM, a capa e a entrada do `gamelist.xml`.
+**Remover:** o módulo só manda `rom.remove` ou `port.remove`, para algo que
+**ele mesmo instalou** (`-32001` senão; uma ROM que mudou de tamanho ou data
+desde a instalação também é recusada). O launcher mostra **a pergunta dele**
+("Remover <nome>?", com Cancelar no foco, nos textos do launcher, uma por vez)
+e só age com o "sim"; a resposta vem depois: `{removed: true}` ou
+`{removed: false}`. O módulo não ouve essa pergunta. `rom.remove` apaga a ROM,
+a capa e a entrada do `gamelist.xml`.
 
 `port.install` (com `"ports"` em `install`): `name` é o nome de um arquivo do
-catálogo do PortMaster, `^[a-z0-9][a-z0-9._-]*\.zip$` (até 64). O launcher
-**nunca** recebe arquivos do módulo para ports (os scripts deles rodam como
-root): ele roda o script do sistema `/usr/bin/archr-port-install install
-<name>` (`uninstall` para `port.remove`), que usa o próprio PortMaster para
-baixar do lançamento oficial, conferir o md5 e extrair. Um por vez, até 15 min;
-linhas `PROGRESS <0-100>` na saída do script viram `port.progress` para o app;
-o erro (`-32000`) traz a última linha de erro do script. Um jogo começando
-interrompe a instalação. `game.launch` funciona para o script de um port que
-o módulo instalou (`system: "ports"`, o `game_key` da resposta); outros ports e
+catálogo do PortMaster, `^[a-z0-9][a-z0-9._-]*\.zip$` (até 64). Um port que
+já está instalado e não é do módulo é recusado com `-32005` ("port already
+installed"). O launcher **nunca** recebe arquivos do módulo para ports (os
+scripts deles rodam como root): ele roda o script do sistema
+`/usr/bin/archr-port-install install <name>` (`uninstall` para
+`port.remove`), que usa o próprio PortMaster para baixar do lançamento
+oficial, conferir o md5 e extrair. Um por vez, até 15 min; linhas
+`PROGRESS <0-100>` na saída do script viram `port.progress` para o app; o erro
+(`-32000`) traz a última linha de erro do script. Parado (tempo esgotado, um
+jogo começando), o script recebe `SIGTERM` para desfazer o que começou e, 15 s
+depois, `SIGKILL`. O port passa a ser do módulo só quando o `port.json` que o
+PortMaster deixa com esse `name` aponta um script de início (`items`); o
+tamanho dos arquivos dele conta na cota. `game.launch` funciona para esse
+script (`system: "ports"`, o `game_key` da resposta); outros ports e
 ferramentas continuam fora.
 
 O que cada módulo instalou fica em `module-data/installed.toml`, fora do
-alcance dele (o módulo só vê `module-data/<id>`); `rom.list` e `port.list`
-devolvem só o que ainda existe. O módulo nunca lê a pasta de ROMs nem a
-biblioteca.
+alcance dele (o módulo só vê `module-data/<id>`), com tamanho e data de cada
+ROM; ao remover o módulo, os registros dele saem (o que ele instalou fica do
+usuário). `rom.list` e `port.list` devolvem só o que ainda existe. O módulo
+nunca lê a pasta de ROMs nem a biblioteca.
+
+**Limites do processo do app:** até 256 linhas esperando o launcher (mais é
+quebra de protocolo e o processo para); até 256 imagens e 64 MiB de imagens
+por abertura do app (uma imagem já vista, pelo mesmo arquivo, não é lida de
+novo). O `initialize` lista em `capabilities` os métodos `screen.*` que o
+launcher desenha; `screen.qr` ainda não existe: como notificação é ignorado,
+como pedido recebe `-32601`, e o app deve seguir sem ele.

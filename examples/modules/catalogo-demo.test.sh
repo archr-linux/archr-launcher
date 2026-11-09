@@ -26,7 +26,7 @@ said() { jq -c "select($1)" "${DATA}/out"; }
   echo '{"jsonrpc":"2.0","id":2,"method":"action.invoke","params":{"action":"get","context":{"screen":"game:g2","button":"get"}}}'
   echo '{"jsonrpc":"2.0","id":12,"result":{"game_key":"gb/Blue Lines.gb"}}'
   echo '{"jsonrpc":"2.0","id":3,"method":"action.invoke","params":{"action":"remove","context":{"screen":"game:g2","button":"remove"}}}'
-  echo '{"jsonrpc":"2.0","method":"screen.answer","params":{"id":"remove:g2","yes":true}}'
+  echo '{"jsonrpc":"2.0","id":13,"result":{"removed":true}}'
   echo '{"jsonrpc":"2.0","id":4,"method":"shutdown","params":{}}'
 } | run
 
@@ -44,9 +44,9 @@ check "Get: a bar, then rom.install of a file it made" \
   'said ".params.target == \"button:get\"" | grep -q "\"progress\":60" && [ "$(said ".method == \"rom.install\"" | jq -r "[.id, .params.system, .params.file] | join(\" \")")" = "12 gb downloads/g2.gb" ] && [ "$(wc -c <"${DATA}/downloads/g2.gb")" -eq 32768 ]'
 check "installed: Play and Remove, and the tag in the catalog" \
   'said ".params.id == \"game:g2\"" | sed -n 2p | grep -q "\"action\":\"play\"" && said ".params.target == \"item:g2\"" | grep -q "@badge.installed"'
-check "Remove asks first" \
-  'said ".method == \"screen.confirm\"" | grep -q "\"id\":\"remove:g2\""'
-check "after the yes, rom.remove of its own game" \
+check "Remove: rom.remove of its own game (the launcher asks the user)" \
   '[ "$(said ".method == \"rom.remove\"" | jq -r .params.game_key)" = "gb/Blue Lines.gb" ]'
+check "removed: Get again" \
+  '[ "$(said ".params.id == \"game:g2\"" | tail -n 1 | jq ".params.buttons[0].action" -r)" = get ]'
 check "shutdown answered" '[ "$(said ".id == 4" | jq -c .result)" = "{}" ]'
 exit "${FAILED}"
