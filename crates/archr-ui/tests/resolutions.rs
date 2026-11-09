@@ -301,6 +301,18 @@ fn frames(theme: &Theme, size: (u32, u32)) -> Vec<(&'static str, Vec<u8>)> {
     );
     shot(&mut ui, "details", &app, None);
     app.screen = games;
+    // An app's screens, in the same layouts.
+    ui.app = Some(common::app_session(false));
+    shot(&mut ui, "app-collection", &app, None);
+    ui.app = Some(common::app_session(true));
+    shot(&mut ui, "app-detail", &app, None);
+    ui.app.as_mut().unwrap().ask = Some(archr_ui::apps::Ask {
+        id: "remove".into(),
+        text: "Remove Blue Lines from your games?".into(),
+        ..Default::default()
+    });
+    shot(&mut ui, "app-ask", &app, None);
+    ui.app = None;
     let mut settings = Settings::default();
     settings.loading = false;
     shot(&mut ui, "settings", &app, Some(&settings));

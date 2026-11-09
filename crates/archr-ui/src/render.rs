@@ -15,6 +15,7 @@ use crate::{
     HintButton,
 };
 pub use details::Art;
+mod apps;
 mod cheevos;
 mod details;
 mod effects;
@@ -428,6 +429,8 @@ pub struct Ui<'font, 'texture> {
     pub lobby: Option<crate::netplay::Lobby>,
     pub transition: Option<String>,
     pub moonlight: Option<crate::moonlight::State>,
+    /// The open app (API 4); the main loop owns and changes it here.
+    pub app: Option<crate::apps::Session>,
     /// Active theme directory; its `systems/` folder holds console images.
     pub theme_dir: Option<PathBuf>,
     /// Root-mapped installed default theme: icons and console images the
@@ -537,6 +540,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             screenshot: None,
             transition: None,
             moonlight: None,
+            app: None,
             theme_dir: None,
             default_theme_dir: None,
         })
@@ -919,6 +923,9 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         }
         let browsing = self.lobby.is_none() && self.moonlight.is_none() && settings.is_none();
         self.look(theme, browsing);
+        if let Some(art) = &mut self.art {
+            art.set_apps(data.apps());
+        }
         if let Some(lobby) = self.lobby.take() {
             let tall = self.frame.reference().1;
             let drawn = self.staged((640., tall), |ui| ui.lobby_page(&lobby, theme));
@@ -940,6 +947,15 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 || ((settings.searching()
                     || settings.updates.working()
                     || settings.pending.is_some())
+                    && self.motion != Motion::Off);
+        } else if let Some(session) = self.app.take() {
+            let drawn = self.app_page(&session, data, theme, art);
+            self.app = Some(session);
+            drawn?;
+            self.animating = self.list.scroll.active(now)
+                || self.list.pill.active(now)
+                || self.cover_fade.active(now)
+                || (self.app.as_ref().is_some_and(|s| s.busy.is_some())
                     && self.motion != Motion::Off);
         } else if matches!(app.screen, Screen::Switcher | Screen::Resume) {
             // Fixed compositions in their theme rectangles, no decorations.
@@ -1491,6 +1507,10 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                     )?;
                     right -= self.px(24.);
                 }
+                if let Some((badge, tone)) = data.badge(system, i) {
+                    let ink = selection(accent_ink, self.tone(tone, theme), theme.highlight_text);
+                    right -= self.tone_tag(badge, ink, (right, y + rh as i32 / 2))? + self.px(10.);
+                }
                 game.name.clone()
             } else {
                 let name = systems.get(i).expect("visible system row");
@@ -1508,8 +1528,11 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                     self.icon(Glyph::ArrowUpDown, icon, c)?;
                     x += self.px(26.);
                 } else {
+                    let app = data.apps().iter().find(|a| a.key == *name);
                     let count = if name == crate::moonlight::SYSTEM {
                         String::new()
+                    } else if let Some(app) = app {
+                        app.summary.clone()
                     } else {
                         system_count(name, data).to_string()
                     };
@@ -1527,7 +1550,9 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                         let icon = self
                             .frame
                             .square(x, y + (rh as i32 - self.px(16.)) / 2, 16.);
-                        if name == "@favorites" {
+                        if let Some(app) = app {
+                            self.module_icon((app.icon.as_deref(), ""), icon, c)?;
+                        } else if name == "@favorites" {
                             self.icon(
                                 Glyph::Star,
                                 icon,
@@ -1732,7 +1757,9 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 .unwrap_or_default();
             // One line, shrinking down to the theme's smallest text; else the
             // facts on one line and "played" on the next. Nothing is cut.
-            let facts = parts.join(" · ");
+            let facts = data
+                .subtitle(system, cursor)
+                .map_or_else(|| parts.join(" · "), str::to_owned);
             let (mut size, floor) = (size, self.frame.min_size());
             let (fw, pw, gap) = loop {
                 let fw = self.measure(&facts, Face::Regular, size)?;
@@ -1944,7 +1971,12 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         let mut right = width as i32 - self.px(24.);
         for (button, label) in hints.iter().rev() {
             let button = *button;
-            let start = matches!(button, HintButton::Start);
+            let word = match button {
+                HintButton::Start => Some("START"),
+                HintButton::Select => Some("SELECT"),
+                _ => None,
+            };
+            let start = word.is_some();
             let letter = |key| {
                 ['A', 'B', 'X', 'Y']
                     .iter()
@@ -1954,13 +1986,13 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             let buttons = match button {
                 HintButton::Key(key) => [Some(letter(key)), None],
                 HintButton::Pair(left, right) => [Some(letter(left)), Some(letter(right))],
-                HintButton::Start => [None, None],
+                HintButton::Start | HintButton::Select => [None, None],
             };
             let paired = buttons[1].is_some();
             // The START badge holds its word, which the text floor may widen.
-            let start_w = if start {
+            let start_w = if let Some(word) = word {
                 self.px(45.)
-                    .max(self.measure("START", Face::Regular, 10.)? as i32 + self.px(10.))
+                    .max(self.measure(word, Face::Regular, 10.)? as i32 + self.px(10.))
             } else {
                 0
             };
@@ -1976,7 +2008,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 } else {
                     self.px(if paired { 50. } else { 20. })
                 };
-            if start {
+            if let Some(word) = word {
                 let badge = Rect::new(
                     right,
                     y + (h as i32 - self.px(20.)) / 2,
@@ -1986,12 +2018,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 if !theme.user.text_hints {
                     self.rounded(badge, self.px(5.) as f32, theme.badge, None)?;
                 }
-                self.label_aligned(
-                    "START",
-                    (Face::Regular, 10., theme.text),
-                    badge,
-                    Align::Center,
-                )?;
+                self.label_aligned(word, (Face::Regular, 10., theme.text), badge, Align::Center)?;
             }
             if paired {
                 self.label_aligned(
@@ -2398,6 +2425,9 @@ pub fn pixels(rect: Rect01, width: u32, height: u32) -> Rect {
     )
 }
 fn system_title(name: &str, data: &dyn DataSource, catalog: &I18n) -> String {
+    if let Some(app) = data.apps().iter().find(|a| a.key == name) {
+        return app.name.clone();
+    }
     match name {
         "@favorites" => catalog.text("collections.favorites"),
         "@recent" => catalog.text("collections.recent"),

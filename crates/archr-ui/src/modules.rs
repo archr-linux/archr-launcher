@@ -210,6 +210,8 @@ pub struct Module {
     pub auto_updated: u64,
     /// Failures in the last ten minutes.
     pub failures: usize,
+    /// API 4: its carousel row (the summary comes from `app:summary`).
+    pub app: Option<crate::apps::Row>,
 }
 impl Module {
     /// Running, or allowed to run.
@@ -334,6 +336,18 @@ impl View {
     pub fn items(&self, module: &str, target: &str) -> &[Item] {
         Self::extra(&self.items, module, target).map_or(&[], Vec::as_slice)
     }
+    /// The carousel rows of the active apps, with their `app:summary`.
+    pub fn apps(&self) -> Vec<crate::apps::Row> {
+        self.modules
+            .iter()
+            .filter(|m| m.active())
+            .filter_map(|m| {
+                let mut row = m.app.clone()?;
+                row.summary = self.value(&m.id, "app:summary").unwrap_or("").to_owned();
+                Some(row)
+            })
+            .collect()
+    }
     pub fn shortcuts(&self) -> Vec<(usize, &Entry)> {
         self.entries(
             SHORTCUTS,
@@ -367,8 +381,11 @@ pub struct Call {
     pub system: String,
     pub game_key: String,
     pub rom: String,
-    /// The id of the chosen row of a `list` row.
+    /// The id of the chosen row of a `list` row, or of an app's item.
     pub item: Option<String>,
+    /// API 4: the app screen it was chosen on, and the button.
+    pub screen: Option<String>,
+    pub button: Option<String>,
 }
 
 /// The store tabs (Loja-modulos).
@@ -507,6 +524,16 @@ pub enum Request {
         data: bool,
     },
     Store(StoreAction),
+    /// API 4: start the module's app process, which shows its first screen.
+    OpenApp(String),
+    /// Stop it (B on its first screen).
+    CloseApp(String),
+    /// An event to the open app (`screen.select`, `screen.answer`...).
+    AppEvent {
+        module: String,
+        name: &'static str,
+        data: serde_json::Value,
+    },
 }
 
 #[cfg(test)]

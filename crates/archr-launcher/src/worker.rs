@@ -34,6 +34,8 @@ pub enum Work {
     },
     /// Rescan a loaded system whose files changed (new scraped art).
     Reload(String),
+    /// Count every system's games again (a module installed one).
+    Count,
     /// Re-read system.cfg after the settings changed launch choices.
     Config,
 }
@@ -181,6 +183,10 @@ pub fn start(paths: Paths, initial: Vec<SystemDef>) -> Worker {
                 }
             };
             let update = match job {
+                Work::Count => {
+                    refresh_overview(&paths, &systems, &done);
+                    continue;
+                }
                 Work::Config => Update::Config(SystemCfg::load(&paths.config).ok()),
                 Work::Reload(name) => {
                     loaded.remove(&name);

@@ -237,6 +237,17 @@ pub trait DataSource {
     fn game_key(&self, _system: &str, _game: usize) -> Option<String> {
         None
     }
+    /// The carousel rows of the open-able apps (API 4), after the collections.
+    fn apps(&self) -> &[crate::apps::Row] {
+        &[]
+    }
+    /// An app item's tag and second line, drawn by the games list and cover.
+    fn badge(&self, _system: &str, _game: usize) -> Option<(&str, crate::modules::Tone)> {
+        None
+    }
+    fn subtitle(&self, _system: &str, _game: usize) -> Option<&str> {
+        None
+    }
 }
 
 /// How a screen's list answers the shoulders and the d-pad, which send the
@@ -604,6 +615,11 @@ impl App {
                         if system == crate::moonlight::SYSTEM {
                             return Outcome::Moonlight;
                         }
+                        if let Some(module) = crate::apps::module_of(system) {
+                            return Outcome::Module(crate::modules::Request::OpenApp(
+                                module.to_owned(),
+                            ));
+                        }
                         self.enter(Screen::Games {
                             system: system.clone(),
                         });
@@ -730,7 +746,7 @@ impl App {
                                     .get(*index)
                                     .map(|g| g.path.display().to_string())
                                     .unwrap_or_default(),
-                                item: None,
+                                ..Call::default()
                             },
                             None => Call {
                                 system: self.quick_system(data).unwrap_or_default(),

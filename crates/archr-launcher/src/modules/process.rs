@@ -42,6 +42,8 @@ pub struct Plan {
     /// The system's resolv.conf, for a `net` module's DNS.
     pub resolv: String,
     pub memory_mb: u32,
+    /// Processes and threads; never fewer than 16.
+    pub tasks: u32,
 }
 
 pub trait Executor: Send + Sync {
@@ -177,7 +179,6 @@ pub fn sandbox(plan: &Plan, seccomp: bool) -> Vec<String> {
         // in /run/userdb, which nss-systemd reads directly without them.
         "-p InaccessiblePaths=-/run/systemd/userdb",
         "-p MemorySwapMax=0",
-        "-p TasksMax=16",
         "-p CPUWeight=20",
         "-p Nice=10",
         "-p IOWeight=20",
@@ -235,6 +236,7 @@ pub fn sandbox(plan: &Plan, seccomp: bool) -> Vec<String> {
         }
     }
     property(format!("MemoryMax={}M", plan.memory_mb));
+    property(format!("TasksMax={}", plan.tasks.max(16)));
     property(format!("WorkingDirectory={}", plan.dir.display()));
     args
 }
@@ -458,6 +460,16 @@ mod tests {
             assert!(args.contains(expected), "{expected} in {args}");
         }
         assert!(!args.contains("archr-mod "), "no shared user: {args}");
+        assert!(args.contains("-p TasksMax=16"), "the least: {args}");
+        let app = sandbox(
+            &Plan {
+                tasks: 32,
+                ..plan.clone()
+            },
+            true,
+        )
+        .join(" ");
+        assert!(app.contains("-p TasksMax=32"), "an app's: {app}");
         let online = sandbox(
             &Plan {
                 net: true,

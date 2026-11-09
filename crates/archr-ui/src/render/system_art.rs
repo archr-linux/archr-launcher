@@ -90,8 +90,10 @@ pub(super) fn short_name(name: &str) -> String {
 }
 
 /// User directory first, then the theme; within each, the system's own file
-/// before its alias.
-fn candidates(dirs: &[&Path], name: &str) -> Vec<PathBuf> {
+/// before its alias. An app's picture is `app-<id>` there, else its own.
+fn candidates(dirs: &[&Path], row: &str, apps: &[crate::apps::Row]) -> Vec<PathBuf> {
+    let app = crate::apps::module_of(row).map(|id| format!("app-{id}"));
+    let name = app.as_deref().unwrap_or(row.trim_start_matches('@'));
     let keys = [Some(name), lookup(IMAGE_ALIASES, name)];
     let mut found = Vec::new();
     for dir in dirs {
@@ -103,6 +105,8 @@ fn candidates(dirs: &[&Path], name: &str) -> Vec<PathBuf> {
             );
         }
     }
+    let own = apps.iter().find(|app| app.key == row);
+    found.extend(own.and_then(|app| app.art.clone()));
     found
 }
 
@@ -144,6 +148,8 @@ pub(super) struct SystemArt<'a> {
     pixel: bool,
     size: (u32, u32),
     wanted: Vec<Vec<PathBuf>>,
+    /// The apps' rows: their own pictures and icons.
+    apps: Vec<crate::apps::Row>,
 }
 
 impl<'a> SystemArt<'a> {
@@ -162,7 +168,17 @@ impl<'a> SystemArt<'a> {
             size,
             dirs,
             wanted: Vec::new(),
+            apps: Vec::new(),
         }
+    }
+    /// The rows the library shows now.
+    pub(super) fn set_apps(&mut self, rows: &[crate::apps::Row]) {
+        if self.apps != rows {
+            self.apps = rows.to_vec();
+        }
+    }
+    fn icon(&self, name: &str) -> Option<std::sync::Arc<str>> {
+        self.apps.iter().find(|a| a.key == name)?.icon.clone()
     }
 
     /// Selected row first, then its neighbours; collections have no image.
@@ -171,18 +187,14 @@ impl<'a> SystemArt<'a> {
         self.wanted = names
             .iter()
             .filter(|name| has_picture(name))
-            .map(|name| candidates(&dirs, name.trim_start_matches('@')))
+            .map(|name| candidates(&dirs, name, &self.apps))
             .collect();
     }
     /// The cache key of `name`'s picture, if it can have one.
     fn key(&self, name: &str) -> Option<PathBuf> {
         let dirs: Vec<_> = self.dirs.iter().map(PathBuf::as_path).collect();
         has_picture(name)
-            .then(|| {
-                candidates(&dirs, name.trim_start_matches('@'))
-                    .into_iter()
-                    .next()
-            })
+            .then(|| candidates(&dirs, name, &self.apps).into_iter().next())
             .flatten()
     }
 
@@ -194,7 +206,13 @@ impl<'a> SystemArt<'a> {
 }
 
 fn has_picture(name: &str) -> bool {
-    !name.starts_with('@') || name == crate::moonlight::SYSTEM
+    !name.starts_with('@')
+        || name == crate::moonlight::SYSTEM
+        || crate::apps::module_of(name).is_some()
+}
+/// A collection's glyph; apps draw their own icon instead.
+fn collection(name: &str) -> bool {
+    name.starts_with('@') && name != crate::moonlight::SYSTEM
 }
 /// Entries `cursor` and its neighbours, the selection first.
 fn nearby(rows: &[String], cursor: usize, reach: usize) -> Vec<&str> {
@@ -447,15 +465,19 @@ impl Ui<'_, '_> {
             a: alpha,
             ..mix(theme.dim_text, theme.text_secondary, focus)
         };
-        if name.starts_with('@') && name != crate::moonlight::SYSTEM {
+        if collection(name) {
             let side = (inner.width().min(inner.height()) as f32 * 0.5) as u32;
-            let glyph = selection(name == "@favorites", Glyph::Clock, Glyph::Star);
             let icon = Rect::new(
                 inner.center().x() - side as i32 / 2,
                 inner.center().y() - side as i32 / 2,
                 side,
                 side,
             );
+            if crate::apps::module_of(name).is_some() {
+                let svg = self.art.as_ref().and_then(|a| a.icon(name));
+                return self.module_icon((svg.as_deref(), ""), icon, ink);
+            }
+            let glyph = selection(name == "@favorites", Glyph::Clock, Glyph::Star);
             return self.icon(glyph, icon, ink);
         }
         let text = short_name(name);
@@ -549,13 +571,17 @@ impl Ui<'_, '_> {
 
     fn generated_card(&mut self, rect: Rect, name: &str, theme: &Theme) -> Result<(), String> {
         let ink = theme.surface_elevated;
-        if name.starts_with('@') && name != crate::moonlight::SYSTEM {
+        if collection(name) {
             let side = self.px(96.);
             let icon = self.frame.square(
                 rect.right() - self.px(24.) - side,
                 rect.y() + self.px(40.),
                 96.,
             );
+            if crate::apps::module_of(name).is_some() {
+                let svg = self.art.as_ref().and_then(|a| a.icon(name));
+                return self.module_icon((svg.as_deref(), ""), icon, ink);
+            }
             let glyph = if name == "@favorites" {
                 Glyph::Star
             } else {
@@ -634,6 +660,15 @@ fn generated_label(
     })
 }
 
+/// An app's line under its name: what it says it holds, else its subtitle.
+fn app_line(app: &crate::apps::Row) -> String {
+    if app.summary.is_empty() {
+        app.subtitle.clone()
+    } else {
+        app.summary.clone()
+    }
+}
+
 /// Manufacturer and year as the definitions give them, without icon glyphs
 /// or the "System" placeholder.
 fn maker(data: &dyn DataSource, name: &str) -> Vec<String> {
@@ -692,6 +727,8 @@ fn panel_labels(
     let blocks: Vec<Block> = if info.inline {
         let mut details = vec![if name == crate::moonlight::SYSTEM {
             catalog.text("moonlight.description")
+        } else if let Some(app) = data.apps().iter().find(|a| a.key == name) {
+            app_line(app)
         } else if data.is_tools(name) {
             count("tools.count", games)
         } else {
@@ -710,6 +747,8 @@ fn panel_labels(
     } else {
         let stats = if name == crate::moonlight::SYSTEM {
             catalog.text("moonlight.description")
+        } else if let Some(app) = data.apps().iter().find(|a| a.key == name) {
+            app_line(app)
         } else if name.starts_with('@') {
             count("games.count", games)
         } else if data.is_tools(name) {
@@ -836,12 +875,12 @@ mod tests {
     fn lookup_prefers_user_then_theme_and_own_name_before_alias() {
         let user = Path::new("/u");
         let theme = Path::new("/t");
-        let found = candidates(&[user, theme], "sfc");
+        let found = candidates(&[user, theme], "sfc", &[]);
         assert_eq!(found.first().unwrap(), Path::new("/u/sfc.png"));
         assert_eq!(found[3], Path::new("/u/snes.png"));
         assert_eq!(found[6], Path::new("/t/sfc.png"));
         assert_eq!(found.last().unwrap(), Path::new("/t/snes.webp"));
-        assert_eq!(candidates(&[user], "nes").len(), 3);
+        assert_eq!(candidates(&[user], "nes", &[]).len(), 3);
         // Device ROM folders show their console's picture.
         for (folder, console) in [
             ("coleco", "colecovision"),

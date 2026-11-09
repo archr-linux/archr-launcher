@@ -1,6 +1,6 @@
 //! What is installed and what the user decided (modules.toml), the settings
 //! files, and the `View` the screens draw, in the launcher's language.
-use super::manifest::{self, Manifest, Mode, ALIASES};
+use super::manifest::{self, Manifest, ALIASES};
 use archr_io::{atomic_publish, read_bytes, read_utf8, Symlinks};
 use archr_ui::modules::{Module, Permission, RowKind, Status};
 use serde::{Deserialize, Serialize};
@@ -308,8 +308,22 @@ pub fn scan(dirs: &Dirs, language: &str) -> Vec<Installed> {
     found
 }
 
-/// What a module asks for, as the permission page lists it.
-pub fn permissions(manifest: &Manifest) -> Vec<Permission> {
+/// The systems' full names by folder name, from the catalog; `ports` is
+/// PortMaster's.
+pub fn system_names(catalog: Option<&Path>) -> BTreeMap<String, String> {
+    let mut names: BTreeMap<String, String> = catalog
+        .and_then(|path| archr_index::load_systems(path).ok())
+        .into_iter()
+        .flatten()
+        .map(|s| (s.name, s.fullname))
+        .collect();
+    names.insert(super::app::PORTS.into(), "Ports (PortMaster)".into());
+    names
+}
+
+/// What a module asks for, as the permission page lists it; `names` gives
+/// the systems' full names.
+pub fn permissions(manifest: &Manifest, names: &BTreeMap<String, String>) -> Vec<Permission> {
     let line = |key, detail: &str, sensitive| Permission {
         key,
         detail: detail.to_owned(),
@@ -404,6 +418,16 @@ pub fn permissions(manifest: &Manifest) -> Vec<Permission> {
             false,
         ));
     }
+    if !granted.install.is_empty() {
+        let systems: Vec<&str> = granted
+            .install
+            .iter()
+            .map(|s| names.get(s).map_or(s.as_str(), String::as_str))
+            .collect();
+        // It writes into the user's library. The label takes the list.
+        let detail = format!("|systems={}", systems.join(", "));
+        list.push(line("modules.perm_install", &detail, true));
+    }
     // The amber ones first: a list cut short never hides them.
     list.sort_by_key(|p| !p.sensitive);
     if list.is_empty() {
@@ -415,7 +439,8 @@ pub fn permissions(manifest: &Manifest) -> Vec<Permission> {
         (!manifest.widgets.is_empty(), "modules.perm_widget"),
         (!manifest.quick.is_empty(), "modules.perm_quick"),
         (!manifest.pages.is_empty(), "modules.perm_page"),
-        (manifest.mode == Mode::Daemon, "modules.perm_daemon"),
+        (manifest.app.is_some(), "modules.perm_app"),
+        (super::permanent(manifest), "modules.perm_daemon"),
     ] {
         if used {
             list.push(line(key, "", false));
@@ -532,7 +557,7 @@ pub fn module(
     dirs: &Dirs,
     installed: &Installed,
     record: Option<&Record>,
-    language: &str,
+    (language, names): (&str, &BTreeMap<String, String>),
 ) -> Module {
     let record = record.cloned().unwrap_or_default();
     let Some(manifest) = &installed.manifest else {
@@ -591,7 +616,7 @@ pub fn module(
         source: record.source.clone(),
         reviewed: false,
         update: None,
-        permissions: permissions(manifest),
+        permissions: permissions(manifest, names),
         problem: if installed.compatible {
             String::new()
         } else {
@@ -667,6 +692,22 @@ pub fn module(
             })
             .collect(),
         settings: settings(dirs, manifest),
+        app: manifest.app.as_ref().map(|app| archr_ui::apps::Row {
+            key: archr_ui::apps::row(&manifest.id),
+            name: Some(tr(&app.label))
+                .filter(|l| !l.is_empty())
+                .or_else(|| Some(installed.names(manifest.name.as_ref(), language)))
+                .filter(|n| !n.is_empty())
+                .unwrap_or_else(|| manifest.id.clone()),
+            subtitle: tr(&app.subtitle),
+            summary: String::new(),
+            icon: app
+                .icon
+                .as_deref()
+                .or(manifest.icon.as_deref())
+                .and_then(svg),
+            art: app.art.as_ref().map(|art| installed.dir.join(art)),
+        }),
     }
 }
 
@@ -792,7 +833,7 @@ mod tests {
             [permissions]\nsystem = [\"screenshot\"]\n";
         let shot = |source: &str| {
             let (manifest, _) = manifest::parse(source).unwrap();
-            permissions(&manifest)
+            permissions(&manifest, &BTreeMap::new())
                 .into_iter()
                 .find(|p| p.key == "modules.perm_screenshot")
                 .unwrap()
@@ -809,7 +850,10 @@ mod tests {
             [permissions]\nconfig_read = [\"system.language\"]\nlaunch = true\n\
             config_write = [\"system.cpugovernor\"]\n";
         let (manifest, _) = manifest::parse(source).unwrap();
-        let keys: Vec<&str> = permissions(&manifest).iter().map(|p| p.key).collect();
+        let keys: Vec<&str> = permissions(&manifest, &BTreeMap::new())
+            .iter()
+            .map(|p| p.key)
+            .collect();
         assert_eq!(
             keys,
             [
@@ -818,6 +862,34 @@ mod tests {
                 "modules.perm_launch"
             ]
         );
+    }
+
+    #[test]
+    fn an_app_lists_its_screens_and_the_systems_it_installs_in() {
+        let source = "id = \"loja\"\nversion = \"1.0.0\"\napi_version = 4\n\
+            [run]\nruntime = \"sh\"\nentry = \"main.sh\"\nmode = \"daemon\"\n\
+            [app]\nhome = \"catalog\"\n\
+            [permissions]\nnet = true\ninstall = [\"gb\", \"ports\", \"zz\"]\n";
+        let (manifest, _) = manifest::parse(source).unwrap();
+        let names = BTreeMap::from([("gb".to_owned(), "Game Boy".to_owned())]);
+        let names = {
+            let mut all = system_names(None);
+            all.extend(names);
+            all
+        };
+        let lines = permissions(&manifest, &names);
+        let keys: Vec<&str> = lines.iter().map(|p| p.key).collect();
+        assert_eq!(
+            keys,
+            [
+                "modules.perm_net",
+                "modules.perm_install",
+                "modules.perm_app"
+            ],
+            "no daemon line: it runs only while the app is open"
+        );
+        assert_eq!(lines[1].detail, "|systems=Game Boy, Ports (PortMaster), zz");
+        assert!(lines[1].sensitive);
     }
 
     #[test]
@@ -847,7 +919,12 @@ mod tests {
         let installed = Installed::read(&dir, "pt_BR");
         assert!(installed.manifest.is_some(), "{}", installed.problem);
         let data = tempfile::tempdir().unwrap();
-        let module = module(&Dirs::new(data.path()), &installed, None, "pt_BR");
+        let module = module(
+            &Dirs::new(data.path()),
+            &installed,
+            None,
+            ("pt_BR", &BTreeMap::new()),
+        );
         let detail = &module.pages[1];
         assert!(detail.detail);
         assert_eq!(

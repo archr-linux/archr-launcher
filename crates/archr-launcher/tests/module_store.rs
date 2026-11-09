@@ -559,6 +559,7 @@ fn host(
         shop: Some(shop(root, fake)),
         cpufreq: root.join("cpufreq/policy0"),
         perf: root.join("run/perf-last.json"),
+        library: None,
     })
 }
 /// Store answers and notices until `done` holds, at most 10 s.
