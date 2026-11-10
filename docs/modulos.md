@@ -804,8 +804,11 @@ launch = true              # "Jogar" depois de instalar
   recebem `settings.changed`; uma ação das páginas vai ao daemon, ou ao app
   quando só ele roda.
 - O app termina (`shutdown`, 500 ms, depois é morto) com B na primeira tela,
-  ao abrir um jogo, ao suspender ou desligar pelo launcher e ao fechar o
-  launcher. Nunca é reiniciado sozinho; se morre, a tela fecha com "X parou"
+  ao abrir um jogo, ao desligar ou reiniciar pelo launcher e ao fechar o
+  launcher. Suspender o aparelho não fecha o app: ele para junto com o
+  sistema e, ao acordar, está onde estava. Uma conexão que estava aberta
+  costuma cair na suspensão (o Wi-Fi volta em alguns segundos), então o app
+  deve tentar de novo o que estava baixando. Nunca é reiniciado sozinho; se morre, a tela fecha com "X parou"
   e uma saída com erro conta como falha (seção 3).
 - START, em qualquer tela do app, abre as páginas do módulo em Configurações
   (se ele tem); ao sair delas, o app continua onde estava.
@@ -820,6 +823,7 @@ launch = true              # "Jogar" depois de instalar
 | `screen.confirm` | `{id, text, yes?, no?}`: a pergunta do launcher, com "não" no foco; resposta `screen.answer` (para remover jogos e ports, o launcher pergunta ele mesmo: 10.5) |
 | `screen.busy` | `{text}`: indicador de espera até a próxima `show` ou `patch`; `{text: null}` tira |
 | `screen.offline` | `{text?}`: selo "Sem conexão" (ou o texto) na faixa dos chips; `{text: null}` tira |
+| `screen.qr` | `{id, title?, value, text?, code?}`: código QR sobre a tela, para abrir uma página ou aprovar uma entrada no celular (abaixo); `{id, value: null}` tira |
 
 **Coleção** (`layout = "collection"`), desenhada com o layout `games` da
 visualização ativa: `chips` (até 8, `{id, label, selected}`), `items` (até 50
@@ -876,6 +880,17 @@ Um item pode chegar sem `image` e ganhá-la depois com
 quadro vazio. Com `screen.visible` (10.4) o app baixa só as capas da janela
 que a tela mostra.
 
+**Código QR** (`screen.qr`): o launcher desenha o código em preto sobre um
+quadrado branco (o que a câmera do celular lê, qualquer que seja o tema), com
+`title` em cima e `text` (até 3 linhas) e o endereço embaixo. `value` é uma
+página `https://` de até 512 bytes, sem espaços nem caracteres de controle;
+outro valor é recusado com aviso no log. `code` (até 16 caracteres) aparece
+em letra grande entre o código e o texto: o código que o celular mostra numa
+entrada por QR, para o usuário conferir. Um `screen.qr` novo troca o que está
+aberto (o mesmo `id` atualiza o texto); fica sobre a tela até B ou A, que o
+fecham e mandam `screen.dismissed {id}`; as outras teclas não fazem nada. Uma
+`screen.confirm` aberta por cima é respondida antes.
+
 **Textos:** `@chave` e `{key, args}` como no resto; outro texto (nome e
 descrição de um jogo vindos da rede) é texto puro: nada de HTML ou formatação.
 
@@ -892,6 +907,7 @@ Notificações (sem `id`), com o nome do evento como método:
 | `screen.search` | `{screen, text}` | SELECT abriu o teclado do launcher (até 64 bytes) e o usuário confirmou |
 | `screen.answer` | `{id, yes}` | a resposta de um `screen.confirm` (B é "não") |
 | `screen.back` | `{screen}` | B fechou essa tela; a de baixo volta |
+| `screen.dismissed` | `{id}` | B ou A fechou o `screen.qr` com esse id |
 | `screen.visible` | `{screen, from, to}` | os itens que a coleção desenha (índices a partir de 0, inclusive), ao abrir e quando a janela muda (rolagem, chip, `append`), depois de 150 ms parada; num detalhe, `from = to` = a imagem mostrada (0 é `image`, depois a galeria) |
 | `port.progress` | `{name, progress}` | o script do PortMaster disse quanto falta |
 
@@ -908,7 +924,7 @@ tela sai do app.
 
 | método | params | result |
 |---|---|---|
-| `rom.install` | `{system, file, name?, cover?, meta?: {developer, description, year}}` | `{game_key}` |
+| `rom.install` | `{system, file, name?, cover?, meta?: {developer, description, year}, replace?}` | `{game_key}` |
 | `rom.list` | `{}` | `{games: [{game_key, system, size, date}], used, limit}` (bytes; os ports contam) |
 | `rom.remove` | `{game_key}` | `{removed: true \| false}` |
 | `port.install` | `{name}` | `{game_key}` (o script de início do port, para "Jogar") |
@@ -944,6 +960,19 @@ pasta do sistema (onde uma cópia pela rede também cai); a capa vai para
 aparece na hora. No máximo uma cópia por vez, um `rom.install` por segundo por
 módulo e 2 GiB por módulo, jogos e ports juntos (`-32003`, "quota exceeded");
 o que está errado no pedido é recusado antes (`-32602`, `-32001`) e não conta.
+
+**Nova versão de um jogo** (`replace: <game_key>`; o launcher que aceita lista `rom.install.replace` em `capabilities`, e um app só deve usar com ele: um launcher anterior ignora o campo e instalaria uma segunda cópia): troca um jogo que o
+próprio módulo instalou pelo arquivo novo, **no mesmo caminho e com o mesmo
+nome** (o `name` do pedido é ignorado), para que os saves e estados, que têm o
+nome da ROM, continuem valendo. O jogo precisa estar no registro do módulo,
+ser do mesmo sistema e do mesmo tipo de arquivo (extensão) e estar como foi
+instalado (tamanho e data): um arquivo que o usuário mudou é dele e o pedido é
+recusado (`-32001`), antes e de novo logo antes da troca. O arquivo novo é
+gravado inteiro com outro nome na mesma pasta e posto no lugar do antigo de
+uma vez (`rename`); sem `cover`, a capa antiga fica. O registro troca a
+entrada (não soma outra) e a cota desconta o tamanho antigo. O app pode
+oferecer "Atualizar" quando a página do jogo mostra outro arquivo que o que
+ele guardou ao instalar.
 A cópia acontece fora da thread do módulo: a resposta vem quando termina.
 
 **Remover:** o módulo só manda `rom.remove` ou `port.remove`, para algo que
@@ -986,5 +1015,6 @@ nunca lê a pasta de ROMs nem a biblioteca.
 **Limites do processo do app:** até 256 linhas esperando o launcher (mais é
 quebra de protocolo e o processo para); as cópias das imagens, como em 10.3
 (uma imagem já vista, pelo mesmo arquivo, não é lida de novo). O `initialize` lista em `capabilities` os métodos `screen.*` que o
-launcher desenha; `screen.qr` ainda não existe: como notificação é ignorado,
-como pedido recebe `-32601`, e o app deve seguir sem ele.
+launcher desenha; um método que não está lá (um launcher antigo sem
+`screen.qr`, por exemplo) é recusado com aviso no log, e o app deve seguir sem
+ele.

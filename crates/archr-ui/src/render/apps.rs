@@ -74,6 +74,30 @@ impl Ui<'_, '_> {
             Kind::Detail => self.app_detail(session, screen, theme, layout, art)?,
         }
         let tall = self.frame.reference().1;
+        if let Some(qr) = &session.qr {
+            self.staged((640., tall), |ui| ui.app_qr(qr, theme))?;
+            // The screen's own hints would still read under the dimming: its
+            // footer band is cleared (background, then the same dimming) and
+            // only B is offered.
+            let Frame { width, height, .. } = self.frame;
+            let footer = self.frame.size(theme.footer_height).round().max(1.) as u32;
+            let band = Rect::new(0, height as i32 - footer as i32, width, footer);
+            self.canvas.set_draw_color(color(theme.background));
+            self.canvas.fill_rect(band)?;
+            let dim = Rgba {
+                a: (f32::from(theme.scrim.a) * 1.2).round().min(255.) as u8,
+                ..theme.scrim
+            };
+            self.canvas.set_draw_color(color(dim));
+            self.canvas.fill_rect(band)?;
+            self.hints(
+                &[('B', "hint.close")],
+                theme,
+                width,
+                height as i32 - footer as i32,
+                footer,
+            )?;
+        }
         if let Some(ask) = &session.ask {
             self.staged((640., tall), |ui| ui.app_ask(ask, theme))?;
         }
@@ -470,6 +494,90 @@ impl Ui<'_, '_> {
             let face = selection(on, Face::Regular, Face::Semibold);
             self.label_aligned(label, (face, 14., ink), rect, Align::Center)?;
         }
+        Ok(())
+    }
+
+    /// `screen.qr`: the code on a white square (phone cameras want dark on
+    /// light, whatever the theme), a sign-in code to compare, the text and
+    /// the address it opens.
+    fn app_qr(&mut self, qr: &crate::apps::Qr, theme: &Theme) -> Result<(), String> {
+        use qrcodegen::{QrCode, QrCodeEcc};
+        self.scrim(theme, 1.2)?;
+        let tall = self.frame.reference().1;
+        let width = 352.;
+        let inner = width - 40.;
+        let text = if qr.text.is_empty() {
+            Vec::new()
+        } else {
+            let lines = self.wrap(&qr.text, Face::Regular, 13., self.px(inner) as u32)?;
+            lines.into_iter().take(3).collect()
+        };
+        let code = !qr.code.is_empty();
+        let side = if code { 176. } else { 200. };
+        let h = 18. + 22. + 10. + side + 10.
+            + if code { 34. } else { 0. }
+            + text.len() as f32 * 19.
+            + 18.
+            + 16.;
+        let top = ((tall - h) / 2.).max(8.);
+        let left = (640. - width) / 2.;
+        let panel = Rect::new(
+            self.px(left),
+            self.px(top),
+            self.px(width) as u32,
+            self.px(h) as u32,
+        );
+        self.rounded(panel, self.px(12.) as f32, theme.surface, Some(theme.border))?;
+        let mut y = top + 18.;
+        let line = |ui: &Self, y: f32, h: f32| {
+            Rect::new(ui.px(left + 20.), ui.px(y), ui.px(inner) as u32, ui.px(h) as u32)
+        };
+        if !qr.title.is_empty() {
+            let at = line(self, y, 22.);
+            self.label(&qr.title, (Face::Semibold, 16., theme.text), at)?;
+        }
+        y += 22. + 10.;
+        // Whole pixels per module, four modules of quiet zone each side.
+        if let Ok(code) = QrCode::encode_text(&qr.value, QrCodeEcc::Medium) {
+            let n = code.size();
+            let box_px = self.px(side);
+            let module = (box_px / (n + 8)).max(1);
+            let drawn = module * (n + 8);
+            let x0 = self.px(320.) - drawn / 2;
+            let y0 = self.px(y) + (box_px - drawn) / 2;
+            let paper = Rect::new(x0, y0, drawn as u32, drawn as u32);
+            let white = Rgba { r: 255, g: 255, b: 255, a: 255 };
+            self.rounded(paper, self.px(8.) as f32, white, None)?;
+            let dark: Vec<Rect> = (0..n)
+                .flat_map(|my| (0..n).map(move |mx| (mx, my)))
+                .filter(|&(mx, my)| code.get_module(mx, my))
+                .map(|(mx, my)| {
+                    Rect::new(
+                        x0 + (mx + 4) * module,
+                        y0 + (my + 4) * module,
+                        module as u32,
+                        module as u32,
+                    )
+                })
+                .collect();
+            self.canvas.set_draw_color(sdl2::pixels::Color::RGB(0, 0, 0));
+            self.canvas.fill_rects(&dark)?;
+        }
+        y += side + 10.;
+        if code {
+            let at = line(self, y, 30.);
+            self.label_aligned(&qr.code, (Face::Semibold, 24., theme.text), at, Align::Center)?;
+            y += 34.;
+        }
+        for l in &text {
+            let at = line(self, y, 19.);
+            self.label_aligned(l, (Face::Regular, 13., theme.muted), at, Align::Center)?;
+            y += 19.;
+        }
+        // The address without its scheme (labels end in "…" when cut).
+        let shown = qr.value.trim_start_matches("https://");
+        let at = line(self, y, 16.);
+        self.label_aligned(shown, (Face::Regular, 11., theme.muted), at, Align::Center)?;
         Ok(())
     }
 

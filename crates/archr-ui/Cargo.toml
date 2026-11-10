@@ -15,6 +15,7 @@ serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 serde_json = "1"
 libc = "0.2"
+qrcodegen = "1.8"
 
 [dev-dependencies]
 tempfile = "3"

@@ -185,6 +185,24 @@ pub enum Message {
     Offline(Option<String>),
     /// `port.progress` of a PortMaster install: the name and 0–100.
     Port(String, u8),
+    /// `screen.qr`: a code for the phone over the screen.
+    Qr(Qr),
+    /// `screen.qr` with `value: null`: that code goes away.
+    QrClose(String),
+}
+
+/// `screen.qr`: a QR code the launcher draws over the app's screen, to open a
+/// page or approve a sign-in on the phone. B or A closes it
+/// (`screen.dismissed`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Qr {
+    pub id: String,
+    pub title: String,
+    /// What the code holds (a URL), already checked to fit a code.
+    pub value: String,
+    pub text: String,
+    /// A short code to compare on the phone (a sign-in), in large type.
+    pub code: String,
 }
 
 /// `screen.confirm`: the launcher's question, answered with `screen.answer`.
@@ -225,6 +243,7 @@ pub struct Session {
     pub ask: Option<Ask>,
     /// A question asked while another was open.
     waiting: Option<Ask>,
+    pub qr: Option<Qr>,
     pub keyboard: Option<Keyboard>,
     /// When the app was opened, for its first screen's wait.
     pub opened: Option<std::time::Instant>,
@@ -271,6 +290,12 @@ impl Session {
                 }
                 _ => self.ask = Some(ask),
             },
+            Message::Qr(qr) => self.qr = Some(qr),
+            Message::QrClose(id) => {
+                if self.qr.as_ref().is_some_and(|qr| qr.id == id) {
+                    self.qr = None;
+                }
+            }
             Message::Busy(text) => self.busy = text,
             Message::Offline(text) => self.offline = text,
             // The main loop shows these in its banner.
@@ -413,6 +438,14 @@ impl Session {
                 "screen.answer",
                 json!({"id": id, "yes": yes}),
             ));
+        }
+        // A code for the phone: only B and A count, and both close it.
+        if self.qr.is_some() {
+            if !matches!(button, Button::A | Button::B) {
+                return None;
+            }
+            let id = self.qr.take().map(|qr| qr.id).unwrap_or_default();
+            return Some(Effect::Event("screen.dismissed", json!({"id": id})));
         }
         // Until its first screen, only B (leave) counts.
         if self.stack.is_empty() {
@@ -585,6 +618,47 @@ impl DataSource for Screens<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_code_for_the_phone_closes_with_a_or_b_and_says_so() {
+        let mut session = Session::new("itch", "Itch.io", false);
+        session.apply(Message::Show(Box::new(catalog(3))));
+        let qr = Qr {
+            id: "page".into(),
+            value: "https://example.com".into(),
+            ..Qr::default()
+        };
+        session.apply(Message::Qr(qr.clone()));
+        // Other buttons do nothing while it is open, and the list stays put.
+        assert_eq!(session.handle(Button::Down, 5), None);
+        assert_eq!(session.top().unwrap().cursor, 0);
+        assert!(session.qr.is_some());
+        assert_eq!(
+            session.handle(Button::B, 5),
+            Some(Effect::Event("screen.dismissed", json!({"id": "page"})))
+        );
+        assert!(session.qr.is_none());
+        assert_eq!(session.stack.len(), 1, "B closed the code, not the screen");
+        // A closes it too; the module's own close only takes its code away.
+        session.apply(Message::Qr(qr.clone()));
+        session.apply(Message::QrClose("other".into()));
+        assert!(session.qr.is_some());
+        session.apply(Message::QrClose("page".into()));
+        assert!(session.qr.is_none());
+        session.apply(Message::Qr(qr));
+        assert_eq!(
+            session.handle(Button::A, 5),
+            Some(Effect::Event("screen.dismissed", json!({"id": "page"})))
+        );
+        // A question asked over the code is answered first.
+        session.apply(Message::Qr(Qr { id: "again".into(), ..Qr::default() }));
+        session.apply(Message::Confirm(Ask { id: "q".into(), ..Ask::default() }));
+        assert_eq!(
+            session.handle(Button::B, 5),
+            Some(Effect::Event("screen.answer", json!({"id": "q", "yes": false})))
+        );
+        assert!(session.qr.is_some());
+    }
 
     fn item(id: &str) -> Item {
         Item {

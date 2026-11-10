@@ -388,6 +388,18 @@ impl Reader<'_> {
                 on_yes: false,
                 launcher: false,
             }),
+            "screen.qr" if params["value"].is_null() => Message::QrClose(name(&params["id"])?),
+            "screen.qr" => Message::Qr(archr_ui::apps::Qr {
+                id: name(&params["id"])?,
+                title: text("title").unwrap_or_default(),
+                value: qr_value(&params["value"])?,
+                text: text("text").unwrap_or_default(),
+                code: params["code"]
+                    .as_str()
+                    .filter(|c| c.chars().count() <= 16 && !c.chars().any(char::is_control))
+                    .unwrap_or_default()
+                    .to_owned(),
+            }),
             "screen.busy" => Message::Busy(text("text")),
             // `text: null` (or `offline: false`) takes the tag away.
             "screen.offline"
@@ -413,6 +425,16 @@ fn name(value: &Json) -> Option<String> {
     value
         .as_str()
         .filter(|t| (1..=ID).contains(&t.len()) && !t.chars().any(char::is_control))
+        .map(str::to_owned)
+}
+/// What a `screen.qr` may hold: a web page (`https://`), short enough to stay
+/// readable by a phone camera on a 640×480 screen.
+pub const QR_VALUE: usize = 512;
+fn qr_value(value: &Json) -> Option<String> {
+    value
+        .as_str()
+        .filter(|v| v.len() <= QR_VALUE && v.len() > "https://".len())
+        .filter(|v| v.starts_with("https://") && !v.chars().any(|c| c.is_control() || c == ' '))
         .map(str::to_owned)
 }
 fn percent(value: &Json) -> Option<u8> {
@@ -596,6 +618,7 @@ pub fn check(
         name,
         cover,
         meta: params["meta"].clone(),
+        replace: None,
     })
 }
 /// A checked `rom.install`, for a worker to carry out: the game's file is
@@ -608,8 +631,30 @@ pub struct Copy {
     name: String,
     cover: Option<Vec<u8>>,
     meta: Json,
+    /// `replace`: the module's own game whose file this one takes the place
+    /// of, under the same name (its saves keep matching).
+    replace: Option<Game>,
 }
 impl Copy {
+    /// `rom.install {replace: <game_key>}`: a new version of a game the
+    /// module installed, unchanged since, of the same system and kind of
+    /// file. Without it, nothing changes.
+    pub fn replacing(mut self, game: Option<Game>) -> Result<Self, Refusal> {
+        let Some(game) = game else { return Ok(self) };
+        let same_kind = game
+            .rom
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| format!(".{}", e.to_lowercase()) == self.ext);
+        if game.system != self.def.name || !same_kind || !game.rom.starts_with(&self.def.path) {
+            return Err((-32602, "replace"));
+        }
+        if !unchanged(&game) {
+            return Err((-32001, "the file changed since it was installed"));
+        }
+        self.replace = Some(game);
+        Ok(self)
+    }
     pub fn run(self) -> Result<Game, Refusal> {
         let Self {
             def,
@@ -619,18 +664,41 @@ impl Copy {
             name,
             cover,
             meta,
+            replace,
         } = self;
         let root = &def.path;
         fs::create_dir_all(root).map_err(|_| (-32000, "cannot write"))?;
-        let rom = publish(root, &name, &ext, |file| {
+        let copy = |file: &mut fs::File| {
             let copied = io::copy(&mut (&source).take(size + 1), file)?;
             if copied == size {
                 Ok(())
             } else {
                 Err(io::Error::other("the file changed while it was copied"))
             }
-        })
-        .map_err(|_| (-32000, "cannot write"))?;
+        };
+        let rom = match &replace {
+            Some(old) => {
+                let dir = old.rom.parent().ok_or((-32000, "cannot write"))?;
+                let temp = written(dir, copy).map_err(|_| (-32000, "cannot write"))?;
+                // Looked at again right before: a file the user changed
+                // meanwhile is theirs and stays.
+                if !unchanged(old) {
+                    let _ = fs::remove_file(&temp);
+                    return Err((-32001, "the file changed since it was installed"));
+                }
+                if fs::rename(&temp, &old.rom).is_err() {
+                    let _ = fs::remove_file(&temp);
+                    return Err((-32000, "cannot write"));
+                }
+                // The old cover goes; the new one takes the game's name.
+                if let Some(cover) = old.cover.as_ref().filter(|_| cover.is_some()) {
+                    let _ = fs::remove_file(cover);
+                }
+                old.rom.clone()
+            }
+            None => publish(root, &name, &ext, copy).map_err(|_| (-32000, "cannot write"))?,
+        };
+        let kept = replace.as_ref().and_then(|old| old.cover.clone()).filter(|_| cover.is_none());
         let cover = cover.and_then(|bytes| {
             let images = root.join("media/images");
             let stem = rom.file_stem()?.to_str()?;
@@ -641,6 +709,8 @@ impl Copy {
             })
             .ok()
         });
+        // A new version without a picture keeps the one it had.
+        let cover = cover.or(kept);
         let field = |key: &str, max: usize| -> String {
             meta[key]
                 .as_str()
@@ -677,18 +747,9 @@ impl Copy {
         })
     }
 }
-/// Writes a new file `<name><ext>` in `dir` (or `<name> (2)<ext>`...),
-/// whole, and never over one that is there, even one that appears while it
-/// is written: it is renamed into place only where no file is.
-fn publish(
-    dir: &Path,
-    name: &str,
-    ext: &str,
-    write: impl FnOnce(&mut fs::File) -> io::Result<()>,
-) -> io::Result<PathBuf> {
-    use std::os::unix::ffi::OsStrExt;
-    // A name of its own (time, process, try); what a crash left behind
-    // over an hour ago goes.
+/// The new file, whole and synced, under a temporary name of its own in
+/// `dir` (time, process, try); what a crash left behind over an hour ago goes.
+fn written(dir: &Path, write: impl FnOnce(&mut fs::File) -> io::Result<()>) -> io::Result<PathBuf> {
     let hour = std::time::SystemTime::now() - Duration::from_secs(3600);
     for entry in fs::read_dir(dir)?.flatten() {
         let stale = entry
@@ -724,6 +785,19 @@ fn publish(
         let _ = fs::remove_file(&temp);
         return Err(error);
     }
+    Ok(temp)
+}
+/// Writes a new file `<name><ext>` in `dir` (or `<name> (2)<ext>`...),
+/// whole, and never over one that is there, even one that appears while it
+/// is written: it is renamed into place only where no file is.
+fn publish(
+    dir: &Path,
+    name: &str,
+    ext: &str,
+    write: impl FnOnce(&mut fs::File) -> io::Result<()>,
+) -> io::Result<PathBuf> {
+    use std::os::unix::ffi::OsStrExt;
+    let temp = written(dir, write)?;
     let from = std::ffi::CString::new(temp.as_os_str().as_bytes()).map_err(io::Error::other)?;
     for _ in 0..1000 {
         let to = free_name(dir, name, ext);
@@ -1190,6 +1264,51 @@ mod tests {
         fs::write(home.join("Game.exe"), b"MZ").unwrap();
         let pc = json!({"system": "pc", "file": "Game.exe"});
         assert!(check(home, &pc, &["pc".to_owned()], (&systems, roms), 0).is_ok());
+    }
+
+    #[test]
+    fn a_new_version_takes_the_old_ones_place_and_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        fs::create_dir_all(home.join("downloads")).unwrap();
+        fs::write(home.join("downloads/v1.gb"), vec![1u8; 64]).unwrap();
+        fs::write(home.join("downloads/v2.gb"), vec![2u8; 80]).unwrap();
+        fs::write(home.join("downloads/v2.nes"), b"rom").unwrap();
+        fs::write(home.join("Cover.png"), PNG).unwrap();
+        let systems = [system(dir.path())];
+        let roms = dir.path().join("roms");
+        let allowed = vec!["gb".to_owned()];
+        let first = json!({"system": "gb", "file": "downloads/v1.gb", "name": "Tobu", "cover": "Cover.png"});
+        let old = install(&home, &first, &allowed, (&systems, &roms), 0).unwrap();
+        // Its save, named after the ROM, must keep matching.
+        let save = old.rom.with_extension("srm");
+        fs::write(&save, b"save").unwrap();
+        let second = json!({"system": "gb", "file": "downloads/v2.gb", "name": "Other name"});
+        let check = |params: &Json, game: Option<Game>| {
+            check(&home, params, &allowed, (&systems, &roms), 0).and_then(|c| c.replacing(game))
+        };
+        let new = check(&second, Some(old.clone())).unwrap().run().unwrap();
+        assert_eq!(new.rom, old.rom, "same file name, whatever the name asked");
+        assert_eq!(new.game_key, old.game_key);
+        assert_eq!(fs::read(&new.rom).unwrap(), vec![2u8; 80]);
+        assert_eq!(new.size, 80);
+        assert_eq!(new.cover, old.cover, "no new picture: the old one stays");
+        assert!(new.cover.as_ref().unwrap().is_file());
+        assert_eq!(fs::read(&save).unwrap(), b"save");
+        let leftovers: Vec<_> = fs::read_dir(old.rom.parent().unwrap())
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty());
+        // The record of the first copy no longer matches the file.
+        assert_eq!(check(&second, Some(old.clone())).err().unwrap().1, "the file changed since it was installed");
+        // Another kind of file, or a game changed by the user, is refused.
+        let nes = json!({"system": "gb", "file": "downloads/v2.nes"});
+        assert!(check(&nes, Some(new.clone())).is_err());
+        fs::write(&new.rom, b"edited by the user").unwrap();
+        assert_eq!(check(&second, Some(new.clone())).err().unwrap().1, "the file changed since it was installed");
+        assert_eq!(fs::read(&new.rom).unwrap(), b"edited by the user");
     }
 
     #[test]
