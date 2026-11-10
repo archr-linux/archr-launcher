@@ -1496,6 +1496,7 @@ impl Host {
                 "screen.confirm",
                 "screen.busy",
                 "screen.offline",
+                "screen.qr",
                 "rom.install",
                 "rom.list",
                 "rom.remove",
@@ -1867,8 +1868,6 @@ impl Host {
                         self.screens.push(message);
                         self.touch();
                     }
-                    // Unknown ones (screen.qr, of a later phase) are ignored.
-                    None if method == "screen.qr" => {}
                     None => log::warn!("Module {id}: {method} refused"),
                 }
             }

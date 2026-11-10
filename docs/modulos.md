@@ -820,6 +820,7 @@ launch = true              # "Jogar" depois de instalar
 | `screen.confirm` | `{id, text, yes?, no?}`: a pergunta do launcher, com "não" no foco; resposta `screen.answer` (para remover jogos e ports, o launcher pergunta ele mesmo: 10.5) |
 | `screen.busy` | `{text}`: indicador de espera até a próxima `show` ou `patch`; `{text: null}` tira |
 | `screen.offline` | `{text?}`: selo "Sem conexão" (ou o texto) na faixa dos chips; `{text: null}` tira |
+| `screen.qr` | `{id, title?, value, text?, code?}`: código QR sobre a tela, para abrir uma página ou aprovar uma entrada no celular (abaixo); `{id, value: null}` tira |
 
 **Coleção** (`layout = "collection"`), desenhada com o layout `games` da
 visualização ativa: `chips` (até 8, `{id, label, selected}`), `items` (até 50
@@ -876,6 +877,17 @@ Um item pode chegar sem `image` e ganhá-la depois com
 quadro vazio. Com `screen.visible` (10.4) o app baixa só as capas da janela
 que a tela mostra.
 
+**Código QR** (`screen.qr`): o launcher desenha o código em preto sobre um
+quadrado branco (o que a câmera do celular lê, qualquer que seja o tema), com
+`title` em cima e `text` (até 3 linhas) e o endereço embaixo. `value` é uma
+página `https://` de até 512 bytes, sem espaços nem caracteres de controle;
+outro valor é recusado com aviso no log. `code` (até 16 caracteres) aparece
+em letra grande entre o código e o texto: o código que o celular mostra numa
+entrada por QR, para o usuário conferir. Um `screen.qr` novo troca o que está
+aberto (o mesmo `id` atualiza o texto); fica sobre a tela até B ou A, que o
+fecham e mandam `screen.dismissed {id}`; as outras teclas não fazem nada. Uma
+`screen.confirm` aberta por cima é respondida antes.
+
 **Textos:** `@chave` e `{key, args}` como no resto; outro texto (nome e
 descrição de um jogo vindos da rede) é texto puro: nada de HTML ou formatação.
 
@@ -892,6 +904,7 @@ Notificações (sem `id`), com o nome do evento como método:
 | `screen.search` | `{screen, text}` | SELECT abriu o teclado do launcher (até 64 bytes) e o usuário confirmou |
 | `screen.answer` | `{id, yes}` | a resposta de um `screen.confirm` (B é "não") |
 | `screen.back` | `{screen}` | B fechou essa tela; a de baixo volta |
+| `screen.dismissed` | `{id}` | B ou A fechou o `screen.qr` com esse id |
 | `screen.visible` | `{screen, from, to}` | os itens que a coleção desenha (índices a partir de 0, inclusive), ao abrir e quando a janela muda (rolagem, chip, `append`), depois de 150 ms parada; num detalhe, `from = to` = a imagem mostrada (0 é `image`, depois a galeria) |
 | `port.progress` | `{name, progress}` | o script do PortMaster disse quanto falta |
 
@@ -986,5 +999,6 @@ nunca lê a pasta de ROMs nem a biblioteca.
 **Limites do processo do app:** até 256 linhas esperando o launcher (mais é
 quebra de protocolo e o processo para); as cópias das imagens, como em 10.3
 (uma imagem já vista, pelo mesmo arquivo, não é lida de novo). O `initialize` lista em `capabilities` os métodos `screen.*` que o
-launcher desenha; `screen.qr` ainda não existe: como notificação é ignorado,
-como pedido recebe `-32601`, e o app deve seguir sem ele.
+launcher desenha; um método que não está lá (um launcher antigo sem
+`screen.qr`, por exemplo) é recusado com aviso no log, e o app deve seguir sem
+ele.

@@ -331,6 +331,23 @@ fn frames(theme: &Theme, size: (u32, u32)) -> Vec<(&'static str, Vec<u8>)> {
         ..Default::default()
     });
     shot(&mut ui, "app-ask", &app, None);
+    ui.app.as_mut().unwrap().ask = None;
+    ui.app.as_mut().unwrap().qr = Some(archr_ui::apps::Qr {
+        id: "page".into(),
+        title: "Page on your phone".into(),
+        value: "https://tangramgames.itch.io/tobutobugirl".into(),
+        text: "Point the phone camera here to open Tobu Tobu Girl on itch.io.".into(),
+        code: String::new(),
+    });
+    shot(&mut ui, "app-qr", &app, None);
+    ui.app.as_mut().unwrap().qr = Some(archr_ui::apps::Qr {
+        id: "sign-in".into(),
+        title: "Sign in to itch.io".into(),
+        value: "https://itch.io/oauth/device?user_code=KX7T-4MPB".into(),
+        text: "Scan, sign in and check that the phone shows this code.".into(),
+        code: "KX7T-4MPB".into(),
+    });
+    shot(&mut ui, "app-qr-code", &app, None);
     ui.app = None;
     let mut settings = Settings::default();
     settings.loading = false;

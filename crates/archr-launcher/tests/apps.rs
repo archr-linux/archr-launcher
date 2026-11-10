@@ -495,3 +495,80 @@ fn ports_go_through_the_system_script() {
     let ledger = Ledger::load(&base.join("module-data").join(LEDGER));
     assert!(ledger.modules["porter"].ports.is_empty());
 }
+
+/// An app that asks for codes for the phone, good and bad, and logs what it
+/// hears back.
+const PHONE: &str = r#"#!/bin/bash
+log="$HOME/heard.log"
+send() { printf '%s\n' "$1"; }
+while IFS= read -r line; do
+    id=$(jq -r '.id // "null"' <<<"$line")
+    method=$(jq -r '.method // ""' <<<"$line")
+    case "$method" in
+        initialize)
+            jq -c '.params.capabilities' <<<"$line" >>"$log"
+            send "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"ready\":true}}" ;;
+        shutdown) send "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{}}"; exit 0 ;;
+        screen.opened)
+            send '{"jsonrpc":"2.0","method":"screen.qr","params":{"id":"plain","title":"T","value":"http://example.com"}}'
+            send '{"jsonrpc":"2.0","method":"screen.qr","params":{"id":"script","value":"javascript:alert(1)"}}'
+            send '{"jsonrpc":"2.0","method":"screen.qr","params":{"id":"spaced","value":"https://a b"}}'
+            long=$(printf 'a%.0s' $(seq 1 600))
+            send "{\"jsonrpc\":\"2.0\",\"method\":\"screen.qr\",\"params\":{\"id\":\"long\",\"value\":\"https://x/$long\"}}"
+            send '{"jsonrpc":"2.0","method":"screen.qr","params":{"id":"page","title":"Page","value":"https://example.com/game","text":"Scan","code":"KX7T-4MPB"}}'
+            send '{"jsonrpc":"2.0","method":"screen.qr","params":{"id":"page","value":null}}'
+            ;;
+        screen.dismissed) jq -c '.params' <<<"$line" >>"$log" ;;
+    esac
+done
+"#;
+
+#[test]
+fn codes_for_the_phone_are_web_pages_only() {
+    if !jq() {
+        eprintln!("jq missing");
+        return;
+    }
+    let root = root();
+    let base = root.path().join("storage/.config/archr-launcher");
+    let dir = base.join("modules/phone");
+    fs::create_dir_all(dir.join("locales")).unwrap();
+    fs::write(dir.join("locales/en.toml"), "\"name\" = \"Phone\"\n").unwrap();
+    fs::write(dir.join("main.sh"), PHONE).unwrap();
+    fs::write(
+        dir.join("module.toml"),
+        "id = \"phone\"\nversion = \"1.0.0\"\napi_version = 4\nname = \"@name\"\n\
+         [run]\nruntime = \"bash\"\nentry = \"main.sh\"\nmode = \"daemon\"\n\
+         [app]\nhome = \"main\"\n",
+    )
+    .unwrap();
+    let mut probe = Probe::new(start(root.path(), "phone", &[]));
+    probe.wait("its row", |p| p.view.apps().len() == 1);
+    probe.modules.request(Request::OpenApp("phone".into()));
+    probe.wait("the code and its closing", |p| {
+        p.screens.iter().any(|m| matches!(m, Message::QrClose(_)))
+    });
+    let codes: Vec<&archr_ui::apps::Qr> = probe
+        .screens
+        .iter()
+        .filter_map(|m| match m {
+            Message::Qr(qr) => Some(qr),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(codes.len(), 1, "only the https page: {codes:?}");
+    assert_eq!(codes[0].id, "page");
+    assert_eq!(codes[0].value, "https://example.com/game");
+    assert_eq!(codes[0].code, "KX7T-4MPB");
+    assert!(probe
+        .screens
+        .iter()
+        .any(|m| m == &Message::QrClose("page".into())));
+    probe.event("phone", "screen.dismissed", json!({"id": "page"}));
+    let log = base.join("module-data/phone/heard.log");
+    probe.wait("the app heard it closed", |_| {
+        fs::read_to_string(&log).is_ok_and(|t| t.contains(r#"{"id":"page"}"#))
+    });
+    let heard = fs::read_to_string(&log).unwrap();
+    assert!(heard.contains("\"screen.qr\""), "offered: {heard}");
+}

@@ -388,6 +388,18 @@ impl Reader<'_> {
                 on_yes: false,
                 launcher: false,
             }),
+            "screen.qr" if params["value"].is_null() => Message::QrClose(name(&params["id"])?),
+            "screen.qr" => Message::Qr(archr_ui::apps::Qr {
+                id: name(&params["id"])?,
+                title: text("title").unwrap_or_default(),
+                value: qr_value(&params["value"])?,
+                text: text("text").unwrap_or_default(),
+                code: params["code"]
+                    .as_str()
+                    .filter(|c| c.chars().count() <= 16 && !c.chars().any(char::is_control))
+                    .unwrap_or_default()
+                    .to_owned(),
+            }),
             "screen.busy" => Message::Busy(text("text")),
             // `text: null` (or `offline: false`) takes the tag away.
             "screen.offline"
@@ -413,6 +425,16 @@ fn name(value: &Json) -> Option<String> {
     value
         .as_str()
         .filter(|t| (1..=ID).contains(&t.len()) && !t.chars().any(char::is_control))
+        .map(str::to_owned)
+}
+/// What a `screen.qr` may hold: a web page (`https://`), short enough to stay
+/// readable by a phone camera on a 640×480 screen.
+pub const QR_VALUE: usize = 512;
+fn qr_value(value: &Json) -> Option<String> {
+    value
+        .as_str()
+        .filter(|v| v.len() <= QR_VALUE && v.len() > "https://".len())
+        .filter(|v| v.starts_with("https://") && !v.chars().any(|c| c.is_control() || c == ' '))
         .map(str::to_owned)
 }
 fn percent(value: &Json) -> Option<u8> {
