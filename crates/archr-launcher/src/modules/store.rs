@@ -7,7 +7,7 @@ use super::{
     registry::{self, Dirs, State},
     Input,
 };
-use crate::github::{name_ok, owner_ok, unpack, GitHub, Rules, API};
+use crate::github::{name_ok, owner_ok, unpack, GitHub, Rules, API, LOOKED, LOOK_EVERY};
 use archr_io::{read_bytes, Symlinks};
 use archr_scraper::Http;
 use archr_ui::modules::{Card, Offer, StoreAction, StoreReply, Tab};
@@ -316,8 +316,13 @@ impl Shop {
     /// The card with the module's id, texts and version, from the latest
     /// release's module.toml (a plain download, no API call).
     pub fn decorate(&self, card: &Card) -> Option<Card> {
+        self.latest(card, true).0
+    }
+    /// The same, only as last saved unless `look`; the flag tells GitHub
+    /// answered.
+    fn latest(&self, card: &Card, look: bool) -> (Option<Card>, bool) {
         if !owner_ok(&card.owner) || !name_ok(&card.repo) {
-            return None;
+            return (None, false);
         }
         let url = format!(
             "https://github.com/{}/{}/releases/latest/download/{}",
@@ -326,18 +331,24 @@ impl Shop {
             manifest::FILE
         );
         let name = format!("{}-{}/latest-module.toml", card.owner, card.repo);
-        let (Some((body, _)), _) = self.github.saved(&url, &name, false) else {
-            return None;
+        let (body, answered) = if look {
+            let (saved, problem) = self.github.saved(&url, &name, false);
+            (saved.map(|(body, _)| body), problem.is_none())
+        } else {
+            (self.github.kept(&name), false)
         };
-        let (manifest, _) = manifest::parse(std::str::from_utf8(&body).ok()?).ok()?;
-        Some(Card {
-            id: manifest.id.clone(),
-            name: plain(manifest.name.as_ref(), &self.lang()),
-            description: plain(manifest.description.as_ref(), &self.lang()),
-            icon: manifest.icon.clone().unwrap_or_default(),
-            version: manifest.version,
-            ..card.clone()
-        })
+        let card = (|| {
+            let (manifest, _) = manifest::parse(std::str::from_utf8(&body?).ok()?).ok()?;
+            Some(Card {
+                id: manifest.id.clone(),
+                name: plain(manifest.name.as_ref(), &self.lang()),
+                description: plain(manifest.description.as_ref(), &self.lang()),
+                icon: manifest.icon.clone().unwrap_or_default(),
+                version: manifest.version,
+                ..card.clone()
+            })
+        })();
+        (card, answered)
     }
     /// The permission page: what the latest release asks for, checked
     /// against its tag, its assets and this device.
@@ -613,7 +624,7 @@ impl Shop {
                 StoreReply::Offer(card.source(), self.offer(&card).map(Box::new)),
                 None,
             ),
-            StoreAction::Auto(_) => (StoreReply::Done(Ok("")), None),
+            StoreAction::Auto(_) | StoreAction::Check(_) => (StoreReply::Done(Ok("")), None),
             StoreAction::Install(offer) => match self.install(&offer) {
                 Ok(installed) => (
                     StoreReply::Done(Ok("modules.installed_ok")),
@@ -825,6 +836,23 @@ pub(super) fn lane(
             Err(mpsc::TryRecvError::Empty) => None,
             Err(mpsc::TryRecvError::Disconnected) => return,
         };
+        if let Some(StoreAction::Check(look)) = action {
+            let look = look && shop.github.due(LOOKED, LOOK_EVERY);
+            let mut answered = false;
+            for card in shop.installed() {
+                let (card, reached) = shop.latest(&card, look);
+                answered |= reached;
+                let Some(card) = card else { continue };
+                let answer = (StoreReply::Card(card), None);
+                if results.send(Input::Store(Box::new(answer))).is_err() {
+                    return;
+                }
+            }
+            if answered {
+                shop.github.looked(LOOKED);
+            }
+            continue;
+        }
         if let Some(StoreAction::Auto(id)) = &action {
             let answer = match shop.auto(id) {
                 Some(installed) => (

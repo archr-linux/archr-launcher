@@ -42,6 +42,8 @@ pub struct Runtime {
     switch: Option<(String, (String, String))>,
     /// Conversion work for the host's one runner.
     convert: Vec<crate::convert::Request>,
+    /// The theme store's look for updates (`watch_themes`).
+    themes: Option<std::sync::mpsc::Receiver<archr_ui::settings::store::Reply>>,
 }
 impl Runtime {
     pub fn new(paths: Paths) -> Self {
@@ -65,6 +67,7 @@ impl Runtime {
             level_hold: None,
             switch: None,
             convert: Vec::new(),
+            themes: None,
         }
     }
     fn send(&mut self, work: Work) {
@@ -159,6 +162,32 @@ impl Runtime {
         if self.active && self.state.page() == Page::UsbAdapters {
             self.send(Work::Adapters(None));
         }
+    }
+    /// What the store has for the installed themes, for the START menu:
+    /// what was last seen at once, and GitHub's answer `look` later.
+    pub fn watch_themes(&mut self, look: Option<Duration>) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let shop = crate::themestore::Shop::production(
+            self.paths.cache.join("store"),
+            self.paths.at(crate::appearance::USER_THEMES),
+        );
+        let started = std::thread::Builder::new()
+            .name("launcher-theme-look".into())
+            .spawn(move || crate::themestore::watch(&shop, look, &tx));
+        match started {
+            Ok(_) => self.themes = Some(rx),
+            Err(error) => log::warn!("Cannot look for theme updates: {error}"),
+        }
+    }
+    /// A page a START shortcut opens (stores, Bluetooth, sound); the module
+    /// store's listing comes back for the module host.
+    pub fn open_page(&mut self, page: Page) -> Outcome {
+        self.open();
+        let effect = self.state.open_page(page);
+        if page == Page::Bluetooth {
+            self.next_bt_scan = Instant::now();
+        }
+        self.apply(effect)
     }
     /// The START menu's update shortcut.
     pub fn open_updates(&mut self) {
@@ -384,6 +413,10 @@ impl Runtime {
         self.launch_saved |= writing.is_some() && self.state.pending.is_none();
         dirty |= self.poll_scrape();
         dirty |= self.poll_updates();
+        while let Some(reply) = self.themes.as_ref().and_then(|rx| rx.try_recv().ok()) {
+            self.state.store_reply(reply);
+            dirty = true;
+        }
         self.poll_convert();
         // Nothing known yet about an open import page: look.
         if self.active
@@ -736,6 +769,25 @@ mod tests {
             .unwrap()
             .contains("global.netplay.nickname=Ana"));
         assert!(runtime.take_launch_saved());
+    }
+    #[test]
+    fn start_shortcuts_open_the_stores_and_the_module_listing_goes_to_the_host() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut runtime = Runtime::new(Paths::new(Some(dir.path().into())));
+        let outcome = runtime.open_page(Page::ModuleStore);
+        assert!(runtime.active);
+        assert_eq!(runtime.state.page(), Page::ModuleStore);
+        assert!(
+            matches!(
+                outcome,
+                Outcome::Module(archr_ui::modules::Request::Store(
+                    archr_ui::modules::StoreAction::List(..)
+                ))
+            ),
+            "{outcome:?}"
+        );
+        assert_eq!(runtime.open_page(Page::Store), Outcome::None);
+        assert_eq!(runtime.state.page(), Page::Store);
     }
     #[test]
     fn the_installed_tab_answers_from_the_store_lane_without_the_network() {

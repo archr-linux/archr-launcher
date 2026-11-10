@@ -45,6 +45,8 @@ pub const BEFORE: Duration = Duration::from_millis(300);
 const AUTO_FIRST: Duration = Duration::from_secs(120);
 const AUTO_EVERY: u64 = 24 * 3600;
 pub const AUTO_KEY: &str = "launcher.modules.autoupdate";
+/// The user's "look for updates on its own" (Settings › System › Updates).
+const LOOK_KEY: &str = "updates.check_on_boot";
 /// Late `launch.before` answers in a row before it counts as a failure.
 const LATE: u32 = 3;
 /// `game.launch` is honoured this long after the user chose one of the
@@ -555,6 +557,8 @@ impl Host {
         };
         host.boot = host.last_launch();
         host.reload();
+        // The START menu's badge: what the store offered when last seen.
+        host.check_store(false);
         host
     }
     /// `launcher.started`, and `game.ended` when a game just closed.
@@ -2546,6 +2550,19 @@ impl Host {
             .collect();
         self.next_auto();
     }
+    /// Asks the store what it offers for the installed modules; `look` lets
+    /// it ask GitHub (once a day at most), unless the user keeps the
+    /// launcher from looking for updates on its own.
+    fn check_store(&self, look: bool) {
+        let look = look
+            && archr_config::SystemCfg::load(&self.config.system_cfg)
+                .ok()
+                .and_then(|cfg| cfg.get_setting(LOOK_KEY, None, None))
+                .is_none_or(|v| v == "1");
+        if let Some(store) = &self.store {
+            let _ = store.send(StoreAction::Check(look));
+        }
+    }
     /// The next module to the store, one at a time and never while a game
     /// has the screen: the batch waits for the launcher to come back.
     fn next_auto(&mut self) {
@@ -2975,6 +2992,7 @@ impl Host {
         if now >= self.auto_at {
             self.auto_at = now + Duration::from_secs(3600);
             self.auto_update();
+            self.check_store(true);
         }
         if self.focus.as_ref().is_some_and(|f| f.0 <= now) {
             let (_, name, data) = self.focus.take().expect("focus");

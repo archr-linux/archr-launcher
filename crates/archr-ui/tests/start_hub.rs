@@ -92,8 +92,10 @@ fn shortcuts_remember_columns_and_toggle_from_snapshot() {
     let data = data(false);
     app.handle(Button::Start, &data);
     app.handle(Button::Down, &data);
-    app.handle(Button::R, &data);
-    app.handle(Button::R, &data);
+    // Settings, Update, the two stores, Wi-Fi.
+    for _ in 0..4 {
+        app.handle(Button::R, &data);
+    }
     assert_eq!(app.handle(Button::A, &data), Outcome::ToggleWifi);
     app.handle(Button::Up, &data);
     assert!(matches!(
@@ -101,7 +103,7 @@ fn shortcuts_remember_columns_and_toggle_from_snapshot() {
         Screen::StartHub {
             row: 0,
             tile: 0,
-            shortcut: 2
+            shortcut: 4
         }
     ));
     app.handle(Button::Down, &data);
@@ -110,10 +112,59 @@ fn shortcuts_remember_columns_and_toggle_from_snapshot() {
         app.handle(Button::A, &data),
         Outcome::Action(SessionAction::Suspend)
     );
+    for _ in 0..2 {
+        app.handle(Button::L, &data);
+    }
+    assert_eq!(
+        app.handle(Button::A, &data),
+        Outcome::Open(archr_ui::settings::Page::ModuleStore)
+    );
     app.handle(Button::L, &data);
-    app.handle(Button::L, &data);
-    app.handle(Button::L, &data);
+    assert_eq!(
+        app.handle(Button::A, &data),
+        Outcome::Open(archr_ui::settings::Page::Store)
+    );
+    for _ in 0..9 {
+        app.handle(Button::L, &data);
+    }
     assert_eq!(app.handle(Button::A, &data), Outcome::Settings);
+    // The row ends at Power off.
+    for _ in 0..20 {
+        app.handle(Button::R, &data);
+    }
+    assert_eq!(
+        app.handle(Button::A, &data),
+        Outcome::Action(SessionAction::Shutdown)
+    );
+}
+#[test]
+fn the_row_follows_the_user_and_an_empty_one_keeps_the_focus_up() {
+    use archr_ui::shortcuts::Saved;
+    let mut app = App::new(8);
+    let data = data(false);
+    app.shortcuts = Saved {
+        order: vec!["bluetooth".into(), "settings".into()],
+        hidden: vec!["settings".into()],
+    };
+    app.handle(Button::Start, &data);
+    app.handle(Button::Down, &data);
+    assert_eq!(
+        app.handle(Button::A, &data),
+        Outcome::Open(archr_ui::settings::Page::Bluetooth)
+    );
+    // Everything hidden: Down has nowhere to go.
+    let ids = [
+        "settings", "update", "themes", "modules", "wifi", "suspend", "reboot", "shutdown",
+    ];
+    app.shortcuts = Saved {
+        order: ids.iter().map(|s| (*s).into()).collect(),
+        hidden: ids.iter().map(|s| (*s).into()).collect(),
+    };
+    app.handle(Button::B, &data);
+    app.handle(Button::Start, &data);
+    app.handle(Button::Down, &data);
+    assert!(matches!(app.screen, Screen::StartHub { row: 0, .. }));
+    assert_eq!(app.handle(Button::A, &data), Outcome::None);
 }
 #[test]
 fn focus_never_lands_on_a_disabled_tile() {
@@ -178,8 +229,15 @@ fn module_tiles_and_shortcuts_join_the_start_menu() {
             page: 0
         })
     );
+    // The default row is full: the module's shortcut waits, hidden, until
+    // the user makes room (here by hiding Restart).
+    assert_eq!(app.hub_shortcuts().len(), 8);
+    let mut items = archr_ui::shortcuts::list(&Default::default(), &app.modules);
+    items[5].shown = true;
+    items[7].shown = false;
+    app.shortcuts = archr_ui::shortcuts::save(&items, &app.modules);
     app.handle(Button::Down, &data);
-    for _ in 0..3 {
+    for _ in 0..5 {
         app.handle(Button::R, &data);
     }
     assert_eq!(
@@ -190,7 +248,7 @@ fn module_tiles_and_shortcuts_join_the_start_menu() {
             call: None
         })
     );
-    // Suspend moved one place right and still suspends.
+    // Suspend follows it and still suspends.
     app.handle(Button::R, &data);
     assert_eq!(
         app.handle(Button::A, &data),

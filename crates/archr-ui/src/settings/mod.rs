@@ -26,6 +26,7 @@ pub mod modules;
 pub mod raimport;
 pub(crate) mod resume;
 pub mod roms;
+pub mod shortcuts;
 pub mod storage;
 pub mod store;
 pub mod updates;
@@ -86,6 +87,8 @@ pub enum Page {
     Resume,
     /// System › Power (Config-energia).
     Power,
+    /// Appearance › Start shortcuts (Hub-atalhos-editar).
+    Shortcuts,
     Soon(&'static str),
 }
 impl Page {
@@ -127,6 +130,7 @@ impl Page {
             Self::Bios => "bios.title",
             Self::Resume => "settings.resume",
             Self::Power => "settings.power",
+            Self::Shortcuts => "shortcuts.title",
             Self::Soon(key) => key,
         }
     }
@@ -138,7 +142,7 @@ impl Page {
             }
             Self::Netplay | Self::Scraper | Self::Mangohud | Self::Resume => &["settings.games"],
             Self::MangohudItems => &["settings.games", "settings.mangohud_page"],
-            Self::AccentColor | Self::Store => &["settings.appearance"],
+            Self::AccentColor | Self::Store | Self::Shortcuts => &["settings.appearance"],
             Self::StoreTheme => &["settings.appearance", "settings.theme_store"],
             Self::Modules | Self::ModuleStore | Self::RaImport | Self::Diagnostics => {
                 &["settings.system"]
@@ -387,6 +391,9 @@ pub enum Id {
     BatteryLow,
     /// `system.shutdown_delay`, and the running game's copy of it.
     ShutdownDelay,
+    /// Appearance link to Start shortcuts, and one line of that page.
+    ShortcutsLink,
+    Shortcut(u8),
 }
 impl Id {
     fn metadata(self) -> (&'static str, &'static str) {
@@ -548,7 +555,9 @@ impl Id {
             Self::BatteryCritical => ("power.battery.critical", "3"),
             Self::BatteryLow => ("power.battery.low", "10"),
             Self::ShutdownDelay => ("system.shutdown_delay", "900"),
-            Self::ResumeLink | Self::PowerLink => ("", ""),
+            Self::ResumeLink | Self::PowerLink | Self::ShortcutsLink | Self::Shortcut(_) => {
+                ("", "")
+            }
             Self::RaImportLink
             | Self::RaConfig
             | Self::RaOverrides
@@ -1023,6 +1032,7 @@ pub struct Settings {
     pub converting: bool,
     pub diag: diag::Diag,
     pub bios: bios::Bios,
+    pub shortcuts: shortcuts::Shortcuts,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -1089,6 +1099,7 @@ impl Default for Settings {
             converting: false,
             diag: diag::Diag::default(),
             bios: bios::Bios::default(),
+            shortcuts: shortcuts::Shortcuts::default(),
         }
     }
 }
@@ -1237,7 +1248,8 @@ impl Settings {
                 | Id::RaRun
                 | Id::BiosLink
                 | Id::ResumeLink
-                | Id::PowerLink,
+                | Id::PowerLink
+                | Id::ShortcutsLink,
                 _,
             ) => return "›".into(),
             (Id::SecondCard, _) => "settings.eject_link",
@@ -1375,6 +1387,9 @@ impl Settings {
         if matches!(self.page(), Page::Modules | Page::Module(..)) {
             return self.module_rows();
         }
+        if self.page() == Page::Shortcuts {
+            return self.shortcut_rows();
+        }
         self.page()
             .rows()
             .iter()
@@ -1500,6 +1515,7 @@ impl Settings {
             Page::RomsList => BACK,
             Page::UsbAdapters => self.usb_hints(),
             Page::Bios => self.bios_hints(),
+            Page::Shortcuts => self.shortcuts_hints(),
             Page::Root => &[
                 (Key('A'), "hint.open"),
                 (Key('B'), "hint.back"),
@@ -1670,6 +1686,14 @@ impl Settings {
         }
         if page == Page::MangohudItems {
             self.mangohud_saved = self.mangohud_draft();
+        }
+    }
+    /// The host's values just replaced the ones shown: an Appearance page
+    /// open under them takes them as what it opened with, so leaving it
+    /// saves nothing that did not change.
+    pub fn values_loaded(&mut self) {
+        if self.stack.iter().any(|(page, _)| *page == Page::Appearance) {
+            self.appearance_saved = self.appearance();
         }
     }
     /// Back to the categories, for a page opened from outside Settings.

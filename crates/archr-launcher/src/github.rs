@@ -14,6 +14,10 @@ use std::{
 };
 
 pub const API: &str = "https://api.github.com";
+/// The stores look for updates of what they installed at most this often
+/// on their own, recorded in `LOOKED` (the START menu's badges).
+pub const LOOK_EVERY: Duration = Duration::from_secs(24 * 3600);
+pub const LOOKED: &str = "looked";
 /// Unauthenticated GitHub allows 10 searches a minute and 60 other calls an
 /// hour: answers are kept this long.
 const FRESH: Duration = Duration::from_secs(3600);
@@ -117,6 +121,22 @@ impl GitHub {
             }
             Err(problem) => (saved, Some(problem)),
         }
+    }
+    /// A saved answer however old, without asking GitHub.
+    pub fn kept(&self, name: &str) -> Option<Vec<u8>> {
+        read_bytes(&self.cache.join(name), JSON_LIMIT, Symlinks::Reject).ok()
+    }
+    /// `every` has passed since the look recorded in `stamp` (or none was).
+    pub fn due(&self, stamp: &str, every: Duration) -> bool {
+        fs::metadata(self.cache.join(stamp))
+            .and_then(|meta| meta.modified())
+            .ok()
+            .and_then(|at| at.elapsed().ok())
+            .is_none_or(|age| age >= every)
+    }
+    /// Records a look that reached GitHub in `stamp`.
+    pub fn looked(&self, stamp: &str) {
+        self.keep(&self.cache.join(stamp), b"");
     }
     /// A saved answer that only fails when there is none.
     pub fn json(&self, url: &str, name: &str) -> Result<Value, &'static str> {

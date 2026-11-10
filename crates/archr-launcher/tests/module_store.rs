@@ -440,6 +440,10 @@ fn release_1_1(manifest: &str, reviewed: bool) -> Fake {
         ),
     );
     fake.answer(&format!("{download}/module.toml"), manifest.to_owned());
+    fake.answer(
+        "https://github.com/kaio-dev/archr-bateria/releases/latest/download/module.toml",
+        manifest.to_owned(),
+    );
     fake.answer(&format!("{download}/bateria-1.1.0.tar.gz"), tarball);
     fake
 }
@@ -1025,4 +1029,45 @@ fn refreshing_the_store_checks_the_files_again() {
     .unwrap();
     modules.request(Request::Store(StoreAction::List(Tab::Reviewed, true)));
     assert_eq!(badge_of(&modules, Some(false), wait), Some(false));
+}
+
+/// Views from the host until one counts `outdated` modules, at most 10 s.
+fn until_outdated(modules: &archr_launcher::modules::Modules, outdated: usize) {
+    use archr_launcher::modules::Event;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        for event in modules.poll() {
+            if matches!(event, Event::View(view) if view.outdated() == outdated) {
+                return;
+            }
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "never {outdated} outdated"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
+#[test]
+fn the_start_menu_counts_module_updates_and_remembers_them_after_a_restart() {
+    // Not reviewed: the automatic update leaves it, the badge tells.
+    let newer = MANIFEST.replace("1.0.0", "1.1.0");
+    let root = tempfile::tempdir().unwrap();
+    installed_bateria(root.path());
+    let modules = host(
+        root.path(),
+        &release_1_1(&newer, false),
+        std::time::Duration::from_millis(100),
+    );
+    until_outdated(&modules, 1);
+    drop(modules);
+    assert!(root.path().join("cache/looked").is_file());
+    // The next start knows it from what was kept, offline.
+    let modules = host(
+        root.path(),
+        &Fake::default(),
+        std::time::Duration::from_secs(60),
+    );
+    until_outdated(&modules, 1);
 }

@@ -86,6 +86,8 @@ pub enum Outcome {
     Settings,
     /// Opens Settings, System, Updates.
     Updates,
+    /// Opens a settings page from the START menu (`Settings::open_page`).
+    Open(crate::settings::Page),
     /// Opens the Netplay lobby.
     OpenNetplay,
     /// Starts a lobby room as a netplay client.
@@ -323,6 +325,11 @@ pub struct App {
     pub sheet_page: usize,
     /// Packages a system update would bring, when the START menu tells.
     pub updates: usize,
+    /// Store themes and store modules with an update, when the START menu tells.
+    pub theme_updates: usize,
+    pub module_updates: usize,
+    /// The START menu's shortcut row as the user arranged it.
+    pub shortcuts: crate::shortcuts::Saved,
     /// Installed modules and their live values, from the host.
     pub modules: std::sync::Arc<crate::modules::View>,
     /// The focused module widget of the Start menu (its row is 2).
@@ -371,6 +378,9 @@ impl App {
             sheet: crate::cheevos::Sheet::default(),
             sheet_page: 1,
             updates: 0,
+            theme_updates: 0,
+            module_updates: 0,
+            shortcuts: Default::default(),
             history: Vec::new(),
             moving: None,
             keep_row: None,

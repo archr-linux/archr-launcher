@@ -348,6 +348,10 @@ impl View {
             })
             .collect()
     }
+    /// Installed modules the store has a newer version of.
+    pub fn outdated(&self) -> usize {
+        self.modules.iter().filter(|m| m.update.is_some()).count()
+    }
     pub fn shortcuts(&self) -> Vec<(usize, &Entry)> {
         self.entries(
             SHORTCUTS,
@@ -472,6 +476,10 @@ pub enum StoreAction {
     /// Update this store module on its own if its new version is reviewed
     /// and asks for nothing new; one module per action.
     Auto(String),
+    /// What the store offers for the installed store modules, as `Card`
+    /// answers: from GitHub when `true` and a day passed since the last
+    /// look, else as last saved (the START menu's badge).
+    Check(bool),
     Open(Box<Card>),
     Install(Box<Offer>),
 }

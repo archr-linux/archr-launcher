@@ -140,6 +140,20 @@
 "start.update" = "Atualização"
 "start.wifi_on" = "Wi-Fi · ligado"
 "start.wifi_off" = "Wi-Fi · desligado"
+"shortcuts.title" = "Atalhos do Start"
+"shortcuts.levels" = "Brilho e volume"
+"shortcuts.toggle" = "Mostrar/ocultar"
+"shortcuts.move" = "Mover"
+"shortcuts.add" = "Adicionar"
+"shortcuts.moving" = "movendo"
+"shortcuts.preview" = "Prévia"
+"shortcuts.limit" = "Até {count} atalhos aparecem no Start. Ocultos continuam na lista."
+"shortcuts.to_add" = "Para adicionar (Y)"
+"shortcuts.restore" = "Restaurar o padrão: SELECT"
+"shortcuts.add_title" = "Adicionar ao Start"
+"shortcuts.full" = "O Start mostra até {count} atalhos. Oculte um antes de mostrar outro."
+"shortcuts.nothing_to_add" = "Todos os atalhos já estão na lista."
+"shortcuts.restored" = "Atalhos do Start de volta ao padrão."
 "settings.off" = "Desligado"
 "settings.suspend_mem" = "Suspender na RAM"
 "settings.suspend_freeze" = "Congelar"
@@ -804,6 +818,7 @@
 "store.download_failed" = "O download não terminou. Confira a rede; a loja aceita temas de até 25 MB."
 # System updates (Settings › System › Updates)
 "start.update_ready" = { one = "Atualização · {count} pacote", other = "Atualização · {count} pacotes" }
+"start.store_updates" = { one = "{name} · {count} atualização", other = "{name} · {count} atualizações" }
 "updates.title" = "Atualizações"
 "updates.packages" = "Pacotes"
 "updates.options" = "Opções"

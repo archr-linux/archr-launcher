@@ -32,6 +32,8 @@ mod network;
 mod raimport;
 #[path = "render/roms.rs"]
 mod roms;
+#[path = "render/shortcuts.rs"]
+mod shortcuts;
 #[path = "render/store.rs"]
 mod store;
 #[path = "render/updates.rs"]
@@ -751,6 +753,7 @@ impl View<'_, '_, '_> {
             Page::UsbAdapters => self.usb_page(state)?,
             Page::Diagnostics => self.diag_page(state, &rows)?,
             Page::Bios => self.bios_page(state)?,
+            Page::Shortcuts => self.shortcuts_page(state)?,
             Page::Scraper => {
                 self.rows_at(state, &rows, &placements(Page::Scraper, &rows), 384.)?;
                 self.scraper_panel(state)?;
@@ -842,6 +845,7 @@ impl View<'_, '_, '_> {
                 "usb.",
                 "diag.",
                 "bios.",
+                "shortcuts.",
             ]
             .iter()
             .any(|prefix| error.starts_with(prefix))
@@ -1498,33 +1502,7 @@ impl View<'_, '_, '_> {
             }
             Kind::Toggle => {
                 let on = state.value(id) == "1";
-                // While the change applies, the knob waits halfway and breathes.
-                let target = if busy { 0.5 } else { f32::from(u8::from(on)) };
-                let (now, motion) = (self.ui.frame.now, self.ui.motion());
-                let knob = self
-                    .ui
-                    .switches
-                    .entry(id)
-                    .or_insert_with(|| Tween::new(target, motion.travel(SWITCH)));
-                knob.retarget(target, now);
-                let at = knob.value(now);
-                let track = mix(
-                    self.theme.badge,
-                    selection(selected, self.theme.highlight_bg, self.theme.highlight_text),
-                    at,
-                );
-                self.capsule((x + w - 38., y + h / 2. - 10., 38., 20.), track)?;
-                let fill = selection(selected && on, self.theme.text, self.theme.highlight_bg);
-                let fill = if busy {
-                    let alpha = motion.busy(self.clock());
-                    faded(
-                        selection(selected, self.theme.text, self.theme.highlight_bg),
-                        alpha,
-                    )
-                } else {
-                    fill
-                };
-                self.capsule((x + w - 36. + 18. * at, y + h / 2. - 8., 16., 16.), fill)?;
+                self.toggle(id, (on, busy), selected, (x, y, w, h))?;
             }
             _ => {
                 let v = state.display_value(id, &self.ui.catalog);
@@ -1583,6 +1561,41 @@ impl View<'_, '_, '_> {
             }
         }
         Ok(())
+    }
+    /// A switch at the right of `bounds`; while a change applies, the knob
+    /// waits halfway and breathes. Each `id` slides its own knob.
+    fn toggle(
+        &mut self,
+        id: Id,
+        (on, busy): (bool, bool),
+        selected: bool,
+        (x, y, w, h): Bounds,
+    ) -> Result<(), String> {
+        let target = if busy { 0.5 } else { f32::from(u8::from(on)) };
+        let (now, motion) = (self.ui.frame.now, self.ui.motion());
+        let knob = self
+            .ui
+            .switches
+            .entry(id)
+            .or_insert_with(|| Tween::new(target, motion.travel(SWITCH)));
+        knob.retarget(target, now);
+        let at = knob.value(now);
+        let track = mix(
+            self.theme.badge,
+            selection(selected, self.theme.highlight_bg, self.theme.highlight_text),
+            at,
+        );
+        self.capsule((x + w - 38., y + h / 2. - 10., 38., 20.), track)?;
+        let fill = if busy {
+            let alpha = motion.busy(self.clock());
+            faded(
+                selection(selected, self.theme.text, self.theme.highlight_bg),
+                alpha,
+            )
+        } else {
+            selection(selected && on, self.theme.text, self.theme.highlight_bg)
+        };
+        self.capsule((x + w - 36. + 18. * at, y + h / 2. - 8., 16., 16.), fill)
     }
     fn root(&mut self, state: &Settings) -> Result<(), String> {
         for (n, (page, _, glyph)) in CATEGORIES.iter().enumerate() {

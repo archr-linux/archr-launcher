@@ -589,3 +589,55 @@ fn a_theme_repository_is_accepted_and_installs_whole() {
         );
     }
 }
+
+#[test]
+fn installed_themes_learn_of_updates_from_what_was_kept_and_once_a_day_from_github() {
+    let root = tempfile::tempdir().unwrap();
+    let fake = Fake::default();
+    let detail = detail(root.path(), &fake);
+    let tarball = "https://codeload.github.com/kaio-dev/neon/tar.gz/v1.2.0";
+    fake.answer(tarball, 200, Tarball::theme().bytes());
+    let store = shop(root.path(), &fake);
+    store.install(&detail).unwrap();
+    let ids = |reply: &Reply| match reply {
+        Reply::Latest(installed, latest) => (
+            installed["kaio-dev-neon"].clone(),
+            latest.get("kaio-dev-neon").cloned(),
+        ),
+        other => panic!("{other:?}"),
+    };
+    // A new release: without a look nothing is asked, the kept answers say
+    // the installed one is the newest.
+    fake.answer(
+        &format!("{REPO}/releases/latest"),
+        200,
+        r#"{"tag_name":"v1.3.0"}"#,
+    );
+    fake.answer(
+        &format!("{REPO}/git/trees/v1.3.0?recursive=1"),
+        200,
+        r#"{"sha":"tree3","tree":[]}"#,
+    );
+    let asked = fake.asked.lock().unwrap().len();
+    let (reply, answered) = store.latest(false);
+    assert_eq!(ids(&reply), ("tree1".into(), Some("tree1".into())));
+    assert!(!answered);
+    assert_eq!(fake.asked.lock().unwrap().len(), asked);
+    // The look (answers older than an hour are asked again) finds it.
+    fs::remove_file(root.path().join("cache/kaio-dev-neon/release.json")).unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    archr_launcher::themestore::watch(&store, Some(std::time::Duration::ZERO), &tx);
+    let replies: Vec<Reply> = rx.try_iter().collect();
+    assert_eq!(replies.len(), 2, "what was kept, then GitHub's answer");
+    assert_eq!(ids(&replies[1]), ("tree1".into(), Some("tree3".into())));
+    // Within the day the next start only reads what was kept.
+    let asked = fake.asked.lock().unwrap().len();
+    archr_launcher::themestore::watch(&store, Some(std::time::Duration::ZERO), &tx);
+    assert_eq!(rx.try_iter().count(), 1);
+    assert_eq!(fake.asked.lock().unwrap().len(), asked);
+    // Without the user's leave to look, never.
+    fs::remove_file(root.path().join("cache/looked")).unwrap();
+    archr_launcher::themestore::watch(&store, None, &tx);
+    assert_eq!(rx.try_iter().count(), 1);
+    assert_eq!(fake.asked.lock().unwrap().len(), asked);
+}

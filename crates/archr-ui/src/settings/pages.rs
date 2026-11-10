@@ -96,6 +96,7 @@ pub const APPEARANCE: &[Row] = &[
     row(Id::Animations, "settings.animations", Kind::Value),
     row(Id::BatteryPercent, "settings.battery_percent", Kind::Toggle),
     row(Id::TextHints, "settings.text_hints", Kind::Toggle),
+    row(Id::ShortcutsLink, "shortcuts.title", Kind::Action),
     row(Id::GameArt, "settings.game_art", Kind::Toggle).under("settings.games_screen"),
     row(Id::ArtWidth, "settings.art_width", Kind::Value),
     row(Id::ArtRadius, "settings.art_radius", Kind::Value),
@@ -273,6 +274,7 @@ impl Settings {
             Page::RomsList => self.roms_list_input(button),
             Page::UsbAdapters => self.usb_input(button),
             Page::Bios => self.bios_input(button),
+            Page::Shortcuts => self.shortcuts_input(button),
             Page::Modules
             | Page::ModuleInfo
             | Page::Module(..)
@@ -433,6 +435,7 @@ impl Settings {
             id if Self::is_colour(id) => self.open_custom(id),
             Id::ThemeStore => return Some(self.open_store()),
             Id::ModulesLink => self.open(Page::Modules),
+            Id::ShortcutsLink => self.open(Page::Shortcuts),
             // Every visit looks at the folder again.
             Id::RaImportLink => {
                 self.raimport.found = None;

@@ -140,6 +140,20 @@
 "start.update" = "Updates"
 "start.wifi_on" = "Wi-Fi · on"
 "start.wifi_off" = "Wi-Fi · off"
+"shortcuts.title" = "Start shortcuts"
+"shortcuts.levels" = "Brightness and volume"
+"shortcuts.toggle" = "Show/hide"
+"shortcuts.move" = "Move"
+"shortcuts.add" = "Add"
+"shortcuts.moving" = "moving"
+"shortcuts.preview" = "Preview"
+"shortcuts.limit" = "Up to {count} shortcuts appear on Start. Hidden ones stay on the list."
+"shortcuts.to_add" = "To add (Y)"
+"shortcuts.restore" = "Restore the default: SELECT"
+"shortcuts.add_title" = "Add to Start"
+"shortcuts.full" = "Start shows up to {count} shortcuts. Hide one before showing another."
+"shortcuts.nothing_to_add" = "Every shortcut is already on the list."
+"shortcuts.restored" = "Start shortcuts back to the default."
 "settings.off" = "Off"
 "settings.suspend_mem" = "Suspend to RAM"
 "settings.suspend_freeze" = "Freeze"
@@ -804,6 +818,7 @@
 "store.download_failed" = "The download did not finish. Check the network; the store takes themes up to 25 MB."
 # System updates (Settings › System › Updates)
 "start.update_ready" = { one = "Updates · {count} package", other = "Updates · {count} packages" }
+"start.store_updates" = { one = "{name} · {count} update", other = "{name} · {count} updates" }
 "updates.title" = "Updates"
 "updates.packages" = "Packages"
 "updates.options" = "Options"

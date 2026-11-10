@@ -30,6 +30,8 @@ pub struct Store {
     hidden: Vec<String>,
     /// Where the last game was launched from, to come back to it.
     place: Option<Place>,
+    /// The START menu's shortcut row as the user arranged it.
+    shortcuts: archr_ui::shortcuts::Saved,
 }
 
 /// A row of the systems screen and, when the game was chosen from its list,
@@ -217,6 +219,14 @@ impl Store {
 
     pub fn show_all(&mut self) {
         self.hidden.clear();
+    }
+
+    pub fn shortcuts(&self) -> &archr_ui::shortcuts::Saved {
+        &self.shortcuts
+    }
+
+    pub fn set_shortcuts(&mut self, shortcuts: archr_ui::shortcuts::Saved) {
+        self.shortcuts = shortcuts;
     }
 
     pub fn place(&self) -> Option<&Place> {
