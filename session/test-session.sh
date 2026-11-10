@@ -444,10 +444,21 @@ END'
 grep -q 'Unknown' "$ARCHR_SESSION_LOG"
 printf '%s\n' 'PASS unknown instructions ignored'
 
+cat >"$root/bin/error-report" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >>"$CASE_DIR/error-reports"
+EOF
+chmod +x "$root/bin/error-report"
+export ARCHR_SESSION_ERROR_REPORT="$root/bin/error-report"
 run_case crash 'CRASH
 game runemu.sh demo
 END'
+unset ARCHR_SESSION_ERROR_REPORT
 [ "$(cat "$CASE_DIR/sleeps")" = 1 ]
+# Only the launcher's crash is reported, never the game's exit.
+i=0
+while [ ! -s "$CASE_DIR/error-reports" ] && [ "$i" -lt 100 ]; do /bin/sleep 0.01; i=$((i + 1)); done
+[ "$(cat "$CASE_DIR/error-reports")" = 'launcher 9' ]
 [ "$(cat "$ARCHR_SESSION_RUN_DIR/last-exit")" = 37 ]
 printf '%s\n' 'PASS crash backoff and recovery'
 

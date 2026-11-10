@@ -66,6 +66,7 @@ sleep_bin=sleep
 stop_sleep=sleep
 user_controller_db=/storage/.config/SDL-GameControllerDB/gamecontrollerdb.txt
 packaged_controller_db=/usr/config/SDL-GameControllerDB/gamecontrollerdb.txt
+error_report=/usr/bin/archr-error-report
 # Overrides are only for hermetic host tests, never read in normal operation.
 if [ "${ARCHR_SESSION_TEST:-0}" = 1 ]; then
     run_dir=${ARCHR_SESSION_RUN_DIR:?}
@@ -79,6 +80,7 @@ if [ "${ARCHR_SESSION_TEST:-0}" = 1 ]; then
     stop_sleep=${ARCHR_SESSION_STOP_SLEEP:?}
     user_controller_db=${ARCHR_SESSION_USER_CONTROLLER_DB:?}
     packaged_controller_db=${ARCHR_SESSION_PACKAGED_CONTROLLER_DB:?}
+    error_report=${ARCHR_SESSION_ERROR_REPORT:-/nonexistent}
 fi
 
 # Same UI exports as 001-functions and 050-sway.conf. Quirk exports already
@@ -284,6 +286,12 @@ while :; do
     if [ "$launcher_status" -ne 0 ]; then
         rm -f "$run_dir/next" || exit 1
         session_log "Launcher exited with $launcher_status; retrying in 1 s"
+        # A crash becomes an anonymous error report unless reports are off
+        # (archr-error-report decides, and leaves out stops from outside).
+        # In the background: the launcher comes back meanwhile.
+        if [ -x "$error_report" ]; then
+            nice -n 10 "$error_report" launcher "$launcher_status" >/dev/null 2>&1 </dev/null &
+        fi
         "$sleep_bin" 1
         continue
     fi
