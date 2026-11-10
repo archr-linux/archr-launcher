@@ -2174,7 +2174,19 @@ impl Host {
                 // What is asked is checked first; only a sound request counts.
                 let (systems, home) = (self.systems(), self.config.dirs.data_dir(&id));
                 let roms = self.roms();
-                let copy = app::check(&home, params, &allowed, (&systems, &roms), owned.used())?;
+                // A new version of one of its own games takes that game's
+                // place (and its share of the quota).
+                let replace = match params.get("replace").filter(|v| !v.is_null()) {
+                    None => None,
+                    Some(key) => {
+                        let key = key.as_str().ok_or((-32602, "replace"))?;
+                        let game = owned.games.iter().find(|g| g.game_key == key);
+                        Some(game.cloned().ok_or((-32001, "not installed by this module"))?)
+                    }
+                };
+                let used = owned.used().saturating_sub(replace.as_ref().map_or(0, |g| g.size));
+                let copy = app::check(&home, params, &allowed, (&systems, &roms), used)?
+                    .replacing(replace)?;
                 if self.copying {
                     return Err((-32003, "another install is running"));
                 }
@@ -2365,6 +2377,7 @@ impl Host {
                         log::info!("Module {id} installed {}", game.game_key);
                         let answer = json!({"game_key": game.game_key});
                         let system = game.system.clone();
+                        owned.games.retain(|g| g.game_key != game.game_key);
                         owned.games.push(game);
                         (Ok(answer), Some(system))
                     }

@@ -383,6 +383,7 @@ const CONFIG_KEYS: &[&str] = &[
     "screen.busy",
     "screen.chip",
     "screen.confirm",
+    "screen.dismissed",
     "screen.more",
     "screen.offline",
     "screen.opened",

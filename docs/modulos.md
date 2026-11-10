@@ -921,7 +921,7 @@ tela sai do app.
 
 | método | params | result |
 |---|---|---|
-| `rom.install` | `{system, file, name?, cover?, meta?: {developer, description, year}}` | `{game_key}` |
+| `rom.install` | `{system, file, name?, cover?, meta?: {developer, description, year}, replace?}` | `{game_key}` |
 | `rom.list` | `{}` | `{games: [{game_key, system, size, date}], used, limit}` (bytes; os ports contam) |
 | `rom.remove` | `{game_key}` | `{removed: true \| false}` |
 | `port.install` | `{name}` | `{game_key}` (o script de início do port, para "Jogar") |
@@ -957,6 +957,19 @@ pasta do sistema (onde uma cópia pela rede também cai); a capa vai para
 aparece na hora. No máximo uma cópia por vez, um `rom.install` por segundo por
 módulo e 2 GiB por módulo, jogos e ports juntos (`-32003`, "quota exceeded");
 o que está errado no pedido é recusado antes (`-32602`, `-32001`) e não conta.
+
+**Nova versão de um jogo** (`replace: <game_key>`): troca um jogo que o
+próprio módulo instalou pelo arquivo novo, **no mesmo caminho e com o mesmo
+nome** (o `name` do pedido é ignorado), para que os saves e estados, que têm o
+nome da ROM, continuem valendo. O jogo precisa estar no registro do módulo,
+ser do mesmo sistema e do mesmo tipo de arquivo (extensão) e estar como foi
+instalado (tamanho e data): um arquivo que o usuário mudou é dele e o pedido é
+recusado (`-32001`), antes e de novo logo antes da troca. O arquivo novo é
+gravado inteiro com outro nome na mesma pasta e posto no lugar do antigo de
+uma vez (`rename`); sem `cover`, a capa antiga fica. O registro troca a
+entrada (não soma outra) e a cota desconta o tamanho antigo. O app pode
+oferecer "Atualizar" quando a página do jogo mostra outro arquivo que o que
+ele guardou ao instalar.
 A cópia acontece fora da thread do módulo: a resposta vem quando termina.
 
 **Remover:** o módulo só manda `rom.remove` ou `port.remove`, para algo que
