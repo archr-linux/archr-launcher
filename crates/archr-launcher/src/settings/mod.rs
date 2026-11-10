@@ -896,6 +896,7 @@ impl Worker {
                     state.mangohud_supported = loaded.mangohud_supported;
                     state.games.replace(loaded.games.systems);
                     state.sync_games();
+                    state.values_loaded();
                     refresh_storage(state, loaded.storage);
                     if !state.scrape.verifying {
                         state.scrape.user = loaded.scrape.user;

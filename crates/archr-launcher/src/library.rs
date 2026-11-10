@@ -297,6 +297,7 @@ impl Library {
             Outcome::None
             | Outcome::Settings
             | Outcome::Updates
+            | Outcome::Open(_)
             | Outcome::OpenNetplay
             | Outcome::Moonlight
             | Outcome::Rescrape { .. }
@@ -470,6 +471,14 @@ impl Library {
             log::warn!("Cannot launch {system}: {error}");
             "error.no_core".to_owned()
         })
+    }
+    pub fn shortcuts(&self) -> &archr_ui::shortcuts::Saved {
+        self.store.shortcuts()
+    }
+    /// The START menu's row as arranged in Settings, saved with the rest.
+    pub fn set_shortcuts(&mut self, shortcuts: archr_ui::shortcuts::Saved) {
+        self.store.set_shortcuts(shortcuts);
+        self.queue_store();
     }
     fn queue_store(&self) {
         if let Some(writer) = &self.store_writer {

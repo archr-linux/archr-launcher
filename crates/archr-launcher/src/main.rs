@@ -297,6 +297,11 @@ fn run(
     }
     let mut update_check =
         (saved(Id::UpdateBoot) == "1").then(|| Instant::now() + UPDATE_CHECK_DELAY);
+    // The theme store's badge looks with the system update, never before.
+    settings.watch_themes(update_check.map(|_| UPDATE_CHECK_DELAY));
+    // The START menu's row, and the copy the Start shortcuts page edits.
+    app.shortcuts = library.shortcuts().clone();
+    settings.state.shortcuts.saved = app.shortcuts.clone();
     // An update still running from before (the launcher restarted): its screen.
     settings.watch_update();
     settings.state.base_theme = base;
@@ -480,6 +485,10 @@ fn run(
         };
         dirty |= app.updates != updates;
         app.updates = updates;
+        if let Some(shortcuts) = settings.state.take_shortcuts() {
+            library.set_shortcuts(shortcuts.clone());
+            app.shortcuts = shortcuts;
+        }
         for event in modules.poll() {
             match event {
                 modules::Event::View(view) => {
@@ -607,6 +616,14 @@ fn run(
             }
             dirty = true;
         }
+        // Store updates, marked on the store shortcuts like the system's.
+        let stores = if settings.state.value(Id::UpdateNotify) == "1" {
+            (settings.state.store.outdated(), app.modules.outdated())
+        } else {
+            (0, 0)
+        };
+        dirty |= (app.theme_updates, app.module_updates) != stores;
+        (app.theme_updates, app.module_updates) = stores;
         if let Some(language) = &language {
             modules.language(language);
         }
@@ -1182,6 +1199,8 @@ fn run(
             } else if requested == Outcome::Updates {
                 settings.open_updates();
                 Outcome::None
+            } else if let Outcome::Open(page) = requested {
+                settings.open_page(page)
             } else if requested == Outcome::Moonlight {
                 moonlight.open();
                 Outcome::None

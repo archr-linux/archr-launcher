@@ -257,7 +257,8 @@ fn library() -> FakeData {
     }
 }
 
-/// Systems, games, details and two settings pages of `theme` at `size`.
+/// Systems, games, details, the Start menu with its badges and the settings
+/// pages (Start shortcuts too: moving and adding) of `theme` at `size`.
 fn frames(theme: &Theme, size: (u32, u32)) -> Vec<(&'static str, Vec<u8>)> {
     let root = tempfile::tempdir().unwrap();
     let ttf;
@@ -354,6 +355,29 @@ fn frames(theme: &Theme, size: (u32, u32)) -> Vec<(&'static str, Vec<u8>)> {
     shot(&mut ui, "settings", &app, Some(&settings));
     settings.open(Page::Sound);
     shot(&mut ui, "settings-sound", &app, Some(&settings));
+    // The START menu with a pending system update and store updates, on
+    // the module store; then the row's page, moving and adding.
+    app.screen = Screen::StartHub {
+        row: 1,
+        tile: 1,
+        shortcut: 3,
+    };
+    (app.updates, app.theme_updates, app.module_updates) = (3, 1, 12);
+    shot(&mut ui, "start-badges", &app, None);
+    let mut shortcuts = Settings::default();
+    shortcuts.loading = false;
+    shortcuts.open(Page::Appearance);
+    shortcuts.open(Page::Shortcuts);
+    shortcuts.cursor = 6;
+    shortcuts.handle(Button::A);
+    shot(&mut ui, "settings-shortcuts", &app, Some(&shortcuts));
+    shortcuts.cursor = 3;
+    shortcuts.handle(Button::X);
+    shortcuts.handle(Button::Up);
+    shot(&mut ui, "settings-shortcuts-moving", &app, Some(&shortcuts));
+    shortcuts.handle(Button::B);
+    shortcuts.handle(Button::Y);
+    shot(&mut ui, "settings-shortcuts-adding", &app, Some(&shortcuts));
     shots
 }
 

@@ -44,6 +44,7 @@ pub mod keyboard;
 pub mod modules;
 pub mod moonlight;
 pub mod settings;
+pub mod shortcuts;
 
 /// A footer action may be bound to one button or a grouped pair.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

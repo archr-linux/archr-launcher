@@ -1,7 +1,7 @@
 //! Theme store engine: GitHub search, details, install and removal. Every
 //! call blocks; the settings worker runs them on the store lane. The contract
 //! for theme authors is in docs/temas.md ("Publicar na Loja de temas").
-use crate::github::{day, name_ok, owner_ok, unpack, GitHub, Rules, API};
+use crate::github::{day, name_ok, owner_ok, unpack, GitHub, Rules, API, LOOKED, LOOK_EVERY};
 use archr_io::{atomic_publish, read_utf8, Symlinks};
 use archr_scraper::Http;
 use archr_ui::{
@@ -74,6 +74,30 @@ pub(crate) fn now_day() -> String {
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = yoe + era * 400 + i64::from(m <= 2);
     format!("{y:04}-{m:02}-{d:02}")
+}
+
+/// The START menu's theme badge: what was last seen now, then after
+/// `delay` (when the user lets the launcher look on its own) what GitHub
+/// says, once a day at most. Runs on its own thread; `None` never looks.
+pub fn watch(
+    shop: &Shop,
+    delay: Option<std::time::Duration>,
+    out: &std::sync::mpsc::Sender<Reply>,
+) {
+    if out.send(shop.latest(false).0).is_err() {
+        return;
+    }
+    let Some(delay) = delay else {
+        return;
+    };
+    std::thread::sleep(delay);
+    if shop.github.due(LOOKED, LOOK_EVERY) {
+        let (reply, answered) = shop.latest(true);
+        if answered {
+            shop.github.looked(LOOKED);
+        }
+        let _ = out.send(reply);
+    }
 }
 
 /// Unpacks a GitHub tarball (one top folder) into `into`: regular files of the
@@ -288,6 +312,10 @@ impl Shop {
     }
     /// Themes the store installed: folder with content id, and their cards.
     pub fn installed(&self) -> Reply {
+        let (map, cards) = self.records();
+        Reply::Installed(map, cards)
+    }
+    fn records(&self) -> (BTreeMap<String, String>, Vec<Card>) {
         let mut map = BTreeMap::new();
         let mut cards = Vec::new();
         for entry in fs::read_dir(&self.themes).into_iter().flatten().flatten() {
@@ -314,7 +342,57 @@ impl Shop {
             cards.push(card);
         }
         cards.sort_by_key(|card| card.folder());
-        Reply::Installed(map, cards)
+        (map, cards)
+    }
+    /// The installed store themes and the newest content id of each: its
+    /// latest release's (or branch's) tree, as the details read it. From
+    /// GitHub when `look` (answers saved within the hour are used as they
+    /// are), else only as last saved. The flag tells GitHub answered.
+    pub fn latest(&self, look: bool) -> (Reply, bool) {
+        let (installed, cards) = self.records();
+        let mut answered = false;
+        let mut kept = |url: String, name: String| {
+            if !look {
+                return self.github.kept(&name);
+            }
+            let (saved, problem) = self.github.saved(&url, &name, false);
+            answered |= problem.is_none();
+            saved.map(|(body, _)| body)
+        };
+        let mut latest = BTreeMap::new();
+        for card in &cards {
+            let (folder, repo) = (
+                card.folder(),
+                format!("{API}/repos/{}/{}", card.owner, card.repo),
+            );
+            let release = kept(
+                format!("{repo}/releases/latest"),
+                format!("{folder}/release.json"),
+            );
+            let release: Value = release
+                .and_then(|body| serde_json::from_slice(&body).ok())
+                .unwrap_or(Value::Null);
+            let reference = release["tag_name"]
+                .as_str()
+                .unwrap_or(&card.branch)
+                .to_owned();
+            if !name_ok(&reference) {
+                continue;
+            }
+            let tree = kept(
+                format!("{repo}/git/trees/{reference}?recursive=1"),
+                format!("{folder}/tree-{reference}.json"),
+            )
+            .and_then(|body| serde_json::from_slice::<Value>(&body).ok());
+            if let Some(sha) = tree
+                .as_ref()
+                .and_then(|t| t["sha"].as_str())
+                .filter(|s| name_ok(s))
+            {
+                latest.insert(folder, sha.to_owned());
+            }
+        }
+        (Reply::Latest(installed, latest), answered)
     }
     /// Downloads the release (or branch) the details showed, checks it and
     /// swaps it into the themes folder in one rename.

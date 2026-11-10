@@ -349,7 +349,7 @@ impl Settings {
             Some(RowKind::Text { .. } | RowKind::Progress { .. })
         )
     }
-    fn open_store_list(&mut self, tab: Tab, refresh: bool) -> Effect {
+    pub(super) fn open_store_list(&mut self, tab: Tab, refresh: bool) -> Effect {
         self.modules.tab = tab;
         self.modules.loading = true;
         self.modules.problem = None;

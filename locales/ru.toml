@@ -140,6 +140,20 @@
 "start.update" = "Обновление"
 "start.wifi_on" = "Wi-Fi · включён"
 "start.wifi_off" = "Wi-Fi · выключен"
+"shortcuts.title" = "Ярлыки меню Start"
+"shortcuts.levels" = "Яркость и громкость"
+"shortcuts.toggle" = "Показать/скрыть"
+"shortcuts.move" = "Переместить"
+"shortcuts.add" = "Добавить"
+"shortcuts.moving" = "перемещение"
+"shortcuts.preview" = "Предпросмотр"
+"shortcuts.limit" = "В меню Start помещается до {count} ярлыков. Скрытые остаются в списке."
+"shortcuts.to_add" = "Можно добавить (Y)"
+"shortcuts.restore" = "Вернуть по умолчанию: SELECT"
+"shortcuts.add_title" = "Добавить в Start"
+"shortcuts.full" = "В меню Start помещается до {count} ярлыков. Сначала скройте один."
+"shortcuts.nothing_to_add" = "Все ярлыки уже в списке."
+"shortcuts.restored" = "Ярлыки меню Start возвращены по умолчанию."
 "settings.off" = "Выключено"
 "settings.suspend_mem" = "Сон в RAM"
 "settings.suspend_freeze" = "Заморозка"
@@ -804,6 +818,7 @@
 "store.download_failed" = "Загрузка не завершилась. Проверьте сеть; магазин принимает темы до 25 МБ."
 # System updates (Settings › System › Updates)
 "start.update_ready" = { one = "Обновление · {count} пакет", few = "Обновление · {count} пакета", many = "Обновление · {count} пакетов", other = "Обновление · {count} пакета" }
+"start.store_updates" = { one = "{name} · {count} обновление", few = "{name} · {count} обновления", many = "{name} · {count} обновлений", other = "{name} · {count} обновления" }
 "updates.title" = "Обновления"
 "updates.packages" = "Пакеты"
 "updates.options" = "Параметры"

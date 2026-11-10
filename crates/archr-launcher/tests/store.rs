@@ -278,3 +278,21 @@ fn hidden_rows_and_the_last_place_roundtrip() {
         Some(("nes", None))
     );
 }
+
+#[test]
+fn the_start_shortcut_row_survives_a_restart_and_old_stores_load() {
+    let root = tempdir().unwrap();
+    let dir = root.path().join("config/launcher");
+    // A store from before the row was kept loads with the default row.
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("store.toml"), "favorites = []\nrecent = []\n").unwrap();
+    let mut store = Store::load(&dir);
+    assert_eq!(store.shortcuts(), &Default::default());
+    let row = archr_ui::shortcuts::Saved {
+        order: vec!["update".into(), "settings".into(), "gone".into()],
+        hidden: vec!["gone".into()],
+    };
+    store.set_shortcuts(row.clone());
+    store.save(&dir).unwrap();
+    assert_eq!(Store::load(&dir).shortcuts(), &row);
+}

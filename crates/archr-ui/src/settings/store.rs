@@ -203,6 +203,9 @@ pub enum Reply {
     Installed(BTreeMap<String, String>, Vec<Card>),
     /// An install or removal ended; the key names the outcome.
     Done(Result<&'static str, &'static str>),
+    /// The installed store themes (as `Installed`) and the newest content
+    /// id the store offers for each (the START menu's badge).
+    Latest(BTreeMap<String, String>, BTreeMap<String, String>),
 }
 
 #[derive(Clone, Debug, Default)]
@@ -224,8 +227,17 @@ pub struct Store {
     /// Locale key while an install or removal runs.
     pub working: Option<&'static str>,
     pub confirm_remove: bool,
+    /// The newest content id the store last showed for installed themes.
+    pub latest: BTreeMap<String, String>,
 }
 impl Store {
+    /// Installed themes the store has something newer for.
+    pub fn outdated(&self) -> usize {
+        self.installed
+            .iter()
+            .filter(|(folder, tree)| self.latest.get(*folder).is_some_and(|l| l != *tree))
+            .count()
+    }
     pub fn cards(&self) -> &[Card] {
         &self.cards[self.tab.index()]
     }
@@ -428,7 +440,10 @@ impl Settings {
                 }
                 store.loading = false;
                 match result {
-                    Ok(detail) => store.detail = Some(*detail),
+                    Ok(detail) => {
+                        store.latest.insert(folder, detail.tree.clone());
+                        store.detail = Some(*detail);
+                    }
                     Err(key) => store.problem = Some(key),
                 }
             }
@@ -449,6 +464,10 @@ impl Settings {
                     store.loading = false;
                     store.problem = None;
                 }
+            }
+            Reply::Latest(installed, latest) => {
+                store.installed = installed;
+                store.latest = latest;
             }
             Reply::Done(result) => {
                 store.working = None;
@@ -582,8 +601,19 @@ mod tests {
         let detail = detail(&mut state);
         let mut installed = BTreeMap::new();
         installed.insert("kaio-neon".to_owned(), "t0".to_owned());
-        state.store_reply(Reply::Installed(installed, vec![detail.card]));
+        state.store_reply(Reply::Installed(installed, vec![detail.card.clone()]));
         assert_eq!(state.store.action(), Some("store.update"));
+        // The details showed the newer content: the START menu counts it,
+        // until the update is in.
+        assert_eq!(state.store.outdated(), 1);
+        let mut updated = BTreeMap::new();
+        updated.insert("kaio-neon".to_owned(), detail.tree.clone());
+        state.store_reply(Reply::Installed(updated.clone(), vec![detail.card.clone()]));
+        assert_eq!(state.store.outdated(), 0);
+        let mut newer = BTreeMap::new();
+        newer.insert("kaio-neon".to_owned(), "t9".to_owned());
+        state.store_reply(Reply::Latest(updated, newer));
+        assert_eq!(state.store.outdated(), 1);
         state.values.insert(Id::Theme, "kaio-neon".into());
         assert_eq!(state.handle(Button::X), Effect::None);
         assert!(!state.store.confirm_remove);

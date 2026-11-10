@@ -47,7 +47,7 @@ Sem `name`, a Aparência mostra o nome da pasta. Idiomas: `en`, `pt_BR`, `es`,
 | `border`, `badge` | bordas e botões do rodapé |
 | `text`, `text_secondary`, `muted`, `dim` | texto, do mais forte ao mais apagado |
 | `accent`, `accent_text`, `accent_text_secondary` | destaque e o texto sobre ele |
-| `success`, `warning`, `danger` | estados positivos, de atenção e de falha |
+| `success`, `warning`, `danger` | estados positivos, de atenção e de falha (`warning` também no selo de atualizações das lojas no Menu Start, com o número na cor `background`) |
 | `scrim` | véu atrás de avisos e menus |
 
 O aviso de partição das ROMs com erro (só leitura ou não montada) fica no
@@ -282,6 +282,13 @@ inteira; numa tela quadrada o Grafite a põe entre o cabeçalho e o rodapé
 [aspect.square]
 start_area = { x = 0.0, y = 0.1796875, w = 1.0, h = 0.75 }
 ```
+
+A fileira de atalhos tem até 8 círculos de 46 px com 12 px entre eles, sempre
+centrada; quais e em que ordem é escolha do usuário (Configurações › Aparência
+› Atalhos do Start), não do tema. O atalho Atualização ganha um ponto
+`accent` quando há atualização do sistema; Loja de temas e Loja de módulos
+ganham um selo `warning` com quantos temas ou módulos instalados têm versão
+nova.
 
 Uma caixa com menos de 480 px de referência de altura aperta a composição.
 `start_widgets` (ver [Widgets de módulos no Menu

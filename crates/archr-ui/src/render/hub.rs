@@ -1,18 +1,21 @@
 //! START hub: a fixed 640×480 composition scaled with the theme's screen height.
 use super::{Align, App, DataSource, Face, Glyph, Rect, Rgba, Screen, Theme, Ui};
+use crate::shortcuts::{Builtin, Shortcut};
+
+/// What waits behind a shortcut: system update packages, store updates.
+fn pending(app: &App, item: &Shortcut) -> usize {
+    match item {
+        Shortcut::Builtin(Builtin::Update) => app.updates,
+        Shortcut::Builtin(Builtin::Themes) => app.theme_updates,
+        Shortcut::Builtin(Builtin::Modules) => app.module_updates,
+        _ => 0,
+    }
+}
 
 const TILES: [(&str, Glyph); 3] = [
     ("collections.recent", Glyph::Recent),
     ("start.games", Glyph::Games),
     ("start.tools", Glyph::Tools),
-];
-const SHORTCUTS: [(&str, Glyph); 6] = [
-    ("start.settings", Glyph::Gear),
-    ("start.update", Glyph::Download),
-    ("", Glyph::Wifi),
-    ("menu.suspend", Glyph::Moon),
-    ("menu.reboot", Glyph::Restart),
-    ("menu.shutdown", Glyph::Power),
 ];
 
 /// Where the Start menu puts things, on the 640×480 reference. The theme's
@@ -270,110 +273,76 @@ impl Ui<'_, '_> {
         self.frame.min = minimum;
         self.hub_widgets(app, theme, row, &widgets)?;
         let side = px(46.);
-        let gap = px(14.);
-        // Module shortcuts sit between Wi-Fi and Suspend.
-        let extra = app.modules.shortcuts();
-        let count = SHORTCUTS.len() + extra.len();
-        let start = center - (side * count as i32 + gap * (count as i32 - 1)) / 2;
+        let gap = px(12.);
+        let shortcuts = app.hub_shortcuts();
+        let count = shortcuts.len() as i32;
+        let start = center - (side * count + gap * (count - 1).max(0)) / 2;
         let wifi_on = self.wifi_enabled();
-        let builtin = |index: usize| match index.checked_sub(3) {
-            Some(n) if n < extra.len() => None,
-            Some(n) => Some(3 + n - extra.len()),
-            None => Some(index),
-        };
-        for index in 0..count {
+        let wifi = Shortcut::Builtin(Builtin::Wifi);
+        for (index, item) in shortcuts.iter().enumerate() {
             let focus = row == 1 && shortcut == index;
-            let Some(fixed) = builtin(index) else {
-                let (_, entry) = extra[index - 3];
-                let x = start + index as i32 * (side + gap);
-                let rect = Rect::new(x, px(row_y), side as u32, side as u32);
-                let fill = if focus {
-                    theme.highlight_bg
-                } else {
-                    theme.surface
-                };
-                self.rounded(rect, side as f32 / 2., fill, Some(theme.border))?;
-                let ink = if focus {
-                    theme.highlight_text
-                } else {
-                    theme.text_secondary
-                };
-                let icon = Rect::new(x + px(11.), px(row_y + 11.), px(24.) as u32, px(24.) as u32);
-                self.module_icon((entry.icon.as_deref(), ""), icon, ink)?;
-                continue;
-            };
-            let glyph = SHORTCUTS[fixed].1;
-            let index = fixed;
-            let enabled = App::hub_shortcut_enabled(index);
-            let active = index == 2 && wifi_on;
-            let at = if index >= 3 {
-                index + extra.len()
-            } else {
-                index
-            };
-            let x = start + at as i32 * (side + gap);
+            let active = *item == wifi && wifi_on;
+            let x = start + index as i32 * (side + gap);
             let rect = Rect::new(x, px(row_y), side as u32, side as u32);
-            self.rounded(
-                rect,
-                side as f32 / 2.,
-                // Selected is always the most marked, offered or not.
-                if focus {
-                    theme.highlight_bg
-                } else {
-                    theme.surface
-                },
-                Some(if focus || active {
-                    theme.highlight_bg
-                } else {
-                    theme.border
-                }),
-            )?;
-            let ink = if focus && enabled {
-                theme.highlight_text
-            } else if focus {
-                // Not offered yet: the accent's ink, faded.
-                Rgba {
-                    a: 110,
-                    ..theme.highlight_text
-                }
+            let (fill, edge, ink) = if focus {
+                (theme.highlight_bg, theme.highlight_bg, theme.highlight_text)
             } else if active {
-                theme.highlight_bg
-            } else if enabled {
-                theme.text_secondary
+                (theme.surface, theme.highlight_bg, theme.highlight_bg)
             } else {
-                theme.dim_text
+                (theme.surface, theme.border, theme.text_secondary)
             };
-            self.icon(
-                if index == 2 && !wifi_on {
-                    Glyph::WifiOff
-                } else {
-                    glyph
-                },
-                Rect::new(x + px(11.), px(row_y + 11.), px(24.) as u32, px(24.) as u32),
-                ink,
+            self.rounded(rect, side as f32 / 2., fill, Some(edge))?;
+            let icon = Rect::new(x + px(11.), px(row_y + 11.), px(24.) as u32, px(24.) as u32);
+            match item {
+                Shortcut::Module(_, entry) => {
+                    self.module_icon((entry.icon.as_deref(), ""), icon, ink)?
+                }
+                _ if *item == wifi && !wifi_on => self.icon(Glyph::WifiOff, icon, ink)?,
+                Shortcut::Builtin(builtin) => self.icon(builtin.glyph(), icon, ink)?,
+            }
+            let pending = pending(app, item);
+            if pending == 0 {
+                continue;
+            }
+            // A system update is waiting: a dot; store updates: how many.
+            let dot = px(12.);
+            let ring = px(2.);
+            let numeric = *item != Shortcut::Builtin(Builtin::Update);
+            let (w, h, dx, dy) = if !numeric {
+                (dot, dot, x + side - dot + px(1.), px(row_y - 1.))
+            } else {
+                // Where the smallest text is larger than the design, the
+                // badge grows around it.
+                let h = px(14.).max(i32::from(self.frame.font_size(11.)) + 2);
+                let w = (px(10.) + self.measure(&pending.to_string(), Face::Semibold, 11.)? as i32)
+                    .max(h);
+                (w, h, x + side + px(2.) - w, px(row_y - 2.))
+            };
+            self.rounded(
+                Rect::new(
+                    dx - ring,
+                    dy - ring,
+                    (w + ring * 2) as u32,
+                    (h + ring * 2) as u32,
+                ),
+                (h / 2 + ring) as f32,
+                theme.background,
+                None,
             )?;
-            // A system update is waiting: a dot on the update shortcut.
-            if index == 1 && app.updates > 0 {
-                let dot = px(12.);
-                let ring = px(2.);
-                let (dx, dy) = (x + side - dot + px(1.), px(row_y - 1.));
-                self.rounded(
-                    Rect::new(
-                        dx - ring,
-                        dy - ring,
-                        (dot + ring * 2) as u32,
-                        (dot + ring * 2) as u32,
-                    ),
-                    (dot / 2 + ring) as f32,
-                    theme.background,
-                    None,
+            let badge = Rect::new(dx, dy, w as u32, h as u32);
+            if !numeric {
+                self.rounded(badge, (dot / 2) as f32, theme.highlight_bg, None)?;
+            } else {
+                self.rounded(badge, (h / 2) as f32, theme.warning, None)?;
+                // On the badge, not the background: no outline.
+                self.look.outlining = false;
+                self.label_aligned(
+                    &pending.to_string(),
+                    (Face::Semibold, 11., theme.background),
+                    badge,
+                    Align::Center,
                 )?;
-                self.rounded(
-                    Rect::new(dx, dy, dot as u32, dot as u32),
-                    (dot / 2) as f32,
-                    theme.highlight_bg,
-                    None,
-                )?;
+                self.look.outlining = true;
             }
         }
         if row == 2 {
@@ -393,37 +362,38 @@ impl Ui<'_, '_> {
                 )?;
             }
         }
-        if row == 1 {
-            let fixed = builtin(shortcut);
-            let key = fixed.map_or("", |n| SHORTCUTS[n].0);
-            let label = if let Some((n, entry)) = shortcut
-                .checked_sub(3)
-                .and_then(|n| extra.get(n))
-                .filter(|_| fixed.is_none())
-            {
-                let value = app.modules.value(
-                    &app.modules.modules[*n].id,
-                    &format!("shortcut:{}", entry.id),
-                );
-                match value {
-                    Some(value) => format!("{} · {value}", entry.label),
-                    None => entry.label.clone(),
+        if let Some(item) = shortcuts.get(shortcut).filter(|_| row == 1) {
+            let count = pending(app, item);
+            let label = match *item {
+                Shortcut::Module(n, entry) => {
+                    let value = app.modules.value(
+                        &app.modules.modules[n].id,
+                        &format!("shortcut:{}", entry.id),
+                    );
+                    match value {
+                        Some(value) => format!("{} · {value}", entry.label),
+                        None => entry.label.clone(),
+                    }
                 }
-            } else if fixed == Some(1) && app.updates > 0 {
-                let count = app.updates.to_string();
-                self.catalog.plural(
-                    "start.update_ready",
-                    app.updates as f64,
-                    &[("count", &count)],
-                )
-            } else if fixed == Some(2) {
-                self.catalog.text(if wifi_on {
+                _ if *item == wifi => self.catalog.text(if wifi_on {
                     "start.wifi_on"
                 } else {
                     "start.wifi_off"
-                })
-            } else {
-                self.catalog.text(key)
+                }),
+                Shortcut::Builtin(Builtin::Update) if count > 0 => self.catalog.plural(
+                    "start.update_ready",
+                    count as f64,
+                    &[("count", &count.to_string())],
+                ),
+                Shortcut::Builtin(builtin) if count > 0 => self.catalog.plural(
+                    "start.store_updates",
+                    count as f64,
+                    &[
+                        ("name", &self.catalog.text(builtin.label())),
+                        ("count", &count.to_string()),
+                    ],
+                ),
+                Shortcut::Builtin(builtin) => self.catalog.text(builtin.label()),
             };
             self.fitted(
                 &label,
