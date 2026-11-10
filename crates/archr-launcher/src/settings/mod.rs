@@ -184,7 +184,7 @@ impl Backend {
         ]
         .iter()
         .flat_map(|page| page.rows().iter().map(|row| row.id))
-        .chain([Id::Buttons, Id::ModulesAuto]);
+        .chain([Id::Buttons, Id::ModulesAuto, Id::ErrorReports]);
         for id in ids {
             if let Some(value) = cfg.get_setting(id.key(), None, None) {
                 state.values.insert(id, id.normalize(&value));
@@ -299,7 +299,7 @@ impl Backend {
         }
         let valid = match id {
             Id::SoundsVolume => value.parse::<u8>().is_ok_and(|n| n <= 100),
-            Id::Sounds | Id::Turbo | Id::Gpu | Id::Governor | Id::Language => {
+            Id::Sounds | Id::Turbo | Id::Gpu | Id::Governor | Id::Language | Id::ErrorReports => {
                 id.choices().contains(&value)
             }
             Id::Buttons => archr_ui::pad::bindings_text(&archr_ui::pad::bindings(value)) == value,
@@ -375,6 +375,9 @@ impl Backend {
             _ => {}
         }
         self.save(id, value)?;
+        if id == Id::ErrorReports && value == "0" {
+            crate::reports::purge(&self.paths);
+        }
         if id == Id::Timezone && self.paths.root.is_none() {
             unsafe extern "C" {
                 fn tzset();
@@ -426,6 +429,8 @@ pub(super) enum Work {
     Roms,
     /// Network › USB adapters, after forgetting this one if given.
     Adapters(Option<String>),
+    /// System › Error reports: the reporter's folders.
+    Reports,
     /// Diagnostics and BIOS: their own lane (`diag::Slow`).
     Diag,
     Report,
@@ -480,6 +485,7 @@ enum Reply {
         )>,
     ),
     Diag(Box<archr_ui::settings::diag::Facts>),
+    Reports(Box<archr_ui::settings::reports::Facts>),
     Report(Result<archr_ui::settings::diag::Report, String>),
     Bios(Result<Vec<archr_ui::settings::bios::System>, String>),
     BiosInstall(Result<(), String>),
@@ -686,6 +692,9 @@ impl Worker {
                         }
                         Work::RaScan => Reply::RaScan(backend.ra_scan()),
                         Work::Roms => Reply::Roms(Box::new(backend.roms_scan())),
+                        Work::Reports => {
+                            Reply::Reports(Box::new(crate::reports::facts(&backend.paths)))
+                        }
                         Work::Adapters(forget) => Reply::Adapters(backend.adapters(forget)),
                         Work::RaImport(backup, seen) => {
                             Reply::RaImport(backend.ra_import(backup, &seen))
@@ -1016,6 +1025,10 @@ impl Worker {
                 Reply::Diag(facts) => {
                     state.diag.scanning = false;
                     state.diag.facts = Some(*facts);
+                }
+                Reply::Reports(facts) => {
+                    state.reports.scanning = false;
+                    state.reports.facts = Some(*facts);
                 }
                 Reply::Report(result) => state.report_done(result),
                 Reply::Bios(Ok(systems)) => state.bios_scanned(systems),

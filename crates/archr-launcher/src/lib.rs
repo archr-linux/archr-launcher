@@ -15,6 +15,7 @@ pub mod notice;
 pub mod paths;
 pub mod preview;
 pub mod raimport;
+pub mod reports;
 pub mod rescrape;
 pub mod resume;
 pub mod saves;

@@ -440,7 +440,8 @@ impl Library {
             | Outcome::Continue { .. }
             | Outcome::Delete { .. }
             | Outcome::UseShot { .. }
-            | Outcome::Convert(_) => return Err("error.operation".to_owned()),
+            | Outcome::Convert(_)
+            | Outcome::ReportsNotice(_) => return Err("error.operation".to_owned()),
         }
         Ok(false)
     }

@@ -83,6 +83,8 @@ pub enum Outcome {
     None,
     /// Convert the saves the user agreed to take along.
     Convert(Box<crate::convert::Offer>),
+    /// The error reports notice was answered: keep them on (true) or not.
+    ReportsNotice(bool),
     Settings,
     /// Opens Settings, System, Updates.
     Updates,
@@ -342,6 +344,8 @@ pub struct App {
     pub confirm: Option<Confirm>,
     /// Take the saves along to the emulator just chosen (Converter-save).
     pub convert: Option<crate::convert::Offer>,
+    /// Error reports are on: said once, over the Start screen (Relatorios-aviso).
+    pub reports_notice: Option<crate::settings::reports::Notice>,
     /// States per page and the screenshot grid, reported by the renderer.
     pub saves_page: usize,
     pub shots_columns: usize,
@@ -392,6 +396,7 @@ impl App {
             scan: None,
             confirm: None,
             convert: None,
+            reports_notice: None,
             saves_page: 1,
             shots_columns: 1,
             shots_page: 1,
@@ -405,6 +410,11 @@ impl App {
     pub fn set_view(&mut self, view: &View) {
         self.systems_nav = Nav::of(&view.systems, view.screen);
         self.games_nav = Nav::of(&view.games, view.screen);
+    }
+
+    /// The reports notice waits while the resume screen or the switcher is up.
+    pub fn notice_shown(&self) -> bool {
+        self.reports_notice.is_some() && !matches!(self.screen, Screen::Resume | Screen::Switcher)
     }
 
     /// The undimmed screen beneath a modal, including collection identity.
@@ -542,6 +552,19 @@ impl App {
                 Some(crate::convert::Answer::Later) => {
                     self.convert = None;
                     Outcome::None
+                }
+                None => Outcome::None,
+            };
+        }
+        if let Some(notice) = self
+            .reports_notice
+            .as_mut()
+            .filter(|_| !matches!(self.screen, Screen::Resume | Screen::Switcher))
+        {
+            return match notice.handle(b) {
+                Some(on) => {
+                    self.reports_notice = None;
+                    Outcome::ReportsNotice(on)
                 }
                 None => Outcome::None,
             };

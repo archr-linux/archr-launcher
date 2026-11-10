@@ -229,6 +229,10 @@ fn run(
     ui.start_opening();
     ui.configure_prepared(&creator, prepared, paths.root.as_deref())?;
     let mut app = App::new(1);
+    // Error reports are on by default: said once (Relatorios-aviso).
+    if archr_launcher::reports::notice_due(&paths) {
+        app.reports_notice = Some(Default::default());
+    }
     app.set_view(&theme.view(&theme.active_view));
     app.netplay = netplay_on;
     app.cheevos = cheevos_on;
@@ -1257,6 +1261,10 @@ fn run(
             let requested = match requested {
                 Outcome::Convert(offer) => {
                     converter.send(archr_launcher::convert::Request::Run(offer));
+                    Outcome::None
+                }
+                Outcome::ReportsNotice(on) => {
+                    archr_launcher::reports::answer(paths.clone(), on);
                     Outcome::None
                 }
                 requested => requested,

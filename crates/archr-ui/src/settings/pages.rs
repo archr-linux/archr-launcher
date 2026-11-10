@@ -272,6 +272,7 @@ impl Settings {
             Page::Updates | Page::UpdatePackages => self.updates_input(button),
             Page::RaImport | Page::RaImportList => self.raimport_input(button),
             Page::RomsList => self.roms_list_input(button),
+            Page::ReportText => self.report_text_input(button),
             Page::UsbAdapters => self.usb_input(button),
             Page::Bios => self.bios_input(button),
             Page::Shortcuts => self.shortcuts_input(button),
@@ -516,6 +517,7 @@ impl Settings {
                 self.open(Page::Bios);
             }
             id @ (Id::DiagLink | Id::ReportNow) => return self.diag_activate(id),
+            id @ (Id::ReportsLink | Id::ReportsView) => return self.reports_activate(id),
             id => return self.storage_activate(id),
         }
         Some(Effect::None)

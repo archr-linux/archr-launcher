@@ -24,6 +24,7 @@ use bluetooth::{Action, Device};
 pub use pages::MEDIA;
 pub mod modules;
 pub mod raimport;
+pub mod reports;
 pub(crate) mod resume;
 pub mod roms;
 pub mod shortcuts;
@@ -89,6 +90,10 @@ pub enum Page {
     Power,
     /// Appearance › Start shortcuts (Hub-atalhos-editar).
     Shortcuts,
+    /// System › Error reports (Relatorios-ajustes), and the last report's
+    /// text (Relatorios-ver).
+    ErrorReports,
+    ReportText,
     Soon(&'static str),
 }
 impl Page {
@@ -131,6 +136,8 @@ impl Page {
             Self::Resume => "settings.resume",
             Self::Power => "settings.power",
             Self::Shortcuts => "shortcuts.title",
+            Self::ErrorReports => "reports.title",
+            Self::ReportText => "reports.view_title",
             Self::Soon(key) => key,
         }
     }
@@ -144,9 +151,12 @@ impl Page {
             Self::MangohudItems => &["settings.games", "settings.mangohud_page"],
             Self::AccentColor | Self::Store | Self::Shortcuts => &["settings.appearance"],
             Self::StoreTheme => &["settings.appearance", "settings.theme_store"],
-            Self::Modules | Self::ModuleStore | Self::RaImport | Self::Diagnostics => {
-                &["settings.system"]
-            }
+            Self::Modules
+            | Self::ModuleStore
+            | Self::RaImport
+            | Self::Diagnostics
+            | Self::ErrorReports => &["settings.system"],
+            Self::ReportText => &["settings.system", "reports.title"],
             Self::Bios => &["settings.games"],
             Self::RaImportList => &["settings.system", "raimport.title"],
             Self::Roms => &["settings.storage"],
@@ -183,6 +193,7 @@ impl Page {
             Self::RaImport => raimport::ROWS,
             Self::Roms => roms::ROWS,
             Self::Diagnostics => diag::ROWS,
+            Self::ErrorReports => reports::ROWS,
             Self::Resume => resume::RESUME,
             Self::Power => resume::POWER,
             _ => &[],
@@ -394,6 +405,14 @@ pub enum Id {
     /// Appearance link to Start shortcuts, and one line of that page.
     ShortcutsLink,
     Shortcut(u8),
+    /// System link to Error reports, and that page's rows.
+    ReportsLink,
+    /// `system.error_reports`, read by archr-error-report: on when missing.
+    ErrorReports,
+    ReportsQueue,
+    ReportsToday,
+    ReportsLatest,
+    ReportsView,
 }
 impl Id {
     fn metadata(self) -> (&'static str, &'static str) {
@@ -575,6 +594,12 @@ impl Id {
             | Self::RomsRetry
             | Self::RomsLeft => ("", ""),
             Self::DebugMode => ("", "0"),
+            Self::ErrorReports => ("system.error_reports", "1"),
+            Self::ReportsLink
+            | Self::ReportsQueue
+            | Self::ReportsToday
+            | Self::ReportsLatest
+            | Self::ReportsView => ("", ""),
             Self::DiagLink
             | Self::Crashes
             | Self::ReportNow
@@ -640,6 +665,7 @@ impl Id {
             | Self::UpdateNotify
             | Self::ModulesAuto
             | Self::DebugMode
+            | Self::ErrorReports
             | Self::SwitcherOn => &["0", "1"],
             // Only published channels (archr-update reads the rest as stable).
             Self::UpdateChannel => &["stable"],
@@ -789,6 +815,7 @@ const SYSTEM: &[Row] = &[
     row(Id::ModulesLink, "settings.modules", Kind::Action),
     row(Id::RaImportLink, "raimport.title", Kind::Action),
     row(Id::DiagLink, "diag.title", Kind::Action),
+    row(Id::ReportsLink, "reports.title", Kind::Action),
 ];
 const REGION: &[Row] = &[
     row(Id::Language, "settings.language", Kind::Value),
@@ -1031,6 +1058,7 @@ pub struct Settings {
     pub convert: Option<crate::convert::Offer>,
     pub converting: bool,
     pub diag: diag::Diag,
+    pub reports: reports::Reports,
     pub bios: bios::Bios,
     pub shortcuts: shortcuts::Shortcuts,
 }
@@ -1098,6 +1126,7 @@ impl Default for Settings {
             convert: None,
             converting: false,
             diag: diag::Diag::default(),
+            reports: reports::Reports::default(),
             bios: bios::Bios::default(),
             shortcuts: shortcuts::Shortcuts::default(),
         }
@@ -1114,6 +1143,16 @@ impl Settings {
         ) {
             let now = std::time::SystemTime::now();
             return information::value(catalog, &self.diag_value(id, now));
+        }
+        if matches!(
+            id,
+            Id::ReportsLink
+                | Id::ReportsQueue
+                | Id::ReportsToday
+                | Id::ReportsLatest
+                | Id::ReportsView
+        ) {
+            return information::value(catalog, &self.reports_value(id));
         }
         let value = self.value(id);
         if let Some(label) = self.labels.get(&(id, value.to_owned())) {
@@ -1365,6 +1404,7 @@ impl Settings {
             Id::ReportNow | Id::ReportLast => self
                 .diag_subtitle(row.id)
                 .or(row.subtitle.map(Into::into))?,
+            Id::ReportsLatest => self.reports_last()?.detail(),
             _ => row.subtitle?.into(),
         })
     }
@@ -1378,6 +1418,12 @@ impl Settings {
                 return self.module_label(row.id).unwrap_or_default()
             }
             id if id.roms() => return self.roms_label(id).unwrap_or(row.label).into(),
+            Id::ReportsLatest => {
+                return self
+                    .reports_last()
+                    .map(|last| last.title())
+                    .unwrap_or_default()
+            }
             _ => &None,
         };
         card.as_ref()
@@ -1411,6 +1457,7 @@ impl Settings {
                 Id::UnifiedCard => self.storage.unified.is_some(),
                 Id::RomsLink => self.storage.roms.shown(),
                 Id::ReportLast => self.diag_visible(row.id),
+                Id::ReportsLatest | Id::ReportsView => self.reports_visible(row.id),
                 id if id.roms() => self.roms_visible(id),
                 id if Games::ROWS.contains(&id) => self.games.shows(id, self),
                 id @ (Id::CheevosAccount
@@ -1438,6 +1485,7 @@ impl Settings {
             Id::StorageCard | Id::UnifiedCard | Id::UsbAddress | Id::UsbState => true,
             Id::RomsNow | Id::RomsCard | Id::RomsPower | Id::RomsLeft => true,
             Id::Crashes | Id::ReportLast => true,
+            Id::ReportsQueue | Id::ReportsToday | Id::ReportsLatest => true,
             Id::ModuleRow(_) | Id::ModuleItem(..) => self.module_fixed(id),
             _ => false,
         }
@@ -1513,6 +1561,7 @@ impl Settings {
             Page::Updates | Page::UpdatePackages => self.updates_hints(),
             Page::RaImport | Page::RaImportList => self.raimport_hints(),
             Page::RomsList => BACK,
+            Page::ReportText => &[(Key('↕'), "details.scroll"), (Key('B'), "hint.back")],
             Page::UsbAdapters => self.usb_hints(),
             Page::Bios => self.bios_hints(),
             Page::Shortcuts => self.shortcuts_hints(),

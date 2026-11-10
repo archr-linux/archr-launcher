@@ -433,6 +433,11 @@ impl Runtime {
             self.send(Work::Diag);
             dirty = true;
         }
+        if self.active && !self.closing && self.state.reports_wants_scan() {
+            self.state.reports.scanning = true;
+            self.send(Work::Reports);
+            dirty = true;
+        }
         if self.active && !self.closing && self.state.bios_wants_scan() {
             self.state.bios.scanning = true;
             self.send(Work::Bios);
