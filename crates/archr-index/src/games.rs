@@ -3,7 +3,7 @@ use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::gamelist::{game_path_key, load_gamelist, resolve_path};
+use crate::gamelist::{game_path_key, load_gamelist, load_port_infos, resolve_path};
 use crate::SystemDef;
 
 #[cfg(test)]
@@ -110,7 +110,19 @@ fn scan_root(sys: &SystemDef, dir: &Path, mapper: &dyn Fn(&Path) -> PathBuf) -> 
     let mut paths = Vec::new();
     let mut ancestors = HashSet::from([root]);
     scan_directory(dir, sys, 0, false, &mut ancestors, &mut paths);
-    let metadata = load_gamelist(dir, mapper).unwrap_or_default();
+    let mut metadata = load_gamelist(dir, mapper).unwrap_or_default();
+    // Ports from PortMaster describe themselves in their own folders.
+    if sys.name == "ports" {
+        for (key, mut info) in load_port_infos(dir, mapper) {
+            // Often only the folder's name ("asteroludi"): the script's
+            // own name reads better.
+            let stem = key.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+            if info.name.eq_ignore_ascii_case(stem) {
+                info.name.clear();
+            }
+            metadata.entry(key).or_default().fill_from(info);
+        }
+    }
     let mut media = MediaLookup::new(dir);
     paths
         .into_iter()
@@ -381,6 +393,59 @@ mod tests {
         MEDIA_DIRECTORY_READS.with(|counts| {
             assert_eq!(counts.borrow().get(&system_dir.join("linked/..")), Some(&1));
         });
+    }
+
+    #[test]
+    fn ports_describe_themselves_in_portmasters_gameinfo() {
+        let directory = tempfile::tempdir().unwrap();
+        let ports = directory.path().join("ports");
+        for folder in ["asteroludi", "cave", "PortMaster"] {
+            fs::create_dir_all(ports.join(folder)).unwrap();
+        }
+        for script in ["Asteroludi.sh", "Cave Story.sh", "PortMaster.sh"] {
+            fs::write(ports.join(script), "#!/bin/bash\n").unwrap();
+        }
+        fs::write(ports.join("asteroludi/cover.png"), []).unwrap();
+        fs::write(ports.join("cave/cover.png"), []).unwrap();
+        fs::write(ports.join("PortMaster/cover.png"), []).unwrap();
+        fs::write(ports.join("asteroludi/gameinfo.xml"),
+            "<gameList><game><path>./Asteroludi.sh</path><name>asteroludi</name><desc>Mining in space.</desc><developer>eludi</developer><releasedate>20251118T000000</releasedate><image>./asteroludi/cover.png</image></game></gameList>")
+            .unwrap();
+        fs::write(ports.join("cave/gameinfo.xml"),
+            "<gameList><game><path>./Cave Story.sh</path><name>From gameinfo</name><image>./cave/cover.png</image></game></gameList>")
+            .unwrap();
+        // PortMaster's own folder is not a port.
+        fs::write(ports.join("PortMaster/gameinfo.xml"),
+            "<gameList><game><path>./PortMaster.sh</path><name>PM</name><image>./PortMaster/cover.png</image></game></gameList>")
+            .unwrap();
+        // The ports' own gamelist wins where it speaks.
+        fs::write(ports.join("gamelist.xml"),
+            "<gameList><game><path>./Cave Story.sh</path><name>Cave Story+</name></game></gameList>")
+            .unwrap();
+        let sys = SystemDef {
+            name: "ports".into(),
+            fullname: "Ports".into(),
+            path: ports.clone(),
+            extensions: vec![".sh".into()],
+            emulators: Vec::new(),
+            ..Default::default()
+        };
+        let games = scan_system(&sys);
+        let get = |file: &str| games.iter().find(|g| g.path == ports.join(file)).unwrap();
+        let astero = get("Asteroludi.sh");
+        assert_eq!(astero.name, "Asteroludi", "a slug name gives way to the script's");
+        assert_eq!(astero.image, Some(ports.join("asteroludi/cover.png")));
+        assert_eq!(astero.details.description, "Mining in space.");
+        assert_eq!(astero.details.developer, "eludi");
+        assert_eq!(astero.year, Some(2025));
+        let cave = get("Cave Story.sh");
+        assert_eq!(cave.name, "Cave Story+");
+        assert_eq!(cave.image, Some(ports.join("cave/cover.png")), "what the gamelist leaves out");
+        assert_ne!(get("PortMaster.sh").name, "PM");
+        // Any other system ignores such files.
+        let gb = SystemDef { name: "gb".into(), ..sys.clone() };
+        let games = scan_system(&gb);
+        assert!(games.iter().all(|g| g.image.is_none()));
     }
 
     #[test]

@@ -24,6 +24,27 @@ pub(crate) struct Metadata {
 }
 
 impl Metadata {
+    /// What `self` leaves empty, taken from `other` (the user's gamelist
+    /// first, a port's own description after).
+    pub(crate) fn fill_from(&mut self, other: Metadata) {
+        let take = |mine: &mut String, theirs: String| {
+            if mine.is_empty() {
+                *mine = theirs;
+            }
+        };
+        take(&mut self.name, other.name);
+        take(&mut self.image, other.image);
+        take(&mut self.thumbnail, other.thumbnail);
+        take(&mut self.video, other.video);
+        take(&mut self.marquee, other.marquee);
+        take(&mut self.details.description, other.details.description);
+        take(&mut self.details.genre, other.details.genre);
+        take(&mut self.details.developer, other.details.developer);
+        take(&mut self.details.publisher, other.details.publisher);
+        self.details.rating = self.details.rating.or(other.details.rating);
+        self.year = self.year.or(other.year);
+        self.players = self.players.take().or(other.players);
+    }
     fn set(&mut self, field: &[u8], text: &str) {
         let text = text.trim();
         match field {
@@ -87,7 +108,42 @@ pub(crate) fn load_gamelist(
     system_dir: &Path,
     mapper: &dyn Fn(&Path) -> PathBuf,
 ) -> Result<HashMap<PathBuf, Metadata>, IndexError> {
-    let source = read_bytes(&system_dir.join("gamelist.xml"), 32 * 1024 * 1024, Follow)?;
+    load_list(system_dir, &system_dir.join("gamelist.xml"), 32 * 1024 * 1024, mapper)
+}
+
+/// The `gameinfo.xml` PortMaster puts in each port's folder (a gamelist of
+/// that port alone, its paths from the ports folder), for what the ports'
+/// own `gamelist.xml` does not say. Hidden folders and PortMaster's own are
+/// skipped; at most 1000 folders are looked at.
+pub(crate) fn load_port_infos(
+    ports_dir: &Path,
+    mapper: &dyn Fn(&Path) -> PathBuf,
+) -> HashMap<PathBuf, Metadata> {
+    let mut entries = HashMap::new();
+    let Ok(dir) = std::fs::read_dir(ports_dir) else {
+        return entries;
+    };
+    for entry in dir.flatten().take(1000) {
+        let name = entry.file_name();
+        let skip = name.to_str().is_none_or(|n| n.starts_with('.') || n == "PortMaster");
+        if skip || !entry.file_type().is_ok_and(|t| t.is_dir()) {
+            continue;
+        }
+        let info = entry.path().join("gameinfo.xml");
+        if let Ok(found) = load_list(ports_dir, &info, 256 * 1024, mapper) {
+            entries.extend(found);
+        }
+    }
+    entries
+}
+
+fn load_list(
+    system_dir: &Path,
+    file: &Path,
+    limit: u64,
+    mapper: &dyn Fn(&Path) -> PathBuf,
+) -> Result<HashMap<PathBuf, Metadata>, IndexError> {
+    let source = read_bytes(file, limit, Follow)?;
     let mut reader = Reader::from_reader(source.as_slice());
     reader.config_mut().expand_empty_elements = true;
     reader.config_mut().check_comments = true;
