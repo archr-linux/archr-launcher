@@ -580,6 +580,12 @@ fn scan_shaders(plan: &mut Plan, roots: &Roots) {
             continue;
         }
         match read(&path, FILE_LIMIT).map(|text| preset(&text, &item, roots, &incoming)) {
+            // Imported before: the same preset is already there.
+            Some(Ok(text))
+                if read(&roots.shaders.join(&item), FILE_LIMIT).as_ref() == Some(&text) =>
+            {
+                plan.ignore(shown, SAME)
+            }
             Some(Ok(text)) => {
                 let to = roots.shaders.join(&item);
                 if plan.write(to, shown, "raimport.file_preset".into(), text) {

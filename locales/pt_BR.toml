@@ -1003,7 +1003,7 @@
 "raimport.run" = "Importar agora"
 "raimport.run_detail" = "Vale a partir do próximo jogo"
 "raimport.copy_to" = "Copie para"
-"raimport.copy_rest" = "o retroarch.cfg e as pastas config, shaders, overlays e remaps. Caminhos, drivers, vídeo do aparelho e senhas nunca são importados. Antes de aplicar, o estado atual vai para um backup. Overlays e shaders que já estão em roms/overlays, roms/shaders e na pasta de cada sistema (roms/snes/shaders…) também são lidos."
+"raimport.copy_rest" = "o retroarch.cfg e as pastas config, shaders, overlays e remaps; e também roms/shaders, roms/overlays e as de cada sistema. Caminhos, drivers, vídeo e senhas nunca entram; antes, um backup."
 "raimport.searching" = "Procurando…"
 "raimport.missing" = "Não encontrado"
 "raimport.will_apply" = "Será aplicado"

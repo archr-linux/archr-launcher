@@ -595,7 +595,8 @@ fn the_users_own_overlay_and_shader_folders_are_read_too() {
         .is_file());
     let again = scan(&f.roots);
     assert_eq!(why(&again, "roms/overlays/borders/gb.png"), Some(SAME));
-    assert_eq!(again.found.overlays + again.found.shader_files, 0);
+    assert_eq!(why(&again, "roms/shaders/mine/scan.slangp"), Some(SAME));
+    assert!(again.found.apply.is_empty());
 }
 
 #[test]

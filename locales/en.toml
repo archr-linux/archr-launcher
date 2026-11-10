@@ -1003,7 +1003,7 @@
 "raimport.run" = "Import now"
 "raimport.run_detail" = "Applies from the next game"
 "raimport.copy_to" = "Copy to"
-"raimport.copy_rest" = "retroarch.cfg and the config, shaders, overlays and remaps folders. Paths, drivers, the device's video mode and passwords are never imported. Before applying, the current state goes to a backup. Overlays and shaders already in roms/overlays, roms/shaders and each system's folder (roms/snes/shaders…) are read too."
+"raimport.copy_rest" = "retroarch.cfg and the config, shaders, overlays and remaps folders, plus roms/shaders, roms/overlays and each system's. Paths, drivers, video mode and passwords never come in; a backup comes first."
 "raimport.searching" = "Looking…"
 "raimport.missing" = "Not found"
 "raimport.will_apply" = "Will be applied"
