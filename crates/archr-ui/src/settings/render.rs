@@ -30,6 +30,8 @@ mod modules;
 mod network;
 #[path = "render/raimport.rs"]
 mod raimport;
+#[path = "render/reports.rs"]
+mod reports;
 #[path = "render/roms.rs"]
 mod roms;
 #[path = "render/shortcuts.rs"]
@@ -752,6 +754,8 @@ impl View<'_, '_, '_> {
             Page::RomsList => self.roms_list(state)?,
             Page::UsbAdapters => self.usb_page(state)?,
             Page::Diagnostics => self.diag_page(state, &rows)?,
+            Page::ErrorReports => self.reports_page(state, &rows)?,
+            Page::ReportText => self.report_text(state)?,
             Page::Bios => self.bios_page(state)?,
             Page::Shortcuts => self.shortcuts_page(state)?,
             Page::Scraper => {
@@ -903,6 +907,8 @@ impl View<'_, '_, '_> {
                 })
         } else if state.page() == Page::Bios {
             Some(self.tr("bios.footer"))
+        } else if state.page() == Page::ReportText {
+            self.report_status(state)
         } else if state.page() == Page::Resume {
             Some(self.tr("resume.note"))
         } else if state.page() == Page::Power {
@@ -1251,7 +1257,7 @@ impl View<'_, '_, '_> {
             self.ink(selected)
         };
         let face = selection(selected, Face::Regular, Face::Semibold);
-        let label = self.tr(&state.label(row));
+        let mut label = self.tr(&state.label(row));
         // A switch needs little room: its title and subtitle take the rest.
         let full = if row.kind == Kind::Toggle {
             right - 98.
@@ -1303,6 +1309,19 @@ impl View<'_, '_, '_> {
                 warning = warn;
                 line
             }),
+            // What failed and the game's name are data: shortened, never dropped.
+            Id::ReportsLatest => {
+                let width = self.rect((0., 0., full, 1.)).width();
+                if self.ui.measure(&label, face, 15.)? > width {
+                    label = self.ellipsized(&label, 15., face, width)?;
+                }
+                match state.subtitle(row).map(|text| self.tr(&text)) {
+                    Some(text) if self.ui.measure(&text, Face::Regular, 12.)? > width => {
+                        Some(self.ellipsized(&text, 12., Face::Regular, width)?)
+                    }
+                    text => text,
+                }
+            }
             _ => state.subtitle(row).map(|text| self.tr(&text)),
         };
         let expand = subtitle.is_none()

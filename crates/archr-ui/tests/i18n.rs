@@ -417,6 +417,8 @@ const CONFIG_KEYS: &[&str] = &[
     "reviewed.json",
     // archr-debug's key and the free PlayStation BIOS file.
     "system.loglevel",
+    // archr-error-report's switch.
+    "system.error_reports",
     "openbios.bin",
     // system.cfg keys the saves scan resolves per game.
     "retroachievements.hardcore",

@@ -31,6 +31,7 @@ mod saves;
 mod usb;
 pub(crate) use usb::tone as usb_tone;
 mod convert;
+mod reports;
 mod switcher;
 
 use sdl2::{
@@ -1094,6 +1095,9 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             }
             if let Some(offer) = &app.convert {
                 self.convert_question(offer, theme)?;
+            } else if let Some(notice) = app.reports_notice.as_ref().filter(|_| app.notice_shown())
+            {
+                self.reports_notice(notice, theme)?;
             }
             self.animating = self.list.scroll.active(now)
                 || self.list.pill.active(now)

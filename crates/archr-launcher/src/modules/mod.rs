@@ -1675,7 +1675,10 @@ impl Host {
         let mut code = None;
         for _ in 0..20 {
             if let Ok(Some(status)) = daemon.child.try_wait() {
-                code = status.code();
+                // A signal reads as the shell gives it: 128 + its number.
+                code = status.code().or_else(|| {
+                    std::os::unix::process::ExitStatusExt::signal(&status).map(|n| 128 + n)
+                });
                 break;
             }
             thread::sleep(Duration::from_millis(10));
@@ -1688,6 +1691,10 @@ impl Host {
             return;
         }
         let id = module_id(key);
+        // A crash becomes an error report (archr-error-report decides).
+        if let Some(code) = code.filter(|code| *code != 0) {
+            crate::reports::module_crashed(&self.config.bin, id, code);
+        }
         if key != id {
             // Apps are never started again on their own.
             self.app_gone(id);
@@ -2187,10 +2194,15 @@ impl Host {
                     Some(key) => {
                         let key = key.as_str().ok_or((-32602, "replace"))?;
                         let game = owned.games.iter().find(|g| g.game_key == key);
-                        Some(game.cloned().ok_or((-32001, "not installed by this module"))?)
+                        Some(
+                            game.cloned()
+                                .ok_or((-32001, "not installed by this module"))?,
+                        )
                     }
                 };
-                let used = owned.used().saturating_sub(replace.as_ref().map_or(0, |g| g.size));
+                let used = owned
+                    .used()
+                    .saturating_sub(replace.as_ref().map_or(0, |g| g.size));
                 let copy = app::check(&home, params, &allowed, (&systems, &roms), used)?
                     .replacing(replace)?;
                 if self.copying {
