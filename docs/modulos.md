@@ -804,8 +804,11 @@ launch = true              # "Jogar" depois de instalar
   recebem `settings.changed`; uma ação das páginas vai ao daemon, ou ao app
   quando só ele roda.
 - O app termina (`shutdown`, 500 ms, depois é morto) com B na primeira tela,
-  ao abrir um jogo, ao suspender ou desligar pelo launcher e ao fechar o
-  launcher. Nunca é reiniciado sozinho; se morre, a tela fecha com "X parou"
+  ao abrir um jogo, ao desligar ou reiniciar pelo launcher e ao fechar o
+  launcher. Suspender o aparelho não fecha o app: ele para junto com o
+  sistema e, ao acordar, está onde estava. Uma conexão que estava aberta
+  costuma cair na suspensão (o Wi-Fi volta em alguns segundos), então o app
+  deve tentar de novo o que estava baixando. Nunca é reiniciado sozinho; se morre, a tela fecha com "X parou"
   e uma saída com erro conta como falha (seção 3).
 - START, em qualquer tela do app, abre as páginas do módulo em Configurações
   (se ele tem); ao sair delas, o app continua onde estava.
