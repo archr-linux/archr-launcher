@@ -72,7 +72,10 @@ impl Last {
         let what = self.field("what").replace('|', "");
         match self.field("event") {
             "game" => format!("reports.failed_game|what={what}"),
-            "unit" => format!("reports.failed_unit|what={what}"),
+            "unit" => format!(
+                "reports.failed_unit|what={}",
+                what.trim_end_matches(".service")
+            ),
             "module" => format!("reports.failed_module|what={what}"),
             "kernel" => "reports.failed_kernel".into(),
             "launcher" => "reports.failed_launcher".into(),
@@ -259,6 +262,13 @@ mod tests {
             "reports.last_when|day=02|month=01|time=03:04"
         );
         assert_eq!(Last::default().title(), "reports.failed");
+        let unit = Last::new(
+            "2026-01-02_03-04-05.txt".into(),
+            true,
+            String::new(),
+            "event: unit\nwhat: iwd.service\n",
+        );
+        assert_eq!(unit.title(), "reports.failed_unit|what=iwd");
     }
     #[test]
     fn long_lines_wrap_and_blank_lines_stay() {
