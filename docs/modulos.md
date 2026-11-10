@@ -108,8 +108,12 @@ O bloco mostra um valor ao vivo embaixo do título quando o módulo manda
 `ui.update` para `tile:<id>`.
 
 **Atalho no Start** (`[[start.shortcuts]]`, mesmos campos; 1 por módulo, 2 no
-total), entre Wi-Fi e Suspender. O rótulo aparece embaixo da fileira quando o
-atalho tem o foco.
+total), na lista de Configurações › Aparência › **Atalhos do Start**, logo
+depois do Wi-Fi. A fileira mostra no máximo 8 atalhos e os 8 do launcher já a
+enchem: o atalho do módulo entra oculto na lista e aparece quando o usuário o
+liga ali (ocultando outro). Quem já arrumou a fileira e tem lugar sobrando vê
+o atalho de um módulo novo direto. O rótulo aparece embaixo da fileira quando
+o atalho tem o foco.
 
 **Widget no Start** (`[[start.widgets]]`, mesmos campos; 1 por módulo, 2 no
 total): um bloco 2×1 entre os blocos e os atalhos, com o ícone e o nome do

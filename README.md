@@ -215,6 +215,38 @@ uma medição no PC não substitui a sonda no aparelho.
 Entrada temporária: `Y` na lista de sistemas → `Configurações` → `A`.
 `B` volta pela pilha de páginas; na raiz retorna ao launcher. `Y` na raiz
 abre Informações do sistema. O menu Start também abre as configurações.
+
+### Menu Start
+
+`START` abre o menu: Recentes, Jogos e Ferramentas (e blocos de módulos) em
+cima, e embaixo uma fileira de até 8 atalhos. O padrão é Configurações,
+Atualização, Loja de temas, Loja de módulos, Wi-Fi, Suspender, Reiniciar e
+Desligar. As duas lojas abrem direto a Loja de temas (Aparência) e a Loja de
+módulos (Sistema › Módulos), com `B` voltando pelas páginas de cima, como no
+atalho Atualização. Um selo com número nas lojas diz quantos temas ou módulos
+instalados têm versão nova, e o nome embaixo do atalho diz o mesmo
+("Loja de módulos · 2 atualizações").
+
+As contas vêm do que as lojas já guardam: a versão da última release de cada
+módulo (`latest-module.toml`) e a árvore da última release (ou do ramo) de
+cada tema, as mesmas respostas que as páginas de detalhes leem. Ao abrir, o
+launcher só lê esse cache, sem rede. Com "Verificar ao ligar" ligado
+(Sistema › Atualizações), as lojas perguntam ao GitHub uma vez por dia no
+máximo (o carimbo `looked` no cache de cada loja), 20 s depois do início para
+os temas e 2 min depois para os módulos; abrir a loja ou os detalhes de um
+tema também atualiza a conta. "Avisar no menu Start" desligado tira os selos,
+como tira o ponto da Atualização.
+
+Configurações › Aparência › **Atalhos do Start** arruma a fileira: `A` mostra
+ou oculta o atalho, `X` levanta o item para mover com ↑↓ (`A` ou `X` confirma,
+`B` desfaz), `Y` adiciona o que ainda não está na lista (Bluetooth, que abre
+Rede › Bluetooth, e Brilho e volume, que abre Som e tela) e `SELECT` volta ao
+padrão. Ocultos continuam na lista; um 9º atalho visível é recusado com aviso.
+Atalhos de módulos entram na lista sozinhos, depois do Wi-Fi (ocultos se a
+fileira estiver cheia). A ordem e os ocultos ficam em `store.toml`
+(`[shortcuts]`, `order` e `hidden`), junto da ordem dos sistemas; ids que não
+existem mais são ignorados, e quem nunca mexeu fica no padrão e ganha os
+atalhos novos de versões futuras no lugar deles.
 Som e tela, Sistema e Região e idioma aplicam alterações imediatamente;
 as outras categorias mostram “Em breve”. Atualização mostra a versão instalada,
 sem iniciar o atualizador. O driver de GPU oferece confirmação de reinício.
