@@ -24,6 +24,7 @@ impl Backend {
             // layer, /storage/overlays.
             overlays: self.paths.at("/tmp/overlays"),
             factory_overlays: self.paths.at("/usr/share/retroarch-overlays"),
+            roms: self.paths.at("/storage/roms"),
         }
     }
     pub(super) fn ra_scan(&self) -> Found {

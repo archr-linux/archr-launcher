@@ -995,7 +995,7 @@
 "raimport.overrides" = "Настройки ядер и игр"
 "raimport.overrides_detail" = "Папка config/ каждого ядра"
 "raimport.shaders" = "Шейдеры, оверлеи и переназначения"
-"raimport.shaders_detail" = "Папки shaders/, overlays/ и remaps/"
+"raimport.shaders_detail" = "Папки shaders/, overlays/ и remaps/, а также в roms/ и в папке каждой системы"
 "raimport.preview" = "Что будет применено"
 "raimport.preview_detail" = "Каждый параметр и что пропущено"
 "raimport.backup" = "Сначала резервная копия"
@@ -1003,7 +1003,7 @@
 "raimport.run" = "Импортировать"
 "raimport.run_detail" = "Действует со следующей игры"
 "raimport.copy_to" = "Скопируйте в"
-"raimport.copy_rest" = "retroarch.cfg и папки config, shaders, overlays и remaps. Пути, драйверы, видеорежим устройства и пароли не импортируются. Перед применением текущее состояние сохраняется в копию."
+"raimport.copy_rest" = "retroarch.cfg и папки config, shaders, overlays и remaps. Пути, драйверы, видеорежим устройства и пароли не импортируются. Перед применением текущее состояние сохраняется в копию. Оверлеи и шейдеры из roms/overlays, roms/shaders и из папки каждой системы (roms/snes/shaders…) тоже читаются."
 "raimport.searching" = "Поиск…"
 "raimport.missing" = "Не найдено"
 "raimport.will_apply" = "Будет применено"
@@ -1037,6 +1037,7 @@
 "raimport.why_factory" = "в системе есть файл с таким именем"
 "raimport.file_copy" = "копируется как есть"
 "raimport.why_same" = "уже есть на устройстве"
+"raimport.why_twice" = "есть и в другой папке; берётся первый"
 "raimport.shader_files_count" = { one = "{count} файл шейдера", few = "{count} файла шейдеров", many = "{count} файлов шейдеров", other = "{count} файла шейдеров" }
 "raimport.overlays_count" = { one = "{count} файл оверлея", few = "{count} файла оверлеев", many = "{count} файлов оверлеев", other = "{count} файла оверлеев" }
 "modules.perm_widget" = "Виджет в меню Start"

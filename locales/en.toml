@@ -995,7 +995,7 @@
 "raimport.overrides" = "Core and game overrides"
 "raimport.overrides_detail" = "The config/ folder of each core"
 "raimport.shaders" = "Shaders, overlays and remaps"
-"raimport.shaders_detail" = "The shaders/, overlays/ and remaps/ folders"
+"raimport.shaders_detail" = "The shaders/, overlays/ and remaps/ folders, and those in roms/ and each system"
 "raimport.preview" = "See what will be applied"
 "raimport.preview_detail" = "Each setting, and what was left out"
 "raimport.backup" = "Back up first"
@@ -1003,7 +1003,7 @@
 "raimport.run" = "Import now"
 "raimport.run_detail" = "Applies from the next game"
 "raimport.copy_to" = "Copy to"
-"raimport.copy_rest" = "retroarch.cfg and the config, shaders, overlays and remaps folders. Paths, drivers, the device's video mode and passwords are never imported. Before applying, the current state goes to a backup."
+"raimport.copy_rest" = "retroarch.cfg and the config, shaders, overlays and remaps folders. Paths, drivers, the device's video mode and passwords are never imported. Before applying, the current state goes to a backup. Overlays and shaders already in roms/overlays, roms/shaders and each system's folder (roms/snes/shaders…) are read too."
 "raimport.searching" = "Looking…"
 "raimport.missing" = "Not found"
 "raimport.will_apply" = "Will be applied"
@@ -1037,6 +1037,7 @@
 "raimport.why_factory" = "the system has a file with this name"
 "raimport.file_copy" = "copied as it is"
 "raimport.why_same" = "already on this device"
+"raimport.why_twice" = "also in another folder; the first one is used"
 "raimport.shader_files_count" = { one = "{count} shader file", other = "{count} shader files" }
 "raimport.overlays_count" = { one = "{count} overlay file", other = "{count} overlay files" }
 "modules.perm_widget" = "Widget in the Start menu"

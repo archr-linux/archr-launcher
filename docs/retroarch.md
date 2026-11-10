@@ -39,6 +39,19 @@ RetroArch (outro aparelho, o PC).
    Uma pasta do RetroArch copiada inteira (por exemplo
    `roms/retroarch-import/RetroArch/`) também serve, quando é a única pasta
    lá dentro.
+
+   Overlays e shaders que você já guarda em `roms/overlays/` e `roms/shaders/`
+   também são lidos, com as mesmas regras; essas pastas ficam como estão. Se o
+   mesmo arquivo estiver nos dois lugares, vale o de `roms/retroarch-import/`.
+
+   Também valem as pastas `shaders/` e `overlays/` dentro da pasta de cada
+   sistema (`roms/snes/shaders/`, `roms/n64/overlays/`…), só nesse nível: as
+   subpastas de ROMs nunca são vasculhadas. Essas entram numa subpasta com o
+   nome do sistema (`roms/snes/shaders/crt/x.slangp` vira
+   `/storage/shaders/snes/crt/x.slangp`, que o RetroArch mostra em
+   `/tmp/shaders/snes/`), então dois sistemas nunca se sobrescrevem. A
+   estrutura interna é copiada igual, então caminhos relativos de presets e
+   de overlays `.cfg` continuam valendo.
 2. Abra a página: ela mostra o que foi encontrado. "Ver o que será aplicado"
    lista cada ajuste e o que ficou de fora, com o motivo.
 3. "Fazer backup antes" (ligado por padrão) salva o estado atual; restaure em

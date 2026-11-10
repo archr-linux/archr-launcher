@@ -5,7 +5,9 @@
 //! RetroArch folder was copied there): `retroarch.cfg`, `config/<core>/`
 //! (core and game overrides `.cfg`, core options `.opt`), `remaps/<core>/*.rmp`,
 //! `shaders/**` (presets, shader sources and their textures) and `overlays/**`
-//! (overlay `.cfg` files and their images). Only allow-listed `retroarch.cfg`
+//! (overlay `.cfg` files and their images); also `roms/shaders/`,
+//! `roms/overlays/` and each system's `roms/<system>/shaders|overlays/`,
+//! where many keep them (those land under `<system>/`). Only allow-listed `retroarch.cfg`
 //! keys go into the user's own retroarch.cfg (never system.cfg, so the
 //! launcher does not impose them); paths, drivers, the device's video mode,
 //! credentials and commands never do. Files are bounded, never symbolic
@@ -65,6 +67,10 @@ pub struct Roots {
     /// overlay_directory, and the system's overlays under it.
     pub overlays: PathBuf,
     pub factory_overlays: PathBuf,
+    /// The ROMs folder: the user's own roms/overlays and roms/shaders, and
+    /// roms/<system>/overlays and roms/<system>/shaders, read like the
+    /// import folder's.
+    pub roms: PathBuf,
 }
 
 /// What an import would do: the screen's summary and the files to write.
@@ -77,6 +83,9 @@ pub struct Plan {
     /// Destination and the file copied there as it is.
     pub copies: Vec<(PathBuf, PathBuf)>,
     copied: u64,
+    /// Every destination a copy was considered for, taken or not: the first
+    /// folder that has a file decides, a later one never replaces it.
+    claimed: BTreeSet<PathBuf>,
 }
 
 /// Why a key or a file stays out, as catalog keys.
@@ -88,6 +97,7 @@ const NO_CORE: &str = "raimport.why_core";
 const NO_SHADER: &str = "raimport.why_shader";
 const FACTORY: &str = "raimport.why_factory";
 const SAME: &str = "raimport.why_same";
+const TWICE: &str = "raimport.why_twice";
 
 /// Never imported, whatever the file: where things live, which drivers run,
 /// accounts, and anything that runs a command or calls a server. Anything
@@ -257,6 +267,10 @@ impl Plan {
     /// A file to copy as it is, within the limits, unless the destination
     /// already holds the same bytes.
     fn copy(&mut self, to: PathBuf, from: PathBuf, item: String, size: u64) -> bool {
+        if !self.claimed.insert(to.clone()) {
+            self.ignore(item, TWICE);
+            return false;
+        }
         if same(&from, &to, size) {
             self.ignore(item, SAME);
             return false;
@@ -500,31 +514,69 @@ fn same(from: &Path, to: &Path, size: u64) -> bool {
         )
 }
 
-/// `shaders/**`, at the same place under the shader directory: sources and
-/// textures as they are, then presets pointed at this device.
+/// Where shaders and overlays come from, as (folder, name the list shows,
+/// subfolder they land in): the import folder's, the user's own
+/// roms/<name>/, then roms/<system>/<name>/ of each system folder (one
+/// level, never deeper into the ROMs), which lands under <system>/ so two
+/// systems never meet.
+fn sources(roots: &Roots, name: &str) -> Vec<(PathBuf, String, PathBuf)> {
+    let mut list = vec![
+        (roots.source.join(name), name.to_owned(), PathBuf::new()),
+        (
+            roots.roms.join(name),
+            format!("roms/{name}"),
+            PathBuf::new(),
+        ),
+    ];
+    for (system, dir, kind) in entries(&roots.roms) {
+        let skip = ["shaders", "overlays", "retroarch-import"].contains(&system.as_str());
+        if kind.is_dir() && plain(&system) && !skip {
+            let folder = dir.join(name);
+            if fs::symlink_metadata(&folder).is_ok_and(|m| m.is_dir()) {
+                list.push((
+                    folder,
+                    format!("roms/{system}/{name}"),
+                    PathBuf::from(&system),
+                ));
+            }
+        }
+    }
+    list
+}
+
+/// `shaders/**` and roms/shaders/**, at the same place under the shader
+/// directory: sources and textures as they are, then presets pointed at
+/// this device.
 fn scan_shaders(plan: &mut Plan, roots: &Roots) {
     let mut presets = Vec::new();
     let mut incoming = BTreeSet::new();
-    for (item, path, size) in walk(plan, &roots.source.join("shaders"), "shaders") {
-        let shown = format!("shaders/{}", item.display());
-        let kind = extension(&item);
-        if kind == "slangp" || kind == "glslp" {
-            presets.push((item, path));
-        } else if !SHADER_FILES.contains(&kind.as_str()) {
-            plan.ignore(shown, UNKNOWN);
-        } else if roots.factory.iter().any(|dir| dir.join(&item).exists()) {
-            // The system's own file stays; presets find it there.
-            plan.ignore(shown, FACTORY);
-        } else if plan.copy(roots.shaders.join(&item), path, shown, size) {
-            plan.found.shader_files += 1;
-            incoming.insert(item);
+    for (dir, label, under) in sources(roots, "shaders") {
+        for (item, path, size) in walk(plan, &dir, &label) {
+            let shown = format!("{label}/{}", item.display());
+            let item = under.join(item);
+            let kind = extension(&item);
+            if kind == "slangp" || kind == "glslp" {
+                presets.push((item, path, shown));
+            } else if !SHADER_FILES.contains(&kind.as_str()) {
+                plan.ignore(shown, UNKNOWN);
+            } else if roots.factory.iter().any(|dir| dir.join(&item).exists()) {
+                // The system's own file stays; presets find it there.
+                plan.ignore(shown, FACTORY);
+            } else if plan.copy(roots.shaders.join(&item), path, shown, size) {
+                plan.found.shader_files += 1;
+                incoming.insert(item);
+            }
         }
     }
-    for (item, path) in presets {
-        let shown = format!("shaders/{}", item.display());
+    let mut taken = BTreeSet::new();
+    for (item, path, shown) in presets {
         // Never hide a preset the system ships under the same name.
         if roots.factory.iter().any(|dir| dir.join(&item).exists()) {
             plan.ignore(shown, FACTORY);
+            continue;
+        }
+        if taken.contains(&item) {
+            plan.ignore(shown, TWICE);
             continue;
         }
         match read(&path, FILE_LIMIT).map(|text| preset(&text, &item, roots, &incoming)) {
@@ -532,6 +584,7 @@ fn scan_shaders(plan: &mut Plan, roots: &Roots) {
                 let to = roots.shaders.join(&item);
                 if plan.write(to, shown, "raimport.file_preset".into(), text) {
                     plan.found.presets += 1;
+                    taken.insert(item);
                 }
             }
             Some(Err(why)) => plan.ignore(shown, why),
@@ -540,16 +593,20 @@ fn scan_shaders(plan: &mut Plan, roots: &Roots) {
     }
 }
 
-/// `overlays/**` as they are, at the same place under the overlay directory.
+/// `overlays/**` and roms/overlays/** as they are, at the same place under
+/// the overlay directory.
 fn scan_overlays(plan: &mut Plan, roots: &Roots) {
-    for (item, path, size) in walk(plan, &roots.source.join("overlays"), "overlays") {
-        let shown = format!("overlays/{}", item.display());
-        if !OVERLAY_FILES.contains(&extension(&item).as_str()) {
-            plan.ignore(shown, UNKNOWN);
-        } else if roots.factory_overlays.join(&item).exists() {
-            plan.ignore(shown, FACTORY);
-        } else if plan.copy(roots.overlays.join(&item), path, shown, size) {
-            plan.found.overlays += 1;
+    for (dir, label, under) in sources(roots, "overlays") {
+        for (item, path, size) in walk(plan, &dir, &label) {
+            let shown = format!("{label}/{}", item.display());
+            let item = under.join(item);
+            if !OVERLAY_FILES.contains(&extension(&item).as_str()) {
+                plan.ignore(shown, UNKNOWN);
+            } else if roots.factory_overlays.join(&item).exists() {
+                plan.ignore(shown, FACTORY);
+            } else if plan.copy(roots.overlays.join(&item), path, shown, size) {
+                plan.found.overlays += 1;
+            }
         }
     }
 }
