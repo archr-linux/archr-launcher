@@ -20,6 +20,11 @@ impl Backend {
                 .iter()
                 .map(|dir| self.paths.at(&format!("/usr/share/{dir}")))
                 .collect(),
+            // The /tmp/overlays overlay: the user's files land in its upper
+            // layer, /storage/overlays.
+            overlays: self.paths.at("/tmp/overlays"),
+            factory_overlays: self.paths.at("/usr/share/retroarch-overlays"),
+            roms: self.paths.at("/storage/roms"),
         }
     }
     pub(super) fn ra_scan(&self) -> Found {

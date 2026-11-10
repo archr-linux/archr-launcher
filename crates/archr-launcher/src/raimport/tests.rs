@@ -15,6 +15,9 @@ fn fixture() -> Fixture {
         shaders: at("shaders"),
         cores: at("cores"),
         factory: vec![at("factory")],
+        overlays: at("overlays"),
+        factory_overlays: at("factory-overlays"),
+        roms: at("roms"),
     };
     for path in [
         &roots.source,
@@ -417,5 +420,231 @@ fn long_lists_end_in_one_plus_line() {
     assert_eq!(
         plan.found.ignored[199],
         ("+101".into(), "raimport.more|count=101".into())
+    );
+}
+
+#[test]
+fn shader_sources_and_textures_come_along_with_their_presets() {
+    let f = fixture();
+    put(&f.roots.source, "shaders/mine/scan.slang", "// mine");
+    put(&f.roots.source, "shaders/mine/mask.png", "png");
+    put(&f.roots.source, "shaders/mine/README.md", "hi");
+    put(
+        &f.roots.source,
+        "shaders/mine/scan.slangp",
+        "shaders = \"1\"\nshader0 = \"scan.slang\"\ntextures = \"MASK\"\nMASK = \"mask.png\"\n",
+    );
+    // The system ships this one: it stays, and presets find it there.
+    put(&f.roots.factory[0], "crt/zfast.slang", "// system");
+    put(&f.roots.source, "shaders/crt/zfast.slang", "// copy");
+    let plan = scan(&f.roots);
+    let copies: Vec<&Path> = plan.copies.iter().map(|(to, _)| to.as_path()).collect();
+    assert_eq!(
+        copies,
+        [
+            f.roots.shaders.join("mine/mask.png"),
+            f.roots.shaders.join("mine/scan.slang"),
+        ]
+    );
+    assert_eq!((plan.found.shader_files, plan.found.presets), (2, 1));
+    assert_eq!(why(&plan, "shaders/mine/README.md"), Some(UNKNOWN));
+    assert_eq!(why(&plan, "shaders/crt/zfast.slang"), Some(FACTORY));
+    let preset = &plan.files[0].1;
+    assert!(preset.contains(&format!(
+        "shader0 = \"{}\"",
+        f.roots.shaders.join("mine/scan.slang").display()
+    )));
+    assert!(preset.contains(&format!(
+        "MASK = \"{}\"",
+        f.roots.shaders.join("mine/mask.png").display()
+    )));
+    assert_eq!(apply(&plan, &f.roots), Ok(3));
+    assert_eq!(
+        fs::read_to_string(f.roots.shaders.join("mine/scan.slang")).unwrap(),
+        "// mine"
+    );
+}
+
+#[test]
+fn overlays_are_copied_as_they_are() {
+    let f = fixture();
+    put(
+        &f.roots.source,
+        "overlays/borders/gb.cfg",
+        "overlays = 1\noverlay0_overlay = gb.png\n",
+    );
+    fs::write(
+        f.roots.source.join("overlays/borders/gb.png"),
+        [0x89, b'P', 0, 0xff],
+    )
+    .unwrap();
+    put(&f.roots.source, "overlays/borders/notes.txt", "hi");
+    put(
+        &f.roots.factory_overlays,
+        "gamepads/neo.cfg",
+        "overlays = 1\n",
+    );
+    put(
+        &f.roots.source,
+        "overlays/gamepads/neo.cfg",
+        "overlays = 2\n",
+    );
+    symlink(
+        f.roots.retroarch.join("retroarch.cfg"),
+        f.roots.source.join("overlays/borders/link.cfg"),
+    )
+    .unwrap();
+    let plan = scan(&f.roots);
+    assert_eq!(plan.found.overlays, 2);
+    assert_eq!(why(&plan, "overlays/borders/notes.txt"), Some(UNKNOWN));
+    assert_eq!(why(&plan, "overlays/gamepads/neo.cfg"), Some(FACTORY));
+    assert_eq!(why(&plan, "overlays/borders/link.cfg"), Some(BAD_FILE));
+    assert_eq!(apply(&plan, &f.roots), Ok(2));
+    assert_eq!(
+        fs::read(f.roots.overlays.join("borders/gb.png")).unwrap(),
+        [0x89, b'P', 0, 0xff]
+    );
+    // Again: the same bytes are already there.
+    let again = scan(&f.roots);
+    assert_eq!(again.found.overlays, 0);
+    assert_eq!(why(&again, "overlays/borders/gb.png"), Some(SAME));
+}
+
+#[test]
+fn a_whole_retroarch_folder_copied_in_is_read_from_inside() {
+    let f = fixture();
+    put(
+        &f.roots.source,
+        "RetroArch/retroarch.cfg",
+        "video_smooth = \"true\"\n",
+    );
+    put(
+        &f.roots.source,
+        "RetroArch/overlays/a.cfg",
+        "overlays = 1\n",
+    );
+    let plan = scan(&f.roots);
+    assert_eq!((plan.found.settings, plan.found.overlays), (1, 1));
+    // Two folders: which one is meant is not guessed.
+    put(
+        &f.roots.source,
+        "Other/retroarch.cfg",
+        "video_smooth = \"true\"\n",
+    );
+    let plan = scan(&f.roots);
+    assert!(plan.found.apply.is_empty());
+}
+
+#[test]
+fn the_users_own_overlay_and_shader_folders_are_read_too() {
+    let f = fixture();
+    put(
+        &f.roots.roms.join("overlays"),
+        "borders/gb.cfg",
+        "overlays = 1\n",
+    );
+    put(&f.roots.roms.join("overlays"), "borders/gb.png", "png");
+    put(&f.roots.roms.join("shaders"), "mine/scan.slang", "// mine");
+    put(
+        &f.roots.roms.join("shaders"),
+        "mine/scan.slangp",
+        "shaders = \"1\"\nshader0 = \"scan.slang\"\n",
+    );
+    // The same file in the import folder: the first one is used.
+    put(&f.roots.source, "overlays/borders/gb.cfg", "overlays = 2\n");
+    put(
+        &f.roots.factory_overlays,
+        "borders/sys.cfg",
+        "overlays = 1\n",
+    );
+    put(
+        &f.roots.roms.join("overlays"),
+        "borders/sys.cfg",
+        "overlays = 9\n",
+    );
+    let plan = scan(&f.roots);
+    assert_eq!(
+        (
+            plan.found.overlays,
+            plan.found.shader_files,
+            plan.found.presets
+        ),
+        (2, 1, 1)
+    );
+    assert_eq!(why(&plan, "roms/overlays/borders/gb.cfg"), Some(TWICE));
+    assert_eq!(why(&plan, "roms/overlays/borders/sys.cfg"), Some(FACTORY));
+    assert!(plan.files[0].1.contains(&format!(
+        "shader0 = \"{}\"",
+        f.roots.shaders.join("mine/scan.slang").display()
+    )));
+    assert_eq!(apply(&plan, &f.roots), Ok(4));
+    assert_eq!(
+        fs::read_to_string(f.roots.overlays.join("borders/gb.cfg")).unwrap(),
+        "overlays = 2\n"
+    );
+    assert_eq!(
+        fs::read_to_string(f.roots.overlays.join("borders/gb.png")).unwrap(),
+        "png"
+    );
+    // The card's folders stay as they were; a second import has nothing new.
+    assert!(f
+        .roots
+        .roms
+        .join("overlays")
+        .join("borders/gb.png")
+        .is_file());
+    let again = scan(&f.roots);
+    assert_eq!(why(&again, "roms/overlays/borders/gb.png"), Some(SAME));
+    assert_eq!(why(&again, "roms/shaders/mine/scan.slangp"), Some(SAME));
+    assert!(again.found.apply.is_empty());
+}
+
+#[test]
+fn each_system_folder_lands_under_its_own_name() {
+    let f = fixture();
+    let roms = &f.roots.roms;
+    // Same names in two systems never meet; relative paths keep working.
+    put(roms, "snes/shaders/crt/scan.slang", "// snes");
+    put(
+        roms,
+        "snes/shaders/crt/scan.slangp",
+        "shaders = \"1\"\nshader0 = \"scan.slang\"\n",
+    );
+    put(roms, "n64/shaders/crt/scan.slang", "// n64");
+    put(
+        roms,
+        "snes/overlays/border.cfg",
+        "overlay0_overlay = border.png\n",
+    );
+    put(roms, "snes/overlays/border.png", "png");
+    // Only one level: ROM subfolders are never searched.
+    put(roms, "snes/Hacks/shaders/x.slang", "// deep");
+    put(roms, "snes/Game.sfc", "rom");
+    let plan = scan(&f.roots);
+    let copies: Vec<&Path> = plan.copies.iter().map(|(to, _)| to.as_path()).collect();
+    assert_eq!(
+        copies,
+        [
+            f.roots.shaders.join("n64/crt/scan.slang"),
+            f.roots.shaders.join("snes/crt/scan.slang"),
+            f.roots.overlays.join("snes/border.cfg"),
+            f.roots.overlays.join("snes/border.png"),
+        ]
+    );
+    let (to, text) = &plan.files[0];
+    assert_eq!(*to, f.roots.shaders.join("snes/crt/scan.slangp"));
+    assert!(text.contains(&format!(
+        "shader0 = \"{}\"",
+        f.roots.shaders.join("snes/crt/scan.slang").display()
+    )));
+    assert!(!plan
+        .found
+        .ignored
+        .iter()
+        .any(|(item, _)| item.contains("Hacks") || item.contains("Game.sfc")));
+    assert_eq!(apply(&plan, &f.roots), Ok(5));
+    assert_eq!(
+        fs::read_to_string(f.roots.shaders.join("n64/crt/scan.slang")).unwrap(),
+        "// n64"
     );
 }

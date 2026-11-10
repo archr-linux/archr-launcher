@@ -994,8 +994,8 @@
 "raimport.config_detail" = "Escala inteira, overlay, latência e mais"
 "raimport.overrides" = "Substituições de núcleo e jogo"
 "raimport.overrides_detail" = "A pasta config/ de cada núcleo"
-"raimport.shaders" = "Shaders e remapeamentos"
-"raimport.shaders_detail" = "As pastas shaders/ e remaps/"
+"raimport.shaders" = "Shaders, overlays e remapeamentos"
+"raimport.shaders_detail" = "As pastas shaders/, overlays/ e remaps/, e as de roms/ e de cada sistema"
 "raimport.preview" = "Ver o que será aplicado"
 "raimport.preview_detail" = "Lista de cada ajuste e do que foi ignorado"
 "raimport.backup" = "Fazer backup antes"
@@ -1003,7 +1003,7 @@
 "raimport.run" = "Importar agora"
 "raimport.run_detail" = "Vale a partir do próximo jogo"
 "raimport.copy_to" = "Copie para"
-"raimport.copy_rest" = "o retroarch.cfg e as pastas config, shaders e remaps. Caminhos, drivers, vídeo do aparelho e senhas nunca são importados. Antes de aplicar, o estado atual vai para um backup."
+"raimport.copy_rest" = "o retroarch.cfg e as pastas config, shaders, overlays e remaps; e também roms/shaders, roms/overlays e as de cada sistema. Caminhos, drivers, vídeo e senhas nunca entram; antes, um backup."
 "raimport.searching" = "Procurando…"
 "raimport.missing" = "Não encontrado"
 "raimport.will_apply" = "Será aplicado"
@@ -1034,7 +1034,12 @@
 "settings.ra_hotkeys_failed" = "O mapa do controle não foi encontrado; os atalhos do RetroArch não mudaram."
 "raimport.changed" = "Os arquivos mudaram; revise de novo."
 "raimport.more" = { one = "mais {count}", other = "mais {count}" }
-"raimport.why_factory" = "já existe um preset do sistema com esse nome"
+"raimport.why_factory" = "o sistema já tem um arquivo com esse nome"
+"raimport.file_copy" = "copiado como está"
+"raimport.why_same" = "já está neste aparelho"
+"raimport.why_twice" = "também está em outra pasta; vale a primeira"
+"raimport.shader_files_count" = { one = "{count} arquivo de shader", other = "{count} arquivos de shader" }
+"raimport.overlays_count" = { one = "{count} arquivo de overlay", other = "{count} arquivos de overlay" }
 "modules.perm_widget" = "Widget no menu Start"
 "modules.new_tag" = "NOVO"
 "modules.range" = "{first}–{last} de {total}"

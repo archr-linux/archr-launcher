@@ -32,7 +32,26 @@ RetroArch (outro aparelho, o PC).
    - `retroarch.cfg`;
    - `config/<núcleo>/` com as substituições (`.cfg`) e opções de núcleo (`.opt`);
    - `remaps/<núcleo>/*.rmp`;
-   - `shaders/` com os presets (`.slangp`, `.glslp`).
+   - `shaders/` com os presets (`.slangp`, `.glslp`), os shaders que eles
+     usam (`.slang`, `.glsl`, `.h`, `.inc`) e as texturas (`.png`, `.jpg`…);
+   - `overlays/` com os overlays (`.cfg` e imagens).
+
+   Uma pasta do RetroArch copiada inteira (por exemplo
+   `roms/retroarch-import/RetroArch/`) também serve, quando é a única pasta
+   lá dentro.
+
+   Overlays e shaders que você já guarda em `roms/overlays/` e `roms/shaders/`
+   também são lidos, com as mesmas regras; essas pastas ficam como estão. Se o
+   mesmo arquivo estiver nos dois lugares, vale o de `roms/retroarch-import/`.
+
+   Também valem as pastas `shaders/` e `overlays/` dentro da pasta de cada
+   sistema (`roms/snes/shaders/`, `roms/n64/overlays/`…), só nesse nível: as
+   subpastas de ROMs nunca são vasculhadas. Essas entram numa subpasta com o
+   nome do sistema (`roms/snes/shaders/crt/x.slangp` vira
+   `/storage/shaders/snes/crt/x.slangp`, que o RetroArch mostra em
+   `/tmp/shaders/snes/`), então dois sistemas nunca se sobrescrevem. A
+   estrutura interna é copiada igual, então caminhos relativos de presets e
+   de overlays `.cfg` continuam valendo.
 2. Abra a página: ela mostra o que foi encontrado. "Ver o que será aplicado"
    lista cada ajuste e o que ficou de fora, com o motivo.
 3. "Fazer backup antes" (ligado por padrão) salva o estado atual; restaure em
@@ -54,8 +73,13 @@ O que entra:
   rotação, atraso de quadro, tamanho de fonte e "salvar ao sair" também não:
   dependem da tela e do processador de origem, ou são escolha sua aqui;
 - substituições e opções só de núcleos instalados;
-- presets de shader cujos arquivos existem no aparelho; os caminhos são
-  reescritos para o diretório de shaders do ArchR.
+- presets de shader cujos arquivos existem no aparelho ou vêm na importação;
+  os caminhos são reescritos para o diretório de shaders do ArchR;
+- shaders, texturas e overlays copiados como estão, nas mesmas subpastas, para
+  `/storage/shaders` e `/storage/overlays` (o que o RetroArch vê em
+  `/tmp/shaders` e `/tmp/overlays`). Um arquivo que o sistema já traz com o
+  mesmo nome fica como está, e um que já está igual no aparelho é pulado.
+  Limites: 16 MB por arquivo, 2000 arquivos e 256 MB por importação.
 
 O que nunca entra: caminhos e diretórios, drivers, modo de vídeo do aparelho
 (tela cheia, resolução, taxa de atualização, `video_threaded`), qual controle é
