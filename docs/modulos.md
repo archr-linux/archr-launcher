@@ -961,7 +961,7 @@ aparece na hora. No máximo uma cópia por vez, um `rom.install` por segundo por
 módulo e 2 GiB por módulo, jogos e ports juntos (`-32003`, "quota exceeded");
 o que está errado no pedido é recusado antes (`-32602`, `-32001`) e não conta.
 
-**Nova versão de um jogo** (`replace: <game_key>`): troca um jogo que o
+**Nova versão de um jogo** (`replace: <game_key>`; o launcher que aceita lista `rom.install.replace` em `capabilities`, e um app só deve usar com ele: um launcher anterior ignora o campo e instalaria uma segunda cópia): troca um jogo que o
 próprio módulo instalou pelo arquivo novo, **no mesmo caminho e com o mesmo
 nome** (o `name` do pedido é ignorado), para que os saves e estados, que têm o
 nome da ROM, continuem valendo. O jogo precisa estar no registro do módulo,

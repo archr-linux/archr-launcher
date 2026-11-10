@@ -394,6 +394,7 @@ const CONFIG_KEYS: &[&str] = &[
     "screen.show",
     "screen.toast",
     "rom.install",
+    "rom.install.replace",
     "rom.list",
     "rom.remove",
     "port.install",

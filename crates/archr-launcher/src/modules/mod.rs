@@ -1498,6 +1498,8 @@ impl Host {
                 "screen.offline",
                 "screen.qr",
                 "rom.install",
+                // `replace`: a new version of the module's own game.
+                "rom.install.replace",
                 "rom.list",
                 "rom.remove",
                 "port.install",
