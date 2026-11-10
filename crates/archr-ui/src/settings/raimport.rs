@@ -35,10 +35,19 @@ pub struct Found {
     pub overrides: usize,
     pub presets: usize,
     pub remaps: usize,
+    /// Shader sources and textures, and overlay files, copied as they are.
+    pub shader_files: usize,
+    pub overlays: usize,
     /// Key or file, and its value or a catalog reference.
     pub apply: Vec<(String, String)>,
     /// Key or file, and why (a catalog key).
     pub ignored: Vec<(String, String)>,
+}
+impl Found {
+    /// Files of the "Shaders, overlays and remaps" row.
+    fn shader_row(&self) -> usize {
+        self.presets + self.shader_files + self.overlays + self.remaps
+    }
 }
 #[derive(Clone, Debug, Default)]
 pub struct RaImport {
@@ -81,9 +90,7 @@ impl Settings {
                 count("ignored_count", found.skipped),
             ],
             Id::RaOverrides if found.overrides > 0 => vec![count("files", found.overrides)],
-            Id::RaShaders if found.presets + found.remaps > 0 => {
-                vec![count("files", found.presets + found.remaps)]
-            }
+            Id::RaShaders if found.shader_row() > 0 => vec![count("files", found.shader_row())],
             _ => vec!["raimport.missing".into()],
         }
     }
@@ -92,10 +99,18 @@ impl Settings {
         let found = self.raimport.found.as_ref()?;
         match id {
             Id::RaOverrides if !found.cores.is_empty() => Some(vec![found.cores.join(", ")]),
-            Id::RaShaders if found.presets + found.remaps > 0 => Some(vec![
-                format!("raimport.presets_count|count={}", found.presets),
-                format!("raimport.remaps_count|count={}", found.remaps),
-            ]),
+            Id::RaShaders if found.shader_row() > 0 => Some(
+                [
+                    ("presets_count", found.presets),
+                    ("shader_files_count", found.shader_files),
+                    ("overlays_count", found.overlays),
+                    ("remaps_count", found.remaps),
+                ]
+                .iter()
+                .filter(|(_, n)| *n > 0)
+                .map(|(key, n)| format!("raimport.{key}|count={n}"))
+                .collect(),
+            ),
             _ => None,
         }
     }

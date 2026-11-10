@@ -1,14 +1,18 @@
 //! Import from RetroArch: a RetroArch setup copied to the card, filtered to
 //! what is safe on this device, then applied in one go or not at all.
 //!
-//! Source (`roms/retroarch-import/`): `retroarch.cfg`, `config/<core>/`
-//! (core and game overrides `.cfg`, core options `.opt`), `remaps/<core>/*.rmp`
-//! and `shaders/**.slangp|.glslp`. Only allow-listed `retroarch.cfg` keys go
-//! into the user's own retroarch.cfg (never system.cfg, so the launcher does
-//! not impose them); paths, drivers, the device's video mode, credentials and
-//! commands never do. Files are bounded, UTF-8, never symbolic links, and
-//! overrides only for installed cores. Shader presets point at this device's
-//! shader directory or are left out.
+//! Source (`roms/retroarch-import/`, or the one folder in it when a whole
+//! RetroArch folder was copied there): `retroarch.cfg`, `config/<core>/`
+//! (core and game overrides `.cfg`, core options `.opt`), `remaps/<core>/*.rmp`,
+//! `shaders/**` (presets, shader sources and their textures) and `overlays/**`
+//! (overlay `.cfg` files and their images). Only allow-listed `retroarch.cfg`
+//! keys go into the user's own retroarch.cfg (never system.cfg, so the
+//! launcher does not impose them); paths, drivers, the device's video mode,
+//! credentials and commands never do. Files are bounded, never symbolic
+//! links, configs UTF-8, and overrides only for installed cores. Shader
+//! presets point at this device's shader directory or are left out; shader
+//! sources, textures and overlays are copied as they are, never over a file
+//! the system ships.
 use archr_io::{atomic_publish, read_bytes, read_utf8, remove_durable, Symlinks::Reject};
 use archr_ui::settings::raimport::Found;
 use std::collections::{BTreeMap, BTreeSet};
@@ -19,6 +23,13 @@ use std::path::{Component, Path, PathBuf};
 const CONFIG_LIMIT: u64 = 1024 * 1024;
 const FILE_LIMIT: u64 = 256 * 1024;
 const FILES_LIMIT: usize = 200;
+/// Files copied as they are (shader sources, textures, overlays): each, how
+/// many, and all together.
+const COPY_LIMIT: u64 = 16 * 1024 * 1024;
+const COPIES_LIMIT: usize = 2000;
+const COPIES_TOTAL: u64 = 256 * 1024 * 1024;
+/// Folders below shaders/ and overlays/.
+const DEPTH: usize = 8;
 const VALUE_LIMIT: usize = 512;
 /// Lines the list page shows of each kind; the rest is one "+N" line.
 const LIST_LIMIT: usize = 200;
@@ -31,6 +42,11 @@ const SHADER_ROOTS: [&str; 6] = [
     "common-shaders",
     "shaders",
 ];
+/// Copied as they are: what presets load, and what overlays are made of.
+const SHADER_FILES: [&str; 9] = [
+    "slang", "glsl", "h", "inc", "png", "jpg", "jpeg", "bmp", "tga",
+];
+const OVERLAY_FILES: [&str; 6] = ["cfg", "png", "jpg", "jpeg", "bmp", "tga"];
 
 /// Where everything is read and written; the host passes the real paths.
 #[derive(Clone, Debug)]
@@ -46,6 +62,9 @@ pub struct Roots {
     pub cores: PathBuf,
     /// The system's shader trees under video_shader_dir.
     pub factory: Vec<PathBuf>,
+    /// overlay_directory, and the system's overlays under it.
+    pub overlays: PathBuf,
+    pub factory_overlays: PathBuf,
 }
 
 /// What an import would do: the screen's summary and the files to write.
@@ -55,6 +74,9 @@ pub struct Plan {
     pub settings: Vec<(String, String)>,
     /// Destination and complete contents.
     pub files: Vec<(PathBuf, String)>,
+    /// Destination and the file copied there as it is.
+    pub copies: Vec<(PathBuf, PathBuf)>,
+    copied: u64,
 }
 
 /// Why a key or a file stays out, as catalog keys.
@@ -65,6 +87,7 @@ const BAD_FILE: &str = "raimport.why_file";
 const NO_CORE: &str = "raimport.why_core";
 const NO_SHADER: &str = "raimport.why_shader";
 const FACTORY: &str = "raimport.why_factory";
+const SAME: &str = "raimport.why_same";
 
 /// Never imported, whatever the file: where things live, which drivers run,
 /// accounts, and anything that runs a command or calls a server. Anything
@@ -231,6 +254,25 @@ impl Plan {
         self.files.push((to, text));
         true
     }
+    /// A file to copy as it is, within the limits, unless the destination
+    /// already holds the same bytes.
+    fn copy(&mut self, to: PathBuf, from: PathBuf, item: String, size: u64) -> bool {
+        if same(&from, &to, size) {
+            self.ignore(item, SAME);
+            return false;
+        }
+        if size > COPY_LIMIT
+            || self.copies.len() >= COPIES_LIMIT
+            || self.copied + size > COPIES_TOTAL
+        {
+            self.ignore(item, BAD_FILE);
+            return false;
+        }
+        self.copied += size;
+        self.found.apply.push((item, "raimport.file_copy".into()));
+        self.copies.push((to, from));
+        true
+    }
     /// Allowed entries of a RetroArch config, the rest listed as ignored.
     fn filter(
         &mut self,
@@ -274,8 +316,32 @@ fn config_text(entries: &[(String, String)]) -> String {
         .collect()
 }
 
+/// Where the setup is: the import folder, or the one folder in it when a
+/// whole RetroArch folder was copied there.
+fn origin(source: &Path) -> PathBuf {
+    const KNOWN: [&str; 5] = ["retroarch.cfg", "config", "remaps", "shaders", "overlays"];
+    if KNOWN
+        .iter()
+        .any(|name| fs::symlink_metadata(source.join(name)).is_ok())
+    {
+        return source.to_path_buf();
+    }
+    let folders: Vec<_> = entries(source)
+        .into_iter()
+        .filter(|(name, _, kind)| kind.is_dir() && plain(name))
+        .collect();
+    match folders.as_slice() {
+        [(_, path, _)] => path.clone(),
+        _ => source.to_path_buf(),
+    }
+}
+
 /// Everything the folder holds, sorted into what applies and what does not.
 pub fn scan(roots: &Roots) -> Plan {
+    let roots = &Roots {
+        source: origin(&roots.source),
+        ..roots.clone()
+    };
     let mut plan = Plan::default();
     let source = &roots.source;
     let config = source.join("retroarch.cfg");
@@ -297,6 +363,7 @@ pub fn scan(roots: &Roots) -> Plan {
     scan_overrides(&mut plan, roots, &cores);
     scan_remaps(&mut plan, roots, &cores);
     scan_shaders(&mut plan, roots);
+    scan_overlays(&mut plan, roots);
     cap(&mut plan.found.apply);
     cap(&mut plan.found.ignored);
     plan
@@ -393,26 +460,66 @@ fn scan_remaps(plan: &mut Plan, roots: &Roots, cores: &BTreeSet<String>) {
     }
 }
 
-/// `shaders/**.slangp|.glslp`, at the same place under the shader directory.
-fn scan_shaders(plan: &mut Plan, roots: &Roots) {
-    let mut presets = Vec::new();
-    let mut pending = vec![(PathBuf::new(), roots.source.join("shaders"))];
+/// Regular files under `dir`, sorted, as (path below `dir`, path, size).
+/// Links, odd names and folders deeper than DEPTH are listed as ignored.
+fn walk(plan: &mut Plan, dir: &Path, label: &str) -> Vec<(PathBuf, PathBuf, u64)> {
+    let mut files = Vec::new();
+    let mut pending = vec![(PathBuf::new(), dir.to_path_buf())];
     while let Some((relative, dir)) = pending.pop() {
         for (name, path, kind) in entries(&dir) {
             let item = relative.join(&name);
-            let shown = format!("shaders/{}", item.display());
-            if !plain(&name) || kind.is_symlink() || relative.components().count() >= 4 {
-                plan.ignore(shown, BAD_FILE);
+            if !plain(&name) || kind.is_symlink() || relative.components().count() >= DEPTH {
+                plan.ignore(format!("{label}/{}", item.display()), BAD_FILE);
             } else if kind.is_dir() {
                 pending.push((item, path));
-            } else if name.ends_with(".slangp") || name.ends_with(".glslp") {
-                presets.push((item, path));
+            } else if kind.is_file() {
+                let size = fs::symlink_metadata(&path).map_or(u64::MAX, |m| m.len());
+                files.push((item, path, size));
             } else {
-                plan.ignore(shown, UNKNOWN);
+                plan.ignore(format!("{label}/{}", item.display()), BAD_FILE);
             }
         }
     }
-    presets.sort();
+    files.sort();
+    files
+}
+
+fn extension(path: &Path) -> String {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase()
+}
+
+/// Whether `to` already holds the bytes of `from`.
+fn same(from: &Path, to: &Path, size: u64) -> bool {
+    fs::symlink_metadata(to).is_ok_and(|m| m.is_file() && m.len() == size)
+        && matches!(
+            (read_bytes(from, COPY_LIMIT, Reject), read_bytes(to, COPY_LIMIT, Reject)),
+            (Ok(a), Ok(b)) if a == b
+        )
+}
+
+/// `shaders/**`, at the same place under the shader directory: sources and
+/// textures as they are, then presets pointed at this device.
+fn scan_shaders(plan: &mut Plan, roots: &Roots) {
+    let mut presets = Vec::new();
+    let mut incoming = BTreeSet::new();
+    for (item, path, size) in walk(plan, &roots.source.join("shaders"), "shaders") {
+        let shown = format!("shaders/{}", item.display());
+        let kind = extension(&item);
+        if kind == "slangp" || kind == "glslp" {
+            presets.push((item, path));
+        } else if !SHADER_FILES.contains(&kind.as_str()) {
+            plan.ignore(shown, UNKNOWN);
+        } else if roots.factory.iter().any(|dir| dir.join(&item).exists()) {
+            // The system's own file stays; presets find it there.
+            plan.ignore(shown, FACTORY);
+        } else if plan.copy(roots.shaders.join(&item), path, shown, size) {
+            plan.found.shader_files += 1;
+            incoming.insert(item);
+        }
+    }
     for (item, path) in presets {
         let shown = format!("shaders/{}", item.display());
         // Never hide a preset the system ships under the same name.
@@ -420,7 +527,7 @@ fn scan_shaders(plan: &mut Plan, roots: &Roots) {
             plan.ignore(shown, FACTORY);
             continue;
         }
-        match read(&path, FILE_LIMIT).map(|text| preset(&text, &item, roots)) {
+        match read(&path, FILE_LIMIT).map(|text| preset(&text, &item, roots, &incoming)) {
             Some(Ok(text)) => {
                 let to = roots.shaders.join(&item);
                 if plan.write(to, shown, "raimport.file_preset".into(), text) {
@@ -433,9 +540,28 @@ fn scan_shaders(plan: &mut Plan, roots: &Roots) {
     }
 }
 
+/// `overlays/**` as they are, at the same place under the overlay directory.
+fn scan_overlays(plan: &mut Plan, roots: &Roots) {
+    for (item, path, size) in walk(plan, &roots.source.join("overlays"), "overlays") {
+        let shown = format!("overlays/{}", item.display());
+        if !OVERLAY_FILES.contains(&extension(&item).as_str()) {
+            plan.ignore(shown, UNKNOWN);
+        } else if roots.factory_overlays.join(&item).exists() {
+            plan.ignore(shown, FACTORY);
+        } else if plan.copy(roots.overlays.join(&item), path, shown, size) {
+            plan.found.overlays += 1;
+        }
+    }
+}
+
 /// A preset with every shader, texture and reference pointing at this
 /// device's shader directory, or why it cannot.
-fn preset(text: &str, item: &Path, roots: &Roots) -> Result<String, &'static str> {
+fn preset(
+    text: &str,
+    item: &Path,
+    roots: &Roots,
+    incoming: &BTreeSet<PathBuf>,
+) -> Result<String, &'static str> {
     let textures: Vec<String> = text
         .lines()
         .find_map(|line| match parse(line)? {
@@ -450,7 +576,7 @@ fn preset(text: &str, item: &Path, roots: &Roots) -> Result<String, &'static str
         let trimmed = line.trim();
         if let Some(target) = trimmed.strip_prefix("#reference") {
             let target = target.trim().trim_matches('"');
-            let found = locate(target, here, roots).ok_or(NO_SHADER)?;
+            let found = locate(target, here, roots, incoming).ok_or(NO_SHADER)?;
             out.push_str(&format!("#reference \"{}\"\n", found.display()));
             continue;
         }
@@ -463,7 +589,7 @@ fn preset(text: &str, item: &Path, roots: &Roots) -> Result<String, &'static str
                     .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
                     || textures.contains(&key);
                 let value = if file {
-                    let found = locate(&value, here, roots).ok_or(NO_SHADER)?;
+                    let found = locate(&value, here, roots, incoming).ok_or(NO_SHADER)?;
                     found.display().to_string()
                 } else {
                     value
@@ -475,9 +601,15 @@ fn preset(text: &str, item: &Path, roots: &Roots) -> Result<String, &'static str
     Ok(out)
 }
 
-/// A shader file on this device for a path saved elsewhere: the part after a
-/// known shader tree, else the path beside the preset; never outside.
-fn locate(saved: &str, here: &Path, roots: &Roots) -> Option<PathBuf> {
+/// A shader file on this device, or coming with the import, for a path saved
+/// elsewhere: the part after a known shader tree, else the path beside the
+/// preset; never outside.
+fn locate(
+    saved: &str,
+    here: &Path,
+    roots: &Roots,
+    incoming: &BTreeSet<PathBuf>,
+) -> Option<PathBuf> {
     let saved = saved.replace('\\', "/");
     let parts: Vec<&str> = saved.split('/').collect();
     let tail = parts
@@ -490,9 +622,7 @@ fn locate(saved: &str, here: &Path, roots: &Roots) -> Option<PathBuf> {
         None => return None,
     };
     let path = roots.shaders.join(&relative);
-    fs::metadata(&path)
-        .is_ok_and(|m| m.is_file())
-        .then_some(path)
+    (incoming.contains(&relative) || fs::metadata(&path).is_ok_and(|m| m.is_file())).then_some(path)
 }
 
 /// A relative path with ".." resolved, or None when it leaves its root.
@@ -535,13 +665,19 @@ fn merged(current: &str, settings: &[(String, String)]) -> String {
 /// What a destination held before the import: None when it did not exist.
 type Before = Option<Vec<u8>>;
 
+/// What goes to a destination: text made here, or a file copied as it is.
+enum Source {
+    Text(String),
+    File(PathBuf),
+}
+
 /// A destination's bytes, read before anything is written. Anything that is
 /// not a readable regular file stops the import.
 fn before(path: &Path) -> Result<Before, String> {
     match fs::symlink_metadata(path) {
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
         Ok(meta) if meta.is_file() => {
-            read_bytes(path, CONFIG_LIMIT, Reject)
+            read_bytes(path, COPY_LIMIT, Reject)
                 .map(Some)
                 .map_err(|error| {
                     log::warn!("Import: cannot read {}: {error}", path.display());
@@ -556,25 +692,34 @@ fn before(path: &Path) -> Result<Before, String> {
 /// write fails, the earlier ones get their saved bytes back (a file that did
 /// not exist is removed, one that existed is never removed).
 pub fn apply(plan: &Plan, roots: &Roots) -> Result<usize, String> {
-    let mut writes: Vec<(PathBuf, String, Before)> = Vec::new();
+    let mut writes: Vec<(PathBuf, Source, Before)> = Vec::new();
     if !plan.settings.is_empty() {
         let path = roots.retroarch.join("retroarch.cfg");
         let saved = before(&path)?.ok_or("raimport.no_retroarch_cfg")?;
         let current = String::from_utf8(saved.clone()).map_err(|_| "raimport.failed")?;
         let text = merged(&current, &plan.settings);
-        writes.push((path, text, Some(saved)));
+        writes.push((path, Source::Text(text), Some(saved)));
     }
     for (path, text) in &plan.files {
-        writes.push((path.clone(), text.clone(), before(path)?));
+        writes.push((path.clone(), Source::Text(text.clone()), before(path)?));
     }
-    for (n, (path, text, _)) in writes.iter().enumerate() {
-        if let Err(error) = publish(path, text.as_bytes()) {
+    for (path, from) in &plan.copies {
+        writes.push((path.clone(), Source::File(from.clone()), before(path)?));
+    }
+    for (n, (path, source, _)) in writes.iter().enumerate() {
+        let written = match source {
+            Source::Text(text) => publish(path, text.as_bytes()),
+            Source::File(from) => {
+                read_bytes(from, COPY_LIMIT, Reject).and_then(|bytes| publish(path, &bytes))
+            }
+        };
+        if let Err(error) = written {
             log::warn!("Import: cannot write {}: {error}", path.display());
             undo(&writes[..n]);
             return Err("raimport.failed".into());
         }
     }
-    Ok(plan.settings.len() + plan.files.len())
+    Ok(plan.settings.len() + plan.files.len() + plan.copies.len())
 }
 
 fn publish(path: &Path, bytes: &[u8]) -> io::Result<()> {
@@ -587,7 +732,7 @@ fn publish(path: &Path, bytes: &[u8]) -> io::Result<()> {
     })
 }
 
-fn undo(done: &[(PathBuf, String, Before)]) {
+fn undo(done: &[(PathBuf, Source, Before)]) {
     for (path, _, before) in done.iter().rev() {
         let result = match before {
             Some(bytes) => publish(path, bytes),

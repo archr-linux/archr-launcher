@@ -287,6 +287,7 @@ fn pages() -> Vec<(&'static str, Settings)> {
             ("config/Mupen64Plus-Next", "raimport.why_core"),
             ("shaders/crt-royale.slangp", "raimport.why_shader"),
         ]),
+        ..Default::default()
     });
     raimport.cursor = 5;
     use crate::settings::roms::{Check, Scan, Status};

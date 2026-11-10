@@ -15,6 +15,8 @@ fn fixture() -> Fixture {
         shaders: at("shaders"),
         cores: at("cores"),
         factory: vec![at("factory")],
+        overlays: at("overlays"),
+        factory_overlays: at("factory-overlays"),
     };
     for path in [
         &roots.source,
@@ -418,4 +420,116 @@ fn long_lists_end_in_one_plus_line() {
         plan.found.ignored[199],
         ("+101".into(), "raimport.more|count=101".into())
     );
+}
+
+#[test]
+fn shader_sources_and_textures_come_along_with_their_presets() {
+    let f = fixture();
+    put(&f.roots.source, "shaders/mine/scan.slang", "// mine");
+    put(&f.roots.source, "shaders/mine/mask.png", "png");
+    put(&f.roots.source, "shaders/mine/README.md", "hi");
+    put(
+        &f.roots.source,
+        "shaders/mine/scan.slangp",
+        "shaders = \"1\"\nshader0 = \"scan.slang\"\ntextures = \"MASK\"\nMASK = \"mask.png\"\n",
+    );
+    // The system ships this one: it stays, and presets find it there.
+    put(&f.roots.factory[0], "crt/zfast.slang", "// system");
+    put(&f.roots.source, "shaders/crt/zfast.slang", "// copy");
+    let plan = scan(&f.roots);
+    let copies: Vec<&Path> = plan.copies.iter().map(|(to, _)| to.as_path()).collect();
+    assert_eq!(
+        copies,
+        [
+            f.roots.shaders.join("mine/mask.png"),
+            f.roots.shaders.join("mine/scan.slang"),
+        ]
+    );
+    assert_eq!((plan.found.shader_files, plan.found.presets), (2, 1));
+    assert_eq!(why(&plan, "shaders/mine/README.md"), Some(UNKNOWN));
+    assert_eq!(why(&plan, "shaders/crt/zfast.slang"), Some(FACTORY));
+    let preset = &plan.files[0].1;
+    assert!(preset.contains(&format!(
+        "shader0 = \"{}\"",
+        f.roots.shaders.join("mine/scan.slang").display()
+    )));
+    assert!(preset.contains(&format!(
+        "MASK = \"{}\"",
+        f.roots.shaders.join("mine/mask.png").display()
+    )));
+    assert_eq!(apply(&plan, &f.roots), Ok(3));
+    assert_eq!(
+        fs::read_to_string(f.roots.shaders.join("mine/scan.slang")).unwrap(),
+        "// mine"
+    );
+}
+
+#[test]
+fn overlays_are_copied_as_they_are() {
+    let f = fixture();
+    put(
+        &f.roots.source,
+        "overlays/borders/gb.cfg",
+        "overlays = 1\noverlay0_overlay = gb.png\n",
+    );
+    fs::write(
+        f.roots.source.join("overlays/borders/gb.png"),
+        [0x89, b'P', 0, 0xff],
+    )
+    .unwrap();
+    put(&f.roots.source, "overlays/borders/notes.txt", "hi");
+    put(
+        &f.roots.factory_overlays,
+        "gamepads/neo.cfg",
+        "overlays = 1\n",
+    );
+    put(
+        &f.roots.source,
+        "overlays/gamepads/neo.cfg",
+        "overlays = 2\n",
+    );
+    symlink(
+        f.roots.retroarch.join("retroarch.cfg"),
+        f.roots.source.join("overlays/borders/link.cfg"),
+    )
+    .unwrap();
+    let plan = scan(&f.roots);
+    assert_eq!(plan.found.overlays, 2);
+    assert_eq!(why(&plan, "overlays/borders/notes.txt"), Some(UNKNOWN));
+    assert_eq!(why(&plan, "overlays/gamepads/neo.cfg"), Some(FACTORY));
+    assert_eq!(why(&plan, "overlays/borders/link.cfg"), Some(BAD_FILE));
+    assert_eq!(apply(&plan, &f.roots), Ok(2));
+    assert_eq!(
+        fs::read(f.roots.overlays.join("borders/gb.png")).unwrap(),
+        [0x89, b'P', 0, 0xff]
+    );
+    // Again: the same bytes are already there.
+    let again = scan(&f.roots);
+    assert_eq!(again.found.overlays, 0);
+    assert_eq!(why(&again, "overlays/borders/gb.png"), Some(SAME));
+}
+
+#[test]
+fn a_whole_retroarch_folder_copied_in_is_read_from_inside() {
+    let f = fixture();
+    put(
+        &f.roots.source,
+        "RetroArch/retroarch.cfg",
+        "video_smooth = \"true\"\n",
+    );
+    put(
+        &f.roots.source,
+        "RetroArch/overlays/a.cfg",
+        "overlays = 1\n",
+    );
+    let plan = scan(&f.roots);
+    assert_eq!((plan.found.settings, plan.found.overlays), (1, 1));
+    // Two folders: which one is meant is not guessed.
+    put(
+        &f.roots.source,
+        "Other/retroarch.cfg",
+        "video_smooth = \"true\"\n",
+    );
+    let plan = scan(&f.roots);
+    assert!(plan.found.apply.is_empty());
 }
