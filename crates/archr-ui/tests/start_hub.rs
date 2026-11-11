@@ -65,9 +65,7 @@ fn tiles_open_recent_games_and_tools() {
     app.handle(Button::A, &data(false));
     assert_eq!(
         app.screen,
-        Screen::Games {
-            system: "@recent".into()
-        }
+        Screen::games("@recent")
     );
     app.handle(Button::B, &data(false));
     assert_eq!(app.screen, Screen::Systems);
@@ -81,9 +79,7 @@ fn tiles_open_recent_games_and_tools() {
     app.handle(Button::A, &data(true));
     assert_eq!(
         app.screen,
-        Screen::Games {
-            system: "tools".into()
-        }
+        Screen::games("tools")
     );
 }
 #[test]

@@ -668,11 +668,15 @@ fn run(
         let focus = match &app.screen {
             _ if settings.active || ui.app.is_some() => None,
             Screen::Systems => selected_system.clone().map(|s| (s, None)),
-            Screen::Games { system } => library.origin(system, app.cursor).map(|(real, game)| {
-                let key = library.game_key(&real, game).unwrap_or_default();
-                let name = library.games(&real).get(game).map(|g| g.name.clone());
-                (real, Some((key, name.unwrap_or_default())))
-            }),
+            Screen::Games { system, folder } => {
+                App::list_game(&library, system, folder, app.cursor)
+                    .and_then(|row| library.origin(system, row))
+                    .map(|(real, game)| {
+                        let key = library.game_key(&real, game).unwrap_or_default();
+                        let name = library.games(&real).get(game).map(|g| g.name.clone());
+                        (real, Some((key, name.unwrap_or_default())))
+                    })
+            }
             _ => None,
         };
         if focus.is_some() && focus != module_focus {
@@ -766,7 +770,7 @@ fn run(
             match (&details_rom, games.get(game)) {
                 (Some(rom), Some(shown)) if shown.path != *rom => {
                     if let Some(index) = games.iter().position(|g| g.path == *rom) {
-                        app.retarget_details(index);
+                        app.retarget_details(index, &library);
                     }
                 }
                 (None, Some(shown)) => details_rom = Some(shown.path.clone()),
@@ -901,12 +905,12 @@ fn run(
             }
             dirty = true;
         }
-        if let Screen::Games { system } = &app.screen {
+        if let Screen::Games { system, folder } = &app.screen {
             library.ensure(system);
             ui.loading = library.loading(system);
             app.cursor = app
                 .cursor
-                .min(library.games(system).len().saturating_sub(1));
+                .min(App::list_len(&library, system, folder).saturating_sub(1));
         } else {
             ui.loading = false;
         }
@@ -997,8 +1001,9 @@ fn run(
                 cover: if open {
                     app_cover.as_ref().and_then(|path| app_covers.get(path))
                 } else {
-                    selected.as_ref().and_then(|path| covers.get(path))
+                    selected.as_ref().and_then(|path| covers.peek(path))
                 },
+                covers: Some(&covers),
                 shot: if open {
                     app_shot.as_ref().and_then(|path| app_shots.get(path))
                 } else {
@@ -1191,7 +1196,7 @@ fn run(
             let requested = if requested == Outcome::Settings {
                 // The Games page opens on the system being browsed.
                 let system = match &app.screen {
-                    Screen::Games { system } => Some(system.clone()),
+                    Screen::Games { system, .. } => Some(system.clone()),
                     Screen::Systems => app.rows(&library).get(app.cursor).cloned(),
                     _ => None,
                 };
@@ -1539,17 +1544,31 @@ fn cover_paths(app: &App, data: &dyn DataSource) -> (Option<PathBuf>, Vec<PathBu
         let image = data.games(system).get(*game).and_then(|g| g.image.clone());
         return (image.clone(), image.into_iter().collect());
     }
-    let Screen::Games { system } = screen else {
+    let Screen::Games { system, folder } = screen else {
         return (None, Vec::new());
     };
     let games = data.games(system);
-    let selected = games.get(cursor).and_then(|game| game.image.clone());
+    let game = |row: usize| {
+        let game = App::list_game(data, system, folder, row)?;
+        games.get(game)?.image.clone()
+    };
+    let selected = game(cursor);
     let mut paths = Vec::new();
     if let Some(path) = &selected {
         paths.push(path.clone());
     }
+    // A folder shows the covers of its first games.
+    if let Some(name) =
+        App::level(data, system, folder).and_then(|l| l.folder(cursor).map(str::to_owned))
+    {
+        paths.extend(App::folder_covers(
+            data,
+            system,
+            &archr_ui::folders::join(folder, &name),
+        ));
+    }
     for index in cursor.saturating_sub(2)..=cursor.saturating_add(2) {
-        if let Some(path) = games.get(index).and_then(|game| game.image.clone()) {
+        if let Some(path) = game(index) {
             if !paths.contains(&path) {
                 paths.push(path);
             }

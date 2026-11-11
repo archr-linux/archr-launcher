@@ -1458,3 +1458,16 @@
 "reports.notice_where" = "Mude quando quiser em Configurações › Sistema › Relatórios de erro."
 "reports.notice_ok" = "Entendi"
 "reports.notice_off" = "Desligar relatórios"
+
+# List search and folders
+"menu.search" = "Buscar na lista"
+"menu.folders" = "Mostrar pastas"
+"menu.folders_detail" = "Neste sistema: pastas no topo da lista"
+"folder.summary" = "Pasta · {games}"
+"search.title" = "{system} / Buscar"
+"search.count" = "{n} de {total}"
+"search.placeholder" = "Nome do jogo"
+"search.empty" = "Nenhum jogo encontrado"
+"search.type" = "Digitar"
+"search.list" = "Ir à lista"
+"search.keyboard" = "Teclado"

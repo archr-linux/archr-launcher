@@ -6,6 +6,7 @@ use crate::saves::{Action, Confirm, Kind, Progress, Save};
 use archr_index::{cache::SystemEntry, Game};
 use std::path::PathBuf;
 mod hub;
+mod list;
 mod order;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -31,6 +32,12 @@ pub enum Screen {
         shortcut: usize,
     },
     Games {
+        system: String,
+        /// The folder shown when the system lists by folder, "" at its root.
+        folder: String,
+    },
+    /// The system's list searched by name (`App::search`).
+    Search {
         system: String,
     },
     /// Game context is always resolved to its real system and index.
@@ -66,6 +73,23 @@ pub enum Screen {
     Switcher,
     /// Back to the last game at power on (`App::boot`).
     Resume,
+}
+
+impl Screen {
+    /// A system's or a collection's whole list.
+    pub fn games(system: impl Into<String>) -> Self {
+        Self::Games {
+            system: system.into(),
+            folder: String::new(),
+        }
+    }
+}
+
+/// The search screen's keyboard, and whether its results have the focus.
+#[derive(Clone, Debug)]
+pub struct Search {
+    pub keyboard: crate::keyboard::Keyboard,
+    pub results: bool,
 }
 
 /// Buttons of the details screen, left to right.
@@ -169,6 +193,11 @@ pub enum Outcome {
     HideSystem(String),
     /// Bring every hidden row back.
     ShowSystems,
+    /// List this system by folder, or not.
+    ShowFolders {
+        system: String,
+        on: bool,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -192,6 +221,10 @@ pub enum QuickItem {
     ShowHidden,
     /// Off the recent games, in the menu of a Recently played game.
     ForgetRecent,
+    /// The list's search, in the menus opened on a system's list.
+    Search,
+    /// The list by folder, a switch beside the search.
+    Folders,
     Suspend,
     Reboot,
     Shutdown,
@@ -251,6 +284,15 @@ pub trait DataSource {
     }
     fn subtitle(&self, _system: &str, _game: usize) -> Option<&str> {
         None
+    }
+    /// Each game's folder below the system's, in list order: "" at its
+    /// root, "/" between names. Empty when the paths are not known.
+    fn folders(&self, _system: &str) -> Vec<&str> {
+        Vec::new()
+    }
+    /// The user lists this system by folder.
+    fn shows_folders(&self, _system: &str) -> bool {
+        false
     }
 }
 
@@ -355,6 +397,8 @@ pub struct App {
     pub switcher_left: Option<crate::resume::Recent>,
     /// The resume screen's game, filled by the host.
     pub boot: Option<crate::resume::Boot>,
+    /// The open search, kept while its game menu is up.
+    pub search: Option<Search>,
     history: Vec<(Screen, usize)>,
     moving: Option<order::Moving>,
     /// The systems row to find again once the host changed the rows.
@@ -403,6 +447,7 @@ impl App {
             switcher: Vec::new(),
             switcher_left: None,
             boot: None,
+            search: None,
         }
     }
 
@@ -461,6 +506,9 @@ impl App {
         if self.on_recent_list() {
             items.push(ForgetRecent);
         }
+        if !from_details && self.list_system().is_some() {
+            items.extend([Search, Folders]);
+        }
         items.extend(self.module_items(Context::Game, system));
         items
     }
@@ -472,6 +520,10 @@ impl App {
             Screen::QuickMenu {
                 game: Some((system, game)),
             } => self.game_menu_items(data, (system, *game), from_details),
+            // Opened on a folder of a list.
+            Screen::QuickMenu { game: None } if self.list_system().is_some() => {
+                vec![Search, Folders]
+            }
             Screen::QuickMenu { game: None } => {
                 let system = self.quick_system(data);
                 let mut items = vec![Settings];
@@ -506,7 +558,7 @@ impl App {
     fn on_recent_list(&self) -> bool {
         matches!(
             self.history.last(),
-            Some((Screen::Games { system }, _)) if system == "@recent"
+            Some((Screen::Games { system, .. }, _)) if system == "@recent"
         )
     }
     /// The system a systems-screen quick menu was opened on.
@@ -591,6 +643,9 @@ impl App {
         if let Screen::Details { system, game } = self.screen.clone() {
             return self.handle_details(b, system, game, data);
         }
+        if let Screen::Search { system } = self.screen.clone() {
+            return self.handle_search(b, system, data);
+        }
         if matches!(self.screen, Screen::Achievements { .. }) {
             self.handle_achievements(b);
             return Outcome::None;
@@ -609,11 +664,12 @@ impl App {
             | Screen::Shots { .. }
             | Screen::Shot { .. }
             | Screen::Switcher
+            | Screen::Search { .. }
             | Screen::Resume => {
                 unreachable!()
             }
             Screen::Systems => Self::system_rows(data).len(),
-            Screen::Games { system } => data.games(system).len(),
+            Screen::Games { system, folder } => Self::list_len(data, system, folder),
             Screen::QuickMenu { .. } => self.quick_menu_items(data).len(),
         };
         let last = len.saturating_sub(1);
@@ -653,9 +709,7 @@ impl App {
                                 module.to_owned(),
                             ));
                         }
-                        self.enter(Screen::Games {
-                            system: system.clone(),
-                        });
+                        self.enter(Screen::games(system.clone()));
                     }
                 }
                 Button::Y => self.enter(Screen::QuickMenu { game: None }),
@@ -668,16 +722,29 @@ impl App {
             | Screen::Shots { .. }
             | Screen::Shot { .. }
             | Screen::Switcher
+            | Screen::Search { .. }
             | Screen::Resume => {
                 unreachable!()
             }
-            Screen::Games { system } => match b {
+            Screen::Games { system, folder } => match b {
                 Button::B => self.back(),
                 Button::A | Button::X | Button::Y => {
-                    if self.cursor >= data.games(&system).len() {
+                    let level = Self::level(data, &system, &folder);
+                    if let Some(name) = level.as_ref().and_then(|l| l.folder(self.cursor)) {
+                        match b {
+                            Button::A => self.enter(Screen::Games {
+                                folder: crate::folders::join(&folder, name),
+                                system,
+                            }),
+                            Button::Y => self.enter(Screen::QuickMenu { game: None }),
+                            _ => {}
+                        }
                         return Outcome::None;
                     }
-                    let Some((system, game)) = data.origin(&system, self.cursor) else {
+                    let Some(row) = Self::list_game(data, &system, &folder, self.cursor) else {
+                        return Outcome::None;
+                    };
+                    let Some((system, game)) = data.origin(&system, row) else {
                         return Outcome::None;
                     };
                     match b {
@@ -750,6 +817,16 @@ impl App {
                         self.back();
                         return self.show_hidden(data);
                     }
+                    (Button::A, Some(QuickItem::Search)) => {
+                        let system = self.list_system().map(str::to_owned);
+                        self.back();
+                        if let Some(system) = system {
+                            self.open_search(system);
+                        }
+                    }
+                    (Button::A | Button::L | Button::R, Some(QuickItem::Folders)) => {
+                        return self.toggle_folders(data);
+                    }
                     (Button::A, Some(QuickItem::ForgetRecent)) => {
                         self.back();
                         if let Some((system, game)) = game {
@@ -812,7 +889,7 @@ impl App {
 
     /// The details game moved (its system was re-read and re-sorted): follow
     /// it, and the list cursor below it when that list is the same system.
-    pub fn retarget_details(&mut self, index: usize) {
+    pub fn retarget_details(&mut self, index: usize, data: &dyn DataSource) {
         let mut system = None;
         for screen in
             std::iter::once(&mut self.screen).chain(self.history.iter_mut().map(|(s, _)| s))
@@ -823,8 +900,16 @@ impl App {
             }
         }
         for (screen, cursor) in &mut self.history {
-            if matches!(screen, Screen::Games { system: name } if Some(&*name) == system.as_ref()) {
-                *cursor = index;
+            if let Screen::Games {
+                system: name,
+                folder,
+            } = screen
+            {
+                if Some(&*name) == system.as_ref() {
+                    let row =
+                        Self::level(data, name, folder).map_or(Some(index), |l| l.game_row(index));
+                    *cursor = row.unwrap_or(*cursor);
+                }
             }
         }
     }
@@ -1189,7 +1274,8 @@ impl App {
     }
 
     /// Where a game launched now was chosen: the systems row, and the
-    /// game's position when it came from a list (`Screen::Games`).
+    /// game's index in its list when it came from one (`Screen::Games`,
+    /// or that list's search).
     pub fn place(&self, data: &dyn DataSource) -> Option<(String, Option<usize>)> {
         let screens = std::iter::once((&self.screen, self.cursor)).chain(
             self.history
@@ -1199,7 +1285,16 @@ impl App {
         );
         for (screen, cursor) in screens {
             match screen {
-                Screen::Games { system } => return Some((system.clone(), Some(cursor))),
+                Screen::Games { system, folder } => {
+                    return Some((
+                        system.clone(),
+                        Self::list_game(data, system, folder, cursor),
+                    ))
+                }
+                Screen::Search { system } => {
+                    let game = self.search_results(data, system).get(cursor).copied();
+                    return Some((system.clone(), game));
+                }
                 Screen::Systems => {
                     return Self::system_rows(data)
                         .get(cursor)
@@ -1211,7 +1306,8 @@ impl App {
         None
     }
 
-    /// Back to where the last game was chosen: its row, then its list.
+    /// Back to where the last game was chosen: its row, then its list, in
+    /// the game's folder when the list shows them.
     pub fn return_to(&mut self, row: usize, game: Option<usize>, data: &dyn DataSource) {
         let Some(system) = Self::system_rows(data).get(row).cloned() else {
             return;
@@ -1219,8 +1315,9 @@ impl App {
         self.screen = Screen::Systems;
         self.cursor = row;
         if let Some(game) = game {
-            self.enter(Screen::Games { system });
-            self.cursor = game;
+            self.enter(Screen::games(system.clone()));
+            let by_folder = Self::level(data, &system, "").is_some();
+            self.select(data, &system, game, by_folder);
         }
     }
 

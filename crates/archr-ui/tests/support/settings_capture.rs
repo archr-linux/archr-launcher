@@ -645,6 +645,8 @@ fn capture_network_and_games_pages() {
 struct Shelf {
     systems: Vec<archr_index::cache::SystemEntry>,
     games: Vec<archr_index::Game>,
+    /// Each game's folder; the list shows folders when there are any.
+    dirs: Vec<&'static str>,
 }
 impl Shelf {
     fn new() -> Self {
@@ -704,7 +706,11 @@ impl Shelf {
             },
         })
         .collect();
-        Self { systems, games }
+        Self {
+            systems,
+            games,
+            dirs: Vec::new(),
+        }
     }
 }
 impl crate::state::DataSource for Shelf {
@@ -729,6 +735,12 @@ impl crate::state::DataSource for Shelf {
     }
     fn current_core(&self, _: &str, _: usize) -> Option<(String, String)> {
         None
+    }
+    fn folders(&self, _: &str) -> Vec<&str> {
+        self.dirs.clone()
+    }
+    fn shows_folders(&self, _: &str) -> bool {
+        !self.dirs.is_empty()
     }
 }
 /// A stand-in box art: a dusk gradient with a sun and a horizon.
@@ -1145,9 +1157,7 @@ fn capture_achievements() {
         let mut app = crate::state::App::new(1);
         app.set_view(&theme.view(&theme.active_view));
         app.cheevos = true;
-        app.screen = crate::state::Screen::Games {
-            system: "snes".into(),
-        };
+        app.screen = crate::state::Screen::games("snes");
         app.cursor = 5;
         app.handle(Button::Y, &shelf);
         app.cursor = 1;
@@ -3292,6 +3302,46 @@ fn golden_frames_at_640x480() {
     app.handle(crate::state::Button::Y, &shelf);
     browse(&mut ui, &app, &theme, with_cover);
     keep(&mut ui, "quick-menu");
+    // By folder (Pastas-lista, Pastas-dentro), then the search (Pastas-busca).
+    {
+        let mut folders = Shelf::new();
+        folders.dirs = vec!["Hacks", "", "Hacks", "", "Traduções", "Hacks", "", "", ""];
+        for game in folders.games.iter_mut().step_by(2) {
+            game.image = Some(picture.clone());
+        }
+        let covers = crate::render::Art {
+            covers: Some(&cache),
+            ..Default::default()
+        };
+        let mut list = crate::state::App::new(10);
+        list.set_view(&theme.view(&theme.active_view));
+        list.screen = crate::state::Screen::games("snes");
+        for (name, art) in [("games-folders", covers), ("games-folder", with_cover)] {
+            for _ in 0..2 {
+                ui.snap_animations();
+                ui.draw_with_settings(&list, &folders, &theme, art, None)
+                    .unwrap();
+            }
+            keep(&mut ui, name);
+            list.handle(crate::state::Button::A, &folders);
+            list.cursor = 1;
+        }
+        list.handle(crate::state::Button::Y, &folders);
+        list.cursor = list
+            .quick_menu_items(&folders)
+            .iter()
+            .position(|i| *i == crate::state::QuickItem::Search)
+            .unwrap();
+        list.handle(crate::state::Button::A, &folders);
+        list.search.as_mut().unwrap().keyboard =
+            crate::keyboard::Keyboard::new(crate::keyboard::Mode::Text, "su".into());
+        for _ in 0..2 {
+            ui.snap_animations();
+            ui.draw_with_settings(&list, &folders, &theme, Default::default(), None)
+                .unwrap();
+        }
+        keep(&mut ui, "search");
+    }
     // The systems menu: the divider sits above the power actions.
     let mut systems_menu = crate::state::App::new(10);
     systems_menu.set_view(&theme.view(&theme.active_view));

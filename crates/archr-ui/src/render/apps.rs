@@ -142,9 +142,7 @@ impl Ui<'_, '_> {
         if let Some(wash) = layout.backdrop {
             self.backdrop(art.cover, wash, theme)?;
         }
-        let games = Screen::Games {
-            system: key.clone(),
-        };
+        let games = Screen::games(key.clone());
         // Nothing listed yet: the title alone, never "0 of 0".
         if screen.items.is_empty() {
             self.app_title(&data.systems()[0].fullname, theme)?;
@@ -160,7 +158,7 @@ impl Ui<'_, '_> {
             Some(text) if screen.items.is_empty() => self.app_busy(text, list, true, theme)?,
             _ => self.list(&games, (&[], false), cursor, data, theme, &layout)?,
         }
-        self.cover(&key, cursor, data, theme, art.cover, &layout)?;
+        self.cover((&key, ""), cursor, data, theme, art, &layout)?;
         // Waiting with a list: over the bottom of the picture, never a row.
         if let (Some(text), false) = (&session.busy, screen.items.is_empty()) {
             let area = layout

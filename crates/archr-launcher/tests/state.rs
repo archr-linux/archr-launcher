@@ -61,9 +61,7 @@ fn pair(emulator: &str, core: &str) -> (String, String) {
 
 fn in_games(system: &str, cursor: usize) -> App {
     let mut app = App::new(5);
-    app.screen = Screen::Games {
-        system: system.into(),
-    };
+    app.screen = Screen::games(system);
     app.cursor = cursor;
     app
 }
@@ -75,12 +73,7 @@ fn a_on_system_enters_games() {
     assert_eq!(app.screen, Screen::Systems);
     app.handle(Button::Down, &data);
     assert_eq!(app.handle(Button::A, &data), Outcome::None);
-    assert_eq!(
-        app.screen,
-        Screen::Games {
-            system: "snes".into()
-        }
-    );
+    assert_eq!(app.screen, Screen::games("snes"));
     assert_eq!(app.cursor, 0);
 }
 
@@ -277,12 +270,7 @@ fn collection_entry_and_back_preserve_pseudo_system_row() {
     let mut app = App::new(5);
     app.handle(Button::Down, &data);
     app.handle(Button::A, &data);
-    assert_eq!(
-        app.screen,
-        Screen::Games {
-            system: "@recent".into()
-        }
-    );
+    assert_eq!(app.screen, Screen::games("@recent"));
     app.handle(Button::B, &data);
     assert_eq!(app.screen, Screen::Systems);
     assert_eq!(app.cursor, 1);
@@ -296,12 +284,7 @@ fn missing_origin_makes_game_actions_noops() {
     let mut app = in_games("@favorites", 1);
     for button in [Button::A, Button::X, Button::Y] {
         assert_eq!(app.handle(button, &data), Outcome::None);
-        assert_eq!(
-            app.screen,
-            Screen::Games {
-                system: "@favorites".into()
-            }
-        );
+        assert_eq!(app.screen, Screen::games("@favorites"));
         assert_eq!(app.cursor, 1);
     }
 }
@@ -320,12 +303,7 @@ fn y_opens_quick_menu_and_b_closes() {
     assert_eq!(app.cursor, 0);
     app.handle(Button::Down, &data);
     assert_eq!(app.handle(Button::B, &data), Outcome::None);
-    assert_eq!(
-        app.screen,
-        Screen::Games {
-            system: "snes".into()
-        }
-    );
+    assert_eq!(app.screen, Screen::games("snes"));
     assert_eq!(app.cursor, 7);
 }
 
@@ -380,12 +358,7 @@ fn quick_menu_collection_uses_real_game_and_restores_collection_cursor() {
         [QuickItem::Core, QuickItem::Details]
     );
     app.handle(Button::B, &data);
-    assert_eq!(
-        app.screen,
-        Screen::Games {
-            system: "@favorites".into()
-        }
-    );
+    assert_eq!(app.screen, Screen::games("@favorites"));
     app.handle(Button::B, &data);
     assert_eq!(app.screen, Screen::Systems);
     assert_eq!(app.cursor, 0);
@@ -402,9 +375,10 @@ fn quick_menu_tools_and_ports_hide_core_and_power_lives_in_the_system_menu() {
     for system in ["snes", "tools", "ports"] {
         let mut app = in_games(system, 0);
         app.handle(Button::Y, &data);
-        // Game menus open the details; only snes has a core choice.
+        // Game menus open the details, then the list's search and folders;
+        // only snes has a core choice.
         let items = app.quick_menu_items(&data);
-        assert_eq!(items.len(), 1 + usize::from(system == "snes"), "{system}");
+        assert_eq!(items.len(), 3 + usize::from(system == "snes"), "{system}");
         assert!(!items.contains(&QuickItem::Suspend), "{system}");
         assert!(!items.contains(&QuickItem::Reboot), "{system}");
         assert!(!items.contains(&QuickItem::Shutdown), "{system}");
@@ -435,7 +409,7 @@ fn quick_menu_up_down_clamp() {
     for _ in 0..10 {
         app.handle(Button::Down, &data);
     }
-    assert_eq!(app.cursor, 1);
+    assert_eq!(app.cursor, 3);
 }
 
 fn open_details(data: &FakeData, system: &str, game: usize) -> App {
@@ -467,12 +441,7 @@ fn details_open_from_the_game_menu_and_go_back_to_the_list() {
     app.handle(Button::B, &data);
     assert!(matches!(app.screen, Screen::Details { .. }));
     app.handle(Button::B, &data);
-    assert_eq!(
-        app.screen,
-        Screen::Games {
-            system: "snes".into()
-        }
-    );
+    assert_eq!(app.screen, Screen::games("snes"));
     assert_eq!(app.cursor, 7);
 }
 
@@ -526,7 +495,7 @@ fn details_text_scrolls_within_the_reported_overflow() {
     app.handle(Button::Up, &data);
     assert_eq!(app.details_scroll, 1);
     // A re-sorted system moves the game: the screen and the list follow it.
-    app.retarget_details(3);
+    app.retarget_details(3, &data);
     assert_eq!(
         app.screen,
         Screen::Details {
@@ -612,12 +581,7 @@ fn empty_games_cannot_open_game_menu() {
     let data = FakeData::default();
     let mut app = in_games("missing", 0);
     assert_eq!(app.handle(Button::Y, &data), Outcome::None);
-    assert_eq!(
-        app.screen,
-        Screen::Games {
-            system: "missing".into()
-        }
-    );
+    assert_eq!(app.screen, Screen::games("missing"));
 }
 
 #[test]
@@ -714,15 +678,7 @@ fn quick_menu_preserves_the_collection_backdrop_and_cursor() {
     data.collections();
     let mut app = in_games("@favorites", 1);
     app.handle(Button::Y, &data);
-    assert_eq!(
-        app.backdrop(),
-        (
-            &Screen::Games {
-                system: "@favorites".into()
-            },
-            1
-        )
-    );
+    assert_eq!(app.backdrop(), (&Screen::games("@favorites"), 1));
     app.handle(Button::B, &data);
     assert_eq!(app.backdrop(), (&app.screen, 1));
 }
@@ -874,12 +830,7 @@ fn a_recently_played_game_can_leave_the_list_from_its_menu() {
             game: 7
         }
     );
-    assert_eq!(
-        app.screen,
-        Screen::Games {
-            system: "@recent".into()
-        }
-    );
+    assert_eq!(app.screen, Screen::games("@recent"));
     // Not from the system's own list, nor from the favorites.
     for list in ["snes", "@favorites"] {
         let mut app = in_games(list, 0);
@@ -912,15 +863,7 @@ fn return_to_opens_the_list_on_the_game_and_b_goes_to_its_row() {
     data.collections();
     let mut app = App::new(5);
     app.return_to(3, Some(9), &data);
-    assert_eq!(
-        (app.screen.clone(), app.cursor),
-        (
-            Screen::Games {
-                system: "snes".into()
-            },
-            9
-        )
-    );
+    assert_eq!((app.screen.clone(), app.cursor), (Screen::games("snes"), 9));
     app.handle(Button::B, &data);
     assert_eq!((app.screen.clone(), app.cursor), (Screen::Systems, 3));
     let mut app = App::new(5);
@@ -1026,7 +969,15 @@ fn achievements_open_from_the_game_menu_only_when_signed_in_and_page_with_l_r() 
     app.cheevos = true;
     app.handle(Button::Y, &data);
     let items = app.quick_menu_items(&data);
-    assert_eq!(items, [QuickItem::Details, QuickItem::Achievements]);
+    assert_eq!(
+        items,
+        [
+            QuickItem::Details,
+            QuickItem::Achievements,
+            QuickItem::Search,
+            QuickItem::Folders
+        ]
+    );
     app.cursor = 1;
     assert_eq!(
         app.handle(Button::A, &data),
@@ -1059,12 +1010,7 @@ fn achievements_open_from_the_game_menu_only_when_signed_in_and_page_with_l_r() 
     assert_eq!(app.cursor, 6);
     // The details menu offers it too, and B goes back where it came from.
     app.handle(Button::B, &data);
-    assert_eq!(
-        app.screen,
-        Screen::Games {
-            system: "nes".into()
-        }
-    );
+    assert_eq!(app.screen, Screen::games("nes"));
     assert_eq!(app.cursor, 1);
     let mut details = open_details(&data, "nes", 1);
     details.cheevos = true;
@@ -1085,7 +1031,13 @@ fn mangohud_row_steps_through_the_systems_choices_for_this_game() {
     app.handle(Button::Y, &data);
     assert_eq!(
         app.quick_menu_items(&data),
-        [QuickItem::Core, QuickItem::Details, QuickItem::Mangohud]
+        [
+            QuickItem::Core,
+            QuickItem::Details,
+            QuickItem::Mangohud,
+            QuickItem::Search,
+            QuickItem::Folders
+        ]
     );
     app.handle(Button::Down, &data);
     app.handle(Button::Down, &data);
@@ -1230,12 +1182,7 @@ mod progress {
         ));
         // Nothing left: the screen closes.
         app.set_progress(found(0, 0), &data);
-        assert_eq!(
-            app.screen,
-            Screen::Games {
-                system: "snes".into()
-            }
-        );
+        assert_eq!(app.screen, Screen::games("snes"));
     }
 
     #[test]
@@ -1307,4 +1254,168 @@ mod progress {
         assert!(matches!(app.screen, Screen::Shots { .. }));
         assert_eq!(app.cursor, 2, "back on the picture last shown");
     }
+}
+
+/// snes by folder: games 0-3 in Hacks, 4 in Hacks/Deep, 5 in Empty/Sub, the
+/// rest at the root.
+fn by_folder() -> FakeData {
+    let mut data = FakeData::library();
+    let dirs = (0..12).map(|n| match n {
+        0..=3 => "Hacks",
+        4 => "Hacks/Deep",
+        5 => "Beta",
+        _ => "",
+    });
+    data.dirs
+        .insert("snes".into(), dirs.map(str::to_owned).collect());
+    data.by_folder.push("snes".into());
+    data
+}
+
+#[test]
+fn folders_list_first_open_with_a_and_close_on_the_folder_left() {
+    let mut data = by_folder();
+    let mut app = in_games("snes", 0);
+    assert_eq!(App::list_len(&data, "snes", ""), 2 + 6);
+    // Beta, Hacks, then the root's games; a game row plays the real game.
+    app.cursor = 2;
+    assert_eq!(
+        app.handle(Button::A, &data),
+        Outcome::Launch {
+            system: "snes".into(),
+            game: 6
+        }
+    );
+    app.cursor = 1;
+    app.handle(Button::A, &data);
+    assert_eq!(
+        app.screen,
+        Screen::Games {
+            system: "snes".into(),
+            folder: "Hacks".into()
+        }
+    );
+    // Deep, then games 0-3: a folder row is no game to come back to.
+    assert_eq!(app.place(&data), Some(("snes".into(), None)));
+    app.cursor = 2;
+    assert_eq!(app.place(&data), Some(("snes".into(), Some(1))));
+    app.handle(Button::B, &data);
+    assert_eq!(app.screen, Screen::games("snes"));
+    assert_eq!(app.cursor, 1, "back on Hacks");
+    // Off, the list is the whole system again.
+    data.by_folder.clear();
+    assert_eq!(App::list_len(&data, "snes", ""), 12);
+    assert_eq!(App::list_game(&data, "snes", "", 4), Some(4));
+}
+
+#[test]
+fn back_from_a_game_reopens_its_folder_on_it() {
+    let data = by_folder();
+    let mut app = App::new(5);
+    let row = App::system_rows(&data)
+        .iter()
+        .position(|r| r == "snes")
+        .unwrap();
+    app.return_to(row, Some(4), &data);
+    assert_eq!(
+        app.screen,
+        Screen::Games {
+            system: "snes".into(),
+            folder: "Hacks/Deep".into()
+        }
+    );
+    assert_eq!(app.cursor, 0);
+    app.handle(Button::B, &data);
+    assert_eq!(app.cursor, 0, "on Deep, above Hacks' games");
+    app.handle(Button::B, &data);
+    assert_eq!((app.screen.clone(), app.cursor), (Screen::games("snes"), 1));
+}
+
+#[test]
+fn the_folders_switch_keeps_the_game_and_says_so() {
+    let mut data = by_folder();
+    data.by_folder.clear();
+    let mut app = in_games("snes", 2);
+    app.handle(Button::Y, &data);
+    let items = app.quick_menu_items(&data);
+    app.cursor = items.iter().position(|i| *i == QuickItem::Folders).unwrap();
+    assert_eq!(
+        app.handle(Button::A, &data),
+        Outcome::ShowFolders {
+            system: "snes".into(),
+            on: true
+        }
+    );
+    data.by_folder.push("snes".into());
+    assert_eq!(
+        app.screen,
+        Screen::Games {
+            system: "snes".into(),
+            folder: "Hacks".into()
+        }
+    );
+    assert_eq!(app.cursor, 3, "game 2, under Deep");
+    // A folder's menu holds the list's items alone; collections have none.
+    app.handle(Button::B, &data);
+    app.handle(Button::Y, &data);
+    assert_eq!(
+        app.quick_menu_items(&data),
+        [QuickItem::Search, QuickItem::Folders]
+    );
+    let mut data = FakeData::library();
+    data.collections();
+    let mut favorites = in_games("@favorites", 0);
+    favorites.handle(Button::Y, &data);
+    assert!(!favorites
+        .quick_menu_items(&data)
+        .contains(&QuickItem::Search));
+}
+
+#[test]
+fn search_finds_across_folders_and_plays_from_the_results() {
+    use archr_ui::keyboard::{Keyboard, Mode};
+    let mut data = by_folder();
+    data.games.get_mut("snes").unwrap()[4].name = "Pokémon Deep".into();
+    data.games.get_mut("snes").unwrap()[9].name = "POKEMON Root".into();
+    let mut app = in_games("snes", 0);
+    app.handle(Button::Y, &data);
+    app.cursor = app
+        .quick_menu_items(&data)
+        .iter()
+        .position(|i| *i == QuickItem::Search)
+        .unwrap();
+    app.handle(Button::A, &data);
+    assert_eq!(
+        app.screen,
+        Screen::Search {
+            system: "snes".into()
+        }
+    );
+    assert_eq!(app.search_results(&data, "snes").len(), 12);
+    app.search.as_mut().unwrap().keyboard = Keyboard::new(Mode::Text, "pokem".into());
+    assert_eq!(app.search_results(&data, "snes"), [4, 9]);
+    app.handle(Button::Start, &data);
+    assert!(app.search.as_ref().unwrap().results);
+    app.handle(Button::Down, &data);
+    assert_eq!(
+        app.handle(Button::X, &data),
+        Outcome::ToggleFavorite {
+            system: "snes".into(),
+            game: 9
+        }
+    );
+    assert_eq!(app.place(&data), Some(("snes".into(), Some(9))));
+    app.handle(Button::Y, &data);
+    assert!(matches!(app.screen, Screen::QuickMenu { game: Some(_) }));
+    assert!(!app.quick_menu_items(&data).contains(&QuickItem::Search));
+    app.handle(Button::B, &data);
+    assert_eq!(app.cursor, 1);
+    // B types again; B on the keyboard closes the search.
+    app.handle(Button::B, &data);
+    assert!(!app.search.as_ref().unwrap().results);
+    app.handle(Button::Y, &data);
+    assert_eq!(app.search.as_ref().unwrap().keyboard.text(), "poke");
+    app.handle(Button::B, &data);
+    assert_eq!(app.screen, Screen::games("snes"));
+    assert!(app.search.is_none());
 }
