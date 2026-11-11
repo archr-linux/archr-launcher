@@ -12,6 +12,9 @@ pub struct FakeData {
     pub current: HashMap<(String, usize), (String, String)>,
     pub order: Vec<String>,
     pub hidden: Vec<String>,
+    /// Each game's folder, by system; the systems listed by folder.
+    pub dirs: HashMap<String, Vec<String>>,
+    pub by_folder: Vec<String>,
 }
 
 impl DataSource for FakeData {
@@ -21,6 +24,17 @@ impl DataSource for FakeData {
 
     fn hidden_systems(&self) -> &[String] {
         &self.hidden
+    }
+
+    fn folders(&self, system: &str) -> Vec<&str> {
+        let dirs = self.dirs.get(system);
+        (0..self.games(system).len())
+            .map(|n| dirs.and_then(|d| d.get(n)).map_or("", String::as_str))
+            .collect()
+    }
+
+    fn shows_folders(&self, system: &str) -> bool {
+        self.by_folder.iter().any(|s| s == system)
     }
 
     fn systems(&self) -> &[SystemEntry] {

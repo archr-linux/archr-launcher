@@ -1458,3 +1458,16 @@
 "reports.notice_where" = "Cámbialo cuando quieras en Configuración › Sistema › Informes de errores."
 "reports.notice_ok" = "Entendido"
 "reports.notice_off" = "Desactivar informes"
+
+# List search and folders
+"menu.search" = "Buscar en la lista"
+"menu.folders" = "Mostrar carpetas"
+"menu.folders_detail" = "En este sistema: carpetas arriba de la lista"
+"folder.summary" = "Carpeta · {games}"
+"search.title" = "{system} / Buscar"
+"search.count" = "{n} de {total}"
+"search.placeholder" = "Nombre del juego"
+"search.empty" = "Ningún juego encontrado"
+"search.type" = "Escribir"
+"search.list" = "Ir a la lista"
+"search.keyboard" = "Teclado"

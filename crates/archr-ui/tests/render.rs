@@ -109,9 +109,7 @@ fn grafite_layout_motion_glyphs_and_untrusted_text_render_offscreen() {
     theme =
         Theme::load(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../themes/default"));
     ui.configure(&ttf, &creator, &theme, None).unwrap();
-    app.screen = Screen::Games {
-        system: "nes".into(),
-    };
+    app.screen = Screen::games("nes");
     ui.draw(&app, &data, &theme, None).unwrap();
     let rgba = ui
         .canvas
@@ -156,9 +154,7 @@ fn grafite_layout_motion_glyphs_and_untrusted_text_render_offscreen() {
         .into(),
         ..Data::default()
     };
-    app.screen = Screen::Games {
-        system: "nes".into(),
-    };
+    app.screen = Screen::games("nes");
     app.cursor = 0;
     ui.draw(&app, &scroll_data, &theme, None).unwrap();
     ui.snap_animations();

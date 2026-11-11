@@ -1458,3 +1458,16 @@
 "reports.notice_where" = "Change it any time in Settings › System › Error reports."
 "reports.notice_ok" = "OK"
 "reports.notice_off" = "Turn off reports"
+
+# List search and folders
+"menu.search" = "Search in list"
+"menu.folders" = "Show folders"
+"menu.folders_detail" = "On this system: folders at the top of the list"
+"folder.summary" = "Folder · {games}"
+"search.title" = "{system} / Search"
+"search.count" = "{n} of {total}"
+"search.placeholder" = "Game name"
+"search.empty" = "No game found"
+"search.type" = "Type"
+"search.list" = "Go to list"
+"search.keyboard" = "Keyboard"

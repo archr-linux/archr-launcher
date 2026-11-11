@@ -28,6 +28,8 @@ pub struct Store {
     imported_times: HashMap<String, u64>,
     /// Rows (systems and collections) taken off the systems screen.
     hidden: Vec<String>,
+    /// Systems whose list shows their folders.
+    folders: Vec<String>,
     /// Where the last game was launched from, to come back to it.
     place: Option<Place>,
     /// The START menu's shortcut row as the user arranged it.
@@ -219,6 +221,17 @@ impl Store {
 
     pub fn show_all(&mut self) {
         self.hidden.clear();
+    }
+
+    pub fn shows_folders(&self, system: &str) -> bool {
+        self.folders.iter().any(|s| s == system)
+    }
+
+    pub fn set_folders(&mut self, system: &str, on: bool) {
+        self.folders.retain(|s| s != system);
+        if on {
+            self.folders.push(system.to_owned());
+        }
     }
 
     pub fn shortcuts(&self) -> &archr_ui::shortcuts::Saved {

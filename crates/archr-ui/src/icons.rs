@@ -51,7 +51,7 @@ glyphs! {
     Usb => "usb", ArrowLeftRight => "arrow-left-right", ArrowRight => "arrow-right",
     CircleCheck => "circle-check",
     CircleX => "circle-x", CircleDashed => "circle-dashed", CircleAlert => "circle-alert",
-    FolderOpen => "folder-open", Store => "store", Bluetooth => "bluetooth",
+    FolderOpen => "folder-open", Folder => "folder", Search => "search", Store => "store", Bluetooth => "bluetooth",
 }
 
 #[link(name = "SDL2_image")]

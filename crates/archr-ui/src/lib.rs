@@ -18,6 +18,7 @@ pub use theme::{
 
 pub mod convert;
 pub mod covers;
+pub mod folders;
 
 pub mod input;
 pub mod pad;

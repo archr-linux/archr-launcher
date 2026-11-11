@@ -121,12 +121,8 @@ impl App {
             Button::A if row == 0 => {
                 self.screen = Screen::Systems;
                 match tile {
-                    0 => self.enter(Screen::Games {
-                        system: "@recent".to_owned(),
-                    }),
-                    2 => self.enter(Screen::Games {
-                        system: "tools".to_owned(),
-                    }),
+                    0 => self.enter(Screen::games("@recent")),
+                    2 => self.enter(Screen::games("tools")),
                     _ => {}
                 }
                 return Outcome::None;

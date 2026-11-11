@@ -312,6 +312,10 @@ impl Library {
                 self.store.show_all();
                 self.queue_store();
             }
+            Outcome::ShowFolders { system, on } => {
+                self.store.set_folders(&system, on);
+                self.queue_store();
+            }
             Outcome::ForgetRecent { system, game } => {
                 let key = self.game_key(&system, game).ok_or("error.game_missing")?;
                 self.store.forget_recent(&key);
@@ -668,6 +672,24 @@ impl DataSource for Library {
     }
     fn hidden_systems(&self) -> &[String] {
         self.store.hidden()
+    }
+    fn shows_folders(&self, system: &str) -> bool {
+        self.store.shows_folders(system)
+    }
+    fn folders(&self, system: &str) -> Vec<&str> {
+        let Some(def) = self.definition(system) else {
+            return Vec::new();
+        };
+        self.games(system)
+            .iter()
+            .map(|game| {
+                let dir = game.path.parent().unwrap_or(&game.path);
+                dir.strip_prefix(def.root_of(&game.path))
+                    .ok()
+                    .and_then(std::path::Path::to_str)
+                    .unwrap_or("")
+            })
+            .collect()
     }
     fn is_tools(&self, system: &str) -> bool {
         self.definition(system).is_some_and(crate::store::is_tools)

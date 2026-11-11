@@ -502,9 +502,7 @@ mod tests {
     use super::*;
 
     fn screen(system: &str) -> Screen {
-        Screen::Games {
-            system: system.into(),
-        }
+        Screen::games(system)
     }
 
     #[test]

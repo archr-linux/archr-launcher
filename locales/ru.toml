@@ -1458,3 +1458,16 @@
 "reports.notice_where" = "Изменить можно в любой момент: Настройки › Система › Отчёты об ошибках."
 "reports.notice_ok" = "Понятно"
 "reports.notice_off" = "Отключить отчёты"
+
+# List search and folders
+"menu.search" = "Поиск в списке"
+"menu.folders" = "Показывать папки"
+"menu.folders_detail" = "В этой системе: папки вверху списка"
+"folder.summary" = "Папка · {games}"
+"search.title" = "{system} / Поиск"
+"search.count" = "{n} из {total}"
+"search.placeholder" = "Название игры"
+"search.empty" = "Игры не найдены"
+"search.type" = "Ввод"
+"search.list" = "К списку"
+"search.keyboard" = "Клавиатура"

@@ -14,6 +14,8 @@ pub struct Art<'a, 't> {
     pub video: Option<(&'a Texture<'t>, f32)>,
     /// Achievement badges decoded so far, by file.
     pub badges: Option<&'a crate::covers::CoverCache<'t>>,
+    /// The covers decoded so far, by file: a folder's mosaic.
+    pub covers: Option<&'a crate::covers::CoverCache<'t>>,
     /// Save-state pictures and screenshots, small, by file.
     pub thumbs: Option<&'a crate::covers::CoverCache<'t>>,
     /// The selected state's picture, or the screenshot on the whole screen.

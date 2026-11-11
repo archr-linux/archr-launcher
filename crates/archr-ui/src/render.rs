@@ -28,6 +28,7 @@ mod netplay;
 mod roms_move;
 pub use roms_move::{MoveStage, RomsMove, DOT_STEP};
 mod saves;
+mod search;
 mod usb;
 pub(crate) use usb::tone as usb_tone;
 mod convert;
@@ -990,10 +991,17 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 .filter(|_| layout.list.mark != Mark::Tile)
                 .and_then(|picture| {
                     let key = match backdrop {
-                        Screen::Games { system } => data
-                            .games(system)
-                            .get(cursor)
-                            .map(|g| g.path.display().to_string()),
+                        Screen::Games { system, folder } => {
+                            match App::level(data, system, folder).and_then(|l| {
+                                l.folder(cursor)
+                                    .map(|name| crate::folders::join(folder, name))
+                            }) {
+                                Some(folder) => Some(folder),
+                                None => App::list_game(data, system, folder, cursor)
+                                    .and_then(|g| data.games(system).get(g))
+                                    .map(|g| g.path.display().to_string()),
+                            }
+                        }
                         Screen::Systems => rows.get(cursor).cloned(),
                         _ => None,
                     };
@@ -1001,7 +1009,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 });
             self.begin_page(games, picture, theme)?;
             let system = match backdrop {
-                Screen::Games { system } | Screen::Details { system, .. }
+                Screen::Games { system, .. } | Screen::Details { system, .. }
                     if !system.starts_with('@') =>
                 {
                     Some(system.as_str())
@@ -1015,7 +1023,10 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             let bare = hub
                 || matches!(
                     backdrop,
-                    Screen::Saves { .. } | Screen::Shots { .. } | Screen::Shot { .. }
+                    Screen::Saves { .. }
+                        | Screen::Shots { .. }
+                        | Screen::Shot { .. }
+                        | Screen::Search { .. }
                 );
             let decor = if bare { &[][..] } else { &layout.decor[..] };
             self.decor(theme, decor, true)?;
@@ -1025,6 +1036,8 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 self.shots(app, (system, *game), data, theme, art)?;
             } else if let Screen::Shot { system, game } = backdrop {
                 self.shot(app, (system, *game), data, theme, art)?;
+            } else if let Screen::Search { system } = backdrop {
+                self.search(app, (system, cursor), data, theme)?;
             } else if let Screen::Achievements { system, game } = backdrop {
                 let name = data
                     .games(system)
@@ -1072,8 +1085,8 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                             self.canvas.fill_rect(self.area(panel.rect))?;
                         }
                     }
-                    if let Screen::Games { system } = backdrop {
-                        self.cover(system, cursor, data, theme, art.cover, layout)?;
+                    if let Screen::Games { system, folder } = backdrop {
+                        self.cover((system, folder), cursor, data, theme, art, layout)?;
                     }
                     if self.has_presented {
                         self.footer(app, data, theme, layout)?;
@@ -1289,10 +1302,17 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             self.frame.width as i32 - pad
         };
         let h = self.frame.size(theme.header_height).round() as u32;
-        if let Screen::Games { system } = screen {
-            let title = system_title(system, data, &self.catalog);
-            let total = data.games(system).len();
-            let n = if total == 0 { 0 } else { cursor + 1 };
+        if let Screen::Games { system, folder } = screen {
+            let mut title = system_title(system, data, &self.catalog);
+            for name in folder.split('/').filter(|n| !n.is_empty()) {
+                title = format!("{title} / {name}");
+            }
+            // The real games below the folder; a folder row counts from its first.
+            let (n, total) = match App::level(data, system, folder) {
+                Some(level) => (level.position(cursor), level.total()),
+                None => (cursor + 1, data.games(system).len()),
+            };
+            let n = if total == 0 { 0 } else { n };
             if layout.header == Header::Compact {
                 let text = self.catalog.format(
                     "games.position",
@@ -1363,8 +1383,26 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         layout: &Layout,
     ) -> Result<(), String> {
         let l = &layout.list;
+        let level = match screen {
+            Screen::Games { system, folder } => App::level(data, system, folder),
+            _ => None,
+        };
+        // A folder's subfolders sit above its games, as the collections above
+        // the systems, with the same divider.
         let (key, len, collections, is_games) = match screen {
-            Screen::Games { system } => (system.clone(), data.games(system).len(), 0, true),
+            Screen::Games { system, folder } => match &level {
+                Some(level) => (
+                    format!("{system}/{folder}"),
+                    level.len(),
+                    if level.games.is_empty() {
+                        0
+                    } else {
+                        level.folders.len()
+                    },
+                    true,
+                ),
+                None => (system.clone(), data.games(system).len(), 0, true),
+            },
             _ if l.mark == Mark::Tile => {
                 return self.tiles(systems, cursor, lifted, theme, l);
             }
@@ -1501,7 +1539,25 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             let accent_ink = selected && on_pill;
             let mut x = margin + inset + if selected && !pill { self.px(14.) } else { 0 };
             let mut right = margin + list_width as i32 - inset;
-            let name = if let Screen::Games { system } = screen {
+            let folder_row = level.as_ref().and_then(|l| l.folders.get(i));
+            let name = if let Some((name, count)) = folder_row {
+                let face = selection(selected, Face::Mono, Face::MonoMedium);
+                let color = selection(accent_ink, theme.dim_text, theme.accent_text_secondary);
+                right = self.packed_label(
+                    &count.to_string(),
+                    (face, 13., color),
+                    (right, y, rh),
+                    u32::MAX,
+                    Align::Right,
+                )? - self.px(14.);
+                let icon = self
+                    .frame
+                    .square(x, y + (rh as i32 - self.px(16.)) / 2, 16.);
+                self.icon(Glyph::Folder, icon, c)?;
+                x += self.px(26.);
+                name.clone()
+            } else if let Screen::Games { system, .. } = screen {
+                let i = level.as_ref().and_then(|l| l.game(i)).unwrap_or(i);
                 let game = &data.games(system)[i];
                 if game.favorite {
                     let star = self.frame.square(
@@ -1665,11 +1721,11 @@ impl<'font, 'texture> Ui<'font, 'texture> {
     }
     fn cover(
         &mut self,
-        system: &str,
+        (system, folder): (&str, &str),
         cursor: usize,
         data: &dyn DataSource,
         theme: &Theme,
-        cover: Option<&Texture<'_>>,
+        art: Art<'_, '_>,
         layout: &Layout,
     ) -> Result<(), String> {
         let Frame { now, .. } = self.frame;
@@ -1682,6 +1738,15 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 (theme.surface, theme.border),
             )?;
         }
+        let level = App::level(data, system, folder);
+        if let Some((name, count)) = level.as_ref().and_then(|l| l.folders.get(cursor)) {
+            let path = crate::folders::join(folder, name);
+            return self.folder_art((system, &path), *count, data, theme, art, layout);
+        }
+        let cursor = level
+            .map_or(Some(cursor), |l| l.game(cursor))
+            .unwrap_or(usize::MAX);
+        let cover = art.cover;
         let game = data.games(system).get(cursor);
         let key = game.map(|g| g.path.clone());
         if self.cover_key != key {
@@ -1854,6 +1919,14 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 ('B', "hint.cancel"),
             ],
             Screen::Systems => &[('A', "hint.open"), ('Y', "hint.menu")],
+            Screen::Games {
+                ref system,
+                ref folder,
+            } if App::level(data, system, folder)
+                .is_some_and(|l| l.folder(app.cursor).is_some()) =>
+            {
+                &[('A', "hint.open"), ('B', "hint.back"), ('Y', "hint.menu")]
+            }
             Screen::Games { .. } => &[
                 ('A', "hint.play"),
                 ('B', "hint.back"),
@@ -2167,7 +2240,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         // Rows with a value are taller: the core's, and MangoHud's subtitle.
         let extra = |item: &QuickItem| match item {
             QuickItem::Core => 4.,
-            QuickItem::Mangohud => 6.,
+            QuickItem::Mangohud | QuickItem::Folders => 6.,
             _ => 0.,
         };
         let has_core = matches!(items.first(), Some(QuickItem::Core));
@@ -2187,6 +2260,11 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 6.
             } else {
                 0.
+            }
+            + if items.contains(&QuickItem::Folders) {
+                6.
+            } else {
+                0.
             };
         // Optical centering: the approved modal sits 20px above center.
         let panel = self.modal(theme, (340., 32., panel_h, -self.px(20.)))?;
@@ -2199,6 +2277,11 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                     .get(*game)
                     .map(|g| g.name.clone())
                     .unwrap_or_else(|| self.catalog.text("menu.title")),
+                system_title(system, data, &self.catalog),
+            )
+        } else if let Some(system) = app.list_system() {
+            (
+                self.catalog.text("menu.title"),
                 system_title(system, data, &self.catalog),
             )
         } else {
@@ -2281,6 +2364,8 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 QuickItem::Hide => "menu.hide",
                 QuickItem::ShowHidden => "menu.show_hidden",
                 QuickItem::ForgetRecent => "menu.forget_recent",
+                QuickItem::Search => "menu.search",
+                QuickItem::Folders => "menu.folders",
                 QuickItem::Suspend => "menu.suspend",
                 QuickItem::Reboot => "menu.reboot",
                 QuickItem::Shutdown => "menu.shutdown",
@@ -2314,6 +2399,55 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 )?;
                 let width = (right - x - self.px(8.)).max(1) as u32;
                 self.label(label, (face, 15., c), Rect::new(x, y, width, item_height))?;
+                continue;
+            }
+            // The list by folder: a switch, and what it does on a second line.
+            if *item == QuickItem::Folders {
+                let on = app.list_system().is_some_and(|s| data.shows_folders(s));
+                let (w, h) = (self.px(38.), self.px(20.));
+                let track = Rect::new(
+                    panel.right() - self.px(24.) - w,
+                    // Beside the label; the detail below has the whole row.
+                    y + self.px(5.) + (self.px(19.) - h) / 2,
+                    w as u32,
+                    h as u32,
+                );
+                let lit = selection(selected, theme.highlight_bg, theme.highlight_text);
+                self.rounded(
+                    track,
+                    h as f32 / 2.,
+                    if on { lit } else { theme.badge },
+                    None,
+                )?;
+                let knob = self.px(16.);
+                let x_knob = track.x()
+                    + if on {
+                        w - knob - self.px(2.)
+                    } else {
+                        self.px(2.)
+                    };
+                let ink = selection(selected && on, theme.text, theme.highlight_bg);
+                self.rounded(
+                    Rect::new(x_knob, track.y() + self.px(2.), knob as u32, knob as u32),
+                    knob as f32 / 2.,
+                    ink,
+                    None,
+                )?;
+                let width = (track.x() - x - self.px(8.)).max(1) as u32;
+                let sc = selection(selected, theme.muted, theme.accent_text_secondary);
+                self.label(
+                    label,
+                    (face, 15., c),
+                    Rect::new(x, y + self.px(5.), width, self.px(19.) as u32),
+                )?;
+                let detail = self.catalog.text("menu.folders_detail");
+                let floor = self.frame.min_size();
+                let size = self.shrink(&detail, Face::Regular, 11.5, floor, content_w)?;
+                self.label(
+                    &detail,
+                    (Face::Regular, size.unwrap_or(floor), sc),
+                    Rect::new(x, y + self.px(25.), content_w, self.px(15.) as u32),
+                )?;
                 continue;
             }
             let value = match item {
