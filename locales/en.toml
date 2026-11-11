@@ -1420,6 +1420,10 @@
 "osd.report_done" = "In roms/relatorios, visible on a PC."
 "osd.report_failed_title" = "No report"
 "osd.report_failed" = "The report could not be created."
+"osd.disc_start_title" = "Preparing the disc…"
+"osd.disc_start" = "Extracting it from the archive, only the first time."
+"osd.disc_nospace_title" = "No room for the disc"
+"osd.disc_nospace" = "Free space on the card, or extract the archive on a PC."
 
 # System › Error reports (Relatorios-ajustes, Relatorios-ver, Relatorios-aviso)
 "reports.title" = "Error reports"

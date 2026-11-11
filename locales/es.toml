@@ -1420,6 +1420,10 @@
 "osd.report_done" = "En roms/relatorios, visible en el PC."
 "osd.report_failed_title" = "Sin informe"
 "osd.report_failed" = "No se pudo generar el informe."
+"osd.disc_start_title" = "Preparando el disco…"
+"osd.disc_start" = "Extrayéndolo del archivo comprimido, solo la primera vez."
+"osd.disc_nospace_title" = "Sin espacio para el disco"
+"osd.disc_nospace" = "Libera espacio en la tarjeta o descomprime el archivo en un PC."
 
 # System › Error reports (Relatorios-ajustes, Relatorios-ver, Relatorios-aviso)
 "reports.title" = "Informes de errores"

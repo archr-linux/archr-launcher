@@ -1420,6 +1420,10 @@
 "osd.report_done" = "В roms/relatorios, виден на ПК."
 "osd.report_failed_title" = "Отчёта нет"
 "osd.report_failed" = "Не удалось создать отчёт."
+"osd.disc_start_title" = "Подготовка диска…"
+"osd.disc_start" = "Распаковка из архива, только в первый раз."
+"osd.disc_nospace_title" = "Нет места для диска"
+"osd.disc_nospace" = "Освободите место на карте или распакуйте архив на ПК."
 
 # System › Error reports (Relatorios-ajustes, Relatorios-ver, Relatorios-aviso)
 "reports.title" = "Отчёты об ошибках"

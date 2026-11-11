@@ -1,7 +1,7 @@
 //! The battery card (Bateria-critica): a notice over the whole screen, games
 //! included. Geometry from the 640x480 design, text with the launcher's
 //! fonts and catalogs.
-use crate::proto::{Alert, Report};
+use crate::proto::{Alert, Disc, Report};
 use ab_glyph::{Font, FontVec, PxScale, ScaleFont};
 use resvg::tiny_skia as sk;
 use std::{collections::HashMap, path::Path, time::Duration};
@@ -101,6 +101,39 @@ impl Assets {
                     icon: ALERT,
                     accent: WARNING,
                 }
+            }
+            Alert::Disc(step) => {
+                let (title, body, icon, accent) = match step {
+                    Disc::Start => (
+                        self.tr("osd.disc_start_title", "Preparing the disc…", &[]),
+                        self.tr(
+                            "osd.disc_start",
+                            "Extracting it from the archive, only the first time.",
+                            &[],
+                        ),
+                        LOADER,
+                        ACCENT,
+                    ),
+                    Disc::NoSpace => (
+                        self.tr("osd.disc_nospace_title", "No room for the disc", &[]),
+                        self.tr(
+                            "osd.disc_nospace",
+                            "Free space on the card, or extract the archive on a PC.",
+                            &[],
+                        ),
+                        FAILED,
+                        DANGER,
+                    ),
+                };
+                return Card {
+                    title,
+                    body,
+                    hint: None,
+                    bar: None,
+                    critical: false,
+                    icon,
+                    accent,
+                };
             }
             Alert::Report(step) => {
                 let (title, body, icon, accent) = match step {
@@ -497,6 +530,11 @@ mod tests {
             report("pt_BR", Report::Start).body,
             "Leva cerca de 20 segundos."
         );
+        let disc = |step| assets("pt_BR").card(Alert::Disc(step));
+        assert_eq!(disc(Disc::Start).title, "Preparando o disco…");
+        assert_eq!((disc(Disc::Start).icon, disc(Disc::Start).accent), (LOADER, ACCENT));
+        assert_eq!(disc(Disc::NoSpace).title, "Sem espaço para o disco");
+        assert_eq!(disc(Disc::NoSpace).accent, DANGER);
         let done = report("pt_BR", Report::Done);
         assert_eq!(done.body, "Em roms/relatorios, visível no PC.");
         assert_eq!(

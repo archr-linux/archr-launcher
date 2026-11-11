@@ -43,12 +43,19 @@ pub struct Battery {
 /// The cards over the screen: the battery's, and "this emulator saves no
 /// state" when the switcher's shortcut cannot save the game (`nostate`);
 /// the diagnostic report's, as archr-report --osd starts and ends
-/// (`report start|done|failed`).
+/// (`report start|done|failed`); runemu.sh's, while it extracts a disc kept
+/// in an archive or finds no room for it (`disc start|nospace`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Alert {
     Battery(Battery),
     NoState,
     Report(Report),
+    Disc(Disc),
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Disc {
+    Start,
+    NoSpace,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Report {
@@ -73,6 +80,11 @@ pub fn parse_notice(text: &str) -> Option<Notice> {
             "start" => Report::Start,
             "done" => Report::Done,
             "failed" => Report::Failed,
+            _ => return None,
+        }))),
+        ["disc", step] => Some(Notice::Alert(Alert::Disc(match step {
+            "start" => Disc::Start,
+            "nospace" => Disc::NoSpace,
             _ => return None,
         }))),
         ["battery-low", level] => Some(Notice::Alert(Alert::Battery(Battery {
@@ -177,6 +189,12 @@ mod tests {
             parse_notice("report done"),
             Some(Notice::Alert(Alert::Report(Report::Done)))
         );
+        assert_eq!(
+            parse_notice("disc nospace"),
+            Some(Notice::Alert(Alert::Disc(Disc::NoSpace)))
+        );
+        assert_eq!(parse_notice("disc"), None);
+        assert_eq!(parse_notice("disc later"), None);
         assert_eq!(parse_notice("battery-low 10"), battery(10, None, false));
         assert_eq!(
             parse_notice("battery 3 8 8 game"),
