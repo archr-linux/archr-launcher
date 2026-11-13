@@ -1,13 +1,15 @@
 //! Diagnostics and BIOS: the slow scripts behind both pages, on their own
 //! lane so the settings worker never waits for a report or a checksum.
-//! archr-debug owns system.loglevel, archr-report writes the zip,
-//! archr-systems checks the BIOS and archr-bios-livres installs a free one.
+//! archr-debug owns system.loglevel, archr-report writes and sends the zip,
+//! archr-console-id names the console, archr-systems checks the BIOS and archr-bios-livres installs a free one.
 use super::*;
-use archr_ui::settings::{bios, diag};
+use archr_ui::settings::{bios, diag, reports};
 
 /// The folder archr-report writes to, and its own time limit with room.
 const REPORTS: &str = "/storage/roms/relatorios";
 const REPORT_TIME: Duration = Duration::from_secs(180);
+/// A few MB over a slow Wi-Fi.
+const SEND_TIME: Duration = Duration::from_secs(300);
 /// Every BIOS file is read for its MD5; a big Neo Geo zip takes seconds.
 const BIOS_TIME: Duration = Duration::from_secs(120);
 /// pacman may download the package first.
@@ -16,6 +18,8 @@ const INSTALL_TIME: Duration = Duration::from_secs(300);
 pub(super) enum Slow {
     Diag,
     Report,
+    /// Send this zip of REPORTS, by name.
+    Send(String),
     Bios,
     BiosInstall(String),
 }
@@ -25,6 +29,7 @@ impl Backend {
         match work {
             Slow::Diag => Reply::Diag(Box::new(self.diag_facts())),
             Slow::Report => Reply::Report(self.report()),
+            Slow::Send(name) => Reply::ReportSent(self.send_report(&name)),
             Slow::Bios => Reply::Bios(
                 self.command_with_timeout("archr-systems", &["--json"], BIOS_TIME)
                     .and_then(|json| bios::parse(&json)),
@@ -74,6 +79,42 @@ impl Backend {
                 .modified()
                 .unwrap_or_else(|_| std::time::SystemTime::now()),
         })
+    }
+    /// `archr-report send <zip>`: its exit code says what happened
+    /// (diag::sent_message). Only a report of its own folder goes.
+    fn send_report(&self, name: &str) -> Result<i32, String> {
+        if !name.starts_with("archr-relatorio-") || !name.ends_with(".zip") || name.contains('/') {
+            return Err(format!("not a report: {name}"));
+        }
+        let zip = self.paths.at(REPORTS).join(name);
+        let mut command = self.tool("archr-report");
+        command.arg("send").arg(&zip);
+        let output = crate::process::capture_with_input(
+            &mut command,
+            None,
+            SEND_TIME,
+            &AtomicBool::new(false),
+            64 * 1024,
+        )
+        .map_err(|e| format!("archr-report send: {e}"))?;
+        if !output.status.success() {
+            log::warn!(
+                "archr-report send: {}; {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+        output
+            .status
+            .code()
+            .ok_or_else(|| format!("archr-report send: {}", output.status))
+    }
+    /// This console's id, None without archr-console-id or a valid answer.
+    pub(super) fn console_id(&self) -> Option<String> {
+        self.command("archr-console-id", &[])
+            .map_err(|e| log::debug!("{e}"))
+            .ok()
+            .and_then(|out| reports::console_id(&out))
     }
     /// The debug switch: archr-debug writes the key; the reply is what it saved.
     pub(super) fn apply_debug(&self, value: &str) -> Result<String, String> {
@@ -178,6 +219,40 @@ mod tests {
         );
         script(&dir, "archr-report", "exit 1");
         assert!(backend.report().is_err());
+    }
+    #[test]
+    fn a_send_reports_archr_reports_exit_code() {
+        let (dir, backend) = fixture();
+        let zip = "archr-relatorio-20261113-0915.zip";
+        // The script sees the zip's full path and answers by its exit code.
+        script(
+            &dir,
+            "archr-report",
+            &format!(
+                "[ \"$1\" = send ] && [ \"$2\" = \"$ARCHR_LAUNCHER_ROOT{REPORTS}/{zip}\" ] || exit 9\n\
+                 read code <\"$ARCHR_LAUNCHER_ROOT/code\"; exit $code"
+            ),
+        );
+        for code in [0, 2, 3, 4, 5] {
+            fs::write(dir.path().join("code"), code.to_string()).unwrap();
+            assert!(
+                matches!(backend.slow(Slow::Send(zip.into())), Reply::ReportSent(Ok(c)) if c == code),
+                "exit {code}"
+            );
+        }
+        assert!(backend.send_report("../etc/passwd.zip").is_err());
+        assert!(backend.send_report("photo-1.zip").is_err());
+    }
+    #[test]
+    fn the_console_id_is_read_from_archr_console_id() {
+        let (dir, backend) = fixture();
+        assert_eq!(backend.console_id(), None, "no command, no row");
+        script(&dir, "archr-console-id", "echo 3f9a0c2b7d14");
+        assert_eq!(backend.console_id().as_deref(), Some("3f9a0c2b7d14"));
+        script(&dir, "archr-console-id", "echo nope");
+        assert_eq!(backend.console_id(), None);
+        script(&dir, "archr-console-id", "echo 3f9a0c2b7d14; exit 1");
+        assert_eq!(backend.console_id(), None, "a failure is no id");
     }
     #[test]
     fn bios_check_and_install_go_through_the_scripts() {

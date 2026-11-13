@@ -18,6 +18,12 @@ pub const ROWS: &[Row] = &[
         .under("reports.section"),
     described(Id::ReportsQueue, "reports.queue", "reports.queue_detail").kind(Kind::Action),
     described(Id::ReportsToday, "reports.today", "reports.today_detail").kind(Kind::Action),
+    described(
+        Id::ConsoleId,
+        "reports.console_id",
+        "reports.console_id_detail",
+    )
+    .kind(Kind::Action),
     described(Id::ReportsLatest, "", "")
         .kind(Kind::Action)
         .under("reports.last_section"),
@@ -110,12 +116,20 @@ impl Last {
         )
     }
 }
+/// `archr-console-id`'s answer, when it is one: 12 lowercase hex digits.
+pub fn console_id(output: &str) -> Option<String> {
+    let id = output.trim();
+    (id.len() == 12 && id.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')))
+        .then(|| id.to_owned())
+}
 /// What the host read from archr-error-report's folders.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Facts {
     pub queued: usize,
     pub sent_today: usize,
     pub last: Option<Last>,
+    /// This console's id (archr-console-id); None when the system has none.
+    pub console_id: Option<String>,
 }
 #[derive(Clone, Debug, Default)]
 pub struct Reports {
@@ -159,14 +173,22 @@ impl Settings {
     pub fn reports_last(&self) -> Option<&Last> {
         self.reports.facts.as_ref()?.last.as_ref()
     }
+    fn console(&self) -> Option<&str> {
+        self.reports.facts.as_ref()?.console_id.as_deref()
+    }
     pub(super) fn reports_visible(&self, id: Id) -> bool {
-        !matches!(id, Id::ReportsLatest | Id::ReportsView) || self.reports_last().is_some()
+        match id {
+            Id::ConsoleId => self.console().is_some(),
+            Id::ReportsLatest | Id::ReportsView => self.reports_last().is_some(),
+            _ => true,
+        }
     }
     pub(super) fn reports_value(&self, id: Id) -> String {
         let facts = self.reports.facts.as_ref();
         match (id, facts) {
             (Id::ReportsLink | Id::ReportsView, _) => "›".into(),
             (Id::ReportsQueue, Some(f)) => format!("@{}", f.queued),
+            (Id::ConsoleId, _) => self.console().unwrap_or_default().into(),
             (Id::ReportsToday, Some(f)) => {
                 format!("reports.today_count|count={}|limit={DAILY}", f.sent_today)
             }
@@ -292,6 +314,7 @@ mod tests {
             queued: 1,
             sent_today: 2,
             last: Some(last(TEXT)),
+            console_id: None,
         });
         assert_eq!(
             ids(&state),
@@ -315,6 +338,40 @@ mod tests {
             Effect::Set(Id::ErrorReports, "0".into()),
             "on by default; the host saves the switch"
         );
+    }
+    #[test]
+    fn the_console_id_shows_only_when_the_system_gave_one() {
+        assert_eq!(
+            console_id("3f9a0c2b7d14\n").as_deref(),
+            Some("3f9a0c2b7d14")
+        );
+        for bad in [
+            "",
+            "3F9A0C2B7D14",
+            "3f9a0c2b7d1",
+            "3f9a0c2b7d14a",
+            "3f9a0c2b7d1g",
+        ] {
+            assert_eq!(console_id(bad), None, "{bad:?}");
+        }
+        let mut state = page();
+        state.reports.facts = Some(Facts::default());
+        assert!(!ids(&state).contains(&Id::ConsoleId), "no id: no row");
+        state.reports.facts = Some(Facts {
+            console_id: Some("3f9a0c2b7d14".into()),
+            ..Facts::default()
+        });
+        assert_eq!(
+            ids(&state),
+            [
+                Id::ErrorReports,
+                Id::ReportsQueue,
+                Id::ReportsToday,
+                Id::ConsoleId
+            ]
+        );
+        assert_eq!(state.reports_value(Id::ConsoleId), "3f9a0c2b7d14");
+        assert!(state.fixed(Id::ConsoleId), "a reading, not an action");
     }
     #[test]
     fn the_viewer_scrolls_by_lines_and_pages_and_b_goes_back() {

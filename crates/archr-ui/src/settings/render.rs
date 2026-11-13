@@ -976,6 +976,12 @@ impl View<'_, '_, '_> {
             } else if let Some(confirm) = &state.storage.confirm {
                 let (question, detail, hints) = confirm.dialog();
                 Some((self.tr(question), Some(self.tr(detail)), Some(hints)))
+            } else if state.diag.confirm_send {
+                Some((
+                    self.tr("diag.send_question"),
+                    Some(self.tr("diag.send_what")),
+                    Some(crate::settings::diag::SEND_HINTS),
+                ))
             } else if let Some((title, detail)) = state.hotkey_prompt() {
                 Some((
                     self.tr(&title),

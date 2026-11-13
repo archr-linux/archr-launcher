@@ -385,6 +385,8 @@ pub enum Id {
     Crashes,
     ReportNow,
     ReportLast,
+    /// Send the last report (archr-report send), after a question.
+    ReportSend,
     /// Games link to the BIOS page.
     BiosLink,
     /// Games link to Resume and switch, and that page's rows.
@@ -411,6 +413,8 @@ pub enum Id {
     ErrorReports,
     ReportsQueue,
     ReportsToday,
+    /// This console's id (archr-console-id), to quote in an issue.
+    ConsoleId,
     ReportsLatest,
     ReportsView,
 }
@@ -598,12 +602,14 @@ impl Id {
             Self::ReportsLink
             | Self::ReportsQueue
             | Self::ReportsToday
+            | Self::ConsoleId
             | Self::ReportsLatest
             | Self::ReportsView => ("", ""),
             Self::DiagLink
             | Self::Crashes
             | Self::ReportNow
             | Self::ReportLast
+            | Self::ReportSend
             | Self::BiosLink => ("", ""),
         }
     }
@@ -898,6 +904,8 @@ pub enum Effect {
     Convert(Box<crate::convert::Offer>),
     /// Write a diagnostic report (archr-report).
     Report,
+    /// Send this report, by its file name (archr-report send).
+    SendReport(String),
     /// Install a free BIOS: "psx" or "msx" (archr-bios-livres).
     BiosInstall(String),
 }
@@ -944,6 +952,7 @@ impl std::fmt::Debug for Effect {
             Self::Adapters(id) => write!(f, "Adapters({id:?})"),
             Self::Convert(offer) => write!(f, "Convert({:?} -> {:?})", offer.from, offer.to),
             Self::Report => write!(f, "Report"),
+            Self::SendReport(name) => write!(f, "SendReport({name:?})"),
             Self::BiosInstall(free) => write!(f, "BiosInstall({free:?})"),
         }
     }
@@ -1139,7 +1148,7 @@ impl Settings {
         }
         if matches!(
             id,
-            Id::Crashes | Id::ReportNow | Id::ReportLast | Id::DiagLink
+            Id::Crashes | Id::ReportNow | Id::ReportLast | Id::ReportSend | Id::DiagLink
         ) {
             let now = std::time::SystemTime::now();
             return information::value(catalog, &self.diag_value(id, now));
@@ -1149,6 +1158,7 @@ impl Settings {
             Id::ReportsLink
                 | Id::ReportsQueue
                 | Id::ReportsToday
+                | Id::ConsoleId
                 | Id::ReportsLatest
                 | Id::ReportsView
         ) {
@@ -1401,7 +1411,7 @@ impl Settings {
                 self.storage.password.replace('|', "")
             ),
             Id::ModuleRow(_) | Id::ModuleItem(..) => self.module_subtitle(row.id)?,
-            Id::ReportNow | Id::ReportLast => self
+            Id::ReportNow | Id::ReportLast | Id::ReportSend => self
                 .diag_subtitle(row.id)
                 .or(row.subtitle.map(Into::into))?,
             Id::ReportsLatest => self.reports_last()?.detail(),
@@ -1456,8 +1466,8 @@ impl Settings {
                 Id::ArtWidth | Id::ArtRadius => self.value(Id::GameArt) == "1",
                 Id::UnifiedCard => self.storage.unified.is_some(),
                 Id::RomsLink => self.storage.roms.shown(),
-                Id::ReportLast => self.diag_visible(row.id),
-                Id::ReportsLatest | Id::ReportsView => self.reports_visible(row.id),
+                Id::ReportLast | Id::ReportSend => self.diag_visible(row.id),
+                Id::ConsoleId | Id::ReportsLatest | Id::ReportsView => self.reports_visible(row.id),
                 id if id.roms() => self.roms_visible(id),
                 id if Games::ROWS.contains(&id) => self.games.shows(id, self),
                 id @ (Id::CheevosAccount
@@ -1485,7 +1495,7 @@ impl Settings {
             Id::StorageCard | Id::UnifiedCard | Id::UsbAddress | Id::UsbState => true,
             Id::RomsNow | Id::RomsCard | Id::RomsPower | Id::RomsLeft => true,
             Id::Crashes | Id::ReportLast => true,
-            Id::ReportsQueue | Id::ReportsToday | Id::ReportsLatest => true,
+            Id::ReportsQueue | Id::ReportsToday | Id::ConsoleId | Id::ReportsLatest => true,
             Id::ModuleRow(_) | Id::ModuleItem(..) => self.module_fixed(id),
             _ => false,
         }
@@ -1495,6 +1505,7 @@ impl Settings {
         match id {
             Id::IndexNow => true,
             Id::ReportNow => self.diag.running,
+            Id::ReportSend => self.diag_send_disabled(),
             Id::UpdateInstall => self.updates.count() == 0 || self.updates.checking,
             Id::UpdateCheck => self.updates.checking,
             Id::RestoreBackup => self.storage.backup.is_none(),
@@ -1553,6 +1564,9 @@ impl Settings {
         }
         if self.confirm_forget.is_some() {
             return &[(Key('A'), "settings.forget"), (Key('B'), "hint.cancel")];
+        }
+        if self.diag.confirm_send {
+            return diag::SEND_HINTS;
         }
         if let Some(hints) = self.modules_hints() {
             return hints;
