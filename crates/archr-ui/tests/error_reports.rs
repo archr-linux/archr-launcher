@@ -1,7 +1,7 @@
 //! System › Error reports, the last report's text and the notice over the
 //! Start screen, and the question of a port that needs panfrost, draw in
 //! every language and at every screen size without a text the layout
-//! cannot hold.
+//! cannot hold. ARCHR_REPORTS_CAPTURE_DIR keeps the pictures.
 mod common;
 use archr_ui::{
     i18n::I18n,
@@ -77,6 +77,7 @@ fn reports(page: Page) -> Settings {
             "12:31".into(),
             REPORT,
         )),
+        console_id: Some("3f9a0c2b7d14".into()),
     });
     if page == Page::ReportText {
         state.open(Page::ReportText);
@@ -108,6 +109,8 @@ fn error_reports_draw_in_every_language_at_every_size() {
     log::set_max_level(log::LevelFilter::Warn);
     std::env::set_var("SDL_VIDEODRIVER", "offscreen");
     let temp = tempfile::tempdir().unwrap();
+    let dir = std::env::var_os("ARCHR_REPORTS_CAPTURE_DIR")
+        .map_or_else(|| temp.path().to_path_buf(), Into::into);
     let themes: PathBuf = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../themes");
     let default = Theme::load(&themes.join("default"));
     let data = FakeData::default();
@@ -131,10 +134,7 @@ fn error_reports_draw_in_every_language_at_every_size() {
                 ("aviso", start(), None),
                 ("panfrost", panfrost(), None),
             ] {
-                ui.screenshot = Some(
-                    temp.path()
-                        .join(format!("{name}-{language}-{width}x{height}.png")),
-                );
+                ui.screenshot = Some(dir.join(format!("{name}-{language}-{width}x{height}.png")));
                 for _ in 0..2 {
                     ui.snap_animations();
                     ui.draw_with_settings(&app, &data, &theme, Default::default(), state.as_ref())

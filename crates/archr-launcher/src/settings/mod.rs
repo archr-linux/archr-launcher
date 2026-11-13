@@ -434,6 +434,7 @@ pub(super) enum Work {
     /// Diagnostics and BIOS: their own lane (`diag::Slow`).
     Diag,
     Report,
+    SendReport(String),
     Bios,
     BiosInstall(String),
 }
@@ -487,6 +488,8 @@ enum Reply {
     Diag(Box<archr_ui::settings::diag::Facts>),
     Reports(Box<archr_ui::settings::reports::Facts>),
     Report(Result<archr_ui::settings::diag::Report, String>),
+    /// `archr-report send`'s exit code.
+    ReportSent(Result<i32, String>),
     Bios(Result<Vec<archr_ui::settings::bios::System>, String>),
     BiosInstall(Result<(), String>),
 }
@@ -630,6 +633,8 @@ impl Worker {
             .name("launcher-settings".into())
             .spawn(move || {
                 let backend = Backend::new(paths);
+                // archr-console-id answers the same until the system changes.
+                let mut console_id = None;
                 while let Ok(work) = requests.recv() {
                     let reply = match work {
                         Work::Load => Reply::Loaded(backend.load_with_levels().map(Box::new)),
@@ -671,6 +676,7 @@ impl Worker {
                         | Work::Store(_)
                         | Work::Diag
                         | Work::Report
+                        | Work::SendReport(_)
                         | Work::Bios
                         | Work::BiosInstall(_) => {
                             unreachable!("these have their own lanes")
@@ -693,7 +699,11 @@ impl Worker {
                         Work::RaScan => Reply::RaScan(backend.ra_scan()),
                         Work::Roms => Reply::Roms(Box::new(backend.roms_scan())),
                         Work::Reports => {
-                            Reply::Reports(Box::new(crate::reports::facts(&backend.paths)))
+                            let mut facts = crate::reports::facts(&backend.paths);
+                            facts.console_id = console_id
+                                .get_or_insert_with(|| backend.console_id())
+                                .clone();
+                            Reply::Reports(Box::new(facts))
                         }
                         Work::Adapters(forget) => Reply::Adapters(backend.adapters(forget)),
                         Work::RaImport(backup, seen) => {
@@ -772,6 +782,7 @@ impl Worker {
         let slow = match work {
             Work::Diag => Some(diag::Slow::Diag),
             Work::Report => Some(diag::Slow::Report),
+            Work::SendReport(ref name) => Some(diag::Slow::Send(name.clone())),
             Work::Bios => Some(diag::Slow::Bios),
             Work::BiosInstall(ref free) => Some(diag::Slow::BiosInstall(free.clone())),
             _ => None,
@@ -872,6 +883,7 @@ impl Worker {
                     | Reply::Rejoined(..)
                     | Reply::Diag(_)
                     | Reply::Report(_)
+                    | Reply::ReportSent(_)
                     | Reply::Bios(_)
                     | Reply::BiosInstall(_)
             ) {
@@ -1031,6 +1043,7 @@ impl Worker {
                     state.reports.facts = Some(*facts);
                 }
                 Reply::Report(result) => state.report_done(result),
+                Reply::ReportSent(result) => state.report_sent(result),
                 Reply::Bios(Ok(systems)) => state.bios_scanned(systems),
                 Reply::Bios(Err(error)) => {
                     log::warn!("archr-systems --json: {error}");

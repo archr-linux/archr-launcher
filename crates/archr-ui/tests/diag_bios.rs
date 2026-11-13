@@ -97,11 +97,20 @@ fn diagnostics_and_bios_draw_in_every_language() {
     .remove(0);
     let mut running = diagnostics();
     running.diag.running = true;
+    // "Send the last report": its question, and the row while reports are off.
+    let mut send = diagnostics();
+    send.cursor = 4;
+    send.diag.confirm_send = true;
+    let mut off = diagnostics();
+    off.cursor = 4;
+    off.values.insert(Id::ErrorReports, "0".into());
     for language in ["en", "pt_BR", "es", "ru"] {
         ui.catalog = I18n::load(std::path::Path::new("/nonexistent"), Some(language), None);
         for (name, state) in [
             ("diagnostico", diagnostics()),
             ("diagnostico-gerando", running.clone()),
+            ("diagnostico-enviar", send.clone()),
+            ("diagnostico-desligado", off.clone()),
             ("bios", bios_page()),
             ("bios-livre", question.clone()),
             ("bios-msx", msx.clone()),

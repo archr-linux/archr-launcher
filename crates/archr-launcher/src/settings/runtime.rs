@@ -361,6 +361,7 @@ impl Runtime {
             Effect::Adapters(forget) => self.send(Work::Adapters(forget)),
             Effect::Convert(offer) => self.convert.push(crate::convert::Request::Run(offer)),
             Effect::Report => self.send(Work::Report),
+            Effect::SendReport(name) => self.send(Work::SendReport(name)),
             Effect::BiosInstall(free) => self.send(Work::BiosInstall(free)),
             Effect::Module(request) => return Outcome::Module(request),
             Effect::Reboot => return Outcome::Action(SessionAction::Reboot),

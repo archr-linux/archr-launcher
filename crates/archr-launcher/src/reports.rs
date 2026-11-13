@@ -98,6 +98,7 @@ pub fn facts(paths: &Paths) -> Facts {
         queued: queue.len(),
         sent_today,
         last,
+        console_id: None,
     }
 }
 /// Today's date as archr-error-report writes it (`date +%F`, local time).

@@ -275,6 +275,7 @@ impl Settings {
             Page::ReportText => self.report_text_input(button),
             Page::UsbAdapters => self.usb_input(button),
             Page::Bios => self.bios_input(button),
+            Page::Diagnostics => self.diag_input(button),
             Page::Shortcuts => self.shortcuts_input(button),
             Page::Modules
             | Page::ModuleInfo
@@ -516,7 +517,7 @@ impl Settings {
                 self.bios.systems = None;
                 self.open(Page::Bios);
             }
-            id @ (Id::DiagLink | Id::ReportNow) => return self.diag_activate(id),
+            id @ (Id::DiagLink | Id::ReportNow | Id::ReportSend) => return self.diag_activate(id),
             id @ (Id::ReportsLink | Id::ReportsView) => return self.reports_activate(id),
             id => return self.storage_activate(id),
         }
