@@ -1465,7 +1465,7 @@
 "reports.last_detail" = "{day}.{month} {time} · {place}"
 "reports.last_when" = "{day}.{month} {time}"
 "reports.goes" = "Отправляется"
-"reports.goes_detail" = "Модель устройства, версия Arch R, что сломалось (эмулятор, игра или приложение) и журнал ошибки."
+"reports.goes_detail" = "Модель устройства, ID этой консоли, версия Arch R, что сломалось (эмулятор, игра или приложение) и журнал ошибки."
 "reports.stays" = "Не отправляется"
 "reports.stays_detail" = "Имя сети Wi-Fi, IP, учётные записи, пароли, сохранения и ваши ROM."
 "reports.deleted" = "Решённые отчёты удаляются с сервера."

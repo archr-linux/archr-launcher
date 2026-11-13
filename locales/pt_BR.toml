@@ -1465,7 +1465,7 @@
 "reports.last_detail" = "{day}/{month} {time} · {place}"
 "reports.last_when" = "{day}/{month} {time}"
 "reports.goes" = "O que vai"
-"reports.goes_detail" = "Modelo do aparelho, versão do Arch R, o que falhou (emulador, jogo ou app) e o trecho do log do erro."
+"reports.goes_detail" = "Modelo do aparelho, ID deste console, versão do Arch R, o que falhou (emulador, jogo ou app) e o trecho do log do erro."
 "reports.stays" = "O que não vai"
 "reports.stays_detail" = "Nome da rede Wi-Fi, IP, contas, senhas, saves e suas ROMs."
 "reports.deleted" = "Relatórios resolvidos são apagados do servidor."
