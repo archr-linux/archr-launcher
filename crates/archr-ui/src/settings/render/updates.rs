@@ -17,6 +17,11 @@ const LEFT: f32 = 40.;
 const WIDE: f32 = 560.;
 const STEP: f32 = 45.;
 
+/// The step's detail: the file's name, without roms/update/.
+fn card_name(file: &str) -> String {
+    file.rsplit('/').next().unwrap_or(file).to_owned()
+}
+
 impl View<'_, '_, '_> {
     fn size(&self, bytes: u64) -> String {
         self.ui.catalog.size(bytes)
@@ -176,6 +181,18 @@ impl View<'_, '_, '_> {
             let text = view.tr(key).to_uppercase();
             view.text((x, y, w, 15.), &text, (11., theme.muted, Align::Left))
         };
+        // On the card's row, the panel holds that update's notes.
+        let focused = state.visible_rows().get(state.cursor).map(|r| r.id);
+        if let Some(card) = state
+            .updates
+            .card
+            .as_ref()
+            .filter(|_| focused == Some(Id::UpdateCard))
+        {
+            heading(self, "updates.news", VIEW_TOP)?;
+            let notes = card.changelog.join("\n");
+            return self.update_notes(&notes, VIEW_TOP + 21., false);
+        }
         heading(self, "updates.packages", VIEW_TOP)?;
         let mut y = VIEW_TOP + 21.;
         let report = state.updates.report.as_ref();
@@ -204,14 +221,20 @@ impl View<'_, '_, '_> {
         }
         y += 8.;
         heading(self, "updates.news", y)?;
-        y += 21.;
+        self.update_notes(news, y + 21., true)
+    }
+    /// The notes from `y` to the bottom; a cut ends in the line that points
+    /// to the full list when there is one (`more`).
+    fn update_notes(&mut self, news: &str, y: f32, more: bool) -> Result<(), String> {
+        let (x, w) = PANEL;
+        let theme = self.theme;
         if news.is_empty() {
             return self.paragraph((x, y, w), &self.tr("updates.no_news"));
         }
         let width = self.rect((x, y, w, 1.)).width();
         let mut lines = self.lines(news, 12., width)?;
         let room = ((self.view_bottom() - y) / 17.).floor().max(1.) as usize;
-        let cut = lines.len() > room;
+        let cut = more && lines.len() > room;
         lines.truncate(if cut { room - 1 } else { room });
         for (n, line) in lines.iter().enumerate() {
             self.text(
@@ -299,10 +322,13 @@ impl View<'_, '_, '_> {
         state: &Settings,
         progress: &Progress,
     ) -> (String, u8, String) {
-        let count = progress
-            .count
-            .max(state.updates.count())
-            .max(progress.current);
+        // The network's list says nothing of the card's file.
+        let listed = if state.updates.from_card.is_some() {
+            0
+        } else {
+            state.updates.count()
+        };
+        let count = progress.count.max(listed).max(progress.current);
         let name = package_name(&progress.package);
         let (now, percent) = match progress.stage {
             Stage::Sync => (self.tr("updates.now_sync"), 0),
@@ -315,6 +341,7 @@ impl View<'_, '_, '_> {
                     .format("updates.now_download", &[("name", name)]),
                 progress.percent,
             ),
+            Stage::Extract => (self.tr("updates.now_extract"), progress.percent),
             Stage::Install => (
                 self.ui
                     .catalog
@@ -344,6 +371,9 @@ impl View<'_, '_, '_> {
                     ("name", name),
                 ],
             )
+        } else if count == 0 {
+            // A card's run knows its packages only once it installs.
+            String::new()
         } else {
             self.tr(&format!("updates.package_count|count={count}"))
         };
@@ -398,16 +428,26 @@ impl View<'_, '_, '_> {
                 String::new()
             }
         };
-        let steps = [
-            (Stage::Sync, "updates.step_sync", "pacman -Sy".to_owned()),
-            (Stage::Download, "updates.step_download", download),
-            (Stage::Install, "updates.step_install", install),
-            (
-                Stage::Hooks,
-                "updates.step_hooks",
-                self.tr("updates.step_hooks_detail"),
-            ),
-        ];
+        let hooks = (
+            Stage::Hooks,
+            "updates.step_hooks",
+            self.tr("updates.step_hooks_detail"),
+        );
+        // From the card: the file is prepared where the network syncs and
+        // downloads.
+        let steps = match &state.updates.from_card {
+            Some(file) => vec![
+                (Stage::Extract, "updates.step_extract", card_name(file)),
+                (Stage::Install, "updates.step_install", install),
+                hooks,
+            ],
+            None => vec![
+                (Stage::Sync, "updates.step_sync", "pacman -Sy".to_owned()),
+                (Stage::Download, "updates.step_download", download),
+                (Stage::Install, "updates.step_install", install),
+                hooks,
+            ],
+        };
         for (n, (stage, title, detail)) in steps.iter().enumerate() {
             let y = 138. + n as f32 * STEP;
             self.step((LEFT, y), progress.stage.cmp(stage), title, detail)?;
@@ -629,14 +669,7 @@ impl View<'_, '_, '_> {
             .report
             .as_ref()
             .map_or(state.info.version.as_str(), |r| r.version.as_str());
-        let known = [
-            "network", "battery", "space", "busy", "seed", "sync", "download", "install",
-        ];
-        let reason = if known.contains(&reason) {
-            reason
-        } else {
-            "unknown"
-        };
+        let reason = crate::settings::updates::failure(reason);
         let after = if changed {
             self.tr("updates.partly_installed")
         } else {
@@ -650,7 +683,11 @@ impl View<'_, '_, '_> {
             &self.tr(&format!("updates.failed_{reason}")),
             &body,
             line,
-            ["updates.retry", "hint.back"],
+            if state.updates.card_refused() {
+                ["hint.back", ""]
+            } else {
+                ["updates.retry", "hint.back"]
+            },
         )
     }
     /// Footer note of the page: the source, the cancel rule or the log.
@@ -658,6 +695,9 @@ impl View<'_, '_, '_> {
         match &state.updates.run {
             _ if state.page() == Page::UpdatePackages => None,
             None => Some(self.tr("updates.source")),
+            Some(Run::Working(_)) if state.updates.from_card.is_some() => {
+                Some(self.tr("updates.card_rule"))
+            }
             Some(Run::Working(_)) => Some(self.tr("updates.cancel_rule")),
             Some(Run::Failed { .. }) => {
                 Some(self.ui.catalog.format("updates.log", &[("path", LOG)]))

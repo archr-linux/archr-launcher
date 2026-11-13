@@ -342,6 +342,8 @@ pub enum Id {
     HotkeyOn(u8),
     UpdateInstall,
     UpdateCheck,
+    /// Install the update file copied to roms/update.
+    UpdateCard,
     /// `updates.branch`, read by archr-update.
     UpdateChannel,
     UpdateBoot,
@@ -557,6 +559,7 @@ impl Id {
             | Self::CheevosLogout
             | Self::UpdateInstall
             | Self::UpdateCheck
+            | Self::UpdateCard
             | Self::ModulesLink
             | Self::ModuleEntry(_)
             | Self::ModuleStoreLink
@@ -882,6 +885,8 @@ pub enum Effect {
     CheckUpdates,
     /// Download and install the pending updates.
     Update,
+    /// Install this update file from the card (archr-update update --from).
+    UpdateFromCard(String),
     /// Stop the download (the install cannot stop).
     CancelUpdate,
     /// Preview another theme: load it off the draw thread.
@@ -938,6 +943,7 @@ impl std::fmt::Debug for Effect {
             Self::CancelScrape => write!(f, "CancelScrape"),
             Self::CheckUpdates => write!(f, "CheckUpdates"),
             Self::Update => write!(f, "Update"),
+            Self::UpdateFromCard(file) => write!(f, "UpdateFromCard({file:?})"),
             Self::CancelUpdate => write!(f, "CancelUpdate"),
             Self::Theme(name) => write!(f, "Theme({name:?})"),
             Self::Appearance => write!(f, "Appearance"),
@@ -1181,6 +1187,14 @@ impl Settings {
                 };
             }
             (Id::UpdateInstall | Id::UpdateCheck, _) => return "›".into(),
+            (Id::UpdateCard, _) => {
+                return self
+                    .updates
+                    .card
+                    .as_ref()
+                    .map(|c| c.id.clone())
+                    .unwrap_or_default();
+            }
             (Id::UpdateChannel, _) => "updates.stable",
             (Id::Language, "en_US") => "settings.lang_en",
             (Id::Language, "pt_BR") => "settings.lang_pt",
@@ -1399,6 +1413,7 @@ impl Settings {
             Id::StorageCard => self.storage.card.as_ref()?.detail.clone(),
             Id::SecondCard => self.storage.second.as_ref()?.detail.clone(),
             Id::UpdateInstall => self.updates.install_note()?.into(),
+            Id::UpdateCard => self.card_subtitle()?.into(),
             Id::Mangohud if !self.mangohud_supported => "settings.mangohud_unsupported".into(),
             Id::RestoreBackup => self
                 .storage
@@ -1465,6 +1480,7 @@ impl Settings {
                 Id::SecondCard => self.storage.second.is_some(),
                 Id::ArtWidth | Id::ArtRadius => self.value(Id::GameArt) == "1",
                 Id::UnifiedCard => self.storage.unified.is_some(),
+                Id::UpdateCard => self.updates.card.is_some(),
                 Id::RomsLink => self.storage.roms.shown(),
                 Id::ReportLast | Id::ReportSend => self.diag_visible(row.id),
                 Id::ConsoleId | Id::ReportsLatest | Id::ReportsView => self.reports_visible(row.id),
@@ -1508,6 +1524,7 @@ impl Settings {
             Id::ReportSend => self.diag_send_disabled(),
             Id::UpdateInstall => self.updates.count() == 0 || self.updates.checking,
             Id::UpdateCheck => self.updates.checking,
+            Id::UpdateCard => self.updates.card_disabled(),
             Id::RestoreBackup => self.storage.backup.is_none(),
             Id::RomsMove | Id::RomsNames => self.roms_disabled(id),
             Id::ButtonsRestore => self.default_bindings(),

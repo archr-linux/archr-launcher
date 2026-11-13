@@ -29,7 +29,9 @@ pub struct Runtime {
     /// A write the library reads at launch finished (Games page, netplay nickname).
     launch_saved: bool,
     closing: bool,
-    check: Option<Check>,
+    check: Option<Check<Result<archr_ui::settings::updates::Report, String>>>,
+    /// archr-update looking for an update file on the card.
+    card: Option<Check<Option<archr_ui::settings::updates::Card>>>,
     /// A system update runs: nothing closes or powers off meanwhile.
     install: Option<Install>,
     /// `install` follows a run found going, not one started here.
@@ -63,6 +65,7 @@ impl Runtime {
             launch_saved: false,
             closing: false,
             check: None,
+            card: None,
             install: None,
             attaching: false,
             reattached: false,
@@ -249,6 +252,21 @@ impl Runtime {
                 }
             }
         }
+        if let Some(card) = self.card.as_ref().and_then(Check::poll) {
+            self.card = None;
+            self.state.updates.card_found(card);
+            changed = true;
+        }
+        if self.active
+            && !self.closing
+            && self.state.page() == Page::Updates
+            && self.card.is_none()
+            && self.state.updates.wants_card_scan()
+        {
+            self.state.updates.card_looking = true;
+            self.card = Some(Check::card(self.paths.clone()));
+            changed = true;
+        }
         // Nothing known yet about an open Updates page: look.
         if self.active
             && !self.closing
@@ -348,10 +366,13 @@ impl Runtime {
             Effect::Store(action) => self.send(Work::Store(action)),
             Effect::CheckUpdates => self.check_updates(),
             Effect::Update if self.install.is_none() && self.check.is_none() => {
-                self.install = Some(Install::start(&self.paths));
+                self.install = Some(Install::start(&self.paths, None));
+            }
+            Effect::UpdateFromCard(file) if self.install.is_none() && self.check.is_none() => {
+                self.install = Some(Install::start(&self.paths, Some(file)));
             }
             // A check still running: the page shows it; press again after.
-            Effect::Update => self.state.updates.run = None,
+            Effect::Update | Effect::UpdateFromCard(_) => self.state.updates.run = None,
             Effect::CancelUpdate => {
                 if let Some(install) = &self.install {
                     install.cancel();

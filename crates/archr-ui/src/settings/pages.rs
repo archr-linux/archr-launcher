@@ -451,10 +451,16 @@ impl Settings {
             Id::ResumeLink => self.open(Page::Resume),
             Id::PowerLink => self.open(Page::Power),
             Id::MangohudItems => self.open(Page::MangohudItems),
-            Id::Update => self.open(Page::Updates),
+            // Every visit looks at the card again.
+            Id::Update => {
+                self.updates.card_looked = false;
+                self.open(Page::Updates);
+            }
             Id::UpdateInstall => return Some(self.start_update()),
+            Id::UpdateCard => return Some(self.ask_card_update()),
             Id::UpdateCheck => {
                 self.updates.checking = true;
+                self.updates.card_looked = false;
                 return Some(Effect::CheckUpdates);
             }
             Id::ScraperMedia => self.open(Page::ScraperMedia),
