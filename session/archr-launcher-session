@@ -266,6 +266,13 @@ case "$game_sequence" in ''|*[!0-9]*) exit 1 ;; esac
 
 session_log 'Starting launcher session'
 
+# Seen once after a GPU driver switch (R36S, 2026-11-12): sway up, its
+# output never active, the launcher failing every second with "The video
+# driver did not add any displays" until sway was restarted. Every 10th
+# failure in a row with no active output: say what sway reports and ask it
+# to bring its outputs up.
+failures=0
+
 while :; do
     cap_log
     # input_sense uses killall with this file, never a PID or a process group.
@@ -286,6 +293,13 @@ while :; do
     if [ "$launcher_status" -ne 0 ]; then
         rm -f "$run_dir/next" || exit 1
         session_log "Launcher exited with $launcher_status; retrying in 1 s"
+        failures=$((failures + 1))
+        if [ $((failures % 10)) -eq 0 ] &&
+            ! swaymsg -t get_outputs 2>/dev/null | grep -q '"active": true'; then
+            session_log "No active output after $failures failures: $(swaymsg -t get_outputs 2>&1 |
+                tr -d ' \n' | grep -o '"\(name\|active\|dpms\|power\)":[^,}]*' | tr '\n' ' ')"
+            swaymsg 'output * enable; output * power on' >/dev/null 2>&1 || :
+        fi
         # A crash becomes an anonymous error report unless reports are off
         # (archr-error-report decides, and leaves out stops from outside).
         # In the background: the launcher comes back meanwhile.
@@ -295,6 +309,7 @@ while :; do
         "$sleep_bin" 1
         continue
     fi
+    failures=0
     if [ ! -f "$run_dir/next" ]; then
         continue
     fi
