@@ -2,7 +2,7 @@
 //! JSON lines read as they arrive. SDL's thread only drains the channels.
 use super::Backend;
 use crate::paths::Paths;
-use archr_ui::settings::updates::{Package, Progress, Reboot, Report, Run, Stage, Updates};
+use archr_ui::settings::updates::{Card, Package, Progress, Reboot, Report, Run, Stage, Updates};
 use serde_json::Value;
 use std::{
     fs,
@@ -18,6 +18,8 @@ use std::{
 
 /// The sync and the package list on a slow mirror.
 const CHECK_TIMEOUT: Duration = Duration::from_secs(180);
+/// `offline --json` reads the file's manifest and signature.
+const CARD_TIMEOUT: Duration = Duration::from_secs(60);
 
 fn text(value: &Value, key: &str) -> String {
     value[key].as_str().unwrap_or_default().to_owned()
@@ -53,6 +55,28 @@ pub(super) fn report(json: &str) -> Result<Report, String> {
         news: text(&value, "news"),
     })
 }
+/// `offline --json`: the card's update file, when there is a usable one.
+/// Anything else (no file, a line that is not the contract) shows no row.
+pub(super) fn card(json: &str) -> Option<Card> {
+    let value: Value = serde_json::from_str(json.trim()).ok()?;
+    let card = Card {
+        file: text(&value, "file"),
+        id: text(&value, "id"),
+        newer: value["newer"].as_bool()?,
+        changelog: value["changelog"]
+            .as_array()
+            .map(|lines| {
+                lines
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default(),
+    };
+    let found = value["found"].as_bool() == Some(true);
+    (found && !card.file.is_empty() && !card.id.is_empty()).then_some(card)
+}
 /// One `update --progress` line into the run on screen.
 pub(super) fn apply(updates: &mut Updates, line: &str) {
     let Ok(event) = serde_json::from_str::<Value>(line.trim()) else {
@@ -65,6 +89,12 @@ pub(super) fn apply(updates: &mut Updates, line: &str) {
     let percent = number(&event, "percent").min(100) as u8;
     progress.stage = match event["phase"].as_str().unwrap_or_default() {
         "sync" => Stage::Sync,
+        "extract" => {
+            progress.percent = percent;
+            // A run from the card followed from before this launcher.
+            updates.from_card.get_or_insert_with(String::new);
+            Stage::Extract
+        }
         "download" => {
             progress.package = text(&event, "package");
             progress.bytes = number(&event, "bytes");
@@ -103,18 +133,30 @@ pub(super) fn apply(updates: &mut Updates, line: &str) {
     updates.run = Some(Run::Working(progress));
 }
 
-pub(super) struct Check(mpsc::Receiver<Result<Report, String>>);
-impl Check {
-    pub(super) fn start(paths: Paths) -> Self {
+/// One archr-update question on its own thread: the check, or the look at
+/// the card.
+pub(super) struct Check<T>(mpsc::Receiver<T>);
+impl<T: Send + 'static> Check<T> {
+    fn spawn(paths: Paths, ask: fn(&Backend) -> T) -> Self {
         let (tx, rx) = mpsc::channel();
         thread::spawn(move || {
-            let _ = tx.send(Backend::new(paths).update_check());
+            let _ = tx.send(ask(&Backend::new(paths)));
         });
         Self(rx)
     }
-    /// The finished check, once.
-    pub(super) fn poll(&self) -> Option<Result<Report, String>> {
+    /// The finished answer, once.
+    pub(super) fn poll(&self) -> Option<T> {
         self.0.try_recv().ok()
+    }
+}
+impl Check<Result<Report, String>> {
+    pub(super) fn start(paths: Paths) -> Self {
+        Self::spawn(paths, Backend::update_check)
+    }
+}
+impl Check<Option<Card>> {
+    pub(super) fn card(paths: Paths) -> Self {
+        Self::spawn(paths, Backend::update_card)
     }
 }
 
@@ -140,23 +182,21 @@ pub(super) struct Install {
     cancel: Arc<AtomicBool>,
 }
 impl Install {
-    /// Starts the update outside the launcher's session and follows it.
-    pub(super) fn start(paths: &Paths) -> Self {
-        Self::spawn(paths, |paths, tx| {
+    /// Starts the update outside the launcher's session and follows it:
+    /// from the network, or from this file on the card.
+    pub(super) fn start(paths: &Paths, from: Option<String>) -> Self {
+        Self::spawn(paths, move |paths, tx| {
             let _ = fs::remove_file(paths.at(PROGRESS));
             let _ = fs::remove_file(paths.at(CANCEL));
             let script = paths.at("/usr/bin/archr-update");
             let script = script.to_string_lossy();
             let backend = Backend::new(paths.clone());
-            let args = [
-                "--unit=archr-update",
-                "--collect",
-                "--quiet",
-                "--",
-                &script,
-                "update",
-                "--progress",
-            ];
+            let mut args = vec!["--unit=archr-update", "--collect", "--quiet", "--"];
+            args.extend([&*script, "update"]);
+            if let Some(file) = &from {
+                args.extend(["--from", file]);
+            }
+            args.push("--progress");
             if let Err(error) = backend.command("systemd-run", &args) {
                 log::warn!("archr-update not started: {error}");
                 let event = serde_json::json!({
@@ -181,7 +221,10 @@ impl Install {
             running
         })
     }
-    fn spawn(paths: &Paths, begin: fn(&Paths, &mpsc::Sender<Line>) -> bool) -> Self {
+    fn spawn(
+        paths: &Paths,
+        begin: impl FnOnce(&Paths, &mpsc::Sender<Line>) -> bool + Send + 'static,
+    ) -> Self {
         let (tx, rx) = mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
         let (paths, asked) = (paths.clone(), cancel.clone());
@@ -303,6 +346,12 @@ impl Backend {
         })?;
         report(&String::from_utf8_lossy(&output.stdout))
     }
+    fn update_card(&self) -> Option<Card> {
+        self.command_with_timeout("archr-update", &["offline", "--json"], CARD_TIMEOUT)
+            .map_err(|e| log::warn!("archr-update offline: {e}"))
+            .ok()
+            .and_then(|json| card(&json))
+    }
 }
 
 /// A finished check into the page: the report or why it failed, and when.
@@ -326,8 +375,8 @@ mod tests {
         state::{Button, Outcome, SessionAction},
     };
     use archr_ui::settings::{
-        updates::{Reboot, Run, Stage},
-        Page,
+        updates::{Card, Reboot, Run, Stage, Updates},
+        Id, Page,
     };
     use std::{fs, os::unix::fs::PermissionsExt, time::Duration, time::Instant};
 
@@ -343,11 +392,24 @@ if [ "$1" = check ]; then
   exit 0
 fi
 [ "$1" = version ] && { echo 2.1.2; exit 0; }
+if [ "$1" = offline ]; then
+  /bin/cat "$R/card-answer" 2>/dev/null || echo '{"found":false}'
+  exit 0
+fi
 exec 9>>"$R/run/archr-update.lock"
 /usr/bin/flock -n 9 || exit 1
 : >"$R/run/archr-update.progress"
 say() { echo "$1" >>"$R/run/archr-update.progress"; /bin/sleep 0.25; }
 mode=$(/bin/cat "$R/mode")
+if [ "$2" = --from ]; then
+  say '{"phase":"extract","percent":40}'
+  say '{"phase":"extract","percent":100}'
+  [ "$mode" = old ] && { say '{"phase":"error","reason":"offline-old","message":"","line":"","changed":false}'; exit 1; }
+  say '{"phase":"install","package":"archr-launcher","current":1,"count":1,"percent":100}'
+  say '{"phase":"hooks","message":""}'
+  say '{"phase":"done","count":1,"reboot_required":true,"reboot_reason":"launcher","old_version":"20261112","new_version":"20261113.1"}'
+  exit 0
+fi
 say '{"phase":"sync"}'
 say '{"phase":"download","package":"linux","bytes":1048576,"total":3145728,"percent":33,"speed":524288}'
 case "$mode" in
@@ -559,5 +621,129 @@ while [ "${1#-}" != "$1" ]; do shift; done
         until(&mut runtime, |r| !r.mutations_pending());
         assert!(!runtime.take_reattached());
         assert!(runtime.state.updates.run.is_none());
+    }
+    const CARD: &str = r#"{"found":true,"file":"/storage/roms/update/archr-update-20261113.1.tar","id":"20261113.1","channel":"stable","newer":true,"current":"20261112","changelog":["- [launcher] new feature: update from the card","- [system] fix the clock"]}"#;
+    #[test]
+    fn the_card_answer_gives_a_row_only_for_a_whole_answer() {
+        let card = super::card(CARD).unwrap();
+        assert_eq!(
+            card.file,
+            "/storage/roms/update/archr-update-20261113.1.tar"
+        );
+        assert_eq!(card.id, "20261113.1");
+        assert!(card.newer);
+        assert_eq!(card.changelog.len(), 2);
+        let old = CARD.replace(r#""newer":true"#, r#""newer":false"#);
+        assert_eq!(super::card(&old).map(|c| c.newer), Some(false));
+        let bare = r#"{"found":true,"file":"/a.tar","id":"1","newer":true}"#;
+        assert_eq!(super::card(bare).unwrap().changelog, Vec::<String>::new());
+        for json in [
+            r#"{"found":false}"#,
+            "",
+            "archr-update: unknown command offline",
+            r#"{"found":true,"id":"1","newer":true}"#,
+            r#"{"found":true,"file":"/a.tar","newer":true}"#,
+            r#"{"found":true,"file":"/a.tar","id":"1"}"#,
+            r#"{"found":"yes","file":"/a.tar","id":"1","newer":true}"#,
+            "[1,2]",
+        ] {
+            assert_eq!(super::card(json), None, "{json}");
+        }
+    }
+    #[test]
+    fn extract_is_the_card_run_s_first_step() {
+        let mut updates = Updates::default();
+        super::apply(&mut updates, r#"{"phase":"extract","percent":40}"#);
+        assert!(
+            matches!(&updates.run, Some(Run::Working(p)) if p.stage == Stage::Extract && p.percent == 40)
+        );
+        // Followed from before this launcher: drawn as a card run, with
+        // no file to try again.
+        assert_eq!(updates.from_card.as_deref(), Some(""));
+        updates.from_card = Some("/a.tar".into());
+        super::apply(&mut updates, r#"{"phase":"extract","percent":100}"#);
+        assert_eq!(updates.from_card.as_deref(), Some("/a.tar"));
+        super::apply(
+            &mut updates,
+            r#"{"phase":"error","reason":"offline-incomplete","line":"","changed":false}"#,
+        );
+        assert!(
+            matches!(&updates.run, Some(Run::Failed { reason, .. }) if reason == "offline-incomplete")
+        );
+    }
+    fn on_the_card(runtime: &mut Runtime) {
+        until(runtime, |r| r.state.updates.card_looked);
+        let rows = runtime.state.visible_rows();
+        runtime.state.cursor = rows.iter().position(|r| r.id == Id::UpdateCard).unwrap();
+    }
+    #[test]
+    fn the_card_s_file_installs_from_the_path_the_look_found() {
+        let (dir, mut runtime) = fixture("ok");
+        fs::write(dir.path().join("card-answer"), CARD).unwrap();
+        until(&mut runtime, |r| r.state.updates.report.is_some());
+        on_the_card(&mut runtime);
+        let card: Option<Card> = runtime.state.updates.card.clone();
+        assert_eq!(card.map(|c| c.id).as_deref(), Some("20261113.1"));
+        // The question first: nothing starts on the first A.
+        runtime.handle(Button::A);
+        assert!(runtime.state.updates.confirm_card && !runtime.mutations_pending());
+        runtime.handle(Button::A);
+        let stages = until(&mut runtime, |r| {
+            matches!(r.state.updates.run, Some(Run::Done { .. }))
+        });
+        assert_eq!(stages, [Stage::Extract, Stage::Install, Stage::Hooks]);
+        until(&mut runtime, |r| !r.mutations_pending());
+        let args = fs::read_to_string(dir.path().join("systemd-run.args")).unwrap();
+        let script = dir.path().join("usr/bin/archr-update");
+        assert_eq!(
+            args.trim(),
+            format!(
+                "--unit=archr-update --collect --quiet -- {} update --from \
+                 /storage/roms/update/archr-update-20261113.1.tar --progress",
+                script.display()
+            )
+        );
+        assert_eq!(
+            runtime.state.updates.run,
+            Some(Run::Done {
+                reboot: Some(Reboot::Launcher),
+                from: "20261112".into(),
+                to: "20261113.1".into(),
+                count: 1
+            })
+        );
+        assert_eq!(
+            runtime.handle(Button::A),
+            Outcome::Action(SessionAction::Reboot)
+        );
+    }
+    #[test]
+    fn without_network_the_card_still_offers_its_file() {
+        let (dir, mut runtime) = fixture("old");
+        fs::write(dir.path().join("card-answer"), CARD).unwrap();
+        // The check fails as it does with no network.
+        fs::write(
+            dir.path().join("usr/bin/archr-update"),
+            FAKE.replace(
+                r#"if [ "$1" = check ]; then"#,
+                r#"if [ "$1" = check ]; then echo '{"error":"network","message":"offline"}'; exit 1; fi
+if false; then"#,
+            ),
+        )
+        .unwrap();
+        until(&mut runtime, |r| r.state.updates.failed.is_some());
+        assert_eq!(runtime.state.updates.failed.as_deref(), Some("network"));
+        on_the_card(&mut runtime);
+        assert!(!runtime.state.disabled(Id::UpdateCard));
+        runtime.handle(Button::A);
+        runtime.handle(Button::A);
+        until(&mut runtime, |r| !r.mutations_pending());
+        assert!(
+            matches!(&runtime.state.updates.run, Some(Run::Failed { reason, .. }) if reason == "offline-old")
+        );
+        // Back on the page, the card is looked at again.
+        runtime.handle(Button::B);
+        assert!(runtime.state.updates.run.is_none());
+        until(&mut runtime, |r| r.state.updates.card_looked);
     }
 }

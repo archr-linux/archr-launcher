@@ -118,7 +118,7 @@ fn placements(page: Page, rows: &[Row]) -> Vec<Placement> {
                 Page::LauncherControls if row.id == Id::ButtonsRestore => 36.,
                 Page::LauncherControls | Page::Hotkeys if row.subtitle.is_none() => 38.,
                 Page::Hotkeys => 44.,
-                Page::Updates if row.id == Id::UpdateInstall => 44.,
+                Page::Updates if row.subtitle.is_some() => 44.,
                 Page::RaImport => 38.,
                 Page::Updates => 40.,
                 _ if row.subtitle.is_some() => 46.,
@@ -976,6 +976,19 @@ impl View<'_, '_, '_> {
             } else if let Some(confirm) = &state.storage.confirm {
                 let (question, detail, hints) = confirm.dialog();
                 Some((self.tr(question), Some(self.tr(detail)), Some(hints)))
+            } else if let Some(card) = state
+                .updates
+                .card
+                .as_ref()
+                .filter(|_| state.updates.confirm_card)
+            {
+                Some((
+                    self.ui
+                        .catalog
+                        .format("updates.card_question", &[("id", &card.id)]),
+                    Some(self.tr("updates.card_what")),
+                    Some(&[(Key('A'), "hint.confirm"), (Key('B'), "hint.cancel")]),
+                ))
             } else if state.diag.confirm_send {
                 Some((
                     self.tr("diag.send_question"),

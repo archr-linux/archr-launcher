@@ -1848,6 +1848,20 @@ fn update_versions_stay_inside_their_line() {
     for text in [&now, &install] {
         assert!(text.contains("deadbeefcafe1-tools"), "{text}");
     }
+    // From the card the file is prepared first, and the network's package
+    // list counts for nothing.
+    let mut card = state.clone();
+    card.updates.from_card = Some("/storage/roms/update/archr-update-1.tar".into());
+    let progress = crate::settings::updates::Progress {
+        stage: Stage::Extract,
+        percent: 40,
+        ..Default::default()
+    };
+    let said = view.progress_text(&card, &progress);
+    assert_eq!(
+        said,
+        ("Preparando a atualização…".into(), 40, String::new())
+    );
 }
 
 /// System › Modules, the module store, the permission page, a module page
