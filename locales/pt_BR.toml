@@ -1463,6 +1463,12 @@
 "reports.notice_ok" = "Entendi"
 "reports.notice_off" = "Desligar relatórios"
 
+# Ports that need the panfrost driver (Ports-panfrost)
+"ports.panfrost_title" = "{name} precisa do driver panfrost"
+"ports.panfrost_body" = "Este jogo usa OpenGL, que o driver de GPU atual (libmali) não tem."
+"ports.panfrost_note" = "A troca vale para todo o sistema e o console reinicia. Para voltar: Configurações › Sistema › Driver de GPU."
+"ports.panfrost_switch" = "Trocar e reiniciar"
+
 # List search and folders
 "menu.search" = "Buscar na lista"
 "menu.folders" = "Mostrar pastas"

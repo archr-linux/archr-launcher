@@ -1463,6 +1463,12 @@
 "reports.notice_ok" = "OK"
 "reports.notice_off" = "Turn off reports"
 
+# Ports that need the panfrost driver (Ports-panfrost)
+"ports.panfrost_title" = "{name} needs the panfrost driver"
+"ports.panfrost_body" = "This game uses OpenGL, which the current GPU driver (libmali) does not have."
+"ports.panfrost_note" = "The switch applies to the whole system and the console restarts. To go back: Settings › System › GPU driver."
+"ports.panfrost_switch" = "Switch and restart"
+
 # List search and folders
 "menu.search" = "Search in list"
 "menu.folders" = "Show folders"

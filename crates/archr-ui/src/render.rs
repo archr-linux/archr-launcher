@@ -1108,6 +1108,8 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             }
             if let Some(offer) = &app.convert {
                 self.convert_question(offer, theme)?;
+            } else if let Some(title) = &app.panfrost {
+                self.panfrost_notice(title, theme)?;
             } else if let Some(notice) = app.reports_notice.as_ref().filter(|_| app.notice_shown())
             {
                 self.reports_notice(notice, theme)?;

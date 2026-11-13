@@ -109,6 +109,8 @@ pub enum Outcome {
     Convert(Box<crate::convert::Offer>),
     /// The error reports notice was answered: keep them on (true) or not.
     ReportsNotice(bool),
+    /// Ports-panfrost was accepted: set the GPU driver to panfrost, then reboot.
+    Panfrost,
     Settings,
     /// Opens Settings, System, Updates.
     Updates,
@@ -388,6 +390,9 @@ pub struct App {
     pub convert: Option<crate::convert::Offer>,
     /// Error reports are on: said once, over the Start screen (Relatorios-aviso).
     pub reports_notice: Option<crate::settings::reports::Notice>,
+    /// A port that runs only on panfrost, by its title, asked instead of
+    /// launched (Ports-panfrost).
+    pub panfrost: Option<String>,
     /// States per page and the screenshot grid, reported by the renderer.
     pub saves_page: usize,
     pub shots_columns: usize,
@@ -441,6 +446,7 @@ impl App {
             confirm: None,
             convert: None,
             reports_notice: None,
+            panfrost: None,
             saves_page: 1,
             shots_columns: 1,
             shots_page: 1,
@@ -619,6 +625,19 @@ impl App {
                     Outcome::ReportsNotice(on)
                 }
                 None => Outcome::None,
+            };
+        }
+        if self.panfrost.is_some() {
+            return match b {
+                Button::A => {
+                    self.panfrost = None;
+                    Outcome::Panfrost
+                }
+                Button::B => {
+                    self.panfrost = None;
+                    Outcome::None
+                }
+                _ => Outcome::None,
             };
         }
         if self.moving.is_some() {

@@ -398,6 +398,9 @@ const CONFIG_KEYS: &[&str] = &[
     "rom.list",
     "rom.remove",
     "port.install",
+    // Ports-panfrost: a PortMaster package and Arch R's list of them.
+    "bugdom.zip",
+    "panfrost.txt",
     "port.list",
     "port.progress",
     "port.remove",

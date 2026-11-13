@@ -1,6 +1,7 @@
 //! System › Error reports, the last report's text and the notice over the
-//! Start screen draw in every language and at every screen size without a
-//! text the layout cannot hold.
+//! Start screen, and the question of a port that needs panfrost, draw in
+//! every language and at every screen size without a text the layout
+//! cannot hold.
 mod common;
 use archr_ui::{
     i18n::I18n,
@@ -94,6 +95,13 @@ fn start() -> App {
     app.reports_notice = Some(Notice::default());
     app
 }
+/// A port's games list with Ports-panfrost's question over it.
+fn panfrost() -> App {
+    let mut app = App::new(9);
+    app.screen = Screen::games("ports");
+    app.panfrost = Some("Bugdom 2: The Lost Gnome Kingdoms".into());
+    app
+}
 #[test]
 fn error_reports_draw_in_every_language_at_every_size() {
     log::set_logger(&WARNINGS).unwrap();
@@ -121,6 +129,7 @@ fn error_reports_draw_in_every_language_at_every_size() {
                 ("ajustes", App::new(9), Some(reports(Page::ErrorReports))),
                 ("ver", App::new(9), Some(reports(Page::ReportText))),
                 ("aviso", start(), None),
+                ("panfrost", panfrost(), None),
             ] {
                 ui.screenshot = Some(
                     temp.path()
@@ -136,4 +145,18 @@ fn error_reports_draw_in_every_language_at_every_size() {
     }
     let seen = SEEN.lock().unwrap();
     assert!(seen.is_empty(), "{seen:#?}");
+}
+#[test]
+fn the_panfrost_question_switches_on_a_and_closes_on_b() {
+    use archr_ui::state::{Button, Outcome};
+    let data = FakeData::default();
+    let mut app = panfrost();
+    assert_eq!(app.handle(Button::Down, &data), Outcome::None);
+    assert!(app.panfrost.is_some(), "only A or B answer");
+    assert_eq!(app.handle(Button::A, &data), Outcome::Panfrost);
+    assert!(app.panfrost.is_none());
+    let mut app = panfrost();
+    assert_eq!(app.handle(Button::B, &data), Outcome::None);
+    assert!(app.panfrost.is_none());
+    assert_eq!(app.screen, Screen::games("ports"), "B stays on the list");
 }

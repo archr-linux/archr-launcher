@@ -177,6 +177,19 @@ impl Library {
         }
         let _ = self.send(Work::Count);
     }
+    /// Ports-panfrost: the port's title, when it runs only on panfrost and
+    /// the GPU driver set is libmali.
+    pub fn needs_panfrost(&self, system: &str, game: usize) -> Option<String> {
+        use archr_ui::settings::Id;
+        let game = self.games(system).get(game).filter(|_| system == "ports")?;
+        let driver = SystemCfg::load(&self.paths.config)
+            .ok()
+            .and_then(|cfg| cfg.get_setting(Id::Gpu.key(), None, None))
+            .unwrap_or_else(|| Id::Gpu.default_value().into());
+        (driver == "libmali"
+            && crate::panfrost::needed(&game.path, &self.paths.at(crate::panfrost::LIST)))
+        .then(|| game.name.clone())
+    }
     /// Launch choices saved elsewhere (the Games settings page) apply next launch.
     pub fn reload_config(&self) {
         if let Err(error) = self.send(Work::Config) {
@@ -445,7 +458,8 @@ impl Library {
             | Outcome::Delete { .. }
             | Outcome::UseShot { .. }
             | Outcome::Convert(_)
-            | Outcome::ReportsNotice(_) => return Err("error.operation".to_owned()),
+            | Outcome::ReportsNotice(_)
+            | Outcome::Panfrost => return Err("error.operation".to_owned()),
         }
         Ok(false)
     }
