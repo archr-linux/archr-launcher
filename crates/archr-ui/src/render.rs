@@ -2242,7 +2242,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         // Rows with a value are taller: the core's, and MangoHud's subtitle.
         let extra = |item: &QuickItem| match item {
             QuickItem::Core => 4.,
-            QuickItem::Mangohud | QuickItem::Folders => 6.,
+            QuickItem::Mangohud | QuickItem::Folders | QuickItem::FavoritesFirst => 6.,
             _ => 0.,
         };
         let has_core = matches!(items.first(), Some(QuickItem::Core));
@@ -2264,6 +2264,11 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 0.
             }
             + if items.contains(&QuickItem::Folders) {
+                6.
+            } else {
+                0.
+            }
+            + if items.contains(&QuickItem::FavoritesFirst) {
                 6.
             } else {
                 0.
@@ -2368,6 +2373,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 QuickItem::ForgetRecent => "menu.forget_recent",
                 QuickItem::Search => "menu.search",
                 QuickItem::Folders => "menu.folders",
+                QuickItem::FavoritesFirst => "menu.favorites_first",
                 QuickItem::Suspend => "menu.suspend",
                 QuickItem::Reboot => "menu.reboot",
                 QuickItem::Shutdown => "menu.shutdown",
@@ -2403,9 +2409,19 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 self.label(label, (face, 15., c), Rect::new(x, y, width, item_height))?;
                 continue;
             }
-            // The list by folder: a switch, and what it does on a second line.
-            if *item == QuickItem::Folders {
-                let on = app.list_system().is_some_and(|s| data.shows_folders(s));
+            // The list by folder and favorites first: a switch, and what it
+            // does on a second line.
+            let switch = match item {
+                QuickItem::Folders => Some((
+                    app.list_system().is_some_and(|s| data.shows_folders(s)),
+                    "menu.folders_detail",
+                )),
+                QuickItem::FavoritesFirst => {
+                    Some((data.favorites_first(), "menu.favorites_first_detail"))
+                }
+                _ => None,
+            };
+            if let Some((on, detail)) = switch {
                 let (w, h) = (self.px(38.), self.px(20.));
                 let track = Rect::new(
                     panel.right() - self.px(24.) - w,
@@ -2442,7 +2458,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                     (face, 15., c),
                     Rect::new(x, y + self.px(5.), width, self.px(19.) as u32),
                 )?;
-                let detail = self.catalog.text("menu.folders_detail");
+                let detail = self.catalog.text(detail);
                 let floor = self.frame.min_size();
                 let size = self.shrink(&detail, Face::Regular, 11.5, floor, content_w)?;
                 self.label(

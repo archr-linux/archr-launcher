@@ -1502,6 +1502,8 @@
 "menu.search" = "Buscar en la lista"
 "menu.folders" = "Mostrar carpetas"
 "menu.folders_detail" = "En este sistema: carpetas arriba de la lista"
+"menu.favorites_first" = "Favoritos primero"
+"menu.favorites_first_detail" = "En todas las listas: favoritos arriba"
 "folder.summary" = "Carpeta · {games}"
 "search.title" = "{system} / Buscar"
 "search.count" = "{n} de {total}"

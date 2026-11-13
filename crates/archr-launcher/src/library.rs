@@ -329,6 +329,10 @@ impl Library {
                 self.store.set_folders(&system, on);
                 self.queue_store();
             }
+            Outcome::FavoritesFirst(on) => {
+                self.store.set_favorites_first(on);
+                self.queue_store();
+            }
             Outcome::ForgetRecent { system, game } => {
                 let key = self.game_key(&system, game).ok_or("error.game_missing")?;
                 self.store.forget_recent(&key);
@@ -689,6 +693,9 @@ impl DataSource for Library {
     }
     fn shows_folders(&self, system: &str) -> bool {
         self.store.shows_folders(system)
+    }
+    fn favorites_first(&self) -> bool {
+        self.store.favorites_first()
     }
     fn folders(&self, system: &str) -> Vec<&str> {
         let Some(def) = self.definition(system) else {

@@ -32,6 +32,27 @@ fn favorites_roundtrip() {
 }
 
 #[test]
+fn favorites_first_is_on_for_old_stores_and_kept_when_off() {
+    let root = tempdir().unwrap();
+    let dir = root.path().join("config/launcher");
+    fs::create_dir_all(&dir).unwrap();
+    // A store from before the switch.
+    fs::write(dir.join("store.toml"), "favorites = [\"nes/a.zip\"]\n").unwrap();
+    let mut store = Store::load(&dir);
+    assert!(store.favorites_first());
+    store.save(&dir).unwrap();
+    let saved = fs::read_to_string(dir.join("store.toml")).unwrap();
+    assert!(
+        !saved.contains("favorites_mixed"),
+        "the default writes nothing"
+    );
+    store.set_favorites_first(false);
+    store.save(&dir).unwrap();
+    assert!(!Store::load(&dir).favorites_first());
+    assert!(Store::default().favorites_first());
+}
+
+#[test]
 fn recent_dedups_and_caps_at_30() {
     let dir = tempdir().unwrap();
     let mut store = Store::load(dir.path());

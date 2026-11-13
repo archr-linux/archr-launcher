@@ -15,6 +15,7 @@ pub struct FakeData {
     /// Each game's folder, by system; the systems listed by folder.
     pub dirs: HashMap<String, Vec<String>>,
     pub by_folder: Vec<String>,
+    pub favorites_first: bool,
 }
 
 impl DataSource for FakeData {
@@ -35,6 +36,10 @@ impl DataSource for FakeData {
 
     fn shows_folders(&self, system: &str) -> bool {
         self.by_folder.iter().any(|s| s == system)
+    }
+
+    fn favorites_first(&self) -> bool {
+        self.favorites_first
     }
 
     fn systems(&self) -> &[SystemEntry] {

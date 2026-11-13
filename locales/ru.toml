@@ -1502,6 +1502,8 @@
 "menu.search" = "Поиск в списке"
 "menu.folders" = "Показывать папки"
 "menu.folders_detail" = "В этой системе: папки вверху списка"
+"menu.favorites_first" = "Избранное сверху"
+"menu.favorites_first_detail" = "Во всех списках: избранное вверху"
 "folder.summary" = "Папка · {games}"
 "search.title" = "{system} / Поиск"
 "search.count" = "{n} из {total}"

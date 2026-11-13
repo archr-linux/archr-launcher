@@ -8,10 +8,32 @@ use std::path::PathBuf;
 const SEARCH_PAGE: usize = 5;
 
 impl App {
-    /// The folder `folder` of `system`'s list, when the user lists it by folder.
+    /// The folder `folder` of `system`'s list, when the user lists it by
+    /// folder, or the whole list with its favorites on top ("Favorites
+    /// first"); None when the rows are the list itself, in its order.
+    /// Rows map to indices into `data.games(system)`, which never move.
     pub fn level(data: &dyn DataSource, system: &str, folder: &str) -> Option<Level> {
-        (!system.starts_with('@') && data.shows_folders(system))
-            .then(|| Level::of(&data.folders(system), folder))
+        if system.starts_with('@') {
+            return None;
+        }
+        if data.shows_folders(system) {
+            return Some(Self::folder_level(data, system, folder));
+        }
+        let games = data.games(system);
+        (data.favorites_first() && games.iter().any(|g| g.favorite)).then(|| {
+            let mut level = Level::flat(games.len());
+            level.favorites_first(|n| games[n].favorite);
+            level
+        })
+    }
+    /// The folder `folder` of `system`'s list as listed by folder.
+    fn folder_level(data: &dyn DataSource, system: &str, folder: &str) -> Level {
+        let mut level = Level::of(&data.folders(system), folder);
+        if data.favorites_first() {
+            let games = data.games(system);
+            level.favorites_first(|n| games.get(n).is_some_and(|g| g.favorite));
+        }
+        level
     }
     /// The game a list's row shows, as an index into `data.games(system)`;
     /// None on a folder.
@@ -55,7 +77,9 @@ impl App {
     ) {
         let dirs = data.folders(system);
         let Some(dir) = dirs.get(game).filter(|_| by_folder) else {
-            self.cursor = game;
+            self.cursor = Self::level(data, system, "")
+                .map_or(Some(game), |l| l.game_row(game))
+                .unwrap_or(0);
             return;
         };
         let mut at = String::new();
@@ -67,7 +91,9 @@ impl App {
                 folder: at.clone(),
             });
         }
-        self.cursor = Level::of(&dirs, &at).game_row(game).unwrap_or(0);
+        self.cursor = Self::folder_level(data, system, &at)
+            .game_row(game)
+            .unwrap_or(0);
     }
     /// The switch of the list's menu: the list again from its root, the
     /// cursor on the game it was on.
@@ -88,6 +114,41 @@ impl App {
         }
         self.select(data, &system, game, on);
         Outcome::ShowFolders { system, on }
+    }
+    /// The switch "Favorites first": every system's list, the cursor on the
+    /// game (or folder) it was on.
+    pub(super) fn toggle_favorites_first(&mut self, data: &dyn DataSource) -> Outcome {
+        let on = !data.favorites_first();
+        if let Some((Screen::Games { system, folder }, row)) = self.history.last() {
+            if let Some(game) = Self::list_game(data, system, folder, *row) {
+                self.keep_game = Some((system.clone(), game));
+            }
+        }
+        Outcome::FavoritesFirst(on)
+    }
+    /// After the host changed the data: every list of the kept game's system
+    /// (the one shown and those below it) has its cursor on that game again.
+    pub(super) fn follow_game(&mut self, data: &dyn DataSource) {
+        let Some((system, game)) = self.keep_game.take() else {
+            return;
+        };
+        let cursors = std::iter::once((&self.screen, &mut self.cursor))
+            .chain(self.history.iter_mut().map(|(s, c)| (&*s, c)));
+        for (screen, cursor) in cursors {
+            if let Screen::Games {
+                system: name,
+                folder,
+            } = screen
+            {
+                if *name == system {
+                    let row =
+                        Self::level(data, name, folder).map_or(Some(game), |l| l.game_row(game));
+                    if let Some(row) = row {
+                        *cursor = row;
+                    }
+                }
+            }
+        }
     }
     pub(super) fn open_search(&mut self, system: String) {
         // Its submit key goes to the results, the whole list when empty.
@@ -159,7 +220,10 @@ impl App {
         };
         match b {
             Button::A => Outcome::Launch { system, game },
-            Button::X => Outcome::ToggleFavorite { system, game },
+            Button::X => {
+                self.keep_game = Some((system.clone(), game));
+                Outcome::ToggleFavorite { system, game }
+            }
             Button::Y => {
                 self.open_game_menu(system, game, false, data);
                 Outcome::None

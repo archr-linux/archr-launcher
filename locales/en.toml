@@ -1502,6 +1502,8 @@
 "menu.search" = "Search in list"
 "menu.folders" = "Show folders"
 "menu.folders_detail" = "On this system: folders at the top of the list"
+"menu.favorites_first" = "Favorites first"
+"menu.favorites_first_detail" = "On every list: favorites at the top"
 "folder.summary" = "Folder · {games}"
 "search.title" = "{system} / Search"
 "search.count" = "{n} of {total}"

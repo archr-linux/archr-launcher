@@ -36,6 +36,17 @@ impl Level {
         folders.sort_by_cached_key(|(name, _)| fold(name));
         Self { folders, games }
     }
+    /// The whole list as one level: no folders, its `count` games in order.
+    pub fn flat(count: usize) -> Self {
+        Self {
+            folders: Vec::new(),
+            games: (0..count).collect(),
+        }
+    }
+    /// Favorites above the other games, each group keeping its order.
+    pub fn favorites_first(&mut self, favorite: impl Fn(usize) -> bool) {
+        self.games.sort_by_key(|&game| !favorite(game));
+    }
     pub fn len(&self) -> usize {
         self.folders.len() + self.games.len()
     }

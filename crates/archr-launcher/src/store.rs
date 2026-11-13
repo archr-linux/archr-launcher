@@ -30,6 +30,10 @@ pub struct Store {
     hidden: Vec<String>,
     /// Systems whose list shows their folders.
     folders: Vec<String>,
+    /// The user turned "Favorites first" off: lists keep plain name order.
+    /// Stored inverted so a store without it (or a new one) lists favorites first.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    favorites_mixed: bool,
     /// Where the last game was launched from, to come back to it.
     place: Option<Place>,
     /// The START menu's shortcut row as the user arranged it.
@@ -232,6 +236,15 @@ impl Store {
         if on {
             self.folders.push(system.to_owned());
         }
+    }
+
+    /// A system's list puts its favorites on top (the default).
+    pub fn favorites_first(&self) -> bool {
+        !self.favorites_mixed
+    }
+
+    pub fn set_favorites_first(&mut self, on: bool) {
+        self.favorites_mixed = !on;
     }
 
     pub fn shortcuts(&self) -> &archr_ui::shortcuts::Saved {

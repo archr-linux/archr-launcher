@@ -99,6 +99,7 @@ impl App {
     /// On the systems screen a row taken off (hidden) leaves the cursor on
     /// the row that took its place, or the last one.
     pub fn follow_row(&mut self, data: &dyn DataSource) {
+        self.follow_game(data);
         let rows = Self::system_rows(data);
         if let Some(row) = self.keep_row.take() {
             if let Some(index) = rows.iter().position(|r| *r == row) {

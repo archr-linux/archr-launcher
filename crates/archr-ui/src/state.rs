@@ -200,6 +200,8 @@ pub enum Outcome {
         system: String,
         on: bool,
     },
+    /// Favorites on top of every system's list, or not.
+    FavoritesFirst(bool),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -227,6 +229,8 @@ pub enum QuickItem {
     Search,
     /// The list by folder, a switch beside the search.
     Folders,
+    /// Favorites on top of every system's list, a switch below Folders.
+    FavoritesFirst,
     Suspend,
     Reboot,
     Shutdown,
@@ -294,6 +298,10 @@ pub trait DataSource {
     }
     /// The user lists this system by folder.
     fn shows_folders(&self, _system: &str) -> bool {
+        false
+    }
+    /// A system's list puts its favorites on top.
+    fn favorites_first(&self) -> bool {
         false
     }
 }
@@ -408,6 +416,9 @@ pub struct App {
     moving: Option<order::Moving>,
     /// The systems row to find again once the host changed the rows.
     keep_row: Option<String>,
+    /// A game (system, index) whose row may move in its list: the cursor of
+    /// that list follows it once the host changed the data (`follow_row`).
+    keep_game: Option<(String, usize)>,
     selected_core: Option<(String, String)>,
     /// The open game menu's MangoHud: the game's value, the system's.
     selected_mangohud: (String, String),
@@ -437,6 +448,7 @@ impl App {
             history: Vec::new(),
             moving: None,
             keep_row: None,
+            keep_game: None,
             selected_core: None,
             selected_mangohud: Default::default(),
             modules: std::sync::Arc::default(),
@@ -513,7 +525,7 @@ impl App {
             items.push(ForgetRecent);
         }
         if !from_details && self.list_system().is_some() {
-            items.extend([Search, Folders]);
+            items.extend([Search, Folders, FavoritesFirst]);
         }
         items.extend(self.module_items(Context::Game, system));
         items
@@ -528,7 +540,7 @@ impl App {
             } => self.game_menu_items(data, (system, *game), from_details),
             // Opened on a folder of a list.
             Screen::QuickMenu { game: None } if self.list_system().is_some() => {
-                vec![Search, Folders]
+                vec![Search, Folders, FavoritesFirst]
             }
             Screen::QuickMenu { game: None } => {
                 let system = self.quick_system(data);
@@ -768,7 +780,11 @@ impl App {
                     };
                     match b {
                         Button::A => return Outcome::Launch { system, game },
-                        Button::X => return Outcome::ToggleFavorite { system, game },
+                        Button::X => {
+                            // Favorites first: the game moves, the cursor with it.
+                            self.keep_game = Some((system.clone(), game));
+                            return Outcome::ToggleFavorite { system, game };
+                        }
                         Button::Y => self.open_game_menu(system, game, false, data),
                         _ => unreachable!(),
                     }
@@ -845,6 +861,9 @@ impl App {
                     }
                     (Button::A | Button::L | Button::R, Some(QuickItem::Folders)) => {
                         return self.toggle_folders(data);
+                    }
+                    (Button::A | Button::L | Button::R, Some(QuickItem::FavoritesFirst)) => {
+                        return self.toggle_favorites_first(data);
                     }
                     (Button::A, Some(QuickItem::ForgetRecent)) => {
                         self.back();
@@ -953,7 +972,10 @@ impl App {
             Button::A => {
                 return match self.details_focus {
                     0 => Outcome::Launch { system, game },
-                    1 => Outcome::ToggleFavorite { system, game },
+                    1 => {
+                        self.keep_game = Some((system.clone(), game));
+                        Outcome::ToggleFavorite { system, game }
+                    }
                     _ if self.can_rescrape && !self.rescraping => {
                         Outcome::Rescrape { system, game }
                     }
@@ -1335,7 +1357,7 @@ impl App {
         self.cursor = row;
         if let Some(game) = game {
             self.enter(Screen::games(system.clone()));
-            let by_folder = Self::level(data, &system, "").is_some();
+            let by_folder = data.shows_folders(&system);
             self.select(data, &system, game, by_folder);
         }
     }

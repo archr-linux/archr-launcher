@@ -375,10 +375,10 @@ fn quick_menu_tools_and_ports_hide_core_and_power_lives_in_the_system_menu() {
     for system in ["snes", "tools", "ports"] {
         let mut app = in_games(system, 0);
         app.handle(Button::Y, &data);
-        // Game menus open the details, then the list's search and folders;
-        // only snes has a core choice.
+        // Game menus open the details, then the list's search, folders and
+        // favorites first; only snes has a core choice.
         let items = app.quick_menu_items(&data);
-        assert_eq!(items.len(), 3 + usize::from(system == "snes"), "{system}");
+        assert_eq!(items.len(), 4 + usize::from(system == "snes"), "{system}");
         assert!(!items.contains(&QuickItem::Suspend), "{system}");
         assert!(!items.contains(&QuickItem::Reboot), "{system}");
         assert!(!items.contains(&QuickItem::Shutdown), "{system}");
@@ -409,7 +409,7 @@ fn quick_menu_up_down_clamp() {
     for _ in 0..10 {
         app.handle(Button::Down, &data);
     }
-    assert_eq!(app.cursor, 3);
+    assert_eq!(app.cursor, 4);
 }
 
 fn open_details(data: &FakeData, system: &str, game: usize) -> App {
@@ -975,7 +975,8 @@ fn achievements_open_from_the_game_menu_only_when_signed_in_and_page_with_l_r() 
             QuickItem::Details,
             QuickItem::Achievements,
             QuickItem::Search,
-            QuickItem::Folders
+            QuickItem::Folders,
+            QuickItem::FavoritesFirst
         ]
     );
     app.cursor = 1;
@@ -1036,7 +1037,8 @@ fn mangohud_row_steps_through_the_systems_choices_for_this_game() {
             QuickItem::Details,
             QuickItem::Mangohud,
             QuickItem::Search,
-            QuickItem::Folders
+            QuickItem::Folders,
+            QuickItem::FavoritesFirst
         ]
     );
     app.handle(Button::Down, &data);
@@ -1360,7 +1362,11 @@ fn the_folders_switch_keeps_the_game_and_says_so() {
     app.handle(Button::Y, &data);
     assert_eq!(
         app.quick_menu_items(&data),
-        [QuickItem::Search, QuickItem::Folders]
+        [
+            QuickItem::Search,
+            QuickItem::Folders,
+            QuickItem::FavoritesFirst
+        ]
     );
     let mut data = FakeData::library();
     data.collections();
@@ -1418,4 +1424,90 @@ fn search_finds_across_folders_and_plays_from_the_results() {
     app.handle(Button::B, &data);
     assert_eq!(app.screen, Screen::games("snes"));
     assert!(app.search.is_none());
+}
+
+/// snes with games 3, 8 and 10 favorites, "Favorites first" on.
+fn with_favorites() -> FakeData {
+    let mut data = FakeData::library();
+    for n in [3, 8, 10] {
+        data.games.get_mut("snes").unwrap()[n].favorite = true;
+    }
+    data.favorites_first = true;
+    data
+}
+
+#[test]
+fn favorites_first_puts_them_on_top_and_rows_play_the_real_game() {
+    let mut data = with_favorites();
+    assert_eq!(App::list_len(&data, "snes", ""), 12);
+    let rows: Vec<_> = (0..12)
+        .map(|r| App::list_game(&data, "snes", "", r).unwrap())
+        .collect();
+    assert_eq!(rows, [3, 8, 10, 0, 1, 2, 4, 5, 6, 7, 9, 11]);
+    let mut app = in_games("snes", 1);
+    assert_eq!(
+        app.handle(Button::A, &data),
+        Outcome::Launch {
+            system: "snes".into(),
+            game: 8
+        }
+    );
+    // Off, or a list without favorites: the list in its own order.
+    data.favorites_first = false;
+    assert_eq!(App::list_game(&data, "snes", "", 1), Some(1));
+    data.favorites_first = true;
+    assert_eq!(App::list_game(&data, "nes", "", 1), Some(1));
+    // Collections keep their order.
+    data.collections();
+    assert_eq!(App::level(&data, "@favorites", ""), None);
+}
+
+#[test]
+fn favorites_first_sorts_each_folder_too() {
+    let mut data = by_folder();
+    for n in [2, 9] {
+        data.games.get_mut("snes").unwrap()[n].favorite = true;
+    }
+    data.favorites_first = true;
+    let hacks = App::level(&data, "snes", "Hacks").unwrap();
+    assert_eq!(hacks.games, [2, 0, 1, 3]);
+    let root = App::level(&data, "snes", "").unwrap();
+    assert_eq!(root.folders.len(), 2, "folders stay above");
+    assert_eq!(root.games, [9, 6, 7, 8, 10, 11]);
+}
+
+#[test]
+fn marking_a_favorite_keeps_the_cursor_on_the_game() {
+    let mut data = with_favorites();
+    let mut app = in_games("snes", 6);
+    assert_eq!(App::list_game(&data, "snes", "", 6), Some(4));
+    assert_eq!(
+        app.handle(Button::X, &data),
+        Outcome::ToggleFavorite {
+            system: "snes".into(),
+            game: 4
+        }
+    );
+    data.games.get_mut("snes").unwrap()[4].favorite = true;
+    app.follow_row(&data);
+    assert_eq!(app.cursor, 1, "4 now sits among the favorites");
+    assert_eq!(App::list_game(&data, "snes", "", app.cursor), Some(4));
+}
+
+#[test]
+fn the_favorites_first_switch_keeps_the_game() {
+    let mut data = with_favorites();
+    let mut app = in_games("snes", 0);
+    app.handle(Button::Y, &data);
+    let items = app.quick_menu_items(&data);
+    app.cursor = items
+        .iter()
+        .position(|i| *i == QuickItem::FavoritesFirst)
+        .unwrap();
+    assert_eq!(app.handle(Button::A, &data), Outcome::FavoritesFirst(false));
+    data.favorites_first = false;
+    app.follow_row(&data);
+    app.handle(Button::B, &data);
+    assert_eq!(app.screen, Screen::games("snes"));
+    assert_eq!(app.cursor, 3, "game 3 in plain order");
 }
