@@ -330,7 +330,11 @@ EOF
 cat >"$root/bin/swaymsg" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >>"$CASE_DIR/sway-calls"
-printf '%s\n' '[{"active": true}]'
+if [ -f "$CASE_DIR/no-output" ]; then
+  printf '%s\n' '[{"name": "DSI-1", "active": false}]'
+else
+  printf '%s\n' '[{"active": true}]'
+fi
 EOF
 cat >"$root/bin/sleep" <<'EOF'
 #!/bin/sh
@@ -359,6 +363,9 @@ run_case() {
   setup_case "$@"
   if [ "$name" = log-cap ]; then
     head -c 262140 /dev/zero >"$ARCHR_SESSION_LOG"
+  fi
+  if [ "$name" = no-output ]; then
+    : >"$CASE_DIR/no-output"
   fi
   if [ "$name" = stale ]; then
     mkdir -p "$ARCHR_SESSION_RUN_DIR"
@@ -467,6 +474,12 @@ END'
 [ ! -f "$CASE_DIR/actions" ]
 [ "$(cat "$CASE_DIR/sleeps")" = 1 ]
 printf '%s\n' 'PASS stale request discarded before launcher crash'
+
+run_case no-output "$(printf 'CRASH\n%.0s' 1 2 3 4 5 6 7 8 9 10)
+END"
+grep -q 'No active output after 10 failures: "name":"DSI-1" "active":false $' "$ARCHR_SESSION_LOG"
+[ "$(grep -c '^output \* enable; output \* power on$' "$CASE_DIR/sway-calls")" = 1 ]
+printf '%s\n' 'PASS no active output: logged and asked to come up'
 
 run_case failed-handoff 'WRITE_CRASH
 END'
