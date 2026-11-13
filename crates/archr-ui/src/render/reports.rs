@@ -1,9 +1,56 @@
-//! Relatorios-aviso: error reports are on, said once over the Start screen.
+//! Notices over the main screens: error reports are on, said once over the
+//! Start screen (Relatorios-aviso), and a port that needs the panfrost
+//! driver (Ports-panfrost).
 use super::*;
 use crate::settings::reports::Notice;
 
 impl Ui<'_, '_> {
     pub(crate) fn reports_notice(&mut self, notice: &Notice, theme: &Theme) -> Result<(), String> {
+        // What it does, what goes, where to change it.
+        let paragraphs = [
+            "reports.notice_body",
+            "reports.notice_detail",
+            "reports.notice_where",
+        ]
+        .map(|key| self.catalog.text(key));
+        self.notice_dialog(
+            &self.catalog.text("reports.notice_title"),
+            &paragraphs,
+            (["reports.notice_ok", "reports.notice_off"], notice.on_ok),
+            &[
+                (HintButton::Pair('‹', '›'), "hint.choose"),
+                ('A'.into(), "hint.confirm"),
+            ],
+            theme,
+        )
+    }
+    pub(crate) fn panfrost_notice(&mut self, title: &str, theme: &Theme) -> Result<(), String> {
+        // Why it cannot run, then what the switch does and how to undo it.
+        let paragraphs =
+            ["ports.panfrost_body", "ports.panfrost_note"].map(|key| self.catalog.text(key));
+        self.notice_dialog(
+            &self
+                .catalog
+                .format("ports.panfrost_title", &[("name", title)]),
+            &paragraphs,
+            (["ports.panfrost_switch", "hint.cancel"], true),
+            &[
+                ('A'.into(), "ports.panfrost_switch"),
+                ('B'.into(), "hint.cancel"),
+            ],
+            theme,
+        )
+    }
+    /// A titled panel: the first paragraph in the text color, the rest
+    /// muted, two buttons (`first` filled) and the footer's `hints`.
+    fn notice_dialog(
+        &mut self,
+        title: &str,
+        paragraphs: &[String],
+        (buttons, first): ([&str; 2], bool),
+        hints: &[(HintButton, &str)],
+        theme: &Theme,
+    ) -> Result<(), String> {
         let Frame { width, height, .. } = self.frame;
         let footer = self.frame.size(theme.footer_height).round().max(1.) as u32;
         self.scrim(theme, 1.2)?;
@@ -13,22 +60,16 @@ impl Ui<'_, '_> {
         let gap = self.px(12.);
         let icon = self.px(22.);
         let title_room = (inner as i32 - icon - self.px(10.)).max(1) as u32;
-        let titles = self.wrap(
-            &self.catalog.text("reports.notice_title"),
-            Face::Semibold,
-            17.,
-            title_room,
-        )?;
+        let titles = self.wrap(title, Face::Semibold, 17., title_room)?;
         let title_step = self.px(22.);
-        // The paragraphs: what it does, what goes, where to change it.
-        let paragraphs = [
-            ("reports.notice_body", 13., theme.text),
-            ("reports.notice_detail", 12., theme.muted),
-            ("reports.notice_where", 12., theme.muted),
-        ];
         let mut texts = Vec::new();
-        for (key, size, ink) in paragraphs {
-            let lines = self.wrap(&self.catalog.text(key), Face::Regular, size, inner)?;
+        for (n, text) in paragraphs.iter().enumerate() {
+            let (size, ink) = if n == 0 {
+                (13., theme.text)
+            } else {
+                (12., theme.muted)
+            };
+            let lines = self.wrap(text, Face::Regular, size, inner)?;
             texts.push((lines, size, ink, self.px(size * 1.55)));
         }
         let button_h = self.px(40.);
@@ -80,19 +121,16 @@ impl Ui<'_, '_> {
             y += gap;
         }
         y += self.px(4.);
-        // "OK", then "Turn off reports"; the focused one is filled.
+        // The focused button is filled.
         let half = ((inner as i32 - self.px(10.)) / 2).max(1) as u32;
-        for (n, key) in ["reports.notice_ok", "reports.notice_off"]
-            .into_iter()
-            .enumerate()
-        {
+        for (n, key) in buttons.into_iter().enumerate() {
             let rect = Rect::new(
                 x + n as i32 * (half as i32 + self.px(10.)),
                 y,
                 half,
                 button_h as u32,
             );
-            let focused = (n == 0) == notice.on_ok;
+            let focused = (n == 0) == first;
             let (fill, border, ink, face) = if focused {
                 (accent, None, theme.highlight_text, Face::Semibold)
             } else {
@@ -115,16 +153,7 @@ impl Ui<'_, '_> {
         self.canvas.set_draw_color(color(theme.background));
         self.canvas.fill_rect(Rect::new(0, fy, width, footer))?;
         self.divider(0, fy, width, theme.border)?;
-        self.hints(
-            &[
-                (HintButton::Pair('‹', '›'), "hint.choose"),
-                ('A'.into(), "hint.confirm"),
-            ],
-            theme,
-            width,
-            fy,
-            footer,
-        )?;
+        self.hints(hints, theme, width, fy, footer)?;
         Ok(())
     }
 }

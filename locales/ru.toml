@@ -1463,6 +1463,12 @@
 "reports.notice_ok" = "Понятно"
 "reports.notice_off" = "Отключить отчёты"
 
+# Ports that need the panfrost driver (Ports-panfrost)
+"ports.panfrost_title" = "{name}: нужен драйвер panfrost"
+"ports.panfrost_body" = "Эта игра использует OpenGL, которого нет в текущем драйвере GPU (libmali)."
+"ports.panfrost_note" = "Смена действует для всей системы, консоль перезагрузится. Вернуть: Настройки › Система › Драйвер GPU."
+"ports.panfrost_switch" = "Сменить и перезапуск"
+
 # List search and folders
 "menu.search" = "Поиск в списке"
 "menu.folders" = "Показывать папки"

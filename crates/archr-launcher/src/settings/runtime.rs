@@ -44,6 +44,8 @@ pub struct Runtime {
     convert: Vec<crate::convert::Request>,
     /// The theme store's look for updates (`watch_themes`).
     themes: Option<std::sync::mpsc::Receiver<archr_ui::settings::store::Reply>>,
+    /// Ports-panfrost's GPU driver switch is being applied.
+    gpu_switch: bool,
 }
 impl Runtime {
     pub fn new(paths: Paths) -> Self {
@@ -68,6 +70,7 @@ impl Runtime {
             switch: None,
             convert: Vec::new(),
             themes: None,
+            gpu_switch: false,
         }
     }
     fn send(&mut self, work: Work) {
@@ -107,6 +110,27 @@ impl Runtime {
     /// The library re-reads system.cfg after a write that changes launches.
     pub fn take_launch_saved(&mut self) -> bool {
         std::mem::take(&mut self.launch_saved)
+    }
+    /// Ports-panfrost: panfrost through the GPU driver row's own path
+    /// (`gpudriver`, then the value read back).
+    pub fn switch_gpu(&mut self) {
+        self.state.error = None;
+        self.state.pending = Some(Id::Gpu);
+        self.gpu_switch = true;
+        self.send(Work::Set(Id::Gpu, "panfrost".into()));
+    }
+    /// The switch's answer, once: Ok to reboot, else its failure.
+    pub fn take_gpu_switch(&mut self) -> Option<Result<(), String>> {
+        if !self.gpu_switch || self.state.pending.is_some() {
+            return None;
+        }
+        self.gpu_switch = false;
+        // The host reboots or reports: the page's own question is not asked.
+        self.state.reboot_prompt = None;
+        match self.state.error.take() {
+            Some((_, error)) => Some(Err(error)),
+            None => Some(Ok(())),
+        }
     }
     pub fn busy(&self) -> bool {
         self.worker.as_ref().is_some_and(Worker::busy)

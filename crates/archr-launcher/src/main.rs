@@ -17,7 +17,7 @@ use archr_launcher::{
     rescrape::Rescrape,
     resume::{self, Records, Start},
     saves::{Entry, Task},
-    state::{App, Button, DataSource, Outcome, Screen},
+    state::{App, Button, DataSource, Outcome, Screen, SessionAction},
     wifi,
 };
 use archr_ui::{
@@ -430,6 +430,18 @@ fn run(
         }
         if settings.take_launch_saved() {
             library.reload_config();
+        }
+        // Ports-panfrost's switch: reboot once persisted, else say why not.
+        match settings.take_gpu_switch() {
+            Some(Ok(())) => deferred = Some(Outcome::Action(SessionAction::Reboot)),
+            Some(Err(error)) => {
+                log::warn!("GPU driver switch failed: {error}");
+                // As the settings page says a script's failure.
+                ui.banner = Some(ui.catalog.text("settings.failed"));
+                banner_timer.restart(Severity::Error, Instant::now());
+                dirty = true;
+            }
+            None => {}
         }
         if let Some(look) = settings.state.applied.take() {
             let base = &settings.state.base_theme;
@@ -1175,7 +1187,18 @@ fn run(
                 );
                 Outcome::None
             } else {
-                app.handle(button, &library)
+                match app.handle(button, &library) {
+                    // Ports-panfrost: asked instead of a launch that fails on libmali.
+                    Outcome::Launch { system, game } => match library.needs_panfrost(&system, game)
+                    {
+                        Some(title) => {
+                            app.panfrost = Some(title);
+                            Outcome::None
+                        }
+                        None => Outcome::Launch { system, game },
+                    },
+                    requested => requested,
+                }
             };
             let cue = if overlay {
                 audio::by_button(button)
@@ -1270,6 +1293,10 @@ fn run(
                 }
                 Outcome::ReportsNotice(on) => {
                     archr_launcher::reports::answer(paths.clone(), on);
+                    Outcome::None
+                }
+                Outcome::Panfrost => {
+                    settings.switch_gpu();
                     Outcome::None
                 }
                 requested => requested,
