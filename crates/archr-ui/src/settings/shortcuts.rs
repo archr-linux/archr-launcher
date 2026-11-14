@@ -37,7 +37,7 @@ impl Settings {
             let rows = state.visible_rows();
             rows.iter().position(|r| r.id == id).unwrap_or(0)
         };
-        match page {
+        let effect = match page {
             Page::Store => {
                 self.cursor = link(self, Id::ThemeStore);
                 self.open_store()
@@ -56,7 +56,12 @@ impl Settings {
                 Effect::None
             }
             _ => Effect::None,
-        }
+        };
+        // Opened from the START menu: B on this page closes Settings, back
+        // to the menu, not up to its category (Appearance, System, ...).
+        // Pages opened from it (a theme, a module) still come back to it.
+        self.entry = Some(self.stack.len());
+        effect
     }
     /// The list as the page shows it, a move in progress included.
     pub fn shortcut_items(&self) -> Vec<Item> {
@@ -281,14 +286,22 @@ mod tests {
             ))
         );
         assert_eq!(state.page(), Page::Store);
-        state.handle(Button::B);
-        assert_eq!(state.page(), Page::Appearance);
+        assert_eq!(
+            state.handle(Button::B),
+            Effect::Close,
+            "back to the START menu"
+        );
         let Effect::Module(_) = state.open_page(Page::ModuleStore) else {
             panic!("the module store lists its tab");
         };
         assert_eq!(
             (state.page(), state.parent_page()),
             (Page::ModuleStore, Page::Modules)
+        );
+        assert_eq!(
+            state.handle(Button::B),
+            Effect::Close,
+            "back to the START menu"
         );
         assert_eq!(state.open_page(Page::Bluetooth), Effect::None);
         assert_eq!(

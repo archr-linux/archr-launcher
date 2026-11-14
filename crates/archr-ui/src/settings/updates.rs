@@ -224,6 +224,8 @@ impl Settings {
             .unwrap_or(0);
         self.updates.card_looked = false;
         self.open(Page::Updates);
+        // B closes Settings, back where the page was opened from.
+        self.entry = Some(self.stack.len());
     }
     pub(super) fn start_update(&mut self) -> Effect {
         self.updates.from_card = None;

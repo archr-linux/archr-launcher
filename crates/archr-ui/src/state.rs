@@ -408,6 +408,9 @@ pub struct App {
     /// The switcher's games, filled by the host, and the one just left.
     pub switcher: Vec<crate::resume::Recent>,
     pub switcher_left: Option<crate::resume::Recent>,
+    /// The games list the Start Menu was opened from, and its cursor: B or
+    /// Start closes the menu back to it (from the systems screen: None).
+    pub hub_from: Option<(Screen, usize)>,
     /// The resume screen's game, filled by the host.
     pub boot: Option<crate::resume::Boot>,
     /// The open search, kept while its game menu is up.
@@ -464,6 +467,7 @@ impl App {
             shots_page: 1,
             switcher: Vec::new(),
             switcher_left: None,
+            hub_from: None,
             boot: None,
             search: None,
         }
@@ -655,7 +659,14 @@ impl App {
         if self.moving.is_some() {
             return self.handle_move(b);
         }
-        if matches!(self.screen, Screen::Systems) && b == Button::Start {
+        // Start opens the Start Menu from the systems screen and from a
+        // system's list (a search being typed keeps its Start).
+        if b == Button::Start
+            && (matches!(self.screen, Screen::Systems)
+                || matches!(self.screen, Screen::Games { .. }) && self.search.is_none())
+        {
+            self.hub_from = matches!(self.screen, Screen::Games { .. })
+                .then(|| (self.screen.clone(), self.cursor));
             self.screen = Screen::StartHub {
                 row: 0,
                 tile: usize::from(!self.hub_tile_enabled(data, 0)),

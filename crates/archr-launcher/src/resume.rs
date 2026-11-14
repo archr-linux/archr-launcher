@@ -74,7 +74,11 @@ impl Record {
 /// How the launcher opens.
 #[derive(Debug, PartialEq)]
 pub enum Start {
+    /// The launcher back after a game (or restarted): the last game's place.
     Plain,
+    /// The first start of a power on, nothing resumed: the first system. Only
+    /// a return from a game comes back to it (a reboot or power cycle does not).
+    Boot,
     Switcher,
     Resume(Record),
 }
@@ -97,13 +101,13 @@ pub fn start(paths: &Paths, config: Option<&SystemCfg>) -> Start {
     }
     let _ = fs::create_dir_all(&paths.run).and_then(|()| fs::write(&booted, ""));
     if setting("launcher.resume", "last") == "off" {
-        return Start::Plain;
+        return Start::Boot;
     }
     // At or under the critical level on battery the guard would power off
     // again in the middle of the game: the menu instead.
     let critical: u8 = setting("power.battery.critical", "3").parse().unwrap_or(3);
     if critical > 0 && battery_low(paths, critical) {
-        return Start::Plain;
+        return Start::Boot;
     }
     let record = fs::read_to_string(paths.at(LAST))
         .ok()
@@ -115,7 +119,7 @@ pub fn start(paths: &Paths, config: Option<&SystemCfg>) -> Start {
         {
             Start::Resume(r)
         }
-        _ => Start::Plain,
+        _ => Start::Boot,
     }
 }
 
@@ -339,12 +343,21 @@ mod tests {
         let skip = cfg("launcher.resume.standalone=skip\n");
         assert_eq!(
             start(&paths, Some(&skip)),
-            Start::Plain,
+            Start::Boot,
             "no state, not opened"
         );
         fs::remove_file(paths.run.join(BOOTED)).unwrap();
         let off = cfg("launcher.resume=off\n");
-        assert_eq!(start(&paths, Some(&off)), Start::Plain);
+        assert_eq!(
+            start(&paths, Some(&off)),
+            Start::Boot,
+            "a power on: the first system"
+        );
+        assert_eq!(
+            start(&paths, Some(&off)),
+            Start::Plain,
+            "back from a game: its place"
+        );
         // On battery at the critical level: the menu; with a charger: resumed.
         let battery = paths.at("/sys/class/power_supply/battery");
         fs::create_dir_all(&battery).unwrap();

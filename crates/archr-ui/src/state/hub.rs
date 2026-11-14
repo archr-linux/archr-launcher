@@ -59,7 +59,16 @@ impl App {
         let shortcuts = self.hub_shortcuts().len();
         shortcut = shortcut.min(shortcuts.saturating_sub(1));
         match button {
-            Button::Start | Button::B => self.screen = Screen::Systems,
+            Button::Start | Button::B => {
+                match self.hub_from.take() {
+                    Some((screen, cursor)) => {
+                        self.screen = screen;
+                        self.cursor = cursor;
+                    }
+                    None => self.screen = Screen::Systems,
+                }
+                return Outcome::None;
+            }
             Button::Up => {
                 row = if row == 1 && !widgets.is_empty() {
                     2

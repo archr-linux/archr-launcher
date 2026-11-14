@@ -593,10 +593,7 @@ fn reserved_and_unmapped_buttons_do_nothing() {
         assert_eq!(app.handle(Button::Select, &data), Outcome::None);
         assert_eq!(app.screen, screen);
         assert_eq!(app.cursor, cursor);
-        if matches!(screen, Screen::Games { .. }) {
-            assert_eq!(app.handle(Button::Start, &data), Outcome::None);
-            assert_eq!(app.screen, screen);
-        }
+        // Start in a games list opens the Start Menu (its own test).
         app.handle(Button::Y, &data);
         let screen = app.screen.clone();
         for button in [Button::Start, Button::Select, Button::X, Button::Y] {
@@ -871,6 +868,29 @@ fn return_to_opens_the_list_on_the_game_and_b_goes_to_its_row() {
     assert_eq!((app.screen.clone(), app.cursor), (Screen::Systems, 2));
     app.return_to(9, Some(0), &data);
     assert_eq!((app.screen.clone(), app.cursor), (Screen::Systems, 2));
+}
+
+/// Start opens the Start Menu from a system's list too (it did nothing
+/// there), and B or Start brings the list back where it was.
+#[test]
+fn start_opens_the_start_menu_from_a_games_list_and_back_returns_to_it() {
+    let mut data = FakeData::library();
+    data.collections();
+    let mut app = App::new(5);
+    app.return_to(3, Some(9), &data);
+    assert_eq!((app.screen.clone(), app.cursor), (Screen::games("snes"), 9));
+    app.handle(Button::Start, &data);
+    assert!(matches!(app.screen, Screen::StartHub { .. }));
+    app.handle(Button::B, &data);
+    assert_eq!((app.screen.clone(), app.cursor), (Screen::games("snes"), 9));
+    app.handle(Button::Start, &data);
+    app.handle(Button::Start, &data);
+    assert_eq!((app.screen.clone(), app.cursor), (Screen::games("snes"), 9));
+    // From the systems screen it still closes to the systems screen.
+    app.handle(Button::B, &data);
+    app.handle(Button::Start, &data);
+    app.handle(Button::B, &data);
+    assert_eq!(app.screen, Screen::Systems);
 }
 
 /// An app following `view` of the builtin theme.

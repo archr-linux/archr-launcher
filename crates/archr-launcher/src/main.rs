@@ -240,12 +240,13 @@ fn run(
     // The switcher waits for the records; the resume for its game's system.
     let mut records = None;
     let mut resuming = None;
-    // Back where the last game was chosen, on a plain start.
+    // Back where the last game was chosen when coming back from a game; a
+    // power on (Start::Boot) opens on the first system.
     let mut returning = matches!(start, Start::Plain)
         .then(|| library.place().cloned())
         .flatten();
     match start {
-        Start::Plain => {}
+        Start::Plain | Start::Boot => {}
         Start::Switcher => {
             app.screen = Screen::Switcher;
             records = Some((Records::read(&paths), None));
@@ -1216,12 +1217,11 @@ fn run(
             if let Some(cue) = cue {
                 audio.play(cue);
             }
-            // Leaving the switcher or the resume card for the systems screen
-            // comes back where the last game was chosen, as a plain start
-            // does, not to the first system.
-            if matches!(before.0, Screen::Switcher | Screen::Resume)
-                && app.screen == Screen::Systems
-            {
+            // Leaving the switcher (a game was just closed) for the systems
+            // screen comes back where that game was chosen, as the return
+            // from a game does. The resume card shows at power on: skipping
+            // it opens on the first system, as a power on does.
+            if before.0 == Screen::Switcher && app.screen == Screen::Systems {
                 returning = library.place().cloned();
             }
             let requested = if requested == Outcome::Settings {
