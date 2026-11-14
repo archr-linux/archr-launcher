@@ -197,6 +197,30 @@ pub(crate) fn rasterize(svg: &str, size: u32) -> Result<Surface<'static>, String
     }
 }
 
+/// A picture in SVG (a module's cover), drawn `side` pixels on its longer
+/// side and kept in its own colours, as RGBA bytes for the cover worker.
+pub(crate) fn rasterize_picture(svg: &[u8], side: u32) -> Result<image::RgbaImage, String> {
+    let rw = RWops::from_bytes(svg)?;
+    let dimension = i32::try_from(side).map_err(|e| e.to_string())?;
+    // 0 for the height keeps the aspect ratio.
+    let raw = unsafe { IMG_LoadSizedSVG_RW(rw.raw(), dimension, 0) };
+    if raw.is_null() {
+        return Err(sdl2::get_error());
+    }
+    let surface =
+        unsafe { Surface::from_ll(raw) }.convert_format(sdl2::pixels::PixelFormatEnum::ABGR8888)?;
+    let (width, height, pitch) = (surface.width(), surface.height(), surface.pitch() as usize);
+    let row = width as usize * 4;
+    let rgba = surface
+        .without_lock()
+        .ok_or("SVG surface needs a lock")?
+        .chunks(pitch)
+        .take(height as usize)
+        .flat_map(|line| line[..row].iter().copied())
+        .collect();
+    image::RgbaImage::from_raw(width, height, rgba).ok_or_else(|| "SVG size mismatch".to_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

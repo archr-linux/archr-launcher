@@ -19,6 +19,8 @@ use sdl2::{
 /// of them, dropping the oldest first.
 pub const THEME_SIDE: u32 = 2048;
 pub const THEME_BUDGET: u64 = 32 << 20;
+/// SVG covers are drawn at most this many pixels on their longer side.
+const SVG_SIDE: u32 = 1024;
 
 /// How many of the oldest entries (`bytes` each, oldest first) to drop so at
 /// most `capacity` stay within `budget` bytes; the newest always stays.
@@ -123,6 +125,17 @@ fn thumbnail(
 }
 
 fn decode(path: &Path, width: u32, height: u32) -> io::Result<image::DynamicImage> {
+    // Modules ship SVG covers; the image crate reads only raster formats.
+    if path
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("svg"))
+    {
+        let svg = fs::read(path)?;
+        let side = width.max(height).min(SVG_SIDE);
+        return crate::icons::rasterize_picture(&svg, side)
+            .map(image::DynamicImage::ImageRgba8)
+            .map_err(io::Error::other);
+    }
     let mut reader = image::ImageReader::open(path)?.with_guessed_format()?;
     let mut limits = image::Limits::default();
     limits.max_image_width = Some(width);
@@ -400,6 +413,20 @@ mod tests {
         cleanup_thumbnails(&cache);
         assert_eq!(fs::read_dir(cache).unwrap().count(), 4);
     }
+    #[test]
+    fn svg_covers_are_drawn_in_their_own_colours() {
+        let dir = tempfile::tempdir().unwrap();
+        let svg = dir.path().join("module.svg");
+        fs::write(
+            &svg,
+            r##"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="10"><rect width="20" height="10" fill="#ff0000"/></svg>"##,
+        )
+        .unwrap();
+        let thumb = load_thumbnail(&dir.path().join("cache"), &svg, 200, 200).unwrap();
+        assert_eq!((thumb.width, thumb.height), (200, 100));
+        assert_eq!(&thumb.rgba[..4], &[255, 0, 0, 255]);
+    }
+
     #[test]
     fn pixel_art_grows_by_whole_multiples_without_smoothing() {
         let dir = tempfile::tempdir().unwrap();
