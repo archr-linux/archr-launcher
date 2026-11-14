@@ -251,16 +251,15 @@ fn fingerprint(sys: &SystemDef) -> Option<(u64, u64)> {
 
 /// The ROM folders below `directory`, as deep as the scan goes: a game added
 /// to `gba/RPGs/` changes that folder's time only. One listing per folder,
-/// and a stat per subfolder (files are told apart by the listing alone).
+/// and a stat per subfolder. The listing's file names are hashed too: a copy
+/// from a PC onto the exFAT ROM partition does not always move the folder's
+/// time, and the system then kept its old (often empty) list.
 fn stamp_folders(
     directory: &Path,
     depth: usize,
     hash: &mut DefaultHasher,
     newest: &mut u64,
 ) -> Option<()> {
-    if depth == 0 {
-        return Some(());
-    }
     // An unreadable folder is skipped by the scan as well: it is marked, and
     // the rest of the system keeps its cache.
     let Ok(entries) = fs::read_dir(directory) else {
@@ -268,6 +267,7 @@ fn stamp_folders(
         return Some(());
     };
     let mut folders = Vec::new();
+    let mut files = Vec::new();
     for entry in entries.flatten() {
         let name = entry.file_name();
         if name.as_encoded_bytes().starts_with(b".") || is_media_folder(&name) {
@@ -278,7 +278,14 @@ fn stamp_folders(
             .is_ok_and(|kind| kind.is_dir() || kind.is_symlink())
         {
             folders.push(entry.path());
+        } else {
+            files.push(name);
         }
+    }
+    files.sort();
+    files.hash(hash);
+    if depth == 0 {
+        return Some(());
     }
     folders.sort();
     for folder in folders {

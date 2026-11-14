@@ -551,6 +551,7 @@ const CONFIG_KEYS: &[&str] = &[
     "legacy.size",
     "mario.nes",
     "missing.png",
+    "module.svg",
     "nmbd.service",
     "notes.txt",
     "plain.sh",

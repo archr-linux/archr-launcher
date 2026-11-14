@@ -143,6 +143,39 @@ fn a_game_added_inside_a_folder_triggers_rescan() {
     assert_eq!(names, ["First", "Second"]);
 }
 
+/// ROMs copied from a PC onto the exFAT ROM partition: the copy does not
+/// always move the folder's time (a user saw every system stay empty until
+/// a download made on the console touched the folder). The listing does.
+#[test]
+fn games_copied_without_a_folder_time_change_trigger_rescan() {
+    let dir = tempfile::tempdir().unwrap();
+    let roms = dir.path().join("roms");
+    let folder = roms.join("RPGs");
+    fs::create_dir_all(&folder).unwrap();
+    for path in [&roms, &folder] {
+        set_mtime(path, 1_700_000_000_000_000_001);
+    }
+    let sys = system(&roms);
+    let cache = dir.path().join("cache");
+    assert!(load_games(&cache, &sys).is_empty());
+    let empty = build_overview(std::slice::from_ref(&sys));
+    assert_eq!(empty.systems[0].game_count, 0);
+
+    fs::write(roms.join("First.sfc"), []).unwrap();
+    fs::write(folder.join("Second.sfc"), []).unwrap();
+    for path in [&roms, &folder] {
+        set_mtime(path, 1_700_000_000_000_000_001);
+    }
+    let names: Vec<_> = load_games(&cache, &sys)
+        .into_iter()
+        .map(|g| g.name)
+        .collect();
+    assert_eq!(names, ["First", "Second"]);
+    let (refreshed, changed) = archr_index::cache::refresh_overview(&empty, &[sys]);
+    assert!(changed);
+    assert_eq!(refreshed.systems[0].game_count, 2);
+}
+
 #[test]
 fn an_unreadable_folder_keeps_the_rest_of_the_cache() {
     use std::os::unix::fs::PermissionsExt;
@@ -158,14 +191,10 @@ fn an_unreadable_folder_keeps_the_rest_of_the_cache() {
     let sys = system(&roms);
     let cache = dir.path().join("cache");
     assert_eq!(load_games(&cache, &sys).len(), 1);
-    // Taken from the cache: a ROM written behind the cache's back stays out.
-    let mtime = fs::metadata(&roms).unwrap().modified().unwrap();
-    fs::write(roms.join("Second.sfc"), []).unwrap();
-    File::open(&roms)
-        .unwrap()
-        .set_times(FileTimes::new().set_modified(mtime))
-        .unwrap();
+    // Taken from the cache: the scan would publish a new cache file.
+    let before = cache_inode(&cache);
     assert_eq!(load_games(&cache, &sys).len(), 1);
+    assert_eq!(cache_inode(&cache), before);
     fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
 }
 
@@ -299,14 +328,15 @@ fn unchanged_fingerprint_uses_cache_and_preserves_all_game_fields() {
     assert_eq!(&bytes[4..8], &CACHE_VERSION.to_le_bytes());
     assert_eq!(&bytes[8..16], &fingerprint.to_le_bytes());
 
-    // Removing a ROM but restoring the root mtime distinguishes a hit from a scan.
-    let modified = fs::metadata(&roms).unwrap().modified().unwrap();
-    fs::remove_file(roms.join("Game.sfc")).unwrap();
-    File::open(&roms)
-        .unwrap()
-        .set_times(FileTimes::new().set_modified(modified))
-        .unwrap();
+    // A hit returns the cached games and leaves the cache file alone (a
+    // scan publishes a new one).
+    let before = cache_inode(&cache);
     assert_eq!(load_games(&cache, &sys), games);
+    assert_eq!(cache_inode(&cache), before);
+}
+
+fn cache_inode(cache: &Path) -> u64 {
+    std::os::unix::fs::MetadataExt::ino(&fs::metadata(cache.join("systems/snes.bin")).unwrap())
 }
 
 #[test]
