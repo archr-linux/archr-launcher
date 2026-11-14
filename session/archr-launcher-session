@@ -270,7 +270,9 @@ session_log 'Starting launcher session'
 # output never active, the launcher failing every second with "The video
 # driver did not add any displays" until sway was restarted. Every 10th
 # failure in a row with no active output: say what sway reports and ask it
-# to bring its outputs up.
+# to bring its outputs up. When that has not helped by the 20th (a user's
+# R36S Soysauce, 2026-11-13: 30 failures, then a forced power-off), restart
+# sway; this unit Requires it, so systemd restarts the session with it.
 failures=0
 
 while :; do
@@ -298,7 +300,12 @@ while :; do
             ! swaymsg -t get_outputs 2>/dev/null | grep -q '"active": true'; then
             session_log "No active output after $failures failures: $(swaymsg -t get_outputs 2>&1 |
                 tr -d ' \n' | grep -o '"\(name\|active\|dpms\|power\)":[^,}]*' | tr '\n' ' ')"
-            swaymsg 'output * enable; output * power on' >/dev/null 2>&1 || :
+            if [ "$failures" -lt 20 ]; then
+                swaymsg 'output * enable; output * power on' >/dev/null 2>&1 || :
+            else
+                session_log "Restarting sway: its output did not come up"
+                timeout -k 1 5 systemctl --no-block restart sway.service >/dev/null 2>&1 || :
+            fi
         fi
         # A crash becomes an anonymous error report unless reports are off
         # (archr-error-report decides, and leaves out stops from outside).

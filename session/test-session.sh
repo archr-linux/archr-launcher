@@ -208,6 +208,7 @@ signal_scope() {
 }
 case "$1" in
   import-environment) printf '%s\n' "$*" >>"$CASE_DIR/imports" ;;
+  --no-block) printf '%s\n' "$*" >>"$CASE_DIR/restarts" ;;
   list-units)
     printf '%s\n' "$*" >>"$CASE_DIR/scope-calls"
     for unit in "$CASE_DIR"/scopes/archr-game-*.scope; do
@@ -364,9 +365,7 @@ run_case() {
   if [ "$name" = log-cap ]; then
     head -c 262140 /dev/zero >"$ARCHR_SESSION_LOG"
   fi
-  if [ "$name" = no-output ]; then
-    : >"$CASE_DIR/no-output"
-  fi
+  case "$name" in no-output*) : >"$CASE_DIR/no-output" ;; esac
   if [ "$name" = stale ]; then
     mkdir -p "$ARCHR_SESSION_RUN_DIR"
     printf '%s\n' 'action reboot' >"$ARCHR_SESSION_RUN_DIR/next"
@@ -480,6 +479,13 @@ END"
 grep -q 'No active output after 10 failures: "name":"DSI-1" "active":false $' "$ARCHR_SESSION_LOG"
 [ "$(grep -c '^output \* enable; output \* power on$' "$CASE_DIR/sway-calls")" = 1 ]
 printf '%s\n' 'PASS no active output: logged and asked to come up'
+
+run_case no-output-restart "$(printf 'CRASH\n%.0s' $(seq 20))
+END"
+[ "$(grep -c '^output \* enable; output \* power on$' "$CASE_DIR/sway-calls")" = 1 ]
+grep -q 'Restarting sway: its output did not come up' "$ARCHR_SESSION_LOG"
+[ "$(cat "$CASE_DIR/restarts")" = '--no-block restart sway.service' ]
+printf '%s\n' 'PASS no active output after 20 failures: sway restarted'
 
 run_case failed-handoff 'WRITE_CRASH
 END'
