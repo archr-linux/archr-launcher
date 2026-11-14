@@ -156,3 +156,62 @@ fn information_grid_moves_in_two_columns_and_details_restore_focus() {
     state.handle(Button::B);
     assert_eq!(state.page(), Page::Root);
 }
+
+/// The theme store draws a three-column grid: the d-pad moves across it
+/// like any grid, and only past its left or right edge changes the tab
+/// (the shoulders send the same L/R). A review found ← and → changing the
+/// tab instead of picking the next theme.
+#[test]
+fn theme_store_grid_moves_by_column_and_row_and_tabs_at_the_edges() {
+    use archr_ui::settings::store::{Card, Reply, Tab};
+    let mut s = Settings::default();
+    s.loading = false;
+    s.open(Page::Appearance);
+    s.open(Page::Store);
+    s.store.tab = Tab::Popular;
+    let cards: Vec<Card> = (0..7)
+        .map(|n| Card {
+            owner: "o".into(),
+            repo: format!("theme-{n}"),
+            ..Default::default()
+        })
+        .collect();
+    s.store_reply(Reply::Listed {
+        tab: Tab::Popular,
+        cards,
+        problem: None,
+        fetched: None,
+    });
+    s.cursor = 0;
+    s.handle(Button::R);
+    s.handle(Button::R);
+    assert_eq!(
+        (s.store.tab, s.cursor),
+        (Tab::Popular, 2),
+        "→ walks the row"
+    );
+    s.handle(Button::Down);
+    assert_eq!(s.cursor, 5, "↓ keeps the column");
+    s.handle(Button::Down);
+    assert_eq!(
+        s.cursor, 6,
+        "↓ into a short last row lands on its last card"
+    );
+    s.handle(Button::Up);
+    assert_eq!(s.cursor, 3);
+    s.handle(Button::L);
+    assert_eq!(
+        s.store.tab,
+        Tab::Installed,
+        "← at the left edge changes the tab"
+    );
+    assert_eq!(s.cursor, 0);
+    s.store.tab = Tab::Popular;
+    s.cursor = 2;
+    s.handle(Button::R);
+    assert_eq!(
+        s.store.tab,
+        Tab::Recent,
+        "→ at the right edge changes the tab"
+    );
+}

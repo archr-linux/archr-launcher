@@ -295,9 +295,16 @@ impl Settings {
     fn grid_input(&mut self, button: Button) -> Effect {
         let count = self.store.cards().len();
         let tab = self.store.tab.index();
+        let column = self.cursor % COLUMNS;
+        // The grid has COLUMNS cards a row. The d-pad and the shoulders send
+        // the same L/R: they walk the row, and past its edge change the tab.
         match button {
-            Button::Up => self.cursor = self.cursor.saturating_sub(1),
-            Button::Down => self.cursor = (self.cursor + 1).min(count.saturating_sub(1)),
+            Button::Up if self.cursor >= COLUMNS => self.cursor -= COLUMNS,
+            Button::Down if self.cursor / COLUMNS < count.saturating_sub(1) / COLUMNS => {
+                self.cursor = (self.cursor + COLUMNS).min(count - 1);
+            }
+            Button::L if column > 0 => self.cursor -= 1,
+            Button::R if column + 1 < COLUMNS && self.cursor + 1 < count => self.cursor += 1,
             Button::L | Button::R => {
                 let step = if button == Button::L { 2 } else { 1 };
                 self.cursor = 0;
@@ -537,7 +544,8 @@ mod tests {
     #[test]
     fn tabs_cycle_with_l_and_r_and_y_refreshes() {
         let mut state = store();
-        state.handle(Button::Down);
+        // Two cards, one row: → walks to the last, and past it changes tab.
+        state.handle(Button::R);
         assert_eq!(state.cursor, 1);
         assert_eq!(
             state.handle(Button::R),

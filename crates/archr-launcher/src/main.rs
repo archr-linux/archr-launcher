@@ -1216,6 +1216,14 @@ fn run(
             if let Some(cue) = cue {
                 audio.play(cue);
             }
+            // Leaving the switcher or the resume card for the systems screen
+            // comes back where the last game was chosen, as a plain start
+            // does, not to the first system.
+            if matches!(before.0, Screen::Switcher | Screen::Resume)
+                && app.screen == Screen::Systems
+            {
+                returning = library.place().cloned();
+            }
             let requested = if requested == Outcome::Settings {
                 // The Games page opens on the system being browsed.
                 let system = match &app.screen {
