@@ -65,6 +65,10 @@ pub fn failure(reason: &str) -> &'static str {
         "offline-invalid" => "offline_invalid",
         "offline-old" => "offline_old",
         "offline-incomplete" => "offline_incomplete",
+        // The ArchR key could not be loaded: a clock before the key's date,
+        // or the keyring itself.
+        "clock" => "clock",
+        "keyring" => "keyring",
         _ => "unknown",
     }
 }
