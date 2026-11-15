@@ -780,7 +780,7 @@ impl View<'_, '_, '_> {
         let theme = self.theme;
         let mut y =
             self.step_heading((24., 592.), "pad.summary_title", "pad.summary_text", 14.)? + 12.;
-        let letter = |n: usize| if n % 2 == 0 { "X" } else { "Y" };
+        let letter = |n: usize| ["X", "Y"][n % 2];
         let center = |stick: usize| {
             let (n, off) = cal.drift(stick);
             let mut before = format!("{} {}", letter(n), signed(off));
