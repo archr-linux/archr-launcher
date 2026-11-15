@@ -282,6 +282,19 @@ impl Runtime {
     pub fn close(&mut self) {
         self.closing = true;
     }
+    /// A control of the built-in pad while the controller tester is open.
+    pub fn pad(&mut self, input: archr_ui::settings::joypad::Input) {
+        self.state.joypad_input(input, Instant::now());
+    }
+    /// The longest the event loop may sleep: the tester's holds and
+    /// the calibration's readings move the page.
+    pub fn wait_ms(&self) -> u32 {
+        if self.active && self.state.joypad_raw() {
+            archr_ui::settings::joypad::SAMPLE_EVERY.as_millis() as u32
+        } else {
+            u32::MAX
+        }
+    }
     /// The press an open "press a button" prompt waited for.
     pub fn capture(&mut self, pad: archr_ui::pad::Pad) {
         let effect = self.state.captured(pad);
@@ -464,6 +477,12 @@ impl Runtime {
             dirty = true;
         }
         self.poll_convert();
+        // A restore may come from a page already left: always sent.
+        for command in self.state.joypad_commands() {
+            self.send(Work::Joypad(command));
+            dirty = true;
+        }
+        dirty |= self.active && self.state.joypad_tick(Instant::now());
         // Nothing known yet about an open import page: look.
         if self.active
             && !self.closing

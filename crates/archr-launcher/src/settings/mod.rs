@@ -6,6 +6,7 @@ mod controls;
 mod diag;
 mod games;
 mod info;
+mod joypad;
 mod levels;
 mod mangohud;
 pub use mangohud::supported as mangohud_supported;
@@ -437,6 +438,8 @@ pub(super) enum Work {
     SendReport(String),
     Bios,
     BiosInstall(String),
+    /// The controller tester's lane (`joypad::lane`).
+    Joypad(archr_ui::settings::joypad::Command),
 }
 /// A storage action's outcome and the page's refreshed facts.
 type StorageReply = (
@@ -492,6 +495,10 @@ enum Reply {
     ReportSent(Result<i32, String>),
     Bios(Result<Vec<archr_ui::settings::bios::System>, String>),
     BiosInstall(Result<(), String>),
+    /// The driver's axes; None without calibration.
+    JoypadOpened(Option<Box<archr_ui::settings::joypad::Axes>>),
+    JoypadRead(Box<archr_ui::settings::joypad::Axes>, std::time::Instant),
+    JoypadDone(archr_ui::settings::joypad::Command, Result<(), String>),
 }
 /// A radio scan takes ~20 s on the R36S: it runs on its own lane so it never
 /// delays the Wi-Fi switch or any other action.
@@ -506,6 +513,7 @@ pub struct Worker {
     profiles: mpsc::Sender<()>,
     store: mpsc::Sender<archr_ui::settings::store::Action>,
     slow: mpsc::Sender<diag::Slow>,
+    joypad: mpsc::Sender<archr_ui::settings::joypad::Command>,
     rx: mpsc::Receiver<Reply>,
     /// Dropping this stops the socket listener off-thread.
     _level_notices: std::sync::Arc<()>,
@@ -540,6 +548,12 @@ impl Worker {
         let (store_results, store_paths) = (results.clone(), paths.clone());
         let (slow, slow_requests) = mpsc::channel();
         let (slow_results, slow_paths) = (results.clone(), paths.clone());
+        let (joypad, joypad_requests) = mpsc::channel();
+        let (joypad_results, joypad_paths) = (results.clone(), paths.clone());
+        thread::Builder::new()
+            .name("launcher-joypad".into())
+            .spawn(move || joypad::lane(joypad_paths, &joypad_requests, &joypad_results))
+            .map_err(|e| e.to_string())?;
         let (wifi, wifi_requests) = mpsc::channel();
         let (wifi_results, wifi_paths) = (results.clone(), paths.clone());
         thread::Builder::new()
@@ -678,7 +692,8 @@ impl Worker {
                         | Work::Report
                         | Work::SendReport(_)
                         | Work::Bios
-                        | Work::BiosInstall(_) => {
+                        | Work::BiosInstall(_)
+                        | Work::Joypad(_) => {
                             unreachable!("these have their own lanes")
                         }
                         Work::Scrape => Reply::Scrape(backend.scrape()),
@@ -724,6 +739,7 @@ impl Worker {
             profiles,
             store,
             slow,
+            joypad,
             rx,
             _level_notices: level_notices,
             level_sequences: BTreeMap::new(),
@@ -778,6 +794,9 @@ impl Worker {
         }
         if let Work::Store(action) = work {
             return self.store.send(action).map_err(|e| e.to_string());
+        }
+        if let Work::Joypad(command) = work {
+            return self.joypad.send(command).map_err(|e| e.to_string());
         }
         let slow = match work {
             Work::Diag => Some(diag::Slow::Diag),
@@ -886,6 +905,9 @@ impl Worker {
                     | Reply::ReportSent(_)
                     | Reply::Bios(_)
                     | Reply::BiosInstall(_)
+                    | Reply::JoypadOpened(_)
+                    | Reply::JoypadRead(..)
+                    | Reply::JoypadDone(..)
             ) {
                 self.pending = self.pending.saturating_sub(1);
             }
@@ -1051,6 +1073,9 @@ impl Worker {
                     state.fail(None, "bios.check_failed".into());
                 }
                 Reply::BiosInstall(result) => state.bios_installed(result),
+                Reply::JoypadOpened(axes) => state.joypad_opened(axes.map(|a| *a)),
+                Reply::JoypadRead(axes, at) => state.joypad_read(*axes, at),
+                Reply::JoypadDone(command, result) => state.joypad_done(&command, result),
                 Reply::Roms(facts) => {
                     let (status, scan) = *facts;
                     state.storage.roms = status;

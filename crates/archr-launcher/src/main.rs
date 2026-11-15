@@ -1090,6 +1090,7 @@ fn run(
                 .min(preview.wait_ms(now))
                 .min(countdown)
                 .min(told)
+                .min(settings.wait_ms())
         };
         // A held button keeps SDL's own (1 ms) wait: its release and repeats
         // stay exactly as before. Otherwise the idle wait below.
@@ -1117,6 +1118,15 @@ fn run(
                     win_event: WindowEvent::FocusLost,
                     ..
                 } => repeat.clear(),
+                // The controller tester takes every control itself, the
+                // launcher's actions and shortcuts none.
+                _ if settings.active && settings.state.joypad_raw() => {
+                    repeat.clear();
+                    if let Some(input) = controllers.raw(&event) {
+                        settings.pad(input);
+                        dirty = true;
+                    }
+                }
                 // An open "press a button" prompt takes the next press itself.
                 _ if settings.active && settings.state.capturing() => {
                     if let Some(pad) = controllers.pressed(&event) {
@@ -1130,6 +1140,10 @@ fn run(
                     }
                 }
             }
+        }
+        if settings.active && settings.state.joypad_wants_device() {
+            settings.state.joypad.device = Some(controllers.builtin().unwrap_or_default());
+            dirty = true;
         }
         // The adapter card takes Y (its page) and B (close); any other press
         // closes it and still does its own work.
