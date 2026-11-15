@@ -8,6 +8,7 @@ use std::time::Instant;
 pub mod bios;
 pub mod bluetooth;
 pub mod cheevos;
+pub mod datetime;
 mod controls;
 pub use controls::Capture;
 mod custom;
@@ -99,6 +100,8 @@ pub enum Page {
     /// stick calibration's steps over it (Calibrar-*).
     PadTest,
     PadCalibrate,
+    /// Region › Date and time: the clock, one field per row.
+    DateTime,
     Soon(&'static str),
 }
 impl Page {
@@ -108,6 +111,7 @@ impl Page {
             Self::Sound => "settings.sound",
             Self::System => "settings.system",
             Self::Region => "settings.region",
+            Self::DateTime => "settings.datetime",
             Self::Info | Self::InfoDetail(_) => "settings.info",
             Self::Wifi => "settings.wifi",
             Self::Bluetooth => "settings.bluetooth",
@@ -172,6 +176,7 @@ impl Page {
             Self::ModuleInfo | Self::Module(..) => &["settings.system", "settings.modules"],
             Self::ModuleOffer => &["settings.system", "modules.store"],
             Self::LauncherControls | Self::Hotkeys => &["settings.controls"],
+            Self::DateTime => &["settings.region"],
             Self::ScraperMedia => &["settings.games", "settings.scraper_short"],
             Self::Updates | Self::Power => &["settings.system"],
             Self::UpdatePackages => &["settings.system", "updates.title"],
@@ -183,6 +188,7 @@ impl Page {
             Self::Sound => SOUND,
             Self::System => SYSTEM,
             Self::Region => REGION,
+            Self::DateTime => datetime::ROWS,
             Self::Wifi => pages::WIFI,
             Self::Bluetooth => pages::BLUETOOTH,
             Self::Services => pages::SERVICES,
@@ -226,6 +232,15 @@ pub enum Id {
     Timezone,
     /// The clock set by hand (`archr-config time`); never stored.
     DateTime,
+    /// The speaker's mute (audio.mute), owned by archr-levels.
+    Mute,
+    /// Date and time page: its fields and Apply (never stored).
+    DateDay,
+    DateMonth,
+    DateYear,
+    DateHour,
+    DateMinute,
+    DateApply,
     ClockFormat,
     KeyboardLayout,
     KeyboardVariant,
@@ -436,6 +451,7 @@ impl Id {
     fn metadata(self) -> (&'static str, &'static str) {
         match self {
             Self::Volume => ("audio.volume", "60"),
+            Self::Mute => ("audio.mute", "0"),
             Self::Brightness => ("display.brightness", "50"),
             Self::Audio => ("audio.device", ""),
             Self::Sounds => ("launcher.sounds", "1"),
@@ -563,6 +579,12 @@ impl Id {
             | Self::RestoreBackup
             | Self::RootPassword
             | Self::DateTime
+            | Self::DateDay
+            | Self::DateMonth
+            | Self::DateYear
+            | Self::DateHour
+            | Self::DateMinute
+            | Self::DateApply
             | Self::FactoryReset
             | Self::MangohudLink
             | Self::CheevosAccount
@@ -656,6 +678,7 @@ impl Id {
             Self::ShutdownDelay => &["300", "900", "1800", "3600"],
             Self::Governor => &["ondemand", "performance", "schedutil", "powersave"],
             Self::Sounds
+            | Self::Mute
             | Self::Turbo
             | Self::WifiSwitch
             | Self::BtSwitch
@@ -828,6 +851,7 @@ const SOUND: &[Row] = &[
             step: 10,
         },
     ),
+    row(Id::Mute, "settings.mute", Kind::Toggle),
 ];
 const SYSTEM: &[Row] = &[
     described(Id::Gpu, "settings.gpu", "settings.reboot_required"),
@@ -1070,6 +1094,8 @@ pub struct Settings {
     pub mangohud_supported: bool,
     /// Layout and items when the items page opened, to save or restore.
     pub mangohud_saved: (String, String),
+    /// The clock being set on the Date and time page.
+    pub clock_draft: Option<datetime::Draft>,
     /// A "press a button" prompt is open.
     pub capture: Option<Capture>,
     /// The remembered custom colour while the editor shows another one.
@@ -1144,6 +1170,7 @@ impl Default for Settings {
             custom: Custom::default(),
             mangohud_supported: false,
             mangohud_saved: Default::default(),
+            clock_draft: None,
             capture: None,
             custom_kept: Custom::default(),
             custom_target: Id::Accent,
@@ -1166,6 +1193,14 @@ impl Default for Settings {
 }
 impl Settings {
     pub fn display_value(&self, id: Id, catalog: &crate::i18n::I18n) -> String {
+        match id {
+            Id::DateTime => return self.datetime_now(catalog),
+            Id::DateDay | Id::DateMonth | Id::DateYear | Id::DateHour | Id::DateMinute => {
+                return self.datetime_field(id, catalog)
+            }
+            Id::DateApply => return String::new(),
+            _ => {}
+        }
         if id.roms() {
             return information::value(catalog, &self.roms_value(id));
         }
@@ -1340,7 +1375,6 @@ impl Settings {
             }
             (Id::StorageCard | Id::UnifiedCard, _) => return String::new(),
             (Id::RootPassword, _) => "settings.change_link",
-            (Id::DateTime, _) => return now_text(),
             (Id::KeyboardVariant | Id::MangohudGame, "") => "menu.default",
             (Id::MangohudGame, "1") => "settings.on",
             (Id::MangohudGame, _) => "settings.off",
@@ -2524,22 +2558,4 @@ mod dismiss_tests {
         state.values.insert(Id::UsbMode, "file_transfer".into());
         assert_eq!(usb_rows(&state), 0);
     }
-}
-
-/// The local date and time as the clock row shows it and the keyboard
-/// starts from: `YYYY-MM-DD HH:MM`.
-pub(crate) fn now_text() -> String {
-    let unix = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs());
-    crate::status::local_time(unix).map_or_else(String::new, |t| {
-        format!(
-            "{:04}-{:02}-{:02} {:02}:{:02}",
-            t.tm_year + 1900,
-            t.tm_mon + 1,
-            t.tm_mday,
-            t.tm_hour,
-            t.tm_min
-        )
-    })
 }

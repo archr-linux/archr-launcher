@@ -448,6 +448,7 @@ const CONFIG_KEYS: &[&str] = &[
     "archr.mangohud.state",
     "audio.device",
     "audio.volume",
+    "audio.mute",
     "controllers.bluetooth.enabled",
     "display.brightness",
     "fuse.mergerfs",

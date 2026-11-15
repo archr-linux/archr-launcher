@@ -118,6 +118,17 @@ fn pages() -> Vec<(&'static str, Settings)> {
     usb_rndis.values.insert(Id::UsbCompat, "1".into());
     usb_rndis.usb = crate::settings::network::Usb::parse("link=local\naddress=169.254.170.2\n");
     usb_rndis.cursor = 6;
+    let mut datetime = ready();
+    datetime.open(Page::Region);
+    datetime.clock_draft = Some(crate::settings::datetime::Draft {
+        year: 2026,
+        month: 11,
+        day: 15,
+        hour: 18,
+        minute: 12,
+    });
+    datetime.open(Page::DateTime);
+    datetime.cursor = 1;
     let mut region = ready();
     region.open(Page::Region);
     region.values.insert(Id::Language, "pt_BR".into());
@@ -470,6 +481,7 @@ fn pages() -> Vec<(&'static str, Settings)> {
         ("services_usb_fallback", usb_fallback),
         ("services_usb_rndis", usb_rndis),
         ("region", region),
+        ("datetime", datetime),
         ("games", games),
         ("games-standalone", standalone),
         ("netplay", netplay),

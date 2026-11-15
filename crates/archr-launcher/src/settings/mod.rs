@@ -300,7 +300,13 @@ impl Backend {
         }
         let valid = match id {
             Id::SoundsVolume => value.parse::<u8>().is_ok_and(|n| n <= 100),
-            Id::Sounds | Id::Turbo | Id::Gpu | Id::Governor | Id::Language | Id::ErrorReports => {
+            Id::Sounds
+            | Id::Mute
+            | Id::Turbo
+            | Id::Gpu
+            | Id::Governor
+            | Id::Language
+            | Id::ErrorReports => {
                 id.choices().contains(&value)
             }
             Id::Buttons => archr_ui::pad::bindings_text(&archr_ui::pad::bindings(value)) == value,
@@ -358,6 +364,11 @@ impl Backend {
             }
             Id::Timezone => {
                 self.command("archr-config", &["tz", value])?;
+            }
+            // archr-levels applies it and saves audio.mute with the levels.
+            Id::Mute => {
+                self.command("archr-levels", &["mute", value])?;
+                return Ok(value.into());
             }
             // The clock itself, not a setting: nothing goes to system.cfg.
             Id::DateTime => {

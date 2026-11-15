@@ -11,8 +11,6 @@ pub enum Mode {
     Digits,
     /// Six hexadecimal digits of a colour.
     Hex,
-    /// A local date and time, `YYYY-MM-DD HH:MM`.
-    DateTime,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Key {
@@ -108,11 +106,6 @@ const DIGITS: Layer = &[
     &[Key::Back, Key::Submit],
 ];
 
-const DATETIME: Layer = &[
-    chars!("1" "2" "3" "4" "5" "6" "7" "8" "9" "0"),
-    &[Key::Char("-"), Key::Char(":"), Key::Space, Key::Back, Key::Submit],
-];
-
 const HEX: Layer = &[
     chars!("1" "2" "3" "4" "5" "6" "7" "8" "9" "0"),
     &[
@@ -128,7 +121,7 @@ const HEX: Layer = &[
 ];
 
 /// `YYYY-MM-DD HH:MM`, a real date from 2024 to 2099: what `archr-config
-/// time` takes to set the clock by hand.
+/// time` takes (the Date and time page, checked again by the host).
 pub fn datetime_valid(text: &str) -> bool {
     let b = text.as_bytes();
     if b.len() != 16 || b[4] != b'-' || b[7] != b'-' || b[10] != b' ' || b[13] != b':' {
@@ -180,7 +173,6 @@ impl Keyboard {
                 Mode::Ipv4 => 15,
                 Mode::Digits => 5,
                 Mode::Hex => 6,
-                Mode::DateTime => 16,
                 _ => 128,
             },
             optional: false,
@@ -199,7 +191,6 @@ impl Keyboard {
             (Mode::Ipv4, _) => IPV4,
             (Mode::Digits, _) => DIGITS,
             (Mode::Hex, _) => HEX,
-            (Mode::DateTime, _) => DATETIME,
             (_, 1) => SYMBOLS,
             (_, 2) => MORE,
             _ => LETTERS,
@@ -223,7 +214,6 @@ impl Keyboard {
             Mode::Ipv4 => self.value.parse::<Ipv4Addr>().is_ok(),
             Mode::Digits => self.value.parse::<u16>().is_ok_and(|port| port > 0),
             Mode::Hex => crate::appearance::parse_hex(&self.value).is_some(),
-            Mode::DateTime => datetime_valid(&self.value),
             _ => true,
         }
     }
@@ -314,11 +304,6 @@ mod tests {
         ] {
             assert!(!datetime_valid(bad), "{bad}");
         }
-        let mut k = Keyboard::new(Mode::DateTime, "2026-11-15 17:4".into());
-        assert!(!k.valid());
-        assert_eq!(press(&mut k, Key::Char("0")), None);
-        assert!(k.valid());
-        assert_eq!(press(&mut k, Key::Submit), Some("2026-11-15 17:40".into()));
     }
     fn press(keyboard: &mut Keyboard, target: Key) -> Option<String> {
         let (row, column) = (0..4)
