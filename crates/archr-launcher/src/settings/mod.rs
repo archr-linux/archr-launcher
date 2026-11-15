@@ -323,6 +323,7 @@ impl Backend {
             Id::Audio => {
                 !value.is_empty() && !value.contains(['\n', '\r', '\0']) && value.len() <= 1024
             }
+            Id::DateTime => archr_ui::keyboard::datetime_valid(value),
             Id::Update => false,
             _ => false,
         };
@@ -357,6 +358,11 @@ impl Backend {
             }
             Id::Timezone => {
                 self.command("archr-config", &["tz", value])?;
+            }
+            // The clock itself, not a setting: nothing goes to system.cfg.
+            Id::DateTime => {
+                self.command("archr-config", &["time", value])?;
+                return Ok(value.into());
             }
             Id::Governor => {
                 self.command(

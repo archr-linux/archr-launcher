@@ -203,6 +203,8 @@
 "settings.only_missing" = "Só jogos sem arte"
 "settings.start_scraping" = "Iniciar coleta"
 "settings.clock_format" = "Formato do relógio"
+"settings.datetime" = "Data e hora"
+"settings.datetime_detail" = "Ajuste à mão quando não houver rede"
 "settings.clock_24" = "24 h"
 "settings.clock_12" = "12 h"
 "settings.keyboard_layout" = "Layout do teclado"

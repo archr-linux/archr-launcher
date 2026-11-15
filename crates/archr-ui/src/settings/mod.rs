@@ -224,6 +224,8 @@ pub enum Id {
     Update,
     Language,
     Timezone,
+    /// The clock set by hand (`archr-config time`); never stored.
+    DateTime,
     ClockFormat,
     KeyboardLayout,
     KeyboardVariant,
@@ -560,6 +562,7 @@ impl Id {
             | Self::Backup
             | Self::RestoreBackup
             | Self::RootPassword
+            | Self::DateTime
             | Self::FactoryReset
             | Self::MangohudLink
             | Self::CheevosAccount
@@ -841,6 +844,7 @@ const REGION: &[Row] = &[
     row(Id::Language, "settings.language", Kind::Value),
     row(Id::Timezone, "settings.timezone", Kind::Value),
     row(Id::ClockFormat, "settings.clock_format", Kind::Value),
+    described(Id::DateTime, "settings.datetime", "settings.datetime_detail").kind(Kind::Action),
     described(
         Id::KeyboardLayout,
         "settings.keyboard_layout",
@@ -1336,6 +1340,7 @@ impl Settings {
             }
             (Id::StorageCard | Id::UnifiedCard, _) => return String::new(),
             (Id::RootPassword, _) => "settings.change_link",
+            (Id::DateTime, _) => return now_text(),
             (Id::KeyboardVariant | Id::MangohudGame, "") => "menu.default",
             (Id::MangohudGame, "1") => "settings.on",
             (Id::MangohudGame, _) => "settings.off",
@@ -2519,4 +2524,22 @@ mod dismiss_tests {
         state.values.insert(Id::UsbMode, "file_transfer".into());
         assert_eq!(usb_rows(&state), 0);
     }
+}
+
+/// The local date and time as the clock row shows it and the keyboard
+/// starts from: `YYYY-MM-DD HH:MM`.
+pub(crate) fn now_text() -> String {
+    let unix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    crate::status::local_time(unix).map_or_else(String::new, |t| {
+        format!(
+            "{:04}-{:02}-{:02} {:02}:{:02}",
+            t.tm_year + 1900,
+            t.tm_mon + 1,
+            t.tm_mday,
+            t.tm_hour,
+            t.tm_min
+        )
+    })
 }

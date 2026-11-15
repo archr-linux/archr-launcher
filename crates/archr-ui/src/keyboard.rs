@@ -11,6 +11,8 @@ pub enum Mode {
     Digits,
     /// Six hexadecimal digits of a colour.
     Hex,
+    /// A local date and time, `YYYY-MM-DD HH:MM`.
+    DateTime,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Key {
@@ -106,6 +108,11 @@ const DIGITS: Layer = &[
     &[Key::Back, Key::Submit],
 ];
 
+const DATETIME: Layer = &[
+    chars!("1" "2" "3" "4" "5" "6" "7" "8" "9" "0"),
+    &[Key::Char("-"), Key::Char(":"), Key::Space, Key::Back, Key::Submit],
+];
+
 const HEX: Layer = &[
     chars!("1" "2" "3" "4" "5" "6" "7" "8" "9" "0"),
     &[
@@ -119,6 +126,30 @@ const HEX: Layer = &[
         Key::Submit,
     ],
 ];
+
+/// `YYYY-MM-DD HH:MM`, a real date from 2024 to 2099: what `archr-config
+/// time` takes to set the clock by hand.
+pub fn datetime_valid(text: &str) -> bool {
+    let b = text.as_bytes();
+    if b.len() != 16 || b[4] != b'-' || b[7] != b'-' || b[10] != b' ' || b[13] != b':' {
+        return false;
+    }
+    let num = |r: std::ops::Range<usize>| text.get(r).and_then(|s| s.parse::<u32>().ok());
+    let (Some(year), Some(month), Some(day), Some(hour), Some(minute)) =
+        (num(0..4), num(5..7), num(8..10), num(11..13), num(14..16))
+    else {
+        return false;
+    };
+    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let days = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if leap => 29,
+        2 => 28,
+        _ => return false,
+    };
+    (2024..=2099).contains(&year) && (1..=days).contains(&day) && hour < 24 && minute < 60
+}
 
 /// Partial input is never logged: `Debug` hides the value.
 #[derive(Clone)]
@@ -149,6 +180,7 @@ impl Keyboard {
                 Mode::Ipv4 => 15,
                 Mode::Digits => 5,
                 Mode::Hex => 6,
+                Mode::DateTime => 16,
                 _ => 128,
             },
             optional: false,
@@ -167,6 +199,7 @@ impl Keyboard {
             (Mode::Ipv4, _) => IPV4,
             (Mode::Digits, _) => DIGITS,
             (Mode::Hex, _) => HEX,
+            (Mode::DateTime, _) => DATETIME,
             (_, 1) => SYMBOLS,
             (_, 2) => MORE,
             _ => LETTERS,
@@ -190,6 +223,7 @@ impl Keyboard {
             Mode::Ipv4 => self.value.parse::<Ipv4Addr>().is_ok(),
             Mode::Digits => self.value.parse::<u16>().is_ok_and(|port| port > 0),
             Mode::Hex => crate::appearance::parse_hex(&self.value).is_some(),
+            Mode::DateTime => datetime_valid(&self.value),
             _ => true,
         }
     }
@@ -260,6 +294,32 @@ impl Keyboard {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_date_and_time_must_be_real() {
+        assert!(datetime_valid("2026-11-15 17:40"));
+        assert!(datetime_valid("2028-02-29 00:00"), "leap day");
+        assert!(datetime_valid("2099-12-31 23:59"));
+        for bad in [
+            "2027-02-29 10:00",
+            "2026-02-30 10:00",
+            "2026-13-01 10:00",
+            "2026-04-31 10:00",
+            "2026-11-15 24:00",
+            "2026-11-15 10:60",
+            "2023-12-31 10:00",
+            "2026-11-15 9:40",
+            "2026/11/15 10:40",
+            "2026-11-15T10:40",
+            "",
+        ] {
+            assert!(!datetime_valid(bad), "{bad}");
+        }
+        let mut k = Keyboard::new(Mode::DateTime, "2026-11-15 17:4".into());
+        assert!(!k.valid());
+        assert_eq!(press(&mut k, Key::Char("0")), None);
+        assert!(k.valid());
+        assert_eq!(press(&mut k, Key::Submit), Some("2026-11-15 17:40".into()));
+    }
     fn press(keyboard: &mut Keyboard, target: Key) -> Option<String> {
         let (row, column) = (0..4)
             .flat_map(|r| (0..12).map(move |c| (r, c)))

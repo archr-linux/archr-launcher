@@ -339,6 +339,7 @@ impl Settings {
                 self.root_password_typed(value);
                 Effect::None
             }
+            Id::DateTime => Effect::Set(Id::DateTime, value),
             Id::CheevosAccount | Id::CheevosPassword | Id::CheevosWebKey => {
                 self.cheevos_typed(target, value)
             }
@@ -519,6 +520,7 @@ impl Settings {
             | Id::CheevosWebKeyRemove
             | Id::CheevosLogout) => return self.cheevos_activate(id),
             Id::RootPassword => self.open_keyboard(Id::RootPassword, Mode::Secret, String::new()),
+            Id::DateTime => self.open_keyboard(Id::DateTime, Mode::DateTime, super::now_text()),
             // Every visit looks again.
             Id::BiosLink => {
                 self.bios.systems = None;
@@ -552,6 +554,28 @@ mod tests {
         };
         state.open(Page::Wifi);
         state
+    }
+    #[test]
+    fn the_clock_is_set_from_region_with_the_date_keyboard() {
+        use crate::keyboard::{datetime_valid, Mode};
+        let mut state = Settings::default();
+        state.loading = false;
+        state.open(Page::Region);
+        state.cursor = state
+            .visible_rows()
+            .iter()
+            .position(|r| r.id == Id::DateTime)
+            .expect("Region lists the clock");
+        let catalog = crate::i18n::I18n::default();
+        assert!(datetime_valid(&state.display_value(Id::DateTime, &catalog)), "the row shows the time");
+        state.handle(Button::A);
+        assert_eq!(state.page(), Page::Keyboard);
+        let keyboard = state.keyboard.as_ref().unwrap();
+        assert_eq!(keyboard.mode, Mode::DateTime);
+        let now = keyboard.text().to_owned();
+        assert!(datetime_valid(&now), "starts from the current time: {now}");
+        assert_eq!(state.handle(Button::Start), Effect::Set(Id::DateTime, now));
+        assert_eq!(state.page(), Page::Region);
     }
     #[test]
     fn root_password_is_confirmed_from_services_and_never_debug_printed() {

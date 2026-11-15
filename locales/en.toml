@@ -203,6 +203,8 @@
 "settings.only_missing" = "Only games missing artwork"
 "settings.start_scraping" = "Start scraping"
 "settings.clock_format" = "Clock format"
+"settings.datetime" = "Date and time"
+"settings.datetime_detail" = "Set by hand when there is no network"
 "settings.clock_24" = "24 h"
 "settings.clock_12" = "12 h"
 "settings.keyboard_layout" = "Keyboard layout"

@@ -203,6 +203,8 @@
 "settings.only_missing" = "Только игры без обложек"
 "settings.start_scraping" = "Начать загрузку"
 "settings.clock_format" = "Формат времени"
+"settings.datetime" = "Дата и время"
+"settings.datetime_detail" = "Установите вручную, если нет сети"
 "settings.clock_24" = "24 ч"
 "settings.clock_12" = "12 ч"
 "settings.keyboard_layout" = "Раскладка клавиатуры"
