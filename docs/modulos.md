@@ -299,7 +299,7 @@ usuário religa em Configurações › Módulos. Daemon que cai é reiniciado de
 de 1 s, 5 s e 30 s. Se a versão que falha acabou de ser atualizada pela Loja, a
 versão anterior volta sozinha.
 
-Tempos limite: `initialize` 3 s; `action.invoke` 1 s (daemon); um oneshot
+Tempos limite: `initialize` 10 s; `action.invoke` 1 s (daemon); um oneshot
 inteiro 2 s.
 
 ## 4. Protocolo

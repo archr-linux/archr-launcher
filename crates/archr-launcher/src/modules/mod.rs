@@ -24,7 +24,10 @@ use std::{
 
 /// Daemons running at once; more must be one-shots.
 pub const DAEMONS: usize = 3;
-const INITIALIZE: Duration = Duration::from_secs(3);
+/// A bash daemon answers `initialize` in ~0.7 s on an RK3326 with ondemand,
+/// ~2 s at 408 MHz (powersave), more while the boot is busy: 3 s was not
+/// enough there (a Soysauce on powersave, 2026-11-15).
+const INITIALIZE: Duration = Duration::from_secs(10);
 const INVOKE: Duration = Duration::from_secs(1);
 /// A one-shot's whole run: start, one message, exit.
 const ONESHOT: Duration = Duration::from_secs(2);
