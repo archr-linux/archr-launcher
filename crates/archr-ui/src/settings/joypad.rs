@@ -443,16 +443,6 @@ pub struct Joypad {
 fn bit(pad: Pad) -> u32 {
     1 << pad as u32
 }
-/// The controls the tester draws, in the order "missing" lists them.
-pub fn controls(fn_key: bool) -> Vec<Pad> {
-    use Pad::*;
-    let mut pads = vec![A, B, X, Y, L1, R1, L2, R2, Select, Start, L3, R3];
-    if fn_key {
-        pads.push(Fn);
-    }
-    pads.extend([Up, Down, Left, Right]);
-    pads
-}
 impl Joypad {
     pub fn held(&self, pad: Pad) -> bool {
         self.down & bit(pad) != 0
@@ -463,8 +453,15 @@ impl Joypad {
     pub fn has_fn(&self) -> bool {
         self.device.as_ref().is_some_and(|d| d.1)
     }
+    /// The controls the tester draws, in the order "missing" lists them.
     pub fn controls(&self) -> Vec<Pad> {
-        controls(self.has_fn())
+        use Pad::*;
+        let mut pads = vec![A, B, X, Y, L1, R1, L2, R2, Select, Start, L3, R3];
+        if self.has_fn() {
+            pads.push(Fn);
+        }
+        pads.extend([Up, Down, Left, Right]);
+        pads
     }
     /// The calibration can open from here: the pad has one, and this is
     /// not the tester opened from the calibration's summary.
@@ -477,17 +474,14 @@ impl Joypad {
 }
 
 impl Settings {
-    pub(super) fn joypad_page(&self) -> bool {
-        matches!(self.page(), Page::PadTest | Page::PadCalibrate)
-    }
     /// The tester or a calibration step is open: every control goes to
     /// `joypad_input`, none to the launcher's actions or shortcuts.
     pub fn joypad_raw(&self) -> bool {
-        self.joypad_page()
+        matches!(self.page(), Page::PadTest | Page::PadCalibrate)
     }
     /// The host fills in the built-in pad while the tester shows.
     pub fn joypad_wants_device(&self) -> bool {
-        self.joypad_page() && self.joypad.device.is_none()
+        self.joypad_raw() && self.joypad.device.is_none()
     }
     pub fn joypad_commands(&mut self) -> Vec<Command> {
         std::mem::take(&mut self.joypad.commands)
@@ -613,7 +607,9 @@ impl Settings {
                 cal.step = Step::Deadzone;
                 commands.push(Command::Sample(true));
             }
+            // The tester over the summary, with the driver's values now.
             (Step::Summary, Pad::A) if cal.cursor == 1 => {
+                commands.push(Command::Open);
                 self.joypad.seen = 0;
                 self.open(Page::PadTest);
             }
@@ -1055,6 +1051,11 @@ ry raw=1798 center=1795 fixed=0 neg=100 pos=100 deadzone=40 max=1800 invert=0
         press(&mut state, Pad::Down, t);
         press(&mut state, Pad::A, t);
         assert_eq!(state.page(), Page::PadTest, "the tester over the summary");
+        assert_eq!(
+            state.joypad_commands(),
+            [Command::Open],
+            "the values fitted"
+        );
         assert!(!state.joypad.offers_calibration());
         assert_eq!(state.joypad_hints().len(), 1, "only the way out");
         state.joypad_input(Input::Button(Pad::Start, true), t);

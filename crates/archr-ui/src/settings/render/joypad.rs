@@ -6,6 +6,10 @@ use crate::primitives::Sketch;
 use crate::settings::joypad::{position, Axes, Calibration, Joypad, Step, BINS, CHOICES, REST};
 
 type Point = (f32, f32);
+/// A step's title and paragraph: sizes and the paragraph's most lines,
+/// across the page or beside the deadzone's stick.
+const WIDE: (f32, f32, usize) = (22., 14., 2);
+const BESIDE: (f32, f32, usize) = (20., 13., 5);
 /// The calibration's cards and their circle (Calibrar-centro, -curso).
 const CARD_W: f32 = 270.;
 const CARD_GAP: f32 = 16.;
@@ -87,21 +91,15 @@ impl View<'_, '_, '_> {
         (x, w): (f32, f32),
         title: &str,
         text: &str,
-        size: f32,
+        (title_size, size, lines): (f32, f32, usize),
     ) -> Result<f32, String> {
-        let title_size = if size > 13. { 22. } else { 20. };
         self.text_face(
             (x, 50., w, 30.),
             &self.tr(title),
             (title_size, self.theme.text, Align::Left),
             Face::Semibold,
         )?;
-        self.top_paragraph(
-            (x, 84., w),
-            &self.tr(text),
-            size,
-            if size > 13. { 2 } else { 5 },
-        )
+        self.top_paragraph((x, 84., w), &self.tr(text), size, lines)
     }
     /// Wrapped text from the top of `(x, y, w)` in at most `lines` lines;
     /// returns its bottom.
@@ -370,10 +368,10 @@ impl View<'_, '_, '_> {
         heading(self, &mut y, "pad.controller")?;
         let controls = pad.controls();
         let name = pad.device.as_ref().map_or("", |d| d.0.as_str()).to_owned();
-        let counts = self.ui.catalog.format(
-            "pad.counts",
-            &[("buttons", &controls.len().to_string()), ("axes", "4")],
-        );
+        let counts = self
+            .ui
+            .catalog
+            .format("pad.counts", &[("buttons", &controls.len().to_string())]);
         self.round_box((x, y, w, 52.), 10., theme.surface, Some(theme.border))?;
         self.text(
             (x + 12., y + 7., w - 24., 20.),
@@ -479,7 +477,8 @@ impl View<'_, '_, '_> {
     }
     fn pad_center(&mut self, cal: &Calibration) -> Result<(), String> {
         let theme = self.theme;
-        let top = self.step_heading((24., 592.), "pad.center_title", "pad.center_text", 14.)? + 14.;
+        let top =
+            self.step_heading((24., 592.), "pad.center_title", "pad.center_text", WIDE)? + 14.;
         let (svg, r) = (150., 68.);
         let xs = self.cards(top, 12. + svg + 8. + 18. + 6. + 16. + 12., [false; 2])?;
         let max = |n: usize| cal.now[n].max as f32;
@@ -557,7 +556,8 @@ impl View<'_, '_, '_> {
     }
     fn pad_travel(&mut self, cal: &Calibration) -> Result<(), String> {
         let theme = self.theme;
-        let top = self.step_heading((24., 592.), "pad.travel_title", "pad.travel_text", 14.)? + 12.;
+        let top =
+            self.step_heading((24., 592.), "pad.travel_title", "pad.travel_text", WIDE)? + 12.;
         let (svg, r) = (140., 63.);
         let h = 12. + svg + 6. + 18. + 6. + 34. + 12.;
         let ready = [0, 1].map(|stick| cal.travel.ready(stick, &cal.now, &cal.rest));
@@ -717,7 +717,7 @@ impl View<'_, '_, '_> {
         )?;
         // The setting on the right.
         let (x, w) = (262., 354.);
-        let mut y = self.step_heading((x, w), "pad.deadzone", "pad.deadzone_text", 13.)? + 10.;
+        let mut y = self.step_heading((x, w), "pad.deadzone", "pad.deadzone_text", BESIDE)? + 10.;
         let suggested = self.ui.catalog.format(
             "pad.suggested",
             &[
@@ -779,7 +779,7 @@ impl View<'_, '_, '_> {
     fn pad_summary(&mut self, cal: &Calibration) -> Result<(), String> {
         let theme = self.theme;
         let mut y =
-            self.step_heading((24., 592.), "pad.summary_title", "pad.summary_text", 14.)? + 12.;
+            self.step_heading((24., 592.), "pad.summary_title", "pad.summary_text", WIDE)? + 12.;
         let letter = |n: usize| ["X", "Y"][n % 2];
         let center = |stick: usize| {
             let (n, off) = cal.drift(stick);

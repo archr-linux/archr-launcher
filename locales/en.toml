@@ -1523,7 +1523,7 @@
 "pad.tested_legend" = "Tested"
 "pad.deadzone" = "Deadzone"
 "pad.controller" = "Controller"
-"pad.counts" = "{buttons} buttons · {axes} axes"
+"pad.counts" = "{buttons} buttons · 4 axes"
 "pad.sticks" = "Sticks"
 "pad.left_short" = "Left"
 "pad.right_short" = "Right"

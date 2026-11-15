@@ -1523,7 +1523,7 @@
 "pad.tested_legend" = "Проверено"
 "pad.deadzone" = "Мёртвая зона"
 "pad.controller" = "Контроллер"
-"pad.counts" = "Кнопок: {buttons} · осей: {axes}"
+"pad.counts" = "Кнопок: {buttons} · осей: 4"
 "pad.sticks" = "Стики"
 "pad.left_short" = "Лев."
 "pad.right_short" = "Прав."

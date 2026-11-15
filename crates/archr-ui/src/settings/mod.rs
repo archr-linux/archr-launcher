@@ -1897,7 +1897,7 @@ impl Settings {
         }
         // Presses go to an open prompt (`captured`) or the tester
         // (`joypad_input`), never here.
-        if self.capturing() || self.converting || self.joypad_page() {
+        if self.capturing() || self.converting || self.joypad_raw() {
             return Effect::None;
         }
         if let Some(offer) = &mut self.convert {
