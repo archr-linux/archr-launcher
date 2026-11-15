@@ -378,6 +378,9 @@ fn run(
     let mut converter =
         archr_launcher::convert::Runner::new(archr_launcher::convert::Env::new(&paths));
     let mut usb_seq = 0;
+    // A flag a launcher that died left behind pauses nothing, but goes too.
+    let mut hotkeys_paused = false;
+    pause_hotkeys(&paths, false);
     loop {
         // A successful power request owns the screen until the OS stops us.
         // Store is already flushed; no more input, scans, scripts or handoffs.
@@ -1145,6 +1148,13 @@ fn run(
             settings.state.joypad.device = Some(controllers.builtin().unwrap_or_default());
             dirty = true;
         }
+        // The controller tester takes every button: input_sense runs no
+        // shortcut (volume, screenshot, report) while it is open.
+        let tester = settings.active && settings.state.joypad_raw();
+        if tester != hotkeys_paused {
+            hotkeys_paused = tester;
+            pause_hotkeys(&paths, tester);
+        }
         // The adapter card takes Y (its page) and B (close); any other press
         // closes it and still does its own work.
         if let Some(pressed) = button.filter(|_| ui.dongle.is_some()) {
@@ -1686,5 +1696,24 @@ fn idle_wait(events: &mut sdl2::EventPump, timeout_ms: u32) -> Option<Event> {
             return None;
         }
         std::thread::sleep(left.min(INPUT_TICK));
+    }
+}
+
+/// input_sense skips the controller's shortcuts while this flag holds the
+/// PID of a live launcher; power and volume keys stay theirs.
+fn pause_hotkeys(paths: &Paths, on: bool) {
+    let flag = paths.at("/run/archr/hotkeys-paused");
+    let result = if on {
+        flag.parent()
+            .map_or(Ok(()), std::fs::create_dir_all)
+            .and_then(|()| std::fs::write(&flag, format!("{}\n", std::process::id())))
+    } else {
+        match std::fs::remove_file(&flag) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            other => other,
+        }
+    };
+    if let Err(error) = result {
+        log::warn!("{}: {error}", flag.display());
     }
 }
