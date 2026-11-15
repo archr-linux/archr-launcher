@@ -16,6 +16,7 @@ pub(crate) mod games;
 pub(crate) mod information;
 pub use custom::Custom;
 pub mod hotkeys;
+pub mod joypad;
 pub mod mangohud;
 pub use games::{GameCore, GameSystem, Games};
 pub mod network;
@@ -94,6 +95,10 @@ pub enum Page {
     /// text (Relatorios-ver).
     ErrorReports,
     ReportText,
+    /// System › Test the controller (Sistema-testar-controle), and the
+    /// stick calibration's steps over it (Calibrar-*).
+    PadTest,
+    PadCalibrate,
     Soon(&'static str),
 }
 impl Page {
@@ -138,6 +143,8 @@ impl Page {
             Self::Shortcuts => "shortcuts.title",
             Self::ErrorReports => "reports.title",
             Self::ReportText => "reports.view_title",
+            Self::PadTest => "pad.title",
+            Self::PadCalibrate => "pad.calibrate",
             Self::Soon(key) => key,
         }
     }
@@ -155,6 +162,7 @@ impl Page {
             | Self::ModuleStore
             | Self::RaImport
             | Self::Diagnostics
+            | Self::PadTest
             | Self::ErrorReports => &["settings.system"],
             Self::ReportText => &["settings.system", "reports.title"],
             Self::Bios => &["settings.games"],
@@ -380,6 +388,8 @@ pub enum Id {
     RomsCancel,
     RomsRetry,
     RomsLeft,
+    /// System link to the controller tester.
+    PadTestLink,
     /// System link to Diagnostics, and that page's rows.
     DiagLink,
     /// archr-debug owns system.loglevel: "1" while it is verbose.
@@ -608,7 +618,8 @@ impl Id {
             | Self::ConsoleId
             | Self::ReportsLatest
             | Self::ReportsView => ("", ""),
-            Self::DiagLink
+            Self::PadTestLink
+            | Self::DiagLink
             | Self::Crashes
             | Self::ReportNow
             | Self::ReportLast
@@ -823,6 +834,7 @@ const SYSTEM: &[Row] = &[
     row(Id::Update, "settings.update", Kind::Action),
     row(Id::ModulesLink, "settings.modules", Kind::Action),
     row(Id::RaImportLink, "raimport.title", Kind::Action),
+    row(Id::PadTestLink, "pad.title", Kind::Action),
     row(Id::DiagLink, "diag.title", Kind::Action),
     row(Id::ReportsLink, "reports.title", Kind::Action),
 ];
@@ -1076,6 +1088,7 @@ pub struct Settings {
     pub reports: reports::Reports,
     pub bios: bios::Bios,
     pub shortcuts: shortcuts::Shortcuts,
+    pub joypad: joypad::Joypad,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -1144,6 +1157,7 @@ impl Default for Settings {
             reports: reports::Reports::default(),
             bios: bios::Bios::default(),
             shortcuts: shortcuts::Shortcuts::default(),
+            joypad: joypad::Joypad::default(),
         }
     }
 }
@@ -1312,6 +1326,7 @@ impl Settings {
                 | Id::BiosLink
                 | Id::ResumeLink
                 | Id::PowerLink
+                | Id::PadTestLink
                 | Id::ShortcutsLink,
                 _,
             ) => return "›".into(),
@@ -1596,6 +1611,7 @@ impl Settings {
             Page::UsbAdapters => self.usb_hints(),
             Page::Bios => self.bios_hints(),
             Page::Shortcuts => self.shortcuts_hints(),
+            Page::PadTest | Page::PadCalibrate => self.joypad_hints(),
             Page::Root => &[
                 (Key('A'), "hint.open"),
                 (Key('B'), "hint.back"),
@@ -1879,8 +1895,9 @@ impl Settings {
                 _ => Effect::None,
             };
         }
-        // Presses go to an open prompt (`captured`), never here.
-        if self.capturing() || self.converting {
+        // Presses go to an open prompt (`captured`) or the tester
+        // (`joypad_input`), never here.
+        if self.capturing() || self.converting || self.joypad_page() {
             return Effect::None;
         }
         if let Some(offer) = &mut self.convert {

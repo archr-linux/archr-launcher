@@ -450,6 +450,7 @@ impl Settings {
             Id::HotkeysLink => self.open(Page::Hotkeys),
             Id::ResumeLink => self.open(Page::Resume),
             Id::PowerLink => self.open(Page::Power),
+            Id::PadTestLink => self.open_joypad(),
             Id::MangohudItems => self.open(Page::MangohudItems),
             // Every visit looks at the card again.
             Id::Update => {

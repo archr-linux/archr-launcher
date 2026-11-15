@@ -54,6 +54,8 @@ pub enum HintButton {
     Pair(char, char),
     Start,
     Select,
+    /// Start and Select together, in one badge.
+    StartSelect,
 }
 impl From<char> for HintButton {
     fn from(key: char) -> Self {

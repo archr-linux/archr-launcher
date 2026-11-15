@@ -2058,6 +2058,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             let word = match button {
                 HintButton::Start => Some("START"),
                 HintButton::Select => Some("SELECT"),
+                HintButton::StartSelect => Some("START + SELECT"),
                 _ => None,
             };
             let start = word.is_some();
@@ -2070,7 +2071,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             let buttons = match button {
                 HintButton::Key(key) => [Some(letter(key)), None],
                 HintButton::Pair(left, right) => [Some(letter(left)), Some(letter(right))],
-                HintButton::Start | HintButton::Select => [None, None],
+                HintButton::Start | HintButton::Select | HintButton::StartSelect => [None, None],
             };
             let paired = buttons[1].is_some();
             // The START badge holds its word, which the text floor may widen.

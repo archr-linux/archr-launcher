@@ -3,11 +3,14 @@
 //! points at the distribution's gamecontrollerdb.txt.
 use sdl2::event::Event;
 use sdl2::{
-    controller::GameController, joystick::Joystick, GameControllerSubsystem, JoystickSubsystem,
+    controller::{Axis, GameController},
+    joystick::Joystick,
+    GameControllerSubsystem, JoystickSubsystem,
 };
 
 use crate::{
     pad::{Pad, Remap},
+    settings::joypad::Input,
     startup::StartupTrace,
     startup_phase,
     state::Button,
@@ -93,6 +96,43 @@ impl Controllers {
     /// The control a fresh press comes from, for "press a button" prompts.
     pub fn pressed(&self, event: &Event) -> Option<Pad> {
         Pad::pressed(event).filter(|_| self.routed(event))
+    }
+    /// Every control of the built-in pad (the first one), pressed or
+    /// released, FN included, and its sticks as games get them: the
+    /// controller tester reads these instead of the launcher's actions.
+    pub fn raw(&self, event: &Event) -> Option<Input> {
+        let builtin = |which| {
+            self.devices
+                .first()
+                .is_some_and(|d| d.joystick.instance_id() == which)
+        };
+        if let Some(((which, _), down)) = self.modifier(event) {
+            return builtin(which).then_some(Input::Button(Pad::Fn, down));
+        }
+        if crate::input::device_event(event).is_some_and(|(which, _)| !builtin(which))
+            || !self.routed(event)
+        {
+            return None;
+        }
+        Some(match *event {
+            Event::ControllerAxisMotion { axis, value, .. } => match axis {
+                Axis::LeftX => Input::Stick(0, value),
+                Axis::LeftY => Input::Stick(1, value),
+                Axis::RightX => Input::Stick(2, value),
+                Axis::RightY => Input::Stick(3, value),
+                Axis::TriggerLeft => Input::Button(Pad::L2, value > i16::MAX / 2),
+                Axis::TriggerRight => Input::Button(Pad::R2, value > i16::MAX / 2),
+            },
+            Event::KeyDown { .. }
+            | Event::ControllerButtonDown { .. }
+            | Event::JoyButtonDown { .. } => Input::Button(Pad::of(event)?, true),
+            _ => Input::Button(Pad::of(event)?, false),
+        })
+    }
+    /// The built-in pad's name, and whether it has FN.
+    pub fn builtin(&self) -> Option<(String, bool)> {
+        let device = self.devices.first()?;
+        Some((device.joystick.name(), device.fn_button.is_some()))
     }
 
     pub fn refresh(&mut self) {
