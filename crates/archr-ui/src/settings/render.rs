@@ -22,6 +22,8 @@ mod custom;
 mod diag;
 #[path = "render/information.rs"]
 mod information;
+#[path = "render/joypad.rs"]
+mod joypad;
 #[path = "render/mangohud.rs"]
 mod mangohud;
 #[path = "render/modules.rs"]
@@ -585,6 +587,11 @@ impl View<'_, '_, '_> {
                     |c| c.title(self.ui.catalog.language()).to_owned(),
                 )
             }
+            // Calibrar-*: "Testar controle / Calibrar analógicos".
+            Page::PadCalibrate => {
+                trail.push(self.tr(Page::PadTest.title()));
+                self.tr(page.title())
+            }
             Page::Keyboard => {
                 trail.push(self.tr("settings.title"));
                 trail.push(self.tr(state.parent_page().title()));
@@ -717,6 +724,7 @@ impl View<'_, '_, '_> {
                 Face::Semibold,
             )?;
         } else {
+            let right = self.pad_steps(state, right)?;
             self.breadcrumbs(state, right)?;
         }
         let rows: Vec<Row> = state.visible_rows();
@@ -758,6 +766,8 @@ impl View<'_, '_, '_> {
             Page::ReportText => self.report_text(state)?,
             Page::Bios => self.bios_page(state)?,
             Page::Shortcuts => self.shortcuts_page(state)?,
+            Page::PadTest => self.pad_test(state)?,
+            Page::PadCalibrate => self.pad_calibrate(state)?,
             Page::Scraper => {
                 self.rows_at(state, &rows, &placements(Page::Scraper, &rows), 384.)?;
                 self.scraper_panel(state)?;
@@ -850,6 +860,7 @@ impl View<'_, '_, '_> {
                 "diag.",
                 "bios.",
                 "shortcuts.",
+                "pad.",
             ]
             .iter()
             .any(|prefix| error.starts_with(prefix))
@@ -905,6 +916,8 @@ impl View<'_, '_, '_> {
                         &[("date", &usb.table.day(self.ui.catalog.language()))],
                     ),
                 })
+        } else if let Some(note) = state.joypad_note() {
+            Some(self.tr(note))
         } else if state.page() == Page::Bios {
             Some(self.tr("bios.footer"))
         } else if state.page() == Page::ReportText {

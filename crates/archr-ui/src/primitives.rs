@@ -209,6 +209,32 @@ impl Mesh {
         canvas.render_geometry(&self.vertices, texture, self.indices.as_slice())
     }
 }
+/// Strokes and fills drawn once and dropped, for shapes that change every
+/// frame (the controller tester's sticks and traces).
+pub(crate) struct Sketch(Mesh);
+impl Sketch {
+    pub fn new() -> Self {
+        Self(Mesh::new())
+    }
+    pub fn line(&mut self, from: Point, to: Point, width: f32, c: Rgba) {
+        self.0.line(from, to, width, c);
+    }
+    /// The polygon `points` makes around `center`, which sees all of it.
+    pub fn polygon(&mut self, center: Point, points: &[Point], c: Rgba) {
+        let mesh = &mut self.0;
+        let base = mesh.vertices.len() as u16;
+        mesh.vertices.push(vertex(center, color(c), (0., 0.)));
+        mesh.vertices
+            .extend(points.iter().map(|&p| vertex(p, color(c), (0., 0.))));
+        for i in 0..points.len() as u16 {
+            let next = (i + 1) % points.len() as u16;
+            mesh.indices.extend([base, base + 1 + i, base + 1 + next]);
+        }
+    }
+    pub fn draw(&self, canvas: &mut Canvas<Window>) -> Result<(), String> {
+        self.0.draw(canvas, None)
+    }
+}
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Key {
     Rounded(Rect, u32, Rgba, Option<(Rgba, u32)>),
