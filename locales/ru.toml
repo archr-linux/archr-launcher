@@ -1513,6 +1513,7 @@
 "search.list" = "К списку"
 "search.keyboard" = "Клавиатура"
 "pad.title" = "Проверка контроллера"
+"pad.title_detail" = "Кнопки, стики и калибровка стиков"
 "pad.calibrate" = "Калибровка стиков"
 "pad.hold_calibrate" = "Удерживать: калибровка"
 "pad.hold_exit" = "удерживать для выхода"

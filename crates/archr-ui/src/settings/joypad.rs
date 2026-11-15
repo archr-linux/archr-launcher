@@ -783,12 +783,12 @@ ry raw=1798 center=1795 fixed=0 neg=100 pos=100 deadzone=40 max=1800 invert=0
             loading: false,
             ..Default::default()
         };
-        state.open(Page::System);
+        state.open(Page::Controls);
         state.cursor = state
             .visible_rows()
             .iter()
             .position(|r| r.id == Id::PadTestLink)
-            .expect("System links to the tester");
+            .expect("Controls links to the tester");
         state.handle(crate::state::Button::A);
         assert_eq!(state.page(), Page::PadTest);
         assert_eq!(state.joypad_commands(), [Command::Open]);
@@ -1105,7 +1105,7 @@ ry raw=1798 center=1795 fixed=0 neg=100 pos=100 deadzone=40 max=1800 invert=0
         assert!(!state.joypad_tick(now + HOLD), "let go in time");
         state.joypad_input(Input::Button(Pad::Start, true), now + HOLD);
         assert!(state.joypad_tick(now + 2 * HOLD));
-        assert_eq!(state.page(), Page::System);
+        assert_eq!(state.page(), Page::Controls);
         // Without calibration, Y only tests.
         let mut state = tester();
         state.joypad_opened(None);

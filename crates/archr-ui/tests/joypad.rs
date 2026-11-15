@@ -56,7 +56,7 @@ fn press(state: &mut Settings, pad: Pad, now: Instant) {
 fn tester() -> Settings {
     let mut state = Settings::default();
     state.loading = false;
-    state.open(Page::System);
+    state.open(Page::Controls);
     state.cursor = state
         .visible_rows()
         .iter()

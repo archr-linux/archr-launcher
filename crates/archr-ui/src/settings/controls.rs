@@ -17,7 +17,7 @@ pub const CONTROLS: &[Row] = &[
         "controls.hotkeys",
         "controls.hotkeys_detail",
     )
-    .kind(Kind::Action),
+    .kind(Kind::Action),    described(Id::PadTestLink, "pad.title", "pad.title_detail").kind(Kind::Action),
 ];
 pub const LAUNCHER: &[Row] = &[
     row(Id::Bind(0), ACTIONS[0].2, Kind::Action),

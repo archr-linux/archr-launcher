@@ -1513,6 +1513,7 @@
 "search.list" = "Go to list"
 "search.keyboard" = "Keyboard"
 "pad.title" = "Test controller"
+"pad.title_detail" = "Buttons, sticks and stick calibration"
 "pad.calibrate" = "Calibrate sticks"
 "pad.hold_calibrate" = "Hold: calibrate sticks"
 "pad.hold_exit" = "hold to exit"

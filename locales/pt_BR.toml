@@ -1513,6 +1513,7 @@
 "search.list" = "Ir à lista"
 "search.keyboard" = "Teclado"
 "pad.title" = "Testar controle"
+"pad.title_detail" = "Botões, analógicos e calibração dos analógicos"
 "pad.calibrate" = "Calibrar analógicos"
 "pad.hold_calibrate" = "Segure: calibrar analógicos"
 "pad.hold_exit" = "segure para sair"

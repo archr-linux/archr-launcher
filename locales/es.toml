@@ -1513,6 +1513,7 @@
 "search.list" = "Ir a la lista"
 "search.keyboard" = "Teclado"
 "pad.title" = "Probar el control"
+"pad.title_detail" = "Botones, sticks y calibración de los sticks"
 "pad.calibrate" = "Calibrar sticks"
 "pad.hold_calibrate" = "Mantén: calibrar sticks"
 "pad.hold_exit" = "mantén para salir"

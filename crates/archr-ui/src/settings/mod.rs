@@ -162,8 +162,8 @@ impl Page {
             | Self::ModuleStore
             | Self::RaImport
             | Self::Diagnostics
-            | Self::PadTest
             | Self::ErrorReports => &["settings.system"],
+            Self::PadTest => &["settings.controls"],
             Self::ReportText => &["settings.system", "reports.title"],
             Self::Bios => &["settings.games"],
             Self::RaImportList => &["settings.system", "raimport.title"],
@@ -834,7 +834,6 @@ const SYSTEM: &[Row] = &[
     row(Id::Update, "settings.update", Kind::Action),
     row(Id::ModulesLink, "settings.modules", Kind::Action),
     row(Id::RaImportLink, "raimport.title", Kind::Action),
-    row(Id::PadTestLink, "pad.title", Kind::Action),
     row(Id::DiagLink, "diag.title", Kind::Action),
     row(Id::ReportsLink, "reports.title", Kind::Action),
 ];
