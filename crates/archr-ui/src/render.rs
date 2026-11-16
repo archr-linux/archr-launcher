@@ -308,6 +308,7 @@ impl ListMotion {
 struct StatusLayout {
     pill: Rect,
     wifi: Option<Rect>,
+    bluetooth: Option<Rect>,
     clock: Rect,
     battery: Option<Rect>,
     percent: Option<Rect>,
@@ -320,12 +321,14 @@ fn status_layout(
     clock_width: u32,
     // The battery icon, and the width of its number when that shows.
     (battery, number): (bool, Option<u32>),
-    wifi: bool,
+    (wifi, bluetooth): (bool, bool),
 ) -> StatusLayout {
     let px = |v: f32| (v * scale).round().max(1.) as u32;
+    let radio = |on: bool| if on { px(16.) + px(12.) } else { 0 };
     let width = px(12.) * 2
         + clock_width
-        + if wifi { px(16.) + px(12.) } else { 0 }
+        + radio(wifi)
+        + radio(bluetooth)
         + if battery { px(12.) + px(24.) } else { 0 }
         + number.map_or(0, |w| px(6.) + w);
     let center = header_height as i32 / 2;
@@ -346,6 +349,7 @@ fn status_layout(
     StatusLayout {
         pill,
         wifi: panel(wifi.then_some(px(16.)), px(16.), px(12.)),
+        bluetooth: panel(bluetooth.then_some(px(16.)), px(16.), px(12.)),
         clock: panel(Some(clock_width), px(16.), px(12.)).expect("clock is always visible"),
         battery: panel(battery.then_some(px(24.)), px(24.), px(6.)),
         percent: panel(number, px(16.), 0),
@@ -601,6 +605,13 @@ impl<'font, 'texture> Ui<'font, 'texture> {
     }
     pub fn wifi_enabled(&self) -> bool {
         self.status.as_ref().is_some_and(|s| s.wifi.radio())
+    }
+    pub fn bluetooth_enabled(&self) -> bool {
+        self.status.as_ref().is_some_and(|s| s.bluetooth.radio())
+    }
+    /// The radios the console has now (the Start menu's switches).
+    pub fn radios(&self) -> crate::status::Radios {
+        self.status.as_ref().map(|s| s.radios).unwrap_or_default()
     }
     /// See `Status::take_joined`.
     pub fn take_wifi_change(&mut self) -> Option<bool> {
@@ -1237,9 +1248,9 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         let status = self
             .status
             .as_ref()
-            .map(|s| (s.clock.clone(), s.battery, s.wifi));
+            .map(|s| (s.clock.clone(), s.battery, s.wifi, s.bluetooth));
         let mut right = width as i32 - pad;
-        if let Some((clock, battery, wifi)) = status {
+        if let Some((clock, battery, wifi, bluetooth)) = status {
             let percent = battery
                 .filter(|_| theme.user.battery_percent)
                 .map(|b| format!("{}%", b.percent));
@@ -1254,7 +1265,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 self.frame.scale,
                 clock_width,
                 (battery.is_some(), percent_width),
-                wifi.radio(),
+                (wifi.radio(), bluetooth.radio()),
             );
             self.rounded(
                 layout.pill,
@@ -1262,14 +1273,19 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 theme.surface,
                 Some(theme.border),
             )?;
-            if let Some(icon) = layout.wifi {
-                // Lit when joined; on but with no network, dim like the clock.
-                let ink = if wifi == crate::status::Wifi::Connected {
-                    theme.highlight_bg
-                } else {
-                    theme.muted
-                };
-                self.icon(Glyph::Wifi, icon, ink)?;
+            // Lit when joined or linked; on but idle, dim like the clock.
+            for (glyph, radio, icon) in [
+                (Glyph::Wifi, wifi, layout.wifi),
+                (Glyph::Bluetooth, bluetooth, layout.bluetooth),
+            ] {
+                if let Some(icon) = icon {
+                    let ink = if radio == crate::status::Radio::Connected {
+                        theme.highlight_bg
+                    } else {
+                        theme.muted
+                    };
+                    self.icon(glyph, icon, ink)?;
+                }
             }
             self.label(&clock, (Face::Mono, 13., theme.muted), layout.clock)?;
             if let (Some(b), Some(icon)) = (battery, layout.battery) {
@@ -3169,7 +3185,7 @@ mod tests {
     #[test]
     fn status_pill_orders_centers_and_hides_optional_items() {
         for scale in [1., 2.] {
-            for wifi in [false, true] {
+            for (wifi, bluetooth) in [(false, false), (true, false), (false, true), (true, true)] {
                 for percent_width in [None, Some(24)] {
                     let layout = status_layout(
                         (616. * scale) as i32,
@@ -3180,11 +3196,12 @@ mod tests {
                             percent_width.is_some(),
                             percent_width.map(|w| (w as f32 * scale) as u32),
                         ),
-                        wifi,
+                        (wifi, bluetooth),
                     );
                     assert_eq!(layout.pill.right(), (616. * scale) as i32);
                     assert_eq!(layout.pill.height(), (26. * scale) as u32);
                     assert_eq!(layout.wifi.is_some(), wifi);
+                    assert_eq!(layout.bluetooth.is_some(), bluetooth);
                     assert_eq!(layout.battery.is_some(), percent_width.is_some());
                     if let Some(battery) = layout.battery {
                         assert_eq!(battery.width(), (24. * scale) as u32);
@@ -3193,6 +3210,7 @@ mod tests {
                     let mut right = layout.pill.x() + (12. * scale) as i32;
                     for rect in [
                         layout.wifi,
+                        layout.bluetooth,
                         Some(layout.clock),
                         layout.battery,
                         layout.percent,
@@ -3211,8 +3229,8 @@ mod tests {
                 }
             }
         }
-        let on = status_layout(616, 44, 1., 39, (true, Some(24)), true);
-        let off = status_layout(616, 44, 1., 39, (true, Some(24)), false);
+        let on = status_layout(616, 44, 1., 39, (true, Some(24)), (true, false));
+        let off = status_layout(616, 44, 1., 39, (true, Some(24)), (false, false));
         assert_eq!(on.pill.width(), 157);
         assert_eq!(off.pill.width(), 129);
         assert_eq!(on.clock.x() - on.wifi.unwrap().right(), 12);
@@ -3221,9 +3239,20 @@ mod tests {
         assert_eq!(on.battery.unwrap().x() - on.clock.right(), 12);
         assert_eq!(on.percent.unwrap().x() - on.battery.unwrap().right(), 6);
         // The number hidden in Appearance: the icon stays and ends the pill.
-        let bare = status_layout(616, 44, 1., 39, (true, None), true);
+        let bare = status_layout(616, 44, 1., 39, (true, None), (true, false));
         assert_eq!(bare.percent, None);
         assert_eq!(bare.pill.right() - bare.battery.unwrap().right(), 12);
         assert_eq!(bare.pill.width(), 157 - 6 - 24);
+        // Bluetooth on: its icon between Wi-Fi and the clock, spaced alike;
+        // only Bluetooth: first in the pill.
+        let both = status_layout(616, 44, 1., 39, (true, Some(24)), (true, true));
+        assert_eq!(both.pill.width(), 157 + 28);
+        let (wifi, bluetooth) = (both.wifi.unwrap(), both.bluetooth.unwrap());
+        assert_eq!(bluetooth.size(), wifi.size());
+        assert_eq!(bluetooth.x() - wifi.right(), 12);
+        assert_eq!(both.clock.x() - bluetooth.right(), 12);
+        let alone = status_layout(616, 44, 1., 39, (true, Some(24)), (false, true));
+        assert_eq!(alone.wifi, None);
+        assert_eq!(alone.bluetooth.unwrap().x() - alone.pill.x(), 12);
     }
 }

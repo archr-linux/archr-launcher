@@ -121,6 +121,7 @@ pub enum Outcome {
     /// Starts a lobby room as a netplay client.
     Netplay(Box<crate::netplay::Join>),
     ToggleWifi,
+    ToggleBluetooth,
     Moonlight,
     MoonlightStream(crate::moonlight::Stream),
     Launch {
@@ -384,6 +385,8 @@ pub struct App {
     pub module_updates: usize,
     /// The START menu's shortcut row as the user arranged it.
     pub shortcuts: crate::shortcuts::Saved,
+    /// The radios the console has now: the row offers only their switches.
+    pub radios: crate::status::Radios,
     /// Installed modules and their live values, from the host.
     pub modules: std::sync::Arc<crate::modules::View>,
     /// The focused module widget of the Start menu (its row is 2).
@@ -448,6 +451,7 @@ impl App {
             theme_updates: 0,
             module_updates: 0,
             shortcuts: Default::default(),
+            radios: Default::default(),
             history: Vec::new(),
             moving: None,
             keep_row: None,

@@ -1017,16 +1017,21 @@ impl Worker {
                         state.values.insert(Id::KeyboardVariant, String::new());
                         let _ = self.send(Work::Variants(layout));
                     }
+                    // Switched from the START menu, the page is not showing:
+                    // no scan, and another page's cursor stays.
+                    let page = state.page() == Page::Bluetooth;
                     match bluetooth {
-                        Some(true) => {
+                        Some(true) if page => {
                             let _ = self.send(Work::BtScan);
                         }
                         Some(false) => {
                             state.bt.clear();
                             state.bt_scanned = None;
-                            state.cursor = state.cursor.min(state.bt_rows() - 1);
+                            if page {
+                                state.cursor = state.cursor.min(state.bt_rows() - 1);
+                            }
                         }
-                        None => {}
+                        _ => {}
                     }
                     match wifi {
                         Some(true) => {

@@ -9,8 +9,8 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 
-/// The row shows at most this many.
-pub const MAX: usize = 8;
+/// The row shows at most this many: the nine built-ins of the default row.
+pub const MAX: usize = 9;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Builtin {
@@ -62,7 +62,7 @@ const BUILTINS: [(Builtin, &str, &str, Glyph, bool); 10] = [
         "bluetooth",
         "settings.bluetooth",
         Glyph::Bluetooth,
-        false,
+        true,
     ),
     (
         Builtin::Levels,
@@ -93,8 +93,8 @@ const BUILTINS: [(Builtin, &str, &str, Glyph, bool); 10] = [
         true,
     ),
 ];
-/// Module shortcuts take the default row's place after this one.
-const MODULES_AFTER: Builtin = Builtin::Wifi;
+/// Module shortcuts take the default row's place after the radios.
+const MODULES_AFTER: Builtin = Builtin::Bluetooth;
 
 impl Builtin {
     fn entry(self) -> (Builtin, &'static str, &'static str, Glyph, bool) {
@@ -120,7 +120,7 @@ impl Builtin {
             Self::Themes => Outcome::Open(Page::Store),
             Self::Modules => Outcome::Open(Page::ModuleStore),
             Self::Wifi => Outcome::ToggleWifi,
-            Self::Bluetooth => Outcome::Open(Page::Bluetooth),
+            Self::Bluetooth => Outcome::ToggleBluetooth,
             Self::Levels => Outcome::Open(Page::Sound),
             Self::Suspend => Outcome::Action(SessionAction::Suspend),
             Self::Reboot => Outcome::Action(SessionAction::Reboot),
@@ -167,7 +167,7 @@ pub struct Item {
     pub shown: bool,
 }
 
-/// The default row: the built-ins with the modules' after Wi-Fi, and
+/// The default row: the built-ins with the modules' after the radios, and
 /// whether each is a module's.
 fn defaults(view: &View) -> Vec<(String, bool)> {
     let modules = view
@@ -294,26 +294,32 @@ mod tests {
             hidden: hidden.iter().map(|s| (*s).into()).collect(),
         }
     }
-    const ROW: [&str; 8] = [
-        "settings", "update", "themes", "modules", "wifi", "suspend", "reboot", "shutdown",
+    const ROW: [&str; 9] = [
+        "settings",
+        "update",
+        "themes",
+        "modules",
+        "wifi",
+        "bluetooth",
+        "suspend",
+        "reboot",
+        "shutdown",
     ];
 
     #[test]
-    fn the_default_row_has_the_eight_built_ins_and_hides_module_shortcuts() {
+    fn the_default_row_has_the_nine_built_ins_and_hides_module_shortcuts() {
         for (n, builtin) in BUILTINS.iter().enumerate() {
             assert_eq!(builtin.0 as usize, n, "the table follows the enum");
         }
         let none = View::default();
         assert_eq!(ids(&list(&Saved::default(), &none)), ROW);
-        assert_eq!(
-            addable(&list(&Saved::default(), &none)),
-            [Builtin::Bluetooth, Builtin::Levels]
-        );
-        // A module's shortcut is listed after Wi-Fi, hidden: the row is full.
+        assert_eq!(addable(&list(&Saved::default(), &none)), [Builtin::Levels]);
+        // A module's shortcut is listed after the radios, hidden: the row
+        // is full.
         let one = view(&["s"]);
         let items = list(&Saved::default(), &one);
-        assert_eq!(items[5].id, "module:bat:s");
-        assert!(!items[5].shown);
+        assert_eq!(items[6].id, "module:bat:s");
+        assert!(!items[6].shown);
         assert_eq!(row(&Saved::default(), &one).len(), MAX);
         assert_eq!(
             row(&Saved::default(), &none)[4],
@@ -339,6 +345,7 @@ mod tests {
                 "modules",
                 "settings",
                 "wifi",
+                "bluetooth",
                 "module:bat:s",
                 "suspend",
                 "-reboot",
@@ -363,8 +370,8 @@ mod tests {
         // The default list saves as nothing, a changed one as itself.
         assert_eq!(save(&items, &one), Saved::default());
         items.swap(0, 1);
-        items[5].shown = true;
-        items[7].shown = false;
+        items[6].shown = true;
+        items[8].shown = false;
         let kept = save(&items, &one);
         assert_eq!(kept.hidden, ["reboot"]);
         assert_eq!(list(&kept, &one), items);
@@ -376,12 +383,14 @@ mod tests {
     fn added_built_ins_stay_listed_and_resolve_to_their_page() {
         let none = View::default();
         let mut order = ROW.to_vec();
-        order.insert(5, "bluetooth");
+        order.insert(6, "levels");
         let items = list(&saved(&order, &["reboot"]), &none);
-        assert_eq!(addable(&items), [Builtin::Levels]);
+        assert!(addable(&items).is_empty());
         let shown = row(&saved(&order, &["reboot"]), &none);
         assert_eq!(shown[5], Shortcut::Builtin(Builtin::Bluetooth));
-        assert_eq!(Builtin::Bluetooth.outcome(), Outcome::Open(Page::Bluetooth));
+        assert_eq!(shown[6], Shortcut::Builtin(Builtin::Levels));
+        assert_eq!(Builtin::Bluetooth.outcome(), Outcome::ToggleBluetooth);
+        assert_eq!(Builtin::Levels.outcome(), Outcome::Open(Page::Sound));
         assert_eq!(Builtin::Themes.outcome(), Outcome::Open(Page::Store));
     }
 }

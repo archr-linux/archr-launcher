@@ -122,6 +122,17 @@ impl Runtime {
         self.gpu_switch = true;
         self.send(Work::Set(Id::Gpu, "panfrost".into()));
     }
+    /// The START menu's Bluetooth shortcut: the Bluetooth page's own switch
+    /// (`archr-bluetooth`), a failure told by a toast. Ignored while
+    /// another setting is still being applied.
+    pub fn switch_bluetooth(&mut self, on: bool) {
+        if self.state.pending.is_some() {
+            return;
+        }
+        self.state.error = None;
+        self.state.pending = Some(Id::BtSwitch);
+        self.send(Work::Set(Id::BtSwitch, if on { "1" } else { "0" }.into()));
+    }
     /// The switch's answer, once: Ok to reboot, else its failure.
     pub fn take_gpu_switch(&mut self) -> Option<Result<(), String>> {
         if !self.gpu_switch || self.state.pending.is_some() {

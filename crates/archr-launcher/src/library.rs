@@ -457,6 +457,7 @@ impl Library {
             }
             Outcome::Action(_)
             | Outcome::ToggleWifi
+            | Outcome::ToggleBluetooth
             | Outcome::PlayFrom { .. }
             | Outcome::Continue { .. }
             | Outcome::Delete { .. }

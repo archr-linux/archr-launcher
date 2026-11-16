@@ -416,9 +416,9 @@ fn run(
         {
             ui.invalidate_settings_clock();
         }
-        // The Wi-Fi switch's reply: the status bar and the Start menu read the
-        // radio on their own 30 s cycle, so read it now or they lag behind.
-        if previous_setting == Some(archr_ui::settings::Id::WifiSwitch)
+        // A radio switch's reply: the status bar and the Start menu read the
+        // radios on their own 30 s cycle, so read them now or they lag behind.
+        if matches!(previous_setting, Some(Id::WifiSwitch | Id::BtSwitch))
             && settings.state.pending.is_none()
         {
             if let Some(refresh) = ui.wifi_refresh_signal() {
@@ -751,6 +751,7 @@ fn run(
             app.netplay = on;
         }
         dirty |= ui.tick() || ui.animating();
+        app.radios = ui.radios();
         let selected_system = if app.screen == Screen::Systems {
             app.rows(&library).get(app.cursor).cloned()
         } else {
@@ -1487,6 +1488,9 @@ fn run(
                     ui.banner = Some(ui.catalog.text("error.operation"));
                     banner_timer.restart(Severity::Error, Instant::now());
                 }
+                outcome = Some(Outcome::None);
+            } else if requested == Outcome::ToggleBluetooth {
+                settings.switch_bluetooth(!ui.bluetooth_enabled());
                 outcome = Some(Outcome::None);
             } else {
                 let terminal = transition::is_terminal(&requested);

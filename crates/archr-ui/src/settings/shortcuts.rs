@@ -223,26 +223,26 @@ mod tests {
     }
 
     #[test]
-    fn a_hides_and_shows_and_a_ninth_is_refused() {
+    fn a_hides_and_shows_and_a_tenth_is_refused() {
         let mut state = page();
-        assert_eq!(state.visible_rows().len(), 8);
-        state.cursor = 6;
+        assert_eq!(state.visible_rows().len(), 9);
+        state.cursor = 7;
         state.handle(Button::A);
         assert_eq!(state.take_shortcuts().unwrap().hidden, ["reboot"]);
         assert_eq!(state.take_shortcuts(), None, "taken once");
-        assert_eq!(shown(&state).len(), 7);
-        // Bluetooth comes in under the cursor, shown: the row had room.
+        assert_eq!(shown(&state).len(), 8);
+        // Sound levels come in under the cursor, shown: the row had room.
         state.handle(Button::Y);
         assert_eq!(state.shortcuts.adding, Some(0));
         state.handle(Button::A);
-        assert_eq!(state.shortcut_items()[7].id, "bluetooth");
-        assert_eq!(state.cursor, 7);
-        assert_eq!(shown(&state).len(), 8);
-        // Restart again would be the ninth.
-        state.cursor = 6;
+        assert_eq!(state.shortcut_items()[8].id, "levels");
+        assert_eq!(state.cursor, 8);
+        assert_eq!(shown(&state).len(), 9);
+        // Restart again would be the tenth.
+        state.cursor = 7;
         state.handle(Button::A);
-        assert_eq!(state.error.as_ref().unwrap().1, "shortcuts.full|count=8");
-        assert_eq!(shown(&state).len(), 8);
+        assert_eq!(state.error.as_ref().unwrap().1, "shortcuts.full|count=9");
+        assert_eq!(shown(&state).len(), 9);
     }
 
     #[test]
@@ -324,7 +324,7 @@ mod tests {
         state.handle(Button::Select);
         assert_eq!(state.take_shortcuts(), Some(Saved::default()));
         assert_eq!(state.cursor, 0);
-        assert_eq!(shown(&state).len(), 8);
+        assert_eq!(shown(&state).len(), 9);
         state.handle(Button::B);
         assert_eq!(state.page(), Page::Appearance);
     }

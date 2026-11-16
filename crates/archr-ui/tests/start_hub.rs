@@ -1,5 +1,12 @@
 use archr_index::{cache::SystemEntry, Game};
 use archr_ui::state::{App, Button, DataSource, Outcome, Screen, SessionAction};
+use archr_ui::status::Radios;
+
+/// A console with both radios, built in or plugged in.
+const BOTH: Radios = Radios {
+    wifi: true,
+    bluetooth: true,
+};
 
 struct Data {
     systems: Vec<SystemEntry>,
@@ -85,6 +92,7 @@ fn tiles_open_recent_games_and_tools() {
 #[test]
 fn shortcuts_remember_columns_and_toggle_from_snapshot() {
     let mut app = App::new(8);
+    app.radios = BOTH;
     let data = data(false);
     app.handle(Button::Start, &data);
     app.handle(Button::Down, &data);
@@ -103,12 +111,15 @@ fn shortcuts_remember_columns_and_toggle_from_snapshot() {
         }
     ));
     app.handle(Button::Down, &data);
+    // Bluetooth follows Wi-Fi and switches like it.
+    app.handle(Button::R, &data);
+    assert_eq!(app.handle(Button::A, &data), Outcome::ToggleBluetooth);
     app.handle(Button::R, &data);
     assert_eq!(
         app.handle(Button::A, &data),
         Outcome::Action(SessionAction::Suspend)
     );
-    for _ in 0..2 {
+    for _ in 0..3 {
         app.handle(Button::L, &data);
     }
     assert_eq!(
@@ -137,6 +148,7 @@ fn shortcuts_remember_columns_and_toggle_from_snapshot() {
 fn the_row_follows_the_user_and_an_empty_one_keeps_the_focus_up() {
     use archr_ui::shortcuts::Saved;
     let mut app = App::new(8);
+    app.radios = BOTH;
     let data = data(false);
     app.shortcuts = Saved {
         order: vec!["bluetooth".into(), "settings".into()],
@@ -144,13 +156,18 @@ fn the_row_follows_the_user_and_an_empty_one_keeps_the_focus_up() {
     };
     app.handle(Button::Start, &data);
     app.handle(Button::Down, &data);
-    assert_eq!(
-        app.handle(Button::A, &data),
-        Outcome::Open(archr_ui::settings::Page::Bluetooth)
-    );
+    assert_eq!(app.handle(Button::A, &data), Outcome::ToggleBluetooth);
     // Everything hidden: Down has nowhere to go.
     let ids = [
-        "settings", "update", "themes", "modules", "wifi", "suspend", "reboot", "shutdown",
+        "settings",
+        "update",
+        "themes",
+        "modules",
+        "wifi",
+        "bluetooth",
+        "suspend",
+        "reboot",
+        "shutdown",
     ];
     app.shortcuts = Saved {
         order: ids.iter().map(|s| (*s).into()).collect(),
@@ -227,13 +244,14 @@ fn module_tiles_and_shortcuts_join_the_start_menu() {
     );
     // The default row is full: the module's shortcut waits, hidden, until
     // the user makes room (here by hiding Restart).
-    assert_eq!(app.hub_shortcuts().len(), 8);
+    app.radios = BOTH;
+    assert_eq!(app.hub_shortcuts().len(), 9);
     let mut items = archr_ui::shortcuts::list(&Default::default(), &app.modules);
-    items[5].shown = true;
-    items[7].shown = false;
+    items[6].shown = true;
+    items[8].shown = false;
     app.shortcuts = archr_ui::shortcuts::save(&items, &app.modules);
     app.handle(Button::Down, &data);
-    for _ in 0..5 {
+    for _ in 0..6 {
         app.handle(Button::R, &data);
     }
     assert_eq!(
@@ -373,4 +391,65 @@ fn a_module_item_joins_the_quick_menu_before_suspend() {
     );
     assert!(call.is_some());
     assert_eq!(app.screen, Screen::Systems);
+}
+
+#[test]
+fn a_radio_the_console_lacks_has_no_switch_and_the_row_closes_up() {
+    let data = data(false);
+    let row = |radios| {
+        let mut app = App::new(8);
+        app.radios = radios;
+        let outcomes: Vec<Outcome> = app
+            .hub_shortcuts()
+            .iter()
+            .map(|s| match s {
+                archr_ui::shortcuts::Shortcut::Builtin(b) => b.outcome(),
+                _ => Outcome::None,
+            })
+            .collect();
+        outcomes
+    };
+    let radio = |o: &Outcome| matches!(o, Outcome::ToggleWifi | Outcome::ToggleBluetooth);
+    let radios = |wifi, bluetooth| Radios { wifi, bluetooth };
+    for (have, wifi, bluetooth) in [
+        (radios(false, false), false, false),
+        (radios(true, false), true, false),
+        (radios(false, true), false, true),
+        (BOTH, true, true),
+    ] {
+        let shown = row(have);
+        assert_eq!(shown.contains(&Outcome::ToggleWifi), wifi, "{have:?}");
+        assert_eq!(
+            shown.contains(&Outcome::ToggleBluetooth),
+            bluetooth,
+            "{have:?}"
+        );
+        assert_eq!(shown.iter().filter(|o| !radio(o)).count(), 7, "{have:?}");
+    }
+    // No Wi-Fi: the fourth press right of Settings lands on Bluetooth, and
+    // the next on Sleep.
+    let mut app = App::new(8);
+    app.radios = radios(false, true);
+    app.handle(Button::Start, &data);
+    app.handle(Button::Down, &data);
+    for _ in 0..4 {
+        app.handle(Button::R, &data);
+    }
+    assert_eq!(app.handle(Button::A, &data), Outcome::ToggleBluetooth);
+    app.handle(Button::R, &data);
+    assert_eq!(
+        app.handle(Button::A, &data),
+        Outcome::Action(SessionAction::Suspend)
+    );
+    // The dongle unplugged with the focus at the row's end: it stays on the
+    // last button, now Power off.
+    for _ in 0..5 {
+        app.handle(Button::R, &data);
+    }
+    app.radios = radios(false, false);
+    app.handle(Button::R, &data);
+    assert_eq!(
+        app.handle(Button::A, &data),
+        Outcome::Action(SessionAction::Shutdown)
+    );
 }

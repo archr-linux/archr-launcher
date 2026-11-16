@@ -1,7 +1,7 @@
 //! START hub navigation, separate from the systems and game list cursors.
 use super::{App, Button, DataSource, Outcome, Screen};
 use crate::modules::{Request, Target};
-use crate::shortcuts::Shortcut;
+use crate::shortcuts::{Builtin, Shortcut};
 
 /// Recent, Games and Tools; module tiles follow.
 const TILES: usize = 3;
@@ -33,9 +33,16 @@ impl App {
             _ => true,
         }
     }
-    /// The shortcut row as the user arranged it.
+    /// The shortcut row as the user arranged it, without the switch of a
+    /// radio the console lacks.
     pub fn hub_shortcuts(&self) -> Vec<Shortcut<'_>> {
-        crate::shortcuts::row(&self.shortcuts, &self.modules)
+        let mut row = crate::shortcuts::row(&self.shortcuts, &self.modules);
+        row.retain(|item| match item {
+            Shortcut::Builtin(Builtin::Wifi) => self.radios.wifi,
+            Shortcut::Builtin(Builtin::Bluetooth) => self.radios.bluetooth,
+            _ => true,
+        });
+        row
     }
     pub(super) fn handle_hub(&mut self, button: Button, data: &dyn DataSource) -> Outcome {
         let Screen::StartHub {

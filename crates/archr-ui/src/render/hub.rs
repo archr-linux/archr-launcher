@@ -1,6 +1,7 @@
 //! START hub: a fixed 640×480 composition scaled with the theme's screen height.
 use super::{Align, App, DataSource, Face, Glyph, Rect, Rgba, Screen, Theme, Ui};
 use crate::shortcuts::{Builtin, Shortcut};
+use crate::status::Radio;
 
 /// What waits behind a shortcut: system update packages, store updates.
 fn pending(app: &App, item: &Shortcut) -> usize {
@@ -10,6 +11,36 @@ fn pending(app: &App, item: &Shortcut) -> usize {
         Shortcut::Builtin(Builtin::Modules) => app.module_updates,
         _ => 0,
     }
+}
+
+/// The caption of a radio's switch, and the address to follow it in mono:
+/// Wi-Fi names the network joined, Bluetooth says whether a device is
+/// linked. `None` for any other shortcut.
+fn radio_caption(
+    catalog: &crate::i18n::I18n,
+    item: Builtin,
+    (wifi, bluetooth): (Radio, Radio),
+    network: Option<&(String, String)>,
+) -> Option<(String, String)> {
+    let key = match (item, wifi, bluetooth) {
+        (Builtin::Wifi, Radio::Connected, _) => match network {
+            Some((ssid, ip)) if !ssid.is_empty() => {
+                let joined = catalog.format("start.wifi_joined", &[("ssid", ssid)]);
+                return Some(match ip.as_str() {
+                    "" => (joined, String::new()),
+                    ip => (format!("{joined} · "), ip.to_owned()),
+                });
+            }
+            _ => "start.wifi_on",
+        },
+        (Builtin::Wifi, Radio::On, _) => "start.wifi_on",
+        (Builtin::Wifi, Radio::Off, _) => "start.wifi_off",
+        (Builtin::Bluetooth, _, Radio::Connected) => "start.bluetooth_connected",
+        (Builtin::Bluetooth, _, Radio::On) => "start.bluetooth_on",
+        (Builtin::Bluetooth, _, Radio::Off) => "start.bluetooth_off",
+        _ => return None,
+    };
+    Some((catalog.text(key), String::new()))
 }
 
 const TILES: [(&str, Glyph); 3] = [
@@ -279,9 +310,11 @@ impl Ui<'_, '_> {
         let start = center - (side * count + gap * (count - 1).max(0)) / 2;
         let wifi_on = self.wifi_enabled();
         let wifi = Shortcut::Builtin(Builtin::Wifi);
+        let bluetooth = Shortcut::Builtin(Builtin::Bluetooth);
+        let bluetooth_on = self.bluetooth_enabled();
         for (index, item) in shortcuts.iter().enumerate() {
             let focus = row == 1 && shortcut == index;
-            let active = *item == wifi && wifi_on;
+            let active = (*item == wifi && wifi_on) || (*item == bluetooth && bluetooth_on);
             let x = start + index as i32 * (side + gap);
             let rect = Rect::new(x, px(row_y), side as u32, side as u32);
             let (fill, edge, ink) = if focus {
@@ -364,7 +397,19 @@ impl Ui<'_, '_> {
         }
         if let Some(item) = shortcuts.get(shortcut).filter(|_| row == 1) {
             let count = pending(app, item);
+            let radios = self
+                .status
+                .as_ref()
+                .map(|s| ((s.wifi, s.bluetooth), s.network.clone()));
+            let caption = match (item, radios) {
+                (Shortcut::Builtin(builtin), Some((radios, network))) => {
+                    radio_caption(&self.catalog, *builtin, radios, network.as_ref())
+                }
+                _ => None,
+            };
+            let (label, address) = caption.unwrap_or_default();
             let label = match *item {
+                _ if !label.is_empty() => label,
                 Shortcut::Module(n, entry) => {
                     let value = app.modules.value(
                         &app.modules.modules[n].id,
@@ -375,11 +420,6 @@ impl Ui<'_, '_> {
                         None => entry.label.clone(),
                     }
                 }
-                _ if *item == wifi => self.catalog.text(if wifi_on {
-                    "start.wifi_on"
-                } else {
-                    "start.wifi_off"
-                }),
                 Shortcut::Builtin(Builtin::Update) if count > 0 => self.catalog.plural(
                     "start.update_ready",
                     count as f64,
@@ -395,17 +435,31 @@ impl Ui<'_, '_> {
                 ),
                 Shortcut::Builtin(builtin) => self.catalog.text(builtin.label()),
             };
-            self.fitted(
-                &label,
-                (Face::Regular, 14., theme.text_secondary),
-                Rect::new(
-                    px(12.),
-                    px(row_y + 55.),
-                    width.saturating_sub(px(24.) as u32),
-                    px(22.) as u32,
-                ),
-                Align::Center,
-            )?;
+            let line = Rect::new(
+                px(12.),
+                px(row_y + 55.),
+                width.saturating_sub(px(24.) as u32),
+                px(22.) as u32,
+            );
+            let style = (Face::Regular, 14., theme.text_secondary);
+            // The address in mono after the words, centred together, when
+            // both fit at full size; otherwise one line like the others.
+            let (words, mono) = (
+                self.measure(&label, Face::Regular, 14.)?,
+                self.measure(&address, Face::Mono, 14.)?,
+            );
+            if address.is_empty() || words + mono > line.width() {
+                self.fitted(&format!("{label}{address}"), style, line, Align::Center)?;
+            } else {
+                let left = center - (words + mono) as i32 / 2;
+                let at = |x, w| Rect::new(x, line.y(), w, line.height());
+                self.label(&label, style, at(left, words))?;
+                self.label(
+                    &address,
+                    (Face::Mono, 14., theme.text_secondary),
+                    at(left + words as i32, mono),
+                )?;
+            }
         }
         Ok(())
     }
@@ -593,8 +647,64 @@ impl Ui<'_, '_> {
 
 #[cfg(test)]
 mod tests {
-    use super::Layout;
+    use super::{radio_caption, Builtin, Layout, Radio};
     use crate::theme::Rect01;
+
+    #[test]
+    fn radio_captions_name_the_network_and_its_address_only_while_joined() {
+        let catalog =
+            crate::i18n::I18n::load(std::path::Path::new("/nonexistent"), Some("pt_BR"), None);
+        let caption = |item, radios, network: Option<(&str, &str)>| {
+            let network = network.map(|(a, b)| (a.to_owned(), b.to_owned()));
+            radio_caption(&catalog, item, radios, network.as_ref())
+        };
+        let text = |words: &str, ip: &str| Some((words.to_owned(), ip.to_owned()));
+        let joined = Some(("Casa", "192.168.0.42"));
+        assert_eq!(
+            caption(Builtin::Wifi, (Radio::Connected, Radio::Off), joined),
+            text("Wi-Fi · Casa · ", "192.168.0.42")
+        );
+        // No address yet (DHCP), or no network name: no dangling separator.
+        assert_eq!(
+            caption(
+                Builtin::Wifi,
+                (Radio::Connected, Radio::Off),
+                Some(("Casa", ""))
+            ),
+            text("Wi-Fi · Casa", "")
+        );
+        assert_eq!(
+            caption(
+                Builtin::Wifi,
+                (Radio::Connected, Radio::Off),
+                Some(("", "10.0.0.2"))
+            ),
+            text("Wi-Fi · ligado", "")
+        );
+        // Not joined: on or off, whatever network was last known.
+        assert_eq!(
+            caption(Builtin::Wifi, (Radio::On, Radio::Off), joined),
+            text("Wi-Fi · ligado", "")
+        );
+        assert_eq!(
+            caption(Builtin::Wifi, (Radio::Off, Radio::Connected), None),
+            text("Wi-Fi · desligado", "")
+        );
+        for (bluetooth, words) in [
+            (Radio::Off, "Bluetooth · desligado"),
+            (Radio::On, "Bluetooth · ligado"),
+            (Radio::Connected, "Bluetooth · dispositivo conectado"),
+        ] {
+            assert_eq!(
+                caption(Builtin::Bluetooth, (Radio::Connected, bluetooth), joined),
+                text(words, "")
+            );
+        }
+        assert_eq!(
+            caption(Builtin::Settings, (Radio::Connected, Radio::On), joined),
+            None
+        );
+    }
 
     #[test]
     fn any_widget_band_keeps_tiles_and_shortcuts_on_screen() {

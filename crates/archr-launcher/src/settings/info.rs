@@ -4,13 +4,7 @@ use archr_ui::{
     settings::{Id, InfoCard, InfoDetail, InfoMeter, Information},
     status::{find_battery, read_battery, wifi_on},
 };
-use std::{
-    collections::BTreeMap,
-    ffi::{CStr, CString},
-    fs,
-    net::Ipv4Addr,
-    os::unix::ffi::OsStrExt,
-};
+use std::{collections::BTreeMap, ffi::CString, fs, net::Ipv4Addr, os::unix::ffi::OsStrExt};
 
 pub(super) fn percent(used: u64, total: u64) -> Option<u8> {
     used.saturating_mul(100)
@@ -56,52 +50,7 @@ fn card(
         },
     }
 }
-/// The libc-owned list is freed on every return path. No command/path dependency.
-pub(super) fn ipv4_interface(preferred: &str) -> Option<(String, String)> {
-    struct Addresses(*mut libc::ifaddrs);
-    impl Drop for Addresses {
-        fn drop(&mut self) {
-            // SAFETY: this list was allocated by a successful getifaddrs call.
-            unsafe { libc::freeifaddrs(self.0) };
-        }
-    }
-    let mut head = std::ptr::null_mut();
-    // SAFETY: head points to writable storage for the output list pointer.
-    if unsafe { libc::getifaddrs(&mut head) } != 0 {
-        return None;
-    }
-    let list = Addresses(head);
-    let mut current = list.0;
-    let mut first = None;
-    while !current.is_null() {
-        // SAFETY: the list remains owned by `list` until after traversal.
-        let entry = unsafe { &*current };
-        if !entry.ifa_addr.is_null() && !entry.ifa_name.is_null()
-            && entry.ifa_flags & libc::IFF_LOOPBACK as u32 == 0
-            // SAFETY: getifaddrs supplies a valid sockaddr and NUL-terminated name.
-            && unsafe { (*entry.ifa_addr).sa_family } as i32 == libc::AF_INET
-        {
-            // SAFETY: AF_INET addresses are sockaddr_in, aligned by libc.
-            let address = unsafe { &*entry.ifa_addr.cast::<libc::sockaddr_in>() };
-            let ip = Ipv4Addr::from(address.sin_addr.s_addr.to_ne_bytes());
-            if !ip.is_loopback() && !ip.is_unspecified() {
-                // SAFETY: libc guarantees the interface name is NUL-terminated.
-                let name = unsafe { CStr::from_ptr(entry.ifa_name) }
-                    .to_string_lossy()
-                    .into_owned();
-                let entry = (name, ip.to_string());
-                if entry.0 == preferred {
-                    return Some(entry);
-                }
-                if first.is_none() {
-                    first = Some(entry);
-                }
-            }
-        }
-        current = entry.ifa_next;
-    }
-    first
-}
+pub(super) use archr_ui::status::ipv4_interface;
 pub(super) fn filesystem_usage(path: &std::path::Path) -> Option<(u64, u64)> {
     let path = CString::new(path.as_os_str().as_bytes()).ok()?;
     let mut stat = std::mem::MaybeUninit::<libc::statvfs>::uninit();
