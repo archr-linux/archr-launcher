@@ -54,6 +54,11 @@ O aviso de partição das ROMs com erro (só leitura ou não montada) fica no
 rodapé das listas de sistemas e de jogos, no lugar do resumo, com o ícone
 `icons/triangle-alert.svg` e a cor `warning`; o layout não muda.
 
+Os avisos (`docs/avisos.md`) usam `surface` e `border`, o texto `text` e
+`text_secondary`, e a cor do tipo no ícone e na barra de tempo: `success`
+(`icons/check.svg`), `accent` (`icons/info.svg`) ou `warning`
+(`icons/triangle-alert.svg`, que também tinge a borda).
+
 ### Aparência por cima do tema
 
 Em Aparência, a **1ª bolinha** da Cor de destaque é o `accent` do tema ativo,
