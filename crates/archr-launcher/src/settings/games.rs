@@ -20,6 +20,9 @@ impl Backend {
     /// Systems that launch through emulators, with their saved choices.
     /// Without the features file every option row stays available.
     pub(super) fn load_games(&self, cfg: &SystemCfg, definitions: &[SystemDef]) -> Vec<GameSystem> {
+        let counts = archr_index::cache::load_overview(&self.paths.cache)
+            .map(|o| o.systems)
+            .unwrap_or_default();
         let features = load_features(&self.paths.at(FEATURES))
             .map_err(|error| log::warn!("Cannot read {FEATURES}: {error}"))
             .ok();
@@ -66,6 +69,11 @@ impl Backend {
                 Some(GameSystem {
                     name: system.name.clone(),
                     fullname: system.fullname.clone(),
+                    manufacturer: system.manufacturer.clone(),
+                    games: counts
+                        .iter()
+                        .find(|entry| entry.name == system.name)
+                        .map_or(0, |entry| entry.game_count),
                     cores,
                     saved,
                 })

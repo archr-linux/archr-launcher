@@ -30,6 +30,8 @@ mod mangohud;
 mod modules;
 #[path = "render/network.rs"]
 mod network;
+#[path = "render/picker.rs"]
+mod picker;
 #[path = "render/raimport.rs"]
 mod raimport;
 #[path = "render/reports.rs"]
@@ -576,6 +578,12 @@ impl View<'_, '_, '_> {
         let page = state.page();
         let mut trail = Vec::new();
         let current = match page {
+            // Lista-longa: "Região / Fuso horário".
+            _ if state.picker.as_ref().is_some_and(|p| p.full()) => {
+                trail.push(self.tr(page.title()));
+                let row = &state.picker.as_ref().expect("open list").row;
+                self.tr(&state.label(row))
+            }
             Page::Root => self.tr("settings.title"),
             // Loja-tema: "Aparência / Loja de temas / <theme>".
             Page::StoreTheme => {
@@ -728,7 +736,9 @@ impl View<'_, '_, '_> {
             self.breadcrumbs(state, right)?;
         }
         let rows: Vec<Row> = state.visible_rows();
+        let picker = state.picker.as_ref();
         match state.page() {
+            _ if picker.is_some_and(|p| p.full()) => self.picker_page(state)?,
             Page::Root => self.root(state)?,
             Page::Info => self.info(state)?,
             Page::InfoDetail(index) => self.info_detail(state, index)?,
@@ -810,6 +820,9 @@ impl View<'_, '_, '_> {
                 )?;
             }
             page => self.rows_at(state, &rows, &placements(page, &rows), RIGHT)?,
+        }
+        if let Some(picker) = picker.filter(|p| !p.full()) {
+            self.picker_panel(state, &rows, picker)?;
         }
         let error = state.error.as_ref().filter(|(id, _)| {
             !matches!(state.page(), Page::Info | Page::InfoDetail(_))
@@ -895,6 +908,8 @@ impl View<'_, '_, '_> {
             / self.ui.frame.scale;
         let status = if state.loading {
             Some(self.ui.catalog.text("loading"))
+        } else if let Some(picker) = picker.filter(|p| p.full()) {
+            Some(self.picker_status(picker))
         } else if matches!(state.page(), Page::Store | Page::StoreTheme) {
             self.store_status(state, left - 36.)
         } else if matches!(state.page(), Page::Updates | Page::UpdatePackages) {
@@ -1562,6 +1577,14 @@ impl View<'_, '_, '_> {
                     && !state.disabled(id)
                     && !state.fixed(id)
                     && id != Id::ScraperSource;
+                // A long list opens on A: its mark ends the row.
+                let w = if chevrons && state.listable(id, kind) {
+                    let mark = self.rect((x + w - 14., y + (h - 14.) / 2., 14., 14.));
+                    self.ui.icon(Glyph::List, mark, ink)?;
+                    w - 22.
+                } else {
+                    w
+                };
                 if chevrons {
                     // "‹ value ›" hugs the value, as in the mockups.
                     let face = selection(selected, Face::Regular, Face::Semibold);

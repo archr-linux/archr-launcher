@@ -239,6 +239,17 @@ impl Backend {
                     }
                     options.sort();
                     options.dedup();
+                    if id == Id::Timezone {
+                        let zoneinfo = self.paths.at("/usr/share/zoneinfo");
+                        for zone in &options {
+                            let offset = fs::read(zoneinfo.join(zone))
+                                .ok()
+                                .and_then(|file| utc_offset(&file));
+                            if let Some(offset) = offset {
+                                state.notes.insert((id, zone.clone()), offset);
+                            }
+                        }
+                    }
                     state.options.insert(id, options);
                 }
                 Err(error) => errors.push(error),
@@ -947,6 +958,7 @@ impl Worker {
                     state.set_modules(modules);
                     state.options = loaded.options;
                     state.labels = loaded.labels;
+                    state.notes = loaded.notes;
                     state.theme_names = loaded.theme_names;
                     state.access_ip = loaded.access_ip;
                     state.usb_busy = loaded.usb_busy;
@@ -1327,6 +1339,49 @@ fn refresh_storage(state: &mut Settings, facts: archr_ui::settings::storage::Sto
         working: ui.working,
         ..facts
     };
+}
+/// A zone's standard offset from UTC, from the POSIX rule closing its TZif
+/// file ("<-03>3", "CET-1CEST,M3.5.0,M10.5.0/3"): "UTC-3", "UTC+1", "UTC".
+fn utc_offset(file: &[u8]) -> Option<String> {
+    let footer = file.strip_suffix(b"\n")?;
+    let rule = &footer[footer.iter().rposition(|b| *b == b'\n')? + 1..];
+    let rule = std::str::from_utf8(rule).ok()?;
+    let rest = match rule.strip_prefix('<') {
+        Some(quoted) => quoted.split_once('>')?.1,
+        None => rule.trim_start_matches(|c: char| c.is_ascii_alphabetic()),
+    };
+    let end = rest
+        .find(|c: char| !(c.is_ascii_digit() || matches!(c, '+' | '-' | ':')))
+        .unwrap_or(rest.len());
+    // POSIX counts west of Greenwich as positive.
+    let (sign, time) = match rest[..end].strip_prefix('-') {
+        Some(time) => ('+', time),
+        None => ('-', rest[..end].trim_start_matches('+')),
+    };
+    let mut parts = time.split(':').map(str::parse::<u32>);
+    let hours = parts.next()?.ok()?;
+    let minutes = parts.next().transpose().ok()?.unwrap_or(0);
+    Some(match (hours, minutes) {
+        (0, 0) => "UTC".into(),
+        (h, 0) => format!("UTC{sign}{h}"),
+        (h, m) => format!("UTC{sign}{h}:{m:02}"),
+    })
+}
+
+#[cfg(test)]
+mod zone_tests {
+    #[test]
+    fn offsets_come_from_the_rule_at_the_end_of_the_zone_file() {
+        let zone = |rule: &str| super::utc_offset(format!("TZif2\0\0data\n{rule}\n").as_bytes());
+        assert_eq!(zone("<-03>3").as_deref(), Some("UTC-3"));
+        assert_eq!(zone("CET-1CEST,M3.5.0,M10.5.0/3").as_deref(), Some("UTC+1"));
+        assert_eq!(zone("EST5EDT,M3.2.0,M11.1.0").as_deref(), Some("UTC-5"));
+        assert_eq!(zone("IST-5:30").as_deref(), Some("UTC+5:30"));
+        assert_eq!(zone("<+0545>-5:45").as_deref(), Some("UTC+5:45"));
+        assert_eq!(zone("UTC0").as_deref(), Some("UTC"));
+        assert_eq!(zone("").as_deref(), None);
+        assert_eq!(super::utc_offset(b"TZif without a rule"), None);
+    }
 }
 
 #[cfg(test)]

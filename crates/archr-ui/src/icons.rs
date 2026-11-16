@@ -53,6 +53,7 @@ glyphs! {
     CircleX => "circle-x", CircleDashed => "circle-dashed", CircleAlert => "circle-alert",
     Info => "info",
     FolderOpen => "folder-open", Folder => "folder", Search => "search", Store => "store", Bluetooth => "bluetooth",
+    List => "list",
 }
 
 #[link(name = "SDL2_image")]
@@ -253,6 +254,7 @@ mod tests {
                 | Glyph::CircleAlert
                 | Glyph::Info => 1,
                 Glyph::Controls | Glyph::Games | Glyph::Storage | Glyph::StorageIn => 2,
+                Glyph::List => 3,
                 _ => 0,
             };
             assert_eq!(
