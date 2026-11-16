@@ -289,6 +289,7 @@ fn information_collects_detail_rows_and_core_deltas_without_commands() {
         ("sys/devices/system/cpu/cpufreq/policy0/scaling_cur_freq", "1008000"),
         ("sys/devices/system/cpu/cpufreq/policy0/scaling_min_freq", "408000"),
         ("sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq", "1512000"),
+        ("sys/kernel/debug/clk/sclk_ddrc/clk_rate", "664000000"),
     ] {
         let p = dir.path().join(path);
         fs::create_dir_all(p.parent().unwrap()).unwrap();
@@ -304,6 +305,11 @@ fn information_collects_detail_rows_and_core_deltas_without_commands() {
     let second = backend.load().unwrap().info;
     assert_eq!(second.cards[0].detail.meters[0].percent, Some(50));
     assert_eq!(second.cards[2].percent, Some(25));
+    assert!(second.cards[2]
+        .detail
+        .rows
+        .iter()
+        .any(|(k, v)| *k == "settings.frequency" && v == "@664 MHz"));
     assert!(second.cards[4]
         .detail
         .rows

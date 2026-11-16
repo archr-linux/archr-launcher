@@ -637,12 +637,30 @@ impl Backend {
             return card(String::new(), String::new(), None, vec![], vec![]);
         }
         let ratio = percent(used, total);
+        // The RAM clock: the memory controller's devfreq once a driver owns
+        // it, else the DDR clock the bootloader set (debugfs).
+        let ddr = fs::read_dir(self.paths.at("/sys/class/devfreq"))
+            .ok()
+            .into_iter()
+            .flatten()
+            .filter_map(Result::ok)
+            .find(|e| e.file_name().to_string_lossy().contains("dmc"))
+            .and_then(|e| {
+                self.number_at(&format!(
+                    "/sys/class/devfreq/{}/cur_freq",
+                    e.file_name().to_string_lossy()
+                ))
+            })
+            .or_else(|| self.number_at("/sys/kernel/debug/clk/sclk_ddrc/clk_rate"));
         let mut rows = vec![
             ("settings.total", bytes(total)),
             ("settings.used", bytes(used)),
             ("settings.available", bytes(available)),
             ("settings.cached", bytes(kb("Cached:"))),
         ];
+        if ddr.is_some() {
+            rows.insert(1, ("settings.frequency", mhz(ddr, 1_000_000)));
+        }
         let mut meters = vec![meter("settings.memory", usage(used, total), ratio)];
         let zram_used = self
             .read("/sys/block/zram0/mm_stat")
@@ -676,6 +694,9 @@ impl Backend {
         let mut ratio = None;
         let mut meters = vec![];
         let mounts = self.read("/proc/mounts");
+        let has_roms = mounts
+            .lines()
+            .any(|line| line.split_whitespace().nth(1) == Some("/storage/roms"));
         for line in mounts.lines() {
             let fields: Vec<_> = line.split_whitespace().collect();
             if fields.len() < 3 {
@@ -690,7 +711,10 @@ impl Backend {
                 continue;
             }
             if let Some((used, total)) = filesystem_usage(&self.paths.at(&mount)) {
-                if mount == "/storage" || main.is_empty() {
+                // The card shows where the games are: the ROMs partition when
+                // it is its own, else /storage.
+                if mount == "/storage/roms" || (mount == "/storage" && !has_roms) || main.is_empty()
+                {
                     main = usage(used, total);
                     ratio = percent(used, total);
                 }
