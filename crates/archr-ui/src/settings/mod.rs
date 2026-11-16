@@ -22,6 +22,7 @@ pub mod mangohud;
 pub use games::{GameCore, GameSystem, Games};
 pub mod network;
 pub(crate) mod pages;
+pub mod picker;
 use bluetooth::{Action, Device};
 pub use pages::MEDIA;
 pub mod modules;
@@ -1035,6 +1036,11 @@ pub struct Settings {
     pub options: BTreeMap<Id, Vec<String>>,
     /// Display names for option codes (keyboard layouts, systems).
     pub labels: BTreeMap<(Id, String), String>,
+    /// A short note the host knows beside an option code in its list
+    /// (a time zone's offset), as text or a catalog reference.
+    pub notes: BTreeMap<(Id, String), String>,
+    /// The list of a long value row, open over its page.
+    pub picker: Option<picker::Picker>,
     /// Names the installed themes give themselves, by folder.
     pub theme_names: BTreeMap<String, crate::layout::Names>,
     pub pending: Option<Id>,
@@ -1131,6 +1137,8 @@ impl Default for Settings {
                 .map(|id| (id, id.choices().iter().map(|v| (*v).into()).collect()))
                 .collect(),
             labels: BTreeMap::new(),
+            notes: BTreeMap::new(),
+            picker: None,
             theme_names: BTreeMap::new(),
             pending: None,
             loading: true,
@@ -1222,7 +1230,10 @@ impl Settings {
         ) {
             return information::value(catalog, &self.reports_value(id));
         }
-        let value = self.value(id);
+        self.choice_text(id, self.chosen(id), catalog)
+    }
+    /// How `value` reads on `id`'s row, whether it is chosen or not.
+    pub fn choice_text(&self, id: Id, value: &str, catalog: &crate::i18n::I18n) -> String {
         if let Some(label) = self.labels.get(&(id, value.to_owned())) {
             return label.clone();
         }
@@ -1333,7 +1344,10 @@ impl Settings {
             }
             (Id::ScraperStart, _) if self.scrape.running => "settings.cancel_scraping",
             (Id::ScraperStart, _) => return String::new(),
-            (Id::GameSystem, _) => return self.games.fullname().to_owned(),
+            (Id::GameSystem, name) => {
+                let system = self.games.systems.iter().find(|s| s.name == name);
+                return system.map_or(name, |s| s.fullname.as_str()).to_owned();
+            }
             (Id::RaConfig | Id::RaOverrides | Id::RaShaders, _) => {
                 return raimport::joined(catalog, &self.raimport_refs(id))
             }
@@ -1641,6 +1655,9 @@ impl Settings {
         if let Some(hints) = self.modules_hints() {
             return hints;
         }
+        if let Some(picker) = &self.picker {
+            return picker.hints();
+        }
         match self.page() {
             Page::Updates | Page::UpdatePackages => self.updates_hints(),
             Page::RaImport | Page::RaImportList => self.raimport_hints(),
@@ -1792,6 +1809,11 @@ impl Settings {
                     _ if Self::text_input(row.id) => {
                         &[(Key('A'), "settings.edit"), (Key('B'), "hint.back")]
                     }
+                    kind if self.listable(row.id, kind) => &[
+                        (Pair('L', 'R'), "settings.change"),
+                        (Key('A'), "settings.list"),
+                        (Key('B'), "hint.back"),
+                    ],
                     _ => &[(Pair('L', 'R'), "settings.change"), (Key('B'), "hint.back")],
                 },
                 None => BACK,
@@ -1953,6 +1975,9 @@ impl Settings {
         }
         // Any navigation input dismisses the last message.
         self.error = None;
+        if self.picker.is_some() {
+            return self.picker_input(button);
+        }
         if let Some(effect) = self.information_input(button) {
             return effect;
         }
@@ -1988,6 +2013,9 @@ impl Settings {
                 if button == Button::A {
                     if let Some(effect) = self.activate(row.id) {
                         return effect;
+                    }
+                    if self.open_picker(*row) {
+                        return Effect::None;
                     }
                 }
                 // A colour row leaving its own colour keeps it to come back to.
@@ -2033,15 +2061,7 @@ impl Settings {
                         .to_string()
                     }
                     Kind::Value if button != Button::A => {
-                        let options = match self.options.get(&row.id).filter(|v| !v.is_empty()) {
-                            Some(options) => options.clone(),
-                            None if row.id == Id::Accent => self.accent_choices(),
-                            None if Self::is_colour(row.id) => self.colour_choices(row.id),
-                            None if row.id == Id::View => {
-                                self.base_theme.views().into_iter().map(|v| v.0).collect()
-                            }
-                            None => row.id.choices().iter().map(|v| (*v).into()).collect(),
-                        };
+                        let options = self.cycle_choices(row.id);
                         if options.is_empty() {
                             return Effect::None;
                         }
@@ -2065,37 +2085,51 @@ impl Settings {
                     }
                     _ => return Effect::None,
                 };
-                if page == Page::Appearance {
-                    // A draft: shown in the preview now, saved on leaving.
-                    self.values.insert(row.id, next.clone());
-                    return if row.id == Id::Theme {
-                        Effect::Theme(next)
-                    } else {
-                        Effect::None
-                    };
-                }
-                if next != old && matches!(row.kind, Kind::Slider { .. }) {
-                    // Optimistic: show it now, apply in the background and
-                    // coalesce presses made while a value is being applied.
-                    let old = old.to_owned();
-                    self.values.insert(row.id, next.clone());
-                    self.error = None;
-                    if let Some((_, queued)) = self.slides.get_mut(&row.id) {
-                        *queued = Some(next);
-                        return Effect::None;
-                    }
-                    self.slides.insert(row.id, (old, None));
-                    return Effect::Set(row.id, next);
-                }
-                if next != old {
-                    self.pending = Some(row.id);
-                    self.error = None;
-                    return Effect::Set(row.id, next);
-                }
+                return self.write(*row, next);
             }
             _ => {}
         }
         Effect::None
+    }
+    /// What L/R step through on a value row, in order.
+    fn cycle_choices(&self, id: Id) -> Vec<String> {
+        match self.options.get(&id).filter(|v| !v.is_empty()) {
+            Some(options) => options.clone(),
+            None if id == Id::Accent => self.accent_choices(),
+            None if Self::is_colour(id) => self.colour_choices(id),
+            None if id == Id::View => self.base_theme.views().into_iter().map(|v| v.0).collect(),
+            None => id.choices().iter().map(|v| (*v).into()).collect(),
+        }
+    }
+    /// The one write path of a row's new value, stepped or picked from a list.
+    fn write(&mut self, row: Row, next: String) -> Effect {
+        if self.page() == Page::Appearance {
+            // A draft: shown in the preview now, saved on leaving.
+            self.values.insert(row.id, next.clone());
+            return if row.id == Id::Theme {
+                Effect::Theme(next)
+            } else {
+                Effect::None
+            };
+        }
+        let old = self.value(row.id).to_owned();
+        if next == old {
+            return Effect::None;
+        }
+        self.error = None;
+        if matches!(row.kind, Kind::Slider { .. }) {
+            // Optimistic: show it now, apply in the background and
+            // coalesce presses made while a value is being applied.
+            self.values.insert(row.id, next.clone());
+            if let Some((_, queued)) = self.slides.get_mut(&row.id) {
+                *queued = Some(next);
+                return Effect::None;
+            }
+            self.slides.insert(row.id, (old, None));
+            return Effect::Set(row.id, next);
+        }
+        self.pending = Some(row.id);
+        Effect::Set(row.id, next)
     }
 }
 

@@ -20,6 +20,10 @@ pub struct GameCore {
 pub struct GameSystem {
     pub name: String,
     pub fullname: String,
+    /// Who made it, as the systems catalog says; empty when unknown.
+    pub manufacturer: String,
+    /// Games the library holds for it.
+    pub games: u32,
     /// Catalog pairs in order; never empty.
     pub cores: Vec<GameCore>,
     /// Values found in system.cfg for this system, by row.
@@ -163,18 +167,27 @@ impl Settings {
         self.labels
             .insert((Id::Emulator, "retroarch".into()), "RetroArch".into());
     }
-    /// L/R or A on the System row switches locally, never mid-write.
+    /// L/R or A on the System row switch locally, never mid-write; A opens
+    /// the list instead when it is long.
     pub(super) fn games_input(&mut self, button: Button) -> Option<Effect> {
-        let row = self.visible_rows().get(self.cursor)?.id;
-        if row != Id::GameSystem || !matches!(button, Button::A | Button::L | Button::R) {
+        let row = *self.visible_rows().get(self.cursor)?;
+        if row.id != Id::GameSystem || !matches!(button, Button::A | Button::L | Button::R) {
             return None;
         }
         let count = self.games.systems.len();
         if self.pending.is_some() || self.loading || count == 0 {
             return Some(Effect::None);
         }
+        if button == Button::A && self.open_picker(row) {
+            return Some(Effect::None);
+        }
         let step = if button == Button::L { count - 1 } else { 1 };
-        self.games.current = (self.games.current + step) % count;
+        self.show_system((self.games.current + step) % count);
+        Some(Effect::None)
+    }
+    /// The page shows the system at `index` of the list.
+    pub(super) fn show_system(&mut self, index: usize) {
+        self.games.current = index.min(self.games.systems.len().saturating_sub(1));
         self.games.wanted = None;
         self.sync_games();
         // The option rows above may come and go: stay on this row.
@@ -183,7 +196,6 @@ impl Settings {
             .iter()
             .position(|r| r.id == Id::GameSystem)
             .unwrap_or(0);
-        Some(Effect::None)
     }
 }
 
@@ -215,12 +227,13 @@ mod tests {
                     pair("standalone", "snes-sa", false, &[]),
                 ],
                 saved: BTreeMap::from([(Id::Ratio, "4/3".into())]),
+                ..GameSystem::default()
             },
             GameSystem {
                 name: "n64".into(),
                 fullname: "Nintendo 64".into(),
                 cores: vec![pair("mupen64plus", "glide64mk2", false, &[])],
-                saved: BTreeMap::new(),
+                ..GameSystem::default()
             },
         ]);
         state.sync_games();

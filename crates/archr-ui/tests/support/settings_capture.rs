@@ -260,6 +260,7 @@ fn pages() -> Vec<(&'static str, Settings)> {
             pair("snes9x-sa", "snes9x-sa", &[]),
         ],
         saved: [(Id::Autosave, "1".to_owned()), (Id::StateSlot, "1".into())].into(),
+        ..Default::default()
     }]);
     games.sync_games();
     games.open(Page::Games);
@@ -532,6 +533,142 @@ fn pages() -> Vec<(&'static str, Settings)> {
         ("roms-confirm", roms_confirm),
         ("roms-armed", roms_armed),
         ("roms-exfat", roms_exfat),
+    ]
+    .into_iter()
+    .chain(lists())
+    .collect()
+}
+/// Lista-media and Lista-longa: the row's mark and hint, the panel on the
+/// SNES cores, the pages of time zones and of systems.
+fn lists() -> Vec<(&'static str, Settings)> {
+    let mut region = ready();
+    region.open(Page::Region);
+    let zones = [
+        ("Africa/Cairo", "UTC+2"),
+        ("Africa/Johannesburg", "UTC+2"),
+        ("Africa/Lagos", "UTC+1"),
+        ("America/Argentina/Buenos_Aires", "UTC-3"),
+        ("America/Bogota", "UTC-5"),
+        ("America/Chicago", "UTC-6"),
+        ("America/Fortaleza", "UTC-3"),
+        ("America/Los_Angeles", "UTC-8"),
+        ("America/Manaus", "UTC-4"),
+        ("America/Mexico_City", "UTC-6"),
+        ("America/New_York", "UTC-5"),
+        ("America/Noronha", "UTC-2"),
+        ("America/Recife", "UTC-3"),
+        ("America/Santiago", "UTC-4"),
+        ("America/Sao_Paulo", "UTC-3"),
+        ("America/St_Johns", "UTC-3:30"),
+        ("America/Toronto", "UTC-5"),
+        ("Asia/Dubai", "UTC+4"),
+        ("Asia/Kolkata", "UTC+5:30"),
+        ("Asia/Tokyo", "UTC+9"),
+        ("Atlantic/Azores", "UTC-1"),
+        ("Australia/Sydney", "UTC+10"),
+        ("Europe/Lisbon", "UTC"),
+        ("Europe/London", "UTC"),
+        ("Europe/Madrid", "UTC+1"),
+        ("Europe/Moscow", "UTC+3"),
+        ("Pacific/Auckland", "UTC+12"),
+        ("UTC", "UTC"),
+    ];
+    for (zone, offset) in zones {
+        region
+            .notes
+            .insert((Id::Timezone, zone.into()), offset.into());
+    }
+    let zones: Vec<String> = zones.iter().map(|(zone, _)| (*zone).into()).collect();
+    region.options.insert(Id::Timezone, zones);
+    region
+        .values
+        .insert(Id::Timezone, "America/Sao_Paulo".into());
+    region.cursor = 1;
+    let mut timezone = region.clone();
+    timezone.handle(Button::A);
+    let pair = |emulator: &str, core: &str, default: bool| crate::settings::GameCore {
+        emulator: emulator.into(),
+        core: core.into(),
+        default,
+        options: vec![Id::Ratio, Id::Filter],
+    };
+    let snes = [
+        "snes9x",
+        "snes9x2010",
+        "snes9x2005",
+        "snes9x2005_plus",
+        "snes9x2002",
+        "bsnes",
+        "bsnes_hd_beta",
+        "mesen-s",
+        "beetle_supafaust",
+    ];
+    let mut systems = vec![crate::settings::GameSystem {
+        name: "snes".into(),
+        fullname: "Super Nintendo".into(),
+        manufacturer: "Nintendo".into(),
+        games: 42,
+        cores: snes
+            .iter()
+            .map(|core| pair("retroarch", core, *core == "snes9x"))
+            .chain([pair("snes9x-sa", "snes9x-sa", false)])
+            .collect(),
+        ..Default::default()
+    }];
+    for (name, fullname, maker, games) in [
+        ("nes", "Nintendo Entertainment System", "Nintendo", 61),
+        ("gb", "Game Boy", "Nintendo", 18),
+        ("gbc", "Game Boy Color", "Nintendo", 12),
+        ("gba", "Game Boy Advance", "Nintendo", 35),
+        ("n64", "Nintendo 64", "Nintendo", 9),
+        ("nds", "Nintendo DS", "Nintendo", 4),
+        ("fds", "Famicom Disk System", "Nintendo", 0),
+        ("virtualboy", "Virtual Boy", "Nintendo", 0),
+        ("megadrive", "Mega Drive", "Sega", 27),
+        ("mastersystem", "Master System", "Sega", 8),
+        ("gamegear", "Game Gear", "Sega", 6),
+        ("segacd", "Sega CD", "Sega", 2),
+        ("psx", "PlayStation", "Sony", 14),
+        ("psp", "PlayStation Portable", "Sony", 3),
+        ("pcengine", "PC Engine", "NEC", 5),
+        ("pcenginecd", "PC Engine CD", "NEC", 1),
+        ("atari2600", "Atari 2600", "Atari", 20),
+        ("atarilynx", "Atari Lynx", "Atari", 2),
+        ("3do", "3DO Interactive Multiplayer", "Panasonic", 0),
+        ("ports", "Ports", "", 7),
+    ] {
+        systems.push(crate::settings::GameSystem {
+            name: name.into(),
+            fullname: fullname.into(),
+            manufacturer: maker.into(),
+            games,
+            cores: vec![pair("retroarch", &format!("{name}-core"), true)],
+            ..Default::default()
+        });
+    }
+    let mut games = ready();
+    games.games.replace(systems);
+    games.sync_games();
+    games.open(Page::Games);
+    let at = |state: &Settings, id| {
+        state
+            .visible_rows()
+            .iter()
+            .position(|r| r.id == id)
+            .unwrap()
+    };
+    let mut core = games.clone();
+    core.cursor = at(&core, Id::Core);
+    core.handle(Button::A);
+    core.handle(Button::Down);
+    let mut system = games.clone();
+    system.cursor = at(&system, Id::GameSystem);
+    system.handle(Button::A);
+    vec![
+        ("list-region-hint", region),
+        ("list-timezone", timezone),
+        ("list-games-core", core),
+        ("list-games-system", system),
     ]
 }
 #[test]
@@ -2524,6 +2661,7 @@ fn capture_dongle_and_saves() {
             },
         ],
         saved: [(Id::Emulator, "melonds".to_owned())].into_iter().collect(),
+        ..Default::default()
     }]);
     games.sync_games();
     games.open(Page::Games);
