@@ -13,6 +13,24 @@ fn pending(app: &App, item: &Shortcut) -> usize {
     }
 }
 
+/// The update badge of the START shortcut drawn in `shortcut`: a dot at its
+/// top right, cut out of the circle by a ring of the background. One look
+/// for the system, the theme store and the module store; the caption under
+/// the focused one says how many. `None` with nothing waiting.
+fn badge(app: &App, item: &Shortcut, shortcut: Rect, scale: f32) -> Option<Rect> {
+    let px = |n: f32| (n * scale).round() as i32;
+    let dot = px(12.);
+    let right = shortcut.x() + shortcut.width() as i32;
+    (pending(app, item) > 0).then(|| {
+        Rect::new(
+            right - dot + px(1.),
+            shortcut.y() - px(1.),
+            dot as u32,
+            dot as u32,
+        )
+    })
+}
+
 /// The caption of a radio's switch, and the address to follow it in mono:
 /// Wi-Fi names the network joined, Bluetooth says whether a device is
 /// linked. `None` for any other shortcut.
@@ -333,50 +351,22 @@ impl Ui<'_, '_> {
                 _ if *item == wifi && !wifi_on => self.icon(Glyph::WifiOff, icon, ink)?,
                 Shortcut::Builtin(builtin) => self.icon(builtin.glyph(), icon, ink)?,
             }
-            let pending = pending(app, item);
-            if pending == 0 {
+            let Some(badge) = badge(app, item, rect, scale) else {
                 continue;
-            }
-            // A system update is waiting: a dot; store updates: how many.
-            let dot = px(12.);
-            let ring = px(2.);
-            let numeric = *item != Shortcut::Builtin(Builtin::Update);
-            let (w, h, dx, dy) = if !numeric {
-                (dot, dot, x + side - dot + px(1.), px(row_y - 1.))
-            } else {
-                // Where the smallest text is larger than the design, the
-                // badge grows around it.
-                let h = px(14.).max(i32::from(self.frame.font_size(11.)) + 2);
-                let w = (px(10.) + self.measure(&pending.to_string(), Face::Semibold, 11.)? as i32)
-                    .max(h);
-                (w, h, x + side + px(2.) - w, px(row_y - 2.))
             };
+            let ring = px(2.);
             self.rounded(
                 Rect::new(
-                    dx - ring,
-                    dy - ring,
-                    (w + ring * 2) as u32,
-                    (h + ring * 2) as u32,
+                    badge.x() - ring,
+                    badge.y() - ring,
+                    badge.width() + ring as u32 * 2,
+                    badge.height() + ring as u32 * 2,
                 ),
-                (h / 2 + ring) as f32,
+                (badge.height() as i32 / 2 + ring) as f32,
                 theme.background,
                 None,
             )?;
-            let badge = Rect::new(dx, dy, w as u32, h as u32);
-            if !numeric {
-                self.rounded(badge, (dot / 2) as f32, theme.highlight_bg, None)?;
-            } else {
-                self.rounded(badge, (h / 2) as f32, theme.warning, None)?;
-                // On the badge, not the background: no outline.
-                self.look.outlining = false;
-                self.label_aligned(
-                    &pending.to_string(),
-                    (Face::Semibold, 11., theme.background),
-                    badge,
-                    Align::Center,
-                )?;
-                self.look.outlining = true;
-            }
+            self.rounded(badge, (badge.height() / 2) as f32, theme.highlight_bg, None)?;
         }
         if row == 2 {
             if let Some((_, entry)) =
@@ -647,8 +637,36 @@ impl Ui<'_, '_> {
 
 #[cfg(test)]
 mod tests {
-    use super::{radio_caption, Builtin, Layout, Radio};
+    use super::{badge, radio_caption, Builtin, Layout, Radio, Rect, Shortcut};
     use crate::theme::Rect01;
+
+    #[test]
+    fn the_system_and_both_stores_share_one_badge() {
+        let mut app = crate::state::App::new(1);
+        let shortcut = Rect::new(100, 340, 46, 46);
+        let items = [Builtin::Update, Builtin::Themes, Builtin::Modules].map(Shortcut::Builtin);
+        for item in &items {
+            assert_eq!(badge(&app, item, shortcut, 1.), None, "nothing waits");
+        }
+        // One waiting or a dozen: the same dot, never a number's width.
+        for (updates, themes, modules) in [(1, 1, 1), (3, 1, 12)] {
+            (app.updates, app.theme_updates, app.module_updates) = (updates, themes, modules);
+            for scale in [1., 1.5, 0.6667] {
+                let drawn = items
+                    .each_ref()
+                    .map(|item| badge(&app, item, shortcut, scale));
+                assert!(drawn[0].is_some());
+                assert!(drawn.iter().all(|b| *b == drawn[0]), "{drawn:?}");
+            }
+        }
+        assert_eq!(
+            badge(&app, &items[2], shortcut, 1.),
+            Some(Rect::new(135, 339, 12, 12))
+        );
+        // Shortcuts with nothing to update never get one.
+        let settings = Shortcut::Builtin(Builtin::Settings);
+        assert_eq!(badge(&app, &settings, shortcut, 1.), None);
+    }
 
     #[test]
     fn radio_captions_name_the_network_and_its_address_only_while_joined() {
