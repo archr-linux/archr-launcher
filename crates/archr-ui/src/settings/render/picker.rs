@@ -12,6 +12,24 @@ const PANEL_WIDTH: f32 = 300.;
 const GROUPS: f32 = 176.;
 const GAP: f32 = 12.;
 
+/// A line of the list: a group's heading, never selected, or a choice.
+#[derive(Clone, Copy, PartialEq)]
+enum Line {
+    Heading(usize),
+    Choice(usize),
+}
+/// The choices in order, each group opened by its heading.
+fn lines(picker: &Picker) -> Vec<Line> {
+    let mut lines = Vec::new();
+    for n in 0..picker.choices.len() {
+        if let Some(g) = picker.groups.iter().position(|(_, start)| *start == n) {
+            lines.push(Line::Heading(g));
+        }
+        lines.push(Line::Choice(n));
+    }
+    lines
+}
+
 /// The first of `shown` rows out of `len` that keeps `at` near the middle.
 fn window(at: usize, shown: usize, len: usize) -> usize {
     at.saturating_sub(shown / 2).min(len.saturating_sub(shown))
@@ -34,18 +52,37 @@ impl View<'_, '_, '_> {
         };
         self.ui.label_aligned(&text, (face, size, ink), rect, align)
     }
-    /// Choices `first..first + shown` from `top`, between `left` and `right`,
-    /// and a thin bar beyond `right` when the list scrolls.
+    /// `shown` lines around the cursor from `top`, between `left` and
+    /// `right`, and a thin bar beyond `right` when the list scrolls.
     fn picker_entries(
         &mut self,
         state: &Settings,
         picker: &Picker,
-        (first, shown): (usize, usize),
+        shown: usize,
         (left, top, right): (f32, f32, f32),
     ) -> Result<(), String> {
         let current = state.chosen(picker.row.id);
-        for (n, code) in picker.choices.iter().enumerate().skip(first).take(shown) {
-            let y = top + (n - first) as f32 * ENTRY;
+        let lines = lines(picker);
+        let at = lines.iter().position(|l| *l == Line::Choice(picker.cursor));
+        let first = window(at.unwrap_or(0), shown, lines.len());
+        for (k, line) in lines.iter().enumerate().skip(first).take(shown) {
+            let y = top + (k - first) as f32 * ENTRY;
+            let n = match *line {
+                Line::Choice(n) => n,
+                Line::Heading(g) => {
+                    // Like a section label: small capitals just above its rows.
+                    let heading = self.tr(&picker.groups[g].0).to_uppercase();
+                    let muted = self.theme.muted;
+                    self.line(
+                        (left + 32., y + 10., right - left - 44., ENTRY - 12.),
+                        &heading,
+                        (11., muted, Align::Left),
+                        Face::Regular,
+                    )?;
+                    continue;
+                }
+            };
+            let code = &picker.choices[n];
             let selected = n == picker.cursor;
             self.row_panel((left, y, right - left, ENTRY - 2.), selected)?;
             let ink = self.ink(selected);
@@ -75,7 +112,7 @@ impl View<'_, '_, '_> {
                 face,
             )?;
         }
-        let len = picker.choices.len() as f32;
+        let len = lines.len() as f32;
         if shown as f32 >= len {
             return Ok(());
         }
@@ -145,16 +182,10 @@ impl View<'_, '_, '_> {
             (11., self.theme.muted, Align::Left),
             Face::Regular,
         )?;
-        let first = window(picker.cursor, shown, len);
-        self.picker_entries(
-            state,
-            picker,
-            (first, shown),
-            (x + 4., y + HEADER, RIGHT - 10.),
-        )
+        self.picker_entries(state, picker, shown, (x + 4., y + HEADER, RIGHT - 10.))
     }
-    /// Lista-longa: the groups on the left, every choice on the right with
-    /// a thin scroll bar, the cursor's group marked.
+    /// Lista-longa: the groups on the left, every choice on the right under
+    /// its group's heading with a thin scroll bar, the cursor's group marked.
     pub(super) fn picker_page(&mut self, state: &Settings) -> Result<(), String> {
         let Some(picker) = &state.picker else {
             return Ok(());
@@ -187,11 +218,8 @@ impl View<'_, '_, '_> {
             }
             left += GROUPS + GAP;
         }
-        let len = picker.choices.len();
-        let shown = len.min(shown_rows);
-        let first = window(picker.cursor, shown, len);
-        let right = RIGHT - 10.;
-        self.picker_entries(state, picker, (first, shown), (left, top, right))
+        let shown = (picker.choices.len() + picker.groups.len()).min(shown_rows);
+        self.picker_entries(state, picker, shown, (left, top, RIGHT - 10.))
     }
     /// The footer's "<group> · 12 of 30", or "12 of 30" for a list in one piece.
     pub(super) fn picker_status(&self, picker: &Picker) -> String {
@@ -209,5 +237,27 @@ impl View<'_, '_, '_> {
                 .catalog
                 .format("picker.count", &[("n", &n), ("total", &total)]),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn each_group_opens_with_a_heading_that_is_never_a_choice() {
+        let picker = Picker {
+            row: Page::Region.rows()[1],
+            choices: ["a", "b", "c"].map(String::from).to_vec(),
+            groups: vec![("x".into(), 0), ("y".into(), 2)],
+            cursor: 2,
+        };
+        use Line::{Choice, Heading};
+        let expected = [Heading(0), Choice(0), Choice(1), Heading(1), Choice(2)];
+        assert!(lines(&picker) == expected);
+        let whole = Picker {
+            groups: Vec::new(),
+            ..picker
+        };
+        assert!(lines(&whole) == [Choice(0), Choice(1), Choice(2)]);
     }
 }
