@@ -525,6 +525,10 @@
 "toast.update_failed" = "A atualização falhou"
 "toast.scrape_failed" = "A coleta de artes parou"
 "toast.failed" = "Não deu certo"
+"toast.theme_update" = "Atualização de tema: {name}"
+"toast.theme_updates" = { one = "{count} atualização de tema", other = "{count} atualizações de temas" }
+"toast.module_update" = "Atualização de módulo: {name}"
+"toast.module_updates" = { one = "{count} atualização de módulo", other = "{count} atualizações de módulos" }
 "settings.games_screen" = "TELA DE JOGOS"
 "settings.game_art" = "Capas"
 "settings.art_width" = "Largura da capa"

@@ -58,6 +58,8 @@ tempo (um `error` da categoria `updates` segue a chave de Atualizações).
 | aviso | tipo / categoria | quando |
 |---|---|---|
 | N atualizações disponíveis | info / updates | a verificação (a do início ou outra) achou pacotes; uma vez por boot e versão |
+| Atualização de tema: nome / N atualizações de temas | info / updates | a loja de temas tem versão nova de um tema instalado; uma vez por boot e conjunto de versões, nunca na página da loja (vista lá, conta como avisada) |
+| Atualização de módulo: nome / N atualizações de módulos | info / updates | idem, para a loja de módulos |
 | Atualização concluída / A atualização falhou | done, error / updates | a instalação terminou longe da página Atualizações |
 | Wi-Fi conectado (rede) / Wi-Fi desconectado | done, info / network | a rede entrou ou caiu com o rádio ligado; não ao ligar o launcher, não ao desligar o Wi-Fi, não na página Wi-Fi |
 | Controle conectado (nome) | done / network | um controle Bluetooth acabou de conectar |

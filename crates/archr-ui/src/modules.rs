@@ -350,7 +350,14 @@ impl View {
     }
     /// Installed modules the store has a newer version of.
     pub fn outdated(&self) -> usize {
-        self.modules.iter().filter(|m| m.update.is_some()).count()
+        self.updates().len()
+    }
+    /// Those modules: name and the newer version.
+    pub fn updates(&self) -> Vec<(String, String)> {
+        self.modules
+            .iter()
+            .filter_map(|m| Some((m.name.clone(), m.update.clone()?)))
+            .collect()
     }
     pub fn shortcuts(&self) -> Vec<(usize, &Entry)> {
         self.entries(

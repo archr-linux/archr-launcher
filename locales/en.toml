@@ -525,6 +525,10 @@
 "toast.update_failed" = "Update failed"
 "toast.scrape_failed" = "Artwork scraping stopped"
 "toast.failed" = "That did not work"
+"toast.theme_update" = "Theme update: {name}"
+"toast.theme_updates" = { one = "{count} theme update", other = "{count} theme updates" }
+"toast.module_update" = "Module update: {name}"
+"toast.module_updates" = { one = "{count} module update", other = "{count} module updates" }
 "settings.games_screen" = "GAMES SCREEN"
 "settings.game_art" = "Box art"
 "settings.art_width" = "Box art width"

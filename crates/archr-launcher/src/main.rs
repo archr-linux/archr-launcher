@@ -389,6 +389,8 @@ fn run(
     let mut spool = Spool::new(&paths);
     let mut update_checked = None;
     let mut update_ended = false;
+    let mut theme_news = toasts::StoreNews::new(toasts::Shop::Themes);
+    let mut module_news = toasts::StoreNews::new(toasts::Shop::Modules);
     let mut scrape_outcome = None;
     // A flag a launcher that died left behind pauses nothing, but goes too.
     let mut hotkeys_paused = false;
@@ -539,7 +541,7 @@ fn run(
             let found = news.report.as_ref().filter(|r| !r.packages.is_empty());
             if let Some(report) = found.filter(|_| !on_updates) {
                 let said = format!("{} {}", report.new_version, report.packages.len());
-                if first_this_boot(&paths, &said) {
+                if toasts::first_this_boot(&paths, "updates", &said) {
                     ui.toasts.push(toasts::found(&ui.catalog, report), now);
                 }
             }
@@ -727,6 +729,28 @@ fn run(
         };
         dirty |= (app.theme_updates, app.module_updates) != stores;
         (app.theme_updates, app.module_updates) = stores;
+        // And told once, as the system's are, unless that store is open.
+        let theme_name = |folder: &str| {
+            let names = settings.state.theme_names.get(folder);
+            let name = names.and_then(|n| n.get(ui.catalog.language()));
+            name.unwrap_or(folder).to_owned()
+        };
+        let themes = settings.state.store.updates();
+        let on_themes = matches!(page, Some(Page::Store | Page::StoreTheme));
+        let on_modules = matches!(page, Some(Page::ModuleStore | Page::ModuleOffer));
+        let found = [
+            theme_news.check(&paths, &ui.catalog, &themes, theme_name, on_themes),
+            module_news.check(
+                &paths,
+                &ui.catalog,
+                &app.modules.updates(),
+                str::to_owned,
+                on_modules,
+            ),
+        ];
+        for toast in found.into_iter().flatten() {
+            ui.toasts.push(toast, now);
+        }
         if let Some(language) = &language {
             modules.language(language);
         }
@@ -1774,20 +1798,6 @@ const INPUT_TICK: Duration = Duration::from_millis(16);
 /// checks for input every 1 ms (EVENT_POLL_INTERVAL_MS): about a thousand
 /// wake-ups a second on an idle menu. This checks once a frame instead, so a
 /// press is seen at most 16 ms later; a zero timeout is a plain poll.
-/// Once per boot for each news (the launcher starts again after every
-/// game): what was last said is kept in /run.
-fn first_this_boot(paths: &Paths, news: &str) -> bool {
-    let file = paths.run.join("toast-updates");
-    if std::fs::read_to_string(&file).is_ok_and(|said| said == news) {
-        return false;
-    }
-    if let Err(error) =
-        std::fs::create_dir_all(&paths.run).and_then(|()| std::fs::write(&file, news))
-    {
-        log::warn!("{}: {error}", file.display());
-    }
-    true
-}
 fn idle_wait(events: &mut sdl2::EventPump, timeout_ms: u32) -> Option<Event> {
     let deadline = Instant::now().checked_add(Duration::from_millis(u64::from(timeout_ms)));
     loop {

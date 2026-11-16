@@ -109,9 +109,151 @@ pub fn ended(catalog: &I18n, run: &Run) -> Option<Toast> {
     })
 }
 
+/// Once per boot for each news (the launcher starts again after every
+/// game): what was last said under `topic` is kept in /run, in
+/// `toast-<topic>`.
+pub fn first_this_boot(paths: &Paths, topic: &str, news: &str) -> bool {
+    let file = paths.run.join(format!("toast-{topic}"));
+    if fs::read_to_string(&file).is_ok_and(|said| said == news) {
+        return false;
+    }
+    if let Err(error) = fs::create_dir_all(&paths.run).and_then(|()| fs::write(&file, news)) {
+        log::warn!("{}: {error}", file.display());
+    }
+    true
+}
+
+/// A store whose updates the START menu marks: themes or modules.
+#[derive(Clone, Copy)]
+pub enum Shop {
+    Themes,
+    Modules,
+}
+/// The news of one store's updates, told like the system's: once per boot
+/// and set of versions, so the periodic look does not repeat it, and never
+/// on the store's own page (seen there, it counts as said).
+pub struct StoreNews {
+    shop: Shop,
+    last: String,
+}
+impl StoreNews {
+    pub fn new(shop: Shop) -> Self {
+        Self {
+            shop,
+            last: String::new(),
+        }
+    }
+    /// `updates`: id and newer version of each item the store has, and the
+    /// name to show for an id.
+    pub fn check(
+        &mut self,
+        paths: &Paths,
+        catalog: &I18n,
+        updates: &[(String, String)],
+        name: impl Fn(&str) -> String,
+        on_page: bool,
+    ) -> Option<Toast> {
+        let news: Vec<_> = updates.iter().map(|(n, v)| format!("{n} {v}")).collect();
+        let news = news.join("\n");
+        if news == self.last {
+            return None;
+        }
+        self.last.clone_from(&news);
+        let (topic, one, many) = match self.shop {
+            Shop::Themes => ("themes", "toast.theme_update", "toast.theme_updates"),
+            Shop::Modules => ("modules", "toast.module_update", "toast.module_updates"),
+        };
+        if updates.is_empty() || !first_this_boot(paths, topic, &news) || on_page {
+            return None;
+        }
+        let title = match updates {
+            [(id, _)] => catalog.format(one, &[("name", &name(id))]),
+            _ => catalog.plural(
+                many,
+                updates.len() as f64,
+                &[("count", &updates.len().to_string())],
+            ),
+        };
+        Some(Toast::new(Kind::Info, Category::Updates, title))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn store_updates_are_told_once_per_boot_and_version() {
+        let root = tempfile::tempdir().unwrap();
+        let paths = Paths::new(Some(root.path().to_owned()));
+        let catalog = I18n::load(std::path::Path::new("/nonexistent"), Some("en"), None);
+        let named = |id: &str| format!("Praia ({id})");
+        let one = [("praia".to_owned(), "t1".to_owned())];
+        let mut themes = StoreNews::new(Shop::Themes);
+        let check = |news: &mut StoreNews, updates: &[(String, String)], on_page| {
+            news.check(&paths, &catalog, updates, named, on_page)
+                .map(|t| t.title)
+        };
+        assert_eq!(check(&mut themes, &[], false), None, "nothing to tell");
+        assert_eq!(
+            check(&mut themes, &one, false).as_deref(),
+            Some("Theme update: Praia (praia)")
+        );
+        // The periodic look finds the same: said already, and after the
+        // launcher comes back from a game too.
+        assert_eq!(check(&mut themes, &one, false), None);
+        assert_eq!(check(&mut StoreNews::new(Shop::Themes), &one, false), None);
+        // A newer version is news again; each store keeps its own.
+        let two = [
+            ("a".to_owned(), "1.1".to_owned()),
+            ("b".to_owned(), "2.0".to_owned()),
+        ];
+        let mut modules = StoreNews::new(Shop::Modules);
+        assert_eq!(
+            check(&mut modules, &two, false).as_deref(),
+            Some("2 module updates")
+        );
+        let newer = [("praia".to_owned(), "t2".to_owned())];
+        assert!(check(&mut themes, &newer, false).is_some());
+        // Seen on the store's own page: no card, and none after leaving it.
+        let three = [("c".to_owned(), "3.0".to_owned())];
+        assert_eq!(check(&mut modules, &three, true), None);
+        assert_eq!(check(&mut modules, &three, false), None);
+        assert_eq!(
+            check(&mut StoreNews::new(Shop::Modules), &three, false),
+            None
+        );
+        // The system's news keeps its own file.
+        assert!(first_this_boot(&paths, "updates", "3.0.4 2"));
+        assert!(root
+            .path()
+            .join("run/archr-launcher/toast-updates")
+            .is_file());
+    }
+
+    #[test]
+    fn store_updates_follow_the_updates_category() {
+        let root = tempfile::tempdir().unwrap();
+        let paths = Paths::new(Some(root.path().to_owned()));
+        let catalog = I18n::load(std::path::Path::new("/nonexistent"), Some("pt_BR"), None);
+        let updates = [("bateria".to_owned(), "1.1.0".to_owned())];
+        let toast = StoreNews::new(Shop::Modules)
+            .check(&paths, &catalog, &updates, str::to_owned, false)
+            .unwrap();
+        assert_eq!(toast.title, "Atualização de módulo: bateria");
+        assert_eq!(
+            (toast.kind, toast.category),
+            (Kind::Info, Category::Updates)
+        );
+        let now = Instant::now();
+        let mut cards = archr_ui::toast::Toasts::default();
+        cards.prefs.show[Category::Updates as usize] = false;
+        cards.push(toast.clone(), now);
+        assert!(cards.shown().is_empty(), "Notifications › Updates off");
+        cards.prefs.show[Category::Updates as usize] = true;
+        cards.push(toast, now);
+        assert_eq!(cards.shown().len(), 1);
+    }
 
     #[test]
     fn toasts_are_read_in_order_and_every_file_is_deleted() {

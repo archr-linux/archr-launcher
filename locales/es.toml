@@ -525,6 +525,10 @@
 "toast.update_failed" = "La actualización falló"
 "toast.scrape_failed" = "La descarga de carátulas se detuvo"
 "toast.failed" = "No funcionó"
+"toast.theme_update" = "Actualización de tema: {name}"
+"toast.theme_updates" = { one = "{count} actualización de tema", other = "{count} actualizaciones de temas" }
+"toast.module_update" = "Actualización de módulo: {name}"
+"toast.module_updates" = { one = "{count} actualización de módulo", other = "{count} actualizaciones de módulos" }
 "settings.games_screen" = "PANTALLA DE JUEGOS"
 "settings.game_art" = "Carátulas"
 "settings.art_width" = "Ancho de la carátula"

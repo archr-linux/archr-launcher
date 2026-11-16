@@ -525,6 +525,10 @@
 "toast.update_failed" = "Обновление не удалось"
 "toast.scrape_failed" = "Загрузка обложек остановлена"
 "toast.failed" = "Не получилось"
+"toast.theme_update" = "Обновление темы: {name}"
+"toast.theme_updates" = { one = "{count} обновление тем", few = "{count} обновления тем", many = "{count} обновлений тем", other = "{count} обновления тем" }
+"toast.module_update" = "Обновление модуля: {name}"
+"toast.module_updates" = { one = "{count} обновление модулей", few = "{count} обновления модулей", many = "{count} обновлений модулей", other = "{count} обновления модулей" }
 "settings.games_screen" = "ЭКРАН ИГР"
 "settings.game_art" = "Обложки"
 "settings.art_width" = "Ширина обложки"

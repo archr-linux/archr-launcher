@@ -233,10 +233,17 @@ pub struct Store {
 impl Store {
     /// Installed themes the store has something newer for.
     pub fn outdated(&self) -> usize {
+        self.updates().len()
+    }
+    /// Those themes: folder and the newer content id.
+    pub fn updates(&self) -> Vec<(String, String)> {
         self.installed
             .iter()
-            .filter(|(folder, tree)| self.latest.get(*folder).is_some_and(|l| l != *tree))
-            .count()
+            .filter_map(|(folder, tree)| {
+                let latest = self.latest.get(folder).filter(|l| *l != tree)?;
+                Some((folder.clone(), latest.clone()))
+            })
+            .collect()
     }
     pub fn cards(&self) -> &[Card] {
         &self.cards[self.tab.index()]

@@ -3902,6 +3902,28 @@ fn capture_toasts() {
             }
             save(&mut ui, format!("{name}-{language}"));
         }
+        // The START menu with the system and both stores waiting, the same
+        // dot on each, and the module store's news.
+        let mut hub = crate::state::App::new(10);
+        hub.set_view(&theme.view(&theme.active_view));
+        hub.screen = crate::state::Screen::StartHub {
+            row: 1,
+            tile: 1,
+            shortcut: 3,
+        };
+        (hub.updates, hub.theme_updates, hub.module_updates) = (3, 1, 2);
+        let modules = ui
+            .catalog
+            .plural("toast.module_updates", 2., &[("count", "2")]);
+        ui.toasts = Default::default();
+        ui.toasts
+            .push(Toast::new(Kind::Info, Category::Updates, modules), ago(600));
+        for _ in 0..2 {
+            ui.snap_animations();
+            ui.draw_with_settings(&hub, &shelf, &theme, Default::default(), None)
+                .unwrap();
+        }
+        save(&mut ui, format!("toast-start-badges-{language}"));
         ui.toasts = Default::default();
         for _ in 0..2 {
             ui.snap_animations();
