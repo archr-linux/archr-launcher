@@ -18,6 +18,7 @@ use archr_launcher::{
     resume::{self, Records, Start},
     saves::{Entry, Task},
     state::{App, Button, DataSource, Outcome, Screen, SessionAction},
+    toasts::{self, Spool},
     wifi,
 };
 use archr_ui::{
@@ -28,10 +29,11 @@ use archr_ui::{
     input::{button_event, Repeat},
     netplay::{Effect, Lobby},
     render::{prepare_first_frame, Art, Ui},
-    settings::Id,
+    settings::{Id, Page},
     sounds::{Event as Sound, Sounds},
     startup::StartupTrace,
     startup_phase,
+    toast::{Category, Kind, Prefs, Toast},
 };
 use sdl2::{
     event::{Event, WindowEvent},
@@ -297,7 +299,11 @@ fn run(
             .unwrap_or_else(|| id.default_value().into())
     };
     // Read before Settings first opens: the details screen needs them now.
-    for id in [Id::UpdateNotify, Id::PreviewVideo] {
+    let toasts = Page::Toasts.rows().iter().map(|row| row.id);
+    for id in [Id::UpdateNotify, Id::PreviewVideo]
+        .into_iter()
+        .chain(toasts)
+    {
         settings.state.values.insert(id, saved(id));
     }
     let mut update_check =
@@ -378,6 +384,12 @@ fn run(
     let mut converter =
         archr_launcher::convert::Runner::new(archr_launcher::convert::Env::new(&paths));
     let mut usb_seq = 0;
+    // Toasts (Avisos): the spool, and what was last seen of the news the
+    // launcher itself watches.
+    let mut spool = Spool::new(&paths);
+    let mut update_checked = None;
+    let mut update_ended = false;
+    let mut scrape_outcome = None;
     // A flag a launcher that died left behind pauses nothing, but goes too.
     let mut hotkeys_paused = false;
     pause_hotkeys(&paths, false);
@@ -431,6 +443,14 @@ fn run(
         if settings.state.error_seq != seen_errors {
             seen_errors = settings.state.error_seq;
             audio.play(Sound::Error);
+            // A reply that came after Settings closed: no page can say it.
+            if let Some(text) = settings.state.error_text(&ui.catalog) {
+                if !settings.active {
+                    let title = ui.catalog.text("toast.failed");
+                    let toast = Toast::new(Kind::Error, Category::Errors, title).detail(text);
+                    ui.toasts.push(toast, Instant::now());
+                }
+            }
         }
         if settings.take_launch_saved() {
             library.reload_config();
@@ -505,6 +525,69 @@ fn run(
         };
         dirty |= app.updates != updates;
         app.updates = updates;
+        let now = Instant::now();
+        ui.toasts.prefs = Prefs::read(|id| settings.state.value(id));
+        for toast in spool.poll(now) {
+            ui.toasts.push(toast, now);
+        }
+        // The pages that already say this news themselves.
+        let page = settings.active.then(|| settings.state.page());
+        let on_updates = matches!(page, Some(Page::Updates | Page::UpdatePackages));
+        let news = &settings.state.updates;
+        if news.checked != update_checked {
+            update_checked = news.checked;
+            let found = news.report.as_ref().filter(|r| !r.packages.is_empty());
+            if let Some(report) = found.filter(|_| !on_updates) {
+                let said = format!("{} {}", report.new_version, report.packages.len());
+                if first_this_boot(&paths, &said) {
+                    ui.toasts.push(toasts::found(&ui.catalog, report), now);
+                }
+            }
+        }
+        let ended = news
+            .run
+            .as_ref()
+            .and_then(|run| toasts::ended(&ui.catalog, run));
+        if let Some(toast) = ended.clone().filter(|_| !update_ended && !on_updates) {
+            ui.toasts.push(toast, now);
+        }
+        update_ended = ended.is_some();
+        let outcome = settings.state.scrape.outcome;
+        if outcome != scrape_outcome {
+            scrape_outcome = outcome;
+            let failed = outcome.filter(|key| {
+                !matches!(*key, "settings.scrape_done" | "settings.scrape_cancelled")
+            });
+            if let Some(key) = failed.filter(|_| page != Some(Page::Scraper)) {
+                let title = ui.catalog.text("toast.scrape_failed");
+                let toast = Toast::new(Kind::Error, Category::Errors, title);
+                ui.toasts.push(toast.detail(ui.catalog.text(key)), now);
+            }
+        }
+        // Joined on the Wi-Fi page: the page says it.
+        if let Some(joined) = ui.take_wifi_change().filter(|_| page != Some(Page::Wifi)) {
+            let toast = if joined {
+                let ssid = SystemCfg::load(&paths.config)
+                    .ok()
+                    .and_then(|cfg| cfg.get_setting("wifi.ssid", None, None))
+                    .unwrap_or_default();
+                Toast::new(
+                    Kind::Done,
+                    Category::Network,
+                    ui.catalog.text("toast.wifi_joined"),
+                )
+                .detail(ssid)
+            } else {
+                Toast::new(
+                    Kind::Info,
+                    Category::Network,
+                    ui.catalog.text("toast.wifi_lost"),
+                )
+            };
+            ui.toasts.push(toast, now);
+        }
+        // The cards change and their time bars move.
+        dirty |= !ui.toasts.shown().is_empty();
         if let Some(shortcuts) = settings.state.take_shortcuts() {
             library.set_shortcuts(shortcuts.clone());
             app.shortcuts = shortcuts;
@@ -1110,7 +1193,11 @@ fn run(
                     ..
                 } if windowed => close_requested = true,
                 Event::JoyDeviceAdded { .. } | Event::JoyDeviceRemoved { .. } => {
-                    controllers.refresh();
+                    for name in controllers.refresh() {
+                        let title = ui.catalog.text("toast.controller");
+                        let toast = Toast::new(Kind::Done, Category::Network, title).detail(name);
+                        ui.toasts.push(toast, Instant::now());
+                    }
                     repeat.clear();
                 }
                 Event::Window {
@@ -1683,6 +1770,20 @@ const INPUT_TICK: Duration = Duration::from_millis(16);
 /// checks for input every 1 ms (EVENT_POLL_INTERVAL_MS): about a thousand
 /// wake-ups a second on an idle menu. This checks once a frame instead, so a
 /// press is seen at most 16 ms later; a zero timeout is a plain poll.
+/// Once per boot for each news (the launcher starts again after every
+/// game): what was last said is kept in /run.
+fn first_this_boot(paths: &Paths, news: &str) -> bool {
+    let file = paths.run.join("toast-updates");
+    if std::fs::read_to_string(&file).is_ok_and(|said| said == news) {
+        return false;
+    }
+    if let Err(error) =
+        std::fs::create_dir_all(&paths.run).and_then(|()| std::fs::write(&file, news))
+    {
+        log::warn!("{}: {error}", file.display());
+    }
+    true
+}
 fn idle_wait(events: &mut sdl2::EventPump, timeout_ms: u32) -> Option<Event> {
     let deadline = Instant::now().checked_add(Duration::from_millis(u64::from(timeout_ms)));
     loop {

@@ -92,6 +92,8 @@ pub enum Page {
     Power,
     /// Appearance › Start shortcuts (Hub-atalhos-editar).
     Shortcuts,
+    /// Appearance › Notifications (Avisos): the toasts.
+    Toasts,
     /// System › Error reports (Relatorios-ajustes), and the last report's
     /// text (Relatorios-ver).
     ErrorReports,
@@ -145,6 +147,7 @@ impl Page {
             Self::Resume => "settings.resume",
             Self::Power => "settings.power",
             Self::Shortcuts => "shortcuts.title",
+            Self::Toasts => "settings.toasts",
             Self::ErrorReports => "reports.title",
             Self::ReportText => "reports.view_title",
             Self::PadTest => "pad.title",
@@ -160,7 +163,9 @@ impl Page {
             }
             Self::Netplay | Self::Scraper | Self::Mangohud | Self::Resume => &["settings.games"],
             Self::MangohudItems => &["settings.games", "settings.mangohud_page"],
-            Self::AccentColor | Self::Store | Self::Shortcuts => &["settings.appearance"],
+            Self::AccentColor | Self::Store | Self::Shortcuts | Self::Toasts => {
+                &["settings.appearance"]
+            }
             Self::StoreTheme => &["settings.appearance", "settings.theme_store"],
             Self::Modules
             | Self::ModuleStore
@@ -197,6 +202,7 @@ impl Page {
             Self::Scraper => pages::SCRAPER,
             Self::ScraperMedia => pages::SCRAPER_MEDIA,
             Self::Appearance => pages::APPEARANCE,
+            Self::Toasts => pages::TOASTS,
             Self::Storage => storage::STORAGE,
             Self::Mangohud => mangohud::MANGOHUD,
             Self::Achievements => cheevos::CHEEVOS,
@@ -436,6 +442,16 @@ pub enum Id {
     /// Appearance link to Start shortcuts, and one line of that page.
     ShortcutsLink,
     Shortcut(u8),
+    /// Appearance link to Notifications, and that page's rows: the switch,
+    /// the corner, the time and one switch per `toast::Category`.
+    ToastsLink,
+    Toasts,
+    ToastsPosition,
+    ToastsDuration,
+    ToastsUpdates,
+    ToastsNetwork,
+    ToastsStorage,
+    ToastsErrors,
     /// System link to Error reports, and that page's rows.
     ReportsLink,
     /// `system.error_reports`, read by archr-error-report: on when missing.
@@ -616,9 +632,18 @@ impl Id {
             Self::BatteryCritical => ("power.battery.critical", "3"),
             Self::BatteryLow => ("power.battery.low", "10"),
             Self::ShutdownDelay => ("system.shutdown_delay", "900"),
-            Self::ResumeLink | Self::PowerLink | Self::ShortcutsLink | Self::Shortcut(_) => {
-                ("", "")
-            }
+            Self::ResumeLink
+            | Self::PowerLink
+            | Self::ShortcutsLink
+            | Self::Shortcut(_)
+            | Self::ToastsLink => ("", ""),
+            Self::Toasts => ("launcher.toasts", "1"),
+            Self::ToastsPosition => ("launcher.toasts.position", "right"),
+            Self::ToastsDuration => ("launcher.toasts.duration", "4"),
+            Self::ToastsUpdates => ("launcher.toasts.updates", "1"),
+            Self::ToastsNetwork => ("launcher.toasts.network", "1"),
+            Self::ToastsStorage => ("launcher.toasts.storage", "0"),
+            Self::ToastsErrors => ("launcher.toasts.errors", "1"),
             Self::RaImportLink
             | Self::RaConfig
             | Self::RaOverrides
@@ -712,7 +737,14 @@ impl Id {
             | Self::ModulesAuto
             | Self::DebugMode
             | Self::ErrorReports
-            | Self::SwitcherOn => &["0", "1"],
+            | Self::SwitcherOn
+            | Self::Toasts
+            | Self::ToastsUpdates
+            | Self::ToastsNetwork
+            | Self::ToastsStorage
+            | Self::ToastsErrors => &["0", "1"],
+            Self::ToastsPosition => &["right", "left"],
+            Self::ToastsDuration => &["3", "4", "6", "8"],
             // Only published channels (archr-update reads the rest as stable).
             Self::UpdateChannel => &["stable"],
             Self::MangohudGame => &["", "1", "0"],
@@ -1365,9 +1397,13 @@ impl Settings {
                 | Id::ResumeLink
                 | Id::PowerLink
                 | Id::PadTestLink
-                | Id::ShortcutsLink,
+                | Id::ShortcutsLink
+                | Id::ToastsLink,
                 _,
             ) => return "›".into(),
+            (Id::ToastsPosition, "left") => "settings.toasts_left",
+            (Id::ToastsPosition, _) => "settings.toasts_right",
+            (Id::ToastsDuration, v) => return catalog.format("resume.seconds", &[("count", v)]),
             (Id::SecondCard, _) => "settings.eject_link",
             (Id::ModuleEntry(_), _) => return String::new(),
             (Id::ModuleRow(_) | Id::ModuleItem(..), _) => {
@@ -1581,6 +1617,13 @@ impl Settings {
             Id::RestoreBackup => self.storage.backup.is_none(),
             Id::RomsMove | Id::RomsNames => self.roms_disabled(id),
             Id::ButtonsRestore => self.default_bindings(),
+            // With the toasts off, only their switch still means something.
+            Id::ToastsPosition
+            | Id::ToastsDuration
+            | Id::ToastsUpdates
+            | Id::ToastsNetwork
+            | Id::ToastsStorage
+            | Id::ToastsErrors => self.value(Id::Toasts) != "1",
             Id::MangohudGame
             | Id::Mangohud
             | Id::MangohudShow
@@ -1859,6 +1902,12 @@ impl Settings {
         self.brief = false;
         self.error_seq += 1;
     }
+    /// The failure the banner shows, in words: a toast says it when the
+    /// reply comes after Settings closed.
+    pub fn error_text(&self, catalog: &crate::i18n::I18n) -> Option<String> {
+        let (_, error) = self.error.as_ref().filter(|_| !self.brief)?;
+        Some(information::value(catalog, error))
+    }
     /// A short confirmation in the same banner: it leaves sooner than a
     /// failure, on its own or at any button, and plays no error sound.
     pub fn note(&mut self, message: String) {
@@ -2134,6 +2183,28 @@ mod tests {
             .visible_rows()
             .iter()
             .any(|r| matches!(r.id, Id::NetplayHost | Id::NetplayPort)));
+    }
+    #[test]
+    fn notifications_open_from_appearance_and_follow_their_switch() {
+        let mut state = Settings {
+            loading: false,
+            ..Settings::default()
+        };
+        state.open(Page::Appearance);
+        let link = state
+            .visible_rows()
+            .iter()
+            .position(|r| r.id == Id::ToastsLink);
+        state.cursor = link.expect("Appearance links to Notifications");
+        assert_eq!(state.handle(Button::A), Effect::None);
+        assert_eq!(state.page(), Page::Toasts);
+        assert_eq!(Page::Toasts.parent(), &["settings.appearance"]);
+        state.cursor = 1;
+        let corner = Effect::Set(Id::ToastsPosition, "left".into());
+        assert_eq!(state.handle(Button::R), corner, "saved at once, no draft");
+        state.pending = None;
+        state.values.insert(Id::Toasts, "0".into());
+        assert!(state.disabled(Id::ToastsPosition) && !state.disabled(Id::Toasts));
     }
     #[test]
     fn disabled_rows_offer_only_back() {

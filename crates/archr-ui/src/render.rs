@@ -29,6 +29,7 @@ mod roms_move;
 pub use roms_move::{MoveStage, RomsMove, DOT_STEP};
 mod saves;
 mod search;
+mod toast;
 mod usb;
 pub(crate) use usb::tone as usb_tone;
 mod convert;
@@ -426,6 +427,8 @@ pub struct Ui<'font, 'texture> {
     pub banner: Option<String>,
     /// A USB adapter just plugged (Dongle-aviso), over any screen.
     pub dongle: Option<crate::usb::Card>,
+    /// Toasts (Avisos) in a top corner, over any screen; never input.
+    pub toasts: crate::toast::Toasts,
     pub screenshot: Option<PathBuf>,
     /// Open Netplay lobby; it replaces the browsing screens while present.
     pub lobby: Option<crate::netplay::Lobby>,
@@ -539,6 +542,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             loading: false,
             banner: None,
             dongle: None,
+            toasts: Default::default(),
             screenshot: None,
             transition: None,
             moonlight: None,
@@ -597,6 +601,10 @@ impl<'font, 'texture> Ui<'font, 'texture> {
     }
     pub fn wifi_enabled(&self) -> bool {
         self.status.as_ref().is_some_and(|s| s.wifi.radio())
+    }
+    /// See `Status::take_joined`.
+    pub fn take_wifi_change(&mut self) -> Option<bool> {
+        self.status.as_mut()?.take_joined()
     }
     pub fn wifi_refresh_signal(&self) -> Option<impl FnOnce() + Send + 'static> {
         self.status.as_ref().and_then(|s| s.refresh_signal())
@@ -658,7 +666,8 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             .blink
             .is_some_and(|on| on != self.blink_on(Instant::now()));
         let look = self.look_tick();
-        created || art || store || status || blink || look
+        let toasts = self.toasts.tick(Instant::now());
+        created || art || store || status || blink || look || toasts
     }
     /// Loads what the theme store page asked for, sized for its largest box.
     fn store_tick(&mut self) -> bool {
@@ -1126,6 +1135,11 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         }
         if let Some(card) = self.dongle.clone().filter(|_| self.transition.is_none()) {
             self.dongle_card(&card, theme)?;
+        }
+        if self.transition.is_none() {
+            self.toasts(theme)?;
+            // The time bars shrink for as long as a card shows.
+            self.animating |= !self.toasts.shown().is_empty();
         }
         // The launch overlay is the last frame before a handoff: never mid-fade.
         if let Some(message) = self.transition.clone() {

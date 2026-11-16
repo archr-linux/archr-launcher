@@ -27,5 +27,6 @@ mod persistence;
 
 pub mod moonlight;
 pub mod settings;
+pub mod toasts;
 
 mod process;

@@ -135,8 +135,10 @@ impl Controllers {
         Some((device.joystick.name(), device.fn_button.is_some()))
     }
 
-    pub fn refresh(&mut self) {
-        self.devices.clear();
+    /// Opens the devices again; the names of Bluetooth pads that were not
+    /// open before, for the toast that says they connected.
+    pub fn refresh(&mut self) -> Vec<String> {
+        let before: Vec<String> = self.devices.drain(..).map(|d| d.guid).collect();
         for index in 0..self.joysticks.num_joysticks().unwrap_or(0) {
             if self.devices.len() == 4 {
                 break;
@@ -160,6 +162,11 @@ impl Controllers {
                 Err(error) => log::warn!("Cannot open joystick {index}: {error}"),
             }
         }
+        self.devices
+            .iter()
+            .filter(|d| bluetooth(&d.guid) && !before.contains(&d.guid))
+            .map(|d| d.joystick.name())
+            .collect()
     }
     pub fn configuration(&self) -> String {
         controller_arguments(
@@ -168,6 +175,11 @@ impl Controllers {
                 .map(|device| (device.index, device.guid.clone())),
         )
     }
+}
+
+/// SDL's GUID starts with the bus type, little-endian: 0x0005 is Bluetooth.
+fn bluetooth(guid: &str) -> bool {
+    guid.starts_with("0500")
 }
 
 /// Matches ES configureEmulators, including the spaces around each player.
@@ -196,5 +208,11 @@ mod fn_button_tests {
         ] {
             assert_eq!(super::fn_button(name), None, "{name}");
         }
+    }
+    #[test]
+    fn bluetooth_pads_are_told_apart_by_the_guid_bus() {
+        assert!(super::bluetooth("05009b514c050000e40c000000016800"));
+        assert!(!super::bluetooth("03000000c82d00000631000000010000"));
+        assert!(!super::bluetooth("19000000010000000100000000010000"));
     }
 }

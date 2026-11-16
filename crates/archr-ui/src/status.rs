@@ -118,6 +118,8 @@ struct Snapshot {
     roms: Option<&'static str>,
     /// The USB advice's sequence: it changed when this does.
     usb: u64,
+    /// Read by the worker at least once: changes from here on are news.
+    ready: bool,
 }
 enum Signal {
     Refresh,
@@ -176,7 +178,10 @@ impl Worker {
                 let mut next_wifi = Instant::now();
                 loop {
                     let now = Instant::now();
-                    let mut next = snapshot;
+                    let mut next = Snapshot {
+                        ready: true,
+                        ..snapshot
+                    };
                     let battery_tick = source.poll(now);
                     if let Some(battery) = battery_tick {
                         next.battery = battery;
@@ -247,6 +252,9 @@ pub struct Status {
     pub usb_chips: Vec<crate::usb::Chip>,
     usb_seq: u64,
     usb_acked: u64,
+    /// A network just joined (true) or lost with the radio on (false).
+    joined: Option<bool>,
+    ready: bool,
     path: PathBuf,
     worker: Option<Worker>,
     started: bool,
@@ -265,6 +273,8 @@ impl Status {
             usb_chips: Vec::new(),
             usb_seq: 0,
             usb_acked: 0,
+            joined: None,
+            ready: false,
             path,
             worker: None,
             started: false,
@@ -293,6 +303,11 @@ impl Status {
             chips: self.usb_chips.clone(),
             since: Instant::now(),
         })
+    }
+    /// The Wi-Fi network joined or lost since the last call, once. The
+    /// first reading is no news, and switching the radio off is the user's.
+    pub fn take_joined(&mut self) -> Option<bool> {
+        self.joined.take()
     }
     /// Bumped by every new USB advice.
     pub fn usb_seq(&self) -> u64 {
@@ -358,8 +373,17 @@ impl Status {
             wifi,
             roms,
             usb,
+            ready,
         }) = snapshot
         {
+            if ready && self.ready {
+                match (self.wifi, wifi) {
+                    (Wifi::Off | Wifi::On, Wifi::Connected) => self.joined = Some(true),
+                    (Wifi::Connected, Wifi::On) => self.joined = Some(false),
+                    _ => {}
+                }
+            }
+            self.ready |= ready;
             changed = self.battery != battery || self.wifi != wifi || self.roms != roms;
             if usb != self.usb_seq {
                 self.usb_seq = usb;
@@ -499,12 +523,38 @@ mod tests {
                 wifi: if wifi { Wifi::Connected } else { Wifi::Off },
                 roms: None,
                 usb: 0,
+                ready: false,
             };
             assert_eq!(status.update(unix + 60, Some(snapshot)), changed);
             assert!(
                 !status.update(unix + 60, None),
                 "an unavailable snapshot retains displayed status"
             );
+        }
+    }
+
+    #[test]
+    fn wifi_news_is_a_network_joined_or_lost_never_the_first_reading() {
+        let mut status = Status::new(None, Instant::now());
+        let read = |wifi| {
+            Some(Snapshot {
+                wifi,
+                ready: true,
+                ..Snapshot::default()
+            })
+        };
+        let unix = 1_700_000_040;
+        status.update(unix, Some(Snapshot::default()));
+        status.update(unix, read(Wifi::Connected));
+        assert_eq!(status.take_joined(), None, "already joined at start");
+        for (wifi, news) in [
+            (Wifi::On, Some(false)),
+            (Wifi::Connected, Some(true)),
+            (Wifi::Off, None),
+            (Wifi::Connected, Some(true)),
+        ] {
+            status.update(unix, read(wifi));
+            assert_eq!(status.take_joined(), news, "{wifi:?}");
         }
     }
 

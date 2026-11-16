@@ -97,6 +97,7 @@ pub const APPEARANCE: &[Row] = &[
     row(Id::BatteryPercent, "settings.battery_percent", Kind::Toggle),
     row(Id::TextHints, "settings.text_hints", Kind::Toggle),
     row(Id::ShortcutsLink, "shortcuts.title", Kind::Action),
+    row(Id::ToastsLink, "settings.toasts", Kind::Action),
     row(Id::GameArt, "settings.game_art", Kind::Toggle).under("settings.games_screen"),
     row(Id::ArtWidth, "settings.art_width", Kind::Value),
     row(Id::ArtRadius, "settings.art_radius", Kind::Value),
@@ -111,6 +112,20 @@ pub const APPEARANCE: &[Row] = &[
         Kind::Value,
     ),
     row(Id::Restore, "settings.restore", Kind::Action),
+];
+/// Appearance › Notifications (Avisos).
+pub const TOASTS: &[Row] = &[
+    row(Id::Toasts, "settings.toasts_on", Kind::Toggle),
+    row(Id::ToastsPosition, "settings.toasts_position", Kind::Value),
+    described(
+        Id::ToastsDuration,
+        "settings.toasts_duration",
+        "settings.toasts_duration_detail",
+    ),
+    row(Id::ToastsUpdates, "settings.toasts_updates", Kind::Toggle).under("settings.toasts_show"),
+    row(Id::ToastsNetwork, "settings.toasts_network", Kind::Toggle),
+    row(Id::ToastsStorage, "settings.toasts_storage", Kind::Toggle),
+    row(Id::ToastsErrors, "settings.toasts_errors", Kind::Toggle),
 ];
 pub const NETPLAY: &[Row] = &[
     row(Id::NetplayEnabled, "settings.netplay_enabled", Kind::Toggle),
@@ -439,6 +454,7 @@ impl Settings {
             Id::ThemeStore => return Some(self.open_store()),
             Id::ModulesLink => self.open(Page::Modules),
             Id::ShortcutsLink => self.open(Page::Shortcuts),
+            Id::ToastsLink => self.open(Page::Toasts),
             // Every visit looks at the folder again.
             Id::RaImportLink => {
                 self.raimport.found = None;

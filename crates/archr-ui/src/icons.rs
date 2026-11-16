@@ -51,6 +51,7 @@ glyphs! {
     Usb => "usb", ArrowLeftRight => "arrow-left-right", ArrowRight => "arrow-right",
     CircleCheck => "circle-check",
     CircleX => "circle-x", CircleDashed => "circle-dashed", CircleAlert => "circle-alert",
+    Info => "info",
     FolderOpen => "folder-open", Folder => "folder", Search => "search", Store => "store", Bluetooth => "bluetooth",
 }
 
@@ -249,7 +250,8 @@ mod tests {
                 | Glyph::SignalMedium
                 | Glyph::SignalHigh
                 | Glyph::Alert
-                | Glyph::CircleAlert => 1,
+                | Glyph::CircleAlert
+                | Glyph::Info => 1,
                 Glyph::Controls | Glyph::Games | Glyph::Storage | Glyph::StorageIn => 2,
                 _ => 0,
             };

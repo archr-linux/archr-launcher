@@ -3580,3 +3580,114 @@ fn golden_frames_at_640x480() {
     }
     assert!(changed.is_empty(), "640x480 changed: {changed:#?}");
 }
+
+/// Toasts (Avisos) over the systems list, a stack of an error and an
+/// information, the left corner, and Settings › Appearance › Notifications:
+/// `ARCHR_TOAST_CAPTURE_DIR`, at `ARCHR_CAPTURE_SIZE`.
+#[test]
+#[ignore = "manual capture, ARCHR_TOAST_CAPTURE_DIR required"]
+fn capture_toasts() {
+    use crate::toast::{Category, Kind, Toast};
+    std::env::set_var("SDL_VIDEODRIVER", "offscreen");
+    let output = std::path::PathBuf::from(
+        std::env::var_os("ARCHR_TOAST_CAPTURE_DIR").expect("capture directory"),
+    );
+    let (width, height) = capture_size();
+    let ttf;
+    let creator;
+    let mut ui = Ui::new(width, height, true).unwrap();
+    ttf = sdl2::ttf::init().unwrap();
+    creator = ui.canvas.texture_creator();
+    let themes = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../themes");
+    let theme = Theme::load(&themes.join("default")).fitted(width, height);
+    ui.theme_dir = Some(themes.join("default"));
+    ui.set_motion(crate::motion::Motion::Off);
+    ui.configure(&ttf, &creator, &theme, None).unwrap();
+    let mut status =
+        crate::status::Status::new(Some(std::path::Path::new("/nonexistent")), Instant::now());
+    status.clock = "14:32".into();
+    status.wifi = crate::status::Wifi::Connected;
+    status.battery = Some(crate::status::Battery {
+        percent: 87,
+        charging: false,
+    });
+    ui.status = Some(status);
+    let shelf = Shelf::new();
+    let mut app = crate::state::App::new(10);
+    app.set_view(&theme.view(&theme.active_view));
+    let mut page = ready();
+    page.open(Page::Appearance);
+    page.open(Page::Toasts);
+    page.cursor = 2;
+    let save = |ui: &mut Ui, name: String| {
+        let pixels = ui
+            .canvas
+            .read_pixels(None, sdl2::pixels::PixelFormatEnum::RGBA32)
+            .unwrap();
+        image::save_buffer(
+            output.join(format!("{name}-{width}x{height}.png")),
+            &pixels,
+            width,
+            height,
+            image::ColorType::Rgba8,
+        )
+        .unwrap();
+    };
+    // Pushed this long ago: the time bars part spent.
+    let ago = |ms| {
+        Instant::now()
+            .checked_sub(Duration::from_millis(ms))
+            .unwrap()
+    };
+    let languages =
+        std::env::var("ARCHR_SETTINGS_CAPTURE_LANGUAGES").unwrap_or_else(|_| "pt_BR,en".into());
+    for language in languages.split(',') {
+        ui.catalog = I18n::load(std::path::Path::new("/nonexistent"), Some(language), None);
+        let text = |key: &str| ui.catalog.text(key);
+        let joined =
+            Toast::new(Kind::Done, Category::Network, text("toast.wifi_joined")).detail("Casa_5G");
+        let failed = Toast::new(Kind::Error, Category::Errors, text("toast.scrape_failed"))
+            .detail(text("settings.scrape_quota"));
+        let found = Toast::new(
+            Kind::Info,
+            Category::Updates,
+            ui.catalog
+                .plural("updates.available", 3., &[("count", "3")]),
+        )
+        .detail(ui.catalog.format(
+            "updates.card",
+            &[("version", "3.0.3"), ("channel", &text("updates.stable"))],
+        ));
+        let long = Toast::new(Kind::Info, Category::Storage, "Cópia de segurança concluída")
+            .detail("12 jogos salvos e 340 capturas de tela copiados para o cartão SD na pasta backups/2026-11-16, prontos para levar ao PC");
+        for (name, toasts, left) in [
+            ("toast-systems", vec![(joined.clone(), 1500)], false),
+            (
+                "toast-stack",
+                vec![(failed.clone(), 2500), (found.clone(), 600)],
+                false,
+            ),
+            ("toast-left", vec![(long, 900), (joined, 300)], true),
+        ] {
+            ui.toasts = Default::default();
+            ui.toasts.prefs.left = left;
+            ui.toasts.prefs.show = [true; 4];
+            for (toast, at) in toasts {
+                ui.toasts.push(toast, ago(at));
+            }
+            for _ in 0..2 {
+                ui.snap_animations();
+                ui.draw_with_settings(&app, &shelf, &theme, Default::default(), None)
+                    .unwrap();
+            }
+            save(&mut ui, format!("{name}-{language}"));
+        }
+        ui.toasts = Default::default();
+        for _ in 0..2 {
+            ui.snap_animations();
+            ui.draw_with_settings(&app, &shelf, &theme, Default::default(), Some(&page))
+                .unwrap();
+        }
+        save(&mut ui, format!("toast-settings-{language}"));
+    }
+}

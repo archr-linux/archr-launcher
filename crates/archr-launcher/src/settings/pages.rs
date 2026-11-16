@@ -395,6 +395,13 @@ impl Backend {
                 | Id::ModulesAuto
                 | Id::ResumeBoot
                 | Id::ResumeWait
+                | Id::Toasts
+                | Id::ToastsPosition
+                | Id::ToastsDuration
+                | Id::ToastsUpdates
+                | Id::ToastsNetwork
+                | Id::ToastsStorage
+                | Id::ToastsErrors
                 | Id::SwitcherCount
                 | Id::ResumeStandalone
                 | Id::BatteryCritical

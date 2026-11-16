@@ -182,6 +182,7 @@ impl Backend {
             Page::Region,
             Page::Resume,
             Page::Power,
+            Page::Toasts,
         ]
         .iter()
         .flat_map(|page| page.rows().iter().map(|row| row.id))
