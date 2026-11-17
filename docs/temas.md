@@ -651,6 +651,92 @@ lista de jogos em grade com a faixa de sistemas, use `list.mark = "grid"` e
 `strip` em `[view.<id>.games]` (veja [Visualizações](#visualizações)). O tema de
 teste `crates/archr-ui/tests/themes/prateleiras/` liga tudo isso.
 
+## Uma tabela por tela
+
+Desde a 3.1 cada tela pode ter uma tabela no topo do `theme.toml`, fora de
+`[view]` (vale para todas as visualizações). Tudo é opcional e herda do tema
+padrão; chave desconhecida ou valor errado gera aviso no log e fica o padrão.
+Um tema sem essas tabelas desenha exatamente como antes.
+
+### Posições das telas
+
+`[details]`, `[achievements]`, `[saves]`, `[shots]`, `[switcher]`, `[resume]` e
+`[start]` reúnem os retângulos que já existiam soltos no topo. As chaves
+antigas continuam valendo; se as duas formas aparecem, vale a da tabela.
+
+| tabela e chave | chave antiga |
+|---|---|
+| `[details]` `shot`, `info`, `title`, `subtitle`, `text`, `actions` | `details_shot` ... `details_actions` |
+| `[achievements]` `progress`, `list` | `achievements_progress`, `achievements_list` |
+| `[saves]` `list`, `preview` | `saves_list`, `saves_card` |
+| `[shots]` `grid` | `shots_grid` |
+| `[switcher]` `card`, `side`, `info` | `switcher_card`, `switcher_side`, `switcher_info` |
+| `[resume]` `shot`, `info` | `resume_shot`, `resume_info` |
+| `[start]` `area`, `widgets` | `start_area`, `start_widgets` |
+
+```toml
+[saves]
+list = { x = 0.55, y = 0.12, w = 0.4, h = 0.7 }
+preview = { x = 0.05, y = 0.12, w = 0.47, h = 0.5 }
+```
+
+### Avisos: `[toast]`
+
+```toml
+[toast]
+position = "top"      # "top-left", "top" ou "top-right"; sem a chave, o canto que o usuário escolheu
+width = 0.75          # largura do cartão (tamanho, fração de 480; padrão 0,575 = 276 px)
+icon = "circle"       # "circle", "square" ou "none"
+style = "glass"       # "glass" (o vidro do tema) ou "plain"
+```
+
+Em `"top"` o aviso fica centralizado e desce do topo em vez de deslizar do
+lado.
+
+### Dicas de botões: `[hints]`
+
+```toml
+[hints]
+style = "capsule"     # "bar" (como sempre) ou "capsule": as dicas numa cápsula de vidro
+position = "right"    # "left", "center" ou "right"
+```
+
+Vale para o rodapé das telas de sistemas, jogos, detalhes e das prateleiras.
+Com a cápsula, use `divider = false` na visualização para tirar a linha acima
+do rodapé.
+
+### Relógio e bateria: `[status]`
+
+```toml
+[status]
+style = "glass"       # a pílula no vidro do tema
+battery = true        # false: sem a bateria
+radios = true         # false: sem os ícones de Wi-Fi e Bluetooth
+clock = "text"        # "mono" (padrão, discreto) ou "text": a hora na seminegrito, na cor do texto
+```
+
+### Perguntas: `[dialog]`
+
+```toml
+[dialog]
+width = 0.8           # largura (tamanho, fração de 480; padrão 1 = 480 px)
+radius = 0.04         # cantos
+icon = true           # um círculo com o ícone de alerta acima do texto, centralizado
+buttons = "row"       # "row": as respostas em botões lado a lado; "hints": as dicas, como sempre
+style = "glass"
+```
+
+Com `buttons = "row"` a resposta do A fica à direita, na cor de destaque;
+as outras à esquerda. Vale para as perguntas das Configurações (esquecer um
+aparelho, apagar, confirmar).
+
+### Grade de jogos com título
+
+Numa visualização com [prateleiras](#prateleiras), a grade de jogos
+(`list.mark = "grid"`) usa o título grande `home.heading`: o nome do sistema
+em `font_bold` e a posição ("4 de 213") à direita, no lugar da linha do
+cabeçalho.
+
 ## Detalhes do jogo
 
 A tela de detalhes (Y › Detalhes, na lista de jogos) põe cada bloco num
