@@ -358,6 +358,7 @@ log e fica o padrão; subchave desconhecida também só gera aviso.
 | `focus_ring` | `{ color, width }` | cor `accent`, 2 px | contorno do foco `"lift"`; `width` de 0 a 8 px de referência (`0` sem contorno) |
 | `motion` | `"tween"`, `"spring"` | `"tween"` | `"spring"`: tudo que anda segue uma mola criticamente amortecida, que assenta em 0,35 s sem passar do ponto e mantém a velocidade quando o destino muda no meio. Só com Animações Ligadas; Reduzidas e Desligadas seguem como sempre |
 | `gradient` | `{ from, to, angle }` | nenhum | fundo das telas de sistemas, jogos e detalhes em degradê, sob a imagem de fundo (se houver) |
+| `title_tracking` | -0,1 a 0,1 | `0` | espaço entre as letras dos títulos (texto de 20 px de referência para cima), em em: negativo aperta, como pede o texto grande (o Ellegance usa `-0.022`, perto do -0,02 em dos títulos grandes do iOS). O corpo do texto fica com o espaçamento da fonte |
 
 ```toml
 shadow_color = "#0A204080"
@@ -368,8 +369,17 @@ focus = "lift"
 focus_scale = 1.1
 focus_ring = { color = "#FFFFFF", width = 2 }
 motion = "spring"
+title_tracking = -0.02
 gradient = { from = "#1B2A4A", to = "#0A0F1C", angle = 90 }
 ```
+
+**Espaço entre letras**: o SDL_ttf não tem esse ajuste, então um título com
+`title_tracking` é desenhado letra a letra, cada uma onde a linha inteira a
+poria (com o kerning da fonte), deslocada pela sua parte do ajuste, e o
+resultado vira uma textura só, guardada como qualquer texto: nada é refeito a
+cada quadro. As medidas (encolher, quebrar, reticências) contam o ajuste,
+então o título sempre cabe onde foi medido. Fora das Configurações reformuladas
+por `[settings]`, as Configurações ficam sem ajuste.
 
 **Gradiente**: `from` e `to` são cores (aceitam transparência), `angle` em
 graus: `0` vai da esquerda para a direita, `90` de cima para baixo (o padrão é
@@ -642,6 +652,15 @@ recentes); Start abre o Menu Start. Na Início, B não faz nada; toda tela abert
 a partir das prateleiras volta para elas com B, e o launcher volta para elas
 depois de um jogo e ao fechar o Alternador.
 
+**Botões do destaque**: na aba Início, ↑ a partir da primeira prateleira leva o
+foco aos botões do destaque (`actions`: Continuar ou Jogar, Favorito, Mais; um
+sistema ou um app só tem Abrir). ← e → andam entre eles, A aperta o botão em
+foco (Continuar retoma de onde parou, Favorito marca ou desmarca, com a
+estrela em `warning` quando já é favorito, Mais abre o menu do jogo ao lado do
+botão), ↓ ou B voltam para a prateleira, e ao fechar o menu o foco volta ao
+mesmo botão. O botão em foco ganha o contorno `focus_ring`; a prateleira fica
+sem contorno enquanto isso.
+
 **Desenho**: as abas usam o [vidro](#sombra-vidro-foco-movimento-e-gradiente)
 do tema (ou o padrão), o título do destaque usa `font_bold`, e o item em foco
 segue `focus`: com `"lift"` ele cresce, ganha sombra e o contorno `focus_ring`;
@@ -665,20 +684,20 @@ tela é desenhada como sempre:
 
 | tabela | chave do estilo | o que muda |
 |---|---|---|
-| `[start]` | `style = "control"` | central de controle sobre a tela anterior desfocada |
-| `[menu]` | `style = "context"` | cartão ao lado do item em foco, com ações rápidas |
+| `[start]` | `style = "control"`, `tiles`, `shortcuts`, `clock` | central de controle sobre a tela anterior desfocada |
+| `[menu]` | `style = "context"`, `rect` | cartão ao lado do item em foco, com ações rápidas |
 | `[details]` | `style = "hero"` | destaque de tela cheia com a arte desfocada |
 | `[achievements]` | `progress = "ring"`, `style = "glass"` | anel de progresso, lista em vidro |
 | `[saves]` | `style = "preview"` | prévia grande e vagas em vidro |
 | `[shots]` | `sections = true`, `columns` | grade por data |
 | `[switcher]` | `cards = "depth"` | cartões em profundidade |
-| `[resume]` | `style = "title"` | título grande no meio |
-| `[search]` | `style = "field"` | campo e resultados em vidro, teclado encaixado |
+| `[resume]` | `style = "title"`, `progress`, `backdrop` | título grande no meio |
+| `[search]` | `style = "field"`, `field`, `results`, `dock` | campo e resultados em vidro, teclado encaixado |
 | `[keyboard]` | `sheet = true`, `key` | edição numa folha, teclas do tema |
 | `[dialog]` | `buttons = "row"`, `style` | perguntas em cápsulas, destrutivas em vermelho |
 | `[status]` | `rect` | onde fica a pílula do relógio |
 | `[osd]` | `style = "capsule"`, `position` | indicador de volume e brilho em cápsula de vidro ([OSD](#osd-de-volume-e-brilho-osd)) |
-| `[settings]` | `layout = "sidebar"`, `icon = "tile"`, `groups = "inset"` | Configurações em barra lateral, ícones em quadrados coloridos, linhas em grupos ([Configurações](#configurações-settings)) |
+| `[settings]` | `layout = "sidebar"`, `icon = "tile"`, `groups = "inset"`, `title = "below"` | Configurações em barra lateral, ícones em quadrados coloridos, linhas em grupos, título numa linha própria ([Configurações](#configurações-settings)) |
 
 O tema de teste `crates/archr-ui/tests/themes/prateleiras` usa todos; o teste
 `home_render` desenha cada tela em 640x480, 720x720 e 480x320
@@ -727,7 +746,10 @@ usuário, `lista` numa instalação nova. Por isso o Ellegance põe as
 prateleiras na própria `lista` e oferece a lista clássica como `classica`.
 
 O teste `home_render` desenha todas as telas do Ellegance nos três tamanhos
-e compara as de 640x480 com `tests/golden/ellegance-640x480`
+e compara todas as de 640x480 com `tests/golden/ellegance-640x480`, inclusive
+as que mostram datas e a barra de tempo de um aviso: o relógio do launcher
+fica parado num instante fixo em UTC (`Ui::pin_clock`) e cada quadro espera
+todas as imagens pedidas carregarem antes de ser guardado
 (`ARCHR_ELLEGANCE_CAPTURE_DIR=<pasta>` grava os PNGs;
 `ARCHR_GOLDEN_UPDATE=1` regrava as referências). O teste `shipped_themes`
 confere que todo tema de `themes/` carrega sem um aviso no log.
@@ -765,7 +787,10 @@ style = "glass"       # "glass" (o vidro do tema) ou "plain"
 ```
 
 Em `"top"` o aviso fica centralizado e desce do topo em vez de deslizar do
-lado.
+lado, como uma faixa por cima do cabeçalho (a 12 px do topo). Em `"glass"` o
+cartão tem a `surface` do tema por baixo do vidro (nada da tela aparece
+através do texto) e os cantos de `radius_card`. Vidro sobre uma tela
+escurecida (perguntas, a folha do teclado) leva a mesma base.
 
 ### Dicas de botões: `[hints]`
 
@@ -775,9 +800,11 @@ style = "capsule"     # "bar" (como sempre) ou "capsule": as dicas numa cápsula
 position = "right"    # "left", "center" ou "right"
 ```
 
-Vale para o rodapé das telas de sistemas, jogos, detalhes e das prateleiras.
-Com a cápsula, use `divider = false` na visualização para tirar a linha acima
-do rodapé.
+Vale para o rodapé das telas de sistemas, jogos, detalhes, das prateleiras,
+das conquistas, dos saves, das capturas e do alternador (e das perguntas
+dessas telas). Com a cápsula, use `divider = false` na visualização para tirar
+a linha acima do rodapé das telas de sistemas e jogos; nas outras ela some
+sozinha quando `[hints]` não é o padrão.
 
 ### Relógio e bateria: `[status]`
 
@@ -823,8 +850,16 @@ botão inteiro quando está em foco, só a palavra quando não está.
 style = "control"     # "tiles" (como sempre) ou "control": a central de controle
 radius = 0.054        # cantos dos blocos (tamanho, fração de 480; 26 px)
 shortcut = 0.108      # diâmetro dos atalhos redondos (52 px)
-clock = 0.092         # tamanho da hora (44 px)
+clock = 0.092         # tamanho da hora (44 px), ou o lugar com o tamanho dentro:
+# clock = { x = 0.05, y = 0.05, w = 0.9, h = 0.14, size = 0.09 }
+tiles = { x = 0.05, y = 0.25, w = 0.9, h = 0.28 }      # os três blocos lado a lado, da altura da caixa
+shortcuts = { x = 0.05, y = 0.57, w = 0.9, h = 0.12 }  # os atalhos centrados na caixa
 ```
+
+Sem `tiles`, `shortcuts` e `clock` em caixa, a central se monta a partir do
+topo como sempre; com elas, cada parte fica no seu retângulo (a rede e a
+bateria se alinham à direita da caixa da hora; o nome do item em foco fica
+logo abaixo dos atalhos).
 
 Com `"control"` o Menu Start abre sobre a tela de onde foi chamado, desfocada
 uma vez e escurecida: a hora grande no alto à esquerda com "Arch R" embaixo, a
@@ -848,11 +883,16 @@ anchor = "focus"      # "focus" (ao lado do item em foco) ou "center"
 width = 0.625         # largura do cartão (tamanho, fração de 480; 300 px)
 row = 0.079           # altura de uma linha (38 px)
 radius = 0.054        # cantos (26 px)
+# rect = { x = 0.25, y = 0.1, w = 0.5, h = 0.8 }   # o cartão nesta caixa (largura dela, altura até a dela)
 ```
+
+`rect` põe o cartão numa caixa fixa, por cima de `anchor` e `width`; a lista
+rola quando não cabe na altura da caixa.
 
 Com `"context"` o menu vira um cartão de vidro ao lado do item em foco (à
 direita dele se couber, senão à esquerda, embaixo ou em cima; sem espaço, no
-lado oposto da tela): o nome do jogo e "Sistema · ano" no alto; no menu de um
+lado oposto da tela; aberto dos detalhes ou dos botões do destaque, ao lado do
+botão em foco): o nome do jogo e "Sistema · ano" no alto; no menu de um
 jogo, Jogar (claro), Favorito (a estrela âmbar quando já é favorito) e Detalhes
 lado a lado, percorridos com ← → (↓ desce para as linhas, ↑ volta); depois as
 linhas com o ícone à esquerda, o valor (núcleo, MangoHud, quantos saves), a
@@ -878,8 +918,12 @@ ano · gênero · jogadores · desenvolvedora (os últimos saem quando não cabe
 descrição (rola como sempre), os botões Jogar (claro), Favorito e Buscar de
 novo (redondos; o em foco ganha o contorno de `focus_ring`) e "Jogado há …". A
 captura fica à direita, com sombra; embaixo, as capas dos jogos vizinhos do
-mesmo sistema. Os retângulos `shot`, `info`, `title`... não valem nesse
-estilo. Os botões e as dicas do rodapé são os de sempre.
+mesmo sistema. Título, descrição, botões e "Jogado há" formam um bloco
+centrado entre a cápsula e a prateleira: numa tela mais alta (720x720) as
+capas da prateleira param de crescer e o espaço vai para o destaque, sem
+abrir buraco entre a descrição e os botões. Os retângulos `shot`, `info`,
+`title`... não valem nesse estilo. Os botões e as dicas do rodapé são os de
+sempre.
 
 ### Busca: `[search]`
 
@@ -888,6 +932,9 @@ estilo. Os botões e as dicas do rodapé são os de sempre.
 style = "field"       # "plain" (como sempre) ou "field"
 row = 0.079           # altura de um resultado (tamanho, fração de 480; 38 px)
 height = 0.083        # altura do campo (40 px)
+field = { x = 0.0375, y = 0.1, w = 0.925, h = 0.083 }    # o campo (padrão: sob o cabeçalho)
+results = { x = 0.0375, y = 0.2, w = 0.925, h = 0.3 }    # a caixa dos resultados
+dock = "bottom"       # "bottom" (padrão): teclado na borda de baixo; "results": logo abaixo dos resultados
 ```
 
 Com `"field"` o campo vira uma cápsula de vidro com a lupa, o texto, o cursor
@@ -895,6 +942,15 @@ e "N de TOTAL" dentro, contornada na cor de destaque enquanto se digita; os
 resultados ficam num grupo de vidro, cada um com a capa, o nome com o termo
 buscado em `font_bold` e o sistema (ou a pasta) à direita; o teclado fica
 encaixado embaixo, numa folha de vidro. As teclas seguem `[keyboard]`.
+
+Sem `results`, os resultados vão de logo abaixo do campo até o teclado, e as
+linhas crescem até 40 % numa tela mais alta, para cinco delas ocuparem o
+espaço sem deixar um vão. Com `dock = "results"` o teclado fica num cartão
+de vidro logo abaixo da caixa dos resultados (ou de cinco linhas, sem
+`results`) e não muda de lugar enquanto se digita. Em letra pequena (texto de
+11 px ou menos na tela), o negrito do termo fica tão fino quanto o resto, e
+o resto do nome passa para `text_secondary`, para o termo continuar à
+frente.
 
 ### Teclado na tela: `[keyboard]`
 
@@ -911,6 +967,11 @@ regra, o campo em cápsula e as teclas; nas teclas, a em foco fica clara (cor
 `text`, letra `background`), a de confirmar na cor de destaque e as outras
 em vidro. B continua cancelando e START confirmando, como dizem as dicas.
 `key` vale também sem a folha, e para o teclado da busca.
+
+A folha tem a altura do que leva (título, campo e teclas) e fica encaixada
+embaixo, sobre a página de onde veio, escurecida; numa tela mais alta ela
+não estica, a página continua visível acima. O Ellegance aumenta as teclas em
+`[aspect.square.keyboard]` para a tela quadrada.
 
 ### OSD de volume e brilho: `[osd]`
 
@@ -974,6 +1035,7 @@ sidebar = { x = 0.022, w = 0.334, style = "glass", title = 0.046 }
 row = 0.075           # altura de uma entrada da raiz, tamanho de 480 (padrão 36 px)
 icon = "tile"         # "plain" (padrão) ou "tile": ícone branco em quadrado colorido
 groups = "inset"      # "flat" (padrão) ou "inset": linhas em grupos arredondados
+title = "below"       # "beside" (padrão): título ao lado da cápsula; "below": numa linha própria
 
 [settings.icon_colors]  # cor do quadrado de cada página (só com icon = "tile")
 network = "#0A84FF"
@@ -1008,6 +1070,17 @@ sound = "#FF375F"
   branco. A lista de escolhas (painel ao lado da linha e a página de
   escolhas longas) segue o mesmo desenho: cantos de 14 px e regras entre as
   escolhas. Linhas novas de qualquer página entram nos grupos sozinhas.
+  No Wi-Fi, o interruptor e a rede conectada formam um grupo, "REDES" vem
+  em cima das outras (com um indicador girando enquanto a busca roda), e
+  Serviços de rede, Bluetooth e Adaptadores USB ficam num grupo à parte.
+- `title = "below"` (só com `layout = "sidebar"`): o título da página fica
+  grande (28 px, `font_bold`, com `title_tracking`) numa linha própria
+  embaixo da cápsula "‹ <página de cima>", alinhado com o texto das linhas.
+  A página inteira desce o tamanho dessa linha (36 px) e termina onde sempre
+  terminou, então qualquer página de linhas, inclusive as novas, se ajusta
+  sozinha. As páginas montadas até o rodapé (loja de temas e de módulos,
+  atualizações, informações, BIOS, atalhos, teste do controle, coleta de
+  artes, conquistas, teclado) mantêm o título ao lado da cápsula.
 
 Com `layout = "sidebar"` ou `groups = "inset"`, a linha em foco deixa de ser
 preenchida pela cor de destaque: fica um painel claro translúcido com o anel
@@ -1023,8 +1096,10 @@ O tema de teste `prateleiras` usa a barra lateral, os quadrados e os grupos;
 the_sidebar_theme` grava a raiz, Wi-Fi, Serviços de rede, Jogos, Som e tela e
 as duas listas de escolhas em 640x480, 720x720 e 480x320.
 O mesmo para o Ellegance: `ARCHR_ELLEGANCE_CAPTURE_DIR=<pasta> cargo test
--p archr-ui --lib ellegance_draws_settings` (a raiz, Jogos, Serviços de rede e
-a lista de núcleos em 640x480 são referências em `tests/golden/ellegance-640x480`).
+-p archr-ui --lib ellegance_draws_settings` (a raiz, Jogos, Serviços de rede,
+Wi-Fi buscando e vazio, a senha e a lista de núcleos em 640x480 são referências
+em `tests/golden/ellegance-640x480`). Com `ARCHR_SETTINGS_EVERY=1` o mesmo
+teste desenha todas as páginas, para revisar.
 
 ### Grade de jogos com título
 
@@ -1262,6 +1337,8 @@ info = { x = 0.0, y = 0.74, w = 1.0, h = 0.14 }
 
 [resume]
 style = "title"       # "picture" (como sempre) ou "title"
+progress = { x = 0.3, y = 0.9, w = 0.4, h = 0.008 }   # onde fica a barra da contagem
+backdrop = { blur = 0.075, opacity = 0.5 }            # a imagem do jogo atrás
 ```
 
 Com `cards = "depth"` o cartão do jogo selecionado fica no retângulo `card`,
@@ -1275,6 +1352,12 @@ Com `style = "title"` a retomada ao ligar mostra, no meio da tela e sobre a
 imagem do jogo desfocada, "Voltando para", o nome grande em `font_bold`, o
 sistema e quando foi salvo, uma barra fina com a contagem e os dois botões.
 `shot` e `info` não valem nesse estilo.
+
+`progress` põe a barra da contagem num retângulo (sem ele, embaixo do texto;
+os botões continuam embaixo do texto). `backdrop` escolhe a imagem do jogo
+atrás da tela: `blur` (tamanho, fração de 480; `0` deixa nítida) e `opacity`
+(0 a 1, quanto ela aparece através do fundo). Sem `backdrop`, o estilo
+`"title"` desfoca como o vidro do tema e o `"picture"` não põe imagem atrás.
 
 ## Movendo as ROMs
 
