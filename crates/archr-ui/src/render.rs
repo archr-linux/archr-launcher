@@ -479,6 +479,8 @@ pub struct Ui<'font, 'texture> {
     soft: crate::primitives::SoftLook,
     /// The theme's `title_tracking` (em) while drawing its screens.
     tracking: f32,
+    /// A clock that stands still (`pin_clock`): captures and tests only.
+    pinned: Option<(Instant, u64)>,
     pixel_art: bool,
     /// The list cursor's blink phase as last drawn; None when nothing blinks.
     blink: Option<bool>,
@@ -604,6 +606,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             shadow_style: ShadowStyle::Soft,
             soft: Default::default(),
             tracking: 0.,
+            pinned: None,
             pixel_art: false,
             blink: None,
             effects: effects::Effects::default(),
@@ -654,7 +657,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         mut prepared: PreparedText<'font>,
         root: Option<&Path>,
     ) -> Result<(), String> {
-        self.frame = Frame::from_size(self.canvas.output_size()?);
+        self.frame = self.fresh_frame()?;
         self.frame.text = self.text_scale;
         self.creator = Some(creator);
         self.root = root.map(Path::to_path_buf);
@@ -672,6 +675,29 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         self.status = Some(Status::new(root, Instant::now()));
         startup_phase!(self.startup, "status initialization");
         Ok(())
+    }
+    /// Draws from now on as at `now`, `unix` seconds since the epoch: what
+    /// prints a date or runs a timer comes out the same on every run, and
+    /// nothing times out. For captures and tests.
+    pub fn pin_clock(&mut self, now: Instant, unix: u64) {
+        self.pinned = Some((now, unix));
+    }
+    /// The console pictures the screens asked for have all loaded: a
+    /// capture taken now shows them. For captures and tests.
+    pub fn pictures_idle(&self) -> bool {
+        self.art.as_ref().is_none_or(SystemArt::idle)
+    }
+    /// The time this frame is drawn at: now, or the pinned clock.
+    fn now(&self) -> Instant {
+        self.pinned.map_or_else(Instant::now, |(now, _)| now)
+    }
+    /// This frame's screen and time.
+    fn fresh_frame(&self) -> Result<Frame, String> {
+        let mut frame = Frame::from_size(self.canvas.output_size()?);
+        if let Some((now, unix)) = self.pinned {
+            (frame.now, frame.unix) = (now, unix);
+        }
+        Ok(frame)
     }
     /// Replaces the status bar's source (see `Status::frozen`).
     pub fn set_status(&mut self, status: Status) {
@@ -743,15 +769,16 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         self.ensure_art();
         let art = self.art.as_mut().is_some_and(SystemArt::tick);
         let store = self.store_tick();
-        let status = self.status.as_mut().is_some_and(|s| s.poll(Instant::now()));
+        let now = self.now();
+        let status = self.status.as_mut().is_some_and(|s| s.poll(now));
         if let Some(card) = self.status.as_mut().and_then(Status::take_announcement) {
             self.dongle = Some(card);
         }
         let blink = self
             .blink
-            .is_some_and(|on| on != self.blink_on(Instant::now()));
+            .is_some_and(|on| on != self.blink_on(now));
         let look = self.look_tick();
-        let toasts = self.toasts.tick(Instant::now());
+        let toasts = self.toasts.tick(now);
         created || art || store || status || blink || look || toasts
     }
     /// Loads what the theme store page asked for, sized for its largest box.
@@ -1031,7 +1058,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         art: Art<'_, '_>,
         settings: Option<&crate::settings::Settings>,
     ) -> Result<(), String> {
-        self.frame = Frame::from_size(self.canvas.output_size()?);
+        self.frame = self.fresh_frame()?;
         self.frame.text = self.text_scale;
         let now = self.frame.now;
         self.canvas.set_draw_color(color(theme.background));

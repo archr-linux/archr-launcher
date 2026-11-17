@@ -339,6 +339,10 @@ impl<'a> CoverCache<'a> {
 
     /// Forget decoded covers, including "no cover" results, after art changed
     /// on disk. Thumbnails on disk are keyed by source mtime and stay valid.
+    /// Nothing asked for is still loading.
+    pub fn idle(&self) -> bool {
+        self.pending.is_empty()
+    }
     pub fn clear(&mut self) {
         self.textures.clear();
         self.stale.extend(self.pending.drain());

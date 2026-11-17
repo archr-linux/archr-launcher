@@ -45,7 +45,7 @@ impl Ui<'_, '_> {
         step: u32,
         theme: &Theme,
     ) -> Result<(), String> {
-        self.frame = Frame::from_size(self.canvas.output_size()?);
+        self.frame = self.fresh_frame()?;
         (self.frame.font, self.frame.grid, self.frame.min) =
             (theme.font_scale, theme.font_grid, theme.font_min);
         if let Some(status) = &mut self.status {

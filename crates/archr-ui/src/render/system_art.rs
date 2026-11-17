@@ -203,6 +203,10 @@ impl<'a> SystemArt<'a> {
         self.covers.request_candidates(&self.wanted);
         self.covers.poll()
     }
+    /// Every console picture asked for has loaded (or failed to).
+    pub(super) fn idle(&self) -> bool {
+        self.covers.idle()
+    }
 }
 
 fn has_picture(name: &str) -> bool {

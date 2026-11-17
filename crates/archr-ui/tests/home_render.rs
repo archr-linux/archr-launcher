@@ -24,13 +24,42 @@ const SIZES: [(u32, u32); 3] = [(640, 480), (720, 720), (480, 320)];
 static SDL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// One theme drawn on every screen: where its pictures go, the 640x480
-/// frames kept for the golden comparison, and the time games were played
-/// (fixed relative to now, so "2 days ago" reads the same every day).
+/// frames kept for the golden comparison, and the time games were played.
+/// Every frame is drawn at `NOW` (the launcher's clock pinned, in UTC), so
+/// what prints a date or runs a timer reads the same on every run.
 struct Run {
     theme: Theme,
     out: Option<PathBuf>,
     keep: Option<Vec<(String, Vec<u8>)>>,
     played: u64,
+}
+/// 2026-11-17 12:00 UTC: the moment every frame is drawn at.
+const NOW: u64 = 1_794_916_800;
+/// The launcher's clock stopped at `NOW` in UTC, and `instant` standing for
+/// it: toasts are pushed against it.
+fn pin(ui: &mut Ui, instant: std::time::Instant) {
+    extern "C" {
+        fn tzset();
+    }
+    std::env::set_var("TZ", "UTC");
+    // SAFETY: tzset only re-reads TZ; the tests that draw run one at a
+    // time (SDL), and nothing else reads the zone meanwhile.
+    unsafe { tzset() };
+    ui.pin_clock(instant, NOW);
+}
+/// Draws until every picture asked for has loaded, so a frame never
+/// depends on how fast the workers were: `draw` asks, polls and draws, and
+/// says whether its caches are idle.
+fn settle(mut draw: impl FnMut() -> bool) {
+    for round in 0..400 {
+        if draw() && round >= 2 {
+            // Once more over what the last poll brought in.
+            draw();
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    panic!("pictures never finished loading");
 }
 
 /// A library with an app (API 4) beside the systems.
@@ -143,12 +172,6 @@ fn ellegance() -> Theme {
         "lista",
     )
 }
-fn now() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs()
-}
 #[test]
 fn the_test_theme_asks_for_the_capsule_osd() {
     use archr_ui::screens::{OsdEdge, OsdShape};
@@ -199,11 +222,9 @@ fn the_shelves_fit_and_draw_at_every_size() {
 }
 
 /// Ellegance (themes/ellegance) on every screen at the three sizes, and its
-/// 640x480 frames pixel for pixel against tests/golden/ellegance-640x480.
-/// Frames that print a date (saves, captures), a running timer (the toast,
-/// and the question drawn under it) or blur the screen as the picture
-/// workers left it (the Start menu) are drawn and checked for fit, not
-/// compared.
+/// 640x480 frames pixel for pixel against tests/golden/ellegance-640x480:
+/// every one, those that print dates or run a timer too (the clock is
+/// pinned, the pictures loaded before each frame is kept).
 #[test]
 fn ellegance_draws_every_screen() {
     let _sdl = SDL.lock().unwrap_or_else(|e| e.into_inner());
@@ -211,7 +232,7 @@ fn ellegance_draws_every_screen() {
         theme: ellegance(),
         out: std::env::var_os("ARCHR_ELLEGANCE_CAPTURE_DIR").map(PathBuf::from),
         keep: Some(Vec::new()),
-        played: now() - 2 * 86_400,
+        played: NOW - 2 * 86_400,
     };
     assert_eq!(run.theme.name.get("en"), Some("Ellegance"));
     assert!(run.theme.font_bold.is_some(), "Ellegance ships Inter Bold");
@@ -219,16 +240,8 @@ fn ellegance_draws_every_screen() {
     every_screen_table_draws_at_every_size(&mut run);
     let golden = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/ellegance-640x480");
     let update = std::env::var_os("ARCHR_GOLDEN_UPDATE").is_some();
-    let undated = |name: &str| {
-        !["aviso", "dialogo", "saves", "capturas", "start"]
-            .iter()
-            .any(|dated| name.contains(dated))
-    };
     let mut changed = Vec::new();
     for (name, pixels) in run.keep.take().unwrap() {
-        if !undated(&name) {
-            continue;
-        }
         let path = golden.join(format!("{name}.png"));
         if update {
             std::fs::create_dir_all(&golden).unwrap();
@@ -260,7 +273,6 @@ fn shelves_draw(run: &mut Run) {
     std::env::set_var("SDL_VIDEODRIVER", "offscreen");
     let out = run.out.clone();
     let mut keep = run.keep.take();
-    let steady = keep.is_some();
     let data = library(run.played);
     for size in SIZES {
         let theme = run.theme.fitted(size.0, size.1);
@@ -289,6 +301,8 @@ fn shelves_draw(run: &mut Run) {
         ui.configure(&ttf, &creator, &theme, Some(root.path()))
             .unwrap();
         ui.set_status(archr_ui::status::Status::frozen("14:32"));
+        let instant = std::time::Instant::now();
+        pin(&mut ui, instant);
         let mut app = App::new(10);
         app.set_view(&view);
         app.recent = recent(run.played);
@@ -306,9 +320,8 @@ fn shelves_draw(run: &mut Run) {
         let mut covers =
             archr_ui::covers::CoverCache::new(&creator, root.path().join("covers"), 320, 240);
         let mut shot = |ui: &mut Ui, name: &str, app: &App, settings: Option<&Settings>| {
-            // Pictures load on workers: with captures, wait for them.
-            let rounds = if out.is_some() || steady { 40 } else { 2 };
-            for _ in 0..rounds {
+            // Pictures load on workers: wait for every one of them.
+            settle(|| {
                 let (cover_paths, picture_paths) = app.home_paths(&data);
                 covers.request(&cover_paths);
                 pictures.request(&picture_paths);
@@ -324,10 +337,8 @@ fn shelves_draw(run: &mut Run) {
                 };
                 ui.draw_with_settings(app, &data, &theme, art, settings)
                     .unwrap();
-                if rounds > 2 {
-                    std::thread::sleep(std::time::Duration::from_millis(25));
-                }
-            }
+                covers.idle() && pictures.idle() && ui.pictures_idle()
+            });
             let pixels = ui
                 .canvas
                 .read_pixels(None, sdl2::pixels::PixelFormatEnum::RGBA32)
@@ -378,10 +389,12 @@ fn shelves_draw(run: &mut Run) {
         shot(&mut ui, "favoritos-menu", &app, None);
         // [toast]: a notice at the top, on glass.
         app.handle(Button::B, &data);
+        // Pushed a second and a half before the pinned clock: its timer
+        // stands at the same place on every run.
         ui.toasts.push(
             Toast::new(Kind::Info, Category::Updates, "Atualização disponível")
                 .detail("3 pacotes do sistema estão prontos para instalar."),
-            std::time::Instant::now(),
+            instant - std::time::Duration::from_millis(1500),
         );
         shot(&mut ui, "aviso", &app, None);
         // [dialog]: a question with its icon and answers side by side.
@@ -433,7 +446,6 @@ fn every_screen_table_draws_at_every_size(run: &mut Run) {
     std::env::set_var("SDL_VIDEODRIVER", "offscreen");
     let out = run.out.clone();
     let mut keep = run.keep.take();
-    let steady = keep.is_some();
     let root = tempfile::tempdir().unwrap();
     let pictures_at: Vec<PathBuf> = [
         [70, 40, 160],
@@ -459,10 +471,7 @@ fn every_screen_table_draws_at_every_size(run: &mut Run) {
         kirby.details.screenshot = Some(pictures_at[1].clone());
     }
     // Pictures of this week and before (the sections of [shots]).
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
+    let now = NOW;
     let saves: Vec<Save> = (0..4)
         .map(|n| Save {
             path: root.path().join(format!("state{n}")),
@@ -521,6 +530,7 @@ fn every_screen_table_draws_at_every_size(run: &mut Run) {
         ui.configure(&ttf, &creator, &theme, Some(root.path()))
             .unwrap();
         ui.set_status(archr_ui::status::Status::frozen("14:32"));
+        pin(&mut ui, std::time::Instant::now());
         let mut covers =
             archr_ui::covers::CoverCache::new(&creator, root.path().join("covers"), 320, 240);
         let mut thumbs =
@@ -528,9 +538,8 @@ fn every_screen_table_draws_at_every_size(run: &mut Run) {
         let mut pictures =
             archr_ui::covers::CoverCache::new(&creator, root.path().join("big"), size.0, size.1);
         let mut shot = |ui: &mut Ui, name: &str, app: &App, settings: Option<&Settings>| {
-            let rounds = if out.is_some() || steady { 40 } else { 2 };
             let wanted: Vec<PathBuf> = pictures_at.clone();
-            for _ in 0..rounds {
+            settle(|| {
                 let (small, large) = app.progress_paths();
                 covers.request(&wanted);
                 thumbs.request(&small);
@@ -553,10 +562,8 @@ fn every_screen_table_draws_at_every_size(run: &mut Run) {
                 };
                 ui.draw_with_settings(app, &data, &theme, art, settings)
                     .unwrap();
-                if rounds > 2 {
-                    std::thread::sleep(std::time::Duration::from_millis(20));
-                }
-            }
+                covers.idle() && thumbs.idle() && pictures.idle() && ui.pictures_idle()
+            });
             let pixels = ui
                 .canvas
                 .read_pixels(None, sdl2::pixels::PixelFormatEnum::RGBA32)
