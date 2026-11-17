@@ -171,6 +171,32 @@ impl Default for DetailsStyle {
     }
 }
 
+/// A game's achievements: the progress as a bar (as always) or a ring with
+/// the count inside; the list's rows, badges and its group of glass.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AchievementsStyle {
+    pub ring: bool,
+    /// The list in a rounded group of glass.
+    pub glass: bool,
+    /// Sizes (of 480): a row, the gap between rows, a badge and its corners.
+    pub row: f32,
+    pub gap: f32,
+    pub badge: f32,
+    pub badge_radius: f32,
+}
+impl Default for AchievementsStyle {
+    fn default() -> Self {
+        Self {
+            ring: false,
+            glass: false,
+            row: 50. / 480.,
+            gap: 2. / 480.,
+            badge: 36. / 480.,
+            badge_radius: 8. / 480.,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Screens {
     pub toast: ToastStyle,
@@ -180,6 +206,7 @@ pub struct Screens {
     pub start: StartStyle,
     pub menu: MenuStyle,
     pub details: DetailsStyle,
+    pub achievements: AchievementsStyle,
 }
 
 /// Rectangles the screen tables place, as (table, key, old loose key).
@@ -227,6 +254,8 @@ pub(crate) fn flatten(table: &mut Table) {
             .get(*screen)
             .and_then(Value::as_table)
             .and_then(|t| t.get(*key))
+            // A word (`progress = "ring"`) is a style, not a place.
+            .filter(|v| v.is_table())
             .cloned();
         if let Some(rect) = rect {
             if table.contains_key(*old) {
@@ -263,6 +292,7 @@ fn style_keys(screen: &str) -> &'static [&'static str] {
         "start" => &["style", "radius", "shortcut", "clock"],
         "menu" => &["style", "anchor", "width", "row", "radius"],
         "details" => &["style", "shelf"],
+        "achievements" => &["style", "row", "gap", "badge", "badge_radius"],
         _ => &[],
     }
 }
@@ -383,6 +413,40 @@ impl Screens {
                 &[("panels", false), ("hero", true)],
             );
             own.details.shelf = r.flag("shelf", own.details.shelf);
+        }
+        if let Some(t) = get("achievements") {
+            let r = Reader("achievements", t);
+            // `progress` is the bar's place, or a word, or a place with
+            // its `style`.
+            let progress = match t.get("progress") {
+                Some(Value::Table(at)) => {
+                    at.get("style").map(|_| Reader("achievements.progress", at))
+                }
+                Some(_) => Some(Reader("achievements", t)),
+                None => None,
+            };
+            let key = if matches!(t.get("progress"), Some(Value::Table(_))) {
+                "style"
+            } else {
+                "progress"
+            };
+            if let Some(progress) = progress {
+                own.achievements.ring = progress.pick(
+                    key,
+                    own.achievements.ring,
+                    &[("bar", false), ("ring", true)],
+                );
+            }
+            own.achievements.glass = r.pick(
+                "style",
+                own.achievements.glass,
+                &[("plain", false), ("glass", true)],
+            );
+            let a = &mut own.achievements;
+            a.row = r.number("row", a.row, 0.06, 0.2);
+            a.gap = r.number("gap", a.gap, 0., 0.05);
+            a.badge = r.number("badge", a.badge, 0.03, 0.15);
+            a.badge_radius = r.number("badge_radius", a.badge_radius, 0., 0.075);
         }
         own
     }
@@ -510,6 +574,25 @@ mod tests {
                 .rect,
             None,
             "off the screen: the header's"
+        );
+    }
+    #[test]
+    fn the_achievements_progress_is_a_place_a_word_or_both() {
+        let own = read("[achievements]\nprogress = 'ring'\nrow = 0.1");
+        assert!(own.achievements.ring);
+        assert_eq!(own.achievements.row, 0.1);
+        let mut table: Table = toml::from_str(
+            "[achievements]\nprogress = { x = 0.1, y = 0.1, w = 0.8, h = 0.2, style = 'ring' }",
+        )
+        .unwrap();
+        flatten(&mut table);
+        assert_eq!(table["achievements_progress"]["h"].as_float(), Some(0.2));
+        assert!(Screens::read(&table, Screens::default()).achievements.ring);
+        let mut table: Table = toml::from_str("[achievements]\nprogress = 'ring'").unwrap();
+        flatten(&mut table);
+        assert!(
+            !table.contains_key("achievements_progress"),
+            "a word is no place"
         );
     }
     #[test]

@@ -921,6 +921,29 @@ de conquista bloqueada sem imagem, `muted` nas descrições e nos pontos.
 Conquistas bloqueadas aparecem esmaecidas. Títulos e descrições vêm do
 RetroAchievements: o título encolhe até 12 px e a descrição quebra em duas
 linhas menores antes de ser cortada.
+
+### `[achievements]`: anel e grupo de vidro
+
+```toml
+[achievements]
+progress = { x = 0.05, y = 0.11, w = 0.9, h = 0.18, style = "ring" }
+list = { x = 0.05, y = 0.32, w = 0.9, h = 0.56 }
+style = "glass"       # a lista num grupo arredondado de vidro
+row = 0.1             # altura de uma linha (tamanho, fração de 480; padrão 50 px)
+gap = 0               # espaço entre linhas (padrão 2 px)
+badge = 0.075         # lado do selo (padrão 36 px)
+badge_radius = 0.02   # cantos do selo (padrão 8 px)
+```
+
+`progress` é o retângulo, a palavra (`progress = "ring"`, no retângulo
+herdado) ou os dois (`style` dentro do retângulo); `"bar"` é a barra de sempre.
+Com `"ring"`: um anel de progresso com "2/7" dentro, o nome do jogo grande em
+`font_bold`, a contagem e os pontos e, no modo hardcore, a cápsula "Hardcore"
+na cor `warning`; dê ao retângulo altura para o anel (até 84 px). Com
+`style = "glass"` (ou com o anel) as conquistas bloqueadas mostram um cadeado
+no lugar do troféu e o selo baixado aparece esmaecido; a linha em foco ganha
+um fundo claro e as outras são separadas por fios.
+
 ## Saves e capturas do jogo
 
 As telas Saves e Screenshots (Y › Saves ou Y › Screenshots, na lista de
