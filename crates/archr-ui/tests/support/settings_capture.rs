@@ -3933,3 +3933,77 @@ fn capture_toasts() {
         save(&mut ui, format!("toast-settings-{language}"));
     }
 }
+
+/// The test theme's Settings (tests/themes/prateleiras, `[settings]`
+/// sidebar, tiles and groups): the root, pages with switches and lists, and
+/// both forms of the picker draw at 640x480, 720x720 and 480x320, the root
+/// as a sidebar. ARCHR_SETTINGS_THEMED_DIR keeps the pictures.
+#[test]
+fn the_sidebar_theme_draws_settings_on_every_screen() {
+    let _sdl = crate::SDL_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    std::env::set_var("SDL_VIDEODRIVER", "offscreen");
+    let out = std::env::var_os("ARCHR_SETTINGS_THEMED_DIR").map(std::path::PathBuf::from);
+    let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let default = Theme::load(&manifest.join("../../themes/default"));
+    let base = Theme::load_over(&manifest.join("tests/themes/prateleiras"), &default);
+    assert!(base.screens.settings.sidebar && base.screens.settings.inset);
+    let mut root = ready();
+    root.cursor = 1;
+    let mut states = vec![("raiz", root)];
+    let wanted = ["wifi", "services", "games", "sound-sliding"];
+    states.extend(pages().into_iter().filter(|(n, _)| wanted.contains(n)));
+    let picks = ["list-games-core", "list-timezone"];
+    states.extend(lists().into_iter().filter(|(n, _)| picks.contains(n)));
+    assert_eq!(states.len(), 7, "every state found");
+    let ttf = sdl2::ttf::init().unwrap();
+    for (w, h) in [(640, 480), (720, 720), (480, 320)] {
+        let creator;
+        let mut ui = Ui::new(w, h, true).unwrap();
+        creator = ui.canvas.texture_creator();
+        let theme = base.fitted(w, h);
+        ui.set_motion(crate::motion::Motion::Off);
+        ui.configure(&ttf, &creator, &theme, None).unwrap();
+        ui.catalog = I18n::load(std::path::Path::new("/nonexistent"), Some("pt_BR"), None);
+        let mut status = crate::status::Status::new(None, Instant::now());
+        status.clock = "14:32".into();
+        ui.status = Some(status);
+        for (name, state) in &states {
+            for _ in 0..2 {
+                ui.canvas.set_draw_color(color(theme.background));
+                ui.canvas.clear();
+                ui.settings_page(state, &theme).unwrap();
+                ui.snap_animations();
+            }
+            let pixels = ui
+                .canvas
+                .read_pixels(None, sdl2::pixels::PixelFormatEnum::RGBA32)
+                .unwrap();
+            if *name == "raiz" {
+                // The sidebar's glass stands apart from the background.
+                let scale = ui.frame.scale;
+                let stage = (w as f32 - 640. * scale) / 2.;
+                let x = (stage + 40. * scale) as usize;
+                let y = (h / 2) as usize;
+                let at = (y * w as usize + x) * 4;
+                let bg = theme.background;
+                assert_ne!(
+                    &pixels[at..at + 3],
+                    &[bg.r, bg.g, bg.b],
+                    "sidebar at {w}x{h}"
+                );
+            }
+            if let Some(out) = &out {
+                image::save_buffer(
+                    out.join(format!("config-{name}-{w}x{h}.png")),
+                    &pixels,
+                    w,
+                    h,
+                    image::ColorType::Rgba8,
+                )
+                .unwrap();
+            }
+        }
+    }
+}

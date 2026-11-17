@@ -108,3 +108,14 @@ art = false
 panel = false
 meta = false
 backdrop = false
+
+[settings]
+layout = "sidebar"
+sidebar = { x = 0.022, w = 0.334, style = "glass", title = 0.046 }
+row = 0.075
+icon = "tile"
+groups = "inset"
+
+[settings.icon_colors]
+network = "#0A84FF"
+sound = "#FF375F"
