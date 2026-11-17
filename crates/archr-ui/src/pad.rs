@@ -216,8 +216,8 @@ impl Remap {
         for (pad, button) in [
             (Pad::Up, Button::Up),
             (Pad::Down, Button::Down),
-            (Pad::Left, Button::L),
-            (Pad::Right, Button::R),
+            (Pad::Left, Button::Left),
+            (Pad::Right, Button::Right),
             (Pad::Select, Button::Select),
         ] {
             map[pad as usize] = Some(button);
@@ -241,8 +241,8 @@ impl Remap {
             Event::JoyHatMotion { state, .. } => match state {
                 HatState::Up | HatState::LeftUp | HatState::RightUp => Some(Button::Up),
                 HatState::Down | HatState::LeftDown | HatState::RightDown => Some(Button::Down),
-                HatState::Left => Some(Button::L),
-                HatState::Right => Some(Button::R),
+                HatState::Left => Some(Button::Left),
+                HatState::Right => Some(Button::Right),
                 _ => None,
             },
             Event::JoyAxisMotion {
@@ -252,7 +252,7 @@ impl Remap {
                 axis: Axis::LeftX,
                 value,
                 ..
-            } => axis_button(value, Button::L, Button::R),
+            } => axis_button(value, Button::Left, Button::Right),
             Event::JoyAxisMotion {
                 axis_idx: 1, value, ..
             }
@@ -362,7 +362,8 @@ mod tests {
         let default = Remap::default();
         assert_eq!(default.map(&pad(Sdl::A)), Some(Button::A));
         assert_eq!(default.map(&pad(Sdl::LeftShoulder)), Some(Button::L));
-        assert_eq!(default.map(&pad(Sdl::DPadLeft)), Some(Button::L));
+        assert_eq!(default.map(&pad(Sdl::DPadLeft)), Some(Button::Left));
+        assert_eq!(default.map(&pad(Sdl::DPadRight)), Some(Button::Right));
         assert_eq!(default.map(&pad(Sdl::Back)), Some(Button::Select));
         assert_eq!(default.map(&pad(Sdl::LeftStick)), None);
         let swapped = Remap::new([

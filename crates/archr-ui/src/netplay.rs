@@ -115,6 +115,7 @@ impl Lobby {
         self.menu = None;
     }
     pub fn handle(&mut self, button: Button) -> Effect {
+        let button = button.shoulder();
         if let Some(item) = self.menu {
             match button {
                 Button::Up | Button::Down => self.menu = Some(1 - item),

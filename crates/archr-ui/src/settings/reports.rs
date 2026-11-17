@@ -155,7 +155,7 @@ impl Notice {
     /// ‹ › move between the buttons; A answers the focused one, B keeps
     /// them on. Some(true) keeps reports on.
     pub fn handle(&mut self, button: Button) -> Option<bool> {
-        match button {
+        match button.shoulder() {
             Button::L | Button::R => self.on_ok = !self.on_ok,
             Button::A => return Some(self.on_ok),
             Button::B => return Some(true),

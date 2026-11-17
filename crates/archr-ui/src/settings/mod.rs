@@ -1994,6 +1994,7 @@ impl Settings {
         None
     }
     pub fn handle(&mut self, button: Button) -> Effect {
+        let button = button.shoulder();
         if self.reboot_prompt.is_some() {
             return match button {
                 Button::A => Effect::Reboot,

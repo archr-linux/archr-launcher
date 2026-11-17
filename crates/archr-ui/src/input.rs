@@ -41,8 +41,10 @@ pub struct Repeat {
 }
 impl Repeat {
     pub fn press(&mut self, button: Button, now: Instant) {
-        if matches!(button, Button::Up | Button::Down | Button::L | Button::R)
-            && self.held.map(|(b, _)| b) != Some(button)
+        if matches!(
+            button,
+            Button::Up | Button::Down | Button::L | Button::R | Button::Left | Button::Right
+        ) && self.held.map(|(b, _)| b) != Some(button)
         {
             self.held = Some((button, now + Duration::from_millis(300)));
             self.repeats = 0;
@@ -74,7 +76,8 @@ impl Repeat {
             return;
         }
         self.modifiers.push(key);
-        let shoulder = |b: &Button| matches!(b, Button::L | Button::R);
+        // ← and → too, as when they were the shoulders' own buttons.
+        let shoulder = |b: &Button| matches!(b.shoulder(), Button::L | Button::R);
         let pad = key.0;
         let before = self.sources.len();
         self.sources
@@ -89,7 +92,7 @@ impl Repeat {
     }
     /// L1 or R1 from a pad whose FN is down.
     fn suppressed(&self, source: Source, button: Button) -> bool {
-        matches!(button, Button::L | Button::R)
+        matches!(button.shoulder(), Button::L | Button::R)
             && source
                 .device()
                 .is_some_and(|pad| self.modifiers.iter().any(|(m, _)| *m == pad))
@@ -151,7 +154,10 @@ impl Repeat {
                 self.release(old);
                 if self.held.is_none() {
                     if let Some((_, remaining)) = self.sources.iter().rev().find(|(_, b)| {
-                        matches!(b, Button::Up | Button::Down | Button::L | Button::R)
+                        matches!(
+                            b.shoulder(),
+                            Button::Up | Button::Down | Button::L | Button::R
+                        )
                     }) {
                         self.press(*remaining, now);
                     }
@@ -231,8 +237,8 @@ mod tests {
     fn native_stick_navigates_and_repeats_like_dpad() {
         use sdl2::controller::Axis::{LeftX, LeftY};
         for (axis_id, value, button) in [
-            (LeftX, -32768, Button::L),
-            (LeftX, 32767, Button::R),
+            (LeftX, -32768, Button::Left),
+            (LeftX, 32767, Button::Right),
             (LeftY, -32768, Button::Up),
             (LeftY, 32767, Button::Down),
         ] {
@@ -348,8 +354,8 @@ mod tests {
         use sdl2::controller::Axis::{LeftX, LeftY};
         for (axis_id, pad, buttons) in [
             (LeftY, Pad::DPadDown, [Button::Up, Button::Down]),
-            (LeftX, Pad::DPadDown, [Button::L, Button::Down]),
-            (LeftY, Pad::DPadRight, [Button::Up, Button::R]),
+            (LeftX, Pad::DPadDown, [Button::Left, Button::Down]),
+            (LeftY, Pad::DPadRight, [Button::Up, Button::Right]),
         ] {
             for stick_first in [false, true] {
                 for release_active in [false, true] {

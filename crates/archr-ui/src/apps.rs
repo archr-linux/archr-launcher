@@ -406,6 +406,7 @@ impl Session {
     /// A button press: what the module should hear, if anything. `page` is
     /// how many rows the list shows, for L and R without chips.
     pub fn handle(&mut self, button: Button, page: usize) -> Option<Effect> {
+        let button = button.shoulder();
         if let Some(keyboard) = &mut self.keyboard {
             if button == Button::B {
                 self.keyboard = None;

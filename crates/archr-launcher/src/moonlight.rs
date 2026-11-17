@@ -464,6 +464,7 @@ impl Runtime {
         }
     }
     pub fn handle(&mut self, button: Button) -> Outcome {
+        let button = button.shoulder();
         if self.state.busy {
             if button == Button::B {
                 self.close();

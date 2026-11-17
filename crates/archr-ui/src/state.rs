@@ -19,8 +19,23 @@ pub enum Button {
     R,
     Up,
     Down,
+    /// ← and →, apart from the shoulders since 3.1. Screens that do not
+    /// tell them apart read them through `Button::shoulder`.
+    Left,
+    Right,
     Start,
     Select,
+}
+impl Button {
+    /// ← as L and → as R, as the launcher read them before 3.1: every
+    /// screen that pages with either applies this first.
+    pub fn shoulder(self) -> Self {
+        match self {
+            Self::Left => Self::L,
+            Self::Right => Self::R,
+            other => other,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -622,6 +637,7 @@ impl App {
     /// Returns effects for the caller to apply. Core selection is tracked locally
     /// while the quick menu is open, independently of persistence timing.
     pub fn handle(&mut self, b: Button, data: &dyn DataSource) -> Outcome {
+        let b = b.shoulder();
         if let Some(offer) = &mut self.convert {
             return match offer.handle(b) {
                 Some(crate::convert::Answer::Convert) => {

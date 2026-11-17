@@ -401,7 +401,7 @@ fn navigation<P: PartialEq>(
             Event::Select
         })
     } else if before.1 != after.1 {
-        Some(if matches!(button, Button::L | Button::R) {
+        Some(if matches!(button.shoulder(), Button::L | Button::R) {
             Event::Page
         } else {
             Event::Move
@@ -488,7 +488,7 @@ pub fn settings(button: Button, before: &Mark, after: &Mark) -> Option<Event> {
 
 /// Screens without a model to compare (lobby, Moonlight): by button alone.
 pub fn by_button(button: Button) -> Option<Event> {
-    match button {
+    match button.shoulder() {
         Button::Up | Button::Down => Some(Event::Move),
         Button::L | Button::R => Some(Event::Page),
         Button::A => Some(Event::Select),

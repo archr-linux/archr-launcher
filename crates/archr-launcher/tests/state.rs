@@ -142,6 +142,33 @@ fn l_r_move_by_page_and_clamp() {
 }
 
 #[test]
+fn arrows_page_lists_as_the_shoulders_do() {
+    let data = FakeData::library();
+    let (mut arrows, mut shoulders) = (in_games("snes", 0), in_games("snes", 0));
+    for (arrow, shoulder) in [
+        (Button::Right, Button::R),
+        (Button::Right, Button::R),
+        (Button::Left, Button::L),
+        (Button::Right, Button::R),
+        (Button::Right, Button::R),
+    ] {
+        assert_eq!(
+            arrows.handle(arrow, &data),
+            shoulders.handle(shoulder, &data)
+        );
+        assert_eq!(arrows.cursor, shoulders.cursor);
+    }
+    assert_eq!(arrows.cursor, 11);
+    let (mut arrow, mut shoulder) = (App::new(2), App::new(2));
+    arrow.handle(Button::Right, &data);
+    shoulder.handle(Button::R, &data);
+    assert_eq!(
+        arrow.cursor, shoulder.cursor,
+        "→ pages the systems list too"
+    );
+}
+
+#[test]
 fn system_pages_use_visible_rows() {
     let mut data = FakeData::library();
     data.collections();

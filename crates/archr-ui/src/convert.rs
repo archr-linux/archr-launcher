@@ -35,7 +35,7 @@ pub enum Answer {
 impl Offer {
     /// ‹ › move between the buttons, A answers the focused one, B declines.
     pub fn handle(&mut self, button: Button) -> Option<Answer> {
-        match button {
+        match button.shoulder() {
             Button::L | Button::R => self.on_convert = !self.on_convert,
             Button::A if self.on_convert => return Some(Answer::Convert),
             Button::A | Button::B => return Some(Answer::Later),

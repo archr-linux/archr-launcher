@@ -29,6 +29,8 @@ impl Script {
                 "R" => Step::Button(Button::R),
                 "UP" => Step::Button(Button::Up),
                 "DOWN" => Step::Button(Button::Down),
+                "LEFT" => Step::Button(Button::Left),
+                "RIGHT" => Step::Button(Button::Right),
                 "START" => Step::Button(Button::Start),
                 "BACK" | "SELECT" => Step::Button(Button::Select),
                 "WAIT" => Step::Wait,

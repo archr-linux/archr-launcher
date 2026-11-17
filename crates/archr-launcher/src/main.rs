@@ -1292,7 +1292,11 @@ fn run(
             button = None;
             repeat.clear();
         }
-        settings.track_hold(repeat.is_held(Button::L) || repeat.is_held(Button::R));
+        settings.track_hold(
+            [Button::L, Button::R, Button::Left, Button::Right]
+                .iter()
+                .any(|b| repeat.is_held(*b)),
+        );
         if close_requested {
             deferred = None;
             repeat.clear();

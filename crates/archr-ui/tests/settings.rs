@@ -120,6 +120,24 @@ fn localized_values_and_footer_affordances_match_actions() {
 }
 
 #[test]
+fn arrows_change_values_as_the_shoulders_do() {
+    let mut s = Settings::default();
+    s.loading = false;
+    s.open(Page::Sound);
+    s.cursor = 4;
+    s.values.insert(Id::SoundsVolume, "100".into());
+    assert_eq!(
+        s.handle(Button::Left),
+        Effect::Set(Id::SoundsVolume, "90".into())
+    );
+    s.settle(Id::SoundsVolume, Ok("90".into()));
+    assert_eq!(
+        s.handle(Button::Right),
+        Effect::Set(Id::SoundsVolume, "100".into())
+    );
+}
+
+#[test]
 fn information_grid_moves_in_two_columns_and_details_restore_focus() {
     let mut state = Settings::default();
     state.open(Page::Info);

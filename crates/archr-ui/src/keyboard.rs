@@ -249,7 +249,7 @@ impl Keyboard {
     pub fn handle(&mut self, button: Button) -> Option<String> {
         let rows = self.rows().len();
         let width = self.rows()[self.row].len();
-        match button {
+        match button.shoulder() {
             Button::L => self.column = (self.column + width - 1) % width,
             Button::R => self.column = (self.column + 1) % width,
             Button::Up => self.vertical((self.row + rows - 1) % rows),
