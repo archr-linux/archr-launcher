@@ -106,9 +106,13 @@ impl Mesh {
         let base = self.vertices.len() as u16;
         let uv = |p: Point| {
             crop.map_or((0., 0.), |[u, v, w, h]| {
+                // SDL refuses the whole draw when one coordinate leaves
+                // [0, 1], and the corner arcs land a hair past the edge
+                // (-0.0000001): clamp, or a glass panel at the texture's
+                // edge fails every frame.
                 (
-                    u + w * (p.0 - rect.x() as f32) / rect.width() as f32,
-                    v + h * (p.1 - rect.y() as f32) / rect.height() as f32,
+                    (u + w * (p.0 - rect.x() as f32) / rect.width() as f32).clamp(0., 1.),
+                    (v + h * (p.1 - rect.y() as f32) / rect.height() as f32).clamp(0., 1.),
                 )
             })
         };
