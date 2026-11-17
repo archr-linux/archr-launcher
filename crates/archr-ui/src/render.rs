@@ -2373,6 +2373,83 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         )?;
         Ok(panel)
     }
+    /// The width of a question over the browsing screens: the theme's
+    /// `[dialog]` width, else `default` reference pixels; never wider than
+    /// the screen less 16 px a side.
+    fn question_width(&self, theme: &Theme, default: f32) -> i32 {
+        let w = theme.screens.dialog.width.map_or(default, |w| w * 480.);
+        self.px(w)
+            .min(self.frame.width as i32 - self.px(32.))
+            .max(1)
+    }
+    /// The panel of such a question: the theme's `[dialog]` corners and
+    /// glass, else the raised `fill` with `radius` as always.
+    fn question_panel(
+        &mut self,
+        theme: &Theme,
+        panel: Rect,
+        radius: f32,
+        fill: Rgba,
+    ) -> Result<(), String> {
+        let style = theme.screens.dialog;
+        let radius = style.radius.map_or(radius, |r| self.frame.size(r));
+        if style.glass {
+            self.cast_shadow(panel, radius)?;
+            // Glass over a dimmed screen: the theme's surface under it.
+            self.rounded(
+                panel,
+                radius,
+                Rgba {
+                    a: 200,
+                    ..theme.surface
+                },
+                None,
+            )?;
+            self.glass(panel, radius, &theme.glass_or_default())
+        } else {
+            self.panel(panel, radius, fill, theme.border)
+        }
+    }
+    /// An answer of such a question. With the theme's `buttons = "row"` a
+    /// pill, the focused one lit (red when it destroys or restarts), the
+    /// other on the raised surface with its word red when it would; else
+    /// `plain` (fill, border, ink, face) in the launcher's button. Returns
+    /// the ink and face of its word.
+    fn answer_button(
+        &mut self,
+        theme: &Theme,
+        rect: Rect,
+        radius: f32,
+        (focused, danger): (bool, bool),
+        plain: (Rgba, Option<Rgba>, Rgba, Face),
+    ) -> Result<(Rgba, Face), String> {
+        let (fill, border, ink, face, radius) = match (theme.screens.dialog.buttons_row, focused) {
+            (false, _) => (plain.0, plain.1, plain.2, plain.3, radius),
+            (true, true) => (
+                if danger {
+                    theme.danger
+                } else {
+                    theme.highlight_bg
+                },
+                None,
+                theme.highlight_text,
+                Face::Semibold,
+                rect.height() as f32 / 2.,
+            ),
+            (true, false) => (
+                theme.surface_elevated,
+                None,
+                if danger { theme.danger } else { theme.text },
+                Face::Semibold,
+                rect.height() as f32 / 2.,
+            ),
+        };
+        let frame = if focused { "button_selected" } else { "button" };
+        if !self.framed(frame, rect)? {
+            self.rounded(rect, radius, fill, border)?;
+        }
+        Ok((ink, face))
+    }
     fn menu(&mut self, app: &App, data: &dyn DataSource, theme: &Theme) -> Result<(), String> {
         // The mockup combines a dimmed backdrop and its base scrim.
         self.pop_in(effects::Pop::Menu, "menu", (theme, 1.2), |ui| {

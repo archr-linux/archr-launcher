@@ -16,7 +16,11 @@ impl Ui<'_, '_> {
         self.notice_dialog(
             &self.catalog.text("reports.notice_title"),
             &paragraphs,
-            (["reports.notice_ok", "reports.notice_off"], notice.on_ok),
+            (
+                ["reports.notice_ok", "reports.notice_off"],
+                notice.on_ok,
+                false,
+            ),
             &[
                 (HintButton::Pair('‹', '›'), "hint.choose"),
                 ('A'.into(), "hint.confirm"),
@@ -33,7 +37,8 @@ impl Ui<'_, '_> {
                 .catalog
                 .format("ports.panfrost_title", &[("name", title)]),
             &paragraphs,
-            (["ports.panfrost_switch", "hint.cancel"], true),
+            // The switch restarts the console.
+            (["ports.panfrost_switch", "hint.cancel"], true, true),
             &[
                 ('A'.into(), "ports.panfrost_switch"),
                 ('B'.into(), "hint.cancel"),
@@ -47,14 +52,14 @@ impl Ui<'_, '_> {
         &mut self,
         title: &str,
         paragraphs: &[String],
-        (buttons, first): ([&str; 2], bool),
+        (buttons, first, danger): ([&str; 2], bool, bool),
         hints: &[(HintButton, &str)],
         theme: &Theme,
     ) -> Result<(), String> {
         let Frame { width, height, .. } = self.frame;
         let footer = self.frame.size(theme.footer_height).round().max(1.) as u32;
         self.scrim(theme, 1.2)?;
-        let w = self.px(448.).min(width as i32 - self.px(32.)).max(1);
+        let w = self.question_width(theme, 448.);
         let pad = self.px(22.);
         let inner = (w - 2 * pad).max(1) as u32;
         let gap = self.px(12.);
@@ -91,7 +96,7 @@ impl Ui<'_, '_> {
             w as u32,
             h as u32,
         );
-        self.panel(panel, self.px(14.) as f32, theme.surface, theme.border)?;
+        self.question_panel(theme, panel, self.px(14.) as f32, theme.surface)?;
         let accent = theme.highlight_bg;
         let x = panel.x() + pad;
         let mut y = panel.y() + self.px(20.);
@@ -131,15 +136,14 @@ impl Ui<'_, '_> {
                 button_h as u32,
             );
             let focused = (n == 0) == first;
-            let (fill, border, ink, face) = if focused {
+            let plain = if focused {
                 (accent, None, theme.highlight_text, Face::Semibold)
             } else {
                 (theme.badge, Some(theme.border), theme.text, Face::Regular)
             };
-            let frame = if focused { "button_selected" } else { "button" };
-            if !self.framed(frame, rect)? {
-                self.rounded(rect, self.px(10.) as f32, fill, border)?;
-            }
+            let radius = self.px(10.) as f32;
+            let (ink, face) =
+                self.answer_button(theme, rect, radius, (focused, danger && n == 0), plain)?;
             let label = self.catalog.text(key);
             let floor = self.frame.min_size();
             let room = rect.width().saturating_sub(self.px(20.) as u32).max(1);

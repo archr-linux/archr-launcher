@@ -76,6 +76,15 @@ fn faded(c: Rgba, alpha: f32) -> Rgba {
         ..c
     }
 }
+/// Answers that destroy or restart: red in the theme's `[dialog]` row.
+const DESTRUCTIVE: &[&str] = &[
+    "settings.forget",
+    "store.remove",
+    "modules.remove",
+    "menu.reboot",
+    "hint.delete",
+];
+
 impl Placement {
     fn selected_top(self) -> f32 {
         self.top - self.lead()
@@ -1281,10 +1290,12 @@ impl View<'_, '_, '_> {
         for (k, (button, key)) in answers.into_iter().enumerate() {
             let at = (x + 24. + k as f32 * (bw + 8.), bottom, bw, buttons);
             let lit = *button == crate::HintButton::Key('A');
-            let (fill, ink) = if lit {
-                (self.theme.highlight_bg, self.theme.highlight_text)
-            } else {
-                (self.theme.surface_elevated, self.theme.text)
+            // Forgetting, removing and restarting answer in red.
+            let danger = DESTRUCTIVE.contains(key);
+            let (fill, ink) = match (lit, danger) {
+                (true, false) => (self.theme.highlight_bg, self.theme.highlight_text),
+                (true, true) => (self.theme.danger, self.theme.highlight_text),
+                (false, _) => (self.theme.surface_elevated, self.theme.text),
             };
             let pill = self.rect(at);
             self.ui

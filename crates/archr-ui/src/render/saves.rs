@@ -623,7 +623,7 @@ impl Ui<'_, '_> {
         let Frame { width, height, .. } = self.frame;
         let footer = self.frame.size(theme.footer_height).round().max(1.) as u32;
         self.scrim(theme, 1.2)?;
-        let w = self.px(360.).min(width as i32 - self.px(32.)).max(1);
+        let w = self.question_width(theme, 360.);
         let pad = self.px(20.);
         let inner = (w - 2 * pad).max(1) as u32;
         let badge = self.px(36.);
@@ -657,12 +657,7 @@ impl Ui<'_, '_> {
             w as u32,
             h as u32,
         );
-        self.panel(
-            panel,
-            self.px(16.) as f32,
-            theme.surface_elevated,
-            theme.border,
-        )?;
+        self.question_panel(theme, panel, self.px(16.) as f32, theme.surface_elevated)?;
         let x = panel.x() + pad;
         let mut y = panel.y() + self.px(22.);
         let accent = if play {
@@ -767,10 +762,14 @@ impl Ui<'_, '_> {
                 (false, 0) => (theme.badge, Some(theme.border), theme.text, Face::Regular),
                 (false, _) => (theme.badge, Some(theme.border), accent, Face::Regular),
             };
-            let frame = if focused { "button_selected" } else { "button" };
-            if !self.framed(frame, rect)? {
-                self.rounded(rect, radius, fill, border)?;
-            }
+            let danger = n == 1 && !play;
+            let (ink, face) = self.answer_button(
+                theme,
+                rect,
+                radius,
+                (focused, danger),
+                (fill, border, ink, face),
+            )?;
             let label = self.catalog.text(key);
             let floor = self.frame.min_size();
             let lw_room = rect.width().saturating_sub(self.px(40.) as u32).max(1);

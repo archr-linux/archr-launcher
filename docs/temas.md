@@ -732,7 +732,15 @@ style = "glass"
 
 Com `buttons = "row"` a resposta do A fica à direita, na cor de destaque;
 as outras à esquerda. Vale para as perguntas das Configurações (esquecer um
-aparelho, apagar, confirmar).
+aparelho, apagar, confirmar) e para as que aparecem sobre as telas de jogos:
+apagar ou carregar um save, apagar uma captura, levar os saves para outro
+emulador, trocar o driver de vídeo para o panfrost e o aviso dos relatórios.
+Nessas, `width`, `radius` e `style` mudam o painel, e `buttons = "row"` troca
+os botões pelos de cápsula.
+
+A resposta que destrói ou reinicia (apagar, esquecer, remover, reiniciar,
+trocar o driver, converter por cima de saves) sai em vermelho (`danger`): o
+botão inteiro quando está em foco, só a palavra quando não está.
 
 ### Grade de jogos com título
 

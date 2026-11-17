@@ -7,7 +7,7 @@ impl Ui<'_, '_> {
         let Frame { width, height, .. } = self.frame;
         let footer = self.frame.size(theme.footer_height).round().max(1.) as u32;
         self.scrim(theme, 1.2)?;
-        let w = self.px(400.).min(width as i32 - self.px(32.)).max(1);
+        let w = self.question_width(theme, 400.);
         let pad = self.px(20.);
         let inner = (w - 2 * pad).max(1) as u32;
         let gap = self.px(12.);
@@ -68,7 +68,7 @@ impl Ui<'_, '_> {
             w as u32,
             h as u32,
         );
-        self.panel(panel, self.px(16.) as f32, theme.surface, theme.border)?;
+        self.question_panel(theme, panel, self.px(16.) as f32, theme.surface)?;
         let accent = theme.highlight_bg;
         let x = panel.x() + pad;
         let mut y = panel.y() + pad;
@@ -183,15 +183,15 @@ impl Ui<'_, '_> {
                 button_h as u32,
             );
             let focused = (n == 0) == offer.on_convert;
-            let (fill, border, ink, face) = if focused {
+            let plain = if focused {
                 (accent, None, theme.highlight_text, Face::Semibold)
             } else {
                 (theme.badge, Some(theme.border), theme.text, Face::Regular)
             };
-            let frame = if focused { "button_selected" } else { "button" };
-            if !self.framed(frame, rect)? {
-                self.rounded(rect, self.px(10.) as f32, fill, border)?;
-            }
+            // Converting over saves already there replaces them.
+            let danger = n == 0 && offer.replace > 0;
+            let radius = self.px(10.) as f32;
+            let (ink, face) = self.answer_button(theme, rect, radius, (focused, danger), plain)?;
             let label = self.catalog.text(key);
             let floor = self.frame.min_size();
             let room = rect.width().saturating_sub(self.px(40.) as u32).max(1);
