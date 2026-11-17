@@ -1285,11 +1285,14 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             .as_ref()
             .map(|s| (s.clock.clone(), s.battery, s.wifi, s.bluetooth));
         let mut right = width as i32 - pad;
+        let look = theme.screens.status;
+        let clock_face = if look.mono { Face::Mono } else { Face::Semibold };
         if let Some((clock, battery, wifi, bluetooth)) = status {
+            let battery = battery.filter(|_| look.battery);
             let percent = battery
                 .filter(|_| theme.user.battery_percent)
                 .map(|b| format!("{}%", b.percent));
-            let clock_width = self.measure(&clock, Face::Mono, 13.)?;
+            let clock_width = self.measure(&clock, clock_face, 13.)?;
             let percent_width = percent
                 .as_deref()
                 .map(|s| self.measure(s, Face::Mono, 13.))
@@ -1300,14 +1303,19 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 self.frame.scale,
                 clock_width,
                 (battery.is_some(), percent_width),
-                (wifi.radio(), bluetooth.radio()),
+                (wifi.radio() && look.radios, bluetooth.radio() && look.radios),
             );
-            self.rounded(
-                layout.pill,
-                layout.pill.height() as f32 / 2.,
-                theme.surface,
-                Some(theme.border),
-            )?;
+            if look.glass {
+                let radius = layout.pill.height() as f32 / 2.;
+                self.glass(layout.pill, radius, &theme.glass_or_default())?;
+            } else {
+                self.rounded(
+                    layout.pill,
+                    layout.pill.height() as f32 / 2.,
+                    theme.surface,
+                    Some(theme.border),
+                )?;
+            }
             // Lit when joined or linked; on but idle, dim like the clock.
             for (glyph, radio, icon) in [
                 (Glyph::Wifi, wifi, layout.wifi),
@@ -1322,7 +1330,8 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                     self.icon(glyph, icon, ink)?;
                 }
             }
-            self.label(&clock, (Face::Mono, 13., theme.muted), layout.clock)?;
+            let ink = if look.mono { theme.muted } else { theme.text };
+            self.label(&clock, (clock_face, 13., ink), layout.clock)?;
             if let (Some(b), Some(icon)) = (battery, layout.battery) {
                 if let (Some(panel), Some(text)) = (layout.percent, percent) {
                     self.label(&text, (Face::Mono, 13., theme.muted), panel)?;
