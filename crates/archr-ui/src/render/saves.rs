@@ -861,6 +861,10 @@ impl Ui<'_, '_> {
         let Frame { width, height, .. } = self.frame;
         let footer = self.frame.size(theme.footer_height).round().max(1.) as u32;
         self.scrim(theme, 1.2)?;
+        if theme.screens.dialog != crate::screens::DialogStyle::default() {
+            self.progress_alert((&question, &detail), (play, confirm.on_action), theme)?;
+            return self.question_footer(theme);
+        }
         let w = self.question_width(theme, 360.);
         let pad = self.px(20.);
         let inner = (w - 2 * pad).max(1) as u32;
@@ -1041,6 +1045,160 @@ impl Ui<'_, '_> {
             )?;
         }
 
+        self.question_footer(theme)
+    }
+
+    /// The question as the theme's `[dialog]` draws its alerts: centered,
+    /// its width, corners and glass, the icon in a disc on top, the
+    /// question and what happens under it, centered, and Cancel and the
+    /// action side by side: with `buttons = "row"` pills, the action in
+    /// its color (red when it deletes), the focused one ringed.
+    fn progress_alert(
+        &mut self,
+        (question, detail): (&str, &str),
+        (play, on_action): (bool, bool),
+        theme: &Theme,
+    ) -> Result<(), String> {
+        let style = theme.screens.dialog;
+        let Frame { width, height, .. } = self.frame;
+        let footer = self.frame.size(theme.footer_height).round().max(1.) as i32;
+        let w = self.question_width(theme, 360.);
+        let pad = self.px(18.);
+        let inner = (w - 2 * pad).max(1) as u32;
+        let disc = if style.icon { self.px(44.) } else { 0 };
+        let titles = self.wrap(question, Face::Semibold, 16., inner)?;
+        let title_step = self.px(21.);
+        let body = self.wrap(detail, Face::Regular, 13., inner)?;
+        let body_step = self.px(18.);
+        let gap = self.px(8.);
+        let button_h = self.px(40.);
+        let lead = if style.icon {
+            disc + gap + self.px(4.)
+        } else {
+            0
+        };
+        let h = self.px(22.)
+            + lead
+            + title_step * titles.len() as i32
+            + gap
+            + body_step * body.len() as i32
+            + self.px(18.)
+            + button_h
+            + self.px(16.);
+        let room = height as i32 - footer;
+        let panel = Rect::new(
+            (width as i32 - w) / 2,
+            ((room - h) / 2).max(0),
+            w as u32,
+            h as u32,
+        );
+        self.question_panel(theme, panel, self.px(16.) as f32, theme.surface_elevated)?;
+        let x = panel.x() + pad;
+        let mut y = panel.y() + self.px(22.);
+        let accent = if play {
+            theme.highlight_bg
+        } else {
+            theme.danger
+        };
+        if style.icon {
+            let circle = Rect::new(panel.x() + (w - disc) / 2, y, disc as u32, disc as u32);
+            self.rounded(circle, disc as f32 / 2., Rgba { a: 41, ..accent }, None)?;
+            let side = self.px(20.);
+            let icon = Rect::new(
+                circle.x() + (disc - side) / 2,
+                circle.y() + (disc - side) / 2,
+                side as u32,
+                side as u32,
+            );
+            let glyph = if play { Glyph::Play } else { Glyph::Trash };
+            self.icon(glyph, icon, accent)?;
+            y += lead;
+        }
+        for line in &titles {
+            self.label_aligned(
+                line,
+                (Face::Semibold, 16., theme.text),
+                Rect::new(x, y, inner, title_step as u32),
+                Align::Center,
+            )?;
+            y += title_step;
+        }
+        y += gap;
+        for line in &body {
+            self.label_aligned(
+                line,
+                (Face::Regular, 13., theme.text_secondary),
+                Rect::new(x, y, inner, body_step as u32),
+                Align::Center,
+            )?;
+            y += body_step;
+        }
+        y += self.px(18.);
+        let half = ((inner as i32 - gap) / 2).max(1) as u32;
+        let action_key = if play { "hint.play" } else { "hint.delete" };
+        for (n, key) in ["hint.cancel", action_key].into_iter().enumerate() {
+            let rect = Rect::new(x + n as i32 * (half as i32 + gap), y, half, button_h as u32);
+            let focused = (n == 1) == on_action;
+            let (ink, face) = if style.buttons_row {
+                let (fill, ink) = if n == 0 {
+                    (
+                        Rgba {
+                            a: 0x1F,
+                            ..theme.text
+                        },
+                        theme.text,
+                    )
+                } else {
+                    (accent, theme.highlight_text)
+                };
+                let round = rect.height() as f32 / 2.;
+                let frame = if focused { "button_selected" } else { "button" };
+                if !self.framed(frame, rect)? {
+                    self.rounded(rect, round, fill, None)?;
+                }
+                if focused {
+                    let out = self.px(2.);
+                    let ring = Rect::new(
+                        rect.x() - out,
+                        rect.y() - out,
+                        rect.width() + 2 * out as u32,
+                        rect.height() + 2 * out as u32,
+                    );
+                    self.focus_ring(ring, round + out as f32, theme)?;
+                }
+                (ink, Face::Semibold)
+            } else {
+                let plain = match (focused, n) {
+                    (true, 1) if !play => {
+                        (theme.danger, None, theme.highlight_text, Face::Semibold)
+                    }
+                    (true, _) => (
+                        theme.highlight_bg,
+                        None,
+                        theme.highlight_text,
+                        Face::Semibold,
+                    ),
+                    (false, 0) => (theme.badge, Some(theme.border), theme.text, Face::Regular),
+                    (false, _) => (theme.badge, Some(theme.border), accent, Face::Regular),
+                };
+                let radius = self.px(10.) as f32;
+                self.answer_button(theme, rect, radius, (focused, n == 1 && !play), plain)?
+            };
+            let label = self.catalog.text(key);
+            let floor = self.frame.min_size();
+            let lw_room = rect.width().saturating_sub(self.px(16.) as u32).max(1);
+            let size = self
+                .shrink(&label, face, 14., floor, lw_room)?
+                .unwrap_or(floor);
+            self.label_aligned(&label, (face, size, ink), rect, Align::Center)?;
+        }
+        Ok(())
+    }
+
+    /// The footer under a question about a state or a screenshot.
+    fn question_footer(&mut self, theme: &Theme) -> Result<(), String> {
+        let Frame { width, height, .. } = self.frame;
+        let footer = self.frame.size(theme.footer_height).round().max(1.) as u32;
         // The footer answers the question, over the screen's own hints: on
         // a bar, or in the theme's capsule ([hints]) on the background as
         // the scrim leaves it, so no band shows.
