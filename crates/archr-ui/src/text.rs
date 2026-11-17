@@ -238,7 +238,9 @@ impl<'font> Fonts<'font> {
             }
             loaded.size = size;
         }
-        let style = if loaded.synthesize_bold && matches!(face, Face::Semibold | Face::MonoMedium | Face::Bold) {
+        let style = if loaded.synthesize_bold
+            && matches!(face, Face::Semibold | Face::MonoMedium | Face::Bold)
+        {
             loaded.style | FontStyle::BOLD
         } else {
             loaded.style
@@ -267,11 +269,7 @@ pub struct PreparedText<'font> {
 unsafe impl Send for PreparedText<'_> {}
 
 impl<'font> PreparedText<'font> {
-    pub(crate) fn new(
-        ttf: &'font Sdl2TtfContext,
-        paths: FacePaths,
-        trace: StartupTrace,
-    ) -> Self {
+    pub(crate) fn new(ttf: &'font Sdl2TtfContext, paths: FacePaths, trace: StartupTrace) -> Self {
         let mut fonts = Fonts::new(ttf, paths);
         fonts.startup = trace;
         Self {
@@ -711,8 +709,16 @@ mod tests {
         // A regular weight standing in for bold is drawn bold, as semibold is.
         let paths: FacePaths = std::array::from_fn(|_| file("Inter-Regular"));
         let mut fonts = Fonts::new(&ttf, paths);
-        assert!(fonts.font(Face::Bold, 17).unwrap().get_style().contains(FontStyle::BOLD));
-        assert!(!fonts.font(Face::Regular, 17).unwrap().get_style().contains(FontStyle::BOLD));
+        assert!(fonts
+            .font(Face::Bold, 17)
+            .unwrap()
+            .get_style()
+            .contains(FontStyle::BOLD));
+        assert!(!fonts
+            .font(Face::Regular, 17)
+            .unwrap()
+            .get_style()
+            .contains(FontStyle::BOLD));
     }
     #[test]
     fn every_face_uses_the_autohinter_with_mono_hinting() {

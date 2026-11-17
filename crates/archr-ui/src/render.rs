@@ -417,6 +417,7 @@ pub struct Ui<'font, 'texture> {
     motion: Motion,
     /// The theme's shadow under panels and its console picture scaling.
     shadow_style: ShadowStyle,
+    soft: crate::primitives::SoftLook,
     pixel_art: bool,
     /// The list cursor's blink phase as last drawn; None when nothing blinks.
     blink: Option<bool>,
@@ -535,6 +536,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             face_letters: ['A', 'B', 'X', 'Y'],
             motion: Motion::On,
             shadow_style: ShadowStyle::Soft,
+            soft: Default::default(),
             pixel_art: false,
             blink: None,
             effects: effects::Effects::default(),
@@ -710,10 +712,16 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         if settings {
             self.geometry.style(1., self.px(1.) as u32);
             self.shadow_style = ShadowStyle::Soft;
+            self.soft = Default::default();
         } else {
             let border = self.px(theme.border_width).max(1) as u32;
             self.geometry.style(theme.corners, border);
             self.shadow_style = theme.shadow;
+            self.soft = crate::primitives::SoftLook {
+                color: theme.shadow_color,
+                blur: theme.shadow_blur.map(|f| self.frame.size(f)),
+                offset: theme.shadow_offset.map(|f| self.frame.size(f)),
+            };
         }
         crate::motion::set_steps(!settings && theme.steps);
     }
@@ -842,9 +850,9 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 startup_phase!(self.startup, "shadow texture");
             }
         }
-        match (self.shadow_style, &self.shadow) {
+        match (self.shadow_style, &mut self.shadow) {
             (ShadowStyle::Soft, Some(shadow)) => {
-                shadow.draw(&mut self.canvas, rect, self.frame.scale, radius)?
+                shadow.draw(&mut self.canvas, rect, self.frame.scale, radius, self.soft)?
             }
             (ShadowStyle::Hard, _) => {
                 let offset = self.px(4.);

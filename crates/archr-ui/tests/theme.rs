@@ -339,7 +339,11 @@ fn font_bold_belongs_to_the_regular_family() {
     write_theme(dir.path(), "font_bold = 'fonts/SansBold.ttf'");
     let bold = Theme::load(dir.path());
     assert_eq!(bold.font_bold, file("SansBold.ttf"));
-    assert_eq!((&bold.font, &bold.font_semibold), (&None, &None), "the family is the theme's");
+    assert_eq!(
+        (&bold.font, &bold.font_semibold),
+        (&None, &None),
+        "the family is the theme's"
+    );
     // A theme over it that names only its regular face drops the bold one.
     let child = dir.path().join("child");
     fs::create_dir_all(&child).unwrap();
@@ -697,4 +701,39 @@ fn decorations_resolve_inside_the_theme_and_links_out_of_it_are_refused() {
         3,
         "drawn only when resolved"
     );
+}
+
+#[test]
+fn shadow_keys_are_optional_and_checked() {
+    let builtin = Theme::builtin();
+    assert_eq!(
+        (
+            builtin.shadow_color,
+            builtin.shadow_blur,
+            builtin.shadow_offset
+        ),
+        (None, None, None),
+        "the launcher's own shadow"
+    );
+    let theme = load("shadow_color = '#10204080'\nshadow_blur = 0.05\nshadow_offset = -0.01");
+    assert_eq!(
+        theme.shadow_color,
+        Some(Rgba {
+            r: 0x10,
+            g: 0x20,
+            b: 0x40,
+            a: 0x80
+        })
+    );
+    assert_eq!(
+        (theme.shadow_blur, theme.shadow_offset),
+        (Some(0.05), Some(-0.01))
+    );
+    // Out of range or of the wrong type: warned and left as the default.
+    let wrong = load("shadow_color = 3\nshadow_blur = 0.5\nshadow_offset = 'down'\nmargin = 0.2");
+    assert_eq!(
+        (wrong.shadow_color, wrong.shadow_blur, wrong.shadow_offset),
+        (None, None, None)
+    );
+    assert_eq!(wrong.margin, 0.2);
 }

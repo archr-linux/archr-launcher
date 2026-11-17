@@ -47,8 +47,10 @@ impl Ui<'_, '_> {
                 self.shadow = Some(Shadow::new(creator)?);
             }
         }
-        match &self.shadow {
-            Some(shadow) => shadow.draw(&mut self.canvas, rect, self.frame.scale, radius),
+        match &mut self.shadow {
+            Some(shadow) => {
+                shadow.draw(&mut self.canvas, rect, self.frame.scale, radius, self.soft)
+            }
             None => Ok(()),
         }
     }

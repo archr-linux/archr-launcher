@@ -440,6 +440,16 @@ pub(crate) fn nine_slice(
     }
     parts
 }
+/// A theme's own soft shadow, in screen pixels; what is None stays as
+/// the launcher draws it (black, reaching 16 px, 8 px down).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct SoftLook {
+    pub color: Option<Rgba>,
+    /// How far the shadow reaches beyond the box.
+    pub blur: Option<f32>,
+    /// How far down it falls (up when negative).
+    pub offset: Option<f32>,
+}
 pub(crate) struct Shadow<'a>(Texture<'a>);
 impl<'a> Shadow<'a> {
     pub fn new(creator: &'a TextureCreator<WindowContext>) -> Result<Self, String> {
@@ -456,8 +466,9 @@ impl<'a> Shadow<'a> {
                     let distance = qx.max(0.).hypot(qy.max(0.)) + qx.max(qy).min(0.) - 12.;
                     let alpha =
                         (115. * (-0.5 * (distance.max(0.) / 6.).powi(2)).exp()).round() as u8;
+                    // White, made black (or the theme's color) by color mod.
                     bytes[y * pitch + x * 4..y * pitch + x * 4 + 4]
-                        .copy_from_slice(&[0, 0, 0, alpha]);
+                        .copy_from_slice(&[255, 255, 255, alpha]);
                 }
             }
         });
@@ -472,27 +483,66 @@ impl<'a> Shadow<'a> {
             .map_err(|e| e.to_string())?;
         texture.set_blend_mode(BlendMode::Blend);
         texture.set_scale_mode(ScaleMode::Linear);
+        texture.set_color_mod(0, 0, 0);
         Ok(Self(texture))
     }
     /// Under `rect`, whose corners are rounded by `radius`: the shadow grows
     /// with the radius, so it follows the corners instead of poking out.
     pub fn draw(
-        &self,
+        &mut self,
         canvas: &mut Canvas<Window>,
         rect: Rect,
         scale: f32,
         radius: f32,
+        look: SoftLook,
     ) -> Result<(), String> {
         let fit = rect.width().min(rect.height()) as f32 / 24.;
         let k = (radius / 12.).max(scale).min(fit);
-        let pad = (16. * k).round() as i32;
         let corner = (12. * k).round() as i32;
-        let shift = (8. * k).round() as i32;
-        let xs = slice_axis(rect.x(), rect.right(), pad, corner, 0);
-        let ys = slice_axis(rect.y(), rect.bottom(), pad, corner, shift);
-        let src = [0, 28, 36, 64];
-        for y in 0..3 {
-            for x in 0..3 {
+        let shift = look.offset.map_or(8. * k, |px| px).round() as i32;
+        let ink = look.color.unwrap_or(Rgba {
+            r: 0,
+            g: 0,
+            b: 0,
+            a: 255,
+        });
+        self.0.set_color_mod(ink.r, ink.g, ink.b);
+        self.0.set_alpha_mod(ink.a);
+        // The launcher's own reach: the blur and the corner in one slice.
+        let Some(blur) = look.blur else {
+            let pad = (16. * k).round() as i32;
+            let xs = slice_axis(rect.x(), rect.right(), pad, corner, 0);
+            let ys = slice_axis(rect.y(), rect.bottom(), pad, corner, shift);
+            return self.slices(canvas, &[0, 28, 36, 64], &xs, &ys);
+        };
+        // A theme's reach: the blur (picture 0..16) stretches apart from
+        // the corner (16..28), which keeps following the radius.
+        let pad = blur.round().max(0.) as i32;
+        let axis = |start: i32, end: i32, shift: i32| {
+            [
+                start - pad,
+                start,
+                start + corner,
+                end - corner,
+                end,
+                end + pad,
+            ]
+            .map(|n| n + shift)
+        };
+        let xs = axis(rect.x(), rect.right(), 0);
+        let ys = axis(rect.y(), rect.bottom(), shift);
+        self.slices(canvas, &[0, 16, 28, 36, 48, 64], &xs, &ys)
+    }
+    /// The picture cut at `src` drawn over the screen cuts `xs` × `ys`.
+    fn slices(
+        &self,
+        canvas: &mut Canvas<Window>,
+        src: &[i32],
+        xs: &[i32],
+        ys: &[i32],
+    ) -> Result<(), String> {
+        for y in 0..src.len() - 1 {
+            for x in 0..src.len() - 1 {
                 if xs[x + 1] > xs[x] && ys[y + 1] > ys[y] {
                     canvas.copy(
                         &self.0,
@@ -530,6 +580,83 @@ mod tests {
         let tiny = nine_slice((12, 12), [4; 4], 2, Rect::new(0, 0, 10, 10), false);
         assert_eq!(tiny.len(), 4);
         assert_eq!(nine_slice((12, 12), [0; 4], 2, dst, false).len(), 1);
+    }
+    /// The RGBA pixels of a white 120×120 screen with a soft shadow drawn
+    /// under the box (40, 40, 40, 40).
+    fn shadowed(look: SoftLook) -> Vec<u8> {
+        let _sdl = crate::SDL_TEST_LOCK.lock().unwrap();
+        std::env::set_var("SDL_VIDEODRIVER", "dummy");
+        let sdl = sdl2::init().unwrap();
+        let window = sdl
+            .video()
+            .unwrap()
+            .window("shadow", 120, 120)
+            .build()
+            .unwrap();
+        let mut canvas = window.into_canvas().software().build().unwrap();
+        let creator = canvas.texture_creator();
+        canvas.set_draw_color(Color::WHITE);
+        canvas.clear();
+        let mut shadow = Shadow::new(&creator).unwrap();
+        shadow
+            .draw(&mut canvas, Rect::new(40, 40, 40, 40), 1., 0., look)
+            .unwrap();
+        canvas.read_pixels(None, PixelFormatEnum::RGBA32).unwrap()
+    }
+    #[test]
+    fn a_theme_tints_spreads_and_moves_the_soft_shadow() {
+        let at = |pixels: &[u8], x: usize, y: usize| {
+            let i = (y * 120 + x) * 4;
+            [pixels[i], pixels[i + 1], pixels[i + 2]]
+        };
+        // Below the box: the launcher's grey shadow, 8 px down.
+        let plain = shadowed(SoftLook::default());
+        let [r, g, b] = at(&plain, 60, 84);
+        assert!(r < 255 && r == g && g == b, "{r} {g} {b}");
+        // Its color, with its alpha laid over the shadow's own.
+        let red = Rgba {
+            r: 255,
+            g: 0,
+            b: 0,
+            a: 255,
+        };
+        let tinted = shadowed(SoftLook {
+            color: Some(red),
+            ..SoftLook::default()
+        });
+        let [r, g, _] = at(&tinted, 60, 84);
+        assert!(r == 255 && g < 255, "{r} {g}");
+        let faint = shadowed(SoftLook {
+            color: Some(Rgba {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 64,
+            }),
+            ..SoftLook::default()
+        });
+        assert!(at(&faint, 60, 84)[0] > at(&plain, 60, 84)[0]);
+        // No reach and no fall: nothing shows around the box.
+        let flat = shadowed(SoftLook {
+            blur: Some(0.),
+            offset: Some(0.),
+            ..SoftLook::default()
+        });
+        for (x, y) in [(36, 60), (60, 36), (84, 60), (60, 84)] {
+            assert_eq!(at(&flat, x, y), [255; 3], "({x}, {y})");
+        }
+        // A longer reach shades farther out; a fall upward shades above.
+        let wide = shadowed(SoftLook {
+            blur: Some(30.),
+            ..SoftLook::default()
+        });
+        assert_eq!(at(&plain, 22, 60), [255; 3]);
+        assert!(at(&wide, 22, 60)[0] < 255);
+        let up = shadowed(SoftLook {
+            offset: Some(-8.),
+            ..SoftLook::default()
+        });
+        assert!(at(&up, 60, 36)[0] < at(&plain, 60, 36)[0]);
     }
     #[test]
     fn borders_take_the_theme_width_and_square_corners_stay_square() {

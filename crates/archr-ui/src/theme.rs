@@ -217,6 +217,11 @@ pub struct Theme {
     pub corners: f32,
     pub border_width: f32,
     pub shadow: ShadowStyle,
+    /// The soft shadow's color, reach beyond the box and fall, as sizes
+    /// (fractions of 480); None draws it as the launcher always has.
+    pub shadow_color: Option<Rgba>,
+    pub shadow_blur: Option<f32>,
+    pub shadow_offset: Option<f32>,
     pub pixel_art: bool,
     /// Theme pictures (background, frames, decorations) without smoothing.
     pub pixel_images: bool,
@@ -472,6 +477,24 @@ impl Theme {
             corners: token!(corners, unit),
             border_width: token!(border_width, border_width),
             shadow: token!(shadow, shadow),
+            shadow_color: optional(
+                table,
+                "shadow_color",
+                color,
+                defaults.and_then(|d| d.shadow_color),
+            ),
+            shadow_blur: optional(
+                table,
+                "shadow_blur",
+                shadow_blur,
+                defaults.and_then(|d| d.shadow_blur),
+            ),
+            shadow_offset: optional(
+                table,
+                "shadow_offset",
+                shadow_offset,
+                defaults.and_then(|d| d.shadow_offset),
+            ),
             pixel_art: token!(pixel_art = "art_scaling", art_scaling),
             pixel_images: token!(pixel_images = "image_scaling", art_scaling),
             steps: token!(steps = "easing", easing),
@@ -606,6 +629,9 @@ pub const KNOWN_KEYS: &[&str] = &[
     "corners",
     "border_width",
     "shadow",
+    "shadow_color",
+    "shadow_blur",
+    "shadow_offset",
     "art_scaling",
     "image_scaling",
     "easing",
@@ -745,6 +771,25 @@ fn parsed<T: DeserializeOwned, U>(
     value
 }
 
+/// A key without a builtin value: the theme's, else the inherited one.
+fn optional<T: DeserializeOwned, U>(
+    table: &toml::Table,
+    name: &str,
+    parse: impl FnOnce(T) -> Option<U>,
+    inherited: Option<U>,
+) -> Option<U> {
+    if table.contains_key(name) {
+        parsed(table, name, parse).or(inherited)
+    } else {
+        inherited
+    }
+}
+fn shadow_blur(value: f32) -> Option<f32> {
+    (0.0..=0.1).contains(&value).then_some(value)
+}
+fn shadow_offset(value: f32) -> Option<f32> {
+    (-0.05..=0.05).contains(&value).then_some(value)
+}
 fn color(value: String) -> Option<Rgba> {
     let hex = value.strip_prefix('#')?;
     if !matches!(hex.len(), 6 | 8) || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
