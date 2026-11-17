@@ -477,6 +477,8 @@ pub struct Ui<'font, 'texture> {
     /// The theme's shadow under panels and its console picture scaling.
     shadow_style: ShadowStyle,
     soft: crate::primitives::SoftLook,
+    /// The theme's `title_tracking` (em) while drawing its screens.
+    tracking: f32,
     pixel_art: bool,
     /// The list cursor's blink phase as last drawn; None when nothing blinks.
     blink: Option<bool>,
@@ -601,6 +603,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             motion: Motion::On,
             shadow_style: ShadowStyle::Soft,
             soft: Default::default(),
+            tracking: 0.,
             pixel_art: false,
             blink: None,
             effects: effects::Effects::default(),
@@ -778,6 +781,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
     /// Corners, borders, shadows and motion: the theme's, or the default
     /// in Settings, where the theme only colors, fonts and icons.
     fn finish(&mut self, theme: &Theme, settings: bool) {
+        self.tracking = if settings { 0. } else { theme.title_tracking };
         if settings {
             self.geometry.style(1., self.px(1.) as u32);
             self.shadow_style = ShadowStyle::Soft;
@@ -827,10 +831,12 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         panel: Rect,
         align: Align,
     ) -> Result<(), String> {
+        let px = self.frame.font_size(size);
         let mut style = Style {
             face,
-            size: self.frame.font_size(size),
+            size: px,
             color,
+            tracking: self.tracking(size, px),
         };
         let outline = self.outline();
         let text_cache = self
@@ -888,12 +894,19 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         Ok(left)
     }
     fn measure(&mut self, text: &str, face: Face, size: f32) -> Result<u32, String> {
-        let size = self.frame.font_size(size);
+        let px = self.frame.font_size(size);
+        let tracking = self.tracking(size, px);
         self.text
             .as_mut()
             .ok_or_else(|| self.catalog.text("error.font_init"))?
-            .measure(text, face, size)
+            .measure(text, face, px, tracking)
             .map_err(|e| localized_error(&self.catalog, e))
+    }
+    /// The theme's `title_tracking` for text of `size` reference pixels
+    /// drawn `px` tall, in 1/64 pixel: titles (`TITLE_SIZE` and up) only;
+    /// body text keeps the font's own spacing.
+    fn tracking(&self, size: f32, px: u16) -> i16 {
+        tracking_for(self.tracking, size, px)
     }
     fn rounded(
         &mut self,
@@ -2153,6 +2166,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 Some((name, n, total)) => {
                     let title = system_title(name, data, &self.catalog);
                     let (catalog, frame, fonts) = (&self.catalog, self.frame, &mut self.text);
+                    let em = self.tracking;
                     let (text, size) = fit_status(
                         &title,
                         width,
@@ -2161,7 +2175,12 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                             fonts
                                 .as_mut()
                                 .ok_or_else(|| catalog.text("error.font_init"))?
-                                .measure(text, Face::Regular, frame.font_size(size))
+                                .measure(
+                                    text,
+                                    Face::Regular,
+                                    frame.font_size(size),
+                                    tracking_for(em, size, frame.font_size(size)),
+                                )
                                 .map_err(|e| localized_error(catalog, e))
                         },
                     )?;
@@ -2957,6 +2976,14 @@ fn library_summary(data: &dyn DataSource, catalog: &I18n) -> String {
 }
 
 /// First systems screen only: no SDL video calls, textures, sysfs or cover I/O.
+/// `em` of tracking for text of `size` reference pixels drawn `px` tall,
+/// in 1/64 pixel: titles (`TITLE_SIZE` and up) only.
+fn tracking_for(em: f32, size: f32, px: u16) -> i16 {
+    if em == 0. || size < crate::theme::TITLE_SIZE {
+        return 0;
+    }
+    (em * f32::from(px) * 64.).round() as i16
+}
 pub fn prepare_first_frame<'font>(
     ttf: &'font Sdl2TtfContext,
     theme: &Theme,
@@ -2974,6 +3001,7 @@ pub fn prepare_first_frame<'font>(
         face,
         size: frame.font_size(size),
         color,
+        tracking: 0,
     };
     let label = |prepared: &mut PreparedText,
                  text: &str,
@@ -3166,6 +3194,7 @@ impl PreparedText<'_> {
                     face: Face::Semibold,
                     size: frame.font_size(16.),
                     color: theme.text,
+                    tracking: 0,
                 },
                 width,
             )?;

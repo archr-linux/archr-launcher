@@ -48,6 +48,8 @@ focus = "lift"
 focus_scale = 1.05
 focus_ring = { color = "#F5F5F7EB", width = 2 }
 motion = "spring"
+# Large titles set tight, as display type wants; body text keeps Inter's.
+title_tracking = -0.022
 gradient = { from = "#121219", to = "#07070A", angle = 90 }
 
 # One table per screen (docs/temas.md, Uma tabela por tela).

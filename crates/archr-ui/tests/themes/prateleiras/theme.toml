@@ -20,6 +20,7 @@ focus = "lift"
 focus_scale = 1.05
 focus_ring = { color = "#F5F5F7EB", width = 2 }
 motion = "spring"
+title_tracking = -0.02
 
 [toast]
 position = "top"

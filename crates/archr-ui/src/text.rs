@@ -101,6 +101,14 @@ pub(crate) struct Style {
     pub face: Face,
     pub size: u16,
     pub color: Rgba,
+    /// Space added between letters (negative: taken), in 1/64 pixel.
+    pub tracking: i16,
+}
+impl Style {
+    /// The tracking in pixels.
+    fn track(self) -> f32 {
+        f32::from(self.tracking) / 64.
+    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Align {
@@ -130,7 +138,7 @@ struct Fonts<'font> {
     paths: FacePaths,
     fonts: Vec<FontFace<'font>>,
     resolved: HashMap<Face, usize>,
-    measurements: VecDeque<(String, Face, u16, u32)>,
+    measurements: VecDeque<(String, Face, u16, i16, u32)>,
 }
 impl<'font> Fonts<'font> {
     fn new(ttf: &'font Sdl2TtfContext, paths: FacePaths) -> Self {
@@ -143,20 +151,18 @@ impl<'font> Fonts<'font> {
             measurements: VecDeque::new(),
         }
     }
-    fn measure(&mut self, text: &str, face: Face, size: u16) -> Result<u32, String> {
+    fn measure(&mut self, text: &str, face: Face, size: u16, tracking: i16) -> Result<u32, String> {
         let source = bounded_source(text);
-        if let Some((_, _, _, width)) = self
+        if let Some((_, _, _, _, width)) = self
             .measurements
             .iter()
-            .find(|(s, f, z, _)| s == source && *f == face && *z == size)
+            .find(|(s, f, z, t, _)| s == source && *f == face && *z == size && *t == tracking)
         {
             return Ok(*width);
         }
-        let width = self
-            .font(face, size)?
-            .size_of(&sanitize(source))
-            .map_err(|e| e.to_string())?
-            .0;
+        let text = sanitize(source);
+        let font = self.font(face, size)?;
+        let width = tracked_width(font, &text, f32::from(tracking) / 64.)?;
         startup_phase!(
             self.startup,
             "text measurement [face={face:?}; size={size}px]"
@@ -165,7 +171,7 @@ impl<'font> Fonts<'font> {
             self.measurements.pop_front();
         }
         self.measurements
-            .push_back((source.to_owned(), face, size, width));
+            .push_back((source.to_owned(), face, size, tracking, width));
         Ok(width)
     }
     fn font(&mut self, face: Face, size: u16) -> Result<&Font<'font, 'static>, String> {
@@ -314,20 +320,12 @@ impl<'font> PreparedText<'font> {
         {
             return Ok(());
         }
-        let text = ellipsis(
-            self.fonts.font(style.face, style.size)?,
-            &sanitize(source),
-            width,
-        )?;
+        let font = self.fonts.font(style.face, style.size)?;
+        let text = ellipsis(font, &sanitize(source), width, style.track())?;
         if text.is_empty() {
             return Ok(());
         }
-        let surface = self
-            .fonts
-            .font(style.face, style.size)?
-            .render(&text)
-            .blended(color(style.color))
-            .map_err(|e| e.to_string())?;
+        let surface = rasterize(font, &text, style, true)?;
         self.first_rasterization
             .phase_once("first text rasterization");
         self.entries
@@ -335,7 +333,7 @@ impl<'font> PreparedText<'font> {
         Ok(())
     }
     pub(crate) fn measure(&mut self, text: &str, face: Face, size: u16) -> Result<u32, String> {
-        self.fonts.measure(text, face, size)
+        self.fonts.measure(text, face, size, 0)
     }
 }
 
@@ -518,8 +516,14 @@ impl<'font, 'texture> TextCache<'font, 'texture> {
         texture.set_alpha_mod(ink.a);
         canvas.copy(texture, None, panel)
     }
-    pub fn measure(&mut self, text: &str, face: Face, size: u16) -> Result<u32, String> {
-        self.fonts.measure(text, face, size)
+    pub fn measure(
+        &mut self,
+        text: &str,
+        face: Face,
+        size: u16,
+        tracking: i16,
+    ) -> Result<u32, String> {
+        self.fonts.measure(text, face, size, tracking)
     }
     pub fn draw(
         &mut self,
@@ -547,24 +551,19 @@ impl<'font, 'texture> TextCache<'font, 'texture> {
         let entry = if let Some(index) = index {
             self.entries.remove(index).expect("located text")
         } else {
-            let text = ellipsis(self.font(style.face, style.size)?, &sanitize(source), limit)?;
+            let smooth = self.smooth;
+            let font = self.font(style.face, style.size)?;
+            let text = ellipsis(font, &sanitize(source), limit, style.track())?;
             if text.is_empty() {
                 return Ok(());
             }
+            let surface = rasterize(font, &text, style, smooth)?;
             startup_phase!(
                 self.startup,
                 "text rasterization [face={:?}; size={}px]",
                 style.face,
                 style.size
             );
-            let smooth = self.smooth;
-            let render = self.font(style.face, style.size)?.render(&text);
-            let surface = if smooth {
-                render.blended(color(style.color))
-            } else {
-                render.solid(color(style.color))
-            }
-            .map_err(|e| e.to_string())?;
             self.first_rasterization
                 .phase_once("first text rasterization");
             let texture = self
@@ -614,8 +613,122 @@ fn sanitize(s: &str) -> String {
         .map(|c| if c == '\0' { '\u{fffd}' } else { c })
         .collect()
 }
-fn ellipsis(font: &Font<'_, '_>, text: &str, limit: u32) -> Result<String, String> {
-    let width = |s: &str| font.size_of(s).map(|s| s.0).map_err(|e| e.to_string());
+/// `text` in `style`, smooth or hard-edged.
+fn rasterize(
+    font: &Font<'_, '_>,
+    text: &str,
+    style: Style,
+    smooth: bool,
+) -> Result<Surface<'static>, String> {
+    if style.tracking != 0 {
+        return tracked(font, text, color(style.color), smooth, style.track());
+    }
+    let render = font.render(text);
+    if smooth {
+        render.blended(color(style.color))
+    } else {
+        render.solid(color(style.color))
+    }
+    .map_err(|e| e.to_string())
+}
+/// The width of `text` with `track` pixels between its letters.
+fn tracked_width(font: &Font<'_, '_>, text: &str, track: f32) -> Result<u32, String> {
+    let width = font.size_of(text).map_err(|e| e.to_string())?.0;
+    let gaps = text.chars().count().saturating_sub(1) as f32;
+    Ok((width as f32 + gaps * track).round().max(0.) as u32)
+}
+/// `text` with `track` pixels between its letters. SDL_ttf has no
+/// tracking: each glyph is drawn alone where the whole line would put it
+/// (shaped and kerned as one string), moved by its share of the tracking,
+/// and the glyphs' coverage is merged into one surface of `ink`. Drawn
+/// once and cached like any other text, so it costs nothing per frame.
+fn tracked(
+    font: &Font<'_, '_>,
+    text: &str,
+    ink: Color,
+    smooth: bool,
+    track: f32,
+) -> Result<Surface<'static>, String> {
+    use sdl2::pixels::PixelFormatEnum;
+    let chars: Vec<(usize, char)> = text.char_indices().collect();
+    let mut glyphs = Vec::with_capacity(chars.len());
+    let (mut right, mut height) = (0i32, font.height().max(1) as u32);
+    for (n, &(at, ch)) in chars.iter().enumerate() {
+        // The line up to this glyph ends at its pen, plus however far the
+        // glyph before reaches past its advance; this glyph's own picture
+        // starts at its left bearing when that is negative.
+        let x = if n == 0 {
+            0
+        } else {
+            let before = font.size_of(&text[..at]).map_err(|e| e.to_string())?.0 as i32;
+            let reach = font
+                .find_glyph_metrics(chars[n - 1].1)
+                .map_or(0, |m| (m.maxx - m.advance).max(0));
+            let lead = font.find_glyph_metrics(ch).map_or(0, |m| m.minx.min(0));
+            before - reach + lead + (n as f32 * track).round() as i32
+        };
+        if ch.is_whitespace() {
+            continue;
+        }
+        let rendering = font.render_char(ch);
+        let Ok(glyph) = (if smooth {
+            rendering.blended(ink)
+        } else {
+            rendering.solid(ink)
+        }) else {
+            continue;
+        };
+        let glyph = glyph
+            .convert_format(PixelFormatEnum::ARGB8888)
+            .map_err(|e| e.to_string())?;
+        right = right.max(x + glyph.width() as i32);
+        height = height.max(glyph.height());
+        glyphs.push((x, glyph));
+    }
+    let width = right.max(tracked_width(font, text, track)? as i32).max(1) as u32;
+    let mut out = Surface::new(width, height, PixelFormatEnum::ARGB8888)?;
+    out.fill_rect(None, Color::RGBA(ink.r, ink.g, ink.b, 0))?;
+    let pitch = out.pitch() as usize;
+    out.with_lock_mut(|dst| {
+        for (x, glyph) in &glyphs {
+            let (gw, gh, gp) = (
+                glyph.width() as usize,
+                glyph.height() as usize,
+                glyph.pitch() as usize,
+            );
+            glyph.with_lock(|src| {
+                for row in 0..gh.min(height as usize) {
+                    for col in 0..gw {
+                        let dx = *x + col as i32;
+                        if dx < 0 || dx >= width as i32 {
+                            continue;
+                        }
+                        // ARGB8888 is one native-endian u32: alpha on top.
+                        let s = u32::from_ne_bytes(
+                            src[row * gp + col * 4..row * gp + col * 4 + 4]
+                                .try_into()
+                                .expect("four bytes"),
+                        );
+                        let cover = s >> 24;
+                        if cover == 0 {
+                            continue;
+                        }
+                        let at = row * pitch + dx as usize * 4;
+                        let d = u32::from_ne_bytes(dst[at..at + 4].try_into().expect("four bytes"));
+                        // Coverage over coverage, the colour unchanged.
+                        let under = d >> 24;
+                        let alpha = cover + under * (255 - cover) / 255;
+                        let merged = (alpha << 24) | (d & 0x00FF_FFFF);
+                        dst[at..at + 4].copy_from_slice(&merged.to_ne_bytes());
+                    }
+                }
+            });
+        }
+    });
+    Ok(out)
+}
+fn ellipsis(font: &Font<'_, '_>, text: &str, limit: u32, track: f32) -> Result<String, String> {
+    let width = |s: &str| tracked_width(font, s, track);
     if text.is_empty() || width(text)? <= limit {
         return Ok(text.to_owned());
     }
@@ -649,6 +762,64 @@ mod tests {
 
     fn load_font<'a>(ttf: &'a Sdl2TtfContext, name: &str, size: u16) -> Font<'a, 'static> {
         production_font(ttf, &bundled_font(name), size)
+    }
+
+    /// Alpha of every pixel of an ARGB8888 surface, row by row.
+    fn coverage(surface: &Surface<'_>) -> Vec<Vec<u8>> {
+        let surface = surface
+            .convert_format(sdl2::pixels::PixelFormatEnum::ARGB8888)
+            .unwrap();
+        let (w, h, pitch) = (
+            surface.width() as usize,
+            surface.height() as usize,
+            surface.pitch() as usize,
+        );
+        surface.with_lock(|px| {
+            (0..h)
+                .map(|y| {
+                    (0..w)
+                        .map(|x| {
+                            let at = y * pitch + x * 4;
+                            (u32::from_ne_bytes(px[at..at + 4].try_into().unwrap()) >> 24) as u8
+                        })
+                        .collect()
+                })
+                .collect()
+        })
+    }
+
+    #[test]
+    fn tracking_moves_the_glyphs_where_the_line_puts_them() {
+        let ttf = sdl2::ttf::init().unwrap();
+        let font = load_font(&ttf, "Inter-SemiBold", 34);
+        let ink = Color::RGBA(245, 245, 247, 255);
+        let text = "Kirby Super Star";
+        // Without tracking, glyph by glyph draws the line SDL_ttf draws.
+        let whole = coverage(&font.render(text).blended(ink).unwrap());
+        let glyphs = coverage(&tracked(&font, text, ink, true, 0.).unwrap());
+        assert_eq!(whole.len(), glyphs.len(), "same height");
+        assert!(whole[0].len().abs_diff(glyphs[0].len()) <= 1, "same width");
+        let off = whole
+            .iter()
+            .zip(&glyphs)
+            .flat_map(|(a, b)| a.iter().zip(b).filter(|(a, b)| a.abs_diff(**b) > 24))
+            .count();
+        let inked = whole.iter().flatten().filter(|a| **a > 24).count();
+        assert!(off * 50 < inked, "{off} of {inked} pixels differ");
+        // Tightened: narrower by the tracking of each gap, as measured.
+        let plain = tracked_width(&font, text, 0.).unwrap();
+        let tight = tracked_width(&font, text, -0.75).unwrap();
+        assert_eq!(plain, font.size_of(text).unwrap().0);
+        assert_eq!(plain - tight, (15. * 0.75f32).round() as u32);
+        let drawn = tracked(&font, text, ink, true, -0.75).unwrap();
+        assert!(drawn.width().abs_diff(tight) <= 2, "{} {tight}", drawn.width());
+        // The glyphs keep their ink: overlaps merge, nothing darkens.
+        let total = |c: &Vec<Vec<u8>>| c.iter().flatten().map(|a| u64::from(*a)).sum::<u64>();
+        let tightened = coverage(&drawn);
+        assert!(total(&tightened) * 100 > total(&whole) * 97);
+        // An ellipsis keeps the tracking in its measure.
+        let cut = ellipsis(&font, text, tight - 30, -0.75).unwrap();
+        assert!(cut.ends_with('…') && tracked_width(&font, &cut, -0.75).unwrap() <= tight - 30);
     }
 
     #[test]
@@ -813,12 +984,13 @@ mod tests {
             &font,
             "The Legend of Zelda: A Link to the Past — edição 日本語",
             180,
+            0.,
         )
         .unwrap();
         assert!(fitted.ends_with('…'));
         assert!(font.size_of(&fitted).unwrap().0 <= 180);
-        assert_eq!(ellipsis(&font, "Kirby", 180).unwrap(), "Kirby");
-        assert_eq!(ellipsis(&font, "Kirby", 1).unwrap(), "");
+        assert_eq!(ellipsis(&font, "Kirby", 180, 0.).unwrap(), "Kirby");
+        assert_eq!(ellipsis(&font, "Kirby", 1, 0.).unwrap(), "");
     }
     #[test]
     fn icons_start_empty_and_cache_by_glyph_and_size_not_tint() {
@@ -895,10 +1067,10 @@ mod tests {
         cache.fonts.fonts.clear();
         cache.fonts.resolved.clear();
         cache.fonts.paths = std::array::from_fn(|_| vec![]);
-        assert_eq!(cache.measure(source, Face::Regular, 17).unwrap(), width);
-        assert!(cache.measure(source, Face::Regular, 18).is_err());
-        assert!(cache.measure(source, Face::Semibold, 17).is_err());
-        assert!(cache.measure("different", Face::Regular, 17).is_err());
+        assert_eq!(cache.measure(source, Face::Regular, 17, 0).unwrap(), width);
+        assert!(cache.measure(source, Face::Regular, 18, 0).is_err());
+        assert!(cache.measure(source, Face::Semibold, 17, 0).is_err());
+        assert!(cache.measure("different", Face::Regular, 17, 0).is_err());
     }
 
     #[test]
@@ -928,6 +1100,7 @@ mod tests {
                 b: 255,
                 a: 255,
             },
+            tracking: 0,
         };
         let panel = Rect::new(0, 0, 80, 20);
         let source = "Very\0 long source text that must be fitted";
@@ -1076,7 +1249,7 @@ mod tests {
         );
         let reference = load_font(&ttf, "Inter-Regular", 13);
         assert_eq!(
-            cache.measure("Alias sizes", Face::Regular, 13).unwrap(),
+            cache.measure("Alias sizes", Face::Regular, 13, 0).unwrap(),
             reference.size_of("Alias sizes").unwrap().0
         );
         assert!(

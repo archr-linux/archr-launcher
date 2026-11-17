@@ -620,6 +620,7 @@ impl Ui<'_, '_> {
         theme: &Theme,
     ) -> Result<(), String> {
         let frame = self.frame;
+        let em = self.tracking;
         let text_cache = self
             .text
             .as_mut()
@@ -631,7 +632,10 @@ impl Ui<'_, '_> {
             data,
             &self.catalog,
             theme,
-            |text, face, size| text_cache.measure(text, face, frame.font_size(size)),
+            |text, face, size| {
+                let px = frame.font_size(size);
+                text_cache.measure(text, face, px, super::tracking_for(em, size, px))
+            },
         )?;
         for label in labels {
             self.label_aligned(&label.text, label.style, label.rect, info.align)?;
