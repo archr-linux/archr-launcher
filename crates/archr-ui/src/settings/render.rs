@@ -1184,6 +1184,10 @@ impl View<'_, '_, '_> {
         detail: &str,
         hints: &[(crate::HintButton, &str)],
     ) -> Result<(), String> {
+        let style = self.theme.screens.dialog;
+        if style != crate::screens::DialogStyle::default() {
+            return self.styled_question(question, detail, hints, style);
+        }
         let height = |view: &mut Self, text: &str, size: f32, most: f32| {
             view.fit((104., 0., 432., most), text, size, Face::Regular)
                 .map(|(lines, size, _)| lines.len() as f32 * view.pitch(size, size + 3.))
@@ -1204,6 +1208,86 @@ impl View<'_, '_, '_> {
                 self.ui.px(34.) as u32,
             )
             .map(|_| ())
+    }
+    /// The question as the theme's `[dialog]` draws it: its width, corners
+    /// and glass, a disc with an icon on top and the answers as buttons
+    /// side by side, the one A takes last and lit.
+    fn styled_question(
+        &mut self,
+        question: &str,
+        detail: &str,
+        hints: &[(crate::HintButton, &str)],
+        style: crate::screens::DialogStyle,
+    ) -> Result<(), String> {
+        let w = style.width.map_or(480., |w| (w * 480.).min(600.));
+        let x = ((640. - w) / 2.).round();
+        let tw = w - 48.;
+        let height = |view: &mut Self, text: &str, size: f32, most: f32| {
+            view.fit((x + 24., 0., tw, most), text, size, Face::Regular)
+                .map(|(lines, size, _)| lines.len() as f32 * view.pitch(size, size + 3.))
+        };
+        let title = height(self, question, 18., 63.)?;
+        let body = height(self, detail, 14., 136.)?;
+        let icon = if style.icon { 56. } else { 0. };
+        let buttons = if style.buttons_row { 38. } else { 34. };
+        let total = 20. + icon + title + 8. + body + 18. + buttons + 16.;
+        let top = ((432. - total) / 2.).round();
+        let rect = self.rect((x, top, w, total));
+        let radius = self.ui.px(style.radius.map_or(10., |r| r * 480.)) as f32;
+        if style.glass {
+            self.ui.glass(rect, radius, &self.theme.glass_or_default())?;
+        } else {
+            self.ui
+                .rounded(rect, radius, self.theme.surface, Some(self.theme.border))?;
+        }
+        let align = if style.icon { Align::Center } else { Align::Left };
+        if style.icon {
+            let disc = self.rect((320. - 22., top + 18., 44., 44.));
+            let ring = mix(self.theme.surface, self.theme.warning, 0.22);
+            self.ui.rounded(disc, disc.width() as f32 / 2., ring, None)?;
+            let glyph = self.rect((320. - 11., top + 29., 22., 22.));
+            self.ui.icon(Glyph::Alert, glyph, self.theme.warning)?;
+        }
+        let y = top + 20. + icon;
+        self.text((x + 24., y, tw, title), question, (18., self.theme.text, align))?;
+        self.text(
+            (x + 24., y + title + 8., tw, body),
+            detail,
+            (14., self.theme.muted, align),
+        )?;
+        let bottom = top + total - 16. - buttons;
+        if !style.buttons_row {
+            return self
+                .ui
+                .hints(
+                    hints,
+                    self.theme,
+                    self.ui.px(x + w - 10.) as u32,
+                    self.ui.px(bottom),
+                    self.ui.px(34.) as u32,
+                )
+                .map(|_| ());
+        }
+        // Side by side, A's answer last (at the right) and lit.
+        let mut answers: Vec<_> = hints.iter().collect();
+        answers.sort_by_key(|(button, _)| *button == crate::HintButton::Key('A'));
+        let n = answers.len().max(1) as f32;
+        let bw = (tw - 8. * (n - 1.)) / n;
+        for (k, (button, key)) in answers.into_iter().enumerate() {
+            let at = (x + 24. + k as f32 * (bw + 8.), bottom, bw, buttons);
+            let lit = *button == crate::HintButton::Key('A');
+            let (fill, ink) = if lit {
+                (self.theme.highlight_bg, self.theme.highlight_text)
+            } else {
+                (self.theme.surface_elevated, self.theme.text)
+            };
+            let pill = self.rect(at);
+            self.ui
+                .rounded(pill, pill.height() as f32 / 2., fill, None)?;
+            let text = self.tr(key);
+            self.text_face(at, &text, (14., ink, Align::Center), Face::Semibold)?;
+        }
+        Ok(())
     }
     /// Shared scrolling list: sections, clipping and the eased offset.
     fn list(
