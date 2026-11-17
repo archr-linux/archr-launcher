@@ -388,6 +388,10 @@ impl Modules {
 
 struct Daemon {
     child: std::process::Child,
+    /// Its systemd unit, unique per start: a unit of an earlier start can
+    /// still be loaded (stopping, or failed) when the module is restarted,
+    /// and systemd refuses a second unit of the same name.
+    unit: String,
     tx: mpsc::SyncSender<String>,
     generation: u64,
     ready: bool,
@@ -1416,7 +1420,7 @@ impl Host {
         }
         let id = id.as_str();
         self.ran(id);
-        let Some(plan) = self.plan(key, format!("archr-mod-{key}")) else {
+        let Some(plan) = self.plan(key, format!("archr-mod-{key}-{}", self.next + 1)) else {
             return;
         };
         self.next += 1;
@@ -1458,6 +1462,7 @@ impl Host {
             key.to_owned(),
             Daemon {
                 child,
+                unit: plan.unit.clone(),
                 tx: process::writer(stdin),
                 generation,
                 ready: false,
@@ -1646,7 +1651,7 @@ impl Host {
     fn end_daemon(&mut self, key: &str, failed: bool) {
         self.pending.retain(|_, p| p.0 != key);
         if let Some(mut daemon) = self.daemons.remove(key) {
-            self.config.executor.kill(Some(&format!("archr-mod-{key}")));
+            self.config.executor.kill(Some(&daemon.unit));
             let _ = daemon.child.kill();
             let _ = daemon.child.wait();
         }
