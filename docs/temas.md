@@ -1182,7 +1182,8 @@ O mesmo para o Ellegance: `ARCHR_ELLEGANCE_CAPTURE_DIR=<pasta> cargo test
 -p archr-ui --lib ellegance_draws_settings` (a raiz, Jogos, Serviços de rede,
 Wi-Fi buscando e vazio, a senha e a lista de núcleos em 640x480 são referências
 em `tests/golden/ellegance-640x480`). Com `ARCHR_SETTINGS_EVERY=1` o mesmo
-teste desenha todas as páginas, para revisar.
+teste desenha todas as páginas, para revisar, e cada página longa rolada até a
+última linha (`config-<página>-scrolled-*`).
 
 ### Grade de jogos com título
 
