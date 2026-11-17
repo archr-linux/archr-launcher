@@ -1495,6 +1495,7 @@
 "switcher.no_state" = "Sem retomar"
 "switcher.played" = "{system} · jogado {ago}"
 "switcher.empty" = "Nenhum jogo recente"
+"switcher.now" = "Jogando agora"
 "resume.returning" = "Voltando para"
 "resume.saved_off" = "{system} · salvo ao desligar, {when}"
 "resume.saved_switch" = "{system} · salvo {when}"

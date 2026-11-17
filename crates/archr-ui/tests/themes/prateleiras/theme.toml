@@ -70,6 +70,14 @@ columns = 4
 gap = 0.025
 radius = 0.025
 
+[switcher]
+cards = "depth"
+card = { x = 0.22, y = 0.17, w = 0.56, h = 0.52 }
+info = { x = 0.0, y = 0.74, w = 1.0, h = 0.14 }
+
+[resume]
+style = "title"
+
 [view.prateleiras]
 name = { en = "Shelves", pt_BR = "Prateleiras" }
 

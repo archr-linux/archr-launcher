@@ -237,6 +237,22 @@ impl Default for ShotsStyle {
     }
 }
 
+/// The switcher's cards side by side (as always) or in depth (`cards =
+/// "depth"`): the selected one large and outlined, its neighbours smaller,
+/// dimmed and leaving the screen, over its picture blurred.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct SwitcherStyle {
+    pub depth: bool,
+}
+
+/// The resume at power on: its picture and texts in their rectangles (as
+/// always), or the title large in the middle over the picture blurred
+/// (`style = "title"`).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ResumeStyle {
+    pub title: bool,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Screens {
     pub toast: ToastStyle,
@@ -249,6 +265,8 @@ pub struct Screens {
     pub achievements: AchievementsStyle,
     pub saves: SavesStyle,
     pub shots: ShotsStyle,
+    pub switcher: SwitcherStyle,
+    pub resume: ResumeStyle,
 }
 
 /// Rectangles the screen tables place, as (table, key, old loose key).
@@ -337,6 +355,8 @@ fn style_keys(screen: &str) -> &'static [&'static str] {
         "achievements" => &["style", "row", "gap", "badge", "badge_radius"],
         "saves" => &["style", "row", "thumb"],
         "shots" => &["sections", "columns", "gap", "radius"],
+        "switcher" => &["cards"],
+        "resume" => &["style"],
         _ => &[],
     }
 }
@@ -508,6 +528,22 @@ impl Screens {
                 .round() as u32;
             own.shots.gap = r.number("gap", own.shots.gap, 0., 0.08);
             own.shots.radius = r.number("radius", own.shots.radius, 0., 0.08);
+        }
+        if let Some(t) = get("switcher") {
+            let r = Reader("switcher", t);
+            own.switcher.depth = r.pick(
+                "cards",
+                own.switcher.depth,
+                &[("row", false), ("depth", true)],
+            );
+        }
+        if let Some(t) = get("resume") {
+            let r = Reader("resume", t);
+            own.resume.title = r.pick(
+                "style",
+                own.resume.title,
+                &[("picture", false), ("title", true)],
+            );
         }
         own
     }

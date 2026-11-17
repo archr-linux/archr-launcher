@@ -91,6 +91,10 @@ impl Ui<'_, '_> {
         theme: &Theme,
         art: Art<'_, '_>,
     ) -> Result<(), String> {
+        if theme.screens.switcher.depth {
+            self.switcher_depth(app, data, theme, art)?;
+            return self.switcher_footer(app, theme);
+        }
         let Frame { width, height, .. } = self.frame;
         // The selected game behind everything, under the curtain chosen in
         // Appearance; a game without a picture keeps the background.
@@ -218,6 +222,12 @@ impl Ui<'_, '_> {
                 x += w + gap;
             }
         }
+        self.switcher_footer(app, theme)
+    }
+    /// Where the switcher is in the list, and its buttons.
+    fn switcher_footer(&mut self, app: &App, theme: &Theme) -> Result<(), String> {
+        let games = &app.switcher;
+        let at = app.cursor.min(games.len().saturating_sub(1));
         let summary = if games.is_empty() {
             String::new()
         } else {
@@ -251,6 +261,9 @@ impl Ui<'_, '_> {
         let Some(boot) = &app.boot else {
             return Ok(());
         };
+        if theme.screens.resume.title {
+            return self.resume_title(boot, data, theme, art);
+        }
         let Frame { width, height, .. } = self.frame;
         let shot = pixels(theme.resume_shot, width, height);
         let info = pixels(theme.resume_info, width, height);
@@ -335,6 +348,304 @@ impl Ui<'_, '_> {
             end.max(1) as u32,
             bar.bottom() + self.px(14.),
             h,
+        )?;
+        Ok(())
+    }
+    /// `game`'s picture blurred over the whole screen, darkened; the theme's
+    /// background while it has none.
+    fn blurred_game(
+        &mut self,
+        game: &Recent,
+        art: &Art<'_, '_>,
+        theme: &Theme,
+    ) -> Result<(), String> {
+        let Frame { width, height, .. } = self.frame;
+        let whole = Rect::new(0, 0, width, height);
+        let found = game
+            .picture
+            .as_ref()
+            .and_then(|path| art.pictures.and_then(|c| c.peek(path)).map(|t| (path, t)));
+        if let Some((path, texture)) = found {
+            let blur = theme.glass.map_or(0., |g| g.blur).max(24. / 480.);
+            let steps = super::material::halvings(self.frame.size(blur));
+            let size = texture.query();
+            let part = crop((size.width, size.height), (width, height));
+            let src = Rect::new(
+                (part[0] * size.width as f32) as i32,
+                (part[1] * size.height as f32) as i32,
+                (part[2] * size.width as f32).round().max(1.) as u32,
+                (part[3] * size.height as f32).round().max(1.) as u32,
+            );
+            let made = self.blurred(path, steps, |ui| {
+                ui.canvas.copy(texture, src, None).map(|()| true)
+            });
+            if let Some(index) = made {
+                self.draw_blurred(index, whole, 255)?;
+            }
+        }
+        self.canvas.set_draw_color(color(Rgba {
+            a: 150,
+            ..theme.background
+        }));
+        self.canvas.fill_rect(whole)
+    }
+    /// The switcher in depth: the selected card large and outlined with a
+    /// line above it, its neighbours smaller and dimmed, leaving the screen,
+    /// over its picture blurred; its name, system and dots below.
+    fn switcher_depth(
+        &mut self,
+        app: &App,
+        data: &dyn DataSource,
+        theme: &Theme,
+        art: Art<'_, '_>,
+    ) -> Result<(), String> {
+        let Frame { width, height, .. } = self.frame;
+        let games = &app.switcher;
+        let at = app.cursor.min(games.len().saturating_sub(1));
+        if let Some(game) = games.get(at) {
+            self.blurred_game(game, &art, theme)?;
+        }
+        self.status_header(theme)?;
+        let card = pixels(theme.switcher_card, width, height);
+        let info = pixels(theme.switcher_info, width, height);
+        if games.is_empty() {
+            let text = self.catalog.text(if self.loading {
+                "loading"
+            } else {
+                "switcher.empty"
+            });
+            return self.label_aligned(
+                &text,
+                (Face::Regular, 15., theme.muted),
+                card,
+                Align::Center,
+            );
+        }
+        let radius = self.px(18.) as f32;
+        // Two neighbours a side, each smaller and dimmer than the last.
+        let gap = self.px(18.);
+        for step in [2usize, 1] {
+            let scale = if step == 1 { 0.78 } else { 0.6 };
+            let alpha = if step == 1 { 150 } else { 70 };
+            let (w, h) = (
+                (card.width() as f32 * scale).round() as i32,
+                (card.height() as f32 * scale).round() as i32,
+            );
+            let y = card.y() + (card.height() as i32 - h) / 2;
+            let reach = |k: usize| -> i32 {
+                // How far the k-th neighbour's near edge stands from the card.
+                (1..k)
+                    .map(|j| (card.width() as f32 * if j == 1 { 0.78 } else { 0.6 }) as i32 + gap)
+                    .sum::<i32>()
+                    + gap
+            };
+            for (n, left) in [(at.checked_sub(step), true), (at.checked_add(step), false)] {
+                let Some(game) = n.and_then(|n| games.get(n)) else {
+                    continue;
+                };
+                let x = if left {
+                    card.x() - reach(step) - w
+                } else {
+                    card.right() + reach(step)
+                };
+                let rect = Rect::new(x, y, w.max(1) as u32, h.max(1) as u32);
+                self.recent_picture(game, rect, (14., alpha), theme, &art)?;
+            }
+        }
+        let game = &games[at];
+        self.lift(card, radius)?;
+        self.recent_picture(game, card, (18., 255), theme, &art)?;
+        let out = self.px(3.);
+        let ring = Rect::new(
+            card.x() - out,
+            card.y() - out,
+            card.width() + 2 * out as u32,
+            card.height() + 2 * out as u32,
+        );
+        self.focus_ring(ring, radius + out as f32, theme)?;
+        // Above it: playing now, or when it was left.
+        let above = match (at, game.left) {
+            (0, _) => self.catalog.text("switcher.now"),
+            (_, Some(left)) => self.catalog.relative_time(left, self.frame.unix),
+            _ => String::new(),
+        };
+        let line_h = self.px(18.);
+        self.label_aligned(
+            &above.to_uppercase(),
+            (Face::Semibold, 11., theme.text_secondary),
+            Rect::new(
+                card.x(),
+                ring.y() - line_h - self.px(6.),
+                card.width(),
+                line_h as u32,
+            ),
+            Align::Center,
+        )?;
+        self.saved_badge(
+            game,
+            (card.x() + self.px(12.), card.y() + self.px(12.)),
+            theme,
+        )?;
+        // The name, system and when, and a dot per game.
+        let pad = self.px(24.);
+        let room = info.width().saturating_sub(2 * pad as u32).max(1);
+        let floor = self.frame.min_size();
+        let size = self
+            .shrink(&game.name, Face::Bold, 21., floor, room)?
+            .unwrap_or(floor);
+        let band = Rect::new(info.x() + pad, info.y(), room, self.px(26.) as u32);
+        self.label_aligned(
+            &game.name,
+            (Face::Bold, size, theme.text),
+            band,
+            Align::Center,
+        )?;
+        let system = system_title(&game.system, data, &self.catalog);
+        let band = Rect::new(
+            band.x(),
+            band.bottom() + self.px(2.),
+            room,
+            self.px(16.) as u32,
+        );
+        self.label_aligned(
+            &system,
+            (Face::Regular, 12., theme.text_secondary),
+            band,
+            Align::Center,
+        )?;
+        let (dot, wide, gap) = (self.px(6.), self.px(18.), self.px(5.));
+        let count = games.len() as i32;
+        let total = (count - 1) * (dot + gap) + wide;
+        let mut x = info.x() + (info.width() as i32 - total) / 2;
+        let y = band.bottom() + self.px(8.);
+        for n in 0..games.len() {
+            let (w, ink) = if n == at {
+                (wide, theme.text)
+            } else {
+                (
+                    dot,
+                    Rgba {
+                        a: 0x50,
+                        ..theme.text
+                    },
+                )
+            };
+            self.rounded(
+                Rect::new(x, y, w as u32, dot as u32),
+                dot as f32 / 2.,
+                ink,
+                None,
+            )?;
+            x += w + gap;
+        }
+        Ok(())
+    }
+    /// The resume as a title: "Returning to", the game's name large and its
+    /// system in the middle of the screen over its picture blurred, a thin
+    /// bar for the countdown and the two buttons.
+    fn resume_title(
+        &mut self,
+        boot: &crate::resume::Boot,
+        data: &dyn DataSource,
+        theme: &Theme,
+        art: Art<'_, '_>,
+    ) -> Result<(), String> {
+        let Frame { width, height, .. } = self.frame;
+        self.blurred_game(&boot.game, &art, theme)?;
+        let pad = self.px(32.);
+        let room = width.saturating_sub(2 * pad as u32).max(1);
+        let name = boot.game.name.clone();
+        let floor = self.frame.min_size().max(16.);
+        let size = self
+            .shrink(&name, Face::Bold, 34., floor, room)?
+            .unwrap_or(floor);
+        let lines = self.wrap(&name, Face::Bold, size, room)?;
+        let step = (self.frame.size(size / 480.) * 1.15).round() as i32;
+        let shown = lines.len().min(2) as i32;
+        let block = self.px(20.) + step * shown + self.px(28.) + self.px(30.) + self.px(30.);
+        let mut y = (height as i32 - block) / 2;
+        let center = |y: i32, h: i32| Rect::new(pad, y, room, h.max(1) as u32);
+        let returning = self.catalog.text("resume.returning").to_uppercase();
+        self.label_aligned(
+            &returning,
+            (Face::Semibold, 12., theme.text_secondary),
+            center(y, self.px(18.)),
+            Align::Center,
+        )?;
+        y += self.px(20.);
+        for line in lines.iter().take(2) {
+            self.label_aligned(
+                line,
+                (Face::Bold, size, theme.text),
+                center(y, step),
+                Align::Center,
+            )?;
+            y += step;
+        }
+        let system = system_title(&boot.game.system, data, &self.catalog);
+        let when = boot
+            .game
+            .left
+            .map(|left| self.resume_when(left))
+            .unwrap_or_default();
+        let key = match (&boot.game.entry, boot.power_off) {
+            (None, _) => "resume.no_state",
+            (Some(_), true) => "resume.saved_off",
+            (Some(_), false) => "resume.saved_switch",
+        };
+        let detail = self
+            .catalog
+            .format(key, &[("system", &system), ("when", &when)]);
+        let size = self
+            .shrink(&detail, Face::Regular, 13., self.frame.min_size(), room)?
+            .unwrap_or(self.frame.min_size());
+        y += self.px(4.);
+        self.label_aligned(
+            &detail,
+            (Face::Regular, size, theme.text_secondary),
+            center(y, self.px(20.)),
+            Align::Center,
+        )?;
+        y += self.px(36.);
+        let bar_w = (width as i32 * 2 / 5).max(self.px(120.));
+        let bar = Rect::new(
+            (width as i32 - bar_w) / 2,
+            y,
+            bar_w as u32,
+            self.px(3.).max(2) as u32,
+        );
+        let r = bar.height() as f32 / 2.;
+        self.rounded(
+            bar,
+            r,
+            Rgba {
+                a: 0x30,
+                ..theme.text
+            },
+            None,
+        )?;
+        let done = (bar_w as f32 * boot.progress.clamp(0., 1.)).round() as u32;
+        if done > 0 {
+            self.rounded(
+                Rect::new(bar.x(), bar.y(), done, bar.height()),
+                r,
+                theme.text,
+                None,
+            )?;
+        }
+        let hints = [('A', "resume.play_now"), ('B', "resume.to_menu")];
+        let mut total = self.px(16.) * (hints.len() as i32 - 1);
+        for (_, key) in hints {
+            let label = self.catalog.text(key);
+            total += self.px(26.) + self.measure(&label, Face::Regular, 13.)? as i32;
+        }
+        let end = (width as i32 + total) / 2 + self.px(24.);
+        self.hints(
+            &hints,
+            theme,
+            end.max(1) as u32,
+            bar.bottom() + self.px(18.),
+            self.px(24.) as u32,
         )?;
         Ok(())
     }

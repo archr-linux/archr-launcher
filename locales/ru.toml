@@ -1495,6 +1495,7 @@
 "switcher.no_state" = "Без возврата"
 "switcher.played" = "{system} · играли {ago}"
 "switcher.empty" = "Нет недавних игр"
+"switcher.now" = "Сейчас в игре"
 "resume.returning" = "Возвращаемся в"
 "resume.saved_off" = "{system} · сохранено при выключении, {when}"
 "resume.saved_switch" = "{system} · сохранено {when}"

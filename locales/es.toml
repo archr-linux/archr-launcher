@@ -1495,6 +1495,7 @@
 "switcher.no_state" = "Sin reanudar"
 "switcher.played" = "{system} · jugado {ago}"
 "switcher.empty" = "Ningún juego reciente"
+"switcher.now" = "Jugando ahora"
 "resume.returning" = "Volviendo a"
 "resume.saved_off" = "{system} · guardado al apagar, {when}"
 "resume.saved_switch" = "{system} · guardado {when}"

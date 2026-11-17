@@ -1495,6 +1495,7 @@
 "switcher.no_state" = "No resume"
 "switcher.played" = "{system} · played {ago}"
 "switcher.empty" = "No recent games"
+"switcher.now" = "Playing now"
 "resume.returning" = "Returning to"
 "resume.saved_off" = "{system} · saved at power off, {when}"
 "resume.saved_switch" = "{system} · saved {when}"

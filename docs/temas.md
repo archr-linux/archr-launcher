@@ -1033,6 +1033,30 @@ selecionado e na barra; `badge` nos outros pontos e no fundo da barra;
 apoio. A imagem é a tela no momento em que o jogo foi salvo; sem ela, a
 captura de tela do jogo ou a capa.
 
+### `[switcher]` em profundidade e `[resume]` como título
+
+```toml
+[switcher]
+cards = "depth"       # "row" (como sempre) ou "depth"
+card = { x = 0.22, y = 0.17, w = 0.56, h = 0.52 }
+info = { x = 0.0, y = 0.74, w = 1.0, h = 0.14 }
+
+[resume]
+style = "title"       # "picture" (como sempre) ou "title"
+```
+
+Com `cards = "depth"` o cartão do jogo selecionado fica no retângulo `card`,
+com sombra e o contorno de `focus_ring`, e acima dele "Jogando agora" (o jogo
+de onde se veio) ou há quanto tempo foi deixado; os dois vizinhos de cada lado
+ficam menores (78 % e 60 %), esmaecidos e saindo pelas bordas da tela; o
+fundo é a imagem do jogo selecionado desfocada e escurecida. Nome, sistema e
+os pontos ficam em `info`. `side` não vale nesse estilo.
+
+Com `style = "title"` a retomada ao ligar mostra, no meio da tela e sobre a
+imagem do jogo desfocada, "Voltando para", o nome grande em `font_bold`, o
+sistema e quando foi salvo, uma barra fina com a contagem e os dois botões.
+`shot` e `info` não valem nesse estilo.
+
 ## Movendo as ROMs
 
 A tela que aparece no boot de manutenção que move as ROMs para a partição
