@@ -34,6 +34,7 @@ position = "right"
 [status]
 style = "glass"
 clock = "text"
+rect = { x = 0.5, y = 0.012, w = 0.465, h = 0.09 }
 
 [dialog]
 width = 0.8

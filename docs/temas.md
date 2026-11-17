@@ -658,6 +658,29 @@ Desde a 3.1 cada tela pode ter uma tabela no topo do `theme.toml`, fora de
 padrão; chave desconhecida ou valor errado gera aviso no log e fica o padrão.
 Um tema sem essas tabelas desenha exatamente como antes.
 
+Além das posições, cada tabela escolhe um estilo de desenho; sem a chave, a
+tela é desenhada como sempre:
+
+| tabela | chave do estilo | o que muda |
+|---|---|---|
+| `[start]` | `style = "control"` | central de controle sobre a tela anterior desfocada |
+| `[menu]` | `style = "context"` | cartão ao lado do item em foco, com ações rápidas |
+| `[details]` | `style = "hero"` | destaque de tela cheia com a arte desfocada |
+| `[achievements]` | `progress = "ring"`, `style = "glass"` | anel de progresso, lista em vidro |
+| `[saves]` | `style = "preview"` | prévia grande e vagas em vidro |
+| `[shots]` | `sections = true`, `columns` | grade por data |
+| `[switcher]` | `cards = "depth"` | cartões em profundidade |
+| `[resume]` | `style = "title"` | título grande no meio |
+| `[search]` | `style = "field"` | campo e resultados em vidro, teclado encaixado |
+| `[keyboard]` | `sheet = true`, `key` | edição numa folha, teclas do tema |
+| `[dialog]` | `buttons = "row"`, `style` | perguntas em cápsulas, destrutivas em vermelho |
+| `[status]` | `rect` | onde fica a pílula do relógio |
+
+O tema de teste `crates/archr-ui/tests/themes/prateleiras` usa todos; o teste
+`home_render` desenha cada tela em 640x480, 720x720 e 480x320
+(`ARCHR_HOME_CAPTURE_DIR=<pasta> cargo test -p archr-ui --test home_render`
+grava os PNGs).
+
 ### Posições das telas
 
 `[details]`, `[achievements]`, `[saves]`, `[shots]`, `[switcher]`, `[resume]` e
