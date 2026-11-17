@@ -509,6 +509,7 @@ Elementos de cada tela (`[view.<id>.systems]` ou `[view.<id>.games]`):
 | `info` | nome do sistema e detalhes | `x y w h`, `title`, `meta` (tamanhos), `align` (`left`/`center`/`right`), `valign` (`top`/`bottom`), `details` (`stacked`: fabricante, nome, contagem; `inline`: nome e "213 jogos · Nintendo · 1990"), `opacity` |
 | `meta` | ano, jogadores e "jogado há" sob a capa | `x y w h`, `size`, `opacity` |
 | `dots` | pontos de posição entre sistemas | `x y w h` |
+| `strip` | faixa de sistemas acima de uma grade de jogos (L1/R1 trocam de sistema) | `x y w h` |
 | `decor` | imagens soltas (ver [Decorações](#decorações)) | lista de `{ image, x, y, scale, frames, fps, layer }` |
 
 Valores de `list`:
@@ -520,6 +521,12 @@ Valores de `list`:
   ↑ e ↓ também andam um, para nenhum botão saltar ao fim. Numa lista vertical,
   ↑/↓ andam uma linha e ←/→ uma página, do tamanho que a lista mostra
   (`h` dividido por `row + gap`).
+- `mark = "grid"` (só na tela de jogos): os jogos em grade, a capa com o nome
+  embaixo. `columns` (1 a 8, padrão 4) dá as colunas; `row` é a altura da
+  capa, `gap` o espaço entre capas, `font` o tamanho do nome e `radius` os
+  cantos. Na grade ← e → andam um jogo, ↑ e ↓ uma linha, e L1/R1 trocam de
+  sistema (na ordem da lista de sistemas), sem empilhar telas: B volta de
+  onde a grade foi aberta.
 - `scroll`: `"edge"` (rola ao chegar na borda) ou `"center"` (mantém a escolha no meio).
 - `cursor`: texto curto (até 4 caracteres, na fonte da lista) desenhado antes
   do item escolhido, piscando meio segundo aceso e meio apagado, por exemplo
@@ -544,6 +551,105 @@ errados são ignorados com aviso no log; nada disso derruba o launcher.
 2. Acrescente `[view.minha]` com um `name` e os elementos que mudam.
 3. Em Aparência, escolha o tema **meu** e a visualização **minha**; ao sair da
    página a mudança vale na hora, sem reiniciar.
+
+## Prateleiras
+
+Uma visualização pode abrir nas prateleiras em vez da lista de sistemas: abas
+no topo (Início, Biblioteca, Favoritos), o item em foco em destaque e, abaixo,
+fileiras de itens. Liga com `home`:
+
+```toml
+[view.vidro]
+name = { en = "Shelves", pt_BR = "Prateleiras" }
+home = true          # as prateleiras com os valores padrão
+```
+
+Ou, para mudar alguma coisa, com tabelas (uma tabela já liga as prateleiras;
+`home = true` e `[view.vidro.home.*]` não podem estar no mesmo arquivo, porque
+o TOML não deixa `home` ser ao mesmo tempo valor e tabela):
+
+```toml
+[view.vidro.home.tabs]               # cápsula de abas no topo
+items = ["home", "library", "favorites"]
+rect = { x = 0.306, y = 0.029, w = 0.388, h = 0.071 }
+style = "glass"                      # "glass" (o vidro do tema) ou "plain"
+
+[view.vidro.home.hero]               # destaque do item em foco (só na Início)
+rect = { x = 0.05, y = 0.154, w = 0.469, h = 0.313 }   # rótulo, título, detalhes e botões
+art = { x = 0.55, y = 0.146, w = 0.409, h = 0.313, fit = "contain" }
+backdrop = { blur = 0.108, opacity = 0.6 }   # a imagem do item, desfocada, atrás de tudo
+actions = ["play", "favorite", "more"]
+title = 0.071                        # tamanho do título (34 px)
+
+[view.vidro.home.shelves]
+order = ["continue", "systems", "apps"]
+y = 0.5125                           # topo da primeira prateleira
+gap = 0.033                          # entre prateleiras
+title = 0.027                        # tamanho do título de cada prateleira
+[view.vidro.home.shelves.continue]
+item = { w = 0.2625, h = 0.196, radius = 0.033 }
+progress = true
+[view.vidro.home.shelves.systems]
+item = { w = 0.144, h = 0.121, radius = 0.029 }
+
+[view.vidro.home.library]            # aba Biblioteca: grade de sistemas
+rect = { x = 0.05, y = 0.233, w = 0.9, h = 0.733 }
+columns = 3
+item = 0.275                         # altura de cada cartão
+gap = 0.029
+radius = 0.042
+
+[view.vidro.home.heading]            # título grande da Biblioteca e dos Favoritos
+x = 0.05
+y = 0.117
+w = 0.9
+h = 0.092
+size = 0.0625
+```
+
+Os valores acima são os padrões (o layout do tema Ellegance em 640×480); o
+tema só escreve o que muda. Como em toda visualização, `rect`, `art`,
+`library.rect` e `heading` são frações da tela; `item.w` e `item.h` também
+(largura e altura), e `radius`, `title`, `gap` e `size` são tamanhos (frações
+de 480). Num formato de tela diferente os cartões esticam com a tela: ajuste-os
+em `[aspect.square]` ou `[aspect.wide]` se quiser outra proporção.
+
+**Prateleiras** (`order`, na ordem em que aparecem):
+
+| nome | o que mostra |
+|---|---|
+| `continue` | os jogos recentes, com a imagem de onde pararam (a mesma do Alternador); A continua de onde parou |
+| `systems` | os sistemas, com a imagem do console |
+| `favorites` | os jogos favoritos |
+| `apps` | os apps de módulos |
+| `collections` | Favoritos, Recentes e as outras coleções |
+
+Prateleira vazia some. `progress` reserva a barra de progresso do jogo; hoje o
+launcher ainda não tem esse dado, e a barra não aparece.
+
+**Abas**: `home` (Início: destaque e prateleiras), `library` (Biblioteca: todos
+os sistemas em grade; A abre o sistema) e `favorites` (Favoritos: uma
+prateleira por sistema, com o nome do jogo embaixo). `items` escolhe quais e
+em que ordem.
+
+**Botões**: ↑ e ↓ trocam de prateleira (o destaque segue o item em foco, e a
+coluna escolhida fica onde estava); ← e → andam na prateleira; L1 e R1 trocam
+de aba. A continua um recente, abre um sistema ou um app, joga um favorito; X
+marca ou desmarca favorito; Y abre o menu do jogo (num recente, com Tirar dos
+recentes); Start abre o Menu Start. Na Início, B não faz nada; toda tela aberta
+a partir das prateleiras volta para elas com B, e o launcher volta para elas
+depois de um jogo e ao fechar o Alternador.
+
+**Desenho**: as abas usam o [vidro](#sombra-vidro-foco-movimento-e-gradiente)
+do tema (ou o padrão), o título do destaque usa `font_bold`, e o item em foco
+segue `focus`: com `"lift"` ele cresce, ganha sombra e o contorno `focus_ring`;
+com `"pill"` só ganha o contorno. A imagem desfocada do destaque é feita uma
+vez por imagem e guardada, como o vidro.
+
+`decor` vale dentro de `[view.<id>.home]` como nas outras telas. Para jogar a
+lista de jogos em grade com a faixa de sistemas, use `list.mark = "grid"` e
+`strip` em `[view.<id>.games]` (veja [Visualizações](#visualizações)). O tema de
+teste `crates/archr-ui/tests/themes/prateleiras/` liga tudo isso.
 
 ## Detalhes do jogo
 
