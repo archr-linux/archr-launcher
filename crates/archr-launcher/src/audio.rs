@@ -434,6 +434,15 @@ pub fn browse(
         (Screen::StartHub { .. }, Screen::StartHub { .. }) => {
             (before != after).then_some(Event::Move)
         }
+        // The shelves keep their cursor in the screen itself: a step along
+        // them is a move, a new tab a page; never "open".
+        (Screen::Home { tab: a, .. }, Screen::Home { tab: b, .. }) => {
+            if a != b {
+                Some(Event::Page)
+            } else {
+                (before != after).then_some(Event::Move)
+            }
+        }
         _ => navigation(button, before, after),
     }
 }
@@ -520,6 +529,18 @@ mod tests {
             Some(Event::Page)
         );
         assert_eq!(cue(Button::Down, (&systems, 3), (&systems, 3), &none), None);
+        let home = |tab, shelf, item| Screen::Home { tab, shelf, item };
+        let (inicio, biblioteca) = (archr_ui::layout::Tab::Home, archr_ui::layout::Tab::Library);
+        let (first, second) = (home(inicio, 0, 0), home(inicio, 0, 1));
+        let (below, library) = (home(inicio, 1, 0), home(biblioteca, 0, 0));
+        assert_eq!(
+            cue(Button::Right, (&first, 0), (&second, 0), &none),
+            Some(Event::Move),
+            "a step along a shelf is a move, not an open"
+        );
+        assert_eq!(cue(Button::Down, (&second, 0), (&below, 0), &none), Some(Event::Move));
+        assert_eq!(cue(Button::R, (&first, 0), (&library, 0), &none), Some(Event::Page));
+        assert_eq!(cue(Button::Left, (&first, 0), (&first, 0), &none), None);
         assert_eq!(
             cue(Button::A, (&systems, 0), (&snes, 0), &none),
             Some(Event::Select)
