@@ -104,12 +104,12 @@ impl Ui<'_, '_> {
         let drawn = self
             .placed_hints(hints, theme, (width, y, h))
             .and_then(|left| {
-            self.label(
-                summary,
-                (Face::Regular, 13., theme.muted),
-                Rect::new(self.px(24.), y, (left - self.px(40.)).max(1) as u32, h),
-            )
-        });
+                self.label(
+                    summary,
+                    (Face::Regular, 13., theme.muted),
+                    Rect::new(self.px(24.), y, (left - self.px(40.)).max(1) as u32, h),
+                )
+            });
         self.look.outlining = false;
         drawn
     }

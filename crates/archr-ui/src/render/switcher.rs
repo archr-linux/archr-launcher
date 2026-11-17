@@ -360,7 +360,10 @@ impl Ui<'_, '_> {
     /// The blur and veil a game's picture takes behind the switcher and
     /// the resume when the theme says nothing: its glass's blur, at least
     /// 24 px, two fifths through the background.
-    fn backdrop_or_default(theme: &Theme, own: Option<crate::screens::Backdrop>) -> crate::screens::Backdrop {
+    fn backdrop_or_default(
+        theme: &Theme,
+        own: Option<crate::screens::Backdrop>,
+    ) -> crate::screens::Backdrop {
         own.unwrap_or(crate::screens::Backdrop {
             blur: theme.glass.map_or(0., |g| g.blur).max(24. / 480.),
             ..Default::default()

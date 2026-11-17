@@ -696,7 +696,9 @@ impl Screens {
             match t.get("clock") {
                 Some(Value::Table(clock)) => {
                     own.start.clock_at = r.rect("clock").or(own.start.clock_at);
-                    let size = Reader("start.clock", clock);
+                    // Warnings name the key as the theme wrote it.
+                    let at = ["start", "clock"].join(".");
+                    let size = Reader(&at, clock);
                     own.start.clock = size.number("size", own.start.clock, 0.04, 0.16);
                 }
                 _ => own.start.clock = r.number("clock", own.start.clock, 0.04, 0.16),
@@ -800,13 +802,17 @@ impl Screens {
             match t.get("backdrop") {
                 None => {}
                 Some(Value::Table(b)) => {
-                    let r = Reader("resume.backdrop", b);
+                    let at = ["resume", "backdrop"].join(".");
+                    let r = Reader(&at, b);
                     let base = own.resume.backdrop.unwrap_or_default();
                     own.resume.backdrop = Some(Backdrop {
                         blur: r.number("blur", base.blur, 0., 0.2),
                         opacity: r.number("opacity", base.opacity, 0., 1.),
                     });
-                    for name in b.keys().filter(|n| !["blur", "opacity"].contains(&n.as_str())) {
+                    for name in b
+                        .keys()
+                        .filter(|n| !["blur", "opacity"].contains(&n.as_str()))
+                    {
                         log::warn!("Unknown theme key resume.backdrop.{name}; ignored");
                     }
                 }

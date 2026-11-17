@@ -497,10 +497,7 @@ impl View<'_, '_, '_> {
     /// Where the keyboard's sheet starts: its title row, the field with its
     /// caption and the keys, over the footer.
     pub(super) fn sheet_top(&self, state: &Settings) -> f32 {
-        let rows = state
-            .keyboard
-            .as_ref()
-            .map_or(4, |k| k.rows().len()) as f32;
+        let rows = state.keyboard.as_ref().map_or(4, |k| k.rows().len()) as f32;
         let k = self.theme.screens.keyboard;
         let (kh, kg) = if k == crate::screens::KeyboardStyle::default() {
             (34., 6.)

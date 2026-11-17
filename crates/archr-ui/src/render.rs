@@ -774,9 +774,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         if let Some(card) = self.status.as_mut().and_then(Status::take_announcement) {
             self.dongle = Some(card);
         }
-        let blink = self
-            .blink
-            .is_some_and(|on| on != self.blink_on(now));
+        let blink = self.blink.is_some_and(|on| on != self.blink_on(now));
         let look = self.look_tick();
         let toasts = self.toasts.tick(now);
         created || art || store || status || blink || look || toasts

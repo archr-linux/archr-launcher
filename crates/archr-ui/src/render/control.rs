@@ -44,10 +44,12 @@ impl Ui<'_, '_> {
             blur: 0.,
             ..theme.glass_or_default()
         };
-        let clock = style.clock_at.map_or((MARGIN, 24., wide - 2. * MARGIN), |r| {
-            let (x, y, w, _) = place(self, r);
-            (x, y, w)
-        });
+        let clock = style
+            .clock_at
+            .map_or((MARGIN, 24., wide - 2. * MARGIN), |r| {
+                let (x, y, w, _) = place(self, r);
+                (x, y, w)
+            });
         self.control_status(theme, clock, style.clock * 480.)?;
 
         let widgets = app.modules.widgets();

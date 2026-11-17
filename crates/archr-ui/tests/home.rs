@@ -259,7 +259,11 @@ fn up_from_the_first_shelf_reaches_the_showcase_buttons() {
     app.handle(Button::Left, &data);
     assert!(matches!(
         app.handle(Button::A, &data),
-        Outcome::Continue { game: 1, entry: Some(_), .. }
+        Outcome::Continue {
+            game: 1,
+            entry: Some(_),
+            ..
+        }
     ));
     // Down, or B, goes back to the shelf.
     app.handle(Button::Down, &data);

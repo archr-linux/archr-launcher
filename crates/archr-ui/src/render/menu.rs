@@ -165,10 +165,8 @@ impl Ui<'_, '_> {
             y += row;
         }
         let list_h = y;
-        let most = boxed.map_or(height as i32 - 2 * margin, |b| b.height() as i32)
-            - head
-            - quick_h
-            - pad;
+        let most =
+            boxed.map_or(height as i32 - 2 * margin, |b| b.height() as i32) - head - quick_h - pad;
         let shown = list_h.min(most.max(row));
         let h = head + quick_h + shown + pad;
         let (x, top) = if let Some(b) = boxed {

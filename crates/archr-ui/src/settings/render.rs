@@ -1350,45 +1350,45 @@ impl View<'_, '_, '_> {
                     (20., self.theme.text, Align::Center),
                 )?;
             }
-            Page::Appearance => self.appearance_page(state, &rows)?,
+            Page::Appearance => self.appearance_page(state, rows)?,
             Page::Store => self.store_grid(state)?,
             Page::StoreTheme => self.store_detail(state)?,
-            Page::Modules => self.modules_list(state, &rows)?,
-            Page::Module(..) => self.module_page(state, &rows)?,
+            Page::Modules => self.modules_list(state, rows)?,
+            Page::Module(..) => self.module_page(state, rows)?,
             Page::ModuleStore => self.module_store(state)?,
             Page::ModuleInfo | Page::ModuleOffer => self.module_offer(state)?,
             Page::AccentColor => self.custom_page(state)?,
-            Page::Mangohud => self.mangohud_page(state, &rows)?,
+            Page::Mangohud => self.mangohud_page(state, rows)?,
             Page::MangohudItems => self.mangohud_items(state)?,
             Page::Wifi => self.wifi(state)?,
-            Page::Services => self.services(state, &rows)?,
+            Page::Services => self.services(state, rows)?,
             Page::Bluetooth => self.bluetooth(state)?,
             Page::Keyboard => self.keyboard(state)?,
-            Page::Updates => self.updates_page(state, &rows)?,
+            Page::Updates => self.updates_page(state, rows)?,
             Page::UpdatePackages => self.update_packages(state)?,
-            Page::RaImport => self.raimport_page(state, &rows)?,
+            Page::RaImport => self.raimport_page(state, rows)?,
             Page::RaImportList => self.raimport_list(state)?,
-            Page::Roms => self.roms_page(state, &rows)?,
+            Page::Roms => self.roms_page(state, rows)?,
             Page::RomsList => self.roms_list(state)?,
             Page::UsbAdapters => self.usb_page(state)?,
-            Page::Diagnostics => self.diag_page(state, &rows)?,
-            Page::ErrorReports => self.reports_page(state, &rows)?,
+            Page::Diagnostics => self.diag_page(state, rows)?,
+            Page::ErrorReports => self.reports_page(state, rows)?,
             Page::ReportText => self.report_text(state)?,
             Page::Bios => self.bios_page(state)?,
             Page::Shortcuts => self.shortcuts_page(state)?,
             Page::PadTest => self.pad_test(state)?,
             Page::PadCalibrate => self.pad_calibrate(state)?,
             Page::Scraper => {
-                self.rows_at(state, &rows, &placements(Page::Scraper, &rows), 384.)?;
+                self.rows_at(state, rows, &placements(Page::Scraper, rows), 384.)?;
                 self.scraper_panel(state)?;
             }
             Page::Achievements => {
                 let right = cheevos::ROWS_RIGHT;
-                self.rows_at(state, &rows, &placements(Page::Achievements, &rows), right)?;
+                self.rows_at(state, rows, &placements(Page::Achievements, rows), right)?;
                 self.cheevos_panel(state)?;
             }
             Page::Storage => {
-                let positions = placements(Page::Storage, &rows);
+                let positions = placements(Page::Storage, rows);
                 self.list(
                     state,
                     &positions,
@@ -1409,8 +1409,8 @@ impl View<'_, '_, '_> {
                 )?
             }
             Page::Hotkeys => {
-                let positions = placements(Page::Hotkeys, &rows);
-                self.rows_at(state, &rows, &positions, RIGHT)?;
+                let positions = placements(Page::Hotkeys, rows);
+                self.rows_at(state, rows, &positions, RIGHT)?;
                 let rule = positions[0].bottom() + ROW_GAP + 3.;
                 self.ui.divider(
                     self.ui.px(28.),
@@ -1419,7 +1419,7 @@ impl View<'_, '_, '_> {
                     self.theme.border,
                 )?;
             }
-            page => self.rows_at(state, &rows, &placements(page, &rows), RIGHT)?,
+            page => self.rows_at(state, rows, &placements(page, rows), RIGHT)?,
         }
         Ok(())
     }

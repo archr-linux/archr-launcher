@@ -815,7 +815,11 @@ mod tests {
         assert_eq!(plain, font.size_of(text).unwrap().0);
         assert_eq!(plain - tight, (15. * 0.75f32).round() as u32);
         let drawn = tracked(&font, text, ink, true, -0.75).unwrap();
-        assert!(drawn.width().abs_diff(tight) <= 2, "{} {tight}", drawn.width());
+        assert!(
+            drawn.width().abs_diff(tight) <= 2,
+            "{} {tight}",
+            drawn.width()
+        );
         // The glyphs keep their ink: overlaps merge, nothing darkens.
         let total = |c: &Vec<Vec<u8>>| c.iter().flatten().map(|a| u64::from(*a)).sum::<u64>();
         let tightened = coverage(&drawn);
