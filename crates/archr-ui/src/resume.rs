@@ -1,7 +1,7 @@
 //! The switcher (Alternador) and the resume at power on (Retomar-boot):
 //! the games the host found and their buttons. The host fills them from
 //! the recent games and archr-game-save-exit's records.
-use crate::state::{App, Button, Outcome, Screen};
+use crate::state::{App, Button, Outcome};
 use std::path::PathBuf;
 
 /// A recent game as the switcher and the resume screen show it.
@@ -33,7 +33,7 @@ pub struct Boot {
 }
 
 impl App {
-    fn resume(game: &Recent) -> Outcome {
+    pub(crate) fn resume(game: &Recent) -> Outcome {
         Outcome::Continue {
             system: game.system.clone(),
             game: game.game,
@@ -70,7 +70,7 @@ impl App {
         Outcome::None
     }
     fn leave_switcher(&mut self) {
-        self.screen = Screen::Systems;
+        self.screen = self.root();
         self.cursor = 0;
         self.switcher.clear();
         self.switcher_left = None;
@@ -80,7 +80,7 @@ impl App {
             (Button::A, Some(boot)) if boot.ready => Self::resume(&boot.game),
             (Button::B, _) => {
                 self.boot = None;
-                self.screen = Screen::Systems;
+                self.screen = self.root();
                 self.cursor = 0;
                 Outcome::SkipResume
             }
@@ -92,6 +92,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::Screen;
 
     fn game(n: usize, entry: Option<&str>) -> Recent {
         Recent {

@@ -72,7 +72,7 @@ impl App {
                         self.screen = screen;
                         self.cursor = cursor;
                     }
-                    None => self.screen = Screen::Systems,
+                    None => self.screen = self.root(),
                 }
                 return Outcome::None;
             }
@@ -135,7 +135,7 @@ impl App {
                 return self.module_target(*module, &entry.target);
             }
             Button::A if row == 0 => {
-                self.screen = Screen::Systems;
+                self.screen = self.root();
                 match tile {
                     0 => self.enter(Screen::games("@recent")),
                     2 => self.enter(Screen::games("tools")),

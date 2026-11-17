@@ -5,9 +5,11 @@ use crate::modules::{Call, Context};
 use crate::saves::{Action, Confirm, Kind, Progress, Save};
 use archr_index::{cache::SystemEntry, Game};
 use std::path::PathBuf;
+mod home;
 mod hub;
 mod list;
 mod order;
+pub use home::{Item, Shelf};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Button {
@@ -41,6 +43,13 @@ impl Button {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Screen {
     Systems,
+    /// The shelves, when the view has them (`View::home`): the tab, the
+    /// focused shelf and the item on it.
+    Home {
+        tab: crate::layout::Tab,
+        shelf: usize,
+        item: usize,
+    },
     StartHub {
         row: usize,
         tile: usize,
@@ -433,6 +442,14 @@ pub struct App {
     pub boot: Option<crate::resume::Boot>,
     /// The open search, kept while its game menu is up.
     pub search: Option<Search>,
+    /// The shelves of the active view, when it has them.
+    pub home: Option<crate::layout::Home>,
+    /// The recent games for the Continue shelf, filled by the host.
+    pub recent: Vec<crate::resume::Recent>,
+    /// The open game menu came from a recent game on the shelves.
+    recent_menu: bool,
+    /// Columns of the games screen when it is a grid.
+    games_grid: Option<usize>,
     history: Vec<(Screen, usize)>,
     moving: Option<order::Moving>,
     /// The systems row to find again once the host changed the rows.
@@ -489,6 +506,10 @@ impl App {
             hub_from: None,
             boot: None,
             search: None,
+            home: None,
+            recent: Vec::new(),
+            recent_menu: false,
+            games_grid: None,
         }
     }
 
@@ -496,6 +517,22 @@ impl App {
     pub fn set_view(&mut self, view: &View) {
         self.systems_nav = Nav::of(&view.systems, view.screen);
         self.games_nav = Nav::of(&view.games, view.screen);
+        self.games_grid = (view.games.list.mark == crate::layout::Mark::Grid)
+            .then_some(view.games.list.columns.max(1));
+        let had = self.home.is_some();
+        self.home.clone_from(&view.home);
+        // The resting screen follows the view, here and on the way back.
+        if had != self.home.is_some() {
+            let root = self.root();
+            for screen in std::iter::once(&mut self.screen)
+                .chain(self.history.iter_mut().map(|(s, _)| s))
+                .chain(self.hub_from.iter_mut().map(|(s, _)| s))
+            {
+                if matches!(screen, Screen::Systems | Screen::Home { .. }) {
+                    *screen = root.clone();
+                }
+            }
+        }
     }
 
     /// The reports notice waits while the resume screen or the switcher is up.
@@ -597,10 +634,11 @@ impl App {
     }
     /// The game menu was opened on the Recently played list.
     fn on_recent_list(&self) -> bool {
-        matches!(
-            self.history.last(),
-            Some((Screen::Games { system, .. }, _)) if system == "@recent"
-        )
+        match self.history.last() {
+            Some((Screen::Games { system, .. }, _)) => system == "@recent",
+            Some((Screen::Home { .. }, _)) => self.recent_menu,
+            _ => false,
+        }
     }
     /// The system a systems-screen quick menu was opened on.
     fn quick_system(&self, data: &dyn DataSource) -> Option<String> {
@@ -637,6 +675,8 @@ impl App {
     /// Returns effects for the caller to apply. Core selection is tracked locally
     /// while the quick menu is open, independently of persistence timing.
     pub fn handle(&mut self, b: Button, data: &dyn DataSource) -> Outcome {
+        // The shelves and a games grid tell the arrows from the shoulders.
+        let raw = b;
         let b = b.shoulder();
         if let Some(offer) = &mut self.convert {
             return match offer.handle(b) {
@@ -682,10 +722,10 @@ impl App {
         // Start opens the Start Menu from the systems screen and from a
         // system's list (a search being typed keeps its Start).
         if b == Button::Start
-            && (matches!(self.screen, Screen::Systems)
+            && (matches!(self.screen, Screen::Systems | Screen::Home { .. })
                 || matches!(self.screen, Screen::Games { .. }) && self.search.is_none())
         {
-            self.hub_from = matches!(self.screen, Screen::Games { .. })
+            self.hub_from = matches!(self.screen, Screen::Games { .. } | Screen::Home { .. })
                 .then(|| (self.screen.clone(), self.cursor));
             self.screen = Screen::StartHub {
                 row: 0,
@@ -696,6 +736,14 @@ impl App {
         }
         if matches!(self.screen, Screen::StartHub { .. }) {
             return self.handle_hub(b, data);
+        }
+        if matches!(self.screen, Screen::Home { .. }) {
+            return self.handle_home(raw, data);
+        }
+        if let (Screen::Games { system, .. }, Some(columns)) = (&self.screen, self.games_grid) {
+            if let Some(outcome) = self.handle_grid(raw, system.clone(), columns, data) {
+                return outcome;
+            }
         }
         match self.screen {
             Screen::Switcher => return self.handle_switcher(b),
@@ -719,7 +767,8 @@ impl App {
             return self.handle_progress(b, system, game);
         }
         let len = match &self.screen {
-            Screen::StartHub { .. }
+            Screen::Home { .. }
+            | Screen::StartHub { .. }
             | Screen::Details { .. }
             | Screen::Achievements { .. }
             | Screen::Saves { .. }
@@ -777,7 +826,8 @@ impl App {
                 Button::Y => self.enter(Screen::QuickMenu { game: None }),
                 _ => {}
             },
-            Screen::StartHub { .. }
+            Screen::Home { .. }
+            | Screen::StartHub { .. }
             | Screen::Details { .. }
             | Screen::Achievements { .. }
             | Screen::Saves { .. }
@@ -1027,6 +1077,7 @@ impl App {
         from_details: bool,
         data: &dyn DataSource,
     ) {
+        self.recent_menu = false;
         if self.progress.game != Some((system.clone(), game)) {
             self.progress = Progress::default();
         }
@@ -1384,13 +1435,57 @@ impl App {
         let Some(system) = Self::system_rows(data).get(row).cloned() else {
             return;
         };
-        self.screen = Screen::Systems;
-        self.cursor = row;
+        self.screen = self.root();
+        self.cursor = if self.home.is_some() { 0 } else { row };
         if let Some(game) = game {
             self.enter(Screen::games(system.clone()));
             let by_folder = data.shows_folders(&system);
             self.select(data, &system, game, by_folder);
         }
+    }
+
+    /// A games grid: ←/→ step a game, ↑/↓ a row, L1/R1 change system along
+    /// the strip; None leaves the press to the list (A, X, Y, B).
+    fn handle_grid(
+        &mut self,
+        raw: Button,
+        system: String,
+        columns: usize,
+        data: &dyn DataSource,
+    ) -> Option<Outcome> {
+        let Screen::Games { folder, .. } = &self.screen else {
+            return None;
+        };
+        let last = Self::list_len(data, &system, folder).saturating_sub(1);
+        self.cursor = self.cursor.min(last);
+        match raw {
+            Button::Left => self.cursor = self.cursor.saturating_sub(1),
+            Button::Right => self.cursor = (self.cursor + 1).min(last),
+            Button::Up => self.cursor = self.cursor.checked_sub(columns).unwrap_or(self.cursor),
+            Button::Down => {
+                if self.cursor + columns <= last {
+                    self.cursor += columns;
+                }
+            }
+            Button::L | Button::R => {
+                let systems: Vec<String> = Self::system_rows(data)
+                    .into_iter()
+                    .filter(|row| !row.starts_with('@'))
+                    .collect();
+                let at = systems.iter().position(|s| *s == system)?;
+                let next = if raw == Button::L {
+                    at.checked_sub(1)
+                } else {
+                    Some(at + 1)
+                };
+                if let Some(next) = next.and_then(|n| systems.get(n)) {
+                    self.screen = Screen::games(next.clone());
+                    self.cursor = 0;
+                }
+            }
+            _ => return None,
+        }
+        Some(Outcome::None)
     }
 
     fn enter(&mut self, screen: Screen) {
@@ -1400,7 +1495,7 @@ impl App {
     }
 
     fn back(&mut self) {
-        let (screen, cursor) = self.history.pop().unwrap_or((Screen::Systems, 0));
+        let (screen, cursor) = self.history.pop().unwrap_or_else(|| (self.root(), 0));
         self.screen = screen;
         self.cursor = cursor;
     }
