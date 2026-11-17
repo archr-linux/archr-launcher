@@ -77,37 +77,54 @@ impl Ui<'_, '_> {
             Kind::Detail => self.app_detail(session, screen, theme, layout, art)?,
         }
         let tall = self.frame.reference().1;
+        // Each layer over the screen offers only its own buttons.
         if let Some(qr) = &session.qr {
             self.staged((640., tall), |ui| ui.app_qr(qr, theme))?;
-            // The screen's own hints would still read under the dimming: its
-            // footer band is cleared (background, then the same dimming) and
-            // only B is offered.
-            let Frame { width, height, .. } = self.frame;
-            let footer = self.frame.size(theme.footer_height).round().max(1.) as u32;
-            let band = Rect::new(0, height as i32 - footer as i32, width, footer);
-            self.canvas.set_draw_color(color(theme.background));
-            self.canvas.fill_rect(band)?;
-            let dim = Rgba {
-                a: (f32::from(theme.scrim.a) * 1.2).round().min(255.) as u8,
-                ..theme.scrim
-            };
-            self.canvas.set_draw_color(color(dim));
-            self.canvas.fill_rect(band)?;
-            self.hints(
-                &[('B', "hint.close")],
-                theme,
-                width,
-                height as i32 - footer as i32,
-                footer,
-            )?;
+            self.modal_footer(&[(HintButton::Key('B'), "hint.close")], 1.2, theme)?;
         }
         if let Some(ask) = &session.ask {
             self.staged((640., tall), |ui| ui.app_ask(ask, theme))?;
+            let hints = [
+                (HintButton::Key('A'), "hint.select"),
+                (HintButton::Key('B'), "hint.cancel"),
+            ];
+            self.modal_footer(&hints, 1.2, theme)?;
         }
         if let Some(keyboard) = &session.keyboard {
             self.staged((640., tall), |ui| ui.app_keyboard(keyboard, theme))?;
+            let hints = [
+                (HintButton::Key('A'), "search.type"),
+                (HintButton::Key('Y'), "hint.delete"),
+                (HintButton::Start, "apps.search"),
+                (HintButton::Key('B'), "hint.close"),
+            ];
+            self.modal_footer(&hints, 1., theme)?;
         }
         Ok(())
+    }
+    /// The footer under a layer: the screen's own hints would still read
+    /// under the dimming, so the band is cleared (background, then the
+    /// layer's dimming, `strength` as `scrim` takes it) and only `hints`,
+    /// the layer's, are drawn over it.
+    pub(super) fn modal_footer(
+        &mut self,
+        hints: &[(HintButton, &str)],
+        strength: f32,
+        theme: &Theme,
+    ) -> Result<(), String> {
+        let Frame { width, height, .. } = self.frame;
+        let footer = self.frame.size(theme.footer_height).round().max(1.) as u32;
+        let y = height as i32 - footer as i32;
+        let band = Rect::new(0, y, width, footer);
+        self.canvas.set_draw_color(color(theme.background));
+        self.canvas.fill_rect(band)?;
+        let dim = Rgba {
+            a: (f32::from(theme.scrim.a) * strength).round().min(255.) as u8,
+            ..theme.scrim
+        };
+        self.canvas.set_draw_color(color(dim));
+        self.canvas.fill_rect(band)?;
+        self.placed_hints(hints, theme, (width, y, footer)).map(|_| ())
     }
 
     fn app_collection(

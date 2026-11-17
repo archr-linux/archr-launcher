@@ -834,3 +834,78 @@ fn an_app_shows_its_pictures_in_every_view() {
         }
     }
 }
+
+/// The brightest pixel of the footer band (its bottom tenth).
+fn footer_light(pixels: &[u8], (w, h): (u32, u32)) -> u32 {
+    let top = (h - h / 10) as usize;
+    pixels[top * w as usize * 4..]
+        .chunks_exact(4)
+        .map(|p| (u32::from(p[0]) + u32::from(p[1]) + u32::from(p[2])) / 3)
+        .max()
+        .unwrap_or(0)
+}
+
+/// A layer over a screen (a question, an app's question or keyboard)
+/// offers its own hints, as bright as a screen's: never left dimmed under
+/// it, for both shipped themes.
+#[test]
+fn a_layer_keeps_its_hints_bright() {
+    let _sdl = SDL.lock().unwrap_or_else(|e| e.into_inner());
+    std::env::set_var("SDL_VIDEODRIVER", "offscreen");
+    let root = tempfile::tempdir().unwrap();
+    let picture = painted(root.path(), "app", (320, 240), [70, 40, 160]);
+    let themes = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../themes");
+    for dir in ["default", "ellegance"] {
+        let theme = load(&themes.join(dir), LISTA).fitted(640, 480);
+        let view = theme.view(LISTA);
+        let (ttf, creator);
+        let mut ui = Ui::new(640, 480, true).unwrap();
+        ttf = sdl2::ttf::init().unwrap();
+        creator = ui.canvas.texture_creator();
+        ui.set_motion(archr_ui::motion::Motion::Off);
+        ui.configure(&ttf, &creator, &theme, Some(root.path())).unwrap();
+        ui.set_status(archr_ui::status::Status::frozen("14:32"));
+        let mut app = App::new(10);
+        app.set_view(&view);
+        let data = FakeData::default();
+        let mut light = |ui: &mut Ui, settings: Option<&Settings>| {
+            for _ in 0..2 {
+                ui.snap_animations();
+                ui.draw_with_settings(&app, &data, &theme, Default::default(), settings)
+                    .unwrap();
+            }
+            let pixels = ui
+                .canvas
+                .read_pixels(None, sdl2::pixels::PixelFormatEnum::RGBA32)
+                .unwrap();
+            footer_light(&pixels, (640, 480))
+        };
+        let mut settings = Settings::default();
+        settings.loading = false;
+        settings.open(Page::Wifi);
+        settings.open(Page::Bluetooth);
+        let plain = light(&mut ui, Some(&settings));
+        settings.confirm_forget = Some("00:1A:2B:3C:4D:5E".into());
+        let asked = light(&mut ui, Some(&settings));
+        assert!(asked * 10 >= plain * 9, "{dir}: a question's hints dimmed ({asked} < {plain})");
+        let mut session = app_session(&picture);
+        ui.app = Some(session.clone());
+        let screen = light(&mut ui, None);
+        session.ask = Some(archr_ui::apps::Ask {
+            text: "Baixar?".into(),
+            ..Default::default()
+        });
+        ui.app = Some(session.clone());
+        let asked = light(&mut ui, None);
+        assert!(asked * 10 >= screen * 9, "{dir}: an app's question dims its hints ({asked} < {screen})");
+        session.ask = None;
+        session.keyboard = Some(archr_ui::keyboard::Keyboard::new(
+            archr_ui::keyboard::Mode::Text,
+            String::new(),
+        ));
+        ui.app = Some(session);
+        let typing = light(&mut ui, None);
+        assert!(typing * 10 >= screen * 9, "{dir}: an app's keyboard dims its hints ({typing} < {screen})");
+        ui.app = None;
+    }
+}

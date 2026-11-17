@@ -1071,19 +1071,7 @@ impl View<'_, '_, '_> {
                 self.theme.border,
             )?;
         }
-        let (width, y, h) = (
-            self.ui.frame.width,
-            self.ui.px(footer),
-            self.ui.px(self.bottom() - footer) as u32,
-        );
-        let left = match self.module_hints(state) {
-            Some(labels) => self.ui.hint_labels(&labels, self.theme, width, y, h)?,
-            None if themed => self
-                .ui
-                .placed_hints(state.hints(), self.theme, (width, y, h))?,
-            None => self.ui.hints(state.hints(), self.theme, width, y, h)?,
-        } as f32
-            / self.ui.frame.scale;
+        let left = self.footer_hints(state)?;
         let status = if state.loading {
             Some(self.ui.catalog.text("loading"))
         } else if let Some(picker) = picker.filter(|p| p.full()) {
@@ -1313,24 +1301,26 @@ impl View<'_, '_, '_> {
                     )
                 })
             };
+        // A question dims the page, its footer too: the question's own
+        // hints are drawn again over the dimming, never left under it.
         if state.page() == Page::Bios && state.bios.confirm {
             let theme = self.theme;
-            return self
-                .ui
+            self.ui
                 .pop_in(crate::render::Pop::Dialog, "bios", (theme, 1.17), |ui| {
                     View { ui, theme }.bios_question(state)
-                });
+                })?;
+            return self.footer_hints(state).map(|_| ());
         }
         if let Some((question, detail, hints)) = dialog {
             let theme = self.theme;
-            return self
-                .ui
+            self.ui
                 .pop_in(crate::render::Pop::Dialog, &question, (theme, 1.), |ui| {
                     // Designed on 640x480: centered on a taller screen.
                     ui.staged((640., 480.), |ui| {
                         View { ui, theme }.dialog(&question, detail.as_deref(), hints)
                     })
-                });
+                })?;
+            return self.footer_hints(state).map(|_| ());
         }
         Ok(())
     }
@@ -1441,6 +1431,27 @@ impl View<'_, '_, '_> {
         let tall = self.bottom() - TITLE_LINE;
         self.ui
             .staged_in(area, (640., tall), |ui| draw(&mut View { ui, theme }))
+    }
+    /// The footer's hints, where the theme puts them; their left edge in
+    /// reference pixels. On the keyboard's sheet they sit inside the sheet,
+    /// without a capsule of their own over it.
+    fn footer_hints(&mut self, state: &Settings) -> Result<f32, String> {
+        let footer = self.footer_top();
+        let (width, y, h) = (
+            self.ui.frame.width,
+            self.ui.px(footer),
+            self.ui.px(self.bottom() - footer) as u32,
+        );
+        let sheet = state.page() == Page::Keyboard && self.theme.screens.keyboard.sheet;
+        let left = match self.module_hints(state) {
+            Some(labels) => self.ui.hint_labels(&labels, self.theme, width, y, h)?,
+            None if self.look().themed() && !sheet => {
+                self.ui
+                    .placed_hints(state.hints(), self.theme, (width, y, h))?
+            }
+            None => self.ui.hints(state.hints(), self.theme, width, y, h)?,
+        };
+        Ok(left as f32 / self.ui.frame.scale)
     }
     /// A question with its explanation and answers, or a wait message.
     fn dialog(
