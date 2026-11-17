@@ -742,6 +742,29 @@ A resposta que destrói ou reinicia (apagar, esquecer, remover, reiniciar,
 trocar o driver, converter por cima de saves) sai em vermelho (`danger`): o
 botão inteiro quando está em foco, só a palavra quando não está.
 
+### Menu Start: `[start]`
+
+```toml
+[start]
+style = "control"     # "tiles" (como sempre) ou "control": a central de controle
+radius = 0.054        # cantos dos blocos (tamanho, fração de 480; 26 px)
+shortcut = 0.108      # diâmetro dos atalhos redondos (52 px)
+clock = 0.092         # tamanho da hora (44 px)
+```
+
+Com `"control"` o Menu Start abre sobre a tela de onde foi chamado, desfocada
+uma vez e escurecida: a hora grande no alto à esquerda com "Arch R" embaixo, a
+rede e a bateria em texto à direita (seguem `battery` e `radios` de
+`[status]`), os blocos Recentes, Jogos e Ferramentas (e os dos módulos) em
+vidro com o ícone no canto e o nome embaixo, os atalhos em círculos e, abaixo
+deles, o nome e o estado do item em foco (os jogos recentes, a biblioteca, a
+rede, as atualizações). O item em foco fica branco com o texto escuro (cores
+`text` e `background`); o bloco cresce com `focus_scale`. Wi-Fi e Bluetooth
+ligados ficam na cor de destaque, Desligar tem o ícone vermelho (`danger`) e
+os selos de atualização do sistema e das lojas continuam. Os widgets dos
+módulos ficam numa faixa entre os blocos e os atalhos. Os atalhos, a ordem e os
+botões são os mesmos do Menu Start de sempre; `area` continua valendo.
+
 ### Grade de jogos com título
 
 Numa visualização com [prateleiras](#prateleiras), a grade de jogos

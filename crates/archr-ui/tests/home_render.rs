@@ -428,7 +428,8 @@ fn every_screen_table_draws_at_every_size() {
                 pixels.chunks_exact(4).filter(|p| p != &first).count() > 1000,
                 "{name} at {size:?} is empty"
             );
-            if let Some(out) = &out {
+            // A name with '_' draws only (what lies behind the next one).
+            if let Some(out) = out.as_ref().filter(|_| !name.starts_with('_')) {
                 let file = out.join(format!("tela-{name}-{}x{}.png", size.0, size.1));
                 image::save_buffer(file, &pixels, size.0, size.1, image::ColorType::Rgba8).unwrap();
             }
@@ -446,6 +447,7 @@ fn every_screen_table_draws_at_every_size() {
         let snes = |game| ("snes".to_owned(), game);
         // [start]
         let mut app = fresh();
+        shot(&mut ui, "_inicio", &app, None);
         app.handle(Button::Start, &data);
         assert!(
             matches!(app.screen, Screen::StartHub { .. }),

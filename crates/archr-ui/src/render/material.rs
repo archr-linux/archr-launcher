@@ -212,6 +212,10 @@ impl<'t> Ui<'_, 't> {
         blurs.push((path.to_path_buf(), steps, blurred));
         Some(blurs.len() - 1)
     }
+    /// Forgets the blurred copy kept as `path`, so it is made again.
+    pub(super) fn forget_blur(&mut self, path: &Path) {
+        self.materials.blurs.retain(|(made, _, _)| made != path);
+    }
     /// The blurred picture `index` (from `blurred`) drawn over `dst`, at `alpha`.
     pub(super) fn draw_blurred(
         &mut self,

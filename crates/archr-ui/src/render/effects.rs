@@ -15,6 +15,8 @@ use sdl2::{
 };
 use std::time::{Duration, Instant};
 
+/// The blurred screen behind the Start menu's control center, by name.
+const BEHIND: &str = "@start-behind";
 /// How far a leaving or arriving screen travels.
 const SLIDE: f32 = 40.;
 /// How far each band rises when the launcher opens, and the bands' stagger.
@@ -196,6 +198,44 @@ impl<'t> Ui<'_, 't> {
         }
         texture.set_alpha_mod((alpha * 255.).round() as u8);
         self.canvas.copy(texture, None, *rect)
+    }
+    /// Keeps the screen the last frame showed, blurred as the theme's glass
+    /// blurs (else 16 px), for the Start menu's control center to open over.
+    /// Made once each time the control center opens.
+    pub(super) fn keep_behind(&mut self, theme: &Theme) {
+        let key = std::path::Path::new(BEHIND);
+        self.forget_blur(key);
+        let steps = self.behind_steps(theme);
+        self.blurred(key, steps, |ui| match ui.effects.page.as_mut() {
+            Some(page) if ui.has_presented => {
+                page.set_alpha_mod(255);
+                ui.canvas.copy(page, None, None).map(|()| true)
+            }
+            _ => Ok(false),
+        });
+    }
+    fn behind_steps(&self, theme: &Theme) -> u32 {
+        let blur = theme.glass.map_or(0., |g| g.blur).max(16. / 480.);
+        super::material::halvings(self.frame.size(blur))
+    }
+    /// The kept screen behind the control center over the whole screen,
+    /// darkened; the theme's background when none was kept.
+    pub(super) fn behind(&mut self, theme: &Theme) -> Result<(), String> {
+        let Frame { width, height, .. } = self.frame;
+        let whole = Rect::new(0, 0, width, height);
+        let key = std::path::Path::new(BEHIND);
+        let steps = self.behind_steps(theme);
+        if let Some(index) = self.blurred(key, steps, |_| Ok(false)) {
+            self.draw_blurred(index, whole, 255)?;
+        } else {
+            // Not kept (no texture targets): only the theme's background.
+            return Ok(());
+        }
+        self.canvas.set_draw_color(color(Rgba {
+            a: 110,
+            ..theme.background
+        }));
+        self.canvas.fill_rect(whole)
     }
     /// Shows the page: sliding against the leaving one, or rising band by
     /// band while the launcher opens.

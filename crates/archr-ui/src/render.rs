@@ -17,6 +17,7 @@ use crate::{
 pub use details::Art;
 mod apps;
 mod cheevos;
+mod control;
 mod details;
 mod effects;
 pub(crate) use effects::Pop;
@@ -408,6 +409,8 @@ pub struct Ui<'font, 'texture> {
     settings_scroll: settings_render::Scroll,
     settings_banner: settings_render::Banner,
     menu_open: bool,
+    /// The Start menu's control center has kept the screen it opened on.
+    hub_behind: bool,
     /// Each settings switch's last state and its knob's position.
     switches: std::collections::BTreeMap<crate::settings::Id, Tween>,
     cover_key: Option<PathBuf>,
@@ -537,6 +540,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             settings_scroll: settings_render::Scroll::default(),
             settings_banner: settings_render::Banner::default(),
             menu_open: false,
+            hub_behind: false,
             switches: std::collections::BTreeMap::new(),
             lobby: None,
             cover_key: None,
@@ -982,6 +986,8 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             text.set_smoothing(theme.font_smoothing);
         }
         let browsing = self.lobby.is_none() && self.moonlight.is_none() && settings.is_none();
+        // Any other screen between: the next control center keeps it anew.
+        let kept_behind = std::mem::take(&mut self.hub_behind);
         self.look(theme, browsing);
         if let Some(art) = &mut self.art {
             art.set_apps(data.apps());
@@ -1066,6 +1072,14 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                     };
                     key.map(|key| (key, self.area(picture.rect)))
                 });
+            // The control center opens over the screen it was called on:
+            // that screen, blurred once, before the page is drawn over.
+            let control =
+                matches!(app.screen, Screen::StartHub { .. }) && theme.screens.start.control;
+            if control && !kept_behind {
+                self.keep_behind(theme);
+            }
+            self.hub_behind = control;
             self.begin_page(games, picture, theme)?;
             let system = match backdrop {
                 Screen::Games { system, .. } | Screen::Details { system, .. }
@@ -1123,7 +1137,9 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 }
                 // The hub names itself in a view that titles screens; it
                 // follows the systems screen's header, whatever lies behind.
-                if matches!(app.screen, Screen::StartHub { .. }) {
+                if control {
+                    // The control center has its own clock and status.
+                } else if matches!(app.screen, Screen::StartHub { .. }) {
                     self.header(&app.screen, cursor, data, theme, &view.systems)?;
                 } else if matches!(backdrop, Screen::Games { .. })
                     && layout.list.mark == Mark::Grid
@@ -1140,6 +1156,9 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                     // theme says), centered in it; tiles may run to its edges.
                     let area = self.area(theme.start_area);
                     let wide = area.width() as f32 / self.frame.scale;
+                    if control {
+                        self.behind(theme)?;
+                    }
                     self.staged_in(area, (wide, 480.), |ui| ui.hub(app, data, theme))?;
                     self.hub_footer(theme)?;
                 } else {

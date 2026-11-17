@@ -107,12 +107,35 @@ pub struct DialogStyle {
     pub glass: bool,
 }
 
+/// The Start menu: its tiles and shortcuts (`"tiles"`, as always), or the
+/// control center (`"control"`): the hour large, blocks of glass, round
+/// shortcuts and the focused item's caption, over the screen it opened on.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct StartStyle {
+    pub control: bool,
+    /// Sizes (of 480): the blocks' corners, the round shortcuts and the hour.
+    pub radius: f32,
+    pub shortcut: f32,
+    pub clock: f32,
+}
+impl Default for StartStyle {
+    fn default() -> Self {
+        Self {
+            control: false,
+            radius: 26. / 480.,
+            shortcut: 52. / 480.,
+            clock: 44. / 480.,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Screens {
     pub toast: ToastStyle,
     pub hints: Hints,
     pub status: StatusStyle,
     pub dialog: DialogStyle,
+    pub start: StartStyle,
 }
 
 /// Rectangles the screen tables place, as (table, key, old loose key).
@@ -192,6 +215,7 @@ fn style_keys(screen: &str) -> &'static [&'static str] {
         "hints" => &["style", "position"],
         "status" => &["style", "battery", "radios", "clock", "rect"],
         "dialog" => &["width", "radius", "icon", "buttons", "style"],
+        "start" => &["style", "radius", "shortcut", "clock"],
         _ => &[],
     }
 }
@@ -276,6 +300,17 @@ impl Screens {
                 own.dialog.glass,
                 &[("glass", true), ("plain", false)],
             );
+        }
+        if let Some(t) = get("start") {
+            let r = Reader("start", t);
+            own.start.control = r.pick(
+                "style",
+                own.start.control,
+                &[("tiles", false), ("control", true)],
+            );
+            own.start.radius = r.number("radius", own.start.radius, 0., 0.1);
+            own.start.shortcut = r.number("shortcut", own.start.shortcut, 0.06, 0.16);
+            own.start.clock = r.number("clock", own.start.clock, 0.04, 0.16);
         }
         own
     }

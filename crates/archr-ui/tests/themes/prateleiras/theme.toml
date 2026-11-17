@@ -42,6 +42,9 @@ icon = true
 buttons = "row"
 style = "glass"
 
+[start]
+style = "control"
+
 [view.prateleiras]
 name = { en = "Shelves", pt_BR = "Prateleiras" }
 

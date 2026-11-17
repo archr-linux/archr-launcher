@@ -4,7 +4,7 @@ use crate::shortcuts::{Builtin, Shortcut};
 use crate::status::Radio;
 
 /// What waits behind a shortcut: system update packages, store updates.
-fn pending(app: &App, item: &Shortcut) -> usize {
+pub(super) fn pending(app: &App, item: &Shortcut) -> usize {
     match item {
         Shortcut::Builtin(Builtin::Update) => app.updates,
         Shortcut::Builtin(Builtin::Themes) => app.theme_updates,
@@ -17,7 +17,7 @@ fn pending(app: &App, item: &Shortcut) -> usize {
 /// top right, cut out of the circle by a ring of the background. One look
 /// for the system, the theme store and the module store; the caption under
 /// the focused one says how many. `None` with nothing waiting.
-fn badge(app: &App, item: &Shortcut, shortcut: Rect, scale: f32) -> Option<Rect> {
+pub(super) fn badge(app: &App, item: &Shortcut, shortcut: Rect, scale: f32) -> Option<Rect> {
     let px = |n: f32| (n * scale).round() as i32;
     let dot = px(12.);
     let right = shortcut.x() + shortcut.width() as i32;
@@ -34,7 +34,7 @@ fn badge(app: &App, item: &Shortcut, shortcut: Rect, scale: f32) -> Option<Rect>
 /// The caption of a radio's switch, and the address to follow it in mono:
 /// Wi-Fi names the network joined, Bluetooth says whether a device is
 /// linked. `None` for any other shortcut.
-fn radio_caption(
+pub(super) fn radio_caption(
     catalog: &crate::i18n::I18n,
     item: Builtin,
     (wifi, bluetooth): (Radio, Radio),
@@ -61,7 +61,7 @@ fn radio_caption(
     Some((catalog.text(key), String::new()))
 }
 
-const TILES: [(&str, Glyph); 3] = [
+pub(super) const TILES: [(&str, Glyph); 3] = [
     ("collections.recent", Glyph::Recent),
     ("start.games", Glyph::Games),
     ("start.tools", Glyph::Tools),
@@ -132,6 +132,9 @@ impl Ui<'_, '_> {
         else {
             return Ok(());
         };
+        if theme.screens.start.control {
+            return self.hub_control(app, data, theme, (row, tile, shortcut));
+        }
         // The title, the shortcut's name and the hints lie over the
         // background: they take the theme's outline. Tiles have their own.
         self.look.outlining = true;
@@ -320,7 +323,7 @@ impl Ui<'_, '_> {
         }
 
         self.frame.min = minimum;
-        self.hub_widgets(app, theme, row, &widgets)?;
+        self.hub_widgets(app, theme, row, &widgets, None)?;
         let side = px(46.);
         let gap = px(12.);
         let shortcuts = app.hub_shortcuts();
@@ -459,7 +462,9 @@ impl Ui<'_, '_> {
         let (width, height) = (self.frame.width, self.frame.height);
         let footer_y = height as i32 - self.px(48.);
         self.look.outlining = true;
-        self.divider(0, footer_y, width, theme.border)?;
+        if !theme.screens.start.control {
+            self.divider(0, footer_y, width, theme.border)?;
+        }
         let drawn = self.hints(
             &[('A', "hint.open"), ('B', "hint.back")],
             theme,
@@ -473,12 +478,13 @@ impl Ui<'_, '_> {
     /// Module widgets (Start-widget): side by side in `start_widgets`; the
     /// module's icon and name, its value large with the detail beside it,
     /// and a bar when it sent one.
-    fn hub_widgets(
+    pub(super) fn hub_widgets(
         &mut self,
         app: &App,
         theme: &Theme,
         row: usize,
         widgets: &[(usize, &crate::modules::Entry)],
+        band: Option<(f32, f32, f32, f32)>,
     ) -> Result<(), String> {
         if widgets.is_empty() {
             return Ok(());
@@ -487,7 +493,7 @@ impl Ui<'_, '_> {
         let px = |n: f32| (n * scale).round() as i32;
         let width = self.frame.width;
         let offset = width as i32 / 2 - px(320.);
-        let (bx, by, bw, bh) = Layout::new(theme.start_widgets, true).band;
+        let (bx, by, bw, bh) = band.unwrap_or(Layout::new(theme.start_widgets, true).band);
         let gap = 16.;
         let each = ((bw - gap * (widgets.len() as f32 - 1.)) / widgets.len() as f32).max(1.);
         let focused = app.hub_widget.min(widgets.len() - 1);
@@ -588,7 +594,7 @@ impl Ui<'_, '_> {
     /// A module's text in `rect`: as large as fits up to `start`, down to
     /// the theme's smallest; still too wide, wrapped at that size. Never cut
     /// with an ellipsis.
-    fn fitted(
+    pub(super) fn fitted(
         &mut self,
         text: &str,
         (face, start, color): (Face, f32, Rgba),
