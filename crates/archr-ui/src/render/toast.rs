@@ -2,7 +2,11 @@
 //! slide in from their side of the screen and out again; a bar at the
 //! bottom shrinks with the time left.
 use super::*;
-use crate::{appearance::mix, toast::Kind};
+use crate::{
+    appearance::mix,
+    screens::{Badge, Corner},
+    toast::Kind,
+};
 
 /// The card's width at 640×480, narrower only on a screen without room.
 const WIDTH: f32 = 276.;
@@ -15,18 +19,30 @@ impl Ui<'_, '_> {
             return Ok(());
         }
         let Frame { width, now, .. } = self.frame;
+        let style = theme.screens.toast;
         let margin = self.px(24.);
-        let w = self.px(WIDTH).min(width as i32 - 2 * margin);
+        // The theme's width ([toast] width), the launcher's by default.
+        let wide = if style.width == crate::screens::ToastStyle::default().width {
+            self.px(WIDTH)
+        } else {
+            self.frame.size(style.width).round() as i32
+        };
+        let w = wide.min(width as i32 - 2 * margin);
         let pad = self.px(12.);
         let tile = self.px(28.);
-        let text_x = pad + tile + self.px(10.);
+        let text_x = if style.icon == Badge::None {
+            pad
+        } else {
+            pad + tile + self.px(10.)
+        };
         let text_w = (w - text_x - pad).max(1) as u32;
         let step = self.px(16.);
         let slide = self.motion.travel(SLIDE).as_secs_f32();
         // Below the status pill, which is centred in the header.
         let header = self.frame.size(theme.header_height).round() as i32;
-        let mut y = header / 2 + self.px(13. + 10.);
+        let mut next = header / 2 + self.px(13. + 10.);
         for card in &cards {
+            let y = next;
             let toast = &card.toast;
             let (glyph, ink) = match toast.kind {
                 Kind::Done => (Glyph::Check, theme.success),
@@ -51,10 +67,19 @@ impl Ui<'_, '_> {
                 1.
             };
             let shift = ((1. - shown) * (w + margin) as f32).round() as i32;
-            let x = if self.toasts.prefs.left {
-                margin - shift
-            } else {
-                width as i32 - margin - w + shift
+            let left = match style.position {
+                Corner::User => self.toasts.prefs.left,
+                Corner::TopLeft => true,
+                Corner::TopRight | Corner::Top => false,
+            };
+            // From the top, centered, they drop in instead of sliding.
+            let (x, y) = match style.position {
+                Corner::Top => {
+                    let drop = ((1. - shown) * (h + y) as f32).round() as i32;
+                    ((width as i32 - w) / 2, y - drop)
+                }
+                _ if left => (margin - shift, y),
+                _ => (width as i32 - margin - w + shift, y),
             };
             let rect = Rect::new(x, y, w as u32, h as u32);
             let edge = if toast.kind == Kind::Error {
@@ -62,13 +87,24 @@ impl Ui<'_, '_> {
             } else {
                 theme.border
             };
-            self.panel(rect, self.px(12.) as f32, theme.surface, edge)?;
-            let disc = Rect::new(x + pad, y + self.px(9.), tile as u32, tile as u32);
-            self.rounded(disc, tile as f32 / 2., mix(theme.surface, ink, 0.18), None)?;
-            let side = self.px(16.);
-            let inset = (tile - side) / 2;
-            let icon = Rect::new(disc.x() + inset, disc.y() + inset, side as u32, side as u32);
-            self.icon(glyph, icon, ink)?;
+            if style.glass {
+                self.glass(rect, self.px(12.) as f32, &theme.glass_or_default())?;
+            } else {
+                self.panel(rect, self.px(12.) as f32, theme.surface, edge)?;
+            }
+            if style.icon != Badge::None {
+                let disc = Rect::new(x + pad, y + self.px(9.), tile as u32, tile as u32);
+                let round = if style.icon == Badge::Square {
+                    tile as f32 * 0.28
+                } else {
+                    tile as f32 / 2.
+                };
+                self.rounded(disc, round, mix(theme.surface, ink, 0.18), None)?;
+                let side = self.px(16.);
+                let inset = (tile - side) / 2;
+                let icon = Rect::new(disc.x() + inset, disc.y() + inset, side as u32, side as u32);
+                self.icon(glyph, icon, ink)?;
+            }
             let top = y + self.px(14.);
             self.label(
                 &toast.title,
@@ -96,7 +132,7 @@ impl Ui<'_, '_> {
                 let bar = Rect::new(track.x(), track.y(), left, track.height());
                 self.rounded(bar, radius, ink, None)?;
             }
-            y += h + self.px(8.);
+            next += h + self.px(8.);
         }
         Ok(())
     }

@@ -270,6 +270,8 @@ pub struct Theme {
     pub motion: MotionStyle,
     /// The browsing screens' background shaded instead of plain.
     pub gradient: Option<Gradient>,
+    /// One table per screen (`[toast]`, `[hints]`, `[status]`, `[dialog]`).
+    pub screens: crate::screens::Screens,
     pub pixel_art: bool,
     /// Theme pictures (background, frames, decorations) without smoothing.
     pub pixel_images: bool,
@@ -433,7 +435,9 @@ impl Theme {
     ) -> Self {
         let mut sources = defaults.map_or_else(Sources::default, |d| d.sources.clone());
         sources.0.push((source.clone(), dir.map(Path::to_path_buf)));
-        let table = &for_aspect(source, shape.aspect);
+        let mut merged = for_aspect(source, shape.aspect);
+        crate::screens::flatten(&mut merged);
+        let table = &merged;
         // One field list serves both the embedded theme and user overrides.
         // Only the embedded TOML must be complete and valid.
         macro_rules! token {
@@ -562,6 +566,10 @@ impl Theme {
             },
             motion: optional(table, "motion", motion, defaults.map(|d| d.motion))
                 .unwrap_or(MotionStyle::Tween),
+            screens: crate::screens::Screens::read(
+                table,
+                defaults.map(|d| d.screens).unwrap_or_default(),
+            ),
             gradient: match table.get("gradient") {
                 Some(value) => gradient(value, "gradient"),
                 None => defaults.and_then(|d| d.gradient),
@@ -716,6 +724,17 @@ pub const KNOWN_KEYS: &[&str] = &[
     "focus_ring",
     "motion",
     "gradient",
+    "toast",
+    "hints",
+    "status",
+    "dialog",
+    "details",
+    "achievements",
+    "saves",
+    "shots",
+    "switcher",
+    "resume",
+    "start",
     "art_scaling",
     "image_scaling",
     "easing",

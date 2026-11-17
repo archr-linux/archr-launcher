@@ -7,6 +7,7 @@ pub mod appearance;
 pub mod cheevos;
 pub mod i18n;
 pub mod layout;
+pub mod screens;
 pub mod sounds;
 pub mod theme;
 pub mod usb;
