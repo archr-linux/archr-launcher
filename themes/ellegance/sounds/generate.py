@@ -110,10 +110,11 @@ SOUNDS = {
     "move": glass(B6, 0.06, 1.0, decay=0.014, brightness=0.45),
     # A page or letter jump: two of those glass notes, rising.
     "page": mix((0, glass(B6, 0.06, 1.0, decay=0.014, brightness=0.45)), (0.045, glass(E7, 0.065, 0.9, decay=0.015, brightness=0.45))),
-    # Open (A): a rounded pop with a glint of glass on top.
-    "select": mix((0, pop(1400, 520, 0.09, 1.0, 0.03)), (0.012, glass(E6 * 1.5, 0.16, 0.22, decay=0.04, brightness=0.6))),
-    # Back (B): the pop alone, lower and softer.
-    "back": lowpass(pop(1100, 380, 0.08, 1.0, 0.026), 3500),
+    # Open (A): a firm tap on glass, the note and its fifth (no pitch
+    # glide: a falling pop reads as a laser).
+    "select": mix((0, tap(0.008, 0.5, 4500)), (0, glass(E6, 0.22, 1.0, decay=0.055, brightness=0.9)), (0.03, glass(B6, 0.2, 0.45, decay=0.05, brightness=0.7))),
+    # Back (B): a lighter tap on the same glass, stepping down.
+    "back": mix((0, tap(0.006, 0.3, 3500)), (0, glass(B6, 0.14, 0.7, decay=0.035, brightness=0.6)), (0.035, glass(E6, 0.18, 0.6, decay=0.045, brightness=0.55))),
     # Launch a game: a rising glass arpeggio that rings on.
     "launch": mix(
         (0, tap(0.012, 0.18)),
