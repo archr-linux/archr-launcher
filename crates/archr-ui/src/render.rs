@@ -2010,7 +2010,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             ],
             _ => &[('A', "hint.choose"), ('B', "hint.close")],
         };
-        let left = self.hints(hint_keys, theme, width, y, h)?;
+        let left = self.placed_hints(hint_keys, theme, (width, y, h))?;
         // A ROMs partition that cannot be written stays in sight on both
         // lists until it is fixed (Storage tells more).
         let alert = self.status.as_ref().and_then(|s| s.roms).filter(|_| {
@@ -2115,6 +2115,41 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             .map(|&(button, key)| (button.into(), self.catalog.text(key)))
             .collect();
         self.hint_labels(&labels, theme, width, y, h)
+    }
+    /// The footer hints where the theme puts them (`[hints]`): packed to the
+    /// right as always, or gathered in a capsule of glass at a side.
+    fn placed_hints<B: Copy + Into<HintButton>>(
+        &mut self,
+        hints: &[(B, &str)],
+        theme: &Theme,
+        (width, y, h): (u32, i32, u32),
+    ) -> Result<i32, String> {
+        use crate::screens::{HintsStyle, Side};
+        let style = theme.screens.hints;
+        if style == crate::screens::Hints::default() {
+            return self.hints(hints, theme, width, y, h);
+        }
+        // Their width: drawn once unseen.
+        let margin = self.px(24.);
+        let left = self.faded(0., |ui| ui.hints(hints, theme, width, y, h))?;
+        let used = (width as i32 - margin - left).max(0);
+        let pad = self.px(12.);
+        let right = match style.position {
+            Side::Right => width as i32 - margin,
+            Side::Center => (width as i32 + used) / 2,
+            Side::Left => margin + pad + used,
+        };
+        if style.style == HintsStyle::Capsule && used > 0 {
+            let ch = self.px(30.);
+            let capsule = Rect::new(
+                right - used - pad + self.px(6.),
+                y + (h as i32 - ch) / 2,
+                (used + 2 * pad - self.px(6.)) as u32,
+                ch as u32,
+            );
+            self.glass(capsule, ch as f32 / 2., &theme.glass_or_default())?;
+        }
+        self.hints(hints, theme, (right + margin) as u32, y, h)
     }
     /// The hints with their texts already in the user's language.
     fn hint_labels(
