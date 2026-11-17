@@ -739,6 +739,7 @@ pub const KNOWN_KEYS: &[&str] = &[
     "search",
     "keyboard",
     "osd",
+    "settings",
     "art_scaling",
     "image_scaling",
     "easing",

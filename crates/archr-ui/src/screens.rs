@@ -329,6 +329,103 @@ pub struct OsdStyle {
     pub radius: Option<f32>,
 }
 
+/// The Settings pages in the order of their root, by the ids the theme's
+/// `[settings.icon_colors]` names them with.
+pub const SETTINGS_PAGES: [&str; 9] = [
+    "network",
+    "sound",
+    "controls",
+    "games",
+    "region",
+    "appearance",
+    "achievements",
+    "system",
+    "storage",
+];
+/// The squares behind the root's icons (`icon = "tile"`) when the theme
+/// gives no colour: one hue per page, dark enough for a white icon.
+const fn rgb(r: u8, g: u8, b: u8) -> Rgba {
+    Rgba { r, g, b, a: 255 }
+}
+const TILE_COLORS: [Rgba; 9] = [
+    rgb(0x0A, 0x84, 0xFF),
+    rgb(0xFF, 0x37, 0x5F),
+    rgb(0x30, 0xB0, 0x50),
+    rgb(0xFF, 0x7A, 0x00),
+    rgb(0x5E, 0x5C, 0xE6),
+    rgb(0xBF, 0x5A, 0xF2),
+    rgb(0xD9, 0x8E, 0x04),
+    rgb(0x6E, 0x6E, 0x76),
+    rgb(0x1E, 0x9B, 0xD7),
+];
+/// The root of Settings as a sidebar: where it stands (`x`, `w`, fractions
+/// of the 640-wide page), of glass or plain, and its title's size (of 480).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SidebarStyle {
+    pub x: f32,
+    pub w: f32,
+    pub glass: bool,
+    pub title: f32,
+}
+impl Default for SidebarStyle {
+    fn default() -> Self {
+        Self {
+            x: 14. / 640.,
+            w: 214. / 640.,
+            glass: true,
+            title: 22. / 480.,
+        }
+    }
+}
+/// `[settings]`: the root as the list it always was or a sidebar with the
+/// focused page's summary beside it (`layout`), the root's icons plain or
+/// white on coloured squares (`icon = "tile"`), and the rows of every page
+/// flat or in rounded groups (`groups = "inset"`). A theme that asks for
+/// any of them has the rest of its style (glass, lifted focus, motion) in
+/// Settings too.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SettingsStyle {
+    pub sidebar: bool,
+    pub bar: SidebarStyle,
+    /// A root entry's height, a size (of 480).
+    pub row: f32,
+    pub tiles: bool,
+    pub inset: bool,
+    /// By `SETTINGS_PAGES`; None: the launcher's colour for that page.
+    pub icon_colors: [Option<Rgba>; 9],
+}
+impl Default for SettingsStyle {
+    fn default() -> Self {
+        Self {
+            sidebar: false,
+            bar: SidebarStyle::default(),
+            row: 36. / 480.,
+            tiles: false,
+            inset: false,
+            icon_colors: [None; 9],
+        }
+    }
+}
+impl SettingsStyle {
+    /// Whether the theme reshapes Settings at all; if not, they draw as
+    /// they always have, whatever the rest of the theme says.
+    pub fn themed(&self) -> bool {
+        self.sidebar || self.tiles || self.inset
+    }
+    /// The focused row lit with a light fill and a ring, not the accent.
+    pub fn light_focus(&self) -> bool {
+        self.sidebar || self.inset
+    }
+    /// The square behind the root icon of page `n` (`SETTINGS_PAGES`).
+    pub fn tile(&self, n: usize) -> Rgba {
+        self.icon_colors
+            .get(n)
+            .copied()
+            .flatten()
+            .unwrap_or(TILE_COLORS[n % TILE_COLORS.len()])
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Screens {
     pub toast: ToastStyle,
@@ -346,6 +443,7 @@ pub struct Screens {
     pub search: SearchStyle,
     pub keyboard: KeyboardStyle,
     pub osd: OsdStyle,
+    pub settings: SettingsStyle,
 }
 
 /// Rectangles the screen tables place, as (table, key, old loose key).
@@ -386,6 +484,7 @@ pub const TABLES: &[&str] = &[
     "search",
     "keyboard",
     "osd",
+    "settings",
 ];
 
 /// `table` with each screen table's rectangle under its old loose key, so
@@ -442,6 +541,7 @@ fn style_keys(screen: &str) -> &'static [&'static str] {
         "search" => &["style", "row", "height"],
         "keyboard" => &["sheet", "key"],
         "osd" => &["style", "position", "fill", "track", "radius"],
+        "settings" => &["layout", "sidebar", "row", "icon", "groups", "icon_colors"],
         _ => &[],
     }
 }
@@ -685,8 +785,52 @@ impl Screens {
                 o.radius = Some(r.number("radius", 16. / 480., 0., 0.1));
             }
         }
+        if let Some(t) = get("settings") {
+            own.settings = read_settings(t, own.settings);
+        }
         own
     }
+}
+
+fn read_settings(t: &Table, inherited: SettingsStyle) -> SettingsStyle {
+    let r = Reader("settings", t);
+    let mut own = inherited;
+    own.sidebar = r.pick("layout", own.sidebar, &[("list", false), ("sidebar", true)]);
+    own.row = r.number("row", own.row, 0.06, 0.12);
+    own.tiles = r.pick("icon", own.tiles, &[("plain", false), ("tile", true)]);
+    own.inset = r.pick("groups", own.inset, &[("flat", false), ("inset", true)]);
+    match t.get("sidebar") {
+        None => {}
+        Some(Value::Table(bar)) => {
+            let r = Reader("settings", bar);
+            let b = &mut own.bar;
+            b.x = r.number("x", b.x, 0., 0.2);
+            b.w = r.number("w", b.w, 0.2, 0.6);
+            b.glass = r.pick("style", b.glass, &[("glass", true), ("plain", false)]);
+            b.title = r.number("title", b.title, 0.03, 0.08);
+            for name in bar
+                .keys()
+                .filter(|n| !["x", "w", "style", "title"].contains(&n.as_str()))
+            {
+                log::warn!("Unknown theme key settings.sidebar.{name}; ignored");
+            }
+        }
+        Some(_) => log::warn!("Theme settings.sidebar must be {{ x, w, style, title }}; ignored"),
+    }
+    match t.get("icon_colors") {
+        None => {}
+        Some(Value::Table(colors)) => {
+            let r = Reader("settings", colors);
+            for name in colors.keys() {
+                match SETTINGS_PAGES.iter().position(|p| p == name) {
+                    Some(n) => own.icon_colors[n] = r.color(name).or(own.icon_colors[n]),
+                    None => log::warn!("Unknown theme key settings.icon_colors.{name}; ignored"),
+                }
+            }
+        }
+        Some(_) => log::warn!("Theme [settings.icon_colors] must be a table; ignored"),
+    }
+    own
 }
 
 struct Reader<'a>(&'a str, &'a Table);
@@ -814,6 +958,37 @@ mod tests {
         assert!(own.dialog.buttons_row && own.dialog.icon);
         assert_eq!(own.dialog.width, Some(1.), "out of range: the launcher's");
         assert_eq!(read(""), Screens::default());
+    }
+    #[test]
+    fn the_settings_table_reads_its_layout_icons_groups_and_colours() {
+        let plain = read("").settings;
+        assert_eq!(plain, SettingsStyle::default());
+        assert!(!plain.themed() && !plain.light_focus());
+        let own = read(
+            "[settings]\nlayout = 'sidebar'\nicon = 'tile'\ngroups = 'inset'\nrow = 0.08\n\
+             sidebar = { x = 0.03, w = 0.4, style = 'plain', title = 0.05 }\n\
+             [settings.icon_colors]\nnetwork = '#112233'\nkitchen = '#FFFFFF'",
+        )
+        .settings;
+        assert!(own.sidebar && own.tiles && own.inset && own.themed() && own.light_focus());
+        assert_eq!(own.row, 0.08);
+        assert_eq!(
+            own.bar,
+            SidebarStyle {
+                x: 0.03,
+                w: 0.4,
+                glass: false,
+                title: 0.05
+            }
+        );
+        assert_eq!(own.tile(0), rgb(0x11, 0x22, 0x33));
+        assert_eq!(own.tile(1), TILE_COLORS[1], "not given: the launcher's");
+        let wrong = read("[settings]\nlayout = 'grid'\ngroups = 3\nsidebar = { w = 2 }").settings;
+        assert_eq!(
+            wrong,
+            SettingsStyle::default(),
+            "wrong values: warned, kept"
+        );
     }
     #[test]
     fn every_screen_table_is_a_known_theme_key() {

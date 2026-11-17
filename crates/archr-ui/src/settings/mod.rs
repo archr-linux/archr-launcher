@@ -2187,6 +2187,26 @@ impl Settings {
 mod tests {
     use super::*;
     #[test]
+    fn the_theme_names_each_root_page_in_its_order() {
+        // [settings.icon_colors] colours the root's squares by position.
+        let named: Vec<&str> = CATEGORIES
+            .iter()
+            .map(|(page, ..)| match page {
+                Page::Wifi => "network",
+                Page::Sound => "sound",
+                Page::Controls => "controls",
+                Page::Games => "games",
+                Page::Region => "region",
+                Page::Appearance => "appearance",
+                Page::Achievements => "achievements",
+                Page::System => "system",
+                Page::Storage => "storage",
+                _ => "",
+            })
+            .collect();
+        assert_eq!(named, crate::screens::SETTINGS_PAGES);
+    }
+    #[test]
     fn controls_and_games_use_distinct_shared_glyphs() {
         assert_eq!(CATEGORIES[2].2, Glyph::Controls);
         assert_eq!(CATEGORIES[3].2, Glyph::Play);
