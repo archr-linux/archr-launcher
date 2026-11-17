@@ -110,6 +110,51 @@ impl Placement {
         self.bottom() + self.trail
     }
 }
+/// How far a group cut by the list's window stands past it: more than
+/// its corner, so the cut edge is square and its outline stays outside.
+const GROUP_OVERHANG: f32 = 32.;
+/// One group of rows as drawn (`groups = "inset"`), in view coordinates.
+#[derive(Debug, PartialEq)]
+struct GroupBox {
+    top: f32,
+    bottom: f32,
+    /// The rules in the gaps between its rows.
+    rules: Vec<f32>,
+}
+/// Rows that follow each other with no heading between share a group. Each
+/// box comes from the rows' places with the scroll (`offset`) taken off,
+/// reaches the bottom of everything its rows hold (notes, trails), and is
+/// cut to the list's window `top..bottom` with `GROUP_OVERHANG` to spare:
+/// a group scrolled past an edge never moves, nor grows over the next.
+fn group_boxes(positions: &[Placement], offset: f32, (top, bottom): (f32, f32)) -> Vec<GroupBox> {
+    let mut runs: Vec<GroupBox> = Vec::new();
+    for place in positions {
+        let (y, end) = (place.top - offset, place.end() - offset);
+        match runs.last_mut() {
+            Some(run) if place.section.is_none() && y - run.bottom <= ROW_GAP + 0.5 => {
+                run.rules.push(y - ROW_GAP / 2.);
+                run.bottom = run.bottom.max(end);
+            }
+            _ => runs.push(GroupBox {
+                top: y,
+                bottom: end,
+                rules: Vec::new(),
+            }),
+        }
+    }
+    runs.into_iter()
+        .filter(|run| run.bottom > top && run.top < bottom)
+        .map(|run| GroupBox {
+            top: run.top.max(top - GROUP_OVERHANG),
+            bottom: run.bottom.min(bottom + GROUP_OVERHANG),
+            rules: run
+                .rules
+                .into_iter()
+                .filter(|y| (top..bottom).contains(y))
+                .collect(),
+        })
+        .collect()
+}
 /// Mockup row heights: dense Netplay and Services lists, 40/46 elsewhere.
 fn placements(page: Page, rows: &[Row]) -> Vec<Placement> {
     let mut top = if page == Page::Updates {
@@ -504,28 +549,16 @@ impl View<'_, '_, '_> {
         }
         Ok(())
     }
-    /// Rows that follow each other with no heading between share a group.
-    fn groups(&mut self, positions: &[Placement], offset: f32, right: f32) -> Result<(), String> {
-        let mut runs: Vec<(f32, f32, Vec<f32>)> = Vec::new();
-        let mut last: Option<Placement> = None;
-        for place in positions {
-            match (last, runs.last_mut()) {
-                (Some(l), Some(run))
-                    if place.section.is_none() && place.top - l.end() <= ROW_GAP + 0.5 =>
-                {
-                    run.2.push(l.end() + ROW_GAP / 2. - offset);
-                    run.1 = place.end();
-                }
-                _ => runs.push((place.top, place.end(), Vec::new())),
-            }
-            last = Some(*place);
-        }
-        for (top, bottom, rules) in runs {
-            let (top, bottom) = (top - offset, bottom - offset);
-            if bottom < 0. || top > self.view_bottom() {
-                continue;
-            }
-            self.group((16., top, right - 16., bottom - top), &rules)?;
+    /// The groups of the list in its window from `top` to the view's bottom.
+    fn groups(
+        &mut self,
+        positions: &[Placement],
+        offset: f32,
+        (top, right): (f32, f32),
+    ) -> Result<(), String> {
+        for group in group_boxes(positions, offset, (top, self.view_bottom())) {
+            let height = group.bottom - group.top;
+            self.group((16., group.top, right - 16., height), &group.rules)?;
         }
         Ok(())
     }
@@ -1657,7 +1690,7 @@ impl View<'_, '_, '_> {
             .set_clip_rect(self.rect((16., top, right - 16., self.view_bottom() - top)));
         let result = (|| {
             if self.look().inset {
-                self.groups(positions, offset, right)?;
+                self.groups(positions, offset, (top, right))?;
             }
             for (n, position) in positions.iter().enumerate() {
                 let y = position.top - offset;

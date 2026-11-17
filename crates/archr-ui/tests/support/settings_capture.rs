@@ -4082,3 +4082,178 @@ fn sidebar_settings(theme_dir: &str, out: Option<std::path::PathBuf>, golden: Op
         "{theme_dir} 640x480 changed: {changed:#?}"
     );
 }
+
+/// `groups = "inset"`, at every scroll of every page: each row in the
+/// list's window lies in exactly one group, groups never overlap, and none
+/// stands past the window by more than its overhang. A note under a row
+/// (Services, "Internet pelo PC") stays in its row's group.
+#[test]
+fn inset_groups_hold_every_visible_row_at_every_scroll() {
+    let (top, bottom) = (VIEW_TOP, VIEW_BOTTOM);
+    let mut cases: Vec<(String, Vec<Placement>)> = pages()
+        .into_iter()
+        .map(|(name, state)| {
+            let rows = state.visible_rows();
+            (name.to_owned(), placements(state.page(), &rows))
+        })
+        .collect();
+    // The note as `services` lays it out: under one row, the row above
+    // keeping it in view, the rows below moved down.
+    let mut noted = placements(Page::Services, Page::Services.rows());
+    let at = noted.len() / 2;
+    noted[at].trail = 90.;
+    noted[at - 1].trail = noted[at].end() - noted[at - 1].bottom();
+    for place in &mut noted[at + 1..] {
+        place.top += 90.;
+    }
+    cases.push(("services-note".into(), noted));
+    for (name, positions) in &cases {
+        let end = positions.last().map_or(top, |p| p.end());
+        let mut offset = 0.;
+        while offset <= (end - bottom).max(0.) {
+            let boxes = group_boxes(positions, offset, (top, bottom));
+            for pair in boxes.windows(2) {
+                assert!(
+                    pair[0].bottom < pair[1].top,
+                    "{name} at {offset}: groups overlap {boxes:?}"
+                );
+            }
+            for group in &boxes {
+                assert!(
+                    group.top >= top - GROUP_OVERHANG && group.bottom <= bottom + GROUP_OVERHANG,
+                    "{name} at {offset}: {group:?} past the window"
+                );
+                assert!(
+                    group
+                        .rules
+                        .iter()
+                        .all(|y| (top..bottom).contains(y) && (group.top..group.bottom).contains(y)),
+                    "{name} at {offset}: rules {group:?}"
+                );
+            }
+            for (n, place) in positions.iter().enumerate() {
+                let (from, to) = (
+                    (place.top - offset).max(top),
+                    (place.end() - offset).min(bottom),
+                );
+                if from >= to {
+                    continue;
+                }
+                let holding = boxes
+                    .iter()
+                    .filter(|g| g.top <= from && to <= g.bottom)
+                    .count();
+                assert_eq!(holding, 1, "{name} at {offset}: row {n} in {boxes:?}");
+            }
+            offset += 1.;
+        }
+    }
+}
+
+/// The Ellegance's Jogos (title on its own line, groups) scrolled to its
+/// last row on every screen: every row in view stands on one layer of its
+/// group's fill, the group cut at the list's top runs to that edge, and
+/// nothing of the list shows between the title and the list's top.
+#[test]
+fn ellegance_groups_follow_the_rows_scrolled_under_the_title() {
+    let _sdl = crate::SDL_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    std::env::set_var("SDL_VIDEODRIVER", "offscreen");
+    let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let default = Theme::load(&manifest.join("../../themes/default"));
+    let base = Theme::load_over(&manifest.join("../../themes/ellegance"), &default);
+    assert!(base.screens.settings.inset && base.screens.settings.title_below);
+    let games = pages()
+        .into_iter()
+        .find(|(name, _)| *name == "games")
+        .expect("the games page")
+        .1;
+    let rows = games.visible_rows();
+    let positions = placements(Page::Games, &rows);
+    let mut end = games.clone();
+    end.cursor = rows.len() - 1;
+    let ttf = sdl2::ttf::init().unwrap();
+    for (w, h) in [(640, 480), (720, 720), (480, 320)] {
+        let creator;
+        let mut ui = Ui::new(w, h, true).unwrap();
+        creator = ui.canvas.texture_creator();
+        let theme = base.fitted(w, h);
+        ui.set_motion(crate::motion::Motion::Off);
+        ui.configure(&ttf, &creator, &theme, None).unwrap();
+        ui.catalog = I18n::load(std::path::Path::new("/nonexistent"), Some("pt_BR"), None);
+        // Where the page's stage stands under the title's line (under_title).
+        let scale = ui.frame.scale;
+        let line = ui.px(TITLE_LINE) as u32;
+        let tall = h as f32 / scale - TITLE_LINE;
+        let sw = ((640. * scale).round() as u32).clamp(1, w);
+        let sh = ((tall * scale).round() as u32).clamp(1, h - line);
+        let (sx, sy) = ((w - sw) / 2, line + (h - line - sh) / 2);
+        let view_bottom = VIEW_BOTTOM + tall - 480.;
+        let shot = |ui: &mut Ui, state: &Settings| {
+            for _ in 0..2 {
+                ui.canvas.set_draw_color(color(theme.background));
+                ui.canvas.clear();
+                ui.settings_page(state, &theme).unwrap();
+                ui.snap_animations();
+            }
+            let pixels = ui
+                .canvas
+                .read_pixels(None, sdl2::pixels::PixelFormatEnum::RGBA32)
+                .unwrap();
+            let offset = ui.settings_scroll.tween.target;
+            // A pixel by its place in the stage, in screen pixels.
+            let at = move |x: u32, y: u32| {
+                let i = (((sy + y) * w + sx + x) * 4) as usize;
+                [pixels[i], pixels[i + 1], pixels[i + 2]]
+            };
+            (offset, at)
+        };
+        // One layer of fill, from the list at rest.
+        let px = |v: f32| (v * scale).round() as u32;
+        let (rest, at) = shot(&mut ui, &games);
+        assert_eq!(rest, 0.);
+        let first = positions
+            .iter()
+            .enumerate()
+            .find(|(n, _)| *n != games.cursor)
+            .expect("a row")
+            .1;
+        let fill = at(px(22.), px(first.top + first.height / 2.));
+        let bg = theme.background;
+        assert_ne!(fill, [bg.r, bg.g, bg.b], "{w}x{h}: the group's fill");
+        let (offset, at) = shot(&mut ui, &end);
+        assert!(offset > 0., "{w}x{h}: scrolled");
+        let mut cut = false;
+        for (n, place) in positions.iter().enumerate() {
+            let (from, to) = (
+                (place.top - offset).max(VIEW_TOP),
+                (place.bottom() - offset).min(view_bottom),
+            );
+            if n == end.cursor || to - from < 4. {
+                continue;
+            }
+            cut |= from == VIEW_TOP;
+            assert_eq!(
+                at(px(22.), px((from + to) / 2.)),
+                fill,
+                "{w}x{h}: row {n} ({:?}) on one layer of its group",
+                rows[n].id
+            );
+        }
+        assert!(cut, "{w}x{h}: a row cut at the list's top");
+        // The group cut at the top reaches the edge, square.
+        let edge = px(VIEW_TOP);
+        assert_eq!(at(px(22.), edge), fill, "{w}x{h}: cut at the top");
+        // Nothing of the list in the pixel rows above its top, under the title.
+        for y in edge - 3..edge {
+            for x in (px(16.)..px(624.)).step_by(3) {
+                assert_eq!(
+                    at(x, y),
+                    [bg.r, bg.g, bg.b],
+                    "{w}x{h}: drawn at ({x}, {y}) above the list"
+                );
+            }
+        }
+    }
+}
