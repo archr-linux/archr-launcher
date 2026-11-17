@@ -107,14 +107,17 @@ Para o tema continuar bom com essas escolhas: ponha a lista ao lado da capa; man
 ```toml
 font = "fonts/Inter-Regular.ttf"
 font_semibold = "fonts/Inter-SemiBold.ttf"
+font_bold = "fonts/Inter-Bold.ttf"      # opcional: títulos (peso 700)
 font_mono = "fonts/JetBrainsMono-Regular.ttf"
 font_mono_medium = "fonts/JetBrainsMono-Medium.ttf"
 ```
 
 Caminhos relativos à pasta do tema, sem `..`. Cada família vem inteira: o tema
-que cita `font` ou `font_semibold` usa as suas (a regular serve de seminegrito
-se faltar a outra); o que não cita nenhuma das duas herda as duas do tema
-padrão. O mesmo vale para `font_mono` e `font_mono_medium`. Uma fonte citada
+que cita `font`, `font_semibold` ou `font_bold` usa as suas (a regular serve de
+seminegrito se faltar a outra); o que não cita nenhuma delas herda todas do
+tema padrão. `font_bold` desenha os títulos: o nome do sistema no painel e o
+nome do jogo nos detalhes. Sem ela, esses títulos usam a seminegrito, como
+antes (engrossada quando ela é de peso regular). O mesmo vale para `font_mono` e `font_mono_medium`. Uma fonte citada
 que não existe cai nas do sistema (DejaVu/Liberation).
 
 ### Tamanho e nitidez do texto
@@ -242,7 +245,7 @@ Como toda tabela TOML, `[aspect.square]` vem depois das chaves do topo; uma
 chave do topo escrita depois dela passa a valer só no formato quadrado.
 
 O que não muda por formato: os arquivos de fonte (`font`,
-`font_semibold`, `font_mono`, `font_mono_medium`), o `name`, os sons, os
+`font_semibold`, `font_bold`, `font_mono`, `font_mono_medium`), o `name`, os sons, os
 ícones e as imagens de console. `font_size`, `font_scale` e `font_min`
 mudam normalmente.
 
@@ -333,6 +336,54 @@ shadow = "hard"
 art_scaling = "pixel"
 easing = "steps"
 ```
+
+### Sombra, vidro, foco, movimento e gradiente
+
+Chaves do topo desde a 3.1. Todas são opcionais: o tema que não cita nenhuma
+desenha exatamente como antes. Diferente das chaves acima, estas não valem nas
+Configurações. Valor inválido ou de tipo errado gera aviso no
+log e fica o padrão; subchave desconhecida também só gera aviso.
+
+| chave | valores | padrão | efeito |
+|---|---|---|---|
+| `shadow_color` | cor | preta | cor da sombra `"soft"`; a transparência da cor multiplica a da sombra (`"#00000080"` é metade) |
+| `shadow_blur` | 0 a 0,1 | ~0,033 (16 px) | quanto a sombra `"soft"` passa da caixa (tamanho, fração de 480); `0` não espalha |
+| `shadow_offset` | -0,05 a 0,05 | 8 px | quanto a sombra `"soft"` desce (negativo sobe) |
+| `glass` | `{ fill, border, highlight, blur }` | nenhum | o material de vidro (abaixo) |
+| `focus` | `"pill"`, `"lift"` | `"pill"` | `"lift"`: o item em foco cresce, ganha a sombra e um contorno, em vez da faixa colorida. Hoje vale para os blocos (`mark = "tile"`) |
+| `focus_scale` | 1 a 1,15 | `1.06` | quanto o item em foco cresce com `"lift"` |
+| `focus_ring` | `{ color, width }` | cor `accent`, 2 px | contorno do foco `"lift"`; `width` de 0 a 8 px de referência (`0` sem contorno) |
+| `motion` | `"tween"`, `"spring"` | `"tween"` | `"spring"`: tudo que anda segue uma mola criticamente amortecida, que assenta em 0,35 s sem passar do ponto e mantém a velocidade quando o destino muda no meio. Só com Animações Ligadas; Reduzidas e Desligadas seguem como sempre |
+| `gradient` | `{ from, to, angle }` | nenhum | fundo das telas de sistemas, jogos e detalhes em degradê, sob a imagem de fundo (se houver) |
+
+```toml
+shadow_color = "#0A204080"
+shadow_blur = 0.05
+shadow_offset = 0.02
+glass = { fill = "#FFFFFF26", border = "#FFFFFF55", highlight = "#FFFFFF80", blur = 0.03 }
+focus = "lift"
+focus_scale = 1.1
+focus_ring = { color = "#FFFFFF", width = 2 }
+motion = "spring"
+gradient = { from = "#1B2A4A", to = "#0A0F1C", angle = 90 }
+```
+
+**Gradiente**: `from` e `to` são cores (aceitam transparência), `angle` em
+graus: `0` vai da esquerda para a direita, `90` de cima para baixo (o padrão é
+`0`). O mesmo `{ from, to, angle }` vale no `panel` de uma visualização (veja
+[Visualizações](#visualizações)).
+
+**Vidro**: um painel de vidro tem o preenchimento translúcido `fill`, uma borda
+de 1 px `border`, um brilho de 1 px `highlight` no topo e, atrás dele, o fundo
+desfocado (`blur`, tamanho em fração de 480; `0` desliga). O que faltar vem do
+vidro herdado ou do padrão (branco a 12 %, borda a 20 %, brilho a 25 %, sem
+desfoque). Um painel escolhe o vidro com `style = "glass"`; sem `glass` no
+tema, ele usa esse vidro padrão.
+
+O desfoque nunca é refeito a cada quadro: a imagem de fundo (a do tema ou a do
+sistema) é reduzida em passos de metade, uma vez por imagem, e guardada; o
+vidro só desenha o pedaço que fica atrás dele, ampliado. Sem imagem de fundo
+não há o que desfocar, e o vidro desenha só o preenchimento.
 
 ## Imagens do tema
 
@@ -451,12 +502,12 @@ Elementos de cada tela (`[view.<id>.systems]` ou `[view.<id>.games]`):
 | `status` | pílula de relógio/bateria | `true`/`false` |
 | `divider` | linha acima do rodapé | `true`/`false` |
 | `summary` | resumo da biblioteca no rodapé (sistemas) | `true`/`false` |
-| `list` | a lista | `x y w h`, `row`, `selected` (altura da linha escolhida), `gap`, `font`, `selected_font`, `radius`, `mark`, `scroll`, `cursor` |
-| `panel` | cartão em relevo (painel do sistema, moldura da capa) | `x y w h`, `radius` |
-| `art` | imagem do console ou capa do jogo | `x y w h`, `fit`, `radius` |
+| `list` | a lista | `x y w h`, `row`, `selected` (altura da linha escolhida), `gap`, `font`, `selected_font`, `radius`, `mark`, `scroll`, `cursor`, `opacity` |
+| `panel` | cartão em relevo (painel do sistema, moldura da capa) | `x y w h`, `radius`, `style` (`plain` ou `glass`, ver [vidro](#sombra-vidro-foco-movimento-e-gradiente)), `gradient` (`{ from, to, angle }`, ou `false`), `opacity` |
+| `art` | imagem do console ou capa do jogo | `x y w h`, `fit`, `radius`, `opacity` |
 | `backdrop` | a capa ao fundo da tela de jogos | `opacity`, `solid` (fração da largura em fundo puro), `edge` (opacidade do fundo na borda direita) |
-| `info` | nome do sistema e detalhes | `x y w h`, `title`, `meta` (tamanhos), `align` (`left`/`center`/`right`), `valign` (`top`/`bottom`), `details` (`stacked`: fabricante, nome, contagem; `inline`: nome e "213 jogos · Nintendo · 1990") |
-| `meta` | ano, jogadores e "jogado há" sob a capa | `x y w h`, `size` |
+| `info` | nome do sistema e detalhes | `x y w h`, `title`, `meta` (tamanhos), `align` (`left`/`center`/`right`), `valign` (`top`/`bottom`), `details` (`stacked`: fabricante, nome, contagem; `inline`: nome e "213 jogos · Nintendo · 1990"), `opacity` |
+| `meta` | ano, jogadores e "jogado há" sob a capa | `x y w h`, `size`, `opacity` |
 | `dots` | pontos de posição entre sistemas | `x y w h` |
 | `decor` | imagens soltas (ver [Decorações](#decorações)) | lista de `{ image, x, y, scale, frames, fps, layer }` |
 
@@ -465,7 +516,7 @@ Valores de `list`:
 - `mark`: `"pill"` (faixa colorida), `"bar"` (barrinha ao lado do texto) ou
   `"tile"` (sistemas em blocos lado a lado, o escolhido grande no centro, com a
   imagem do console; só na tela de sistemas). Num carrossel de blocos, ← e →
-  (e os ombros, que o launcher lê como os mesmos botões) andam um sistema;
+  (e os ombros L1/R1, que nessas telas fazem o mesmo) andam um sistema;
   ↑ e ↓ também andam um, para nenhum botão saltar ao fim. Numa lista vertical,
   ↑/↓ andam uma linha e ←/→ uma página, do tamanho que a lista mostra
   (`h` dividido por `row + gap`).
@@ -474,6 +525,11 @@ Valores de `list`:
   do item escolhido, piscando meio segundo aceso e meio apagado, por exemplo
   `cursor = "▶"` (a fonte precisa ter o caractere). Com Animações desligadas
   fica aceso. Vazio (o padrão) não desenha nada. Não vale para blocos (`tile`).
+
+`opacity` (0 a 1, padrão 1) desenha o elemento inteiro mais transparente: a
+lista com as linhas e a faixa, o painel com a sombra, a imagem, o texto. Um
+elemento com opacidade abaixo de 1 é desenhado à parte e posto por cima; use
+com moderação nas telas que rolam.
 
 Todas as linhas não escolhidas usam uma cor só: `text_secondary` (coleções em
 `muted`). Mover a escolha nunca muda a cor das outras linhas.
@@ -671,7 +727,9 @@ Aparência › Animações (`launcher.animations`): **Ligadas** (`on`), **Reduzi
 (`off`: tudo instantâneo). Os valores antigos `1` e `0` valem como Ligadas e
 Desligadas. Os tempos são fixos: seleção 180 ms, sistemas→jogos 220 ms, troca de
 capa 200 ms, menus 160 ms, avisos 200 ms, interruptores 150 ms, abertura 300 ms.
-O tema escolhe só a curva (`easing`, ver [Estilo](#estilo)).
+O tema escolhe só a curva (`easing`, ver [Estilo](#estilo)) ou troca a curva
+por uma mola (`motion = "spring"`, que assenta em 0,35 s; ver
+[Sombra, vidro, foco, movimento e gradiente](#sombra-vidro-foco-movimento-e-gradiente)).
 Qualquer botão encerra a animação em curso; a entrada nunca espera.
 
 ## Sons
