@@ -69,9 +69,14 @@ igual à do tema some) e a personalizada por último. Quando o usuário escolhe 
 cor, o texto sobre ela fica preto ou branco automaticamente, pelo contraste.
 
 O Fundo começa em **Do tema** (as superfícies do tema); Preto, Azul-noite e uma cor personalizada são
-alternativas. Trocar de tema leva junto tudo que está em "do tema"; o que o
-usuário escolheu explicitamente continua. **Restaurar padrão** volta tudo para
-o tema escolhido.
+alternativas. **Escolher outro tema** (em Aparência ou em **Usar** na Loja de
+temas) traz o tema inteiro, como o autor fez: as escolhas feitas por cima do
+tema anterior (cor de destaque, fundo, cores do texto, fonte, peso, tamanho do
+texto, animações, visualização, arte dos jogos e o resto da página Aparência)
+voltam ao padrão, como em **Restaurar padrão**, e a visualização é a primeira
+do tema novo. Idioma, controles, rede e sons não mudam. Depois da troca o
+usuário pode personalizar de novo; **Restaurar padrão** volta tudo para o tema
+escolhido.
 
 ### Opções do usuário que agem sobre o tema
 
@@ -131,6 +136,16 @@ font_smoothing = false  # sem suavização: letras de borda dura, para fontes pi
 font_min = 12           # 6 a 32 px: nenhum texto fica menor; o que não cabe quebra linha
                         # (rótulos dos blocos do Menu Start podem ficar 2 px abaixo, nunca abaixo de 8)
 ```
+
+```toml
+font_hinting = "light"  # "mono" (padrão), "light" ou "none"
+```
+
+`font_hinting` diz como as letras se encaixam na grade de pixels. `"mono"`
+(o padrão, aprovado no R36S) prende as hastes nos dois eixos: o texto
+pequeno fica mais nítido, um pouco mais largo e espaçado que o desenho da
+fonte. `"light"` prende só a altura: larguras e espaçamento da própria fonte,
+como num navegador, com hastes um pouco mais macias. `"none"` não prende nada.
 
 `font_grid` serve a fontes desenhadas numa grade (Press Start 2P fica nítida
 em múltiplos de 8 px). Vale também nas Configurações. Padrões: `1.0`, `0`, `true` e `8`.
@@ -353,12 +368,13 @@ log e fica o padrão; subchave desconhecida também só gera aviso.
 | `shadow_blur` | 0 a 0,1 | ~0,033 (16 px) | quanto a sombra `"soft"` passa da caixa (tamanho, fração de 480); `0` não espalha |
 | `shadow_offset` | -0,05 a 0,05 | 8 px | quanto a sombra `"soft"` desce (negativo sobe) |
 | `glass` | `{ fill, border, highlight, blur }` | nenhum | o material de vidro (abaixo) |
-| `focus` | `"pill"`, `"lift"` | `"pill"` | `"lift"`: o item em foco cresce, ganha a sombra e um contorno, em vez da faixa colorida. Hoje vale para os blocos (`mark = "tile"`) |
+| `focus` | `"pill"`, `"lift"` | `"pill"` | `"lift"`: o item em foco cresce, ganha a sombra e um contorno, em vez da faixa colorida. Vale para os blocos (`mark = "tile"`), as prateleiras, a biblioteca, a grade de jogos e os blocos do Menu Start; o item que ganha o foco sobe no movimento do tema (a mola, com `motion = "spring"`), o primeiro de cada tela já aparece em cima |
 | `focus_scale` | 1 a 1,15 | `1.06` | quanto o item em foco cresce com `"lift"` |
 | `focus_ring` | `{ color, width }` | cor `accent`, 2 px | contorno do foco `"lift"`; `width` de 0 a 8 px de referência (`0` sem contorno) |
 | `motion` | `"tween"`, `"spring"` | `"tween"` | `"spring"`: tudo que anda segue uma mola criticamente amortecida, que assenta em 0,35 s sem passar do ponto e mantém a velocidade quando o destino muda no meio. Só com Animações Ligadas; Reduzidas e Desligadas seguem como sempre |
 | `gradient` | `{ from, to, angle }` | nenhum | fundo das telas de sistemas, jogos e detalhes em degradê, sob a imagem de fundo (se houver) |
 | `title_tracking` | -0,1 a 0,1 | `0` | espaço entre as letras dos títulos (texto de 20 px de referência para cima), em em: negativo aperta, como pede o texto grande (o Ellegance usa `-0.022`, perto do -0,02 em dos títulos grandes do iOS). O corpo do texto fica com o espaçamento da fonte |
+| `caps_tracking` | 0 a 0,3 | `0` | espaço entre as letras das versaletes sobre um título (o rótulo acima do destaque das prateleiras, "HÁ 2 DIAS" no alternador, "VOLTANDO PARA" na retomada, as seções do menu do jogo), em em. O Ellegance usa `0.12` |
 
 ```toml
 shadow_color = "#0A204080"
@@ -715,11 +731,19 @@ pasta e mude o que quiser. O começo dele:
 ```toml
 name = "Ellegance"
 font_bold = "fonts/Inter-Bold.ttf"
-glass = { fill = "#FFFFFF17", border = "#FFFFFF21", highlight = "#FFFFFF29", blur = 0.05 }
+shadow_color = "#000000F0"
+shadow_blur = 0.075
+shadow_offset = 0.0375
+glass = { fill = "#FFFFFF14", border = "#FFFFFF1F", highlight = "#FFFFFF29", blur = 0.05 }
 focus = "lift"
 motion = "spring"
 title_tracking = -0.022
+caps_tracking = 0.12
 gradient = { from = "#121219", to = "#07070A", angle = 90 }
+
+[hints]
+style = "capsule"
+lit = true
 
 [start]
 style = "control"
@@ -737,6 +761,10 @@ order = ["continue", "systems", "apps"]
 [view.lista.games]
 list = { x = 0.05, y = 0.31, w = 0.9, h = 0.57, row = 0.2167, mark = "grid", columns = 4 }
 strip = { x = 0.05, y = 0.225, w = 0.9, h = 0.06 }
+
+# Os apps de módulos numa página de loja, em qualquer visualização.
+[app]
+header = "large"
 
 # Para quem prefere a lista de sempre.
 [view.classica]
@@ -800,7 +828,14 @@ escurecida (perguntas, a folha do teclado) leva a mesma base.
 [hints]
 style = "capsule"     # "bar" (como sempre) ou "capsule": as dicas numa cápsula de vidro
 position = "right"    # "left", "center" ou "right"
+lit = true            # a dica do A acesa (selo na cor do texto, rótulo em `text`),
+                      # as outras em `text_secondary`; sem ela, todas em `muted`
 ```
+
+Uma camada sobre a tela (pergunta, menu, teclado, pergunta ou teclado de um
+app) mostra só as dicas dela, com o brilho normal, nunca as da tela de baixo
+apagadas sob o escurecimento. No teclado em folha (`[keyboard] sheet`) as
+dicas ficam dentro da folha, sem cápsula própria por cima dela.
 
 Vale para o rodapé das telas de sistemas, jogos, detalhes, das prateleiras,
 das conquistas, dos saves, das capturas e do alternador (e das perguntas
@@ -1172,15 +1207,18 @@ encolhe e quebra linha.
 
 Um módulo com a API 4 pode ter **um app**: uma linha própria no carrossel
 (`@app:<id do módulo>`, depois das coleções) que abre telas inteiras do módulo
-(`docs/modulos.md`, seção 10). Nada novo no `theme.toml`: todo tema já funciona
-com apps.
+(`docs/modulos.md`, seção 10). Todo tema já funciona com apps; a tabela
+`[app]` (opcional) desenha as telas deles.
 
 - **Arte no carrossel:** `systems/app-<id>.png` (ou `.jpg`, `.webp`), com as
   mesmas regras das imagens de console (a pasta do usuário, depois o tema,
   depois o padrão); sem ela, a arte do próprio módulo; sem nenhuma, o ícone
   do módulo em tamanho grande, no lugar do nome gerado.
-- **Lista do app** (`layout = "collection"`): o layout `games` da visualização
-  ativa (lista, capa ou fundo com a capa, linha de informação, rodapé). Os
+- **Lista do app** (`layout = "collection"`): sempre uma lista de linhas com
+  a imagem do item em foco, qualquer que seja a visualização: uma grade ou as
+  prateleiras nunca levam a imagem embora. Sem `[app]`, é o layout clássico de
+  jogos do tema (a lista à esquerda, a imagem à direita, a linha de informação
+  sob ela), com o vidro, os cantos e o foco do tema. Os
   chips de filtro ficam numa faixa no topo da lista, nas cores do tema
   (`highlight_bg` no escolhido, `surface` e `border` nos outros); os selos dos
   itens usam `success`, `danger`, `muted` e a mistura de `highlight_bg` com
@@ -1190,6 +1228,30 @@ com apps.
   em `details_actions` (a barra de progresso preenche o botão).
 - Teclado da busca, pergunta (`screen.confirm`) e indicador de espera são os
   do launcher, nas cores do tema. Texto nunca abaixo de 10 px, como em tudo.
+
+### `[app]`: as telas dos apps
+
+As mesmas chaves de uma tela de jogos de uma visualização (`header`,
+`divider`, `list`, `panel`, `art`, `meta`, `backdrop`, `decor`), por cima do
+layout clássico de jogos do tema. A lista é sempre vertical: `mark = "grid"`
+ou `"tile"` e `axis = "horizontal"` viram linhas (com um aviso no log), e
+`strip` não vale aqui. `header = "large"` (só em `[app]`) põe o nome da tela
+em letra grande sob o relógio, com a posição à direita, como o título da
+grade das prateleiras. As imagens dos itens são feitas no tamanho de `art`.
+Vale `[aspect.<formato>.app]`.
+
+```toml
+# Ellegance: uma página de loja. O catálogo em linhas à esquerda, a imagem
+# do item grande à direita com a linha dele embaixo.
+[app]
+header = "large"
+divider = false
+list = { x = 0.05, y = 0.215, w = 0.5, h = 0.665, row = 0.0833, gap = 0.0083, font = 0.03, radius = 0.025 }
+panel = { x = 0.585, y = 0.29, w = 0.365, h = 0.41, radius = 0.0375, style = "glass" }
+art = { x = 0.585, y = 0.29, w = 0.365, h = 0.41, fit = "cover", radius = 0.0375 }
+meta = { x = 0.585, y = 0.72, w = 0.365, h = 0.05, size = 0.027 }
+backdrop = false
+```
 
 ## Conquistas do jogo
 
