@@ -950,6 +950,8 @@ pub enum Effect {
     /// RetroAchievements sign-in: user and password.
     CheevosLogin(String, String),
     CheevosLogout,
+    /// Forget the saved ScreenScraper login.
+    ScraperLogout,
     /// Check and save the web API key; empty removes it.
     CheevosKey(String),
     Scrape,
@@ -1010,6 +1012,7 @@ impl std::fmt::Debug for Effect {
             Self::Login(user, _) => write!(f, "Login({user:?}, <hidden>)"),
             Self::CheevosLogin(user, _) => write!(f, "CheevosLogin({user:?}, <hidden>)"),
             Self::CheevosLogout => write!(f, "CheevosLogout"),
+            Self::ScraperLogout => write!(f, "ScraperLogout"),
             Self::CheevosKey(_) => write!(f, "CheevosKey(<hidden>)"),
             Self::Scrape => write!(f, "Scrape"),
             Self::CancelScrape => write!(f, "CancelScrape"),
@@ -1369,6 +1372,7 @@ impl Settings {
             (Id::Hotkey(n), _) if self.value(Id::HotkeyOn(n)) == "0" => "settings.off",
             (Id::Hotkey(n), _) => return self.hotkey_pads(usize::from(n)).join(" + "),
             (Id::IndexNow, _) => "settings.soon",
+            (Id::ScraperAccount, _) if !self.scrape.user.is_empty() => "settings.sign_out",
             (Id::ScraperAccount | Id::CheevosAccount, _) => "settings.sign_in",
             (Id::CheevosSound, "none") => "settings.cheevos_no_sound",
             (Id::CheevosLogout | Id::CheevosWebKey | Id::CheevosWebKeyRemove, _) => {

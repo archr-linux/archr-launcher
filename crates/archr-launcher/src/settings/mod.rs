@@ -444,6 +444,7 @@ pub(super) enum Work {
     Login(String, String),
     CheevosLogin(String, String),
     CheevosLogout,
+    ScraperLogout,
     CheevosKey(String),
     /// The account card's points; its own lane, like the radio scans.
     CheevosProfile,
@@ -499,6 +500,7 @@ enum Reply {
     Login(Result<(String, usize), String>),
     CheevosLogin(Result<(String, archr_ui::settings::cheevos::Profile), String>),
     CheevosLogout(Result<(), String>),
+    ScraperLogout(Result<(), String>),
     CheevosKey(Result<Option<archr_cheevos::Summary>, String>),
     CheevosProfile(Result<(archr_ui::settings::cheevos::Profile, bool), archr_cheevos::Error>),
     Scrape(Result<(archr_scraper::Job, Vec<String>), String>),
@@ -714,6 +716,7 @@ impl Worker {
                             Reply::CheevosLogin(backend.cheevos_login(&user, &password))
                         }
                         Work::CheevosLogout => Reply::CheevosLogout(backend.cheevos_logout()),
+                        Work::ScraperLogout => Reply::ScraperLogout(backend.scraper_logout()),
                         Work::CheevosKey(key) => Reply::CheevosKey(backend.cheevos_key(&key)),
                         Work::CheevosProfile
                         | Work::Store(_)
@@ -1220,6 +1223,16 @@ impl Worker {
                             state.cheevos.expired = false;
                             state.values.insert(Id::Cheevos, "1".into());
                             state.error = None;
+                        }
+                        Err(error) => state.fail(None, error),
+                    }
+                }
+                Reply::ScraperLogout(result) => {
+                    state.scrape.verifying = false;
+                    match result {
+                        Ok(()) => {
+                            state.scrape.user.clear();
+                            state.scrape.threads = 0;
                         }
                         Err(error) => state.fail(None, error),
                     }
