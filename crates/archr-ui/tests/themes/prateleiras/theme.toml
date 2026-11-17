@@ -1,0 +1,37 @@
+# A test theme for the shelves (docs/temas.md, Prateleiras): the Ellegance
+# colors and style over the default theme, and a view that opens on the
+# shelves with the games as a grid. Not shipped; tests/home.rs draws it.
+name = { en = "Shelves (test)", pt_BR = "Prateleiras (teste)" }
+
+background = "#07070A"
+text = "#F5F5F7"
+text_secondary = "#A9A9B0"
+muted = "#8E8E93"
+dim_text = "#636366"
+surface = "#16161C"
+surface_elevated = "#1F1F27"
+border = "#2A2A33"
+accent = "#0A84FF"
+accent_text = "#FFFFFF"
+
+shadow_color = "#000000B0"
+glass = { fill = "#FFFFFF17", border = "#FFFFFF21", highlight = "#FFFFFF29", blur = 0.05 }
+focus = "lift"
+focus_scale = 1.05
+focus_ring = { color = "#F5F5F7EB", width = 2 }
+motion = "spring"
+
+[view.prateleiras]
+name = { en = "Shelves", pt_BR = "Prateleiras" }
+
+[view.prateleiras.home.shelves]
+order = ["continue", "systems", "apps"]
+
+[view.prateleiras.games]
+header = "compact"
+list = { x = 0.05, y = 0.3, w = 0.9, h = 0.58, row = 0.2167, gap = 0.033, font = 0.025, radius = 0.029, mark = "grid", columns = 4 }
+strip = { x = 0.05, y = 0.2, w = 0.9, h = 0.07 }
+art = false
+panel = false
+meta = false
+backdrop = false

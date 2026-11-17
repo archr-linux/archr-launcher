@@ -79,7 +79,13 @@ impl<'t> Ui<'_, 't> {
         if look.wanted_for != view {
             look.wanted_for = view;
             let active = theme.view(&theme.active_view);
-            let decor = active.systems.decor.iter().chain(&active.games.decor);
+            let shelves = active.home.iter().flat_map(|h| &h.decor);
+            let decor = active
+                .systems
+                .decor
+                .iter()
+                .chain(&active.games.decor)
+                .chain(shelves);
             let mut wanted: Vec<PathBuf> = theme
                 .frames
                 .iter()

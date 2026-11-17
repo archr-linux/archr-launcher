@@ -177,12 +177,12 @@ impl<'a> SystemArt<'a> {
             self.apps = rows.to_vec();
         }
     }
-    fn icon(&self, name: &str) -> Option<std::sync::Arc<str>> {
+    pub(super) fn icon(&self, name: &str) -> Option<std::sync::Arc<str>> {
         self.apps.iter().find(|a| a.key == name)?.icon.clone()
     }
 
     /// Selected row first, then its neighbours; collections have no image.
-    fn want(&mut self, names: &[&str]) {
+    pub(super) fn want(&mut self, names: &[&str]) {
         let dirs: Vec<_> = self.dirs.iter().map(PathBuf::as_path).collect();
         self.wanted = names
             .iter()
@@ -191,7 +191,7 @@ impl<'a> SystemArt<'a> {
             .collect();
     }
     /// The cache key of `name`'s picture, if it can have one.
-    fn key(&self, name: &str) -> Option<PathBuf> {
+    pub(super) fn key(&self, name: &str) -> Option<PathBuf> {
         let dirs: Vec<_> = self.dirs.iter().map(PathBuf::as_path).collect();
         has_picture(name)
             .then(|| candidates(&dirs, name, &self.apps).into_iter().next())
@@ -528,7 +528,7 @@ impl Ui<'_, '_> {
 
     /// Draws the loaded image contained in `area`, with a soft shadow; false
     /// while absent or loading.
-    fn console_image(&mut self, area: Rect, path: Option<&PathBuf>, alpha: u8) -> bool {
+    pub(super) fn console_image(&mut self, area: Rect, path: Option<&PathBuf>, alpha: u8) -> bool {
         let (Some(art), Some(path)) = (&mut self.art, path) else {
             return false;
         };
@@ -581,7 +581,12 @@ impl Ui<'_, '_> {
         self.canvas.copy(texture, None, dst).is_ok()
     }
 
-    fn generated_card(&mut self, rect: Rect, name: &str, theme: &Theme) -> Result<(), String> {
+    pub(super) fn generated_card(
+        &mut self,
+        rect: Rect,
+        name: &str,
+        theme: &Theme,
+    ) -> Result<(), String> {
         let ink = theme.surface_elevated;
         if collection(name) {
             let side = self.px(96.);

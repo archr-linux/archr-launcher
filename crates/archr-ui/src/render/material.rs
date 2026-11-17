@@ -149,7 +149,7 @@ impl<'t> Ui<'_, 't> {
     /// time it is asked for: reduced `steps` times, each a linear 2×2
     /// average, then drawn back enlarged. Never once a frame.
     /// `first` draws the picture at `path` over the whole target.
-    fn blurred(
+    pub(super) fn blurred(
         &mut self,
         path: &Path,
         steps: u32,
@@ -211,6 +211,21 @@ impl<'t> Ui<'_, 't> {
         }
         blurs.push((path.to_path_buf(), steps, blurred));
         Some(blurs.len() - 1)
+    }
+    /// The blurred picture `index` (from `blurred`) drawn over `dst`, at `alpha`.
+    pub(super) fn draw_blurred(
+        &mut self,
+        index: usize,
+        dst: Rect,
+        alpha: u8,
+    ) -> Result<(), String> {
+        let Some((_, _, texture)) = self.materials.blurs.get_mut(index) else {
+            return Ok(());
+        };
+        texture.set_alpha_mod(alpha);
+        let drawn = self.canvas.copy(texture, None, dst);
+        texture.set_alpha_mod(255);
+        drawn
     }
     /// Runs `draw` so that what it draws shows at `opacity`: straight to
     /// the screen when whole, else into a layer laid over it.

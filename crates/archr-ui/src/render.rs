@@ -20,6 +20,7 @@ mod cheevos;
 mod details;
 mod effects;
 pub(crate) use effects::Pop;
+mod home;
 mod hub;
 mod keyboard;
 mod look;
@@ -1020,7 +1021,8 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             let (backdrop, cursor) = app.backdrop();
             let view = self.view(theme);
             // The details screen shares the games page: no slide between them.
-            let games = !matches!(backdrop, Screen::Systems);
+            let games = !matches!(backdrop, Screen::Systems | Screen::Home { .. });
+            let shelves = home::home_at(backdrop).zip(view.home.as_ref());
             let layout = view.screen(games);
             let rows = if matches!(backdrop, Screen::Systems) {
                 app.rows(data)
@@ -1070,9 +1072,15 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                         | Screen::Shot { .. }
                         | Screen::Search { .. }
                 );
-            let decor = if bare { &[][..] } else { &layout.decor[..] };
+            let decor = match shelves {
+                _ if bare => &[][..],
+                Some((_, home)) => &home.decor[..],
+                None => &layout.decor[..],
+            };
             self.decor(theme, decor, true)?;
-            if let Screen::Saves { system, game } = backdrop {
+            if let (Some((at, home)), false) = (shelves, hub) {
+                self.home(app, data, theme, art, (home, at))?;
+            } else if let Screen::Saves { system, game } = backdrop {
                 self.saves(app, (system, *game), data, theme, art)?;
             } else if let Screen::Shots { system, game } = backdrop {
                 self.shots(app, (system, *game), data, theme, art)?;
@@ -1115,8 +1123,11 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                     self.hub_footer(theme)?;
                 } else {
                     let lifted = app.moving().is_some();
-                    self.faded(layout.list.opacity, |ui| {
-                        ui.list(backdrop, (&rows, lifted), cursor, data, theme, layout)
+                    self.faded(layout.list.opacity, |ui| match backdrop {
+                        Screen::Games { system, folder } if layout.list.mark == Mark::Grid => {
+                            ui.games_grid((system, folder), cursor, data, theme, art, layout)
+                        }
+                        _ => ui.list(backdrop, (&rows, lifted), cursor, data, theme, layout),
                     })?;
                     // Secondary visuals follow the redraw requested by the artwork worker.
                     if self.has_presented && matches!(backdrop, Screen::Systems) {
@@ -2779,8 +2790,21 @@ pub fn prepare_first_frame<'font>(
         0
     };
     let mut first_icons = Vec::new();
-    // Tiles show art, not labels: nothing to rasterize ahead.
-    let rows = if list.mark == Mark::Tile {
+    // The shelves open instead of the list: their tabs are the first
+    // labels. Tiles show art, not labels: nothing to rasterize ahead.
+    if let Some(home) = &view.home {
+        for tab in &home.tabs {
+            for face in [Face::Semibold, Face::Regular] {
+                let ink = if face == Face::Semibold {
+                    theme.text
+                } else {
+                    theme.text_secondary
+                };
+                label(&mut prepared, &catalog.text(tab.key()), (face, 12., ink), None)?;
+            }
+        }
+    }
+    let rows = if list.mark == Mark::Tile || view.home.is_some() {
         &[][..]
     } else {
         &systems[..]
