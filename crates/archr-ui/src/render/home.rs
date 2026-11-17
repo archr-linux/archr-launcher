@@ -714,7 +714,10 @@ impl<'t> Ui<'_, 't> {
         if self.lift.0 != Some(key) {
             let from = if self.lift.0.is_some() { 0. } else { 1. };
             let time = self.motion.travel(crate::motion::LIFT);
-            self.lift = (Some(key), crate::motion::Tween::starting(from, 1., time, now));
+            self.lift = (
+                Some(key),
+                crate::motion::Tween::starting(from, 1., time, now),
+            );
         }
         self.lift.1.value(now)
     }
@@ -867,7 +870,8 @@ impl<'t> Ui<'_, 't> {
                 h.max(1) as u32,
             );
             let on = n == focus;
-            let (rect, r) = self.focus_box(rect, radius, on.then_some(("library", system)), theme)?;
+            let (rect, r) =
+                self.focus_box(rect, radius, on.then_some(("library", system)), theme)?;
             let count = data
                 .systems()
                 .iter()
@@ -965,7 +969,12 @@ impl<'t> Ui<'_, 't> {
                 break;
             }
             let on = n == cursor;
-            let (rect, r) = self.focus_box(rect, radius, on.then_some(("grid", system, folder, n)), theme)?;
+            let (rect, r) = self.focus_box(
+                rect,
+                radius,
+                on.then_some(("grid", system, folder, n)),
+                theme,
+            )?;
             let folder_name = level.as_ref().and_then(|l| l.folder(n)).map(str::to_owned);
             let game = App::list_game(data, system, folder, n).and_then(|g| games.get(g));
             let cover = game

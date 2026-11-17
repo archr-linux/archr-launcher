@@ -219,7 +219,11 @@ impl<'t> Ui<'_, 't> {
             self.canvas.set_clip_rect(None);
             for (n, (dx, dy)) in [(-1, -1), (1, 1), (1, -1), (-1, 1)].into_iter().enumerate() {
                 // The first replaces, the others blend in at 1/2, 1/3, 1/4.
-                let mode = if n == 0 { BlendMode::None } else { BlendMode::Blend };
+                let mode = if n == 0 {
+                    BlendMode::None
+                } else {
+                    BlendMode::Blend
+                };
                 previous.set_blend_mode(mode);
                 previous.set_alpha_mod((255. / (n + 1) as f32).round() as u8);
                 let dst = Rect::new(dx - 1, dy - 1, w + 2, h + 2);

@@ -242,8 +242,8 @@ impl<'font> Fonts<'font> {
                     continue;
                 };
                 font.set_hinting(self.hinting.sdl()); // see force_autohint
-                                                            // Static Inter SemiBold reports legacy style Regular; inspect
-                                                            // the family as well and never synthesize a shipped weight twice.
+                                                      // Static Inter SemiBold reports legacy style Regular; inspect
+                                                      // the family as well and never synthesize a shipped weight twice.
                 let weight = format!(
                     "{} {}",
                     font.face_family_name().unwrap_or_default(),

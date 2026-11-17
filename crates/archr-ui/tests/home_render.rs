@@ -6,6 +6,7 @@
 //! (tests/golden/ellegance-640x480); ARCHR_GOLDEN_UPDATE=1 writes them again.
 mod common;
 use archr_index::{cache::SystemEntry, Game};
+use archr_ui::layout::LISTA;
 use archr_ui::{
     apps::Row,
     render::Ui,
@@ -16,7 +17,6 @@ use archr_ui::{
     Rect01, Theme,
 };
 use common::FakeData;
-use archr_ui::layout::LISTA;
 use std::path::{Path, PathBuf};
 
 const SIZES: [(u32, u32); 3] = [(640, 480), (720, 720), (480, 320)];
@@ -801,7 +801,8 @@ fn an_app_shows_its_pictures_in_every_view() {
             ttf = sdl2::ttf::init().unwrap();
             creator = ui.canvas.texture_creator();
             ui.set_motion(archr_ui::motion::Motion::Off);
-            ui.configure(&ttf, &creator, &theme, Some(root.path())).unwrap();
+            ui.configure(&ttf, &creator, &theme, Some(root.path()))
+                .unwrap();
             ui.set_status(archr_ui::status::Status::frozen("14:32"));
             let mut covers =
                 archr_ui::covers::CoverCache::new(&creator, root.path().join("c"), 320, 240);
@@ -817,7 +818,8 @@ fn an_app_shows_its_pictures_in_every_view() {
                     cover: covers.peek(&picture),
                     ..Default::default()
                 };
-                ui.draw_with_settings(&app, &data, &theme, art, None).unwrap();
+                ui.draw_with_settings(&app, &data, &theme, art, None)
+                    .unwrap();
                 covers.idle()
             });
             let pixels = ui
@@ -830,7 +832,10 @@ fn an_app_shows_its_pictures_in_every_view() {
                 let (x, y) = ((n % 640) as i32, (n / 640) as i32);
                 r.contains_point((x, y)) && p[0] > 235 && p[1] > 220 && p[2] > 160 && p[2] < 200
             });
-            assert!(disc.count() > 100, "{dir}/{id}: the app's picture is missing");
+            assert!(
+                disc.count() > 100,
+                "{dir}/{id}: the app's picture is missing"
+            );
         }
     }
 }
@@ -863,12 +868,13 @@ fn a_layer_keeps_its_hints_bright() {
         ttf = sdl2::ttf::init().unwrap();
         creator = ui.canvas.texture_creator();
         ui.set_motion(archr_ui::motion::Motion::Off);
-        ui.configure(&ttf, &creator, &theme, Some(root.path())).unwrap();
+        ui.configure(&ttf, &creator, &theme, Some(root.path()))
+            .unwrap();
         ui.set_status(archr_ui::status::Status::frozen("14:32"));
         let mut app = App::new(10);
         app.set_view(&view);
         let data = FakeData::default();
-        let mut light = |ui: &mut Ui, settings: Option<&Settings>| {
+        let light = |ui: &mut Ui, settings: Option<&Settings>| {
             for _ in 0..2 {
                 ui.snap_animations();
                 ui.draw_with_settings(&app, &data, &theme, Default::default(), settings)
@@ -887,7 +893,10 @@ fn a_layer_keeps_its_hints_bright() {
         let plain = light(&mut ui, Some(&settings));
         settings.confirm_forget = Some("00:1A:2B:3C:4D:5E".into());
         let asked = light(&mut ui, Some(&settings));
-        assert!(asked * 10 >= plain * 9, "{dir}: a question's hints dimmed ({asked} < {plain})");
+        assert!(
+            asked * 10 >= plain * 9,
+            "{dir}: a question's hints dimmed ({asked} < {plain})"
+        );
         let mut session = app_session(&picture);
         ui.app = Some(session.clone());
         let screen = light(&mut ui, None);
@@ -897,7 +906,10 @@ fn a_layer_keeps_its_hints_bright() {
         });
         ui.app = Some(session.clone());
         let asked = light(&mut ui, None);
-        assert!(asked * 10 >= screen * 9, "{dir}: an app's question dims its hints ({asked} < {screen})");
+        assert!(
+            asked * 10 >= screen * 9,
+            "{dir}: an app's question dims its hints ({asked} < {screen})"
+        );
         session.ask = None;
         session.keyboard = Some(archr_ui::keyboard::Keyboard::new(
             archr_ui::keyboard::Mode::Text,
@@ -905,7 +917,10 @@ fn a_layer_keeps_its_hints_bright() {
         ));
         ui.app = Some(session);
         let typing = light(&mut ui, None);
-        assert!(typing * 10 >= screen * 9, "{dir}: an app's keyboard dims its hints ({typing} < {screen})");
+        assert!(
+            typing * 10 >= screen * 9,
+            "{dir}: an app's keyboard dims its hints ({typing} < {screen})"
+        );
         ui.app = None;
     }
 }
@@ -928,7 +943,8 @@ fn ellegance_frame_cost() {
     ttf = sdl2::ttf::init().unwrap();
     creator = ui.canvas.texture_creator();
     ui.theme_dir = Some(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../themes/ellegance"));
-    ui.configure(&ttf, &creator, &theme, Some(root.path())).unwrap();
+    ui.configure(&ttf, &creator, &theme, Some(root.path()))
+        .unwrap();
     ui.set_status(archr_ui::status::Status::frozen("14:32"));
     let data = library(NOW);
     let mut covers = archr_ui::covers::CoverCache::new(&creator, root.path().join("c"), 320, 240);
@@ -945,7 +961,8 @@ fn ellegance_frame_cost() {
                 covers: Some(covers),
                 ..Default::default()
             };
-            ui.draw_with_settings(app, &data, &theme, art, None).unwrap();
+            ui.draw_with_settings(app, &data, &theme, art, None)
+                .unwrap();
         };
         settle(|| {
             covers.request(std::slice::from_ref(&picture));
@@ -959,7 +976,10 @@ fn ellegance_frame_cost() {
             draw(ui, &covers);
             // One pixel read back: the frame is finished, not just queued.
             ui.canvas
-                .read_pixels(sdl2::rect::Rect::new(0, 0, 1, 1), sdl2::pixels::PixelFormatEnum::RGBA32)
+                .read_pixels(
+                    sdl2::rect::Rect::new(0, 0, 1, 1),
+                    sdl2::pixels::PixelFormatEnum::RGBA32,
+                )
                 .unwrap();
         }
         let ms = began.elapsed().as_secs_f64() * 1000. / f64::from(frames);

@@ -124,7 +124,8 @@ impl Ui<'_, '_> {
         };
         self.canvas.set_draw_color(color(dim));
         self.canvas.fill_rect(band)?;
-        self.placed_hints(hints, theme, (width, y, footer)).map(|_| ())
+        self.placed_hints(hints, theme, (width, y, footer))
+            .map(|_| ())
     }
 
     fn app_collection(
