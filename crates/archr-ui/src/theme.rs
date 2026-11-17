@@ -1004,7 +1004,7 @@ fn shadow_blur(value: f32) -> Option<f32> {
 fn shadow_offset(value: f32) -> Option<f32> {
     (-0.05..=0.05).contains(&value).then_some(value)
 }
-fn color(value: String) -> Option<Rgba> {
+pub(crate) fn color(value: String) -> Option<Rgba> {
     let hex = value.strip_prefix('#')?;
     if !matches!(hex.len(), 6 | 8) || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return None;

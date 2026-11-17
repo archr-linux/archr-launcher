@@ -4,7 +4,7 @@
 //! `[switcher]`, `[resume]`, `[start]`). Every key is optional; what a
 //! theme leaves out is inherited, and the defaults draw as the launcher
 //! always has.
-use crate::theme::Rect01;
+use crate::theme::{Rect01, Rgba};
 use toml::{Table, Value};
 
 /// Where the toasts stand.
@@ -295,6 +295,40 @@ impl Default for KeyboardStyle {
     }
 }
 
+/// The volume and brightness OSD's shape (archr-osd).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum OsdShape {
+    /// The dark pill with the light fill, as always.
+    #[default]
+    Pill,
+    /// A taller capsule of dark glass with a light rim.
+    Capsule,
+}
+/// The screen edge the OSD stands at: centered on it, upright at the
+/// sides and lying down at the top and bottom.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum OsdEdge {
+    #[default]
+    Right,
+    Left,
+    Top,
+    Bottom,
+}
+/// `[osd]`: the volume and brightness OSD. The launcher hands it to
+/// archr-osd (/run/archr-launcher/osd-theme.toml); what a theme leaves out
+/// draws as always.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct OsdStyle {
+    pub style: OsdShape,
+    pub position: OsdEdge,
+    /// The level's colour; None: the OSD's own.
+    pub fill: Option<Rgba>,
+    /// Behind the level; None: the OSD's own.
+    pub track: Option<Rgba>,
+    /// Corner radius, a size (of 480); None: the shape's own.
+    pub radius: Option<f32>,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Screens {
     pub toast: ToastStyle,
@@ -311,6 +345,7 @@ pub struct Screens {
     pub resume: ResumeStyle,
     pub search: SearchStyle,
     pub keyboard: KeyboardStyle,
+    pub osd: OsdStyle,
 }
 
 /// Rectangles the screen tables place, as (table, key, old loose key).
@@ -350,6 +385,7 @@ pub const TABLES: &[&str] = &[
     "menu",
     "search",
     "keyboard",
+    "osd",
 ];
 
 /// `table` with each screen table's rectangle under its old loose key, so
@@ -405,6 +441,7 @@ fn style_keys(screen: &str) -> &'static [&'static str] {
         "resume" => &["style"],
         "search" => &["style", "row", "height"],
         "keyboard" => &["sheet", "key"],
+        "osd" => &["style", "position", "fill", "track", "radius"],
         _ => &[],
     }
 }
@@ -624,6 +661,30 @@ impl Screens {
                 Some(_) => log::warn!("Theme keyboard.key must be {{ h, gap, radius }}; ignored"),
             }
         }
+        if let Some(t) = get("osd") {
+            let r = Reader("osd", t);
+            let o = &mut own.osd;
+            o.style = r.pick(
+                "style",
+                o.style,
+                &[("pill", OsdShape::Pill), ("capsule", OsdShape::Capsule)],
+            );
+            o.position = r.pick(
+                "position",
+                o.position,
+                &[
+                    ("right", OsdEdge::Right),
+                    ("left", OsdEdge::Left),
+                    ("top", OsdEdge::Top),
+                    ("bottom", OsdEdge::Bottom),
+                ],
+            );
+            o.fill = r.color("fill").or(o.fill);
+            o.track = r.color("track").or(o.track);
+            if t.contains_key("radius") {
+                o.radius = Some(r.number("radius", 16. / 480., 0., 0.1));
+            }
+        }
         own
     }
 }
@@ -671,6 +732,20 @@ impl Reader<'_> {
         if found.is_none() {
             log::warn!(
                 "Theme {}.{key} must be {{ x, y, w, h }} inside the screen; ignored",
+                self.0
+            );
+        }
+        found
+    }
+    /// `#RRGGBB` or `#RRGGBBAA`.
+    fn color(&self, key: &str) -> Option<Rgba> {
+        let value = self.1.get(key)?;
+        let found = value
+            .as_str()
+            .and_then(|v| crate::theme::color(v.to_owned()));
+        if found.is_none() {
+            log::warn!(
+                "Theme {}.{key} must be #RRGGBB or #RRGGBBAA; ignored",
                 self.0
             );
         }
@@ -739,6 +814,32 @@ mod tests {
         assert!(own.dialog.buttons_row && own.dialog.icon);
         assert_eq!(own.dialog.width, Some(1.), "out of range: the launcher's");
         assert_eq!(read(""), Screens::default());
+    }
+    #[test]
+    fn the_osd_table_reads_its_shape_edge_colours_and_radius() {
+        assert_eq!(read("").osd, OsdStyle::default());
+        let own = read(
+            "[osd]\nstyle = 'capsule'\nposition = 'left'\nfill = '#FFFFFF'\n\
+             track = '#00000080'\nradius = 0.05",
+        );
+        assert_eq!(own.osd.style, OsdShape::Capsule);
+        assert_eq!(own.osd.position, OsdEdge::Left);
+        assert_eq!(
+            own.osd.fill,
+            Some(Rgba {
+                r: 255,
+                g: 255,
+                b: 255,
+                a: 255
+            })
+        );
+        assert_eq!(own.osd.track.map(|c| c.a), Some(0x80));
+        assert_eq!(own.osd.radius, Some(0.05));
+        let wrong = read("[osd]\nstyle = 'round'\nposition = 'middle'\nfill = 'white'\nradius = 3");
+        assert_eq!(wrong.osd.style, OsdShape::Pill, "wrong value: warned, kept");
+        assert_eq!(wrong.osd.position, OsdEdge::Right);
+        assert_eq!(wrong.osd.fill, None);
+        assert_eq!(wrong.osd.radius, Some(16. / 480.), "out of range: the pill's");
     }
     #[test]
     fn the_status_pill_takes_a_box_inside_the_screen() {
