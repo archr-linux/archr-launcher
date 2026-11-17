@@ -131,8 +131,7 @@ font_min = 12           # 6 a 32 px: nenhum texto fica menor; o que não cabe qu
 ```
 
 `font_grid` serve a fontes desenhadas numa grade (Press Start 2P fica nítida
-em múltiplos de 8 px). Vale também nas Configurações, onde o tema só muda
-cores, fontes e ícones. Padrões: `1.0`, `0`, `true` e `8`.
+em múltiplos de 8 px). Vale também nas Configurações. Padrões: `1.0`, `0`, `true` e `8`.
 
 `font_min` e `font_grid` são px de referência (480 px de altura) e mudam
 com a tela. Por cima deles vale um piso fixo de **10 px de tela**: nenhum
@@ -305,8 +304,9 @@ composição, não na tela.
 
 ### Configurações
 
-As Configurações não mudam com o tema: têm 640 px de referência de largura,
-centradas numa tela mais larga, e ganham linhas numa tela mais alta.
+As Configurações têm 640 px de referência de largura, centradas numa tela
+mais larga, e ganham linhas numa tela mais alta. O layout é o de sempre até o
+tema pedir outro com a tabela [`[settings]`](#configurações-settings).
 
 ### Ver o tema em cada tamanho
 
@@ -340,8 +340,9 @@ easing = "steps"
 ### Sombra, vidro, foco, movimento e gradiente
 
 Chaves do topo desde a 3.1. Todas são opcionais: o tema que não cita nenhuma
-desenha exatamente como antes. Diferente das chaves acima, estas não valem nas
-Configurações. Valor inválido ou de tipo errado gera aviso no
+desenha exatamente como antes. Diferente das chaves acima, estas só valem nas
+Configurações quando o tema as reformula com
+[`[settings]`](#configurações-settings). Valor inválido ou de tipo errado gera aviso no
 log e fica o padrão; subchave desconhecida também só gera aviso.
 
 | chave | valores | padrão | efeito |
@@ -676,6 +677,7 @@ tela é desenhada como sempre:
 | `[dialog]` | `buttons = "row"`, `style` | perguntas em cápsulas, destrutivas em vermelho |
 | `[status]` | `rect` | onde fica a pílula do relógio |
 | `[osd]` | `style = "capsule"`, `position` | indicador de volume e brilho em cápsula de vidro ([OSD](#osd-de-volume-e-brilho-osd)) |
+| `[settings]` | `layout = "sidebar"`, `icon = "tile"`, `groups = "inset"` | Configurações em barra lateral, ícones em quadrados coloridos, linhas em grupos ([Configurações](#configurações-settings)) |
 
 O tema de teste `crates/archr-ui/tests/themes/prateleiras` usa todos; o teste
 `home_render` desenha cada tela em 640x480, 720x720 e 480x320
@@ -905,6 +907,68 @@ padrão.
 Para ver os estilos no PC: `ARCHR_OSD_STYLES=<pasta> cargo test -p archr-osd
 -- --ignored styles` grava o volume em pill e capsule, em cada borda, sobre
 um fundo cinza de 640x480.
+
+### Configurações: `[settings]`
+
+Até a 3.0 as Configurações só mudavam cores, fontes e ícones com o tema. Desde
+a 3.1 a tabela `[settings]` muda também o layout. Sem ela (ou com os valores
+padrão) as Configurações ficam exatamente como sempre.
+
+```toml
+[settings]
+layout = "sidebar"    # "list" (padrão): a lista de sempre; "sidebar": barra lateral
+sidebar = { x = 0.022, w = 0.334, style = "glass", title = 0.046 }
+row = 0.075           # altura de uma entrada da raiz, tamanho de 480 (padrão 36 px)
+icon = "tile"         # "plain" (padrão) ou "tile": ícone branco em quadrado colorido
+groups = "inset"      # "flat" (padrão) ou "inset": linhas em grupos arredondados
+
+[settings.icon_colors]  # cor do quadrado de cada página (só com icon = "tile")
+network = "#0A84FF"
+sound = "#FF375F"
+```
+
+- `layout = "sidebar"`: a raiz vira um painel à esquerda com o título
+  "Configurações" em negrito e uma entrada por página; à direita, o resumo da
+  página em foco (título grande e a descrição num grupo). ↑↓ andam na barra,
+  A ou → abrem a página, que ocupa a tela inteira com "‹ <página de cima>"
+  numa cápsula no topo e o título em negrito ao lado; B volta para a barra
+  com o foco onde estava. Numa página, ← e → continuam mudando valores, como
+  L e R. As dicas ficam na cápsula do [`[hints]`](#dicas-de-botões-hints),
+  sem a linha do rodapé.
+- `sidebar`: `x` e `w` em frações da largura de 640 px das Configurações
+  (padrão 14 e 214 px), `style` `"glass"` (padrão, o vidro do tema) ou
+  `"plain"` (a superfície com borda; vale também para a cápsula "‹"), e
+  `title` o tamanho do título, fração de 480 (padrão 22 px). Com mais
+  páginas do que cabem, as entradas ficam mais juntas.
+- `icon = "tile"`: o ícone de cada entrada da raiz fica branco num quadrado
+  arredondado de 26 px. Cores padrão: Rede `#0A84FF`, Som e tela `#FF375F`,
+  Controles `#30B050`, Jogos `#FF7A00`, Região e idioma `#5E5CE6`, Aparência
+  `#BF5AF2`, Conquistas `#D98E04`, Sistema `#6E6E76`, Armazenamento
+  `#1E9BD7`. Chaves de `[settings.icon_colors]`: `network`, `sound`,
+  `controls`, `games`, `region`, `appearance`, `achievements`, `system`,
+  `storage`; a página que o tema não cita fica com a cor padrão.
+- `groups = "inset"`: em todas as páginas, as linhas seguidas sem título de
+  seção entre elas formam um grupo arredondado (raio 14 px) no preenchimento
+  do vidro do tema (sem vidro, o texto bem fraco), com uma regra fina entre
+  as linhas; os títulos de seção ficam em maiúsculas cinza acima do grupo.
+  Os interruptores ficam verdes (`success`) quando ligados, com o botão
+  branco. A lista de escolhas (painel ao lado da linha e a página de
+  escolhas longas) segue o mesmo desenho: cantos de 14 px e regras entre as
+  escolhas. Linhas novas de qualquer página entram nos grupos sozinhas.
+
+Com `layout = "sidebar"` ou `groups = "inset"`, a linha em foco deixa de ser
+preenchida pela cor de destaque: fica um painel claro translúcido com o anel
+do [`focus_ring`](#sombra-vidro-foco-movimento-e-gradiente) (sem ele, o
+destaque em 2 px), e o texto dela mantém `text`. Com qualquer chave de
+`[settings]` fora do padrão o resto do estilo do tema passa a valer nas
+Configurações: `corners`, `border_width`, sombra (`shadow_color`,
+`shadow_blur`, `shadow_offset`), vidro, `easing` e `motion = "spring"`. Os
+títulos usam a fonte `font_bold`.
+
+O tema de teste `prateleiras` usa a barra lateral, os quadrados e os grupos;
+`ARCHR_SETTINGS_THEMED_DIR=<pasta> cargo test -p archr-ui --lib
+the_sidebar_theme` grava a raiz, Wi-Fi, Serviços de rede, Jogos, Som e tela e
+as duas listas de escolhas em 640x480, 720x720 e 480x320.
 
 ### Grade de jogos com título
 
@@ -1162,7 +1226,7 @@ A tela que aparece no boot de manutenção que move as ROMs para a partição
 exFAT (`archr-launcher --roms-migrate-screen`) usa sempre o tema padrão
 instalado, nunca o tema escolhido: nesse boot a partição STORAGE, onde ficam
 os temas do usuário, é desmontada para encolher, e uma fonte aberta ali a
-impediria. Como as Configurações, o layout é fixo. Cores do padrão: `accent`
+impediria. O layout é fixo. Cores do padrão: `accent`
 no ícone, na barra e nos pontos, `border` no trilho, `text` no título,
 `muted` no aviso, `text_secondary` na linha do andamento e `dim` no rodapé.
 
