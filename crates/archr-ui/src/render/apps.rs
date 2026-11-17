@@ -7,6 +7,9 @@ use crate::modules::Tone;
 
 /// The chips band above an app's list, in reference pixels.
 const CHIPS: f32 = 30.;
+/// `header = "large"`: the title's top, height and size, of the screen
+/// height (the shelves' heading: 56, 44 and 30 reference pixels).
+const LARGE_TITLE: (f32, f32, f32) = (56. / 480., 44. / 480., 30. / 480.);
 
 impl Ui<'_, '_> {
     /// A tone's ink: theme colours only.
@@ -41,7 +44,7 @@ impl Ui<'_, '_> {
         art: Art<'_, '_>,
     ) -> Result<(), String> {
         let view = self.view(theme);
-        let layout = view.games.clone();
+        let layout = view.app.clone();
         let Some(screen) = session.top() else {
             // Started, its first screen not here yet.
             self.begin_page(true, None, theme)?;
@@ -143,9 +146,34 @@ impl Ui<'_, '_> {
             self.backdrop(art.cover, wash, theme)?;
         }
         let games = Screen::games(key.clone());
-        // Nothing listed yet: the title alone, never "0 of 0".
-        if screen.items.is_empty() {
-            self.app_title(&data.systems()[0].fullname, theme)?;
+        let title = &data.systems()[0].fullname;
+        if layout.header == Header::Large {
+            // The title large under the status, the position beside it.
+            self.status_header(theme)?;
+            let note = if screen.items.is_empty() {
+                String::new()
+            } else {
+                self.catalog.format(
+                    "switcher.position",
+                    &[
+                        ("n", &(cursor + 1).to_string()),
+                        ("count", &screen.items.len().to_string()),
+                    ],
+                )
+            };
+            let heading = Rect01 {
+                x: layout.list.rect.x,
+                y: LARGE_TITLE.0,
+                w: 1. - 2. * layout.list.rect.x,
+                h: LARGE_TITLE.1,
+            };
+            self.look.outlining = true;
+            let drawn = self.large_title(title, &note, heading, LARGE_TITLE.2, theme);
+            self.look.outlining = false;
+            drawn?;
+        } else if screen.items.is_empty() {
+            // Nothing listed yet: the title alone, never "0 of 0".
+            self.app_title(title, theme)?;
         } else {
             self.header(&games, cursor, data, theme, &layout)?;
         }

@@ -1094,7 +1094,7 @@ fn run(
             _ => {}
         }
         let visible = ui.app.as_ref().and_then(|s| {
-            let (screen, from, to) = s.visible(app.games_nav.page)?;
+            let (screen, from, to) = s.visible(app.app_nav.page)?;
             Some((s.module.clone(), screen, from, to))
         });
         if visible == visible_told {
@@ -1352,7 +1352,7 @@ fn run(
                 app_input(
                     &mut ui.app,
                     button,
-                    app.games_nav.page,
+                    app.app_nav.page,
                     &modules,
                     &mut settings,
                 );

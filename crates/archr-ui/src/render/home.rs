@@ -863,6 +863,26 @@ impl<'t> Ui<'_, 't> {
         Ok(())
     }
 
+    /// A screen's large title in `rect`, `size` (of the screen height)
+    /// tall, with its note (a position) at the right.
+    pub(super) fn large_title(
+        &mut self,
+        title: &str,
+        note: &str,
+        rect: crate::theme::Rect01,
+        size: f32,
+        theme: &Theme,
+    ) -> Result<(), String> {
+        let rect = self.area(rect);
+        self.label(title, (Face::Bold, size * 480., theme.text), rect)?;
+        self.label_aligned(
+            note,
+            (Face::Regular, 13., theme.text_secondary),
+            rect,
+            Align::Right,
+        )
+    }
+
     /// A games list laid out as a grid (`mark = "grid"`): covers with their
     /// names under them, and the strip of systems when the layout has one.
     pub(super) fn games_grid(
@@ -883,16 +903,8 @@ impl<'t> Ui<'_, 't> {
                     ("count", &len.to_string()),
                 ],
             );
-            let rect = self.area(home.heading);
             let title = system_title(system, data, &self.catalog);
-            let size = home.heading_size * 480.;
-            self.label(&title, (Face::Bold, size, theme.text), rect)?;
-            self.label_aligned(
-                &note,
-                (Face::Regular, 13., theme.text_secondary),
-                rect,
-                Align::Right,
-            )?;
+            self.large_title(&title, &note, home.heading, home.heading_size, theme)?;
         }
         if let Some(strip) = layout.strip {
             self.strip(self.area(strip), system, data, theme)?;

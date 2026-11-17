@@ -169,6 +169,18 @@ panel = false
 meta = false
 backdrop = false
 
+# An app's screens (API 4), whatever the view: a store page. The catalog
+# in rows on glass at the left, the focused item's picture large at the
+# right with its line under it, and that picture washed behind the screen.
+[app]
+header = "large"
+divider = false
+list = { x = 0.05, y = 0.215, w = 0.5, h = 0.665, row = 0.0833, gap = 0.0083, font = 0.03, radius = 0.025 }
+panel = { x = 0.585, y = 0.29, w = 0.365, h = 0.41, radius = 0.0375, style = "glass" }
+art = { x = 0.585, y = 0.29, w = 0.365, h = 0.41, fit = "cover", radius = 0.0375 }
+meta = { x = 0.585, y = 0.72, w = 0.365, h = 0.05, size = 0.027 }
+backdrop = false
+
 [view.classica]
 name = { en = "List", pt_BR = "Lista", es = "Lista", ru = "Список" }
 

@@ -16,6 +16,7 @@ use archr_ui::{
     Rect01, Theme,
 };
 use common::FakeData;
+use archr_ui::layout::LISTA;
 use std::path::{Path, PathBuf};
 
 const SIZES: [(u32, u32); 3] = [(640, 480), (720, 720), (480, 320)];
@@ -711,6 +712,125 @@ fn every_screen_table_draws_at_every_size(run: &mut Run) {
         settings.keyboard_target = Some(Id::WifiSwitch);
         settings.wifi_ssid = "Casa".into();
         shot(&mut ui, "teclado", &fresh(), Some(&settings));
+        // [app]: an app's catalog (API 4) with the focused item's picture.
+        ui.app = Some(app_session(&pictures_at[0]));
+        shot(&mut ui, "app", &fresh(), None);
+        ui.app = None;
     }
     run.keep = keep;
+}
+
+/// An app (API 4) on its catalog: chips, four items with pictures, the
+/// second one focused.
+fn app_session(picture: &Path) -> archr_ui::apps::Session {
+    use archr_ui::{
+        apps::{Action, Chip, Item, Message, Screen as Page, Session},
+        modules::Tone,
+    };
+    let mut session = Session::new("itchio", "Jogos do itch.io", true);
+    let items = [
+        "Opossum Country",
+        "Dragon Diving",
+        "Tobu Tobu Girl Deluxe",
+        "Pixel Hop",
+        "Blue Lines",
+    ]
+    .iter()
+    .enumerate()
+    .map(|(n, title)| Item {
+        id: format!("g{n}"),
+        title: (*title).into(),
+        subtitle: "Game Boy · 2026".into(),
+        badge: if n == 1 { "Instalado" } else { "Grátis" }.into(),
+        tone: if n == 1 { Tone::Good } else { Tone::Info },
+        image: Some(picture.to_path_buf()),
+    })
+    .collect();
+    let chips = ["Todos", "Comprados", "GB", "GBC", "GBA", "NES"]
+        .iter()
+        .enumerate()
+        .map(|(n, label)| Chip {
+            id: format!("c{n}"),
+            label: (*label).into(),
+            selected: n == 0,
+        })
+        .collect();
+    session.apply(Message::Show(Box::new(Page {
+        id: "catalog".into(),
+        title: "itch.io".into(),
+        chips,
+        items,
+        y: Some(Action {
+            label: "Populares".into(),
+            action: "sort".into(),
+            ..Action::default()
+        }),
+        footer: "270 jogos".into(),
+        ..Page::default()
+    })));
+    session.top_mut().unwrap().cursor = 1;
+    session
+}
+
+/// An app's catalog keeps the focused item's picture and rows of a usable
+/// height in every view of the shipped themes, a grid or shelves included
+/// (an app on Ellegance's grid once drew rows a fifth of the screen tall
+/// and no picture at all).
+#[test]
+fn an_app_shows_its_pictures_in_every_view() {
+    let _sdl = SDL.lock().unwrap_or_else(|e| e.into_inner());
+    std::env::set_var("SDL_VIDEODRIVER", "offscreen");
+    let root = tempfile::tempdir().unwrap();
+    let picture = painted(root.path(), "app", (320, 240), [70, 40, 160]);
+    let themes = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../themes");
+    for dir in ["default", "ellegance"] {
+        let base = load(&themes.join(dir), LISTA);
+        for (id, _) in base.views() {
+            let mut theme = base.clone();
+            theme.active_view.clone_from(&id);
+            let theme = theme.fitted(640, 480);
+            let view = theme.view(&id);
+            let art = view.app.art.expect("an app always has its picture");
+            assert!(
+                view.app.list.row < 0.12 && view.app.list.mark != archr_ui::layout::Mark::Grid,
+                "{dir}/{id}: app rows {:?}",
+                view.app.list
+            );
+            let (ttf, creator);
+            let mut ui = Ui::new(640, 480, true).unwrap();
+            ttf = sdl2::ttf::init().unwrap();
+            creator = ui.canvas.texture_creator();
+            ui.set_motion(archr_ui::motion::Motion::Off);
+            ui.configure(&ttf, &creator, &theme, Some(root.path())).unwrap();
+            ui.set_status(archr_ui::status::Status::frozen("14:32"));
+            let mut covers =
+                archr_ui::covers::CoverCache::new(&creator, root.path().join("c"), 320, 240);
+            ui.app = Some(app_session(&picture));
+            let mut app = App::new(10);
+            app.set_view(&view);
+            let data = FakeData::default();
+            settle(|| {
+                covers.request(std::slice::from_ref(&picture));
+                covers.poll();
+                ui.snap_animations();
+                let art = archr_ui::render::Art {
+                    cover: covers.peek(&picture),
+                    ..Default::default()
+                };
+                ui.draw_with_settings(&app, &data, &theme, art, None).unwrap();
+                covers.idle()
+            });
+            let pixels = ui
+                .canvas
+                .read_pixels(None, sdl2::pixels::PixelFormatEnum::RGBA32)
+                .unwrap();
+            // The picture's light disc, inside the art's box.
+            let r = archr_ui::render::pixels(art.rect, 640, 480);
+            let disc = pixels.chunks_exact(4).enumerate().filter(|(n, p)| {
+                let (x, y) = ((n % 640) as i32, (n / 640) as i32);
+                r.contains_point((x, y)) && p[0] > 235 && p[1] > 220 && p[2] > 160 && p[2] < 200
+            });
+            assert!(disc.count() > 100, "{dir}/{id}: the app's picture is missing");
+        }
+    }
 }

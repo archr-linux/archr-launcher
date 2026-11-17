@@ -387,6 +387,8 @@ pub struct App {
     /// List navigation of the systems and the games screens.
     pub systems_nav: Nav,
     pub games_nav: Nav,
+    /// An app's list (API 4), laid out by the theme's `[app]`.
+    pub app_nav: Nav,
     /// `global.netplay` is on: the quick menu offers the lobby.
     pub netplay: bool,
     /// Details screen: focused button and description scroll, in lines.
@@ -521,6 +523,7 @@ impl App {
             cursor: 0,
             systems_nav: Nav::vertical(page_size),
             games_nav: Nav::vertical(page_size),
+            app_nav: Nav::vertical(page_size),
             netplay: false,
             details_focus: 0,
             details_scroll: 0,
@@ -572,6 +575,7 @@ impl App {
     pub fn set_view(&mut self, view: &View) {
         self.systems_nav = Nav::of(&view.systems, view.screen);
         self.games_nav = Nav::of(&view.games, view.screen);
+        self.app_nav = Nav::of(&view.app, view.screen);
         self.games_grid = (view.games.list.mark == crate::layout::Mark::Grid)
             .then_some(view.games.list.columns.max(1));
         self.menu_quick = view.menu_quick;

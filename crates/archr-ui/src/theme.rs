@@ -304,6 +304,9 @@ pub struct Theme {
     /// `[view.<id>]` tables in the order they apply: the builtin's, then the
     /// theme's own. "lista" always comes first.
     views: Vec<(String, Vec<toml::Table>)>,
+    /// `[app]` tables in the order they apply (the builtin's, then the
+    /// theme's own): an app's screens (API 4), whatever the view.
+    app: Vec<toml::Table>,
     /// The screen this theme is laid out for.
     pub shape: Shape,
     /// The user's Appearance choices that reshape the theme's screens.
@@ -614,6 +617,7 @@ impl Theme {
             active_view: LISTA.into(),
             user: UserLook::default(),
             views: view_tables(table, defaults),
+            app: app_tables(table, defaults),
             shape,
             sources,
         }
@@ -626,11 +630,13 @@ impl Theme {
             .find(|(view, _)| view == id)
             .unwrap_or(&self.views[0]);
         let mut view = View::lista(self);
+        let classic = view.games.clone();
         view.id = id.clone();
         for table in tables {
             view.overlay(table, &format!("view.{id}"));
         }
         view.games.fit_art(&self.user);
+        view.app = crate::layout::app_layout(classic, &self.app);
         view
     }
     /// The theme's glass, or a light one for a panel of glass in a theme
@@ -704,6 +710,7 @@ pub const KNOWN_KEYS: &[&str] = &[
     "font_mono_medium",
     "name",
     "view",
+    "app",
     "sounds",
     "details_shot",
     "details_info",
@@ -803,6 +810,21 @@ fn merge(base: &mut toml::Table, over: &toml::Table) {
             }
         }
     }
+}
+
+/// The inherited `[app]` tables, with this theme's own after them.
+fn app_tables(table: &toml::Table, defaults: Option<&Theme>) -> Vec<toml::Table> {
+    let mut tables = defaults.map_or_else(Vec::new, |d| d.app.clone());
+    match table.get("app") {
+        None => {}
+        Some(toml::Value::Table(own)) => {
+            if tables.last() != Some(own) {
+                tables.push(own.clone());
+            }
+        }
+        Some(_) => log::warn!("Theme key app must be a table; ignored"),
+    }
+    tables
 }
 
 /// The inherited views, with this theme's tables laid over them.

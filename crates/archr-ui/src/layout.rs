@@ -40,11 +40,13 @@ pub enum Fit {
     Contain,
     Cover,
 }
-/// The system name with its counter, or a single muted line.
+/// The system name with its counter, or a single muted line; an app's
+/// screens (`[app]`) also take a large title under the status.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Header {
     Full,
     Compact,
+    Large,
 }
 /// Rectangles use screen fractions (x/w of the width, y/h of the height);
 /// heights, gaps, radii and font sizes are fractions of the screen height.
@@ -161,6 +163,10 @@ pub struct View {
     pub id: String,
     pub systems: Layout,
     pub games: Layout,
+    /// An app's screens (API 4): the theme's `[app]` over the classic
+    /// games layout, never the view's, so a grid or shelves cannot take the
+    /// pictures away.
+    pub app: Layout,
     /// The shelves the launcher opens on instead of the systems list.
     pub home: Option<Home>,
     /// The screen it was laid out for, in pixels.
@@ -280,6 +286,35 @@ impl View {
             decor: Vec::new(),
         };
         let cover = t.cover;
+        let games = Layout {
+            panel: Some(Panel {
+                rect: cover,
+                radius: t.radius_card * 0.75,
+                ..Panel::default()
+            }),
+            art: Some(Art {
+                rect: cover,
+                fit: Fit::Contain,
+                radius: (t.radius_card * 0.75 - h(1.)).max(0.),
+                opacity: 1.,
+            }),
+            meta: Some(Meta {
+                rect: Rect01 {
+                    x: cover.x,
+                    y: (cover.y + cover.h + y(9.)).min(1. - y(20.)),
+                    w: cover.w,
+                    h: y(20.),
+                },
+                size: h(12.),
+                opacity: 1.,
+            }),
+            ..base(list(
+                column(margin, t.list_width),
+                t.game_row_height,
+                t.game_selected_height,
+                t.font_size - h(1.),
+            ))
+        };
         Self {
             id: LISTA.into(),
             home: None,
@@ -323,35 +358,8 @@ impl View {
                     t.font_size,
                 ))
             },
-            games: Layout {
-                panel: Some(Panel {
-                    rect: cover,
-                    radius: t.radius_card * 0.75,
-                    ..Panel::default()
-                }),
-                art: Some(Art {
-                    rect: cover,
-                    fit: Fit::Contain,
-                    radius: (t.radius_card * 0.75 - h(1.)).max(0.),
-                    opacity: 1.,
-                }),
-                meta: Some(Meta {
-                    rect: Rect01 {
-                        x: cover.x,
-                        y: (cover.y + cover.h + y(9.)).min(1. - y(20.)),
-                        w: cover.w,
-                        h: y(20.),
-                    },
-                    size: h(12.),
-                    opacity: 1.,
-                }),
-                ..base(list(
-                    column(margin, t.list_width),
-                    t.game_row_height,
-                    t.game_selected_height,
-                    t.font_size - h(1.),
-                ))
-            },
+            app: games.clone(),
+            games,
         }
     }
     pub fn screen(&self, games: bool) -> &Layout {
@@ -456,7 +464,11 @@ impl Layout {
         self.header = r.pick(
             "header",
             self.header,
-            &[("full", Header::Full), ("compact", Header::Compact)],
+            &[
+                ("full", Header::Full),
+                ("compact", Header::Compact),
+                ("large", Header::Large),
+            ],
         );
         self.brand = r.pick("title", self.brand, &[("brand", true), ("screen", false)]);
         self.status = r.flag("status", self.status);
@@ -543,6 +555,24 @@ impl Layout {
             Some(_) => log::warn!("Theme {at}.decor must be a list of tables; ignored"),
         }
     }
+}
+
+/// An app's layout: `tables` (the theme's `[app]`) over the classic games
+/// layout `classic`. A list of rows always: a grid, tiles or a row across
+/// are the games screens' and fall back to rows, with a warning.
+pub(crate) fn app_layout(mut app: Layout, tables: &[Table]) -> Layout {
+    for table in tables {
+        app.overlay(table, "app");
+    }
+    if app.list.mark != Mark::Pill && app.list.mark != Mark::Bar
+        || app.list.axis != Axis::Vertical
+    {
+        log::warn!("Theme app.list must be a vertical list (pill or bar); drawn as one");
+        app.list.mark = Mark::Pill;
+        app.list.axis = Axis::Vertical;
+    }
+    app.strip = None;
+    app
 }
 
 /// One `decor` entry; None (with a warning) when its image path is unsafe.
