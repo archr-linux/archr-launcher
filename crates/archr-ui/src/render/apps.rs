@@ -85,7 +85,7 @@ impl Ui<'_, '_> {
         if let Some(ask) = &session.ask {
             self.staged((640., tall), |ui| ui.app_ask(ask, theme))?;
             let hints = [
-                (HintButton::Key('A'), "hint.select"),
+                (HintButton::Key('A'), "hint.choose"),
                 (HintButton::Key('B'), "hint.cancel"),
             ];
             self.modal_footer(&hints, 1.2, theme)?;
