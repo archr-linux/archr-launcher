@@ -765,6 +765,29 @@ os selos de atualização do sistema e das lojas continuam. Os widgets dos
 módulos ficam numa faixa entre os blocos e os atalhos. Os atalhos, a ordem e os
 botões são os mesmos do Menu Start de sempre; `area` continua valendo.
 
+### Menu do jogo e menu rápido: `[menu]`
+
+```toml
+[menu]
+style = "context"     # "list" (como sempre) ou "context": um cartão ao lado do item em foco
+anchor = "focus"      # "focus" (ao lado do item em foco) ou "center"
+width = 0.625         # largura do cartão (tamanho, fração de 480; 300 px)
+row = 0.079           # altura de uma linha (38 px)
+radius = 0.054        # cantos (26 px)
+```
+
+Com `"context"` o menu vira um cartão de vidro ao lado do item em foco (à
+direita dele se couber, senão à esquerda, embaixo ou em cima; sem espaço, no
+lado oposto da tela): o nome do jogo e "Sistema · ano" no alto; no menu de um
+jogo, Jogar (claro), Favorito (a estrela âmbar quando já é favorito) e Detalhes
+lado a lado, percorridos com ← → (↓ desce para as linhas, ↑ volta); depois as
+linhas com o ícone à esquerda, o valor (núcleo, MangoHud, quantos saves), a
+seta › quando abrem outra tela e as chaves de Pastas e Favoritos primeiro. As
+ações do console (Suspender, Reiniciar, Desligar) e as da lista ficam sob um
+título pequeno; Desligar e Tirar dos recentes saem em vermelho (`danger`). A
+lista rola quando não cabe. As ações são as mesmas do menu de sempre, mais
+Jogar e Favorito no topo.
+
 ### Grade de jogos com título
 
 Numa visualização com [prateleiras](#prateleiras), a grade de jogos

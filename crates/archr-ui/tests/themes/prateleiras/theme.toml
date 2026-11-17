@@ -45,6 +45,9 @@ style = "glass"
 [start]
 style = "control"
 
+[menu]
+style = "context"
+
 [view.prateleiras]
 name = { en = "Shelves", pt_BR = "Prateleiras" }
 

@@ -33,6 +33,8 @@
 "menu.mangohud" = "MangoHud"
 "menu.mangohud_detail" = "Solo en este juego · sistema: {system}"
 "menu.as_system" = "Como el sistema"
+"menu.section_console" = "Consola"
+"menu.section_list" = "Lista"
 "notice.opening" = "Abriendo {game}…"
 "notice.game" = "juego"
 "notice.closing" = "Cerrando…"

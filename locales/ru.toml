@@ -33,6 +33,8 @@
 "menu.mangohud" = "MangoHud"
 "menu.mangohud_detail" = "Только эта игра · система: {system}"
 "menu.as_system" = "Как в системе"
+"menu.section_console" = "Консоль"
+"menu.section_list" = "Список"
 "notice.opening" = "Запуск {game}…"
 "notice.game" = "игры"
 "notice.closing" = "Закрытие…"

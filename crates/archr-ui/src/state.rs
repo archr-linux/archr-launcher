@@ -231,6 +231,10 @@ pub enum Outcome {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum QuickItem {
+    /// Play and Favorite: the quick actions of a game's menu in a theme
+    /// whose `[menu]` has `style = "context"`, with Details beside them.
+    Play,
+    Favorite,
     Details,
     /// The game's save states, when it has any.
     Saves,
@@ -450,6 +454,9 @@ pub struct App {
     recent_menu: bool,
     /// Columns of the games screen when it is a grid.
     games_grid: Option<usize>,
+    /// A game's menu opens with Play, Favorite and Details side by side
+    /// (the theme's `[menu]` `style = "context"`).
+    menu_quick: bool,
     history: Vec<(Screen, usize)>,
     moving: Option<order::Moving>,
     /// The systems row to find again once the host changed the rows.
@@ -510,6 +517,7 @@ impl App {
             recent: Vec::new(),
             recent_menu: false,
             games_grid: None,
+            menu_quick: false,
         }
     }
 
@@ -519,6 +527,7 @@ impl App {
         self.games_nav = Nav::of(&view.games, view.screen);
         self.games_grid = (view.games.list.mark == crate::layout::Mark::Grid)
             .then_some(view.games.list.columns.max(1));
+        self.menu_quick = view.menu_quick;
         let had = self.home.is_some();
         self.home.clone_from(&view.home);
         // The resting screen follows the view, here and on the way back.
@@ -560,10 +569,16 @@ impl App {
     ) -> Vec<QuickItem> {
         use QuickItem::*;
         let mut items = Vec::new();
+        if self.menu_quick {
+            items.extend([Play, Favorite]);
+            if !from_details {
+                items.push(Details);
+            }
+        }
         if data.cores(system).len() > 1 {
             items.push(Core);
         }
-        if !from_details {
+        if !from_details && !self.menu_quick {
             items.push(Details);
         }
         // Only what the host found for this game, once it looked.
@@ -591,6 +606,22 @@ impl App {
         items
     }
 
+    /// How many quick actions open the game menu, side by side (none
+    /// unless the theme's `[menu]` asks).
+    pub fn quick_row(&self, data: &dyn DataSource) -> usize {
+        if !self.menu_quick || !matches!(self.screen, Screen::QuickMenu { game: Some(_) }) {
+            return 0;
+        }
+        self.quick_menu_items(data)
+            .iter()
+            .take_while(|i| {
+                matches!(
+                    i,
+                    QuickItem::Play | QuickItem::Favorite | QuickItem::Details
+                )
+            })
+            .count()
+    }
     pub fn quick_menu_items(&self, data: &dyn DataSource) -> Vec<QuickItem> {
         use QuickItem::*;
         let from_details = matches!(self.history.last(), Some((Screen::Details { .. }, _)));
@@ -786,7 +817,20 @@ impl App {
         let last = len.saturating_sub(1);
         self.cursor = self.cursor.min(last);
 
+        // The quick actions side by side: across with the arrows; down to
+        // the first row under them and back.
+        let quick = self.quick_row(data);
         match b {
+            Button::Up if self.cursor < quick => {}
+            Button::Up if self.cursor == quick && quick > 0 => self.cursor = 0,
+            Button::Down if self.cursor < quick => self.cursor = quick.min(last),
+            Button::L | Button::R if self.cursor < quick => {
+                self.cursor = if b == Button::L {
+                    self.cursor.saturating_sub(1)
+                } else {
+                    (self.cursor + 1).min(quick - 1)
+                };
+            }
             Button::Up => self.cursor = self.cursor.saturating_sub(1),
             Button::Down => self.cursor = self.cursor.saturating_add(1).min(last),
             Button::L | Button::R if !matches!(self.screen, Screen::QuickMenu { .. }) => {
@@ -876,6 +920,17 @@ impl App {
                 let items = self.quick_menu_items(data);
                 match (b, items.get(self.cursor)) {
                     (Button::B, _) => self.back(),
+                    (Button::A, Some(QuickItem::Play)) => {
+                        self.back();
+                        if let Some((system, game)) = game {
+                            return Outcome::Launch { system, game };
+                        }
+                    }
+                    (Button::A, Some(QuickItem::Favorite)) => {
+                        if let Some((system, game)) = game {
+                            return Outcome::ToggleFavorite { system, game };
+                        }
+                    }
                     (Button::A, Some(QuickItem::Details)) => {
                         self.back();
                         if let Some((system, game)) = game {

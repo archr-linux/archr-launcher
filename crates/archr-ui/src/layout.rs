@@ -165,6 +165,8 @@ pub struct View {
     pub home: Option<Home>,
     /// The screen it was laid out for, in pixels.
     pub screen: (u32, u32),
+    /// A game's menu has its quick actions (the theme's `[menu]`).
+    pub menu_quick: bool,
 }
 
 /// A display name, the same everywhere or per language (`en`, `pt_BR`, ...).
@@ -282,6 +284,7 @@ impl View {
             id: LISTA.into(),
             home: None,
             screen: t.shape.screen,
+            menu_quick: t.screens.menu.context,
             systems: Layout {
                 panel: Some(Panel {
                     rect: panel,

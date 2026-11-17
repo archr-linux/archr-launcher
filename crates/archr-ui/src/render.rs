@@ -20,6 +20,7 @@ mod cheevos;
 mod control;
 mod details;
 mod effects;
+mod menu;
 pub(crate) use effects::Pop;
 mod home;
 mod hub;
@@ -237,6 +238,34 @@ fn status_text(
     )
 }
 
+/// The catalog key of a quick menu item's name (a module's has its own).
+pub(super) fn quick_key(item: &QuickItem) -> &'static str {
+    match item {
+        QuickItem::Play => "hint.play",
+        QuickItem::Favorite => "hint.favorite",
+        QuickItem::Details => "menu.details",
+        QuickItem::Saves => "menu.saves",
+        QuickItem::Shots => "menu.shots",
+        QuickItem::Achievements => "menu.achievements",
+        QuickItem::Settings => "settings.title",
+        QuickItem::Netplay => "netplay.menu",
+        QuickItem::Core => "menu.core",
+        QuickItem::Mangohud => "menu.mangohud",
+        QuickItem::Move => "menu.move",
+        QuickItem::RestoreOrder => "menu.restore_order",
+        QuickItem::Hide => "menu.hide",
+        QuickItem::ShowHidden => "menu.show_hidden",
+        QuickItem::ForgetRecent => "menu.forget_recent",
+        QuickItem::Search => "menu.search",
+        QuickItem::Folders => "menu.folders",
+        QuickItem::FavoritesFirst => "menu.favorites_first",
+        QuickItem::Suspend => "menu.suspend",
+        QuickItem::Reboot => "menu.reboot",
+        QuickItem::Shutdown => "menu.shutdown",
+        QuickItem::Module(_) => "",
+    }
+}
+
 /// Status text is never ellipsized: full, compact, then the name without its
 /// parenthetical, shrinking to 10px, and finally without the position.
 fn fit_status(
@@ -411,6 +440,9 @@ pub struct Ui<'font, 'texture> {
     menu_open: bool,
     /// The Start menu's control center has kept the screen it opened on.
     hub_behind: bool,
+    /// Where this frame drew the focused item of the browsing screen: a
+    /// context menu (`[menu]`) stands beside it.
+    focus_at: Option<Rect>,
     /// Each settings switch's last state and its knob's position.
     switches: std::collections::BTreeMap<crate::settings::Id, Tween>,
     cover_key: Option<PathBuf>,
@@ -541,6 +573,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             settings_banner: settings_render::Banner::default(),
             menu_open: false,
             hub_behind: false,
+            focus_at: None,
             switches: std::collections::BTreeMap::new(),
             lobby: None,
             cover_key: None,
@@ -988,6 +1021,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         let browsing = self.lobby.is_none() && self.moonlight.is_none() && settings.is_none();
         // Any other screen between: the next control center keeps it anew.
         let kept_behind = std::mem::take(&mut self.hub_behind);
+        self.focus_at = None;
         self.look(theme, browsing);
         if let Some(art) = &mut self.art {
             art.set_apps(data.apps());
@@ -1620,6 +1654,10 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         let lift = if lifted { self.px(6.) } else { 0 };
         let radius = self.frame.size(l.radius);
         let mark_y = top + (self.list.pill.value(now) - offset).round() as i32;
+        if len > 0 {
+            let row = Rect::new(margin, mark_y, list_width, selected.max(1.) as u32);
+            self.focus_at = Some(row);
+        }
         if len > 0 && lifted {
             let pill = Rect::new(
                 margin + lift,
@@ -2472,7 +2510,11 @@ impl<'font, 'texture> Ui<'font, 'texture> {
     fn menu(&mut self, app: &App, data: &dyn DataSource, theme: &Theme) -> Result<(), String> {
         // The mockup combines a dimmed backdrop and its base scrim.
         self.pop_in(effects::Pop::Menu, "menu", (theme, 1.2), |ui| {
-            ui.menu_panel(app, data, theme)
+            if theme.screens.menu.context {
+                ui.menu_card(app, data, theme)
+            } else {
+                ui.menu_panel(app, data, theme)
+            }
         })?;
         // Above the scrim and in place: they replace the footer's own hints.
         let Frame { width, height, .. } = self.frame;
@@ -2613,25 +2655,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                     )?;
                     continue;
                 }
-                QuickItem::Details => "menu.details",
-                QuickItem::Saves => "menu.saves",
-                QuickItem::Shots => "menu.shots",
-                QuickItem::Achievements => "menu.achievements",
-                QuickItem::Settings => "settings.title",
-                QuickItem::Netplay => "netplay.menu",
-                QuickItem::Core => "menu.core",
-                QuickItem::Mangohud => "menu.mangohud",
-                QuickItem::Move => "menu.move",
-                QuickItem::RestoreOrder => "menu.restore_order",
-                QuickItem::Hide => "menu.hide",
-                QuickItem::ShowHidden => "menu.show_hidden",
-                QuickItem::ForgetRecent => "menu.forget_recent",
-                QuickItem::Search => "menu.search",
-                QuickItem::Folders => "menu.folders",
-                QuickItem::FavoritesFirst => "menu.favorites_first",
-                QuickItem::Suspend => "menu.suspend",
-                QuickItem::Reboot => "menu.reboot",
-                QuickItem::Shutdown => "menu.shutdown",
+                _ => quick_key(item),
             };
             let label = self.catalog.text(label);
             let label = label.as_str();

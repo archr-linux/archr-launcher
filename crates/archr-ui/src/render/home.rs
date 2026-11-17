@@ -674,6 +674,9 @@ impl<'t> Ui<'_, 't> {
         on: bool,
         theme: &Theme,
     ) -> Result<(Rect, f32), String> {
+        if on {
+            self.focus_at = Some(rect);
+        }
         if !on || theme.focus != FocusStyle::Lift {
             return Ok((rect, radius));
         }

@@ -457,21 +457,23 @@ fn every_screen_table_draws_at_every_size() {
         shot(&mut ui, "start", &app, None);
         app.handle(Button::Down, &data);
         shot(&mut ui, "start-atalhos", &app, None);
-        // [menu]: a game's, then the systems'.
+        // [menu]: a recent game's on the shelves, then a game's on the grid
+        // with the focus on its first row.
+        let mut app = fresh();
+        app.handle(Button::Y, &data);
+        assert!(matches!(app.screen, Screen::QuickMenu { game: Some(_) }));
+        assert_eq!(app.quick_row(&data), 3, "Play, Favorite and Details");
+        assert_eq!(app.quick_menu_items(&data)[0], QuickItem::Play);
+        shot(&mut ui, "menu", &app, None);
         let mut app = fresh();
         app.handle(Button::R, &data);
         app.handle(Button::A, &data);
+        app.handle(Button::Right, &data);
         app.handle(Button::Y, &data);
-        assert!(
-            matches!(app.screen, Screen::QuickMenu { game: Some(_) }),
-            "{:?}",
-            app.screen
-        );
-        shot(&mut ui, "menu", &app, None);
-        let items = app.quick_menu_items(&data);
-        if let Some(n) = items.iter().position(|i| *i == QuickItem::Details) {
-            app.cursor = n;
-        }
+        app.handle(Button::Right, &data);
+        assert_eq!(app.cursor, 1, "across the quick actions");
+        app.handle(Button::Down, &data);
+        assert_eq!(app.cursor, 3, "down to the first row");
         shot(&mut ui, "menu-lista", &app, None);
         // [details]
         let mut app = fresh();

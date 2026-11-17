@@ -129,6 +129,31 @@ impl Default for StartStyle {
     }
 }
 
+/// The game menu and the quick menu: a list in a panel (`"list"`, as
+/// always) or a card of glass beside the focused item (`"context"`), with a
+/// game's quick actions on top, sections and destructive actions in red.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MenuStyle {
+    pub context: bool,
+    /// Beside the focused item (`"focus"`) or in the middle (`"center"`).
+    pub anchor_focus: bool,
+    /// Sizes (of 480): the card's width, a row's height and the corners.
+    pub width: f32,
+    pub row: f32,
+    pub radius: f32,
+}
+impl Default for MenuStyle {
+    fn default() -> Self {
+        Self {
+            context: false,
+            anchor_focus: true,
+            width: 300. / 480.,
+            row: 38. / 480.,
+            radius: 26. / 480.,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Screens {
     pub toast: ToastStyle,
@@ -136,6 +161,7 @@ pub struct Screens {
     pub status: StatusStyle,
     pub dialog: DialogStyle,
     pub start: StartStyle,
+    pub menu: MenuStyle,
 }
 
 /// Rectangles the screen tables place, as (table, key, old loose key).
@@ -172,6 +198,7 @@ pub const TABLES: &[&str] = &[
     "switcher",
     "resume",
     "start",
+    "menu",
 ];
 
 /// `table` with each screen table's rectangle under its old loose key, so
@@ -216,6 +243,7 @@ fn style_keys(screen: &str) -> &'static [&'static str] {
         "status" => &["style", "battery", "radios", "clock", "rect"],
         "dialog" => &["width", "radius", "icon", "buttons", "style"],
         "start" => &["style", "radius", "shortcut", "clock"],
+        "menu" => &["style", "anchor", "width", "row", "radius"],
         _ => &[],
     }
 }
@@ -311,6 +339,22 @@ impl Screens {
             own.start.radius = r.number("radius", own.start.radius, 0., 0.1);
             own.start.shortcut = r.number("shortcut", own.start.shortcut, 0.06, 0.16);
             own.start.clock = r.number("clock", own.start.clock, 0.04, 0.16);
+        }
+        if let Some(t) = get("menu") {
+            let r = Reader("menu", t);
+            own.menu.context = r.pick(
+                "style",
+                own.menu.context,
+                &[("list", false), ("context", true)],
+            );
+            own.menu.anchor_focus = r.pick(
+                "anchor",
+                own.menu.anchor_focus,
+                &[("focus", true), ("center", false)],
+            );
+            own.menu.width = r.number("width", own.menu.width, 0.4, 1.0);
+            own.menu.row = r.number("row", own.menu.row, 0.06, 0.12);
+            own.menu.radius = r.number("radius", own.menu.radius, 0., 0.1);
         }
         own
     }
