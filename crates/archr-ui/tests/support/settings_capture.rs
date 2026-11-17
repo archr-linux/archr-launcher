@@ -3986,7 +3986,7 @@ fn sidebar_settings(theme_dir: &str, out: Option<std::path::PathBuf>, golden: Op
     assert!(base.screens.settings.sidebar && base.screens.settings.inset);
     let mut root = ready();
     root.cursor = 1;
-    let mut states = vec![("raiz", root)];
+    let mut states = vec![("raiz".to_owned(), root)];
     let wanted = [
         "wifi",
         "wifi-searching-a",
@@ -3998,13 +3998,32 @@ fn sidebar_settings(theme_dir: &str, out: Option<std::path::PathBuf>, golden: Op
     ];
     // ARCHR_SETTINGS_EVERY: every page, to look them all over.
     let every = std::env::var_os("ARCHR_SETTINGS_EVERY").is_some();
-    states.extend(
-        pages()
-            .into_iter()
-            .filter(|(n, _)| every || wanted.contains(n)),
-    );
+    let mut chosen: Vec<(String, Settings)> = pages()
+        .into_iter()
+        .filter(|(n, _)| every || wanted.contains(n))
+        .map(|(n, state)| (n.to_owned(), state))
+        .collect();
+    if every {
+        // Each long page also scrolled to its last row.
+        let ends: Vec<_> = chosen
+            .iter()
+            .filter(|(_, s)| s.picker.is_none() && s.visible_rows().len() > 6)
+            .map(|(n, s)| {
+                let mut end = s.clone();
+                end.cursor = s.visible_rows().len() - 1;
+                (format!("{n}-scrolled"), end)
+            })
+            .collect();
+        chosen.extend(ends);
+    }
+    states.extend(chosen);
     let picks = ["list-games-core", "list-timezone"];
-    states.extend(lists().into_iter().filter(|(n, _)| picks.contains(n)));
+    states.extend(
+        lists()
+            .into_iter()
+            .filter(|(n, _)| picks.contains(n))
+            .map(|(n, state)| (n.to_owned(), state)),
+    );
     assert!(every || states.len() == 10, "every state found");
     let ttf = sdl2::ttf::init().unwrap();
     for (w, h) in [(640, 480), (720, 720), (480, 320)] {
@@ -4029,7 +4048,7 @@ fn sidebar_settings(theme_dir: &str, out: Option<std::path::PathBuf>, golden: Op
                 .canvas
                 .read_pixels(None, sdl2::pixels::PixelFormatEnum::RGBA32)
                 .unwrap();
-            if *name == "raiz" {
+            if name == "raiz" {
                 // The sidebar's glass stands apart from the background.
                 let scale = ui.frame.scale;
                 let stage = (w as f32 - 640. * scale) / 2.;
@@ -4055,7 +4074,9 @@ fn sidebar_settings(theme_dir: &str, out: Option<std::path::PathBuf>, golden: Op
             }
             // Pages that print no time ("updated 5 s ago") are golden.
             let steady = ["raiz", "games", "services", "list-games-core"];
-            if let Some(golden) = golden.filter(|_| (w, h) == (640, 480) && steady.contains(name)) {
+            if let Some(golden) =
+                golden.filter(|_| (w, h) == (640, 480) && steady.contains(&name.as_str()))
+            {
                 let path = manifest.join(golden).join(format!("config-{name}.png"));
                 if update {
                     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
