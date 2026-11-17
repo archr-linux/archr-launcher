@@ -304,6 +304,7 @@ impl Backend {
             .unwrap_or_default();
         let definitions = crate::worker::definitions(&self.paths).unwrap_or_default();
         state.games.systems = self.load_games(cfg, &definitions);
+        state.vulkan_supported = crate::panfrost::active(&self.paths.at(crate::panfrost::BOUND));
         let mut systems = vec![String::new()];
         for system in definitions {
             if archr_scraper::system_id(&system.name).is_some() {

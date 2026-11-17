@@ -335,6 +335,8 @@ pub enum Id {
     MangohudLink,
     /// Per-system override on the Games page.
     MangohudGame,
+    /// Per-system renderer on the Games page: GLES or Vulkan (PanVK).
+    GraphicsBackend,
     Mangohud,
     MangohudShow,
     MangohudLayout,
@@ -545,6 +547,9 @@ impl Id {
             // mangohud_set owns enabled and state, and builds MangoHud.conf
             // from the others. The Games page writes `<system>.<suffix>`.
             Self::MangohudGame => ("archr.mangohud.enabled", ""),
+            // `<system>.graphics_backend`, read by setsettings.sh and the
+            // standalone start scripts; libmali turns vulkan into GL.
+            Self::GraphicsBackend => ("graphics_backend", ""),
             Self::Mangohud => ("archr.mangohud.enabled", "0"),
             Self::MangohudShow => ("archr.mangohud.state", "0"),
             Self::MangohudLayout => ("archr.mangohud.layout", "compact"),
@@ -749,6 +754,7 @@ impl Id {
             // Only published channels (archr-update reads the rest as stable).
             Self::UpdateChannel => &["stable"],
             Self::MangohudGame => &["", "1", "0"],
+            Self::GraphicsBackend => &["", "opengl", "vulkan"],
             Self::Filter | Self::StateSlot => &["", "0", "1"],
             Self::MangohudLayout => &mangohud::LAYOUTS,
             Self::MangohudPosition => &mangohud::POSITIONS,
@@ -1130,6 +1136,8 @@ pub struct Settings {
     pub custom: Custom,
     /// The GPU driver in use can run the overlay (075-mangohud-supported).
     pub mangohud_supported: bool,
+    /// The GPU driver in use is panfrost, the only one with Vulkan (PanVK).
+    pub vulkan_supported: bool,
     /// Layout and items when the items page opened, to save or restore.
     pub mangohud_saved: (String, String),
     /// The clock being set on the Date and time page.
@@ -1209,6 +1217,7 @@ impl Default for Settings {
             applied: None,
             custom: Custom::default(),
             mangohud_supported: false,
+            vulkan_supported: false,
             mangohud_saved: Default::default(),
             clock_draft: None,
             capture: None,
@@ -1428,6 +1437,9 @@ impl Settings {
             (Id::KeyboardVariant | Id::MangohudGame, "") => "menu.default",
             (Id::MangohudGame, "1") => "settings.on",
             (Id::MangohudGame, _) => "settings.off",
+            (Id::GraphicsBackend, "opengl") => return "GLES".into(),
+            (Id::GraphicsBackend, "vulkan") => return "Vulkan".into(),
+            (Id::GraphicsBackend, _) => "settings.renderer_default",
             (
                 Id::MangohudLayout
                 | Id::MangohudItems
@@ -1518,6 +1530,7 @@ impl Settings {
             Id::UpdateInstall => self.updates.install_note()?.into(),
             Id::UpdateCard => self.card_subtitle()?.into(),
             Id::Mangohud if !self.mangohud_supported => "settings.mangohud_unsupported".into(),
+            Id::GraphicsBackend if !self.vulkan_supported => "settings.renderer_unsupported".into(),
             Id::RestoreBackup => self
                 .storage
                 .backup
@@ -1647,6 +1660,8 @@ impl Settings {
             | Id::MangohudSize
             | Id::MangohudAlpha
             | Id::MangohudFps => !self.mangohud_supported,
+            // Without panfrost every choice runs GLES: nothing to pick.
+            Id::GraphicsBackend => !self.vulkan_supported,
             Id::Cheevos
             | Id::CheevosAccount
             | Id::CheevosHardcore

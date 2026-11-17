@@ -1,7 +1,21 @@
 //! Ports-panfrost: PortMaster ports that need desktop OpenGL run only on
 //! panfrost (Mesa); libmali has OpenGL ES alone. Read at a port's launch,
-//! never during the library scan.
+//! never during the library scan. Panfrost is also the only driver with
+//! Vulkan (PanVK), which the Games page's renderer row asks for.
 use std::{fs, io::Read, path::Path};
+
+/// Where the kernel lists the devices bound to panfrost (`ff400000.gpu`).
+pub const BOUND: &str = "/sys/bus/platform/drivers/panfrost";
+
+/// Whether panfrost drives the GPU now: `bound` holds a `*.gpu` device.
+/// The configured driver only takes effect after a restart.
+pub fn active(bound: &Path) -> bool {
+    fs::read_dir(bound).is_ok_and(|entries| {
+        entries
+            .flatten()
+            .any(|entry| entry.file_name().to_string_lossy().ends_with(".gpu"))
+    })
+}
 
 /// Arch R's PortMaster packages that need panfrost, one per line.
 pub const LIST: &str = "/usr/share/archr/portmaster/panfrost.txt";
@@ -106,6 +120,17 @@ mod tests {
         assert_eq!(opengl(plain, "A.zip"), Some(false));
         assert_eq!(opengl(r#"{"name": "A.zip"}"#, "A.zip"), Some(false));
         assert_eq!(opengl("not json", "A.zip"), None);
+    }
+    #[test]
+    fn panfrost_is_active_with_a_bound_gpu() {
+        let dir = tempfile::tempdir().unwrap();
+        let bound = dir.path().join("panfrost");
+        assert!(!active(&bound), "no driver directory");
+        fs::create_dir_all(bound.join("module")).unwrap();
+        fs::write(bound.join("bind"), "").unwrap();
+        assert!(!active(&bound), "driver loaded, no GPU bound");
+        fs::create_dir_all(bound.join("ff400000.gpu")).unwrap();
+        assert!(active(&bound));
     }
     #[test]
     fn launch_reads_the_script_the_list_and_the_ports_folders() {

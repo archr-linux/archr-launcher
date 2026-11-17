@@ -64,6 +64,7 @@ pub const GAMES: &[Row] = &[
     .kind(Kind::Toggle),
     row(Id::StateSlot, "settings.state_slot", Kind::Value),
     row(Id::MangohudGame, "settings.mangohud", Kind::Value),
+    row(Id::GraphicsBackend, "settings.renderer", Kind::Value),
     described(
         Id::PreviewVideo,
         "settings.preview_video",

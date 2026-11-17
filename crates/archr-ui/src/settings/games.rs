@@ -56,7 +56,7 @@ pub struct Games {
 }
 impl Games {
     /// Rows bound to the shown system, in page order.
-    pub const ROWS: [Id; 8] = [
+    pub const ROWS: [Id; 9] = [
         Id::Emulator,
         Id::Core,
         Id::Ratio,
@@ -64,6 +64,7 @@ impl Games {
         Id::Autosave,
         Id::StateSlot,
         Id::MangohudGame,
+        Id::GraphicsBackend,
         Id::GameSystem,
     ];
     pub fn current(&self) -> Option<&GameSystem> {
@@ -113,7 +114,7 @@ impl Games {
         };
         matches!(
             id,
-            Id::Emulator | Id::Core | Id::MangohudGame | Id::GameSystem
+            Id::Emulator | Id::Core | Id::MangohudGame | Id::GraphicsBackend | Id::GameSystem
         ) || system.cores.iter().any(|pair| {
             pair.emulator == state.value(Id::Emulator)
                 && pair.core == state.value(Id::Core)
@@ -158,6 +159,7 @@ impl Settings {
             Id::Autosave,
             Id::StateSlot,
             Id::MangohudGame,
+            Id::GraphicsBackend,
         ] {
             values.push((id, saved(id).unwrap_or_else(|| id.default_value().into())));
         }
@@ -343,5 +345,39 @@ mod tests {
             state.handle(Button::R),
             Effect::Set(Id::MangohudGame, "0".into())
         );
+    }
+    #[test]
+    fn the_renderer_offers_vulkan_only_on_panfrost() {
+        let mut state = state();
+        state.cursor = ids(&state)
+            .iter()
+            .position(|id| *id == Id::GraphicsBackend)
+            .unwrap();
+        let row = state.visible_rows()[state.cursor];
+        assert!(state.disabled(Id::GraphicsBackend), "libmali has no Vulkan");
+        assert_eq!(
+            state.subtitle(&row).as_deref(),
+            Some("settings.renderer_unsupported")
+        );
+        assert_eq!(state.handle(Button::R), Effect::None);
+        state.vulkan_supported = true;
+        assert!(!state.disabled(Id::GraphicsBackend));
+        assert_eq!(state.subtitle(&row), None);
+        assert_eq!(state.value(Id::GraphicsBackend), "");
+        assert_eq!(
+            state.handle(Button::R),
+            Effect::Set(Id::GraphicsBackend, "opengl".into())
+        );
+        state.complete(Id::GraphicsBackend, Ok("opengl".into()));
+        assert_eq!(
+            state.handle(Button::R),
+            Effect::Set(Id::GraphicsBackend, "vulkan".into())
+        );
+        state.complete(Id::GraphicsBackend, Ok("vulkan".into()));
+        // The choice is the system's own: another system keeps its default.
+        state.focus_system("n64");
+        assert_eq!(state.value(Id::GraphicsBackend), "");
+        state.focus_system("snes");
+        assert_eq!(state.value(Id::GraphicsBackend), "vulkan");
     }
 }
