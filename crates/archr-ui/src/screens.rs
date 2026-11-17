@@ -117,6 +117,12 @@ pub struct StartStyle {
     pub radius: f32,
     pub shortcut: f32,
     pub clock: f32,
+    /// Where the control center's blocks, its round shortcuts and the hour
+    /// (with the network and battery level with it) stand; None: laid out
+    /// from the top as always.
+    pub tiles: Option<Rect01>,
+    pub shortcuts: Option<Rect01>,
+    pub clock_at: Option<Rect01>,
 }
 impl Default for StartStyle {
     fn default() -> Self {
@@ -125,6 +131,9 @@ impl Default for StartStyle {
             radius: 26. / 480.,
             shortcut: 52. / 480.,
             clock: 44. / 480.,
+            tiles: None,
+            shortcuts: None,
+            clock_at: None,
         }
     }
 }
@@ -141,6 +150,9 @@ pub struct MenuStyle {
     pub width: f32,
     pub row: f32,
     pub radius: f32,
+    /// The box the card stands in (its width, and its height at most),
+    /// over `anchor`.
+    pub rect: Option<Rect01>,
 }
 impl Default for MenuStyle {
     fn default() -> Self {
@@ -150,6 +162,7 @@ impl Default for MenuStyle {
             width: 300. / 480.,
             row: 38. / 480.,
             radius: 26. / 480.,
+            rect: None,
         }
     }
 }
@@ -251,6 +264,27 @@ pub struct SwitcherStyle {
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ResumeStyle {
     pub title: bool,
+    /// Where the countdown's bar stands; None: under the texts.
+    pub progress: Option<Rect01>,
+    /// The game's picture behind; None: blurred behind the title, none
+    /// behind the picture.
+    pub backdrop: Option<Backdrop>,
+}
+/// A picture behind a screen: blurred by `blur` (a size, of 480; 0 keeps
+/// it sharp) and showing through the background at `opacity` (0 to 1).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Backdrop {
+    pub blur: f32,
+    pub opacity: f32,
+}
+impl Default for Backdrop {
+    /// As the title style always drew it: blurred, two fifths through.
+    fn default() -> Self {
+        Self {
+            blur: 24. / 480.,
+            opacity: 105. / 255.,
+        }
+    }
 }
 
 /// The list's search: the field and plain rows (as always), or a field of
@@ -263,6 +297,13 @@ pub struct SearchStyle {
     /// Sizes (of 480): a result's row and the field's height.
     pub row: f32,
     pub height: f32,
+    /// Where the field and the results stand; None: under the header,
+    /// and from under the field to the keyboard.
+    pub field_at: Option<Rect01>,
+    pub results: Option<Rect01>,
+    /// The keyboard docked at the bottom edge, or right under the results'
+    /// box (`dock = "results"`, on a card of its own).
+    pub dock_results: bool,
 }
 impl Default for SearchStyle {
     fn default() -> Self {
@@ -270,6 +311,9 @@ impl Default for SearchStyle {
             field: false,
             row: 38. / 480.,
             height: 40. / 480.,
+            field_at: None,
+            results: None,
+            dock_results: false,
         }
     }
 }
@@ -534,15 +578,15 @@ fn style_keys(screen: &str) -> &'static [&'static str] {
         "hints" => &["style", "position"],
         "status" => &["style", "battery", "radios", "clock", "rect"],
         "dialog" => &["width", "radius", "icon", "buttons", "style"],
-        "start" => &["style", "radius", "shortcut", "clock"],
-        "menu" => &["style", "anchor", "width", "row", "radius"],
+        "start" => &["style", "radius", "shortcut", "clock", "tiles", "shortcuts"],
+        "menu" => &["style", "anchor", "width", "row", "radius", "rect"],
         "details" => &["style", "shelf"],
         "achievements" => &["style", "row", "gap", "badge", "badge_radius"],
         "saves" => &["style", "row", "thumb"],
         "shots" => &["sections", "columns", "gap", "radius"],
         "switcher" => &["cards"],
-        "resume" => &["style"],
-        "search" => &["style", "row", "height"],
+        "resume" => &["style", "progress", "backdrop"],
+        "search" => &["style", "row", "height", "field", "results", "dock"],
         "keyboard" => &["sheet", "key"],
         "osd" => &["style", "position", "fill", "track", "radius"],
         "settings" => &[
@@ -648,7 +692,17 @@ impl Screens {
             );
             own.start.radius = r.number("radius", own.start.radius, 0., 0.1);
             own.start.shortcut = r.number("shortcut", own.start.shortcut, 0.06, 0.16);
-            own.start.clock = r.number("clock", own.start.clock, 0.04, 0.16);
+            // The hour: its size, or its place with its size inside.
+            match t.get("clock") {
+                Some(Value::Table(clock)) => {
+                    own.start.clock_at = r.rect("clock").or(own.start.clock_at);
+                    let size = Reader("start.clock", clock);
+                    own.start.clock = size.number("size", own.start.clock, 0.04, 0.16);
+                }
+                _ => own.start.clock = r.number("clock", own.start.clock, 0.04, 0.16),
+            }
+            own.start.tiles = r.rect("tiles").or(own.start.tiles);
+            own.start.shortcuts = r.rect("shortcuts").or(own.start.shortcuts);
         }
         if let Some(t) = get("menu") {
             let r = Reader("menu", t);
@@ -665,6 +719,7 @@ impl Screens {
             own.menu.width = r.number("width", own.menu.width, 0.4, 1.0);
             own.menu.row = r.number("row", own.menu.row, 0.06, 0.12);
             own.menu.radius = r.number("radius", own.menu.radius, 0., 0.1);
+            own.menu.rect = r.rect("rect").or(own.menu.rect);
         }
         if let Some(t) = get("details") {
             let r = Reader("details", t);
@@ -741,6 +796,22 @@ impl Screens {
                 own.resume.title,
                 &[("picture", false), ("title", true)],
             );
+            own.resume.progress = r.rect("progress").or(own.resume.progress);
+            match t.get("backdrop") {
+                None => {}
+                Some(Value::Table(b)) => {
+                    let r = Reader("resume.backdrop", b);
+                    let base = own.resume.backdrop.unwrap_or_default();
+                    own.resume.backdrop = Some(Backdrop {
+                        blur: r.number("blur", base.blur, 0., 0.2),
+                        opacity: r.number("opacity", base.opacity, 0., 1.),
+                    });
+                    for name in b.keys().filter(|n| !["blur", "opacity"].contains(&n.as_str())) {
+                        log::warn!("Unknown theme key resume.backdrop.{name}; ignored");
+                    }
+                }
+                Some(_) => log::warn!("Theme resume.backdrop must be {{ blur, opacity }}; ignored"),
+            }
         }
         if let Some(t) = get("search") {
             let r = Reader("search", t);
@@ -751,6 +822,13 @@ impl Screens {
             );
             own.search.row = r.number("row", own.search.row, 0.05, 0.12);
             own.search.height = r.number("height", own.search.height, 0.06, 0.12);
+            own.search.field_at = r.rect("field").or(own.search.field_at);
+            own.search.results = r.rect("results").or(own.search.results);
+            own.search.dock_results = r.pick(
+                "dock",
+                own.search.dock_results,
+                &[("bottom", false), ("results", true)],
+            );
         }
         if let Some(t) = get("keyboard") {
             let r = Reader("keyboard", t);
@@ -1044,6 +1122,40 @@ mod tests {
             Some(16. / 480.),
             "out of range: the pill's"
         );
+    }
+    #[test]
+    fn screens_take_their_places() {
+        let own = read(
+            "[start]\ntiles = { x = 0.05, y = 0.3, w = 0.9, h = 0.25 }\n\
+             shortcuts = { x = 0.05, y = 0.6, w = 0.9, h = 0.12 }\n\
+             clock = { x = 0.05, y = 0.05, w = 0.9, h = 0.15, size = 0.12 }\n\
+             [menu]\nrect = { x = 0.3, y = 0.1, w = 0.4, h = 0.8 }\n\
+             [search]\nfield = { x = 0.04, y = 0.1, w = 0.92, h = 0.09 }\n\
+             results = { x = 0.04, y = 0.22, w = 0.92, h = 0.3 }\ndock = 'results'\n\
+             [resume]\nprogress = { x = 0.3, y = 0.7, w = 0.4, h = 0.01 }\n\
+             backdrop = { blur = 0, opacity = 0.8 }",
+        );
+        assert_eq!(own.start.tiles.map(|r| r.h), Some(0.25));
+        assert_eq!(own.start.shortcuts.map(|r| r.y), Some(0.6));
+        assert_eq!(own.start.clock_at.map(|r| r.h), Some(0.15));
+        assert_eq!(own.start.clock, 0.12, "the hour's size inside its place");
+        assert_eq!(own.menu.rect.map(|r| r.w), Some(0.4));
+        assert_eq!(own.search.field_at.map(|r| r.h), Some(0.09));
+        assert_eq!(own.search.results.map(|r| r.h), Some(0.3));
+        assert!(own.search.dock_results);
+        assert_eq!(own.resume.progress.map(|r| r.w), Some(0.4));
+        assert_eq!(
+            own.resume.backdrop,
+            Some(Backdrop {
+                blur: 0.,
+                opacity: 0.8
+            })
+        );
+        // A number is still the hour's size; nothing else moves.
+        let plain = read("[start]\nclock = 0.1\n[resume]\nbackdrop = 'blur'");
+        assert_eq!((plain.start.clock, plain.start.clock_at), (0.1, None));
+        assert_eq!(plain.resume.backdrop, None, "wrong type: warned, left out");
+        assert_eq!(read("").search, SearchStyle::default());
     }
     #[test]
     fn the_status_pill_takes_a_box_inside_the_screen() {

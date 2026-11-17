@@ -265,6 +265,10 @@ impl Ui<'_, '_> {
             return self.resume_title(boot, data, theme, art);
         }
         let Frame { width, height, .. } = self.frame;
+        let style = theme.screens.resume;
+        if let Some(backdrop) = style.backdrop {
+            self.blurred_game(&boot.game, &art, theme, backdrop)?;
+        }
         let shot = pixels(theme.resume_shot, width, height);
         let info = pixels(theme.resume_info, width, height);
         let radius = self.px(12.) as f32;
@@ -322,12 +326,14 @@ impl Ui<'_, '_> {
         // The countdown, then the two buttons centered under it.
         y += self.px(14.);
         let bar_w = self.px(220.);
-        let bar = Rect::new(
+        let under = Rect::new(
             info.x() + (info.width() as i32 - bar_w) / 2,
             y,
             bar_w as u32,
             self.px(4.) as u32,
         );
+        let bar = style.progress.map_or(under, |r| self.area(r));
+        let bar_w = bar.width() as i32;
         self.rounded(bar, self.px(2.) as f32, theme.badge, None)?;
         let done = (bar_w as f32 * boot.progress.clamp(0., 1.)).round() as u32;
         if done > 0 {
@@ -346,18 +352,29 @@ impl Ui<'_, '_> {
             &hints,
             theme,
             end.max(1) as u32,
-            bar.bottom() + self.px(14.),
+            under.bottom() + self.px(14.),
             h,
         )?;
         Ok(())
     }
-    /// `game`'s picture blurred over the whole screen, darkened; the theme's
-    /// background while it has none.
+    /// The blur and veil a game's picture takes behind the switcher and
+    /// the resume when the theme says nothing: its glass's blur, at least
+    /// 24 px, two fifths through the background.
+    fn backdrop_or_default(theme: &Theme, own: Option<crate::screens::Backdrop>) -> crate::screens::Backdrop {
+        own.unwrap_or(crate::screens::Backdrop {
+            blur: theme.glass.map_or(0., |g| g.blur).max(24. / 480.),
+            ..Default::default()
+        })
+    }
+    /// `game`'s picture over the whole screen, blurred by `backdrop.blur`
+    /// (sharp at 0) and showing through the background at its opacity;
+    /// the theme's background while it has none.
     fn blurred_game(
         &mut self,
         game: &Recent,
         art: &Art<'_, '_>,
         theme: &Theme,
+        backdrop: crate::screens::Backdrop,
     ) -> Result<(), String> {
         let Frame { width, height, .. } = self.frame;
         let whole = Rect::new(0, 0, width, height);
@@ -366,8 +383,7 @@ impl Ui<'_, '_> {
             .as_ref()
             .and_then(|path| art.pictures.and_then(|c| c.peek(path)).map(|t| (path, t)));
         if let Some((path, texture)) = found {
-            let blur = theme.glass.map_or(0., |g| g.blur).max(24. / 480.);
-            let steps = super::material::halvings(self.frame.size(blur));
+            let steps = super::material::halvings(self.frame.size(backdrop.blur));
             let size = texture.query();
             let part = crop((size.width, size.height), (width, height));
             let src = Rect::new(
@@ -376,15 +392,20 @@ impl Ui<'_, '_> {
                 (part[2] * size.width as f32).round().max(1.) as u32,
                 (part[3] * size.height as f32).round().max(1.) as u32,
             );
-            let made = self.blurred(path, steps, |ui| {
-                ui.canvas.copy(texture, src, None).map(|()| true)
-            });
-            if let Some(index) = made {
-                self.draw_blurred(index, whole, 255)?;
+            if backdrop.blur <= 0. {
+                self.canvas.copy(texture, src, whole)?;
+            } else {
+                let made = self.blurred(path, steps, |ui| {
+                    ui.canvas.copy(texture, src, None).map(|()| true)
+                });
+                if let Some(index) = made {
+                    self.draw_blurred(index, whole, 255)?;
+                }
             }
         }
+        let veil = (255. * (1. - backdrop.opacity.clamp(0., 1.))).round() as u8;
         self.canvas.set_draw_color(color(Rgba {
-            a: 150,
+            a: veil,
             ..theme.background
         }));
         self.canvas.fill_rect(whole)
@@ -403,7 +424,7 @@ impl Ui<'_, '_> {
         let games = &app.switcher;
         let at = app.cursor.min(games.len().saturating_sub(1));
         if let Some(game) = games.get(at) {
-            self.blurred_game(game, &art, theme)?;
+            self.blurred_game(game, &art, theme, Self::backdrop_or_default(theme, None))?;
         }
         self.status_header(theme)?;
         let card = pixels(theme.switcher_card, width, height);
@@ -551,7 +572,13 @@ impl Ui<'_, '_> {
         art: Art<'_, '_>,
     ) -> Result<(), String> {
         let Frame { width, height, .. } = self.frame;
-        self.blurred_game(&boot.game, &art, theme)?;
+        let style = theme.screens.resume;
+        self.blurred_game(
+            &boot.game,
+            &art,
+            theme,
+            Self::backdrop_or_default(theme, style.backdrop),
+        )?;
         let pad = self.px(32.);
         let room = width.saturating_sub(2 * pad as u32).max(1);
         let name = boot.game.name.clone();
@@ -608,12 +635,16 @@ impl Ui<'_, '_> {
         )?;
         y += self.px(36.);
         let bar_w = (width as i32 * 2 / 5).max(self.px(120.));
-        let bar = Rect::new(
+        let under = Rect::new(
             (width as i32 - bar_w) / 2,
             y,
             bar_w as u32,
             self.px(3.).max(2) as u32,
         );
+        // The theme's place for the countdown, else under the texts; the
+        // buttons stay under the texts.
+        let bar = style.progress.map_or(under, |r| self.area(r));
+        let bar_w = bar.width() as i32;
         let r = bar.height() as f32 / 2.;
         self.rounded(
             bar,
@@ -644,7 +675,7 @@ impl Ui<'_, '_> {
             &hints,
             theme,
             end.max(1) as u32,
-            bar.bottom() + self.px(18.),
+            under.bottom() + self.px(18.),
             self.px(24.) as u32,
         )?;
         Ok(())

@@ -12,8 +12,10 @@ use crate::{primitives::shade, state::DETAILS_ACTIONS, theme::Gradient};
 fn alpha(c: Rgba, a: u8) -> Rgba {
     Rgba { a, ..c }
 }
-/// Games beside this one on the shelf below.
+/// Games beside this one on the shelf below, and its cards' tallest
+/// height in reference pixels.
 const SHELF: usize = 8;
+const SHELF_CARD: f32 = 100.;
 
 impl Ui<'_, '_> {
     pub(super) fn details_hero(
@@ -103,15 +105,24 @@ impl Ui<'_, '_> {
         )?;
         self.status_header(theme)?;
 
-        // The picture at the right; the text beside it.
+        // The shelf below takes cards up to a height; a taller screen gives
+        // the rest to the showcase above it.
         let shelf = theme.screens.details.shelf && data.games(system).len() > 1;
-        let shelf_top = if shelf { h * 64 / 100 } else { h - margin };
+        let shelf_top = if shelf {
+            let tallest = self.px(SHELF_CARD);
+            let over = self.px(56.) + self.px(28.);
+            (h * 64 / 100).max(h - over - tallest)
+        } else {
+            h - margin
+        };
         let top = capsule.bottom() + self.px(22.);
+        let band_bottom = shelf_top - self.px(26.);
+        // The picture at the right, in the middle of the band.
         let pic = Rect::new(
             w * 58 / 100,
             top,
             (w * 42 / 100 - margin).max(1) as u32,
-            (shelf_top - top - self.px(28.)).max(1) as u32,
+            (band_bottom - top - self.px(2.)).max(1) as u32,
         );
         if let Some(texture) = picture {
             let dst = fit(texture, pic, false);
@@ -126,27 +137,21 @@ impl Ui<'_, '_> {
                 [0., 0., 1., 1.],
             )?;
         }
+        // The text beside it: the title, the facts, the description,
+        // the buttons and when it was played, one block in the middle of
+        // the band; the description takes what the band leaves.
         let column = (pic.x() - margin - self.px(20.)).max(1) as u32;
-        let mut y = top;
         let big = 38.;
         let floor = self.frame.min_size().max(20.);
         let size = self
             .shrink(&game.name, Face::Bold, big, floor, column)?
             .unwrap_or(floor);
         let step = (self.frame.size(size / 480.) * 1.08).round() as i32;
-        for line in self
+        let title: Vec<String> = self
             .wrap(&game.name, Face::Bold, size, column)?
-            .iter()
+            .into_iter()
             .take(2)
-        {
-            self.label(
-                line,
-                (Face::Bold, size, theme.text),
-                Rect::new(margin, y, column, step as u32),
-            )?;
-            y += step;
-        }
-        y += self.px(6.);
+            .collect();
         let details = &game.details;
         let mut facts: Vec<String> = Vec::new();
         if let Some(year) = game.year {
@@ -161,8 +166,42 @@ impl Ui<'_, '_> {
         if !details.developer.trim().is_empty() {
             facts.push(details.developer.trim().to_owned());
         }
-        // The last facts go first when the line is tight.
         let line_h = self.px(18.);
+        let button_h = self.px(36.);
+        let played_h = if game.last_played.is_some() {
+            self.px(22.)
+        } else {
+            0
+        };
+        let text = details.description.trim();
+        let text_step = self.px(18.);
+        let fixed = step * title.len() as i32
+            + self.px(6.)
+            + line_h
+            + self.px(10.)
+            + self.px(12.)
+            + button_h
+            + played_h;
+        let band = band_bottom - top;
+        let room = ((band - fixed) / text_step).max(0) as usize;
+        let lines = if text.is_empty() || room == 0 {
+            Vec::new()
+        } else {
+            self.wrap(text, Face::Regular, 13., column)?
+        };
+        let shown = lines.len().min(room);
+        let block = fixed + text_step * shown as i32;
+        let mut y = top + ((band - block) / 2).max(0);
+        for line in &title {
+            self.label(
+                line,
+                (Face::Bold, size, theme.text),
+                Rect::new(margin, y, column, step as u32),
+            )?;
+            y += step;
+        }
+        y += self.px(6.);
+        // The last facts go first when the line is tight.
         while !facts.is_empty() {
             let text = facts.join(" · ");
             if self.measure(&text, Face::Regular, 13.)? <= column || facts.len() == 1 {
@@ -176,23 +215,10 @@ impl Ui<'_, '_> {
             facts.pop();
         }
         y += line_h + self.px(10.);
-
-        // Buttons sit above the shelf; the description takes what is between.
-        let button_h = self.px(36.);
-        let played_h = if game.last_played.is_some() {
-            self.px(22.)
-        } else {
-            0
-        };
-        let buttons_y = shelf_top - self.px(26.) - played_h - button_h;
-        let text = details.description.trim();
-        let text_step = self.px(18.);
-        let room = ((buttons_y - self.px(12.) - y) / text_step).max(0) as usize;
-        if !text.is_empty() && room > 0 {
-            let lines = self.wrap(text, Face::Regular, 13., column)?;
-            let first = app.details_scroll.min(lines.len().saturating_sub(room));
-            self.details_overflow = lines.len().saturating_sub(room);
-            for line in lines.iter().skip(first).take(room) {
+        if shown > 0 {
+            let first = app.details_scroll.min(lines.len().saturating_sub(shown));
+            self.details_overflow = lines.len().saturating_sub(shown);
+            for line in lines.iter().skip(first).take(shown) {
                 self.label(
                     line,
                     (Face::Regular, 13., theme.text_secondary),
@@ -203,6 +229,7 @@ impl Ui<'_, '_> {
         } else {
             self.details_overflow = 0;
         }
+        let buttons_y = y + self.px(12.);
         self.hero_actions(app, game.favorite, (margin, buttons_y, button_h), theme)?;
         if let Some(at) = game.last_played {
             let ago = self.catalog.relative_time(at, self.frame.unix);
@@ -283,6 +310,8 @@ impl Ui<'_, '_> {
                 round
             };
             if focused {
+                // The game menu opens beside the button it was called from.
+                self.focus_at = Some(rect);
                 let out = self.px(3.);
                 let ring = Rect::new(
                     rect.x() - out,

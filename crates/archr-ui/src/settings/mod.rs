@@ -1873,6 +1873,20 @@ impl Settings {
             .checked_sub(2)
             .map_or(Page::Root, |n| self.stack[n].0)
     }
+    /// The page the keyboard was opened from, as it stood: what a sheet
+    /// (`[keyboard] sheet = true`) is drawn over. None off the keyboard.
+    pub fn under_keyboard(&self) -> Option<Settings> {
+        if self.page() != Page::Keyboard || self.stack.len() < 2 {
+            return None;
+        }
+        let mut behind = self.clone();
+        behind.stack.pop();
+        behind.cursor = behind.stack.last()?.1;
+        behind.keyboard = None;
+        behind.keyboard_target = None;
+        behind.error = None;
+        Some(behind)
+    }
     pub fn open(&mut self, page: Page) {
         self.stack.last_mut().expect("root page").1 = self.cursor;
         self.stack.push((page, 0));

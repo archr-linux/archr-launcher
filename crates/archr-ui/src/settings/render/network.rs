@@ -386,34 +386,49 @@ impl View<'_, '_, '_> {
         (caption, rule): (&str, Option<&str>),
     ) -> Result<(), String> {
         let theme = self.theme;
-        let sheet = self.rect((12., 44., 616., 384.));
+        // As tall as what it holds, docked at the bottom: the footer's
+        // hints stand on it.
+        let top = self.sheet_top(state);
+        let sheet = self.rect((8., top, 624., self.bottom() - top + 40.));
         let radius = self.ui.px(22.) as f32;
         self.ui.cast_shadow(sheet, radius)?;
+        // Over the page dimmed: the theme's surface under the glass, so
+        // nothing of the page reads through.
+        self.ui.rounded(
+            sheet,
+            radius,
+            Rgba {
+                a: 240,
+                ..theme.surface
+            },
+            None,
+        )?;
         self.ui.glass(sheet, radius, &theme.glass_or_default())?;
         // Cancel at the left, the field's name, the confirmation at the right.
+        let head = top + 8.;
         let cancel = self.tr("hint.cancel");
         self.text(
-            (32., 52., 160., 30.),
+            (32., head, 160., 30.),
             &cancel,
             (14., theme.highlight_bg, Align::Left),
         )?;
         let submit = self.ui.catalog.text(Self::submit_key(state));
         self.text_face(
-            (448., 52., 160., 30.),
+            (448., head, 160., 30.),
             &submit,
             (14., theme.highlight_bg, Align::Right),
             Face::Semibold,
         )?;
         let title = self.keyboard_name(state);
         self.text_face(
-            (196., 52., 248., 30.),
+            (196., head, 248., 30.),
             &title,
             (15., theme.text, Align::Center),
             Face::Semibold,
         )?;
         self.ui.divider(
             sheet.x(),
-            self.ui.px(88.),
+            self.ui.px(head + 36.),
             sheet.width(),
             Rgba {
                 a: 0x1A,
@@ -421,19 +436,21 @@ impl View<'_, '_, '_> {
             },
         )?;
         // The caption and its rule, then the field.
+        let note = head + 44.;
         let rule_width = match rule {
             Some(rule) => self.span(rule, Face::Regular, 12.)? + 8.,
             None => 0.,
         };
-        self.note((32., 96., 576. - rule_width, 18.), caption, 12.)?;
+        self.note((32., note, 576. - rule_width, 18.), caption, 12.)?;
         if let Some(rule) = rule {
             self.text(
-                (608. - rule_width, 96., rule_width, 18.),
+                (608. - rule_width, note, rule_width, 18.),
                 rule,
                 (12., theme.muted, Align::Right),
             )?;
         }
-        let field = self.rect((28., 118., 584., 42.));
+        let y = note + 22.;
+        let field = self.rect((28., y, 584., 42.));
         let round = field.height() as f32 / 2.;
         self.ui.rounded(
             field,
@@ -457,13 +474,13 @@ impl View<'_, '_, '_> {
         self.ui.label_aligned(
             &text,
             (Face::Mono, size, theme.text),
-            self.rect((48., 118., 530., 42.)),
+            self.rect((48., y, 530., 42.)),
             Align::Left,
         )?;
         self.ui.canvas.set_draw_color(color(theme.highlight_bg));
         self.ui
             .canvas
-            .fill_rect(self.rect((48. + shown.min(530.) + 3., 129., 2., 20.)))?;
+            .fill_rect(self.rect((48. + shown.min(530.) + 3., y + 11., 2., 20.)))?;
         if keyboard.mode == Mode::Secret {
             let eye = if keyboard.reveal {
                 Glyph::EyeOff
@@ -471,11 +488,29 @@ impl View<'_, '_, '_> {
                 Glyph::Eye
             };
             self.ui
-                .icon(eye, self.rect((582., 130., 18., 18.)), theme.muted)?;
+                .icon(eye, self.rect((582., y + 12., 18., 18.)), theme.muted)?;
         }
         let labels = (self.tr("settings.space"), submit);
         self.ui
-            .keyboard_keys(keyboard, 174., (&labels.0, &labels.1), theme)
+            .keyboard_keys(keyboard, y + 42. + 14., (&labels.0, &labels.1), theme)
+    }
+    /// Where the keyboard's sheet starts: its title row, the field with its
+    /// caption and the keys, over the footer.
+    pub(super) fn sheet_top(&self, state: &Settings) -> f32 {
+        let rows = state
+            .keyboard
+            .as_ref()
+            .map_or(4, |k| k.rows().len()) as f32;
+        let k = self.theme.screens.keyboard;
+        let (kh, kg) = if k == crate::screens::KeyboardStyle::default() {
+            (34., 6.)
+        } else {
+            (k.key_h * 480., k.key_gap * 480.)
+        };
+        let keys = rows * (kh + kg) - kg;
+        // Keys end 10 px over the footer; above them the field (42), its
+        // caption (22), the rule and the title row (44) and 8 of margin.
+        self.footer_top() - 10. - keys - 14. - 42. - 22. - 44. - 8.
     }
     /// Config-scraper side panel: last or running collection.
     pub(super) fn scraper_panel(&mut self, state: &Settings) -> Result<(), String> {

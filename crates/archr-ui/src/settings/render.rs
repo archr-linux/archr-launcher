@@ -932,6 +932,13 @@ impl View<'_, '_, '_> {
         Ok(16. + width)
     }
     fn draw(&mut self, state: &Settings) -> Result<(), String> {
+        // The keyboard on a sheet opens over the page it was called from,
+        // dimmed; the sheet carries its own title.
+        let sheet = state.page() == Page::Keyboard && self.theme.screens.keyboard.sheet;
+        if let Some(behind) = state.under_keyboard().filter(|_| sheet) {
+            self.draw(&behind)?;
+            self.ui.scrim(self.theme, 1.)?;
+        }
         let right = self.ui.status_header(self.theme)? as f32 / self.ui.frame.scale;
         if let Page::InfoDetail(index) = state.page() {
             let base = self.tr("settings.info");
@@ -976,6 +983,7 @@ impl View<'_, '_, '_> {
         } else {
             let right = self.pad_steps(state, right)?;
             match (self.look().sidebar, state.page()) {
+                _ if sheet => {}
                 // The sidebar holds the root's title.
                 (true, Page::Root) => {}
                 (true, _) if self.title_below(state) => self.title_header(state)?,
@@ -1012,6 +1020,10 @@ impl View<'_, '_, '_> {
                 (x, 318., RIGHT - x, 80.)
             } else if state.page() == Page::Root {
                 (386., 318., 230., 110.)
+            } else if sheet {
+                // Over the sheet's top, in sight above the keys.
+                let top = self.sheet_top(state);
+                (24., top - 48., 592., 40.)
             } else if state.page() == Page::Keyboard {
                 (24., 296., 592., 40.)
             } else if state.page() == Page::StoreTheme {

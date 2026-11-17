@@ -203,9 +203,13 @@ impl Ui<'_, '_> {
             (Face::Semibold, 15., theme.text),
             Rect::new(pad, 0, (right - pad - self.px(10.)).max(1) as u32, header),
         )?;
-        // The field: a capsule of glass, lit while typing.
+        // The field: a capsule of glass, lit while typing; where the theme
+        // puts it, else under the header.
         let fh = style.height * 480.;
-        let field = at(self, 24., 50., 592., fh);
+        let field = match style.field_at {
+            Some(r) => self.area(r),
+            None => at(self, 24., 50., 592., fh),
+        };
         let typing = !search.results;
         let round = field.height() as f32 / 2.;
         self.glass(field, round, &theme.glass_or_default())?;
@@ -214,7 +218,13 @@ impl Ui<'_, '_> {
             self.geometry
                 .ring(&mut self.canvas, field, round, width, theme.highlight_bg)?;
         }
-        let icon = at(self, 40., 50. + (fh - 18.) / 2., 18., 18.);
+        let side = self.px(18.);
+        let icon = Rect::new(
+            field.x() + self.px(16.),
+            field.y() + (field.height() as i32 - side) / 2,
+            side as u32,
+            side as u32,
+        );
         self.icon(Glyph::Search, icon, theme.text_secondary)?;
         let count = self.catalog.format(
             "search.count",
@@ -258,7 +268,8 @@ impl Ui<'_, '_> {
                 self.canvas.fill_rect(bar)?;
             }
         }
-        // The keyboard on a sheet at the bottom; the results above it.
+        // In reference pixels from here: the results' box and the keyboard.
+        let scale = self.frame.scale;
         let rows = search.keyboard.rows().len() as f32;
         let k = theme.screens.keyboard;
         let (kh, kg) = if k == crate::screens::KeyboardStyle::default() {
@@ -266,12 +277,44 @@ impl Ui<'_, '_> {
         } else {
             (k.key_h * 480., k.key_gap * 480.)
         };
-        let keys = height - 48. - 6. - (kh + kg) * rows;
-        let sheet = at(self, 8., keys - 12., 624., height - keys + 60.);
-        self.glass(sheet, self.px(22.) as f32, &theme.glass_or_default())?;
-        let row = style.row * 480.;
-        let top = 50. + fh + 10.;
-        let fits = (((keys - 22. - top) / row).floor() as usize).max(1);
+        let keys_h = (kh + kg) * rows;
+        let base = style.row * 480.;
+        let below_field = field.bottom() as f32 / scale + 10.;
+        let boxed = style.results.map(|r| {
+            let r = self.area(r);
+            (
+                r.x() as f32 / scale,
+                r.y() as f32 / scale,
+                r.width() as f32 / scale,
+                r.height() as f32 / scale,
+            )
+        });
+        // Docked at the bottom edge, or right under the results' box (five
+        // rows when the theme gives none): it never moves while typing.
+        let keys = if style.dock_results {
+            let bottom = boxed.map_or(below_field + 5. * base, |(_, y, _, h)| y + h);
+            bottom + 22.
+        } else {
+            height - 48. - 6. - keys_h
+        };
+        let (gx, top, gw, box_h) =
+            boxed.unwrap_or((24., below_field, 592., keys - 22. - below_field));
+        // A taller box gives the rows more room, up to two fifths more, so
+        // five of them fill it; a short one keeps the theme's.
+        let row = if boxed.is_none() {
+            (box_h / 5.).clamp(base, base * 1.4).floor()
+        } else {
+            base
+        };
+        if style.dock_results {
+            let card = at(self, 8., keys - 12., 624., keys_h + 18.);
+            self.cast_shadow(card, self.px(22.) as f32)?;
+            self.glass(card, self.px(22.) as f32, &theme.glass_or_default())?;
+        } else {
+            let sheet = at(self, 8., keys - 12., 624., height - keys + 60.);
+            self.glass(sheet, self.px(22.) as f32, &theme.glass_or_default())?;
+        }
+        let fits = ((box_h / row).floor() as usize).max(1);
         let first = (cursor + 1)
             .saturating_sub(fits)
             .min(found.len().saturating_sub(fits));
@@ -279,18 +322,18 @@ impl Ui<'_, '_> {
             self.label(
                 &self.catalog.text("search.empty"),
                 (Face::Regular, 15., theme.muted),
-                at(self, 38., top, 560., row),
+                at(self, gx + 14., top, gw - 28., row),
             )?;
         } else {
             let shown = found.len().saturating_sub(first).min(fits) as f32;
-            let group = at(self, 24., top, 592., shown * row);
+            let group = at(self, gx, top, gw, shown * row);
             self.glass(group, self.px(14.) as f32, &theme.glass_or_default())?;
         }
         let term = text.trim().to_lowercase();
         for (n, &game) in found.iter().enumerate().skip(first).take(fits) {
             let y = top + (n - first) as f32 * row;
             let selected = search.results && n == cursor;
-            let band = at(self, 28., y + 2., 584., row - 4.);
+            let band = at(self, gx + 4., y + 2., gw - 8., row - 4.);
             if selected {
                 self.rounded(
                     band,
@@ -304,7 +347,7 @@ impl Ui<'_, '_> {
             }
             let entry = games.get(game);
             let thumb_h = row - 12.;
-            let thumb = at(self, 36., y + 6., thumb_h * 4. / 3., thumb_h);
+            let thumb = at(self, gx + 12., y + 6., thumb_h * 4. / 3., thumb_h);
             let cover = entry
                 .and_then(|g| g.image.as_ref())
                 .and_then(|path| art.covers.and_then(|c| c.peek(path)));
@@ -327,7 +370,7 @@ impl Ui<'_, '_> {
             let place = dir.rsplit('/').next().filter(|d| !d.is_empty());
             let place =
                 place.map_or_else(|| system_title(system, data, &self.catalog), str::to_owned);
-            let line = (self.px(600.), self.px(y), self.px(row) as u32);
+            let line = (self.px(gx + gw - 16.), self.px(y), self.px(row) as u32);
             let end = self.packed_label(
                 &place,
                 (Face::Regular, 12., theme.text_secondary),

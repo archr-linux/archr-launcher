@@ -25,15 +25,30 @@ impl Ui<'_, '_> {
         let style = theme.screens.start;
         let scale = self.frame.scale;
         let px = |n: f32| (n * scale).round() as i32;
-        // The composition is 480 reference pixels high and as wide as staged.
+        // The composition is laid out from the top, 480 reference pixels
+        // high and as wide as staged; the theme may place its parts.
         let wide = self.frame.width as f32 / scale;
         let room = wide - 2. * MARGIN;
+        // A theme box in reference pixels: (x, y, w, h).
+        let place = |ui: &Self, rect: crate::theme::Rect01| {
+            let r = ui.area(rect);
+            (
+                r.x() as f32 / scale,
+                r.y() as f32 / scale,
+                r.width() as f32 / scale,
+                r.height() as f32 / scale,
+            )
+        };
         // The screen behind is blurred already: the panes only tint it.
         let pane = Glass {
             blur: 0.,
             ..theme.glass_or_default()
         };
-        self.control_status(theme, wide, style.clock * 480.)?;
+        let clock = style.clock_at.map_or((MARGIN, 24., wide - 2. * MARGIN), |r| {
+            let (x, y, w, _) = place(self, r);
+            (x, y, w)
+        });
+        self.control_status(theme, clock, style.clock * 480.)?;
 
         let widgets = app.modules.widgets();
         let row = if row == 2 && widgets.is_empty() {
@@ -43,15 +58,29 @@ impl Ui<'_, '_> {
         };
         let modules = app.modules.tiles();
         let count = TILES.len() + modules.len();
-        let tile_h = if widgets.is_empty() { 150. } else { 108. };
-        let tile_w = ((room - 2. * GAP) / 3.).min(184.);
+        // Three blocks across their box, as tall as it.
+        let (left, top, across, tile_h) = match style.tiles {
+            Some(r) => place(self, r),
+            None => (
+                MARGIN,
+                TOP,
+                room,
+                if widgets.is_empty() { 150. } else { 108. },
+            ),
+        };
+        let tile_w = ((across - 2. * GAP) / 3.).min(if style.tiles.is_some() {
+            f32::MAX
+        } else {
+            184.
+        });
         let step = tile_w + GAP;
         let span = count as f32 * step - GAP;
         // More blocks than fit: the row slides to keep the focus in.
-        let first = if span <= room {
-            (wide - span) / 2.
+        let first = if span <= across {
+            left + (across - span) / 2.
         } else {
-            (wide / 2. - tile_w / 2. - tile as f32 * step).clamp(wide - MARGIN - span, MARGIN)
+            (left + across / 2. - tile_w / 2. - tile as f32 * step)
+                .clamp(left + across - span, left)
         };
         let radius = px(style.radius * 480.) as f32;
         for index in 0..count {
@@ -60,7 +89,7 @@ impl Ui<'_, '_> {
             let focus = row == 0 && tile == index;
             let enabled = app.hub_tile_enabled(data, index);
             let x = first + index as f32 * step;
-            let mut rect = Rect::new(px(x), px(TOP), px(tile_w) as u32, px(tile_h) as u32);
+            let mut rect = Rect::new(px(x), px(top), px(tile_w) as u32, px(tile_h) as u32);
             let ink = if focus {
                 rect = self.lift_focus(rect, radius, 1., theme)?;
                 self.rounded(rect, radius, theme.text, None)?;
@@ -109,18 +138,33 @@ impl Ui<'_, '_> {
             self.label(&label, (Face::Semibold, size, ink), at)?;
         }
 
-        let mut y = TOP + tile_h + 26.;
+        let mut y = top + tile_h + 26.;
         if !widgets.is_empty() {
             // The modules' widgets in a band under the blocks, in the
             // tiles' 640-wide coordinates.
-            let band = (320. - room / 2., TOP + tile_h + 14., room, 64.);
+            let band = (320. - room / 2., top + tile_h + 14., room, 64.);
             self.hub_widgets(app, theme, row, &widgets, Some(band))?;
             y = band.1 + band.3 + 16.;
         }
         let shortcuts = app.hub_shortcuts();
         let n = shortcuts.len().max(1) as f32;
-        let side = (style.shortcut * 480.).min((room - GAP * (n - 1.)) / n);
-        let start = (wide - side * n - GAP * (n - 1.)) / 2.;
+        // In a row centered in their box (and level in its height), or
+        // under the blocks.
+        let (left, across, tall) = match style.shortcuts {
+            Some(r) => {
+                let (x, top, w, h) = place(self, r);
+                y = top;
+                (x, w, h)
+            }
+            None => (MARGIN, room, f32::MAX),
+        };
+        let side = (style.shortcut * 480.)
+            .min((across - GAP * (n - 1.)) / n)
+            .min(tall);
+        if tall < f32::MAX {
+            y += (tall - side) / 2.;
+        }
+        let start = left + (across - side * n - GAP * (n - 1.)) / 2.;
         let wifi_on = self.wifi_enabled();
         let bluetooth_on = self.bluetooth_enabled();
         for (index, item) in shortcuts.iter().enumerate() {
@@ -181,7 +225,14 @@ impl Ui<'_, '_> {
                 .unwrap_or_default(),
         };
         let caption = y + side + 16.;
-        let line = |top: f32, h: f32| Rect::new(px(MARGIN), px(top), px(room) as u32, px(h) as u32);
+        let line = |top: f32, h: f32| {
+            Rect::new(
+                px(left.min(MARGIN)),
+                px(top),
+                px(across.max(room)) as u32,
+                px(h) as u32,
+            )
+        };
         self.fitted(
             &name,
             (Face::Semibold, 16., theme.text),
@@ -201,7 +252,12 @@ impl Ui<'_, '_> {
 
     /// The hour large at the top left with the name under it; the network
     /// and the battery in words at the right.
-    fn control_status(&mut self, theme: &Theme, wide: f32, size: f32) -> Result<(), String> {
+    fn control_status(
+        &mut self,
+        theme: &Theme,
+        (left, top, wide): (f32, f32, f32),
+        size: f32,
+    ) -> Result<(), String> {
         let scale = self.frame.scale;
         let px = |n: f32| (n * scale).round() as i32;
         let Some((clock, battery, wifi, network)) = self
@@ -211,25 +267,24 @@ impl Ui<'_, '_> {
         else {
             return Ok(());
         };
-        let top = 24.;
         let tall = size * 1.2;
         self.label(
             &clock,
             (Face::Regular, size, theme.text),
-            Rect::new(px(MARGIN), px(top), px(wide / 2.) as u32, px(tall) as u32),
+            Rect::new(px(left), px(top), px(wide / 2.) as u32, px(tall) as u32),
         )?;
         self.label(
             "Arch R",
             (Face::Semibold, 13., theme.text_secondary),
             Rect::new(
-                px(MARGIN),
+                px(left),
                 px(top + tall - 2.),
                 px(wide / 2.) as u32,
                 px(18.) as u32,
             ),
         )?;
         let (y, h) = (px(top + 10.), px(20.) as u32);
-        let mut right = px(wide - MARGIN);
+        let mut right = px(left + wide);
         let text = (Face::Regular, 13., theme.text_secondary);
         let icon = px(16.);
         if let Some(battery) = battery.filter(|_| theme.screens.status.battery) {

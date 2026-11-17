@@ -112,6 +112,7 @@ info = { x = 0.0, y = 0.74, w = 1.0, h = 0.14 }
 
 [resume]
 style = "title"
+backdrop = { blur = 0.075, opacity = 0.5 }
 
 [search]
 style = "field"
@@ -208,3 +209,7 @@ list = { x = 0.63, y = 0.11, w = 0.32, h = 0.78 }
 # A 3:2 screen (480x320): a little more air between the shelves.
 [aspect.wide.view.lista.home.shelves]
 gap = 0.045
+
+# A square screen is a larger one: the keys grow with it.
+[aspect.square.keyboard]
+key = { h = 0.09, gap = 0.0125, radius = 0.025 }

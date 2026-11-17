@@ -46,6 +46,9 @@ style = "glass"
 
 [start]
 style = "control"
+clock = { x = 0.05, y = 0.05, w = 0.9, h = 0.14, size = 0.09 }
+tiles = { x = 0.05, y = 0.25, w = 0.9, h = 0.28 }
+shortcuts = { x = 0.05, y = 0.57, w = 0.9, h = 0.12 }
 
 [menu]
 style = "context"
@@ -79,9 +82,14 @@ info = { x = 0.0, y = 0.74, w = 1.0, h = 0.14 }
 
 [resume]
 style = "title"
+progress = { x = 0.3, y = 0.9, w = 0.4, h = 0.008 }
+backdrop = { blur = 0, opacity = 0.6 }
 
 [search]
 style = "field"
+field = { x = 0.0375, y = 0.1, w = 0.925, h = 0.083 }
+results = { x = 0.0375, y = 0.2, w = 0.925, h = 0.3 }
+dock = "results"
 
 [keyboard]
 sheet = true
@@ -121,3 +129,7 @@ title = "below"
 [settings.icon_colors]
 network = "#0A84FF"
 sound = "#FF375F"
+
+# A square screen: the game menu in a box of its own.
+[aspect.square.menu]
+rect = { x = 0.25, y = 0.1, w = 0.5, h = 0.8 }

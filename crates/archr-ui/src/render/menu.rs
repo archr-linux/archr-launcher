@@ -139,7 +139,10 @@ impl Ui<'_, '_> {
         };
         // The card's size: header, quick actions, rows and section titles.
         let margin = px(self, 16.);
-        let w = px(self, style.width * 480.)
+        // The theme's box: the card as wide as it, as tall as it at most.
+        let boxed = style.rect.map(|r| self.area(r));
+        let w = boxed
+            .map_or(px(self, style.width * 480.), |b| b.width() as i32)
             .min(width as i32 - 2 * margin)
             .max(1);
         let pad = px(self, 16.);
@@ -162,10 +165,15 @@ impl Ui<'_, '_> {
             y += row;
         }
         let list_h = y;
-        let most = height as i32 - 2 * margin - head - quick_h - pad;
+        let most = boxed.map_or(height as i32 - 2 * margin, |b| b.height() as i32)
+            - head
+            - quick_h
+            - pad;
         let shown = list_h.min(most.max(row));
         let h = head + quick_h + shown + pad;
-        let (x, top) = if style.anchor_focus {
+        let (x, top) = if let Some(b) = boxed {
+            (b.x(), b.y())
+        } else if style.anchor_focus {
             anchor(self.focus_at, (w, h), (width as i32, height as i32), margin)
         } else {
             anchor(None, (w, h), (width as i32, height as i32), margin)
