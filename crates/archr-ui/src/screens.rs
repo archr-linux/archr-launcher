@@ -816,6 +816,12 @@ mod tests {
         assert_eq!(read(""), Screens::default());
     }
     #[test]
+    fn every_screen_table_is_a_known_theme_key() {
+        for table in TABLES {
+            assert!(crate::theme::KNOWN_KEYS.contains(table), "{table}");
+        }
+    }
+    #[test]
     fn the_osd_table_reads_its_shape_edge_colours_and_radius() {
         assert_eq!(read("").osd, OsdStyle::default());
         let own = read(
