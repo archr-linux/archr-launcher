@@ -1,0 +1,207 @@
+# Ellegance: a retro console as a modern handheld would draw it. Deep black,
+# glass, large continuous corners, a focus that lifts and spring motion. The
+# reference theme of the 3.1 theme API (docs/temas.md): shelves, one table
+# per screen, Settings in a sidebar and the capsule OSD. Inter 4.1 (SIL OFL
+# 1.1, fonts/Inter-OFL.txt) in Regular, SemiBold and Bold.
+name = "Ellegance"
+description = { en = "Deep black and glass: shelves, large corners, a focus that lifts and spring motion.", pt_BR = "Preto profundo e vidro: prateleiras, cantos grandes, foco que levanta e movimento de mola.", es = "Negro profundo y vidrio: estantes, esquinas grandes, un foco que se eleva y movimiento de resorte.", ru = "Глубокий чёрный и стекло: полки, большие скругления, приподнятый фокус и пружинная анимация." }
+author = "Arch R"
+version = "1.0.0"
+license = "GPL-2.0; Inter: SIL OFL 1.1"
+
+# Colors. Secondary text is white at 62 %, so it reads the same on the black
+# and on the glass.
+background = "#07070A"
+surface = "#16161C"
+surface_elevated = "#1F1F27"
+border = "#2A2A33"
+badge = "#2A2A33"
+text = "#F5F5F7"
+text_secondary = "#EBEBF59E"
+muted = "#8E8E93"
+dim = "#636366"
+accent = "#0A84FF"
+accent_text = "#FFFFFF"
+accent_text_secondary = "#D6E8FF"
+success = "#30D158"
+warning = "#FF9F0A"
+danger = "#FF453A"
+scrim = "#000000A6"
+
+font = "fonts/Inter-Regular.ttf"
+font_semibold = "fonts/Inter-SemiBold.ttf"
+font_bold = "fonts/Inter-Bold.ttf"
+
+# Large continuous corners, hairline borders.
+radius_item = 0.025 # 12 px
+radius_card = 0.0375 # 18 px
+
+# Style (docs/temas.md, Estilo): a soft deep shadow, the glass every panel
+# of this theme is made of, a focus that lifts, spring motion and a faint
+# light from the top of the screen.
+shadow = "soft"
+shadow_color = "#000000B0"
+shadow_blur = 0.04
+shadow_offset = 0.012
+glass = { fill = "#FFFFFF17", border = "#FFFFFF21", highlight = "#FFFFFF29", blur = 0.05 }
+focus = "lift"
+focus_scale = 1.05
+focus_ring = { color = "#F5F5F7EB", width = 2 }
+motion = "spring"
+gradient = { from = "#121219", to = "#07070A", angle = 90 }
+
+# One table per screen (docs/temas.md, Uma tabela por tela).
+[toast]
+position = "top"
+width = 0.75
+icon = "circle"
+style = "glass"
+
+[hints]
+style = "capsule"
+position = "right"
+
+[status]
+style = "glass"
+clock = "text"
+rect = { x = 0.5, y = 0.012, w = 0.465, h = 0.09 }
+
+[dialog]
+width = 0.8
+radius = 0.04
+icon = true
+buttons = "row"
+style = "glass"
+
+[start]
+style = "control"
+
+[menu]
+style = "context"
+
+[details]
+style = "hero"
+shelf = true
+
+[achievements]
+progress = { x = 0.05, y = 0.11, w = 0.9, h = 0.18, style = "ring" }
+list = { x = 0.05, y = 0.32, w = 0.9, h = 0.56 }
+style = "glass"
+row = 0.1
+gap = 0
+badge = 0.075
+badge_radius = 0.02
+
+[saves]
+style = "preview"
+preview = { x = 0.05, y = 0.12, w = 0.5, h = 0.72 }
+list = { x = 0.58, y = 0.12, w = 0.37, h = 0.72 }
+
+[shots]
+sections = true
+columns = 4
+gap = 0.025
+radius = 0.025
+
+[switcher]
+cards = "depth"
+card = { x = 0.22, y = 0.17, w = 0.56, h = 0.52 }
+info = { x = 0.0, y = 0.74, w = 1.0, h = 0.14 }
+
+[resume]
+style = "title"
+
+[search]
+style = "field"
+
+[keyboard]
+sheet = true
+key = { h = 0.075, gap = 0.0125, radius = 0.025 }
+
+# Volume and brightness: a glass capsule on the right edge.
+[osd]
+style = "capsule"
+position = "right"
+fill = "#F5F5F7"
+track = "#1C1C22A6"
+radius = 0.0375
+
+# Settings: a sidebar, white icons on colored tiles, rows in inset groups.
+[settings]
+layout = "sidebar"
+sidebar = { x = 0.022, w = 0.334, style = "glass", title = 0.046 }
+row = 0.075
+icon = "tile"
+groups = "inset"
+
+[settings.icon_colors]
+network = "#0A84FF"
+sound = "#FF375F"
+controls = "#30D158"
+games = "#FF9F0A"
+region = "#5E5CE6"
+appearance = "#BF5AF2"
+achievements = "#D98E04"
+system = "#8E8E93"
+storage = "#1E9BD7"
+
+# Views. "lista" is the one a new install starts on, so here it opens on the
+# shelves, with the games in a grid under the systems strip. "classica"
+# keeps the classic list for whoever prefers it; "vitrine" comes from the
+# default theme.
+[view.lista]
+name = { en = "Shelves", pt_BR = "Prateleiras", es = "Estantes", ru = "Полки" }
+
+[view.lista.home.shelves]
+order = ["continue", "systems", "apps"]
+
+[view.lista.games]
+header = "compact"
+list = { x = 0.05, y = 0.31, w = 0.9, h = 0.57, row = 0.2167, gap = 0.033, font = 0.025, radius = 0.029, mark = "grid", columns = 4 }
+strip = { x = 0.05, y = 0.225, w = 0.9, h = 0.06 }
+divider = false
+art = false
+panel = false
+meta = false
+backdrop = false
+
+[view.classica]
+name = { en = "List", pt_BR = "Lista", es = "Lista", ru = "Список" }
+
+[view.classica.systems]
+divider = false
+panel = { style = "glass" }
+
+[view.classica.games]
+divider = false
+panel = { style = "glass" }
+
+# A square screen (720x720): the hero and three shelves fit above the hints,
+# and the games grid shows three whole rows.
+[aspect.square.view.lista.home.hero]
+rect = { x = 0.05, y = 0.125, w = 0.469, h = 0.25 }
+art = { x = 0.55, y = 0.115, w = 0.409, h = 0.27, fit = "contain" }
+
+[aspect.square.view.lista.home.shelves]
+y = 0.415
+
+[aspect.square.view.lista.home.shelves.continue]
+item = { w = 0.2625, h = 0.165, radius = 0.033 }
+
+[aspect.square.view.lista.home.shelves.systems]
+item = { w = 0.144, h = 0.1, radius = 0.029 }
+
+[aspect.square.view.lista.home.shelves.apps]
+item = { w = 0.1, h = 0.1, radius = 0.0375 }
+
+[aspect.square.view.lista.games]
+strip = { x = 0.05, y = 0.205, w = 0.9, h = 0.05 }
+list = { x = 0.05, y = 0.275, w = 0.9, h = 0.63 }
+
+[aspect.square.saves]
+preview = { x = 0.05, y = 0.11, w = 0.55, h = 0.78 }
+list = { x = 0.63, y = 0.11, w = 0.32, h = 0.78 }
+
+# A 3:2 screen (480x320): a little more air between the shelves.
+[aspect.wide.view.lista.home.shelves]
+gap = 0.045
