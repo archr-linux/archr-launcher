@@ -7,6 +7,13 @@
   nada é imposto e vale o que você salvou no próprio RetroArch. Escolher outro
   valor grava `<sistema>.<opção>` no `system.cfg`; voltar a "Padrão do
   RetroArch" apaga a chave.
+- **Renderizador** (Configurações › Jogos, por sistema): "Padrão (GLES)",
+  "GLES" ou "Vulkan" gravam `<sistema>.graphics_backend` (vazio, `opengl` ou
+  `vulkan`). O RetroArch (`video_driver`) e os standalones que leem a chave
+  (PPSSPP, Flycast, DuckStation, Dolphin, melonDS) seguem a escolha. Vulkan
+  (PanVK) só existe com o driver Panfrost: com o libmali a linha fica
+  desabilitada, "Vulkan requer o driver Panfrost", e um `vulkan` já salvo cai
+  para GL. O driver se troca em Configurações › Sistema › Driver de GPU.
 - **O que você salva no RetroArch dura.** Escala inteira (inclusive a
   inteligente), shaders, overlay, proporção e o viewport personalizado (como o
   deslocamento Y do GBA), latência e FPS ficam como você deixou, ao sair com

@@ -967,6 +967,7 @@ impl Worker {
                     state.error = loaded.error;
                     state.scrape.available = loaded.scrape.available;
                     state.mangohud_supported = loaded.mangohud_supported;
+                    state.vulkan_supported = loaded.vulkan_supported;
                     state.games.replace(loaded.games.systems);
                     state.sync_games();
                     state.values_loaded();

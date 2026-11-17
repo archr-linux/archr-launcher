@@ -427,6 +427,19 @@ fn pages() -> Vec<(&'static str, Settings)> {
     let mut games_mangohud = games.clone();
     games_mangohud.mangohud_supported = true;
     games_mangohud.cursor = 6;
+    let at_renderer = |state: &mut Settings| {
+        state.cursor = state
+            .visible_rows()
+            .iter()
+            .position(|r| r.id == Id::GraphicsBackend)
+            .unwrap();
+    };
+    let mut games_renderer = games.clone();
+    games_renderer.vulkan_supported = true;
+    games_renderer.complete(Id::GraphicsBackend, Ok("vulkan".into()));
+    at_renderer(&mut games_renderer);
+    let mut games_renderer_libmali = games.clone();
+    at_renderer(&mut games_renderer_libmali);
     let mut controls = ready();
     controls.open(Page::Controls);
     let mut launcher_controls = controls.clone();
@@ -518,6 +531,8 @@ fn pages() -> Vec<(&'static str, Settings)> {
         ("mangohud-custom", mangohud_custom),
         ("mangohud-unsupported", mangohud_off),
         ("games-mangohud", games_mangohud),
+        ("games-renderer", games_renderer),
+        ("games-renderer-libmali", games_renderer_libmali),
         ("controls", controls),
         ("controls-launcher", launcher_controls),
         ("controls-launcher-press", launcher_press),

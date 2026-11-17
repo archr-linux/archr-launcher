@@ -58,8 +58,10 @@ impl Backend {
                         saved.insert(id, value);
                     }
                 }
-                if let Some(value) = cfg.get_local(name, None, Id::MangohudGame.key()) {
-                    saved.insert(Id::MangohudGame, value);
+                for id in [Id::MangohudGame, Id::GraphicsBackend] {
+                    if let Some(value) = cfg.get_local(name, None, id.key()) {
+                        saved.insert(id, value);
+                    }
                 }
                 for (id, _) in OPTIONS {
                     if let Some(value) = cfg.get_setting(id.key(), Some(name), None) {
@@ -132,7 +134,8 @@ impl Backend {
                 }
                 vec![(key(id), value)]
             }
-            _ if (id == Id::MangohudGame || OPTIONS.iter().any(|(o, _)| *o == id))
+            _ if (matches!(id, Id::MangohudGame | Id::GraphicsBackend)
+                || OPTIONS.iter().any(|(o, _)| *o == id))
                 && id.choices().contains(&value) =>
             {
                 vec![(key(id), value)]
@@ -300,5 +303,41 @@ mod tests {
             cfg.get_setting(Id::MangohudGame.key(), Some("snes"), None),
             None
         );
+    }
+    #[test]
+    fn renderer_uses_the_key_the_start_scripts_read() {
+        let (_root, backend) = fixture("snes.graphics_backend=opengl\n", None);
+        assert_eq!(games(&backend)[0].saved[&Id::GraphicsBackend], "opengl");
+        assert_eq!(
+            backend.apply_game("snes", Id::GraphicsBackend, "vulkan"),
+            Ok("vulkan".into())
+        );
+        assert_eq!(saved(&backend), "snes.graphics_backend=vulkan\n");
+        let cfg = backend.cfg().unwrap();
+        assert_eq!(
+            cfg.get_setting("graphics_backend", Some("snes"), None)
+                .as_deref(),
+            Some("vulkan")
+        );
+        assert!(backend
+            .apply_game("snes", Id::GraphicsBackend, "gl")
+            .is_err());
+        assert_eq!(
+            backend.apply_game("snes", Id::GraphicsBackend, ""),
+            Ok("".into())
+        );
+        assert_eq!(saved(&backend), "snes.graphics_backend=\n");
+        assert_eq!(games(&backend)[0].saved[&Id::GraphicsBackend], "");
+    }
+    #[test]
+    fn vulkan_is_offered_only_with_panfrost_bound() {
+        let (root, backend) = fixture("", None);
+        assert!(!backend.load().unwrap().vulkan_supported);
+        fs::create_dir_all(
+            root.path()
+                .join("sys/bus/platform/drivers/panfrost/ff400000.gpu"),
+        )
+        .unwrap();
+        assert!(backend.load().unwrap().vulkan_supported);
     }
 }
