@@ -58,13 +58,12 @@ impl ShelfKind {
 }
 
 /// One shelf's items: their size (`w` of the width, `h` of the height) and
-/// corner radius (of 480), and whether a game shows how far it has gone.
+/// corner radius (of 480).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ShelfStyle {
     pub w: f32,
     pub h: f32,
     pub radius: f32,
-    pub progress: bool,
 }
 
 /// The focused item's showcase above the shelves.
@@ -124,7 +123,6 @@ impl Default for Home {
             w: x(w),
             h: y(hh),
             radius: h(radius),
-            progress: false,
         };
         Self {
             tabs: Tab::ALL.iter().map(|(_, tab)| *tab).collect(),
@@ -159,13 +157,7 @@ impl Default for Home {
             gap: h(16.),
             title: h(13.),
             shelves: vec![
-                (
-                    ShelfKind::Continue,
-                    ShelfStyle {
-                        progress: true,
-                        ..shelf(168., 94., 16.)
-                    },
-                ),
+                (ShelfKind::Continue, shelf(168., 94., 16.)),
                 (ShelfKind::Systems, shelf(92., 58., 14.)),
                 (ShelfKind::Favorites, shelf(136., 84., 14.)),
                 (ShelfKind::Apps, shelf(64., 64., 18.)),
@@ -311,7 +303,7 @@ impl Home {
                     continue;
                 };
                 let at = format!("{at}.{id}");
-                known(own, &at, &["item", "progress"]);
+                known(own, &at, &["item"]);
                 let mut style = self.shelf(kind);
                 if let Some(item) = sub(own, &at, "item") {
                     let at = format!("{at}.item");
@@ -324,11 +316,6 @@ impl Home {
                     style.h = r.number("h", style.h, 0.02, 1.);
                     style.radius = r.number("radius", style.radius, 0., 0.5);
                 }
-                style.progress = Reader {
-                    table: own,
-                    at: &at,
-                }
-                .flag("progress", style.progress);
                 if let Some(slot) = self.shelves.iter_mut().find(|(k, _)| *k == kind) {
                     slot.1 = style;
                 }
@@ -455,7 +442,6 @@ mod tests {
             systems.radius,
             Home::default().shelf(ShelfKind::Systems).radius
         );
-        assert!(own.shelf(ShelfKind::Continue).progress);
         assert_eq!(own.library.columns, 4);
     }
 }

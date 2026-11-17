@@ -591,7 +591,6 @@ gap = 0.033                          # entre prateleiras
 title = 0.027                        # tamanho do título de cada prateleira
 [view.vidro.home.shelves.continue]
 item = { w = 0.2625, h = 0.196, radius = 0.033 }
-progress = true
 [view.vidro.home.shelves.systems]
 item = { w = 0.144, h = 0.121, radius = 0.029 }
 
@@ -627,8 +626,8 @@ em `[aspect.square]` ou `[aspect.wide]` se quiser outra proporção.
 | `apps` | os apps de módulos |
 | `collections` | Favoritos, Recentes e as outras coleções |
 
-Prateleira vazia some. `progress` reserva a barra de progresso do jogo; hoje o
-launcher ainda não tem esse dado, e a barra não aparece.
+Prateleira vazia some. Não há barra de progresso nos recentes: o launcher não
+sabe quanto de um jogo foi jogado, e uma barra sem esse dado mentiria.
 
 **Abas**: `home` (Início: destaque e prateleiras), `library` (Biblioteca: todos
 os sistemas em grade; A abre o sistema) e `favorites` (Favoritos: uma

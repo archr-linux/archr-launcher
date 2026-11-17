@@ -2,6 +2,8 @@
 //! shelves the launcher opens on when the view declares `home`. ↑/↓ change
 //! shelf, ←/→ walk along one, L1/R1 change tab; A opens or plays, Y opens
 //! the game menu, B does nothing here (screens opened from here come back).
+//! ↑ from the first shelf reaches the showcase's buttons (Continue,
+//! Favorite, More): ←/→ along them, A presses one, ↓ goes back.
 use super::{App, Button, DataSource, Outcome, Screen};
 use crate::layout::{ShelfKind, Tab};
 use std::path::PathBuf;
@@ -49,7 +51,23 @@ impl App {
     pub fn go_root(&mut self) {
         self.screen = self.root();
         self.cursor = 0;
+        self.home_hero = None;
         self.history.clear();
+    }
+    /// The showcase's buttons for `focused`, as the theme lists them
+    /// (`play`, `favorite`, `more`): a game has them all, a system or an
+    /// app only the first, which opens it.
+    pub fn hero_actions(&self, focused: &Item) -> Vec<String> {
+        let Some(home) = &self.home else {
+            return Vec::new();
+        };
+        let game = matches!(focused, Item::Recent(_) | Item::Game { .. });
+        home.hero
+            .actions
+            .iter()
+            .filter(|a| game || *a == "play")
+            .cloned()
+            .collect()
     }
 
     /// The real systems, in the user's order.
@@ -180,6 +198,46 @@ impl App {
         let grid = tab == Tab::Library;
         let columns = self.library_columns();
         let mut outcome = Outcome::None;
+        let focused = shelves.get(shelf).and_then(|s| s.items.get(item)).cloned();
+        // On the showcase's buttons: ← and → go along them, ↓ (or B) goes
+        // back to the shelf, A does what the button says; X and Y as on
+        // the item.
+        if let Some(button) = self.home_hero.filter(|_| tab == Tab::Home) {
+            let actions = focused
+                .as_ref()
+                .map_or_else(Vec::new, |f| self.hero_actions(f));
+            let last = actions.len().saturating_sub(1);
+            let button = button.min(last);
+            match raw {
+                Button::Left => self.home_hero = Some(button.saturating_sub(1)),
+                Button::Right => self.home_hero = Some((button + 1).min(last)),
+                Button::Down | Button::B => self.home_hero = None,
+                Button::A | Button::X | Button::Y => {
+                    let press = match (raw, actions.get(button).map(String::as_str)) {
+                        (Button::A, Some("favorite")) => Button::X,
+                        (Button::A, Some("more")) => Button::Y,
+                        (pressed, _) => pressed,
+                    };
+                    if let Some(focused) = focused.clone() {
+                        outcome = self.home_action(press, focused, data);
+                    }
+                    if !matches!(self.screen, Screen::Home { .. }) {
+                        if let Some((Screen::Home { .. }, _)) = self.history.last_mut() {
+                            let last = self.history.len() - 1;
+                            self.history[last].0 = Screen::Home { tab, shelf, item };
+                        }
+                        return outcome;
+                    }
+                }
+                // Another tab starts on its shelves.
+                Button::L | Button::R => self.home_hero = None,
+                _ => {}
+            }
+            if !matches!(raw, Button::L | Button::R) {
+                self.screen = Screen::Home { tab, shelf, item };
+                return outcome;
+            }
+        }
         match raw {
             Button::Up if grid => item = item.saturating_sub(columns).min(item),
             Button::Down if grid => {
@@ -191,6 +249,13 @@ impl App {
                 if shelf > 0 {
                     shelf -= 1;
                     item = item.min(len(shelf).saturating_sub(1));
+                } else if tab == Tab::Home
+                    && focused
+                        .as_ref()
+                        .is_some_and(|f| !self.hero_actions(f).is_empty())
+                {
+                    // Up from the first shelf: the showcase's buttons.
+                    self.home_hero = Some(0);
                 }
             }
             Button::Down => {

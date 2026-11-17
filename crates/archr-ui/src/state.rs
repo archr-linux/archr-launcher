@@ -454,6 +454,9 @@ pub struct App {
     pub recent: Vec<crate::resume::Recent>,
     /// The open game menu came from a recent game on the shelves.
     recent_menu: bool,
+    /// The showcase's button in focus on the shelves (↑ from the first
+    /// shelf), by its place among `hero_actions`; None: a shelf has it.
+    pub home_hero: Option<usize>,
     /// Columns of the games screen when it is a grid.
     games_grid: Option<usize>,
     /// A game's menu opens with Play, Favorite and Details side by side
@@ -559,6 +562,7 @@ impl App {
             home: None,
             recent: Vec::new(),
             recent_menu: false,
+            home_hero: None,
             games_grid: None,
             menu_quick: false,
         }

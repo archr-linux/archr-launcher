@@ -347,6 +347,18 @@ fn shelves_draw(run: &mut Run) {
         };
         assert!(matches!(app.screen, Screen::Home { .. }));
         shot(&mut ui, "inicio", &app, None);
+        // The showcase's buttons: More in focus, then its menu beside it.
+        app.handle(Button::Up, &data);
+        app.handle(Button::Right, &data);
+        app.handle(Button::Right, &data);
+        assert_eq!(app.home_hero, Some(2));
+        shot(&mut ui, "inicio-destaque", &app, None);
+        app.handle(Button::A, &data);
+        assert!(matches!(app.screen, Screen::QuickMenu { game: Some(_) }));
+        shot(&mut ui, "inicio-mais", &app, None);
+        app.handle(Button::B, &data);
+        app.handle(Button::Down, &data);
+        assert_eq!(app.home_hero, None);
         app.handle(Button::Down, &data);
         app.handle(Button::Right, &data);
         shot(&mut ui, "inicio-sistemas", &app, None);

@@ -339,8 +339,25 @@ impl<'t> Ui<'_, 't> {
         }
         y += self.px(12.);
         // Favorite and More are for games; a system or an app only opens.
-        let game = matches!(focused, Item::Recent(_) | Item::Game { .. });
-        self.hero_buttons(home, &button, game, (rect.x(), y), theme)?;
+        let actions = app.hero_actions(focused);
+        let favorite = match focused {
+            Item::Recent(n) => app
+                .recent
+                .get(*n)
+                .and_then(|r| data.games(&r.system).get(r.game))
+                .is_some_and(|g| g.favorite),
+            Item::Game { system, game } => {
+                data.games(system).get(*game).is_some_and(|g| g.favorite)
+            }
+            _ => false,
+        };
+        self.hero_buttons(
+            &actions,
+            (&button, favorite),
+            app.home_hero,
+            (rect.x(), y),
+            theme,
+        )?;
         // The picture beside the text.
         let picture = self.area(home.hero.art);
         match focused {
@@ -391,19 +408,21 @@ impl<'t> Ui<'_, 't> {
         Ok(())
     }
 
-    /// The first action as a light pill with its text, the others round.
+    /// The first action as a light pill with its text, the others round;
+    /// the one in `focus` ringed (and lifted with `focus = "lift"`).
     fn hero_buttons(
         &mut self,
-        home: &Home,
-        first: &str,
-        game: bool,
+        actions: &[String],
+        (first, favorite): (&str, bool),
+        focus: Option<usize>,
         (x, y): (i32, i32),
         theme: &Theme,
     ) -> Result<(), String> {
         let h = self.px(34.);
         let mut x = x;
-        for action in home.hero.actions.iter().filter(|a| game || *a == "play") {
-            if action == "play" {
+        for (n, action) in actions.iter().enumerate() {
+            let on = focus.map(|f| f.min(actions.len().saturating_sub(1))) == Some(n);
+            let rect = if action == "play" {
                 let text_w = self.measure(first, Face::Semibold, 14.)? as i32;
                 let icon = self.px(12.);
                 let w = self.px(14.) + icon + self.px(7.) + text_w + self.px(18.);
@@ -427,38 +446,53 @@ impl<'t> Ui<'_, 't> {
                         h as u32,
                     ),
                 )?;
-                x += w + self.px(8.);
-                continue;
-            }
-            let round = Rect::new(x, y, h as u32, h as u32);
-            self.rounded(
-                round,
-                h as f32 / 2.,
-                alpha(theme.text, 0x1A),
-                Some(alpha(theme.text, 0x24)),
-            )?;
-            if action == "favorite" {
-                let side = self.px(15.);
-                let glyph = Rect::new(
-                    x + (h - side) / 2,
-                    y + (h - side) / 2,
-                    side as u32,
-                    side as u32,
-                );
-                self.icon(Glyph::Star, glyph, theme.text)?;
+                pill
             } else {
-                let dot = self.px(3.2).max(2);
-                for k in -1..=1 {
-                    let cx = x + h / 2 + k * self.px(6.);
-                    self.rounded(
-                        Rect::new(cx - dot / 2, y + h / 2 - dot / 2, dot as u32, dot as u32),
-                        dot as f32 / 2.,
-                        theme.text,
-                        None,
-                    )?;
+                let round = Rect::new(x, y, h as u32, h as u32);
+                let fill = if on { 0x30 } else { 0x1A };
+                self.rounded(
+                    round,
+                    h as f32 / 2.,
+                    alpha(theme.text, fill),
+                    Some(alpha(theme.text, 0x24)),
+                )?;
+                if action == "favorite" {
+                    let side = self.px(15.);
+                    let glyph = Rect::new(
+                        x + (h - side) / 2,
+                        y + (h - side) / 2,
+                        side as u32,
+                        side as u32,
+                    );
+                    let ink = if favorite { theme.warning } else { theme.text };
+                    self.icon(Glyph::Star, glyph, ink)?;
+                } else {
+                    let dot = self.px(3.2).max(2);
+                    for k in -1..=1 {
+                        let cx = x + h / 2 + k * self.px(6.);
+                        self.rounded(
+                            Rect::new(cx - dot / 2, y + h / 2 - dot / 2, dot as u32, dot as u32),
+                            dot as f32 / 2.,
+                            theme.text,
+                            None,
+                        )?;
+                    }
                 }
+                round
+            };
+            if on {
+                // The game menu (More) opens beside the button.
+                self.focus_at = Some(rect);
+                let out = self.px(3.);
+                let ring = Rect::new(
+                    rect.x() - out,
+                    rect.y() - out,
+                    rect.width() + 2 * out as u32,
+                    rect.height() + 2 * out as u32,
+                );
+                self.focus_ring(ring, ring.height() as f32 / 2., theme)?;
             }
-            x += h + self.px(8.);
+            x = rect.right() + self.px(8.);
         }
         Ok(())
     }
@@ -543,7 +577,8 @@ impl<'t> Ui<'_, 't> {
                     break;
                 }
                 let rect = Rect::new(x, row_y, w.max(1) as u32, h.max(1) as u32);
-                let on = focused == Some(k);
+                // The showcase's buttons may hold the focus instead.
+                let on = focused == Some(k) && app.home_hero.is_none();
                 self.shelf_item(
                     app,
                     data,

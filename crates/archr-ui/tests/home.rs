@@ -226,3 +226,49 @@ fn the_recent_menu_offers_to_forget_and_the_paths_follow_the_shelves() {
     let items = app.quick_menu_items(&data);
     assert!(items.contains(&archr_ui::state::QuickItem::ForgetRecent));
 }
+
+#[test]
+fn up_from_the_first_shelf_reaches_the_showcase_buttons() {
+    let data = library();
+    let mut app = shelves();
+    app.handle(Button::Right, &data);
+    assert_eq!((at(&app), app.home_hero), ((Tab::Home, 0, 1), None));
+    // Up from the first shelf: Continue, the focused recent's.
+    app.handle(Button::Up, &data);
+    assert_eq!(app.home_hero, Some(0));
+    assert_eq!(at(&app), (Tab::Home, 0, 1), "the showcase keeps its item");
+    app.handle(Button::Left, &data);
+    assert_eq!(app.home_hero, Some(0), "no button before Continue");
+    // Favorite toggles the recent game's favorite.
+    app.handle(Button::Right, &data);
+    assert_eq!(app.home_hero, Some(1));
+    assert!(matches!(
+        app.handle(Button::A, &data),
+        Outcome::ToggleFavorite { ref system, game: 1 } if system == "snes"
+    ));
+    // More opens the game's menu; back comes to the same button.
+    app.handle(Button::Right, &data);
+    app.handle(Button::Right, &data);
+    assert_eq!(app.home_hero, Some(2), "no button after More");
+    app.handle(Button::A, &data);
+    assert!(matches!(app.screen, Screen::QuickMenu { game: Some(_) }));
+    app.handle(Button::B, &data);
+    assert_eq!((at(&app), app.home_hero), ((Tab::Home, 0, 1), Some(2)));
+    // Continue resumes the recent game where it was left.
+    app.handle(Button::Left, &data);
+    app.handle(Button::Left, &data);
+    assert!(matches!(
+        app.handle(Button::A, &data),
+        Outcome::Continue { game: 1, entry: Some(_), .. }
+    ));
+    // Down, or B, goes back to the shelf.
+    app.handle(Button::Down, &data);
+    assert_eq!((at(&app), app.home_hero), ((Tab::Home, 0, 1), None));
+    app.handle(Button::Up, &data);
+    app.handle(Button::B, &data);
+    assert_eq!(app.home_hero, None);
+    // Another tab starts on its shelves.
+    app.handle(Button::Up, &data);
+    app.handle(Button::R, &data);
+    assert_eq!((at(&app).0, app.home_hero), (Tab::Library, None));
+}
