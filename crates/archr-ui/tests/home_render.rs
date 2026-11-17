@@ -909,3 +909,73 @@ fn a_layer_keeps_its_hints_bright() {
         ui.app = None;
     }
 }
+
+/// What a frame of Ellegance's glass screens costs to draw, in release on
+/// this machine (SDL's offscreen renderer): `cargo test --release -p
+/// archr-ui --test home_render ellegance_frame_cost -- --ignored
+/// --nocapture`. The blur is made once; a frame only draws.
+#[test]
+#[ignore]
+fn ellegance_frame_cost() {
+    let _sdl = SDL.lock().unwrap_or_else(|e| e.into_inner());
+    std::env::set_var("SDL_VIDEODRIVER", "offscreen");
+    let root = tempfile::tempdir().unwrap();
+    let picture = painted(root.path(), "p", (320, 240), [70, 40, 160]);
+    let theme = ellegance().fitted(640, 480);
+    let view = theme.view(&theme.active_view);
+    let (ttf, creator);
+    let mut ui = Ui::new(640, 480, true).unwrap();
+    ttf = sdl2::ttf::init().unwrap();
+    creator = ui.canvas.texture_creator();
+    ui.theme_dir = Some(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../themes/ellegance"));
+    ui.configure(&ttf, &creator, &theme, Some(root.path())).unwrap();
+    ui.set_status(archr_ui::status::Status::frozen("14:32"));
+    let data = library(NOW);
+    let mut covers = archr_ui::covers::CoverCache::new(&creator, root.path().join("c"), 320, 240);
+    let mut app = App::new(10);
+    app.set_view(&view);
+    app.recent = recent(NOW);
+    app.recent[0].picture = Some(picture.clone());
+    let mut cost = |ui: &mut Ui, name: &str, app: &App| {
+        let draw = |ui: &mut Ui, covers: &archr_ui::covers::CoverCache| {
+            ui.tick();
+            ui.snap_animations();
+            let art = archr_ui::render::Art {
+                cover: covers.peek(&picture),
+                covers: Some(covers),
+                ..Default::default()
+            };
+            ui.draw_with_settings(app, &data, &theme, art, None).unwrap();
+        };
+        settle(|| {
+            covers.request(std::slice::from_ref(&picture));
+            covers.poll();
+            draw(ui, &covers);
+            covers.idle() && ui.pictures_idle()
+        });
+        let frames = 120;
+        let began = std::time::Instant::now();
+        for _ in 0..frames {
+            draw(ui, &covers);
+            // One pixel read back: the frame is finished, not just queued.
+            ui.canvas
+                .read_pixels(sdl2::rect::Rect::new(0, 0, 1, 1), sdl2::pixels::PixelFormatEnum::RGBA32)
+                .unwrap();
+        }
+        let ms = began.elapsed().as_secs_f64() * 1000. / f64::from(frames);
+        println!("{name:<12} {ms:6.2} ms/frame");
+    };
+    cost(&mut ui, "inicio", &app);
+    app.handle(Button::Start, &data);
+    cost(&mut ui, "start", &app);
+    app.handle(Button::B, &data);
+    app.handle(Button::Y, &data);
+    cost(&mut ui, "menu", &app);
+    app.handle(Button::B, &data);
+    app.handle(Button::R, &data);
+    app.handle(Button::A, &data);
+    cost(&mut ui, "jogos", &app);
+    app.handle(Button::B, &data);
+    ui.app = Some(app_session(&picture));
+    cost(&mut ui, "app", &app);
+}

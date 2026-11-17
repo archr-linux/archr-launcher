@@ -94,14 +94,16 @@ impl Ui<'_, '_> {
             };
             if style.glass {
                 // Over whatever is under it: the surface beneath the
-                // glass, the theme's card corners.
+                // glass, the theme's card corners. Nearly opaque: the
+                // glass blurs the picture behind, never the tabs or rows
+                // a notice passes over, which would read through it.
                 let radius = self.frame.size(theme.radius_card).round();
                 self.cast_shadow(rect, radius)?;
                 self.rounded(
                     rect,
                     radius,
                     Rgba {
-                        a: 235,
+                        a: 250,
                         ..theme.surface
                     },
                     None,
