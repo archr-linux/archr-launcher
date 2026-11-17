@@ -260,6 +260,14 @@ impl Banner {
     }
 }
 type Bounds = (f32, f32, f32, f32);
+/// `theme` as Settings draw it with a lit focus: the focused row is a light
+/// pane over the page, not the accent, so its text keeps the page's inks.
+fn lit(theme: &Theme) -> Theme {
+    let mut lit = theme.clone();
+    lit.highlight_text = theme.text;
+    lit.accent_text_secondary = theme.text_secondary;
+    lit
+}
 /// Rows that show a reading in monospace (Config-usb).
 fn reading(id: Id) -> bool {
     matches!(id, Id::UsbAddress | Id::UsbState)
@@ -280,7 +288,9 @@ impl Ui<'_, '_> {
         }
     }
     pub(super) fn settings_page(&mut self, state: &Settings, theme: &Theme) -> Result<(), String> {
-        self.finish(theme, true);
+        let look = theme.screens.settings;
+        // A theme that reshapes Settings brings its style in with it.
+        self.finish(theme, !look.themed());
         self.store_wanted.clear();
         if state.visible_rows().is_empty() && state.page() != Page::UpdatePackages {
             self.settings_scroll.page = None;
@@ -290,7 +300,16 @@ impl Ui<'_, '_> {
         // The 640-wide design, centered on a wider screen; a taller one
         // gives the page more rows.
         let tall = self.frame.reference().1;
-        self.staged((640., tall), |ui| View { ui, theme }.draw(state))
+        if !look.light_focus() {
+            return self.staged((640., tall), |ui| View { ui, theme }.draw(state));
+        }
+        let lit = match self.settings_look.take() {
+            Some((seen, lit)) if seen == *theme => (seen, lit),
+            _ => (theme.clone(), self::lit(theme)),
+        };
+        let drawn = self.staged((640., tall), |ui| View { ui, theme: &lit.1 }.draw(state));
+        self.settings_look = Some(lit);
+        drawn
     }
 }
 impl View<'_, '_, '_> {
@@ -419,7 +438,76 @@ impl View<'_, '_, '_> {
             self.ui.px(h) as u32,
         )
     }
+    /// What the theme's `[settings]` asks for.
+    fn look(&self) -> crate::screens::SettingsStyle {
+        self.theme.screens.settings
+    }
+    /// The lit focus (`light_focus`): a light pane and the theme's ring.
+    fn lit_focus(&mut self, bounds: Bounds, radius: f32) -> Result<(), String> {
+        let rect = self.rect(bounds);
+        let radius = self.ui.px(radius) as f32;
+        self.ui
+            .rounded(rect, radius, faded(self.theme.text, 0.125), None)?;
+        self.ui.focus_ring(rect, radius, self.theme)
+    }
+    /// The fill of a group of rows (`groups = "inset"`): the theme's glass,
+    /// else the text faint over the page; and the rules between its rows.
+    fn group_fill(&self) -> Rgba {
+        self.theme
+            .glass
+            .map_or(faded(self.theme.text, 0.0625), |g| g.fill)
+    }
+    fn group_rule(&self) -> Rgba {
+        self.theme
+            .glass
+            .map_or(faded(self.theme.text, 0.125), |g| g.border)
+    }
+    /// A group of rows from `top` to `bottom` with rules at `rules`.
+    fn group(&mut self, (x, top, w, h): Bounds, rules: &[f32]) -> Result<(), String> {
+        let radius = self.ui.px(14.) as f32;
+        let fill = self.group_fill();
+        self.ui
+            .rounded(self.rect((x, top, w, h)), radius, fill, None)?;
+        let ink = self.group_rule();
+        for y in rules {
+            self.ui.divider(
+                self.ui.px(x + 14.),
+                self.ui.px(*y),
+                self.ui.px(w - 28.) as u32,
+                ink,
+            )?;
+        }
+        Ok(())
+    }
+    /// Rows that follow each other with no heading between share a group.
+    fn groups(&mut self, positions: &[Placement], offset: f32, right: f32) -> Result<(), String> {
+        let mut runs: Vec<(f32, f32, Vec<f32>)> = Vec::new();
+        let mut last: Option<Placement> = None;
+        for place in positions {
+            match (last, runs.last_mut()) {
+                (Some(l), Some(run))
+                    if place.section.is_none() && place.top - l.end() <= ROW_GAP + 0.5 =>
+                {
+                    run.2.push(l.end() + ROW_GAP / 2. - offset);
+                    run.1 = place.end();
+                }
+                _ => runs.push((place.top, place.end(), Vec::new())),
+            }
+            last = Some(*place);
+        }
+        for (top, bottom, rules) in runs {
+            let (top, bottom) = (top - offset, bottom - offset);
+            if bottom < 0. || top > self.view_bottom() {
+                continue;
+            }
+            self.group((16., top, right - 16., bottom - top), &rules)?;
+        }
+        Ok(())
+    }
     fn panel(&mut self, bounds: Bounds, selected: bool) -> Result<(), String> {
+        if selected && self.look().light_focus() {
+            return self.lit_focus(bounds, 10.);
+        }
         self.ui.rounded(
             self.rect(bounds),
             self.ui.px(10.) as f32,
@@ -584,6 +672,39 @@ impl View<'_, '_, '_> {
     }
     /// "Settings / Parent /" in muted 13 px, the current page in 15 px semibold.
     fn breadcrumbs(&mut self, state: &Settings, right: f32) -> Result<(), String> {
+        let (trail, current) = self.crumbs(state);
+        let trail: Vec<String> = trail.into_iter().map(|t| format!("{t} /")).collect();
+        let (mut small, mut large) = (13., 15.);
+        let widths = loop {
+            let mut widths = Vec::new();
+            for part in &trail {
+                widths.push(self.span(part, Face::Regular, small)? + 8.);
+            }
+            widths.push(self.span(&current, Face::Semibold, large)?);
+            if widths.iter().sum::<f32>() <= right - 24. || small <= 12. {
+                break widths;
+            }
+            small -= 0.5;
+            large -= 1.;
+        };
+        let mut x = 24.;
+        for (part, width) in trail.iter().zip(&widths) {
+            self.text(
+                (x, 1., *width, 44.),
+                part,
+                (small, self.theme.muted, Align::Left),
+            )?;
+            x += width;
+        }
+        self.text_face(
+            (x, 0., (right - x).max(40.), 44.),
+            &current,
+            (large, self.theme.text, Align::Left),
+            Face::Semibold,
+        )
+    }
+    /// The pages above the current one, and the current page's title.
+    fn crumbs(&mut self, state: &Settings) -> (Vec<String>, String) {
         let page = state.page();
         let mut trail = Vec::new();
         let current = match page {
@@ -668,34 +789,52 @@ impl View<'_, '_, '_> {
                 self.tr(page.title())
             }
         };
-        let trail: Vec<String> = trail.into_iter().map(|t| format!("{t} /")).collect();
-        let (mut small, mut large) = (13., 15.);
-        let widths = loop {
-            let mut widths = Vec::new();
-            for part in &trail {
-                widths.push(self.span(part, Face::Regular, small)? + 8.);
-            }
-            widths.push(self.span(&current, Face::Semibold, large)?);
-            if widths.iter().sum::<f32>() <= right - 24. || small <= 12. {
-                break widths;
-            }
-            small -= 0.5;
-            large -= 1.;
-        };
-        let mut x = 24.;
-        for (part, width) in trail.iter().zip(&widths) {
-            self.text(
-                (x, 1., *width, 44.),
-                part,
-                (small, self.theme.muted, Align::Left),
-            )?;
-            x += width;
+        (trail, current)
+    }
+    /// A pane of the theme's glass, or the plain surface when the sidebar
+    /// asks for `style = "plain"`.
+    fn pane(&mut self, bounds: Bounds, radius: f32) -> Result<(), String> {
+        let (rect, radius) = (self.rect(bounds), self.ui.px(radius) as f32);
+        if self.look().bar.glass {
+            let glass = self.theme.glass_or_default();
+            self.ui.glass(rect, radius, &glass)
+        } else {
+            self.ui
+                .rounded(rect, radius, self.theme.surface, Some(self.theme.border))
+        }
+    }
+    /// The sidebar's page header: "‹ Parent" in a capsule, then the page's
+    /// title in bold, as large as the line holds.
+    fn back_header(&mut self, state: &Settings, right: f32) -> Result<(), String> {
+        let (trail, current) = self.crumbs(state);
+        let parent = trail
+            .last()
+            .cloned()
+            .unwrap_or_else(|| self.tr("settings.title"));
+        let mut back = format!("‹ {parent}");
+        let most = self.rect((0., 0., 150., 1.)).width();
+        if self.ui.measure(&back, Face::Semibold, 13.)? > most {
+            back = self.ellipsized(&back, 13., Face::Semibold, most)?;
+        }
+        let width = self.span(&back, Face::Semibold, 13.)? + 26.;
+        self.pane((16., 9., width, 28.), 14.)?;
+        self.text_face(
+            (16., 9., width, 28.),
+            &back,
+            (13., self.theme.text, Align::Center),
+            Face::Semibold,
+        )?;
+        let x = 16. + width + 12.;
+        let room = (right - 12. - x).max(40.);
+        let mut size = 22.;
+        while size > 15. && self.span(&current, Face::Bold, size)? > room {
+            size -= 1.;
         }
         self.text_face(
-            (x, 0., (right - x).max(40.), 44.),
+            (x, 0., room, 46.),
             &current,
-            (large, self.theme.text, Align::Left),
-            Face::Semibold,
+            (size, self.theme.text, Align::Left),
+            Face::Bold,
         )
     }
     fn draw(&mut self, state: &Settings) -> Result<(), String> {
@@ -742,7 +881,12 @@ impl View<'_, '_, '_> {
             )?;
         } else {
             let right = self.pad_steps(state, right)?;
-            self.breadcrumbs(state, right)?;
+            match (self.look().sidebar, state.page()) {
+                // The sidebar holds the root's title.
+                (true, Page::Root) => {}
+                (true, _) => self.back_header(state, right)?,
+                (false, _) => self.breadcrumbs(state, right)?,
+            }
         }
         let rows: Vec<Row> = state.visible_rows();
         let picker = state.picker.as_ref();
@@ -849,7 +993,10 @@ impl View<'_, '_, '_> {
                 a: (f32::from(c.a) * alpha) as u8,
                 ..c
             };
-            let (x, y, w, h) = if state.page() == Page::Root {
+            let (x, y, w, h) = if state.page() == Page::Root && self.look().sidebar {
+                let x = self.sidebar_right() + 16.;
+                (x, 318., RIGHT - x, 80.)
+            } else if state.page() == Page::Root {
                 (386., 318., 230., 110.)
             } else if state.page() == Page::Keyboard {
                 (24., 296., 592., 40.)
@@ -899,12 +1046,15 @@ impl View<'_, '_, '_> {
             )?;
         }
         let footer = self.footer_top();
-        self.ui.divider(
-            0,
-            self.ui.px(footer),
-            self.ui.frame.width,
-            self.theme.border,
-        )?;
+        let themed = self.look().themed();
+        if !themed {
+            self.ui.divider(
+                0,
+                self.ui.px(footer),
+                self.ui.frame.width,
+                self.theme.border,
+            )?;
+        }
         let (width, y, h) = (
             self.ui.frame.width,
             self.ui.px(footer),
@@ -912,6 +1062,9 @@ impl View<'_, '_, '_> {
         );
         let left = match self.module_hints(state) {
             Some(labels) => self.ui.hint_labels(&labels, self.theme, width, y, h)?,
+            None if themed => self
+                .ui
+                .placed_hints(state.hints(), self.theme, (width, y, h))?,
             None => self.ui.hints(state.hints(), self.theme, width, y, h)?,
         } as f32
             / self.ui.frame.scale;
@@ -978,7 +1131,13 @@ impl View<'_, '_, '_> {
             None
         };
         if let Some(status) = status {
-            self.note((24., footer, (left - 36.).max(60.), 48.), &status, 13.)?;
+            // Beside the sidebar, not under it.
+            let x = if self.look().sidebar && state.page() == Page::Root {
+                self.sidebar_right() + 16.
+            } else {
+                24.
+            };
+            self.note((x, footer, (left - 12. - x).max(60.), 48.), &status, 13.)?;
         }
         if let Some(offer) = &state.convert {
             return self.ui.convert_question(offer, self.theme);
@@ -1343,6 +1502,9 @@ impl View<'_, '_, '_> {
             .canvas
             .set_clip_rect(self.rect((16., top, right - 16., self.view_bottom() - top)));
         let result = (|| {
+            if self.look().inset {
+                self.groups(positions, offset, right)?;
+            }
             for (n, position) in positions.iter().enumerate() {
                 let y = position.top - offset;
                 if position.end() - offset < top
@@ -1754,6 +1916,25 @@ impl View<'_, '_, '_> {
             .or_insert_with(|| Tween::new(target, motion.travel(SWITCH)));
         knob.retarget(target, now);
         let at = knob.value(now);
+        if self.look().inset {
+            // A switch of the phone kind: green when on, the knob white.
+            let off = mix(self.theme.background, self.theme.text, 0.22);
+            self.capsule(
+                (x + w - 38., y + h / 2. - 10., 38., 20.),
+                mix(off, self.theme.success, at),
+            )?;
+            let knob = Rgba {
+                r: 255,
+                g: 255,
+                b: 255,
+                a: if busy {
+                    (255. * motion.busy(self.clock())) as u8
+                } else {
+                    255
+                },
+            };
+            return self.capsule((x + w - 36. + 18. * at, y + h / 2. - 8., 16., 16.), knob);
+        }
         let track = mix(
             self.theme.badge,
             selection(selected, self.theme.highlight_bg, self.theme.highlight_text),
@@ -1771,7 +1952,98 @@ impl View<'_, '_, '_> {
         };
         self.capsule((x + w - 36. + 18. * at, y + h / 2. - 8., 16., 16.), fill)
     }
+    /// Where the sidebar ends, in the page's reference pixels.
+    fn sidebar_right(&self) -> f32 {
+        let bar = self.look().bar;
+        (bar.x + bar.w) * 640.
+    }
+    /// `[settings] layout = "sidebar"`: the pages in a pane at the left, the
+    /// focused one's summary at the right; A or → opens it.
+    fn sidebar_root(&mut self, state: &Settings) -> Result<(), String> {
+        let look = self.look();
+        let (x, w) = (look.bar.x * 640., look.bar.w * 640.);
+        let (top, bottom) = (14., self.bottom() - 14.);
+        self.pane((x, top, w, bottom - top), 24.)?;
+        let title = look.bar.title * 480.;
+        self.text_face(
+            (x + 18., top + 8., w - 36., title + 16.),
+            &self.tr("settings.title"),
+            (title, self.theme.text, Align::Left),
+            Face::Bold,
+        )?;
+        let first = top + title + 30.;
+        let height = look.row * 480.;
+        // Every page in sight: a long list draws its rows closer.
+        let count = CATEGORIES.len() as f32;
+        let pitch = (height + 3.).min((bottom - 8. - first) / count);
+        let height = height.min(pitch - 2.);
+        for (n, (page, _, glyph)) in CATEGORIES.iter().enumerate() {
+            let y = first + n as f32 * pitch;
+            let selected = n == state.cursor;
+            if selected {
+                self.lit_focus((x + 8., y, w - 16., height), 12.)?;
+            }
+            let ink = self.theme.text;
+            let icon = 26_f32.min(height - 6.);
+            let icon_x = x + 18.;
+            if look.tiles {
+                let tile = self.rect((icon_x, y + (height - icon) / 2., icon, icon));
+                self.ui
+                    .rounded(tile, self.ui.px(7.) as f32, look.tile(n), None)?;
+                let white = Rgba {
+                    r: 255,
+                    g: 255,
+                    b: 255,
+                    a: 255,
+                };
+                let inner = icon * 0.62;
+                let at = (icon - inner) / 2.;
+                let glyph_rect =
+                    self.rect((icon_x + at, y + (height - icon) / 2. + at, inner, inner));
+                self.ui.icon(*glyph, glyph_rect, white)?;
+            } else {
+                let glyph_rect = self.rect((icon_x + 4., y + (height - 18.) / 2., 18., 18.));
+                self.ui.icon(*glyph, glyph_rect, ink)?;
+            }
+            let label_x = icon_x + icon + 12.;
+            self.text_face(
+                (label_x, y, x + w - 14. - label_x, height),
+                &self.tr(root_title(*page)),
+                (15., ink, Align::Left),
+                selection(selected, Face::Regular, Face::Semibold),
+            )?;
+        }
+        // The focused page's summary, its words in a group.
+        let (page, detail, _) = CATEGORIES[state.cursor.min(CATEGORIES.len() - 1)];
+        let px = x + w + 16.;
+        let pw = RIGHT - px;
+        let name = self.tr(root_title(page));
+        let mut size = 26.;
+        while size > 16. && self.span(&name, Face::Bold, size)? > pw - 8. {
+            size -= 1.;
+        }
+        self.text_face(
+            (px + 4., 56., pw - 8., 44.),
+            &name,
+            (size, self.theme.text, Align::Left),
+            Face::Bold,
+        )?;
+        let detail = self.tr(detail);
+        let width = self.rect((0., 0., pw - 32., 1.)).width();
+        let lines = self.lines(&detail, 15., width)?.len().clamp(1, 8) as f32;
+        let height = lines * self.pitch(15., 18.) + 8.;
+        self.group((px, 110., pw, height + 24.), &[])?;
+        self.note((px + 16., 122., pw - 32., height), &detail, 15.)?;
+        self.text(
+            (px + 4., 110. + height + 32., pw - 8., 36.),
+            &self.tr("settings.instant"),
+            (12., self.theme.dim_text, Align::Left),
+        )
+    }
     fn root(&mut self, state: &Settings) -> Result<(), String> {
+        if self.look().sidebar {
+            return self.sidebar_root(state);
+        }
         for (n, (page, _, glyph)) in CATEGORIES.iter().enumerate() {
             let key = page.title();
             let key = if *page == Page::Wifi {
@@ -1801,6 +2073,15 @@ impl View<'_, '_, '_> {
             &self.tr("settings.instant"),
             (12., self.theme.dim_text, Align::Left),
         )
+    }
+}
+
+/// A root entry's title: the Wi-Fi page stands for the whole network.
+fn root_title(page: Page) -> &'static str {
+    if page == Page::Wifi {
+        "settings.network"
+    } else {
+        page.title()
     }
 }
 

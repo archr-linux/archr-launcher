@@ -1,6 +1,7 @@
 //! The list of a long value row: a panel beside the row over the dimmed
 //! page (Lista-media), or a page of groups and choices (Lista-longa).
-//! Fixed layout; the theme only gives colours, fonts and icons.
+//! Fixed layout; the theme gives colours, fonts and icons, and with
+//! `[settings] groups = "inset"` the choices in a rounded group with rules.
 use super::*;
 use crate::settings::picker::Picker;
 
@@ -84,6 +85,16 @@ impl View<'_, '_, '_> {
             };
             let code = &picker.choices[n];
             let selected = n == picker.cursor;
+            // A rule between two choices of a group.
+            if self.look().inset && k > first && matches!(lines[k - 1], Line::Choice(_)) {
+                let ink = self.group_rule();
+                self.ui.divider(
+                    self.ui.px(left + 14.),
+                    self.ui.px(y - 1.),
+                    self.ui.px(right - left - 28.) as u32,
+                    ink,
+                )?;
+            }
             self.row_panel((left, y, right - left, ENTRY - 2.), selected)?;
             let ink = self.ink(selected);
             let face = selection(selected, Face::Regular, Face::Semibold);
@@ -166,11 +177,16 @@ impl View<'_, '_, '_> {
         };
         let height = height(shown);
         let x = RIGHT - PANEL_WIDTH;
+        let (radius, edge) = if self.look().inset {
+            (14., self.group_rule())
+        } else {
+            (10., self.theme.border)
+        };
         self.ui.rounded(
             self.rect((x, y, PANEL_WIDTH, height)),
-            self.ui.px(10.) as f32,
+            self.ui.px(radius) as f32,
             self.theme.surface_elevated,
-            Some(self.theme.border),
+            Some(edge),
         )?;
         let mut title = self.tr(&state.label(&picker.row));
         if matches!(picker.row.id, Id::Emulator | Id::Core) {
@@ -198,6 +214,9 @@ impl View<'_, '_, '_> {
             let count = picker.groups.len();
             let shown = count.min(shown_rows);
             let first = window(current, shown, count);
+            if self.look().inset {
+                self.group((left, top - 2., GROUPS, shown as f32 * ENTRY + 2.), &[])?;
+            }
             for (n, (heading, _)) in picker.groups.iter().enumerate().skip(first).take(shown) {
                 let y = top + (n - first) as f32 * ENTRY;
                 let here = n == current;
@@ -219,6 +238,10 @@ impl View<'_, '_, '_> {
             left += GROUPS + GAP;
         }
         let shown = (picker.choices.len() + picker.groups.len()).min(shown_rows);
+        if self.look().inset {
+            let w = RIGHT - 10. - left;
+            self.group((left, top - 2., w, shown as f32 * ENTRY + 2.), &[])?;
+        }
         self.picker_entries(state, picker, shown, (left, top, RIGHT - 10.))
     }
     /// The footer's "<group> · 12 of 30", or "12 of 30" for a list in one piece.

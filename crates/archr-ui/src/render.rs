@@ -463,6 +463,9 @@ pub struct Ui<'font, 'texture> {
     pub shots_split: Option<usize>,
     /// The active view and the theme it was resolved from.
     view: Option<(Theme, View)>,
+    /// A theme that reshapes Settings, and itself as Settings draw it
+    /// (`settings_render::lit`): the focus lit, the text on it kept.
+    settings_look: Option<(Theme, Theme)>,
     animating: bool,
     /// Origin of looping animations such as the search dots.
     born: Instant,
@@ -590,6 +593,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             shots_grid: (1, 1),
             shots_split: None,
             view: None,
+            settings_look: None,
             animating: false,
             born: Instant::now(),
             text_scale: 1.,
@@ -1016,7 +1020,10 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         self.canvas.set_draw_color(color(theme.background));
         self.canvas.clear();
         self.store_wanted.clear();
-        self.finish(theme, settings.is_some());
+        self.finish(
+            theme,
+            settings.is_some() && !theme.screens.settings.themed(),
+        );
         (self.pixel_art, self.blink) = (theme.pixel_art, None);
         (self.frame.font, self.frame.grid, self.frame.min) =
             (theme.font_scale, theme.font_grid, theme.font_min);
