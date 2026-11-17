@@ -73,9 +73,139 @@ pub fn saved(cfg: Option<&SystemCfg>) -> Appearance {
     }
 }
 
+/// What archr-osd draws with, in /run/archr-launcher: the active theme
+/// resolved (docs/temas.md, OSD de volume e brilho).
+pub const OSD_THEME: &str = "osd-theme.toml";
+
+/// The part of `theme` archr-osd uses: the fonts, `[osd]` and, in
+/// `[colors]`, the colours that differ from the default theme's (the OSD's
+/// own palette is the default theme's, so the default writes none).
+pub fn osd_theme(theme: &Theme) -> String {
+    use archr_ui::screens::{OsdEdge, OsdShape};
+    use toml::{Table, Value};
+    let hex = |c: archr_ui::Rgba| {
+        let rgb = format!("#{:02X}{:02X}{:02X}", c.r, c.g, c.b);
+        Value::String(if c.a == 255 {
+            rgb
+        } else {
+            format!("{rgb}{:02X}", c.a)
+        })
+    };
+    let mut root = Table::new();
+    for (key, font) in [("font", &theme.font), ("font_semibold", &theme.font_semibold)] {
+        if let Some(path) = font {
+            root.insert(key.into(), Value::String(path.to_string_lossy().into()));
+        }
+    }
+    let base = Theme::builtin();
+    let colors: Table = [
+        ("surface", theme.surface, base.surface),
+        ("border", theme.border, base.border),
+        ("badge", theme.badge, base.badge),
+        ("text", theme.text, base.text),
+        ("text_secondary", theme.text_secondary, base.text_secondary),
+        ("muted", theme.muted, base.muted),
+        ("accent", theme.highlight_bg, base.highlight_bg),
+        ("success", theme.success, base.success),
+        ("warning", theme.warning, base.warning),
+        ("danger", theme.danger, base.danger),
+        ("scrim", theme.scrim, base.scrim),
+    ]
+    .into_iter()
+    .filter(|(_, own, default)| own != default)
+    .map(|(key, own, _)| (key.to_owned(), hex(own)))
+    .collect();
+    if !colors.is_empty() {
+        root.insert("colors".into(), Value::Table(colors));
+    }
+    let o = theme.screens.osd;
+    let mut osd = Table::new();
+    let style = match o.style {
+        OsdShape::Pill => "pill",
+        OsdShape::Capsule => "capsule",
+    };
+    let position = match o.position {
+        OsdEdge::Right => "right",
+        OsdEdge::Left => "left",
+        OsdEdge::Top => "top",
+        OsdEdge::Bottom => "bottom",
+    };
+    osd.insert("style".into(), Value::String(style.into()));
+    osd.insert("position".into(), Value::String(position.into()));
+    for (key, color) in [("fill", o.fill), ("track", o.track)] {
+        if let Some(color) = color {
+            osd.insert(key.into(), hex(color));
+        }
+    }
+    if let Some(radius) = o.radius {
+        let radius = (f64::from(radius) * 1e6).round() / 1e6;
+        osd.insert("radius".into(), Value::Float(radius));
+    }
+    root.insert("osd".into(), Value::Table(osd));
+    toml::to_string(&root).unwrap_or_default()
+}
+
+/// Hands the active theme to archr-osd, whole or not at all: it reads the
+/// file again when it changes. A failure only costs the OSD the theme.
+pub fn publish_osd_theme(paths: &Paths, theme: &Theme) {
+    use std::io::Write;
+    let path = paths.run.join(OSD_THEME);
+    let text = osd_theme(theme);
+    if let Err(e) = archr_io::atomic_publish(&path, false, |file| {
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(fs::Permissions::from_mode(0o644))?;
+        file.write_all(text.as_bytes())
+    }) {
+        log::warn!("Cannot write {}: {e}", path.display());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_osd_gets_the_fonts_its_table_and_only_changed_colours() {
+        let root = tempfile::TempDir::new().unwrap();
+        let paths = Paths::new(Some(root.path().to_path_buf()));
+        let path = paths.run.join(OSD_THEME);
+        let mut theme = Theme::builtin();
+        theme.font = Some("/usr/share/archr-launcher/themes/default/fonts/Inter-Regular.ttf".into());
+        publish_osd_theme(&paths, &theme);
+        let table: toml::Table = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(table.get("colors").is_none(), "the default writes no colour");
+        assert_eq!(
+            table["font"].as_str(),
+            Some("/usr/share/archr-launcher/themes/default/fonts/Inter-Regular.ttf")
+        );
+        assert_eq!(table["osd"]["style"].as_str(), Some("pill"));
+        assert_eq!(table["osd"]["position"].as_str(), Some("right"));
+        assert!(table["osd"].get("fill").is_none());
+
+        let dir = root.path().join("glass");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("theme.toml"),
+            "warning = \"#FFAA00\"\nscrim = \"#00000080\"\n\
+             [osd]\nstyle = \"capsule\"\nposition = \"bottom\"\nfill = \"#FFFFFF\"\nradius = 0.05\n",
+        )
+        .unwrap();
+        publish_osd_theme(&paths, &Theme::load(&dir));
+        let table: toml::Table = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        let colors = table["colors"].as_table().unwrap();
+        assert_eq!(colors.len(), 2, "{colors:?}");
+        assert_eq!(colors["warning"].as_str(), Some("#FFAA00"));
+        assert_eq!(colors["scrim"].as_str(), Some("#00000080"));
+        let osd = table["osd"].as_table().unwrap();
+        assert_eq!(osd["style"].as_str(), Some("capsule"));
+        assert_eq!(osd["position"].as_str(), Some("bottom"));
+        assert_eq!(osd["fill"].as_str(), Some("#FFFFFF"));
+        assert_eq!(osd["radius"].as_float(), Some(0.05));
+        // Replaced whole: no temporary file is left beside it.
+        assert_eq!(fs::read_dir(&paths.run).unwrap().count(), 1);
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o644);
+    }
 
     #[test]
     fn themes_without_fonts_take_the_default_themes_family_by_family() {

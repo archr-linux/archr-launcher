@@ -165,6 +165,7 @@ fn run(
             // The layout follows the screen's shape (square, 4:3, 3:2).
             let base = base.fitted(size.0, size.1);
             let theme = look.apply(&base);
+            appearance::publish_osd_theme(paths, &theme);
             let mut prepared = prepare_first_frame(
                 ttf,
                 &theme,
@@ -482,6 +483,7 @@ fn run(
                 || next.font_bold != theme.font_bold
                 || settings.state.base_dir != ui.theme_dir;
             theme = next;
+            appearance::publish_osd_theme(&paths, &theme);
             app.set_view(&theme.view(&theme.active_view));
             ui.theme_dir = settings.state.base_dir.clone();
             audio.set_sounds(theme_sounds(ui.theme_dir.as_deref(), &paths));
