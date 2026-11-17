@@ -117,6 +117,17 @@ fn theme() -> Theme {
     theme.active_view = "prateleiras".into();
     theme
 }
+#[test]
+fn the_test_theme_asks_for_the_capsule_osd() {
+    use archr_ui::screens::{OsdEdge, OsdShape};
+    let osd = theme().screens.osd;
+    assert_eq!(
+        (osd.style, osd.position),
+        (OsdShape::Capsule, OsdEdge::Right)
+    );
+    assert_eq!(osd.track.map(|c| c.a), Some(0xA6));
+    assert_eq!(osd.radius, Some(0.0375));
+}
 fn recent() -> Vec<Recent> {
     [
         ("snes", 0, "Kirby Super Star"),

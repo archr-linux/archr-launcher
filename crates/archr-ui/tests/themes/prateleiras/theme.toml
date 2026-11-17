@@ -86,6 +86,13 @@ style = "field"
 sheet = true
 key = { h = 0.075, gap = 0.0125, radius = 0.025 }
 
+[osd]
+style = "capsule"
+position = "right"
+fill = "#F5F5F7"
+track = "#1C1C22A6"
+radius = 0.0375
+
 [view.prateleiras]
 name = { en = "Shelves", pt_BR = "Prateleiras" }
 
