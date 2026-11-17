@@ -710,7 +710,8 @@ tela é desenhada como sempre:
 | `[resume]` | `style = "title"`, `progress`, `backdrop` | título grande no meio |
 | `[search]` | `style = "field"`, `field`, `results`, `dock` | campo e resultados em vidro, teclado encaixado |
 | `[keyboard]` | `sheet = true`, `key` | edição numa folha, teclas do tema |
-| `[dialog]` | `buttons = "row"`, `style` | perguntas em cápsulas, destrutivas em vermelho |
+| `[header]` | `style = "capsule"` | conquistas, saves, capturas e busca com "‹ <jogo>" numa cápsula e o título grande ([Cabeçalho](#cabeçalho-das-telas-do-jogo-header)) |
+| `[dialog]` | `buttons = "row"`, `style` | perguntas em cápsulas, destrutivas em vermelho; a de apagar ou carregar um save vira um alerta centralizado |
 | `[status]` | `rect` | onde fica a pílula do relógio |
 | `[osd]` | `style = "capsule"`, `position` | indicador de volume e brilho em cápsula de vidro ([OSD](#osd-de-volume-e-brilho-osd)) |
 | `[settings]` | `layout = "sidebar"`, `icon = "tile"`, `groups = "inset"`, `title = "below"` | Configurações em barra lateral, ícones em quadrados coloridos, linhas em grupos, título numa linha própria ([Configurações](#configurações-settings)) |
@@ -747,6 +748,9 @@ lit = true
 
 [start]
 style = "control"
+
+[header]
+style = "capsule"
 
 [settings]
 layout = "sidebar"
@@ -857,12 +861,42 @@ rect = { x = 0.5, y = 0.02, w = 0.46, h = 0.08 }  # opcional: onde fica a pílul
 Com `rect`, a pílula encosta à direita do retângulo e fica centralizada na
 altura dele; sem a chave, fica à direita do cabeçalho, como sempre.
 
+### Cabeçalho das telas do jogo: `[header]`
+
+```toml
+[header]
+style = "capsule"     # "path" (padrão): o caminho em texto; "capsule": "‹ <jogo>" numa cápsula
+```
+
+Vale para as telas que se abrem de um jogo: Conquistas, Saves, Capturas e
+Busca. Com `"capsule"` o caminho em texto ("Super Nintendo / Kirby Super
+Star / Saves") dá lugar a uma cápsula de vidro "‹ <jogo>" no alto à
+esquerda (a mesma dos detalhes em `[details] style = "hero"`), com o relógio
+à direita, e ao título da tela grande (28 px, `font_bold`, com
+`title_tracking`) numa linha própria embaixo dela, a 32 px da borda. O
+conteúdo da tela desce o tamanho dessa linha (44 px): os retângulos de
+`[achievements]`, `[saves]` e `[shots]` começam 44 px mais abaixo e
+terminam onde terminavam, então qualquer posição que o tema der se ajusta
+sozinha, nos três tamanhos de tela.
+
+- Conquistas com `progress = "ring"`: o título ("Conquistas") fica ao lado
+  do anel, no lugar do nome do jogo, e nada desce.
+- Saves com `style = "preview"`: a imagem encolhe quando a altura não
+  basta para ela e para a nota embaixo; a nota nunca é cortada.
+- Busca com `[search] style = "field"`: sem cápsula nem relógio; o campo
+  sobe para o topo (16 px) com "Cancelar" na cor de destaque à direita
+  dele (com `field` em retângulo, o campo fica onde o tema puser, sem
+  "Cancelar"). Na busca simples, "‹ <sistema>" na cápsula substitui o
+  título.
+
+Sem a tabela as telas ficam exatamente como sempre.
+
 ### Perguntas: `[dialog]`
 
 ```toml
 [dialog]
-width = 0.8           # largura (tamanho, fração de 480; padrão 1 = 480 px)
-radius = 0.04         # cantos
+width = 0.625         # largura (tamanho, fração de 480; padrão 1 = 480 px; 300 px)
+radius = 0.054        # cantos (26 px)
 icon = true           # um círculo com o ícone de alerta acima do texto, centralizado
 buttons = "row"       # "row": as respostas em botões lado a lado; "hints": as dicas, como sempre
 style = "glass"
@@ -879,6 +913,18 @@ os botões pelos de cápsula.
 A resposta que destrói ou reinicia (apagar, esquecer, remover, reiniciar,
 trocar o driver, converter por cima de saves) sai em vermelho (`danger`): o
 botão inteiro quando está em foco, só a palavra quando não está.
+
+A pergunta de apagar ou carregar um save e a de apagar uma captura (Saves
+e Capturas, botão X ou A) viram um alerta centralizado quando o tema tem
+`[dialog]`: a largura, os cantos e o vidro da tabela; com `icon = true`, a
+lixeira (ou o Play) num círculo da cor da ação; a pergunta (16 px) e o que
+acontece embaixo dela, centralizados; e Cancelar e a ação lado a lado. Com
+`buttons = "row"` são cápsulas de 40 px: a ação sempre preenchida, em
+vermelho (`danger`) quando apaga e na cor de destaque quando joga;
+Cancelar no branco translúcido; o botão em foco ganha o contorno do
+[`focus_ring`](#sombra-vidro-foco-movimento-e-gradiente) (sem ele, o
+destaque em 2 px). Sem `[dialog]` a pergunta fica como sempre, com a
+miniatura do save.
 
 ### Menu Start: `[start]`
 
@@ -1344,7 +1390,9 @@ Com `"preview"` a imagem do save em foco fica grande no retângulo `preview`
 (4:3, cantos de 16 px, sombra), com o nome da vaga em `font_bold` e "Salvo em
 … · há N dias" sobre um véu no pé dela, e o que acontece ao jogar logo abaixo.
 As vagas ficam num grupo de vidro no retângulo `list`, cada uma com a
-miniatura, o nome e há quanto tempo; a em foco ganha um fundo claro.
+miniatura, o nome e há quanto tempo; a em foco ganha um fundo claro. Quando o
+retângulo não tem altura para a imagem e para a nota inteira, a imagem
+encolhe (até a metade da altura), para a nota nunca ser cortada.
 
 ### `[shots]`: a grade por data
 
