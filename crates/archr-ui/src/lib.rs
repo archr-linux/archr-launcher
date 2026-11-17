@@ -35,6 +35,7 @@ pub mod saves;
 mod badges;
 mod icons;
 pub use icons::DEFAULT_ICONS_DIR;
+pub use text::Hinting;
 pub mod motion;
 mod primitives;
 pub mod startup;

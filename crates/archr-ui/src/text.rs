@@ -83,6 +83,26 @@ pub(crate) fn production_font<'a>(
     font
 }
 
+/// How glyphs fit the pixel grid (a theme's `font_hinting`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Hinting {
+    /// Stems snapped both ways: approved on the device (see force_autohint).
+    #[default]
+    Mono,
+    /// Heights snapped only: the font's own widths and spacing.
+    Light,
+    None,
+}
+impl Hinting {
+    fn sdl(self) -> sdl2::ttf::Hinting {
+        match self {
+            Self::Mono => sdl2::ttf::Hinting::Mono,
+            Self::Light => sdl2::ttf::Hinting::Light,
+            Self::None => sdl2::ttf::Hinting::None,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub(crate) enum Face {
     Regular,
@@ -139,6 +159,8 @@ struct Fonts<'font> {
     fonts: Vec<FontFace<'font>>,
     resolved: HashMap<Face, usize>,
     measurements: VecDeque<(String, Face, u16, i16, u32)>,
+    /// The theme's `font_hinting`; mono unless it says (see force_autohint).
+    hinting: Hinting,
 }
 impl<'font> Fonts<'font> {
     fn new(ttf: &'font Sdl2TtfContext, paths: FacePaths) -> Self {
@@ -149,7 +171,17 @@ impl<'font> Fonts<'font> {
             fonts: Vec::new(),
             resolved: HashMap::new(),
             measurements: VecDeque::new(),
+            hinting: Hinting::Mono,
         }
+    }
+    /// Every face, loaded and to load, hinted `hinting`; widths measured
+    /// under another one are forgotten.
+    fn set_hinting(&mut self, hinting: Hinting) {
+        self.hinting = hinting;
+        for loaded in &mut self.fonts {
+            loaded.font.set_hinting(hinting.sdl());
+        }
+        self.measurements.clear();
     }
     fn measure(&mut self, text: &str, face: Face, size: u16, tracking: i16) -> Result<u32, String> {
         let source = bounded_source(text);
@@ -209,7 +241,7 @@ impl<'font> Fonts<'font> {
                 let Ok((mut font, bytes)) = font else {
                     continue;
                 };
-                font.set_hinting(sdl2::ttf::Hinting::Mono); // see force_autohint
+                font.set_hinting(self.hinting.sdl()); // see force_autohint
                                                             // Static Inter SemiBold reports legacy style Regular; inspect
                                                             // the family as well and never synthesize a shipped weight twice.
                 let weight = format!(
@@ -402,6 +434,13 @@ impl<'font, 'texture> TextCache<'font, 'texture> {
     pub fn set_smoothing(&mut self, smooth: bool) {
         if self.smooth != smooth {
             self.smooth = smooth;
+            self.entries.clear();
+        }
+    }
+    /// The theme's `font_hinting`: texts drawn under another one are made again.
+    pub fn set_hinting(&mut self, hinting: Hinting) {
+        if self.fonts.hinting != hinting {
+            self.fonts.set_hinting(hinting);
             self.entries.clear();
         }
     }

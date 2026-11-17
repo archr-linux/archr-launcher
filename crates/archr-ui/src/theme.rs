@@ -290,6 +290,10 @@ pub struct Theme {
     /// not fit at it wraps instead.
     pub font_min: f32,
     pub font_smoothing: bool,
+    /// How glyphs fit the pixel grid: "mono" (the default, approved on the
+    /// device: stems snapped both ways), "light" (only heights snapped,
+    /// the font's own widths and spacing) or "none".
+    pub font_hinting: crate::text::Hinting,
     pub text_outline: Option<Outline>,
     /// Pictures of the browsing screens: the background and the frames.
     pub background_image: Option<PathBuf>,
@@ -595,6 +599,9 @@ impl Theme {
             font_grid: token!(font_grid, font_grid),
             font_min: token!(font_min, font_min),
             font_smoothing: token!(font_smoothing, some),
+            font_hinting: parsed(table, "font_hinting", hinting)
+                .or_else(|| defaults.map(|theme| theme.font_hinting))
+                .unwrap_or_default(),
             text_outline: match table.get("text_outline") {
                 Some(value) => text_outline(value),
                 None => defaults.and_then(|d| d.text_outline),
@@ -766,6 +773,7 @@ pub const KNOWN_KEYS: &[&str] = &[
     "font_grid",
     "font_min",
     "font_smoothing",
+    "font_hinting",
     "text_outline",
     "background_image",
     "frames",
@@ -1080,6 +1088,15 @@ fn choice<T: Copy>(value: &str, options: &[(&str, T)]) -> Option<T> {
 }
 fn some<T>(value: T) -> Option<T> {
     Some(value)
+}
+fn hinting(value: String) -> Option<crate::text::Hinting> {
+    use crate::text::Hinting;
+    match value.as_str() {
+        "mono" => Some(Hinting::Mono),
+        "light" => Some(Hinting::Light),
+        "none" => Some(Hinting::None),
+        _ => None,
+    }
 }
 fn font_scale(value: f32) -> Option<f32> {
     (0.5..=2.0).contains(&value).then_some(value)

@@ -1071,6 +1071,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             (theme.font_scale, theme.font_grid, theme.font_min);
         if let Some(text) = &mut self.text {
             text.set_smoothing(theme.font_smoothing);
+            text.set_hinting(theme.font_hinting);
         }
         let browsing = self.lobby.is_none() && self.moonlight.is_none() && settings.is_none();
         // Any other screen between: the next control center keeps it anew.
