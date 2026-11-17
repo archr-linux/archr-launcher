@@ -670,6 +670,10 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         startup_phase!(self.startup, "status initialization");
         Ok(())
     }
+    /// Replaces the status bar's source (see `Status::frozen`).
+    pub fn set_status(&mut self, status: Status) {
+        self.status = Some(status);
+    }
     pub fn wifi_enabled(&self) -> bool {
         self.status.as_ref().is_some_and(|s| s.wifi.radio())
     }

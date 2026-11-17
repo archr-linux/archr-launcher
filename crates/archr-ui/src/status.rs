@@ -415,6 +415,7 @@ pub struct Status {
     started: bool,
     minute: u64,
     clock_12: bool,
+    frozen: bool,
 }
 impl Status {
     pub fn new(root: Option<&Path>, now: Instant) -> Self {
@@ -438,8 +439,18 @@ impl Status {
             started: false,
             minute: u64::MAX,
             clock_12: false,
+            frozen: false,
         };
         status.poll(now);
+        status
+    }
+    /// A status that never changes: `clock` and nothing else, no worker.
+    /// For captures and golden frames, which must not read the hour.
+    pub fn frozen(clock: &str) -> Self {
+        let mut status = Self::new(None, Instant::now());
+        status.clock = clock.to_owned();
+        status.frozen = true;
+        status.started = true;
         status
     }
     /// The adapter just plugged, once: its card is shown and the
@@ -490,6 +501,9 @@ impl Status {
         self.worker.as_ref().map(Worker::refresh_signal)
     }
     pub fn poll(&mut self, _now: Instant) -> bool {
+        if self.frozen {
+            return false;
+        }
         let snapshot = self
             .worker
             .as_ref()
