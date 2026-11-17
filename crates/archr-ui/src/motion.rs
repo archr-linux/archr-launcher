@@ -18,6 +18,11 @@ pub const NOTICE: Duration = Duration::from_millis(200);
 pub const SWITCH: Duration = Duration::from_millis(150);
 /// Each band of the screen fading in when the launcher opens.
 pub const OPENING: Duration = Duration::from_millis(300);
+/// How long the theme's spring (`motion = "spring"`) takes to settle
+/// within 1% of where it goes, whatever the motion.
+pub const SPRING_SETTLE: Duration = Duration::from_millis(350);
+/// The spring's stiffness: e^(-ωt)(1 + ωt) falls to 1% at `SPRING_SETTLE`.
+const OMEGA: f32 = 6.64 / 0.35;
 /// Fades never run longer than this when motion is reduced.
 const SHORT_FADE: Duration = Duration::from_millis(120);
 
@@ -102,9 +107,28 @@ thread_local! {
     /// moves in four jumps instead of easing out.
     static STEPS: Cell<bool> = const { Cell::new(false) };
 }
+thread_local! {
+    /// The theme's `motion = "spring"` with Animations on: motion on this
+    /// thread follows a critically damped spring instead of the curve.
+    static SPRING: Cell<bool> = const { Cell::new(false) };
+}
 /// Motion moves in steps (true) or eases out (false) from now on.
 pub fn set_steps(steps: bool) {
     STEPS.with(|cell| cell.set(steps));
+}
+/// Motion follows the spring (true) or the curve (false) from now on.
+pub fn set_spring(spring: bool) {
+    SPRING.with(|cell| cell.set(spring));
+}
+fn spring() -> bool {
+    SPRING.with(Cell::get)
+}
+/// A critically damped spring `t` seconds after it left `offset` away from
+/// its rest at `velocity`: the offset left, and its velocity.
+fn spring_at(offset: f32, velocity: f32, t: f32) -> (f32, f32) {
+    let decay = (-OMEGA * t).exp();
+    let b = velocity + OMEGA * offset;
+    ((offset + b * t) * decay, (velocity - OMEGA * b * t) * decay)
 }
 /// How far along motion is at time fraction `t` (0 to 1): ease-out, or the
 /// theme's four even steps, the first one at once.
@@ -127,6 +151,8 @@ pub struct Tween {
     pub target: f32,
     began: Option<Instant>,
     duration: Duration,
+    /// Speed when it began (units a second): a spring keeps it on retarget.
+    velocity: f32,
 }
 impl Tween {
     pub fn new(value: f32, duration: Duration) -> Self {
@@ -135,6 +161,7 @@ impl Tween {
             target: value,
             began: None,
             duration,
+            velocity: 0.,
         }
     }
     /// From `from` to `to`, starting now.
@@ -147,12 +174,35 @@ impl Tween {
         let Some(began) = self.began.filter(|_| !self.duration.is_zero()) else {
             return self.target;
         };
-        let t = now.saturating_duration_since(began).as_secs_f32() / self.duration.as_secs_f32();
+        let elapsed = now.saturating_duration_since(began);
+        if spring() {
+            if elapsed >= SPRING_SETTLE {
+                return self.target;
+            }
+            let (offset, _) = spring_at(
+                self.from - self.target,
+                self.velocity,
+                elapsed.as_secs_f32(),
+            );
+            return self.target + offset;
+        }
+        let t = elapsed.as_secs_f32() / self.duration.as_secs_f32();
         self.from + (self.target - self.from) * ease(t)
+    }
+    /// Value and speed now: a spring carries its speed into the next move.
+    fn state(&self, now: Instant) -> (f32, f32) {
+        match self.began.filter(|_| spring() && !self.duration.is_zero()) {
+            Some(began) if now.saturating_duration_since(began) < SPRING_SETTLE => {
+                let t = now.saturating_duration_since(began).as_secs_f32();
+                let (offset, velocity) = spring_at(self.from - self.target, self.velocity, t);
+                (self.target + offset, velocity)
+            }
+            _ => (self.value(now), 0.),
+        }
     }
     pub fn retarget(&mut self, target: f32, now: Instant) {
         if target != self.target {
-            self.from = self.value(now);
+            (self.from, self.velocity) = self.state(now);
             self.target = target;
             self.began = Some(now);
         }
@@ -160,14 +210,20 @@ impl Tween {
     pub fn snap(&mut self) {
         self.from = self.target;
         self.began = None;
+        self.velocity = 0.;
     }
     /// Later motion takes `duration`; zero makes every change instant.
     pub fn set_duration(&mut self, duration: Duration) {
         self.duration = duration;
     }
     pub fn active(&self, now: Instant) -> bool {
+        let span = if spring() && !self.duration.is_zero() {
+            SPRING_SETTLE
+        } else {
+            self.duration
+        };
         self.began
-            .is_some_and(|began| now.saturating_duration_since(began) < self.duration)
+            .is_some_and(|began| now.saturating_duration_since(began) < span)
     }
 }
 
@@ -229,6 +285,42 @@ mod tests {
         );
         set_steps(false);
         assert!(at(4) > 4. && at(4) < 8., "back to ease-out");
+    }
+    #[test]
+    fn a_spring_settles_without_overshoot_and_keeps_its_speed() {
+        let now = Instant::now();
+        set_spring(true);
+        let mut glide = Tween::starting(0., 10., SELECT, now);
+        let at = |tween: &Tween, ms: u64| tween.value(now + Duration::from_millis(ms));
+        let samples: Vec<f32> = (0..=35).map(|n| at(&glide, n * 10)).collect();
+        assert!(samples.windows(2).all(|w| w[1] >= w[0]), "it only moves on");
+        assert!(
+            samples.iter().all(|v| *v <= 10.),
+            "critically damped: no overshoot"
+        );
+        assert!(
+            at(&glide, 120) > 5.,
+            "most of the way in a third of its time"
+        );
+        assert!(at(&glide, 300) > 9.7 && at(&glide, 340) < 10.);
+        assert_eq!(at(&glide, 350), 10.);
+        assert!(glide.active(now + SELECT), "it outlasts the curve");
+        assert!(!glide.active(now + SPRING_SETTLE));
+        // Sent elsewhere halfway, it carries on from where and how fast it was.
+        let half = now + Duration::from_millis(60);
+        let (was, speed) = glide.state(half);
+        assert!(speed > 0.);
+        glide.retarget(20., half);
+        let soon = glide.value(half + Duration::from_millis(5));
+        assert!(soon > was, "no stop at the turn");
+        // No duration (Animations off): no movement at all.
+        let mut still = Tween::new(0., Duration::ZERO);
+        still.retarget(10., now);
+        assert_eq!(still.value(now), 10.);
+        assert!(!still.active(now));
+        set_spring(false);
+        let curve = Tween::starting(0., 10., SELECT, now);
+        assert!(!curve.active(now + SELECT), "the curve again");
     }
     #[test]
     fn a_busy_control_breathes_and_holds_still_without_motion() {

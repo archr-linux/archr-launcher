@@ -727,6 +727,12 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             };
         }
         crate::motion::set_steps(!settings && theme.steps);
+        // The spring moves things: only with Animations fully on.
+        crate::motion::set_spring(
+            !settings
+                && theme.motion == crate::theme::MotionStyle::Spring
+                && self.motion == Motion::On,
+        );
     }
     /// Whether a blinking cursor shows at `now`: half a second on, half off;
     /// steady when animations are off.
