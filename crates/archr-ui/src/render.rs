@@ -316,6 +316,21 @@ struct StatusLayout {
     percent: Option<Rect>,
 }
 
+impl StatusLayout {
+    /// Everything `dy` pixels lower.
+    fn moved(self, dy: i32) -> Self {
+        let down = |r: Rect| Rect::new(r.x(), r.y() + dy, r.width(), r.height());
+        Self {
+            pill: down(self.pill),
+            wifi: self.wifi.map(down),
+            bluetooth: self.bluetooth.map(down),
+            clock: down(self.clock),
+            battery: self.battery.map(down),
+            percent: self.percent.map(down),
+        }
+    }
+}
+
 fn status_layout(
     right: i32,
     header_height: u32,
@@ -1132,7 +1147,14 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                     self.faded(layout.list.opacity, |ui| match backdrop {
                         Screen::Games { system, folder } if layout.list.mark == Mark::Grid => {
                             let heading = view.home.as_ref();
-                            ui.games_grid((system, folder), cursor, (data, heading), theme, art, layout)
+                            ui.games_grid(
+                                (system, folder),
+                                cursor,
+                                (data, heading),
+                                theme,
+                                art,
+                                layout,
+                            )
                         }
                         _ => ui.list(backdrop, (&rows, lifted), cursor, data, theme, layout),
                     })?;
@@ -1291,9 +1313,17 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             .status
             .as_ref()
             .map(|s| (s.clock.clone(), s.battery, s.wifi, s.bluetooth));
-        let mut right = width as i32 - pad;
         let look = theme.screens.status;
-        let clock_face = if look.mono { Face::Mono } else { Face::Semibold };
+        // A theme's box: the pill's right edge at its right, centered on it.
+        let (mut right, h, top) = match look.rect.map(|r| self.area(r)) {
+            Some(area) => (area.right(), area.height(), area.y()),
+            None => (width as i32 - pad, h, 0),
+        };
+        let clock_face = if look.mono {
+            Face::Mono
+        } else {
+            Face::Semibold
+        };
         if let Some((clock, battery, wifi, bluetooth)) = status {
             let battery = battery.filter(|_| look.battery);
             let percent = battery
@@ -1310,8 +1340,12 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 self.frame.scale,
                 clock_width,
                 (battery.is_some(), percent_width),
-                (wifi.radio() && look.radios, bluetooth.radio() && look.radios),
+                (
+                    wifi.radio() && look.radios,
+                    bluetooth.radio() && look.radios,
+                ),
             );
+            let layout = layout.moved(top);
             if look.glass {
                 let radius = layout.pill.height() as f32 / 2.;
                 self.glass(layout.pill, radius, &theme.glass_or_default())?;
@@ -2851,7 +2885,12 @@ pub fn prepare_first_frame<'font>(
                 } else {
                     theme.text_secondary
                 };
-                label(&mut prepared, &catalog.text(tab.key()), (face, 12., ink), None)?;
+                label(
+                    &mut prepared,
+                    &catalog.text(tab.key()),
+                    (face, 12., ink),
+                    None,
+                )?;
             }
         }
     }
@@ -3052,7 +3091,12 @@ fn font_paths(theme: &Theme, root: Option<&Path>, default: &Path) -> crate::text
     }
     // Bold: the theme's bold face, else whatever semibold resolves to
     // (made bold when that is a regular weight).
-    paths[5] = theme.font_bold.iter().cloned().chain(paths[1].clone()).collect();
+    paths[5] = theme
+        .font_bold
+        .iter()
+        .cloned()
+        .chain(paths[1].clone())
+        .collect();
     paths
 }
 

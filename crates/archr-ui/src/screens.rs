@@ -4,6 +4,7 @@
 //! `[switcher]`, `[resume]`, `[start]`). Every key is optional; what a
 //! theme leaves out is inherited, and the defaults draw as the launcher
 //! always has.
+use crate::theme::Rect01;
 use toml::{Table, Value};
 
 /// Where the toasts stand.
@@ -69,13 +70,16 @@ impl Default for Hints {
 }
 
 /// The clock and battery pill.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct StatusStyle {
     pub glass: bool,
     pub battery: bool,
     pub radios: bool,
     /// The clock in the monospaced face (the default) or the semibold one.
     pub mono: bool,
+    /// Where the pill stands: its right edge at the box's, centered on its
+    /// height. None: at the right of the header, as always.
+    pub rect: Option<Rect01>,
 }
 impl Default for StatusStyle {
     fn default() -> Self {
@@ -84,6 +88,7 @@ impl Default for StatusStyle {
             battery: true,
             radios: true,
             mono: true,
+            rect: None,
         }
     }
 }
@@ -185,7 +190,7 @@ fn style_keys(screen: &str) -> &'static [&'static str] {
     match screen {
         "toast" => &["position", "width", "icon", "style"],
         "hints" => &["style", "position"],
-        "status" => &["style", "battery", "radios", "clock"],
+        "status" => &["style", "battery", "radios", "clock", "rect"],
         "dialog" => &["width", "radius", "icon", "buttons", "style"],
         _ => &[],
     }
@@ -250,6 +255,7 @@ impl Screens {
             own.status.battery = r.flag("battery", own.status.battery);
             own.status.radios = r.flag("radios", own.status.radios);
             own.status.mono = r.pick("clock", own.status.mono, &[("mono", true), ("text", false)]);
+            own.status.rect = r.rect("rect").or(own.status.rect);
         }
         if let Some(t) = get("dialog") {
             let r = Reader("dialog", t);
@@ -292,6 +298,36 @@ impl Reader<'_> {
                 current
             }
         }
+    }
+    /// A box `{ x, y, w, h }` in screen fractions, inside the screen.
+    fn rect(&self, key: &str) -> Option<Rect01> {
+        let value = self.1.get(key)?;
+        let found = value.as_table().and_then(|t| {
+            let get = |k: &str| {
+                t.get(k)
+                    .and_then(|v| v.as_float().or_else(|| v.as_integer().map(|n| n as f64)))
+                    .map(|n| n as f32)
+            };
+            let rect = Rect01 {
+                x: get("x")?,
+                y: get("y")?,
+                w: get("w")?,
+                h: get("h")?,
+            };
+            ([rect.x, rect.y, rect.w, rect.h]
+                .iter()
+                .all(|v| v.is_finite() && (0.0..=1.0).contains(v))
+                && rect.x + rect.w <= 1.0 + 1e-4
+                && rect.y + rect.h <= 1.0 + 1e-4)
+                .then_some(rect)
+        });
+        if found.is_none() {
+            log::warn!(
+                "Theme {}.{key} must be {{ x, y, w, h }} inside the screen; ignored",
+                self.0
+            );
+        }
+        found
     }
     fn flag(&self, key: &str, current: bool) -> bool {
         match self.1.get(key) {
@@ -356,6 +392,18 @@ mod tests {
         assert!(own.dialog.buttons_row && own.dialog.icon);
         assert_eq!(own.dialog.width, Some(1.), "out of range: the launcher's");
         assert_eq!(read(""), Screens::default());
+    }
+    #[test]
+    fn the_status_pill_takes_a_box_inside_the_screen() {
+        let own = read("[status]\nrect = { x = 0.5, y = 0.02, w = 0.45, h = 0.08 }");
+        assert_eq!(own.status.rect.map(|r| r.w), Some(0.45));
+        assert_eq!(
+            read("[status]\nrect = { x = 0.8, y = 0, w = 0.5, h = 0.1 }")
+                .status
+                .rect,
+            None,
+            "off the screen: the header's"
+        );
     }
     #[test]
     fn screen_tables_place_what_the_loose_keys_did() {

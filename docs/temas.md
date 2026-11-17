@@ -713,7 +713,11 @@ style = "glass"       # a pílula no vidro do tema
 battery = true        # false: sem a bateria
 radios = true         # false: sem os ícones de Wi-Fi e Bluetooth
 clock = "text"        # "mono" (padrão, discreto) ou "text": a hora na seminegrito, na cor do texto
+rect = { x = 0.5, y = 0.02, w = 0.46, h = 0.08 }  # opcional: onde fica a pílula
 ```
+
+Com `rect`, a pílula encosta à direita do retângulo e fica centralizada na
+altura dele; sem a chave, fica à direita do cabeçalho, como sempre.
 
 ### Perguntas: `[dialog]`
 
