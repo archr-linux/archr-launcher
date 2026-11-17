@@ -241,6 +241,10 @@ fn run(
     app.mangohud = mangohud_on;
     // The switcher waits for the records; the resume for its game's system.
     let mut records = None;
+    // The shelves' recent games: the same records, read once and kept, and
+    // whether the Continue shelf must be found again.
+    let mut home_records: Option<(Records, Option<Vec<resume::Record>>)> = None;
+    let mut recent_due = true;
     let mut resuming = None;
     // Back where the last game was chosen when coming back from a game; a
     // power on (Start::Boot) opens on the first system.
@@ -767,7 +771,7 @@ fn run(
         }
         // No change notification exists: re-read `global.netplay` on returning
         // to the systems screen (e.g. from the settings pages).
-        let browsing = app.screen == Screen::Systems && !settings.active && ui.lobby.is_none();
+        let browsing = app.at_root() && !settings.active && ui.lobby.is_none();
         if browsing && !was_browsing {
             rooms.recheck();
         }
@@ -812,6 +816,7 @@ fn run(
         }
         audio.poll();
         if library.poll() {
+            recent_due = true;
             if let Some(name) = selected_system {
                 if let Some(index) = app.rows(&library).iter().position(|system| *system == name) {
                     app.cursor = index;
@@ -819,7 +824,7 @@ fn run(
             }
             dirty = true;
         }
-        if app.screen != Screen::Systems {
+        if !app.at_root() {
             returning = None;
         }
         if let Some(place) = returning.as_ref() {
@@ -852,6 +857,24 @@ fn run(
         if app.screen != Screen::Switcher {
             records = None;
         }
+        // The Continue shelf, without opening the switcher.
+        if app.home.is_none() {
+            home_records = None;
+        } else if recent_due {
+            let (reader, read) = home_records.get_or_insert_with(|| (Records::read(&paths), None));
+            if read.is_none() {
+                *read = reader.poll();
+            }
+            if let Some(found) = read.as_ref() {
+                if let Some(games) = resume::switcher(&mut library, found, HOME_RECENT) {
+                    if app.recent != games {
+                        app.recent = games;
+                        dirty = true;
+                    }
+                    recent_due = false;
+                }
+            }
+        }
         // The resume at power on: its game, then the countdown.
         if app.screen != Screen::Resume {
             resuming = None;
@@ -865,7 +888,7 @@ fn run(
                         dirty = true;
                     }
                     Some(None) => {
-                        app.screen = Screen::Systems;
+                        app.go_root();
                         dirty = true;
                     }
                     None => {}
@@ -1041,6 +1064,9 @@ fn run(
         }
         let (selected, neighbours) = cover_paths(&app, &library);
         covers.request(&neighbours);
+        let (home_covers, home_pictures) = app.home_paths(&library);
+        covers.request(&home_covers);
+        pictures.request(&home_pictures);
         let (shot, logo) = details_art(&app, &library);
         shots.request(shot.as_slice());
         logos.request(logo.as_slice());
@@ -1362,7 +1388,7 @@ fn run(
             // screen comes back where that game was chosen, as the return
             // from a game does. The resume card shows at power on: skipping
             // it opens on the first system, as a power on does.
-            if before.0 == Screen::Switcher && app.screen == Screen::Systems {
+            if before.0 == Screen::Switcher && app.at_root() {
                 returning = library.place().cloned();
             }
             let requested = if requested == Outcome::Settings {
@@ -1457,6 +1483,9 @@ fn run(
             } else {
                 requested
             };
+            if matches!(requested, Outcome::ForgetRecent { .. }) {
+                recent_due = true;
+            }
             if let Outcome::Achievements { system, game } = &requested {
                 cheevos = library
                     .games(system)
@@ -1717,6 +1746,9 @@ fn cover_size(theme: &archr_ui::Theme, (width, height): (u32, u32)) -> (u32, u32
         (rect.h * height as f32).round().max(1.) as u32,
     )
 }
+/// Recent games the Continue shelf shows at most.
+const HOME_RECENT: usize = 12;
+
 fn cover_paths(app: &App, data: &dyn DataSource) -> (Option<PathBuf>, Vec<PathBuf>) {
     let (screen, cursor) = app.backdrop();
     if let Screen::Details { system, game } = screen {
@@ -1746,7 +1778,9 @@ fn cover_paths(app: &App, data: &dyn DataSource) -> (Option<PathBuf>, Vec<PathBu
             &archr_ui::folders::join(folder, &name),
         ));
     }
-    for index in cursor.saturating_sub(2)..=cursor.saturating_add(2) {
+    // A grid shows rows of covers around the cursor.
+    let reach = if app.games_grid().is_some() { 12 } else { 2 };
+    for index in cursor.saturating_sub(reach)..=cursor.saturating_add(reach) {
         if let Some(path) = game(index) {
             if !paths.contains(&path) {
                 paths.push(path);

@@ -151,6 +151,10 @@ impl App {
         shelf.items.get(*item).cloned()
     }
 
+    /// Columns of the games screen when the view lays it out as a grid.
+    pub fn games_grid(&self) -> Option<usize> {
+        self.games_grid
+    }
     /// Columns of the Library tab's grid.
     fn library_columns(&self) -> usize {
         self.home.as_ref().map_or(3, |h| h.library.columns.max(1))
