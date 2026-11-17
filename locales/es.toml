@@ -1557,7 +1557,7 @@
 
 # Ports that need the panfrost driver (Ports-panfrost)
 "ports.panfrost_title" = "{name} necesita el controlador panfrost"
-"ports.panfrost_body" = "Este juego usa OpenGL, que el controlador GPU actual (libmali) no tiene."
+"ports.panfrost_body" = "Este juego solo funciona con el controlador GPU Panfrost; el actual (libmali) no puede ejecutarlo."
 "ports.panfrost_note" = "El cambio vale para todo el sistema y la consola se reinicia. Para volver: Configuración › Sistema › Controlador GPU."
 "ports.panfrost_switch" = "Cambiar y reiniciar"
 

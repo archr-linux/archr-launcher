@@ -1557,7 +1557,7 @@
 
 # Ports that need the panfrost driver (Ports-panfrost)
 "ports.panfrost_title" = "{name}: нужен драйвер panfrost"
-"ports.panfrost_body" = "Эта игра использует OpenGL, которого нет в текущем драйвере GPU (libmali)."
+"ports.panfrost_body" = "Эта игра работает только с драйвером GPU Panfrost; текущий (libmali) её не запускает."
 "ports.panfrost_note" = "Смена действует для всей системы, консоль перезагрузится. Вернуть: Настройки › Система › Драйвер GPU."
 "ports.panfrost_switch" = "Сменить и перезапуск"
 
