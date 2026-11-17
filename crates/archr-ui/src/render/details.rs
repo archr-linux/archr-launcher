@@ -462,9 +462,9 @@ impl Ui<'_, '_> {
             self.canvas.copy(logo, None, dst)?;
         } else {
             let size = self
-                .shrink(sheet.title, Face::Semibold, 26., 18., title.width())?
+                .shrink(sheet.title, Face::Bold, 26., 18., title.width())?
                 .unwrap_or(18.);
-            self.label(sheet.title, (Face::Semibold, size, theme.text), title)?;
+            self.label(sheet.title, (Face::Bold, size, theme.text), title)?;
         }
 
         let sub = rect(theme.details_subtitle);

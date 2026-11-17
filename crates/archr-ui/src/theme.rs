@@ -147,6 +147,8 @@ pub struct Theme {
     pub dim_text: Rgba,
     pub font: Option<PathBuf>,
     pub font_semibold: Option<PathBuf>,
+    /// The bold (700) face; without it bold text takes the semibold one.
+    pub font_bold: Option<PathBuf>,
     pub font_mono: Option<PathBuf>,
     pub font_mono_medium: Option<PathBuf>,
     pub surface: Rgba,
@@ -362,6 +364,7 @@ impl Theme {
         let mut fitted = fitted.unwrap_or_else(|| self.clone());
         fitted.font.clone_from(&self.font);
         fitted.font_semibold.clone_from(&self.font_semibold);
+        fitted.font_bold.clone_from(&self.font_bold);
         fitted.font_mono.clone_from(&self.font_mono);
         fitted.font_mono_medium.clone_from(&self.font_mono_medium);
         fitted.name = self.name.clone();
@@ -391,21 +394,33 @@ impl Theme {
             };
         }
         let font = |name: &str| field::<String>(table, name).and_then(|f| resolve_file(dir?, &f));
-        // Each family (regular with semibold, mono with medium) comes whole
-        // from the theme when it names either face, else from the defaults.
-        let family = |keys: [&'static str; 2], inherited: fn(&Self) -> [Option<PathBuf>; 2]| {
+        // Each family (regular with semibold and bold, mono with medium)
+        // comes whole from the theme when it names any face, else from the
+        // defaults.
+        fn family<const N: usize>(
+            table: &toml::Table,
+            keys: [&'static str; N],
+            font: impl Fn(&'static str) -> Option<PathBuf>,
+            inherited: Option<[Option<PathBuf>; N]>,
+        ) -> [Option<PathBuf>; N] {
             if keys.iter().any(|key| table.contains_key(*key)) {
                 keys.map(font)
             } else {
-                defaults.map_or([None, None], inherited)
+                inherited.unwrap_or_else(|| std::array::from_fn(|_| None))
             }
-        };
-        let [font_regular, font_semibold] = family(["font", "font_semibold"], |d| {
-            [d.font.clone(), d.font_semibold.clone()]
-        });
-        let [font_mono, font_mono_medium] = family(["font_mono", "font_mono_medium"], |d| {
-            [d.font_mono.clone(), d.font_mono_medium.clone()]
-        });
+        }
+        let [font_regular, font_semibold, font_bold] = family(
+            table,
+            ["font", "font_semibold", "font_bold"],
+            font,
+            defaults.map(|d| [d.font.clone(), d.font_semibold.clone(), d.font_bold.clone()]),
+        );
+        let [font_mono, font_mono_medium] = family(
+            table,
+            ["font_mono", "font_mono_medium"],
+            font,
+            defaults.map(|d| [d.font_mono.clone(), d.font_mono_medium.clone()]),
+        );
         Self {
             background: token!(background, color),
             text: token!(text, color),
@@ -479,6 +494,7 @@ impl Theme {
             },
             font: font_regular,
             font_semibold,
+            font_bold,
             font_mono,
             font_mono_medium,
             name: Names::parse(table.get("name"), "name"),
@@ -563,6 +579,7 @@ pub const KNOWN_KEYS: &[&str] = &[
     "system_screen",
     "font",
     "font_semibold",
+    "font_bold",
     "font_mono",
     "font_mono_medium",
     "name",

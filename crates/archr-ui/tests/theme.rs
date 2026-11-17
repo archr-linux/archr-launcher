@@ -329,6 +329,29 @@ fn font_resolves_only_existing_relative_files() {
 }
 
 #[test]
+fn font_bold_belongs_to_the_regular_family() {
+    let dir = TempDir::new().unwrap();
+    fs::create_dir(dir.path().join("fonts")).unwrap();
+    for name in ["Sans.ttf", "SansBold.ttf"] {
+        fs::write(dir.path().join("fonts").join(name), b"font fixture").unwrap();
+    }
+    let file = |name: &str| Some(fs::canonicalize(dir.path().join("fonts").join(name)).unwrap());
+    write_theme(dir.path(), "font_bold = 'fonts/SansBold.ttf'");
+    let bold = Theme::load(dir.path());
+    assert_eq!(bold.font_bold, file("SansBold.ttf"));
+    assert_eq!((&bold.font, &bold.font_semibold), (&None, &None), "the family is the theme's");
+    // A theme over it that names only its regular face drops the bold one.
+    let child = dir.path().join("child");
+    fs::create_dir_all(&child).unwrap();
+    fs::write(child.join("Sans.ttf"), b"font fixture").unwrap();
+    write_theme(&child, "font = 'Sans.ttf'");
+    let regular = Theme::load_over(&child, &bold);
+    assert!(regular.font.is_some());
+    assert_eq!(regular.font_bold, None);
+    assert_eq!(Theme::builtin().font_bold, None);
+}
+
+#[test]
 fn relative_theme_dir_still_returns_absolute_font_path() {
     let dir = tempfile::Builder::new()
         .prefix("theme-test-")

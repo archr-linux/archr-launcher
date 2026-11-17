@@ -719,7 +719,7 @@ fn panel_labels(
     let title_text = system_title(name, data, catalog);
     let title_block = (
         title_text,
-        (Face::Semibold, title, theme.text),
+        (Face::Bold, title, theme.text),
         title * 27. / 22.,
     );
     let muted = |face| (face, meta, theme.muted);

@@ -216,10 +216,12 @@ impl Appearance {
             "mono" => {
                 theme.font = theme.font_mono.clone();
                 theme.font_semibold = theme.font_mono_medium.clone();
+                theme.font_bold = None;
             }
             "system" => {
                 theme.font = None;
                 theme.font_semibold = None;
+                theme.font_bold = None;
             }
             _ => {}
         }

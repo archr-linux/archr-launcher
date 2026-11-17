@@ -2893,7 +2893,7 @@ impl PreparedText<'_> {
 /// Settings fall back to when a theme font cannot fit a word.
 const DEFAULT_FONT: &str = "fonts/Inter-Regular.ttf";
 
-fn font_paths(theme: &Theme, root: Option<&Path>, default: &Path) -> [Vec<PathBuf>; 5] {
+fn font_paths(theme: &Theme, root: Option<&Path>, default: &Path) -> crate::text::FacePaths {
     let defaults = |mono: bool| {
         let names = if mono {
             [
@@ -2917,7 +2917,7 @@ fn font_paths(theme: &Theme, root: Option<&Path>, default: &Path) -> [Vec<PathBu
         }
         paths
     };
-    let mut paths: [Vec<PathBuf>; 5] = std::array::from_fn(|i| defaults(i == 2 || i == 3));
+    let mut paths: crate::text::FacePaths = std::array::from_fn(|i| defaults(i == 2 || i == 3));
     paths[4].insert(0, default.join(DEFAULT_FONT));
     for (i, preferred) in [
         &theme.font,
@@ -2943,6 +2943,9 @@ fn font_paths(theme: &Theme, root: Option<&Path>, default: &Path) -> [Vec<PathBu
             paths[3].insert(0, font.clone());
         }
     }
+    // Bold: the theme's bold face, else whatever semibold resolves to
+    // (made bold when that is a regular weight).
+    paths[5] = theme.font_bold.iter().cloned().chain(paths[1].clone()).collect();
     paths
 }
 

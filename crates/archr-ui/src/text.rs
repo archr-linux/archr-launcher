@@ -91,7 +91,11 @@ pub(crate) enum Face {
     MonoMedium,
     /// The launcher's own regular font, for text a theme font cannot fit.
     Fallback,
+    /// The theme's `font_bold`, else its semibold face made bold.
+    Bold,
 }
+/// One list of font files per `Face`, in its order.
+pub(crate) type FacePaths = [Vec<PathBuf>; 6];
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Style {
     pub face: Face,
@@ -123,13 +127,13 @@ struct FontFace<'font> {
 struct Fonts<'font> {
     startup: StartupTrace,
     ttf: &'font Sdl2TtfContext,
-    paths: [Vec<PathBuf>; 5],
+    paths: FacePaths,
     fonts: Vec<FontFace<'font>>,
     resolved: HashMap<Face, usize>,
     measurements: VecDeque<(String, Face, u16, u32)>,
 }
 impl<'font> Fonts<'font> {
-    fn new(ttf: &'font Sdl2TtfContext, paths: [Vec<PathBuf>; 5]) -> Self {
+    fn new(ttf: &'font Sdl2TtfContext, paths: FacePaths) -> Self {
         Self {
             startup: StartupTrace::default(),
             ttf,
@@ -234,7 +238,7 @@ impl<'font> Fonts<'font> {
             }
             loaded.size = size;
         }
-        let style = if loaded.synthesize_bold && matches!(face, Face::Semibold | Face::MonoMedium) {
+        let style = if loaded.synthesize_bold && matches!(face, Face::Semibold | Face::MonoMedium | Face::Bold) {
             loaded.style | FontStyle::BOLD
         } else {
             loaded.style
@@ -265,7 +269,7 @@ unsafe impl Send for PreparedText<'_> {}
 impl<'font> PreparedText<'font> {
     pub(crate) fn new(
         ttf: &'font Sdl2TtfContext,
-        paths: [Vec<PathBuf>; 5],
+        paths: FacePaths,
         trace: StartupTrace,
     ) -> Self {
         let mut fonts = Fonts::new(ttf, paths);
@@ -687,6 +691,30 @@ mod tests {
         );
     }
     #[test]
+    fn bold_takes_its_own_face_else_the_semibold_one_made_bold() {
+        let _sdl = crate::SDL_TEST_LOCK.lock().unwrap();
+        let ttf = sdl2::ttf::init().unwrap();
+        let file = |name| vec![bundled_font(name)];
+        // No font_bold: the semibold list; Inter SemiBold is not made bolder.
+        let mut paths: FacePaths = std::array::from_fn(|_| file("Inter-Regular"));
+        paths[1] = file("Inter-SemiBold");
+        paths[5] = file("Inter-SemiBold");
+        let mut fonts = Fonts::new(&ttf, paths);
+        let style = fonts.font(Face::Bold, 17).unwrap().get_style();
+        assert!(!style.contains(FontStyle::BOLD));
+        assert_eq!(
+            fonts.font(Face::Semibold, 17).unwrap().get_style(),
+            style,
+            "the same face as semibold"
+        );
+        assert_eq!(fonts.resolved[&Face::Bold], fonts.resolved[&Face::Semibold]);
+        // A regular weight standing in for bold is drawn bold, as semibold is.
+        let paths: FacePaths = std::array::from_fn(|_| file("Inter-Regular"));
+        let mut fonts = Fonts::new(&ttf, paths);
+        assert!(fonts.font(Face::Bold, 17).unwrap().get_style().contains(FontStyle::BOLD));
+        assert!(!fonts.font(Face::Regular, 17).unwrap().get_style().contains(FontStyle::BOLD));
+    }
+    #[test]
     fn every_face_uses_the_autohinter_with_mono_hinting() {
         let _sdl = crate::SDL_TEST_LOCK.lock().unwrap();
         let ttf = sdl2::ttf::init().unwrap();
@@ -696,6 +724,7 @@ mod tests {
             "JetBrainsMono-Regular",
             "JetBrainsMono-Medium",
             "Inter-Regular",
+            "Inter-SemiBold",
         ];
         let mut fonts = Fonts::new(&ttf, names.map(|name| vec![bundled_font(name)]));
         let coverage = |font: &Font<'_, '_>| {
@@ -876,7 +905,7 @@ mod tests {
         let mut canvas = window.into_canvas().software().build().unwrap();
         let creator = canvas.texture_creator();
         let ttf = sdl2::ttf::init().unwrap();
-        let mut paths: [Vec<PathBuf>; 5] = std::array::from_fn(|_| vec![]);
+        let mut paths: FacePaths = std::array::from_fn(|_| vec![]);
         paths[0].push(bundled_font("Inter-Regular"));
         paths[1].push(bundled_font("Inter-SemiBold"));
         let mut cache = TextCache::from_prepared(

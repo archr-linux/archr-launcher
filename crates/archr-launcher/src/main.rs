@@ -475,6 +475,7 @@ fn run(
             // Fonts and system art load with the theme; colors apply at once.
             let reload = next.font != theme.font
                 || next.font_semibold != theme.font_semibold
+                || next.font_bold != theme.font_bold
                 || settings.state.base_dir != ui.theme_dir;
             theme = next;
             app.set_view(&theme.view(&theme.active_view));
