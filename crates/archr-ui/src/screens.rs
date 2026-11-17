@@ -89,7 +89,7 @@ impl Default for StatusStyle {
 }
 
 /// Questions and alerts.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct DialogStyle {
     /// Width and corner radius, sizes (of 480); None keeps the launcher's.
     pub width: Option<f32>,
@@ -100,17 +100,6 @@ pub struct DialogStyle {
     /// otherwise.
     pub buttons_row: bool,
     pub glass: bool,
-}
-impl Default for DialogStyle {
-    fn default() -> Self {
-        Self {
-            width: None,
-            radius: None,
-            icon: false,
-            buttons_row: false,
-            glass: false,
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]

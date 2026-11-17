@@ -1160,6 +1160,11 @@ impl View<'_, '_, '_> {
         if let (Some(detail), Some(hints)) = (detail, hints) {
             return self.question(question, detail, hints);
         }
+        // A question without an explanation, in the theme's [dialog] too.
+        let style = self.theme.screens.dialog;
+        if let (Some(hints), true) = (hints, style != crate::screens::DialogStyle::default()) {
+            return self.styled_question(question, detail.unwrap_or(""), hints, style);
+        }
         self.panel((80., 158., 480., 164.), false)?;
         self.label((104., 174., 432., 80.), question, 18.)?;
         if let Some(detail) = detail {
