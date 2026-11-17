@@ -394,7 +394,7 @@ impl Ui<'_, '_> {
         (y, h): (i32, u32),
     ) -> Result<(), String> {
         let width = self.frame.width;
-        let left = self.hint_labels(hints, theme, width, y, h)?;
+        let left = self.placed_labels(hints, theme, (width, y, h))?;
         let note = screen
             .filter(|s| !(s.items.is_empty() && s.layout == Kind::Collection))
             .map_or("", |s| s.footer.as_str());

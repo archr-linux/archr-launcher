@@ -2293,16 +2293,29 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         &mut self,
         hints: &[(B, &str)],
         theme: &Theme,
+        at: (u32, i32, u32),
+    ) -> Result<i32, String> {
+        let labels: Vec<(HintButton, String)> = hints
+            .iter()
+            .map(|&(button, key)| (button.into(), self.catalog.text(key)))
+            .collect();
+        self.placed_labels(&labels, theme, at)
+    }
+    /// `placed_hints` with their texts already in the user's language.
+    fn placed_labels(
+        &mut self,
+        hints: &[(HintButton, String)],
+        theme: &Theme,
         (width, y, h): (u32, i32, u32),
     ) -> Result<i32, String> {
         use crate::screens::{HintsStyle, Side};
         let style = theme.screens.hints;
         if style == crate::screens::Hints::default() {
-            return self.hints(hints, theme, width, y, h);
+            return self.hint_labels(hints, theme, width, y, h);
         }
         // Their width: drawn once unseen.
         let margin = self.px(24.);
-        let left = self.faded(0., |ui| ui.hints(hints, theme, width, y, h))?;
+        let left = self.faded(0., |ui| ui.hint_labels(hints, theme, width, y, h))?;
         let used = (width as i32 - margin - left).max(0);
         let pad = self.px(12.);
         let right = match style.position {
@@ -2320,7 +2333,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             );
             self.glass(capsule, ch as f32 / 2., &theme.glass_or_default())?;
         }
-        self.hints(hints, theme, (right + margin) as u32, y, h)
+        self.hint_labels(hints, theme, (right + margin) as u32, y, h)
     }
     /// The hints with their texts already in the user's language.
     fn hint_labels(
