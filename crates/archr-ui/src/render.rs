@@ -23,6 +23,7 @@ pub(crate) use effects::Pop;
 mod hub;
 mod keyboard;
 mod look;
+mod material;
 mod moonlight;
 mod netplay;
 mod roms_move;
@@ -423,6 +424,7 @@ pub struct Ui<'font, 'texture> {
     blink: Option<bool>,
     effects: effects::Effects<'texture>,
     look: look::Look<'texture>,
+    materials: material::Materials<'texture>,
     has_presented: bool,
     frame: Frame,
     /// The screen area of the composition being staged, if any.
@@ -541,6 +543,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             blink: None,
             effects: effects::Effects::default(),
             look: look::Look::default(),
+            materials: material::Materials::default(),
             has_presented: false,
             frame: Frame::new(width, height),
             stage: None,
@@ -844,6 +847,11 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         if self.framed(name, rect)? {
             return Ok(());
         }
+        self.cast_shadow(rect, radius)?;
+        self.rounded(rect, radius, fill, Some(border))
+    }
+    /// What a raised box casts under it, in the theme's shadow style.
+    fn cast_shadow(&mut self, rect: Rect, radius: f32) -> Result<(), String> {
         if self.shadow.is_none() {
             if let Some(creator) = self.creator {
                 self.shadow = Some(Shadow::new(creator)?);
@@ -876,7 +884,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             }
             _ => {}
         }
-        self.rounded(rect, radius, fill, Some(border))
+        Ok(())
     }
     fn icon(&mut self, glyph: Glyph, panel: Rect, ink: Rgba) -> Result<(), String> {
         self.icon_turned(glyph, panel, ink, 0.)
@@ -1101,7 +1109,9 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                     self.hub_footer(theme)?;
                 } else {
                     let lifted = app.moving().is_some();
-                    self.list(backdrop, (&rows, lifted), cursor, data, theme, layout)?;
+                    self.faded(layout.list.opacity, |ui| {
+                        ui.list(backdrop, (&rows, lifted), cursor, data, theme, layout)
+                    })?;
                     // Secondary visuals follow the redraw requested by the artwork worker.
                     if self.has_presented && matches!(backdrop, Screen::Systems) {
                         self.system_panel(&rows, cursor, data, theme, layout)?;
@@ -1770,13 +1780,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
     ) -> Result<(), String> {
         let Frame { now, .. } = self.frame;
         if let Some(panel) = layout.panel {
-            let rect = self.area(panel.rect);
-            self.panel_named(
-                "art",
-                rect,
-                self.frame.size(panel.radius),
-                (theme.surface, theme.border),
-            )?;
+            self.layout_panel("art", &panel, theme)?;
         }
         let level = App::level(data, system, folder);
         if let Some((name, count)) = level.as_ref().and_then(|l| l.folders.get(cursor)) {
@@ -1833,7 +1837,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                     cover,
                     dst,
                     self.frame.size(art.radius),
-                    (self.cover_fade.value(now) * 255.).round() as u8,
+                    (self.cover_fade.value(now) * art.opacity * 255.).round() as u8,
                     part,
                 )?;
             }
@@ -1856,56 +1860,70 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         }
         self.old_art()?;
         if let (Some(game), Some(meta)) = (game, layout.meta) {
-            let rect = self.area(meta.rect);
-            let size = meta.size * 480.;
-            let mut parts = Vec::new();
-            if let Some(year) = game.year {
-                parts.push(year.to_string());
-            }
-            if let Some(players) = &game.players {
-                parts.push(self.catalog.players(players));
-            }
-            let played = game
-                .last_played
-                .map(|timestamp| self.catalog.relative_time(timestamp, self.frame.unix))
-                .unwrap_or_default();
-            // One line, shrinking down to the theme's smallest text; else the
-            // facts on one line and "played" on the next. Nothing is cut.
-            let facts = data
-                .subtitle(system, cursor)
-                .map_or_else(|| parts.join(" · "), str::to_owned);
-            let (mut size, floor) = (size, self.frame.min_size());
-            let (fw, pw, gap) = loop {
-                let fw = self.measure(&facts, Face::Regular, size)?;
-                let pw = self.measure(&played, Face::Regular, size)?;
-                let gap = if pw > 0 && fw > 0 {
-                    self.px(8.) as u32
-                } else {
-                    0
-                };
-                if fw + gap + pw <= rect.width() || size <= floor {
-                    break (fw, pw, gap);
-                }
-                size = (size - 1.).max(floor);
-            };
-            let (y, h) = (rect.y(), rect.height());
-            let ink = (Face::Regular, size, theme.muted);
-            if fw + gap + pw <= rect.width() {
-                self.label(&facts, ink, Rect::new(rect.x(), y, fw.max(1), h))?;
-                self.label_aligned(
-                    &played,
-                    ink,
-                    Rect::new(rect.right() - pw as i32, y, pw.max(1), h),
-                    Align::Right,
-                )?;
+            self.faded(meta.opacity, |ui| {
+                ui.game_meta(game, &meta, (system, cursor), data, theme)
+            })?;
+        }
+        Ok(())
+    }
+    /// Year, players and when it was last played, under the cover.
+    fn game_meta(
+        &mut self,
+        game: &archr_index::Game,
+        meta: &crate::layout::Meta,
+        (system, cursor): (&str, usize),
+        data: &dyn DataSource,
+        theme: &Theme,
+    ) -> Result<(), String> {
+        let rect = self.area(meta.rect);
+        let size = meta.size * 480.;
+        let mut parts = Vec::new();
+        if let Some(year) = game.year {
+            parts.push(year.to_string());
+        }
+        if let Some(players) = &game.players {
+            parts.push(self.catalog.players(players));
+        }
+        let played = game
+            .last_played
+            .map(|timestamp| self.catalog.relative_time(timestamp, self.frame.unix))
+            .unwrap_or_default();
+        // One line, shrinking down to the theme's smallest text; else the
+        // facts on one line and "played" on the next. Nothing is cut.
+        let facts = data
+            .subtitle(system, cursor)
+            .map_or_else(|| parts.join(" · "), str::to_owned);
+        let (mut size, floor) = (size, self.frame.min_size());
+        let (fw, pw, gap) = loop {
+            let fw = self.measure(&facts, Face::Regular, size)?;
+            let pw = self.measure(&played, Face::Regular, size)?;
+            let gap = if pw > 0 && fw > 0 {
+                self.px(8.) as u32
             } else {
-                let line = (f32::from(self.frame.font_size(size)) * 1.25).round() as i32;
-                let mut lines = self.wrap(&facts, Face::Regular, size, rect.width())?;
-                lines.extend(self.wrap(&played, Face::Regular, size, rect.width())?);
-                for (n, text) in lines.iter().enumerate() {
-                    let at = Rect::new(rect.x(), y + line * n as i32, rect.width(), line as u32);
-                    self.label(text, ink, at)?;
-                }
+                0
+            };
+            if fw + gap + pw <= rect.width() || size <= floor {
+                break (fw, pw, gap);
+            }
+            size = (size - 1.).max(floor);
+        };
+        let (y, h) = (rect.y(), rect.height());
+        let ink = (Face::Regular, size, theme.muted);
+        if fw + gap + pw <= rect.width() {
+            self.label(&facts, ink, Rect::new(rect.x(), y, fw.max(1), h))?;
+            self.label_aligned(
+                &played,
+                ink,
+                Rect::new(rect.right() - pw as i32, y, pw.max(1), h),
+                Align::Right,
+            )?;
+        } else {
+            let line = (f32::from(self.frame.font_size(size)) * 1.25).round() as i32;
+            let mut lines = self.wrap(&facts, Face::Regular, size, rect.width())?;
+            lines.extend(self.wrap(&played, Face::Regular, size, rect.width())?);
+            for (n, text) in lines.iter().enumerate() {
+                let at = Rect::new(rect.x(), y + line * n as i32, rect.width(), line as u32);
+                self.label(text, ink, at)?;
             }
         }
         Ok(())

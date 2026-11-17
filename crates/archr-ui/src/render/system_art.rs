@@ -292,8 +292,8 @@ impl Ui<'_, '_> {
         let panel = layout
             .panel
             .map(|p| (self.area(p.rect), self.frame.size(p.radius)));
-        if let Some((rect, radius)) = panel {
-            self.panel(rect, radius, theme.surface, theme.border)?;
+        if let Some(own) = &layout.panel {
+            let rect = self.layout_panel("panel", own, theme)?;
             self.canvas.set_clip_rect(rect);
         }
         // Tiles draw their own pictures.
@@ -306,8 +306,10 @@ impl Ui<'_, '_> {
                 a.want(&nearby(rows, cursor, 1));
                 a.key(name)
             });
-            if !self.console_image(rect, path.as_ref(), 255) {
-                self.generated_card(panel.map_or(rect, |p| p.0), name, theme)?;
+            let alpha = (art.opacity * 255.).round() as u8;
+            if !self.console_image(rect, path.as_ref(), alpha) {
+                let card = panel.map_or(rect, |p| p.0);
+                self.faded(art.opacity, |ui| ui.generated_card(card, name, theme))?;
             }
             self.old_art()?;
         }
@@ -328,7 +330,7 @@ impl Ui<'_, '_> {
         if let Some(info) = layout.info {
             // Text straight over the background takes the theme's outline.
             self.look.outlining = layout.panel.is_none();
-            let drawn = self.panel_text(&info, name, data, theme);
+            let drawn = self.faded(info.opacity, |ui| ui.panel_text(&info, name, data, theme));
             self.look.outlining = false;
             drawn?;
         }
@@ -419,6 +421,16 @@ impl Ui<'_, '_> {
                 )?;
                 self.geometry
                     .dashed(&mut self.canvas, rect, radius, theme.highlight_bg)?;
+            } else if i == cursor && theme.focus == crate::theme::FocusStyle::Lift {
+                // Lifted: grown, raised and ringed instead of the pill.
+                let grown = self.lift_focus(rect, radius, focus, theme)?;
+                let grown_radius = radius * grown.width() as f32 / rect.width().max(1) as f32;
+                if !self.framed("tile_selected", grown)? {
+                    self.rounded(grown, grown_radius, theme.surface_elevated, None)?;
+                }
+                self.tile_face(grown, &rows[i], theme, 255, focus)?;
+                self.focus_ring(grown, grown_radius, theme)?;
+                continue;
             } else if i == cursor && self.framed("tile_selected", rect)? {
             } else if i == cursor {
                 self.panel(rect, radius, theme.highlight_bg, theme.highlight_bg)?;

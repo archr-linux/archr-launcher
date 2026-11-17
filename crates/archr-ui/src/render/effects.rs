@@ -77,7 +77,7 @@ impl Effects<'_> {
     }
 }
 
-fn target(
+pub(super) fn target(
     texture: Option<&Texture<'_>>,
     canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
 ) -> bool {
@@ -88,7 +88,7 @@ fn target(
 }
 
 impl<'t> Ui<'_, 't> {
-    fn target_texture(&self, (w, h): (u32, u32)) -> Option<Texture<'t>> {
+    pub(super) fn target_texture(&self, (w, h): (u32, u32)) -> Option<Texture<'t>> {
         if !self.canvas.render_target_supported() {
             return None;
         }

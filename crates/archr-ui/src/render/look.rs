@@ -147,6 +147,33 @@ impl<'t> Ui<'_, 't> {
         }
         Ok(true)
     }
+    /// Copies the `src` part of the loaded background picture at `path`
+    /// (the theme's or a system's) over the whole target, smoothed and
+    /// opaque; false while it is not loaded.
+    pub(super) fn smooth_copy(&mut self, path: &Path, src: Rect) -> Result<bool, String> {
+        let path = path.to_path_buf();
+        let pixel = self
+            .look
+            .images
+            .as_ref()
+            .is_some_and(|(_, pixel, _)| *pixel);
+        let look = &mut self.look;
+        let texture = match look.backgrounds.as_mut().and_then(|c| c.get_mut(&path)) {
+            Some(texture) => Some(texture),
+            None => look.images.as_mut().and_then(|(_, _, c)| c.get_mut(&path)),
+        };
+        let Some(texture) = texture else {
+            return Ok(false);
+        };
+        texture.set_scale_mode(sdl2::render::ScaleMode::Linear);
+        texture.set_blend_mode(BlendMode::None);
+        let copied = self.canvas.copy(texture, src, None);
+        texture.set_blend_mode(BlendMode::Blend);
+        if pixel {
+            texture.set_scale_mode(sdl2::render::ScaleMode::Nearest);
+        }
+        copied.map(|()| true)
+    }
     /// The background picture of `system`, if the user or the theme has one.
     fn system_picture(&mut self, system: &str) -> Option<PathBuf> {
         if let Some(found) = self.look.system_pictures.get(system) {
@@ -180,6 +207,8 @@ impl<'t> Ui<'_, 't> {
         system: Option<&str>,
     ) -> Result<(), String> {
         let Frame { width, height, .. } = self.frame;
+        self.materials.behind = None;
+        self.shaded_background(theme)?;
         let own = system
             .filter(|_| theme.user.system_background)
             .and_then(|system| self.system_picture(system));
@@ -210,6 +239,11 @@ impl<'t> Ui<'_, 't> {
                     a: SYSTEM_CURTAIN,
                     ..theme.background
                 };
+                self.materials.behind = Some(super::material::Behind {
+                    path: path.clone(),
+                    curtain: Some(shade),
+                    src,
+                });
                 self.rounded(Rect::new(0, 0, width, height), 0., shade, None)?;
                 return self.frames_over(theme);
             }
@@ -225,6 +259,11 @@ impl<'t> Ui<'_, 't> {
                     (part[3] * size.height as f32).round().max(1.) as u32,
                 );
                 canvas.copy(texture, src, None)?;
+                self.materials.behind = Some(super::material::Behind {
+                    path,
+                    curtain: None,
+                    src,
+                });
             }
         }
         self.frames_over(theme)

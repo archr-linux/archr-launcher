@@ -1,5 +1,8 @@
 //! Cached SDL 2.0.18 meshes and a lazily loaded/generated 9-slice shadow.
-use crate::{text::color, theme::Rgba};
+use crate::{
+    text::color,
+    theme::{Gradient, Rgba},
+};
 use sdl2::{
     pixels::{Color, PixelFormatEnum},
     rect::{FPoint, Rect},
@@ -148,6 +151,76 @@ impl Mesh {
             );
         }
     }
+    /// Filled like `rounded`, each point taking `paint`'s color there.
+    fn shaded(
+        &mut self,
+        rect: Rect,
+        radius: f32,
+        paint: impl Fn(Point) -> Rgba,
+        border: Option<(Rgba, u32)>,
+    ) {
+        let points = outline(rect, radius);
+        let outer = outline(grown(rect, 1), radius + 1.);
+        let edge = |p: Point| border.map_or_else(|| paint(p), |(c, _)| c);
+        for (&p, &q) in points.iter().zip(&outer) {
+            let c = edge(p);
+            self.vertices.push(vertex(p, color(c), (0., 0.)));
+            self.vertices
+                .push(vertex(q, Color::RGBA(c.r, c.g, c.b, 0), (0., 0.)));
+        }
+        for i in 0..POINTS {
+            let a = (i * 2) as u16;
+            let b = ((i + 1) % POINTS * 2) as u16;
+            self.indices.extend([a, a + 1, b, b, a + 1, b + 1]);
+        }
+        let (inner, r) = match border {
+            Some((c, width)) if rect.width() > 2 * width && rect.height() > 2 * width => {
+                self.fan(&points, color(c), rect, None);
+                let inner = grown(rect, -(width as i32));
+                (inner, (radius - width as f32).max(0.))
+            }
+            _ => (rect, radius),
+        };
+        let base = self.vertices.len() as u16;
+        let inside = outline(inner, r);
+        let middle = center(inner);
+        self.vertices
+            .push(vertex(middle, color(paint(middle)), (0., 0.)));
+        self.vertices
+            .extend(inside.iter().map(|&p| vertex(p, color(paint(p)), (0., 0.))));
+        for i in 0..POINTS {
+            self.indices.extend([
+                base,
+                base + (i + 1) as u16,
+                base + ((i + 1) % POINTS + 1) as u16,
+            ]);
+        }
+    }
+    /// A band `width` pixels wide just inside the rounded outline, softened
+    /// by a pixel outside it.
+    fn ring(&mut self, rect: Rect, radius: f32, width: f32, c: Rgba) {
+        let outer = outline(rect, radius);
+        let fade = outline(grown(rect, 1), radius + 1.);
+        let w = width.round().max(1.) as i32;
+        let inner = outline(grown(rect, -w), (radius - w as f32).max(0.));
+        let clear = Color::RGBA(c.r, c.g, c.b, 0);
+        let base = self.vertices.len() as u16;
+        for i in 0..POINTS {
+            self.vertices.extend([
+                vertex(fade[i], clear, (0., 0.)),
+                vertex(outer[i], color(c), (0., 0.)),
+                vertex(inner[i], color(c), (0., 0.)),
+            ]);
+        }
+        for i in 0..POINTS {
+            let a = base + (i * 3) as u16;
+            let b = base + ((i + 1) % POINTS * 3) as u16;
+            for k in 0..2 {
+                self.indices
+                    .extend([a + k, a + k + 1, b + k, b + k, a + k + 1, b + k + 1]);
+            }
+        }
+    }
     fn line(&mut self, from: Point, to: Point, width: f32, c: Rgba) {
         let (dx, dy) = (to.0 - from.0, to.1 - from.1);
         let length = dx.hypot(dy).max(0.01);
@@ -240,6 +313,9 @@ enum Key {
     Rounded(Rect, u32, Rgba, Option<(Rgba, u32)>),
     Cover(Rect, u32, [u32; 4]),
     Dashed(Rect, u32, Rgba),
+    /// A gradient fill: its two colors and the angle's bits.
+    Shaded(Rect, u32, (Rgba, Rgba, u32), Option<(Rgba, u32)>),
+    Ring(Rect, u32, u32, Rgba),
 }
 /// Per-renderer bounded LRU for panels and cover meshes. Evicted meshes
 /// donate their Vec allocations to the next moving-pill mesh.
@@ -261,6 +337,10 @@ impl Geometry {
     /// The theme's corner factor and border width in pixels, for every shape.
     pub fn style(&mut self, corners: f32, border: u32) {
         (self.corners, self.border) = (corners, border.max(1));
+    }
+    /// The theme's corner factor.
+    pub fn corners(&self) -> f32 {
+        self.corners
     }
     fn mesh(&mut self, key: Key) -> &mut Mesh {
         if let Some(index) = self.meshes.iter().position(|(k, _)| *k == key) {
@@ -284,6 +364,18 @@ impl Geometry {
                     Some(crop.map(f32::from_bits)),
                 ),
                 Key::Dashed(rect, r, c) => mesh.dashed(rect, f32::from_bits(r), c),
+                Key::Shaded(rect, r, (from, to, angle), border) => {
+                    let gradient = Gradient {
+                        from,
+                        to,
+                        angle: f32::from_bits(angle),
+                    };
+                    let paint = shading(rect, &gradient);
+                    mesh.shaded(rect, f32::from_bits(r), paint, border);
+                }
+                Key::Ring(rect, r, w, c) => {
+                    mesh.ring(rect, f32::from_bits(r), f32::from_bits(w), c)
+                }
             }
             self.meshes.push_back((key, mesh));
         }
@@ -300,6 +392,52 @@ impl Geometry {
         let radius = radius * self.corners;
         let border = border.map(|c| (c, self.border));
         self.mesh(Key::Rounded(rect, radius.to_bits(), fill, border))
+            .draw(canvas, None)
+    }
+    /// `rounded` with a border `width` pixels thick, whatever the theme's.
+    pub fn rounded_lined(
+        &mut self,
+        canvas: &mut Canvas<Window>,
+        rect: Rect,
+        radius: f32,
+        fill: Rgba,
+        (border, width): (Rgba, u32),
+    ) -> Result<(), String> {
+        let radius = radius * self.corners;
+        self.mesh(Key::Rounded(
+            rect,
+            radius.to_bits(),
+            fill,
+            Some((border, width.max(1))),
+        ))
+        .draw(canvas, None)
+    }
+    /// `rounded`, filled with `gradient` instead of one color.
+    pub fn shaded(
+        &mut self,
+        canvas: &mut Canvas<Window>,
+        rect: Rect,
+        radius: f32,
+        gradient: &Gradient,
+        border: Option<Rgba>,
+    ) -> Result<(), String> {
+        let radius = radius * self.corners;
+        let border = border.map(|c| (c, self.border));
+        let colors = (gradient.from, gradient.to, gradient.angle.to_bits());
+        self.mesh(Key::Shaded(rect, radius.to_bits(), colors, border))
+            .draw(canvas, None)
+    }
+    /// A ring `width` pixels wide along the inside of `rect`'s outline.
+    pub fn ring(
+        &mut self,
+        canvas: &mut Canvas<Window>,
+        rect: Rect,
+        radius: f32,
+        width: f32,
+        c: Rgba,
+    ) -> Result<(), String> {
+        let radius = radius * self.corners;
+        self.mesh(Key::Ring(rect, radius.to_bits(), width.to_bits(), c))
             .draw(canvas, None)
     }
     pub fn dashed(
@@ -349,6 +487,44 @@ pub(crate) fn gradient(
         vertex((x1, y1), r, (0., 0.)),
         vertex((x0, y1), l, (0., 0.)),
     ];
+    canvas.render_geometry(&corners, None, [0u16, 1, 2, 0, 2, 3].as_slice())
+}
+/// The color `gradient` gives each point of `rect`: from its `from` corner
+/// to its `to` one along the angle (0 left to right, 90 top to bottom).
+pub(crate) fn shading(rect: Rect, gradient: &Gradient) -> impl Fn(Point) -> Rgba {
+    let (sin, cos) = gradient.angle.to_radians().sin_cos();
+    let along = move |(x, y): Point| x * cos + y * sin;
+    let (x0, y0, w, h) = bounds(rect);
+    let ends = [(x0, y0), (x0 + w, y0), (x0, y0 + h), (x0 + w, y0 + h)].map(along);
+    let low = ends.iter().copied().fold(f32::MAX, f32::min);
+    let span = (ends.iter().copied().fold(f32::MIN, f32::max) - low).max(1e-3);
+    let (from, to) = (gradient.from, gradient.to);
+    move |p| {
+        let t = ((along(p) - low) / span).clamp(0., 1.);
+        let mix = |a: u8, b: u8| (f32::from(a) + (f32::from(b) - f32::from(a)) * t).round() as u8;
+        Rgba {
+            r: mix(from.r, to.r),
+            g: mix(from.g, to.g),
+            b: mix(from.b, to.b),
+            a: mix(from.a, to.a),
+        }
+    }
+}
+/// `rect` filled with `gradient`, square cornered.
+pub(crate) fn shade(
+    canvas: &mut Canvas<Window>,
+    rect: Rect,
+    gradient: &Gradient,
+) -> Result<(), String> {
+    let paint = shading(rect, gradient);
+    let (x0, y0, x1, y1) = (
+        rect.x() as f32,
+        rect.y() as f32,
+        rect.right() as f32,
+        rect.bottom() as f32,
+    );
+    let corners =
+        [(x0, y0), (x1, y0), (x1, y1), (x0, y1)].map(|p| vertex(p, color(paint(p)), (0., 0.)));
     canvas.render_geometry(&corners, None, [0u16, 1, 2, 0, 2, 3].as_slice())
 }
 /// Texture fraction (u, v, w, h) that fills a `width`×`height` box without
