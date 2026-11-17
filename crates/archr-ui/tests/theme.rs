@@ -737,3 +737,54 @@ fn shadow_keys_are_optional_and_checked() {
     );
     assert_eq!(wrong.margin, 0.2);
 }
+
+#[test]
+fn style_primitives_are_optional_and_inherit() {
+    use archr_ui::theme::{FocusStyle, MotionStyle, FOCUS_SCALE};
+    let builtin = Theme::builtin();
+    assert_eq!(builtin.glass, None);
+    assert_eq!(builtin.gradient, None);
+    assert_eq!(builtin.focus_ring, None);
+    assert_eq!(
+        (builtin.focus, builtin.focus_scale, builtin.motion),
+        (FocusStyle::Pill, FOCUS_SCALE, MotionStyle::Tween)
+    );
+    let theme = load(
+        "glass = { fill = '#FFFFFF30', blur = 0.02 }\n\
+         focus = 'lift'\nfocus_scale = 1.1\n\
+         focus_ring = { color = '#0A84FF', width = 3 }\n\
+         motion = 'spring'\n\
+         gradient = { from = '#101010', to = '#303030', angle = 90 }",
+    );
+    let glass = theme.glass.unwrap();
+    assert_eq!((glass.fill.a, glass.blur), (0x30, 0.02));
+    assert_eq!(
+        glass.border,
+        builtin.glass_or_default().border,
+        "the rest inherited"
+    );
+    assert_eq!((theme.focus, theme.focus_scale), (FocusStyle::Lift, 1.1));
+    let ring = theme.focus_ring.unwrap();
+    assert_eq!((ring.color.b, ring.width), (0xFF, 3.));
+    assert_eq!(theme.motion, MotionStyle::Spring);
+    let gradient = theme.gradient.unwrap();
+    assert_eq!(
+        (gradient.from.r, gradient.to.r, gradient.angle),
+        (0x10, 0x30, 90.)
+    );
+    // Wrong values: each one warned about and left as the default.
+    let wrong = load(
+        "glass = 'frosted'\nfocus = 'glow'\nfocus_scale = 2\n\
+         focus_ring = { width = 2 }\nmotion = 3\ngradient = { from = '#000000' }\n\
+         margin = 0.2",
+    );
+    assert_eq!(
+        (wrong.glass, wrong.focus_ring, wrong.gradient),
+        (None, None, None)
+    );
+    assert_eq!(
+        (wrong.focus, wrong.focus_scale, wrong.motion),
+        (FocusStyle::Pill, FOCUS_SCALE, MotionStyle::Tween)
+    );
+    assert_eq!(wrong.margin, 0.2);
+}

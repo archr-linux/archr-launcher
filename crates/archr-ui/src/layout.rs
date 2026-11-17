@@ -6,7 +6,7 @@
 //! the builtin theme's table for that id, then the theme's own. Values out of
 //! range are limited, unknown keys are logged and ignored.
 pub use crate::text::Align;
-use crate::theme::{Rect01, Theme};
+use crate::theme::{Gradient, Rect01, Theme};
 use toml::{Table, Value};
 
 /// Id of the classic list layout, which every theme offers.
@@ -58,12 +58,24 @@ pub struct List {
     pub scroll: Scroll,
     /// Text drawn before the selected entry, blinking; empty for none.
     pub cursor: String,
+    /// Every element is drawn at its `opacity` (0 to 1).
+    pub opacity: f32,
+}
+/// What a panel is made of: the theme's surface, or its glass.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PanelStyle {
+    Plain,
+    Glass,
 }
 /// A raised card (the systems panel, the frame behind a cover).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Panel {
     pub rect: Rect01,
     pub radius: f32,
+    pub style: PanelStyle,
+    /// Shaded instead of the plain surface.
+    pub gradient: Option<Gradient>,
+    pub opacity: f32,
 }
 /// The console picture or the game cover.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -71,6 +83,7 @@ pub struct Art {
     pub rect: Rect01,
     pub fit: Fit,
     pub radius: f32,
+    pub opacity: f32,
 }
 /// The cover again, filling the screen behind everything, faded into the
 /// background from the left.
@@ -93,12 +106,14 @@ pub struct Info {
     pub bottom: bool,
     /// Details on one line under the name instead of maker above, counts below.
     pub inline: bool,
+    pub opacity: f32,
 }
 /// Text box: year and players on the left, last played on the right.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Meta {
     pub rect: Rect01,
     pub size: f32,
+    pub opacity: f32,
 }
 /// A theme picture placed on a screen: still, or a strip of frames side by
 /// side that plays `fps` times a second.
@@ -227,6 +242,7 @@ impl View {
             mark: Mark::Pill,
             scroll: Scroll::Edge,
             cursor: String::new(),
+            opacity: 1.,
         };
         let column = |x, width| Rect01 {
             x,
@@ -257,6 +273,7 @@ impl View {
                 panel: Some(Panel {
                     rect: panel,
                     radius: h(14.),
+                    ..Panel::default()
                 }),
                 art: Some(Art {
                     rect: Rect01 {
@@ -267,6 +284,7 @@ impl View {
                     },
                     fit: Fit::Contain,
                     radius: 0.,
+                    opacity: 1.,
                 }),
                 info: Some(Info {
                     rect: Rect01 {
@@ -280,6 +298,7 @@ impl View {
                     align: Align::Left,
                     bottom: true,
                     inline: false,
+                    opacity: 1.,
                 }),
                 ..base(list(
                     column(margin, panel.x - x(14.) - margin),
@@ -292,11 +311,13 @@ impl View {
                 panel: Some(Panel {
                     rect: cover,
                     radius: t.radius_card * 0.75,
+                    ..Panel::default()
                 }),
                 art: Some(Art {
                     rect: cover,
                     fit: Fit::Contain,
                     radius: (t.radius_card * 0.75 - h(1.)).max(0.),
+                    opacity: 1.,
                 }),
                 meta: Some(Meta {
                     rect: Rect01 {
@@ -306,6 +327,7 @@ impl View {
                         h: y(20.),
                     },
                     size: h(12.),
+                    opacity: 1.,
                 }),
                 ..base(list(
                     column(margin, t.list_width),
@@ -425,10 +447,27 @@ impl Layout {
             self.list.overlay(t, &format!("{at}.list"));
         }
         element(t, at, "panel", &mut self.panel, |p, r| {
+            r.known(&["x", "y", "w", "h", "radius", "style", "gradient", "opacity"]);
             p.rect = r.rect(p.rect);
             p.radius = r.number("radius", p.radius, 0., 0.5);
+            p.style = r.pick(
+                "style",
+                p.style,
+                &[("plain", PanelStyle::Plain), ("glass", PanelStyle::Glass)],
+            );
+            match r.table.get("gradient") {
+                None => {}
+                Some(Value::Boolean(false)) => p.gradient = None,
+                Some(value) => {
+                    let at = format!("{}.gradient", r.at);
+                    p.gradient = crate::theme::gradient(value, &at).or(p.gradient);
+                }
+            }
+            p.opacity = r.opacity(p.opacity);
         });
         element(t, at, "art", &mut self.art, |a, r| {
+            r.known(&["x", "y", "w", "h", "fit", "radius", "opacity"]);
+            a.opacity = r.opacity(a.opacity);
             a.rect = r.rect(a.rect);
             a.fit = r.pick(
                 "fit",
@@ -443,6 +482,10 @@ impl Layout {
             b.edge = r.number("edge", b.edge, 0., 1.);
         });
         element(t, at, "info", &mut self.info, |i, r| {
+            r.known(&[
+                "x", "y", "w", "h", "title", "meta", "align", "valign", "details", "opacity",
+            ]);
+            i.opacity = r.opacity(i.opacity);
             i.rect = r.rect(i.rect);
             i.title = r.number("title", i.title, 0.01, 0.3);
             i.meta = r.number("meta", i.meta, 0.01, 0.3);
@@ -459,6 +502,8 @@ impl Layout {
             i.inline = r.pick("details", i.inline, &[("stacked", false), ("inline", true)]);
         });
         element(t, at, "meta", &mut self.meta, |m, r| {
+            r.known(&["x", "y", "w", "h", "size", "opacity"]);
+            m.opacity = r.opacity(m.opacity);
             m.rect = r.rect(m.rect);
             m.size = r.number("size", m.size, 0.01, 0.3);
         });
@@ -531,8 +576,10 @@ impl List {
                 "mark",
                 "scroll",
                 "cursor",
+                "opacity",
             ],
         );
+        self.opacity = r.opacity(self.opacity);
         self.rect = r.rect(self.rect);
         self.row = r.number("row", self.row, 0.02, 1.);
         self.selected = r.number("selected", self.selected, self.row, 1.);
@@ -665,6 +712,13 @@ impl Reader<'_> {
             }
         }
     }
+    /// `opacity`, 0 to 1.
+    fn opacity(&self, current: f32) -> f32 {
+        self.number("opacity", current, 0., 1.)
+    }
+    fn known(&self, keys: &[&str]) {
+        known(self.table, self.at, keys);
+    }
     /// `x`, `y`, `w` and `h`, kept on screen.
     fn rect(&self, current: Rect01) -> Rect01 {
         let x = self.number("x", current.x, 0., 1.);
@@ -688,6 +742,9 @@ impl Default for Panel {
                 h: 0.5,
             },
             radius: h(14.),
+            style: PanelStyle::Plain,
+            gradient: None,
+            opacity: 1.,
         }
     }
 }
@@ -697,6 +754,7 @@ impl Default for Art {
             rect: Panel::default().rect,
             fit: Fit::Contain,
             radius: h(12.),
+            opacity: 1.,
         }
     }
 }
@@ -718,6 +776,7 @@ impl Default for Info {
             align: Align::Left,
             bottom: false,
             inline: false,
+            opacity: 1.,
         }
     }
 }
@@ -726,6 +785,7 @@ impl Default for Meta {
         Self {
             rect: Panel::default().rect,
             size: h(12.),
+            opacity: 1.,
         }
     }
 }
@@ -846,5 +906,47 @@ mod tests {
         assert_eq!(names.get("es"), Some("List"));
         assert_eq!(Names::plain("Grafite").get("ru"), Some("Grafite"));
         assert_eq!(Names::default().get("en"), None);
+    }
+    #[test]
+    fn panels_take_glass_or_a_gradient_and_elements_an_opacity() {
+        let lista = View::lista(&Theme::builtin());
+        let panel = lista.systems.panel.unwrap();
+        assert_eq!(
+            (panel.style, panel.gradient, panel.opacity),
+            (PanelStyle::Plain, None, 1.)
+        );
+        assert_eq!(lista.systems.list.opacity, 1.);
+        let view = view(
+            "[systems]\n\
+             panel = { style = 'glass', opacity = 0.8 }\n\
+             list = { opacity = 0.5 }\n\
+             art = { opacity = 2 }\n\
+             info = { opacity = 0.25 }\n\
+             [games]\n\
+             panel = { gradient = { from = '#000000', to = '#FFFFFF', angle = 90 } }\n\
+             meta = { opacity = 'half' }",
+        );
+        let panel = view.systems.panel.unwrap();
+        assert_eq!((panel.style, panel.opacity), (PanelStyle::Glass, 0.8));
+        assert_eq!(view.systems.list.opacity, 0.5);
+        assert_eq!(view.systems.art.unwrap().opacity, 1., "limited to 1");
+        assert_eq!(view.systems.info.unwrap().opacity, 0.25);
+        let shaded = view.games.panel.unwrap().gradient.unwrap();
+        assert_eq!((shaded.from.r, shaded.to.r, shaded.angle), (0, 255, 90.));
+        assert_eq!(
+            view.games.meta.unwrap().opacity,
+            1.,
+            "not a number: ignored"
+        );
+        // A broken gradient keeps the panel as it was.
+        let broken = view_over(&view, "[games]\npanel = { gradient = { from = 'red' } }");
+        assert_eq!(broken.games.panel.unwrap().gradient, Some(shaded));
+        let plain = view_over(&view, "[games]\npanel = { gradient = false }");
+        assert_eq!(plain.games.panel.unwrap().gradient, None);
+    }
+    fn view_over(base: &View, source: &str) -> View {
+        let mut view = base.clone();
+        view.overlay(&toml::from_str(source).unwrap(), "test");
+        view
     }
 }

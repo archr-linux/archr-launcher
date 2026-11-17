@@ -78,6 +78,44 @@ pub enum ShadowStyle {
     None,
 }
 
+/// Glass (docs/temas.md, Estilo): a translucent fill, a 1 px border, a
+/// 1 px highlight along the top and, behind it, the background blurred by
+/// `blur` (a size; 0 for none).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Glass {
+    pub fill: Rgba,
+    pub border: Rgba,
+    pub highlight: Rgba,
+    pub blur: f32,
+}
+/// How the focused item stands out: the filled pill, or grown, raised and
+/// ringed (`lift`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FocusStyle {
+    Pill,
+    Lift,
+}
+/// The ring around a lifted focus: its color and reference pixels.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Ring {
+    pub color: Rgba,
+    pub width: f32,
+}
+/// Motion along a fixed curve (`easing`), or a critically damped spring.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MotionStyle {
+    Tween,
+    Spring,
+}
+/// A fill shading from `from` to `to`; `angle` 0 runs left to right, 90
+/// top to bottom (degrees).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Gradient {
+    pub from: Rgba,
+    pub to: Rgba,
+    pub angle: f32,
+}
+
 /// The shape of a screen, which picks a theme's `[aspect.<name>]` table:
 /// square up to 6:5, wide from 29:20 (3:2, 16:9), classic between (4:3).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -222,6 +260,16 @@ pub struct Theme {
     pub shadow_color: Option<Rgba>,
     pub shadow_blur: Option<f32>,
     pub shadow_offset: Option<f32>,
+    /// The glass material, when the theme describes one.
+    pub glass: Option<Glass>,
+    /// The focused item: pill or lift, how much a lifted one grows (1 to
+    /// 1.15) and its ring (the accent, 2 px, when the theme gives none).
+    pub focus: FocusStyle,
+    pub focus_scale: f32,
+    pub focus_ring: Option<Ring>,
+    pub motion: MotionStyle,
+    /// The browsing screens' background shaded instead of plain.
+    pub gradient: Option<Gradient>,
     pub pixel_art: bool,
     /// Theme pictures (background, frames, decorations) without smoothing.
     pub pixel_images: bool,
@@ -495,6 +543,29 @@ impl Theme {
                 shadow_offset,
                 defaults.and_then(|d| d.shadow_offset),
             ),
+            glass: match table.get("glass") {
+                Some(value) => glass(value, defaults.and_then(|d| d.glass)),
+                None => defaults.and_then(|d| d.glass),
+            },
+            focus: optional(table, "focus", focus, defaults.map(|d| d.focus))
+                .unwrap_or(FocusStyle::Pill),
+            focus_scale: optional(
+                table,
+                "focus_scale",
+                focus_scale,
+                defaults.map(|d| d.focus_scale),
+            )
+            .unwrap_or(FOCUS_SCALE),
+            focus_ring: match table.get("focus_ring") {
+                Some(value) => ring(value),
+                None => defaults.and_then(|d| d.focus_ring),
+            },
+            motion: optional(table, "motion", motion, defaults.map(|d| d.motion))
+                .unwrap_or(MotionStyle::Tween),
+            gradient: match table.get("gradient") {
+                Some(value) => gradient(value, "gradient"),
+                None => defaults.and_then(|d| d.gradient),
+            },
             pixel_art: token!(pixel_art = "art_scaling", art_scaling),
             pixel_images: token!(pixel_images = "image_scaling", art_scaling),
             steps: token!(steps = "easing", easing),
@@ -542,6 +613,13 @@ impl Theme {
         }
         view.games.fit_art(&self.user);
         view
+    }
+    /// The theme's glass, or a light one for a panel of glass in a theme
+    /// that describes none.
+    pub fn glass_or_default(&self) -> Glass {
+        self.glass.unwrap_or_else(|| {
+            glass(&toml::Value::Table(toml::Table::new()), None).expect("default glass")
+        })
     }
     /// The file of the decoration image `image`, if it is inside the theme.
     pub fn decor_file(&self, image: &str) -> Option<&Path> {
@@ -632,6 +710,12 @@ pub const KNOWN_KEYS: &[&str] = &[
     "shadow_color",
     "shadow_blur",
     "shadow_offset",
+    "glass",
+    "focus",
+    "focus_scale",
+    "focus_ring",
+    "motion",
+    "gradient",
     "art_scaling",
     "image_scaling",
     "easing",
@@ -782,6 +866,114 @@ fn optional<T: DeserializeOwned, U>(
         parsed(table, name, parse).or(inherited)
     } else {
         inherited
+    }
+}
+/// How much a lifted focus grows when the theme does not say.
+pub const FOCUS_SCALE: f32 = 1.06;
+fn focus(value: String) -> Option<FocusStyle> {
+    choice(
+        &value,
+        &[("pill", FocusStyle::Pill), ("lift", FocusStyle::Lift)],
+    )
+}
+fn focus_scale(value: f32) -> Option<f32> {
+    (1.0..=1.15).contains(&value).then_some(value)
+}
+fn motion(value: String) -> Option<MotionStyle> {
+    choice(
+        &value,
+        &[
+            ("tween", MotionStyle::Tween),
+            ("spring", MotionStyle::Spring),
+        ],
+    )
+}
+/// The fields of a small style table: each `parse`d, warned about and left
+/// out when wrong; unknown fields warned about.
+fn style_table<'t>(value: &'t toml::Value, at: &str, keys: &[&str]) -> Option<&'t toml::Table> {
+    let Some(table) = value.as_table() else {
+        log::warn!("Theme {at} must be a table; ignored");
+        return None;
+    };
+    for key in table.keys().filter(|k| !keys.contains(&k.as_str())) {
+        log::warn!("Unknown theme key {at}.{key}; ignored");
+    }
+    Some(table)
+}
+fn style_color(table: &toml::Table, at: &str, key: &str) -> Option<Rgba> {
+    let value = table.get(key)?;
+    let parsed = value.as_str().and_then(|c| color(c.to_owned()));
+    if parsed.is_none() {
+        log::warn!("Theme {at}.{key} must be a color like \"#RRGGBB\"; ignored");
+    }
+    parsed
+}
+fn style_number(table: &toml::Table, at: &str, key: &str, range: (f32, f32)) -> Option<f32> {
+    let value = table.get(key)?;
+    let parsed = number(value).filter(|n| (range.0..=range.1).contains(n));
+    if parsed.is_none() {
+        log::warn!(
+            "Theme {at}.{key} must be a number from {} to {}; ignored",
+            range.0,
+            range.1
+        );
+    }
+    parsed
+}
+/// `glass = { fill, border, highlight, blur }`: what it leaves out comes
+/// from the inherited glass, else from light defaults.
+fn glass(value: &toml::Value, inherited: Option<Glass>) -> Option<Glass> {
+    let Some(t) = style_table(value, "glass", &["fill", "border", "highlight", "blur"]) else {
+        return inherited;
+    };
+    let white = |a| Rgba {
+        r: 255,
+        g: 255,
+        b: 255,
+        a,
+    };
+    let base = inherited.unwrap_or(Glass {
+        fill: white(0x1F),
+        border: white(0x33),
+        highlight: white(0x40),
+        blur: 0.,
+    });
+    Some(Glass {
+        fill: style_color(t, "glass", "fill").unwrap_or(base.fill),
+        border: style_color(t, "glass", "border").unwrap_or(base.border),
+        highlight: style_color(t, "glass", "highlight").unwrap_or(base.highlight),
+        blur: style_number(t, "glass", "blur", (0., 0.1)).unwrap_or(base.blur),
+    })
+}
+/// `focus_ring = { color, width }`, width 0 to 8 reference pixels.
+fn ring(value: &toml::Value) -> Option<Ring> {
+    let t = style_table(value, "focus_ring", &["color", "width"])?;
+    let color = style_color(t, "focus_ring", "color");
+    let width = style_number(t, "focus_ring", "width", (0., 8.));
+    match (color, width) {
+        (Some(color), width) => Some(Ring {
+            color,
+            width: width.unwrap_or(2.),
+        }),
+        _ => {
+            log::warn!("Theme focus_ring needs a color; ignored");
+            None
+        }
+    }
+}
+/// `{ from, to, angle }`: both colors, the angle in degrees (0 when left out).
+pub(crate) fn gradient(value: &toml::Value, at: &str) -> Option<Gradient> {
+    let t = style_table(value, at, &["from", "to", "angle"])?;
+    let angle = match t.get("angle") {
+        None => Some(0.),
+        Some(_) => style_number(t, at, "angle", (-360., 360.)),
+    };
+    match (style_color(t, at, "from"), style_color(t, at, "to"), angle) {
+        (Some(from), Some(to), Some(angle)) => Some(Gradient { from, to, angle }),
+        _ => {
+            log::warn!("Theme {at} must be {{ from, to, angle }}; ignored");
+            None
+        }
     }
 }
 fn shadow_blur(value: f32) -> Option<f32> {
