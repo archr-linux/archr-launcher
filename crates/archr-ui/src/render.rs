@@ -2360,9 +2360,17 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             } else {
                 0
             };
+            // `[hints] lit`: A's in the text colour, the others secondary.
+            let lit = theme.screens.hints.lit;
+            let primary = lit && button == HintButton::Key('A');
+            let ink = match (lit, primary) {
+                (_, true) => theme.text,
+                (true, false) => theme.text_secondary,
+                (false, _) => theme.muted,
+            };
             right = self.packed_label(
                 label,
-                (Face::Regular, 13., theme.muted),
+                (Face::Regular, 13., ink),
                 (right, y, h),
                 u32::MAX,
                 Align::Left,
@@ -2447,8 +2455,12 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                         &mut self.canvas,
                         if button == '↕' { ' ' } else { button },
                         size,
-                        theme.badge,
-                        theme.text,
+                        match (lit, primary) {
+                            (_, true) => theme.text,
+                            (true, false) => Rgba { a: 51, ..theme.text },
+                            (false, _) => theme.badge,
+                        },
+                        if primary { theme.background } else { theme.text },
                         badge,
                     )?;
                 if button == '↕' {

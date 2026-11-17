@@ -59,12 +59,16 @@ pub enum Side {
 pub struct Hints {
     pub style: HintsStyle,
     pub position: Side,
+    /// A's hint lit (its badge in the text colour, its label too) and the
+    /// others in the secondary text, instead of every one muted.
+    pub lit: bool,
 }
 impl Default for Hints {
     fn default() -> Self {
         Self {
             style: HintsStyle::Bar,
             position: Side::Right,
+            lit: false,
         }
     }
 }
@@ -575,7 +579,7 @@ pub(crate) fn flatten(table: &mut Table) {
 fn style_keys(screen: &str) -> &'static [&'static str] {
     match screen {
         "toast" => &["position", "width", "icon", "style"],
-        "hints" => &["style", "position"],
+        "hints" => &["style", "position", "lit"],
         "status" => &["style", "battery", "radios", "clock", "rect"],
         "dialog" => &["width", "radius", "icon", "buttons", "style"],
         "start" => &["style", "radius", "shortcut", "clock", "tiles", "shortcuts"],
@@ -650,6 +654,7 @@ impl Screens {
                     ("right", Side::Right),
                 ],
             );
+            own.hints.lit = r.flag("lit", own.hints.lit);
         }
         if let Some(t) = get("status") {
             let r = Reader("status", t);
