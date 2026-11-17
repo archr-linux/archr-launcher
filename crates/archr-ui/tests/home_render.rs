@@ -1,6 +1,9 @@
 //! The shelves drawn at 640x480, 720x720 and 480x320 with the test theme
-//! (tests/themes/prateleiras): every tab and the games grid fit and draw.
-//! With ARCHR_HOME_CAPTURE_DIR set, each frame is saved there as a PNG.
+//! (tests/themes/prateleiras) and with the shipped Ellegance: every tab and
+//! the games grid fit and draw. With ARCHR_HOME_CAPTURE_DIR (the test
+//! theme) or ARCHR_ELLEGANCE_CAPTURE_DIR (Ellegance) set, each frame is
+//! saved there as a PNG. Ellegance's 640x480 frames are golden
+//! (tests/golden/ellegance-640x480); ARCHR_GOLDEN_UPDATE=1 writes them again.
 mod common;
 use archr_index::{cache::SystemEntry, Game};
 use archr_ui::{
@@ -16,6 +19,19 @@ use common::FakeData;
 use std::path::{Path, PathBuf};
 
 const SIZES: [(u32, u32); 3] = [(640, 480), (720, 720), (480, 320)];
+
+/// SDL video runs one window at a time per process.
+static SDL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// One theme drawn on every screen: where its pictures go, the 640x480
+/// frames kept for the golden comparison, and the time games were played
+/// (fixed relative to now, so "2 days ago" reads the same every day).
+struct Run {
+    theme: Theme,
+    out: Option<PathBuf>,
+    keep: Option<Vec<(String, Vec<u8>)>>,
+    played: u64,
+}
 
 /// A library with an app (API 4) beside the systems.
 struct Library(FakeData, Vec<Row>);
@@ -43,7 +59,7 @@ impl DataSource for Library {
     }
 }
 
-fn game(name: &str) -> Game {
+fn game(name: &str, played: u64) -> Game {
     Game {
         path: format!("{name}.rom").into(),
         name: name.into(),
@@ -52,11 +68,11 @@ fn game(name: &str) -> Game {
         favorite: false,
         year: Some(1996),
         players: Some("1-2".into()),
-        last_played: Some(1_700_000_000),
+        last_played: Some(played),
         details: Default::default(),
     }
 }
-fn library() -> Library {
+fn library(played: u64) -> Library {
     let mut data = FakeData::default();
     let names = [
         "Kirby Super Star",
@@ -85,14 +101,14 @@ fn library() -> Library {
             source_fingerprint: 0,
         });
         data.games
-            .insert(name.into(), games.iter().map(|g| game(g)).collect());
+            .insert(name.into(), games.iter().map(|g| game(g, played)).collect());
     }
     data.games.insert(
         "@favorites".into(),
         vec![
-            game("Kirby Super Star"),
-            game("Super Metroid"),
-            game("Tetris"),
+            game("Kirby Super Star", played),
+            game("Super Metroid", played),
+            game("Tetris", played),
         ],
     );
     for (n, origin) in [("snes", 0), ("snes", 6), ("gb", 1)].iter().enumerate() {
@@ -107,15 +123,31 @@ fn library() -> Library {
     };
     Library(data, vec![app])
 }
-fn theme() -> Theme {
+fn load(dir: &Path, view: &str) -> Theme {
     let themes = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../themes");
     let default = Theme::load(&themes.join("default"));
-    let mut theme = Theme::load_over(
-        &Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/themes/prateleiras"),
-        &default,
-    );
-    theme.active_view = "prateleiras".into();
+    let mut theme = Theme::load_over(dir, &default);
+    theme.active_view = view.into();
     theme
+}
+fn theme() -> Theme {
+    load(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/themes/prateleiras"),
+        "prateleiras",
+    )
+}
+/// The shipped Ellegance, on the view a new install opens (its shelves).
+fn ellegance() -> Theme {
+    load(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../themes/ellegance"),
+        "lista",
+    )
+}
+fn now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
 }
 #[test]
 fn the_test_theme_asks_for_the_capsule_osd() {
@@ -128,7 +160,7 @@ fn the_test_theme_asks_for_the_capsule_osd() {
     assert_eq!(osd.track.map(|c| c.a), Some(0xA6));
     assert_eq!(osd.radius, Some(0.0375));
 }
-fn recent() -> Vec<Recent> {
+fn recent(played: u64) -> Vec<Recent> {
     [
         ("snes", 0, "Kirby Super Star"),
         ("psp", 0, "God of War: Chains of Olympus"),
@@ -139,7 +171,7 @@ fn recent() -> Vec<Recent> {
         system: (*system).into(),
         game: *game,
         name: (*name).into(),
-        left: Some(1_700_000_000),
+        left: Some(played),
         ..Recent::default()
     })
     .collect()
@@ -155,11 +187,83 @@ fn inside(rect: Rect01, (w, h): (u32, u32), what: &str) {
 
 #[test]
 fn the_shelves_fit_and_draw_at_every_size() {
+    let _sdl = SDL.lock().unwrap_or_else(|e| e.into_inner());
+    let mut run = Run {
+        theme: theme(),
+        out: std::env::var_os("ARCHR_HOME_CAPTURE_DIR").map(PathBuf::from),
+        keep: None,
+        played: 1_700_000_000,
+    };
+    shelves_draw(&mut run);
+    every_screen_table_draws_at_every_size(&mut run);
+}
+
+/// Ellegance (themes/ellegance) on every screen at the three sizes, and its
+/// 640x480 frames pixel for pixel against tests/golden/ellegance-640x480.
+/// Frames that print a date (saves, captures), a running timer (the toast,
+/// and the question drawn under it) or blur the screen as the picture
+/// workers left it (the Start menu) are drawn and checked for fit, not
+/// compared.
+#[test]
+fn ellegance_draws_every_screen() {
+    let _sdl = SDL.lock().unwrap_or_else(|e| e.into_inner());
+    let mut run = Run {
+        theme: ellegance(),
+        out: std::env::var_os("ARCHR_ELLEGANCE_CAPTURE_DIR").map(PathBuf::from),
+        keep: Some(Vec::new()),
+        played: now() - 2 * 86_400,
+    };
+    assert_eq!(run.theme.name.get("en"), Some("Ellegance"));
+    assert!(run.theme.font_bold.is_some(), "Ellegance ships Inter Bold");
+    shelves_draw(&mut run);
+    every_screen_table_draws_at_every_size(&mut run);
+    let golden = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/ellegance-640x480");
+    let update = std::env::var_os("ARCHR_GOLDEN_UPDATE").is_some();
+    let undated = |name: &str| {
+        !["aviso", "dialogo", "saves", "capturas", "start"]
+            .iter()
+            .any(|dated| name.contains(dated))
+    };
+    let mut changed = Vec::new();
+    for (name, pixels) in run.keep.take().unwrap() {
+        if !undated(&name) {
+            continue;
+        }
+        let path = golden.join(format!("{name}.png"));
+        if update {
+            std::fs::create_dir_all(&golden).unwrap();
+            image::save_buffer(&path, &pixels, 640, 480, image::ColorType::Rgba8).unwrap();
+            continue;
+        }
+        let expected = image::open(&path)
+            .unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+            .to_rgba8();
+        let off = expected
+            .as_raw()
+            .chunks_exact(4)
+            .zip(pixels.chunks_exact(4))
+            .filter(|(a, b)| a != b)
+            .count();
+        if off > 0 {
+            let actual = std::env::temp_dir().join(format!("archr-golden-ellegance-{name}.png"));
+            image::save_buffer(&actual, &pixels, 640, 480, image::ColorType::Rgba8).unwrap();
+            changed.push(format!("{name}: {off} pixels (now {})", actual.display()));
+        }
+    }
+    assert!(
+        changed.is_empty(),
+        "Ellegance 640x480 changed: {changed:#?}"
+    );
+}
+
+fn shelves_draw(run: &mut Run) {
     std::env::set_var("SDL_VIDEODRIVER", "offscreen");
-    let out = std::env::var_os("ARCHR_HOME_CAPTURE_DIR").map(PathBuf::from);
-    let data = library();
+    let out = run.out.clone();
+    let mut keep = run.keep.take();
+    let steady = keep.is_some();
+    let data = library(run.played);
     for size in SIZES {
-        let theme = theme().fitted(size.0, size.1);
+        let theme = run.theme.fitted(size.0, size.1);
         let view = theme.view(&theme.active_view);
         let home = view.home.clone().expect("the test view has shelves");
         for (what, rect) in [
@@ -184,9 +288,10 @@ fn the_shelves_fit_and_draw_at_every_size() {
         ui.set_motion(archr_ui::motion::Motion::Off);
         ui.configure(&ttf, &creator, &theme, Some(root.path()))
             .unwrap();
+        ui.set_status(archr_ui::status::Status::frozen("14:32"));
         let mut app = App::new(10);
         app.set_view(&view);
-        app.recent = recent();
+        app.recent = recent(run.played);
         // A picture for the first recent game (where it was left) and its
         // cover: the showcase blurs it behind the screen.
         let picture = root.path().join("kirby.png");
@@ -202,7 +307,7 @@ fn the_shelves_fit_and_draw_at_every_size() {
             archr_ui::covers::CoverCache::new(&creator, root.path().join("covers"), 320, 240);
         let mut shot = |ui: &mut Ui, name: &str, app: &App, settings: Option<&Settings>| {
             // Pictures load on workers: with captures, wait for them.
-            let rounds = if out.is_some() { 40 } else { 2 };
+            let rounds = if out.is_some() || steady { 40 } else { 2 };
             for _ in 0..rounds {
                 let (cover_paths, picture_paths) = app.home_paths(&data);
                 covers.request(&cover_paths);
@@ -235,6 +340,9 @@ fn the_shelves_fit_and_draw_at_every_size() {
             if let Some(out) = &out {
                 let file = out.join(format!("home-{name}-{}x{}.png", size.0, size.1));
                 image::save_buffer(file, &pixels, size.0, size.1, image::ColorType::Rgba8).unwrap();
+            }
+            if let Some(keep) = keep.as_mut().filter(|_| size == (640, 480)) {
+                keep.push((format!("home-{name}"), pixels));
             }
         };
         assert!(matches!(app.screen, Screen::Home { .. }));
@@ -273,7 +381,7 @@ fn the_shelves_fit_and_draw_at_every_size() {
         settings.confirm_forget = Some("00:1A:2B:3C:4D:5E".into());
         shot(&mut ui, "dialogo", &app, Some(&settings));
     }
-    every_screen_table_draws_at_every_size();
+    run.keep = keep;
 }
 
 /// A picture of `w`×`h` in a shade of its own, saved under `root`.
@@ -300,8 +408,8 @@ fn painted(root: &Path, name: &str, (w, h): (u32, u32), tint: [u8; 3]) -> PathBu
 /// Every screen the theme's tables restyle (docs/temas.md, Uma tabela por
 /// tela), drawn with the test theme at the three sizes. With
 /// ARCHR_HOME_CAPTURE_DIR set, each frame is saved there as tela-*.png.
-/// SDL lives on one thread: the shelves' test runs this after its own.
-fn every_screen_table_draws_at_every_size() {
+/// SDL lives on one thread: each theme's test runs this after its shelves.
+fn every_screen_table_draws_at_every_size(run: &mut Run) {
     use archr_ui::{
         cheevos::{Fetch, Item as Cheevo, Sheet},
         keyboard::{Keyboard, Mode},
@@ -311,7 +419,9 @@ fn every_screen_table_draws_at_every_size() {
         state::{QuickItem, Search},
     };
     std::env::set_var("SDL_VIDEODRIVER", "offscreen");
-    let out = std::env::var_os("ARCHR_HOME_CAPTURE_DIR").map(PathBuf::from);
+    let out = run.out.clone();
+    let mut keep = run.keep.take();
+    let steady = keep.is_some();
     let root = tempfile::tempdir().unwrap();
     let pictures_at: Vec<PathBuf> = [
         [70, 40, 160],
@@ -325,7 +435,7 @@ fn every_screen_table_draws_at_every_size() {
     .enumerate()
     .map(|(n, tint)| painted(root.path(), &format!("p{n}"), (320, 240), *tint))
     .collect();
-    let mut data = library();
+    let mut data = library(run.played);
     for (n, game) in data.0.games.get_mut("snes").unwrap().iter_mut().enumerate() {
         game.image = Some(pictures_at[n % pictures_at.len()].clone());
     }
@@ -386,7 +496,7 @@ fn every_screen_table_draws_at_every_size() {
             .collect(),
     };
     for size in SIZES {
-        let theme = theme().fitted(size.0, size.1);
+        let theme = run.theme.fitted(size.0, size.1);
         let view = theme.view(&theme.active_view);
         let (ttf, creator);
         let mut ui = Ui::new(size.0, size.1, true).unwrap();
@@ -398,6 +508,7 @@ fn every_screen_table_draws_at_every_size() {
         ui.set_motion(archr_ui::motion::Motion::Off);
         ui.configure(&ttf, &creator, &theme, Some(root.path()))
             .unwrap();
+        ui.set_status(archr_ui::status::Status::frozen("14:32"));
         let mut covers =
             archr_ui::covers::CoverCache::new(&creator, root.path().join("covers"), 320, 240);
         let mut thumbs =
@@ -405,7 +516,7 @@ fn every_screen_table_draws_at_every_size() {
         let mut pictures =
             archr_ui::covers::CoverCache::new(&creator, root.path().join("big"), size.0, size.1);
         let mut shot = |ui: &mut Ui, name: &str, app: &App, settings: Option<&Settings>| {
-            let rounds = if out.is_some() { 40 } else { 2 };
+            let rounds = if out.is_some() || steady { 40 } else { 2 };
             let wanted: Vec<PathBuf> = pictures_at.clone();
             for _ in 0..rounds {
                 let (small, large) = app.progress_paths();
@@ -448,11 +559,17 @@ fn every_screen_table_draws_at_every_size() {
                 let file = out.join(format!("tela-{name}-{}x{}.png", size.0, size.1));
                 image::save_buffer(file, &pixels, size.0, size.1, image::ColorType::Rgba8).unwrap();
             }
+            if let Some(keep) = keep
+                .as_mut()
+                .filter(|_| size == (640, 480) && !name.starts_with('_'))
+            {
+                keep.push((format!("tela-{name}"), pixels));
+            }
         };
         let fresh = || {
             let mut app = App::new(10);
             app.set_view(&view);
-            app.recent = recent();
+            app.recent = recent(run.played);
             for (n, r) in app.recent.iter_mut().enumerate() {
                 r.picture = Some(pictures_at[n].clone());
             }
@@ -572,4 +689,5 @@ fn every_screen_table_draws_at_every_size() {
         settings.wifi_ssid = "Casa".into();
         shot(&mut ui, "teclado", &fresh(), Some(&settings));
     }
+    run.keep = keep;
 }

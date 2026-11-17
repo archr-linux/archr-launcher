@@ -3940,14 +3940,34 @@ fn capture_toasts() {
 /// as a sidebar. ARCHR_SETTINGS_THEMED_DIR keeps the pictures.
 #[test]
 fn the_sidebar_theme_draws_settings_on_every_screen() {
+    let out = std::env::var_os("ARCHR_SETTINGS_THEMED_DIR").map(std::path::PathBuf::from);
+    sidebar_settings("tests/themes/prateleiras", out, None);
+}
+
+/// The shipped Ellegance's Settings, the same states and sizes; its 640x480
+/// frames are golden (tests/golden/ellegance-640x480/config-*.png,
+/// `ARCHR_GOLDEN_UPDATE=1` writes them again). ARCHR_ELLEGANCE_CAPTURE_DIR
+/// keeps the pictures.
+#[test]
+fn ellegance_draws_settings_on_every_screen() {
+    let out = std::env::var_os("ARCHR_ELLEGANCE_CAPTURE_DIR").map(std::path::PathBuf::from);
+    sidebar_settings(
+        "../../themes/ellegance",
+        out,
+        Some("tests/golden/ellegance-640x480"),
+    );
+}
+
+fn sidebar_settings(theme_dir: &str, out: Option<std::path::PathBuf>, golden: Option<&str>) {
     let _sdl = crate::SDL_TEST_LOCK
         .lock()
         .unwrap_or_else(|e| e.into_inner());
     std::env::set_var("SDL_VIDEODRIVER", "offscreen");
-    let out = std::env::var_os("ARCHR_SETTINGS_THEMED_DIR").map(std::path::PathBuf::from);
     let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let default = Theme::load(&manifest.join("../../themes/default"));
-    let base = Theme::load_over(&manifest.join("tests/themes/prateleiras"), &default);
+    let base = Theme::load_over(&manifest.join(theme_dir), &default);
+    let update = std::env::var_os("ARCHR_GOLDEN_UPDATE").is_some();
+    let mut changed = Vec::new();
     assert!(base.screens.settings.sidebar && base.screens.settings.inset);
     let mut root = ready();
     root.cursor = 1;
@@ -4004,6 +4024,32 @@ fn the_sidebar_theme_draws_settings_on_every_screen() {
                 )
                 .unwrap();
             }
+            // Pages that print no time ("updated 5 s ago") are golden.
+            let steady = ["raiz", "games", "services", "list-games-core"];
+            if let Some(golden) = golden.filter(|_| (w, h) == (640, 480) && steady.contains(name)) {
+                let path = manifest.join(golden).join(format!("config-{name}.png"));
+                if update {
+                    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                    image::save_buffer(&path, &pixels, w, h, image::ColorType::Rgba8).unwrap();
+                    continue;
+                }
+                let expected = image::open(&path)
+                    .unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+                    .to_rgba8();
+                let off = expected
+                    .as_raw()
+                    .chunks_exact(4)
+                    .zip(pixels.chunks_exact(4))
+                    .filter(|(a, b)| a != b)
+                    .count();
+                if off > 0 {
+                    changed.push(format!("config-{name}: {off} pixels"));
+                }
+            }
         }
     }
+    assert!(
+        changed.is_empty(),
+        "{theme_dir} 640x480 changed: {changed:#?}"
+    );
 }

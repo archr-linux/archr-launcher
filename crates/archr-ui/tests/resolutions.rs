@@ -484,6 +484,12 @@ fn l_and_r_page_by_the_rows_each_list_draws_at_every_size() {
                     (true, &view.games, app.games_nav),
                 ] {
                     let list = &layout.list;
+                    // Shelves stand for the systems list, and a grid pages
+                    // by rows of covers (tests/home.rs): no pill to follow.
+                    if (view.home.is_some() && !games) || list.mark == archr_ui::layout::Mark::Grid
+                    {
+                        continue;
+                    }
                     if size == (640, 480) {
                         // The pages 640x480 always had.
                         let before = (list.rect.h / (list.row + list.gap)).floor() as usize;
