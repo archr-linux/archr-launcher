@@ -1,6 +1,7 @@
 //! The wlr-layer-shell surfaces: mapped only while the pill or the battery
 //! card is visible.
 use crate::card::{self, Assets, Card};
+use crate::look::{self, Edge, Look};
 use crate::pill::{self, Geometry, Painter, Timeline};
 use crate::proto::{Alert, Icon, Message};
 use smithay_client_toolkit::reexports::client::{
@@ -57,6 +58,8 @@ pub struct Overlay {
     assets: Assets,
     card_pool: Option<SlotPool>,
     card: Option<CardShown>,
+    look: Look,
+    watch: look::Watch,
 }
 
 impl Overlay {
@@ -77,7 +80,18 @@ impl Overlay {
             ),
             card_pool: None,
             card: None,
+            look: Look::default(),
+            watch: look::Watch::new(look::PATH),
         })
+    }
+
+    /// The launcher's theme, read again when it changed: checked as
+    /// something is about to show, so a change applies from the next one.
+    fn restyle(&mut self) {
+        if let Some(look) = self.watch.poll() {
+            self.assets.restyle(&look);
+            self.look = look;
+        }
     }
 
     fn output_size(&self) -> (i32, i32) {
@@ -96,10 +110,12 @@ impl Overlay {
             shown.changed_at = now;
             return;
         }
+        self.restyle();
         let (w, h) = self.output_size();
-        let geometry = Geometry::for_output(w, h);
-        if self.painter.as_ref().map(|p| p.geometry) != Some(geometry) {
-            self.painter = Some(Painter::new(geometry));
+        let level = self.look.level;
+        let geometry = Geometry::for_output(w, h, &level);
+        if self.painter.as_ref().map(|p| (p.geometry, p.level)) != Some((geometry, level)) {
+            self.painter = Some(Painter::new(geometry, level));
         }
         let surface = self.compositor.create_surface(qh);
         // An empty input region: touches and clicks go to whatever is below.
@@ -113,7 +129,12 @@ impl Overlay {
             Some("archr-osd"),
             None,
         );
-        layer.set_anchor(Anchor::RIGHT);
+        layer.set_anchor(match level.edge {
+            Edge::Right => Anchor::RIGHT,
+            Edge::Left => Anchor::LEFT,
+            Edge::Top => Anchor::TOP,
+            Edge::Bottom => Anchor::BOTTOM,
+        });
         layer.set_size(geometry.width, geometry.height);
         layer.set_keyboard_interactivity(KeyboardInteractivity::None);
         layer.set_exclusive_zone(-1);
@@ -132,6 +153,9 @@ impl Overlay {
     /// replaces its text and keeps it up.
     pub fn show_card(&mut self, alert: Alert, qh: &QueueHandle<Self>) {
         let now = Instant::now();
+        if self.card.is_none() {
+            self.restyle();
+        }
         let card = self.assets.card(alert);
         let hold = if card.critical {
             card::HOLD
@@ -255,7 +279,7 @@ impl Overlay {
         // The fill moves by whole pixels: most frames of a glide repeat the last one.
         let look = (
             shown.timeline.icon,
-            g.fill_top(level) as u32,
+            g.fill_edge(level) as u32,
             (opacity * 255.0) as u8,
         );
         if shown.drawn == Some(look) {

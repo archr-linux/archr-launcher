@@ -8,6 +8,7 @@
 //!   archr-osd send battery 3 LEFT TOTAL game|menu
 //!   archr-osd send report start|done|failed
 mod card;
+mod look;
 mod overlay;
 mod pill;
 mod proto;

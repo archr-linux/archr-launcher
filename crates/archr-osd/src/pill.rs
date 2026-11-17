@@ -1,15 +1,23 @@
-//! The level pill: geometry scaled from the 640x480 design, CPU drawing and timing.
+//! The level pill (or capsule): geometry scaled from the 640x480 design,
+//! CPU drawing and timing.
+use crate::look::{Level, Shape};
 use crate::proto::Icon;
 use resvg::{tiny_skia as sk, usvg};
 use std::time::Duration;
 
 const BACKGROUND: [u8; 4] = [40, 46, 58, 209]; // rgba(40,46,58,.82)
-const FILL: [u8; 3] = [0xF1, 0xF3, 0xF7];
+const FILL: [u8; 4] = [0xF1, 0xF3, 0xF7, 255];
+/// The capsule's dark glass, its rim and the shine at its top.
+const GLASS: [u8; 4] = [22, 25, 31, 166]; // rgba(22,25,31,.65)
+const RIM: [u8; 4] = [255, 255, 255, 56];
+const SHINE: u8 = 41;
 const ICON_DARK: &str = "#3A4350";
 const ICON_LIGHT: &str = "#F1F3F7";
 
 /// Layout in surface pixels. The surface is the pill plus room for its shadow;
-/// the horizontal room equals the 24 px edge gap, so the layer needs no margin.
+/// the room across equals the 24 px edge gap, so the layer needs no margin.
+/// At the top and bottom edges the pill lies down: width and height swap
+/// and the level fills from the left.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Geometry {
     pub width: u32,
@@ -20,53 +28,84 @@ pub struct Geometry {
     pub icon_bottom: f32,
     pub shadow_dy: f32,
     pub shadow_blur: f32,
+    pub lying: bool,
 }
 
 impl Geometry {
-    pub fn for_output(width: i32, height: i32) -> Self {
+    pub fn for_output(width: i32, height: i32, level: &Level) -> Self {
         let s = (width as f32 / 640.0).min(height as f32 / 480.0).max(0.5);
+        let capsule = level.shape == Shape::Capsule;
         let (pad_x, pad_y) = ((24.0 * s).round(), (32.0 * s).round());
-        let (w, h) = ((44.0 * s).round(), (136.0 * s).round());
+        let (w, h) = if capsule {
+            (50.0, 200.0)
+        } else {
+            (44.0, 136.0)
+        };
+        let (w, h) = ((w * s).round(), (h * s).round());
+        let radius = level
+            .radius
+            .map_or(if capsule { 18.0 } else { 16.0 }, |r| r * 480.0);
+        let lying = level.edge.lying();
+        let (pill, size) = if lying {
+            ((pad_y, pad_x, h, w), (h + 2.0 * pad_y, w + 2.0 * pad_x))
+        } else {
+            ((pad_x, pad_y, w, h), (w + 2.0 * pad_x, h + 2.0 * pad_y))
+        };
         Self {
-            width: (w + 2.0 * pad_x) as u32,
-            height: (h + 2.0 * pad_y) as u32,
-            pill: (pad_x, pad_y, w, h),
-            radius: 16.0 * s,
-            icon_size: (22.0 * s).round() as u32,
-            icon_bottom: 12.0 * s,
+            width: size.0 as u32,
+            height: size.1 as u32,
+            pill,
+            radius: radius * s,
+            icon_size: ((if capsule { 24.0 } else { 22.0 }) * s).round() as u32,
+            icon_bottom: (if capsule { 16.0 } else { 12.0 }) * s,
             shadow_dy: 8.0 * s,
             shadow_blur: 24.0 * s,
+            lying,
         }
     }
 
-    /// Top edge of the light fill for a 0..=1 level, on a whole pixel so the
-    /// edge stays crisp.
-    pub fn fill_top(&self, level: f32) -> f32 {
-        let (_, y, _, h) = self.pill;
-        (y + h * (1.0 - level.clamp(0.0, 1.0))).round()
+    /// Where the light fill ends for a 0..=1 level: its top edge, or its
+    /// right edge lying down; on a whole pixel so the edge stays crisp.
+    pub fn fill_edge(&self, level: f32) -> f32 {
+        let (x, y, w, h) = self.pill;
+        let level = level.clamp(0.0, 1.0);
+        if self.lying {
+            (x + w * level).round()
+        } else {
+            (y + h * (1.0 - level)).round()
+        }
     }
 
     pub fn icon_origin(&self) -> (i32, i32) {
         let (x, y, w, h) = self.pill;
         let size = self.icon_size as f32;
-        (
-            (x + (w - size) / 2.0).round() as i32,
-            (y + h - self.icon_bottom - size).round() as i32,
-        )
+        if self.lying {
+            (
+                (x + self.icon_bottom).round() as i32,
+                (y + (h - size) / 2.0).round() as i32,
+            )
+        } else {
+            (
+                (x + (w - size) / 2.0).round() as i32,
+                (y + h - self.icon_bottom - size).round() as i32,
+            )
+        }
     }
 }
 
-/// Everything that does not change between frames, built once per geometry:
-/// for each icon the pill empty (light icon) and full (dark icon). A frame is
-/// the empty one above the fill's edge and the full one below it, so drawing
-/// it is a copy of rows, cheap enough for every frame of a held button.
+/// Everything that does not change between frames, built once per geometry
+/// and look: for each icon the pill empty (light icon) and full (dark icon).
+/// A frame is the empty one beyond the fill's edge and the full one before
+/// it, so drawing it is a copy of rows, cheap enough for every frame of a
+/// held button.
 pub struct Painter {
     pub geometry: Geometry,
+    pub level: Level,
     layers: Vec<(Icon, sk::Pixmap, sk::Pixmap)>,
 }
 
 impl Painter {
-    pub fn new(geometry: Geometry) -> Self {
+    pub fn new(geometry: Geometry, level: Level) -> Self {
         let (w, h) = (geometry.width, geometry.height);
         let path = rounded_rect(geometry.pill, geometry.radius);
         let mut pill = sk::Mask::new(w, h).expect("pill size");
@@ -80,11 +119,15 @@ impl Painter {
         let layers = Icon::ALL
             .iter()
             .map(|&icon| {
-                let layer = |full| layer(&geometry, &path, &pill, &shadow, icon, full);
+                let layer = |full| layer(&geometry, &level, &path, &pill, &shadow, icon, full);
                 (icon, layer(false), layer(true))
             })
             .collect();
-        Self { geometry, layers }
+        Self {
+            geometry,
+            level,
+            layers,
+        }
     }
 
     /// One frame: `level` 0..=1, `opacity` 0..=1.
@@ -96,8 +139,21 @@ impl Painter {
             .find(|(i, _, _)| *i == icon)
             .expect("every icon has layers");
         let mut out = empty.clone();
-        let edge = (g.fill_top(level) as usize * g.width as usize * 4).min(out.data().len());
-        out.data_mut()[edge..].copy_from_slice(&full.data()[edge..]);
+        let edge = g.fill_edge(level) as usize * 4;
+        if g.lying {
+            let row = g.width as usize * 4;
+            let edge = edge.min(row);
+            for (dst, src) in out
+                .data_mut()
+                .chunks_exact_mut(row)
+                .zip(full.data().chunks_exact(row))
+            {
+                dst[..edge].copy_from_slice(&src[..edge]);
+            }
+        } else {
+            let edge = (edge * g.width as usize).min(out.data().len());
+            out.data_mut()[edge..].copy_from_slice(&full.data()[edge..]);
+        }
         if opacity < 1.0 {
             let a = (opacity.clamp(0.0, 1.0) * 256.0) as u16;
             for byte in out.data_mut() {
@@ -108,36 +164,85 @@ impl Painter {
     }
 }
 
+/// Light enough for the dark icon.
+fn light([r, g, b, _]: [u8; 4]) -> bool {
+    0.2126 * f32::from(r) + 0.7152 * f32::from(g) + 0.0722 * f32::from(b) > 140.0
+}
+
 /// Shadow, pill and icon; `full`: the pill filled, the icon dark on it.
+/// The capsule's glass also takes a shine at its top and a light rim.
 fn layer(
     g: &Geometry,
+    level: &Level,
     path: &sk::Path,
     pill: &sk::Mask,
     shadow: &sk::Pixmap,
     icon: Icon,
     full: bool,
 ) -> sk::Pixmap {
+    let capsule = level.shape == Shape::Capsule;
+    let track = level
+        .track
+        .unwrap_or(if capsule { GLASS } else { BACKGROUND });
+    let fill = level.fill.unwrap_or(FILL);
     let mut out = shadow.clone();
     let identity = sk::Transform::identity();
     let mut paint = sk::Paint {
         anti_alias: true,
         ..Default::default()
     };
-    paint.set_color_rgba8(BACKGROUND[0], BACKGROUND[1], BACKGROUND[2], BACKGROUND[3]);
+    paint.set_color_rgba8(track[0], track[1], track[2], track[3]);
     out.fill_path(path, &paint, sk::FillRule::Winding, identity, None);
+    let (x, y, w, h) = g.pill;
+    if capsule {
+        let stops = vec![
+            sk::GradientStop::new(0.0, sk::Color::from_rgba8(255, 255, 255, SHINE)),
+            sk::GradientStop::new(1.0, sk::Color::from_rgba8(255, 255, 255, 0)),
+        ];
+        let reach = if g.lying { h * 0.6 } else { h * 0.35 };
+        if let Some(shader) = sk::LinearGradient::new(
+            sk::Point::from_xy(x, y),
+            sk::Point::from_xy(x, y + reach),
+            stops,
+            sk::SpreadMode::Pad,
+            identity,
+        ) {
+            let shine = sk::Paint {
+                shader,
+                anti_alias: true,
+                ..Default::default()
+            };
+            out.fill_path(path, &shine, sk::FillRule::Winding, identity, None);
+        }
+    }
     if full {
-        let (x, y, w, _) = g.pill;
-        let bottom = (g.height as f32).min(g.pill.1 + g.pill.3 + 1.0);
-        paint.set_color_rgba8(FILL[0], FILL[1], FILL[2], 255);
-        if let Some(rect) = sk::Rect::from_ltrb(x, y, x + w, bottom) {
+        let (right, bottom) = (
+            (g.width as f32).min(x + w + 1.0),
+            (g.height as f32).min(y + h + 1.0),
+        );
+        paint.set_color_rgba8(fill[0], fill[1], fill[2], fill[3]);
+        if let Some(rect) = sk::Rect::from_ltrb(x, y, right, bottom) {
             out.fill_rect(rect, &paint, identity, Some(pill));
         }
     }
-    // Dark where the icon sits on the fill, light where it sits on the
+    if capsule {
+        let rim = rounded_rect((x + 0.5, y + 0.5, w - 1.0, h - 1.0), g.radius - 0.5);
+        paint.set_color_rgba8(RIM[0], RIM[1], RIM[2], RIM[3]);
+        let stroke = sk::Stroke {
+            width: 1.0,
+            ..Default::default()
+        };
+        out.stroke_path(&rim, &paint, &stroke, identity, None);
+    }
+    // Dark where the icon sits on a light fill, light where it sits on the
     // background, so the glyph stays legible at any level.
     let glyph = rasterize(
         icon.svg(),
-        if full { ICON_DARK } else { ICON_LIGHT },
+        if full && light(fill) {
+            ICON_DARK
+        } else {
+            ICON_LIGHT
+        },
         g.icon_size,
     );
     let (ix, iy) = g.icon_origin();
@@ -309,7 +414,7 @@ mod tests {
 
     #[test]
     fn geometry_matches_the_design_at_640x480() {
-        let g = Geometry::for_output(640, 480);
+        let g = Geometry::for_output(640, 480, &Level::default());
         assert_eq!(g.pill, (24.0, 32.0, 44.0, 136.0));
         assert_eq!((g.width, g.height), (92, 200));
         assert_eq!((g.radius, g.icon_size), (16.0, 22));
@@ -317,17 +422,20 @@ mod tests {
         assert_eq!(g.width as f32 - (g.pill.0 + g.pill.2), 24.0);
         // Icon centred, its bottom 12 px above the pill's.
         assert_eq!(g.icon_origin(), (35, 134));
-        assert_eq!(g.fill_top(0.6), 86.0);
-        assert_eq!(g.fill_top(0.0), 168.0);
-        assert_eq!(g.fill_top(1.5), 32.0);
+        assert_eq!(g.fill_edge(0.6), 86.0);
+        assert_eq!(g.fill_edge(0.0), 168.0);
+        assert_eq!(g.fill_edge(1.5), 32.0);
     }
 
     #[test]
     fn geometry_scales_with_the_smaller_axis() {
-        let g = Geometry::for_output(1280, 720);
+        let g = Geometry::for_output(1280, 720, &Level::default());
         assert_eq!(g.pill, (36.0, 48.0, 66.0, 204.0));
         assert_eq!(g.icon_size, 33);
-        assert_eq!(Geometry::for_output(0, 0), Geometry::for_output(320, 240));
+        assert_eq!(
+            Geometry::for_output(0, 0, &Level::default()),
+            Geometry::for_output(320, 240, &Level::default())
+        );
     }
 
     fn pixel(p: &sk::Pixmap, x: u32, y: u32) -> [u8; 4] {
@@ -337,7 +445,10 @@ mod tests {
 
     #[test]
     fn paint_fills_from_the_bottom_with_the_design_colours() {
-        let painter = Painter::new(Geometry::for_output(640, 480));
+        let painter = Painter::new(
+            Geometry::for_output(640, 480, &Level::default()),
+            Level::default(),
+        );
         let p = painter.paint(Icon::Volume2, 0.6, 1.0);
         assert_eq!(pixel(&p, 30, 160), [0xF1, 0xF3, 0xF7, 255]);
         // Premultiplied storage: allow one step of rounding.
@@ -365,7 +476,10 @@ mod tests {
 
     #[test]
     fn icon_turns_light_above_the_fill() {
-        let painter = Painter::new(Geometry::for_output(640, 480));
+        let painter = Painter::new(
+            Geometry::for_output(640, 480, &Level::default()),
+            Level::default(),
+        );
         let p = painter.paint(Icon::VolumeX, 0.0, 1.0);
         let light = (134..156)
             .flat_map(|y| (35..57).map(move |x| (x, y)))
@@ -429,13 +543,165 @@ mod tests {
         assert_eq!(next_frame(ms(2000), HOLD + FADE_OUT), None);
     }
 
+    fn capsule(edge: crate::look::Edge) -> Level {
+        Level {
+            shape: Shape::Capsule,
+            edge,
+            ..Level::default()
+        }
+    }
+
+    #[test]
+    fn the_capsule_is_taller_and_lies_down_at_the_top_and_bottom() {
+        use crate::look::Edge;
+        let g = Geometry::for_output(640, 480, &capsule(Edge::Right));
+        assert_eq!(g.pill, (24.0, 32.0, 50.0, 200.0));
+        assert_eq!(
+            (g.width, g.height, g.radius, g.icon_size),
+            (98, 264, 18.0, 24)
+        );
+        assert_eq!(g.icon_origin(), (37, 192));
+        let own = Level {
+            radius: Some(0.05),
+            ..capsule(Edge::Left)
+        };
+        assert_eq!(Geometry::for_output(640, 480, &own).radius, 24.0);
+        let lying = Geometry::for_output(640, 480, &capsule(Edge::Bottom));
+        assert!(lying.lying);
+        assert_eq!(lying.pill, (32.0, 24.0, 200.0, 50.0));
+        assert_eq!((lying.width, lying.height), (264, 98));
+        assert_eq!(lying.fill_edge(0.25), 82.0);
+        assert_eq!(lying.icon_origin(), (48, 37));
+    }
+
+    #[test]
+    fn the_capsule_is_glass_with_a_rim_and_a_light_fill() {
+        use crate::look::Edge;
+        let level = capsule(Edge::Right);
+        let painter = Painter::new(Geometry::for_output(640, 480, &level), level);
+        let p = painter.paint(Icon::Volume2, 0.5, 1.0);
+        // The fill below the middle, the dark icon on it.
+        assert_eq!(pixel(&p, 49, 170), [0xF1, 0xF3, 0xF7, 255]);
+        let dark = (192..216)
+            .flat_map(|y| (37..61).map(move |x| (x, y)))
+            .any(|(x, y)| pixel(&p, x, y)[..3] == [0x3A, 0x43, 0x50]);
+        assert!(dark);
+        // Translucent glass above it, brighter at the top (the shine).
+        let low = pixel(&p, 49, 125);
+        assert!(low[3].abs_diff(166) <= 2 && low[0] < 40, "{low:?}");
+        let high = pixel(&p, 49, 40);
+        assert!(
+            high[0] > low[0] + 10 && high[3] > low[3],
+            "{high:?} {low:?}"
+        );
+        // The light rim on the glass's edge.
+        let rim = pixel(&p, 24, 120);
+        assert!(rim[0] > low[0] + 20, "{rim:?}");
+        // Lying down it fills from the left.
+        let level = capsule(Edge::Top);
+        let painter = Painter::new(Geometry::for_output(640, 480, &level), level);
+        let p = painter.paint(Icon::Sun, 0.5, 1.0);
+        assert_eq!(pixel(&p, 100, 49), [0xF1, 0xF3, 0xF7, 255]);
+        assert!(pixel(&p, 160, 49)[3] < 200);
+        // A theme's own colours; a dark fill takes the light icon.
+        let level = Level {
+            fill: Some([0x10, 0x40, 0x90, 255]),
+            track: Some([200, 0, 0, 255]),
+            ..capsule(Edge::Right)
+        };
+        let painter = Painter::new(Geometry::for_output(640, 480, &level), level);
+        let p = painter.paint(Icon::Volume2, 0.5, 1.0);
+        assert_eq!(pixel(&p, 49, 170), [0x10, 0x40, 0x90, 255]);
+        assert_eq!(pixel(&p, 49, 125)[0], 200);
+        let light = (192..216)
+            .flat_map(|y| (37..61).map(move |x| (x, y)))
+            .any(|(x, y)| pixel(&p, x, y)[0] > 200);
+        assert!(light);
+    }
+
+    /// The level over a grey 640x480 screen, in each shape:
+    /// `ARCHR_OSD_STYLES=dir cargo test -p archr-osd -- --ignored styles`.
+    #[test]
+    #[ignore]
+    fn styles() {
+        use crate::look::Edge;
+        let dir = std::path::PathBuf::from(std::env::var("ARCHR_OSD_STYLES").unwrap());
+        std::fs::create_dir_all(&dir).unwrap();
+        let cases = [
+            ("pill-volume-60", Level::default(), Icon::Volume2, 0.6),
+            ("pill-volume-20", Level::default(), Icon::Volume1, 0.2),
+            (
+                "capsule-volume-60",
+                capsule(Edge::Right),
+                Icon::Volume2,
+                0.6,
+            ),
+            (
+                "capsule-volume-20",
+                capsule(Edge::Right),
+                Icon::Volume1,
+                0.2,
+            ),
+            (
+                "capsule-volume-0-muted",
+                capsule(Edge::Right),
+                Icon::VolumeX,
+                0.0,
+            ),
+            (
+                "capsule-brightness-80-left",
+                capsule(Edge::Left),
+                Icon::Sun,
+                0.8,
+            ),
+            (
+                "capsule-volume-60-top",
+                capsule(Edge::Top),
+                Icon::Volume2,
+                0.6,
+            ),
+            (
+                "capsule-volume-40-bottom",
+                capsule(Edge::Bottom),
+                Icon::Volume1,
+                0.4,
+            ),
+        ];
+        for (name, level, icon, value) in cases {
+            let g = Geometry::for_output(640, 480, &level);
+            let painter = Painter::new(g, level);
+            let mut scene = sk::Pixmap::new(640, 480).unwrap();
+            scene.fill(sk::Color::from_rgba8(0x80, 0x80, 0x80, 255));
+            let (w, h) = (g.width as i32, g.height as i32);
+            let (x, y) = match level.edge {
+                Edge::Right => (640 - w, (480 - h) / 2),
+                Edge::Left => (0, (480 - h) / 2),
+                Edge::Top => ((640 - w) / 2, 0),
+                Edge::Bottom => ((640 - w) / 2, 480 - h),
+            };
+            let frame = painter.paint(icon, value, 1.0);
+            scene.draw_pixmap(
+                x,
+                y,
+                frame.as_ref(),
+                &sk::PixmapPaint::default(),
+                sk::Transform::identity(),
+                None,
+            );
+            scene.save_png(dir.join(format!("{name}.png"))).unwrap();
+        }
+    }
+
     /// Writes 640x480 captures over a mockup-like scene:
     /// `ARCHR_OSD_SHOTS=dir cargo test -p archr-osd -- --ignored shots`.
     #[test]
     #[ignore]
     fn shots() {
         let dir = std::path::PathBuf::from(std::env::var("ARCHR_OSD_SHOTS").unwrap());
-        let painter = Painter::new(Geometry::for_output(640, 480));
+        let painter = Painter::new(
+            Geometry::for_output(640, 480, &Level::default()),
+            Level::default(),
+        );
         let g = painter.geometry;
         let cases = [
             ("volume-0", "volume 0"),

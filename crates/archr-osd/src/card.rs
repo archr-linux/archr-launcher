@@ -1,23 +1,11 @@
 //! The battery card (Bateria-critica): a notice over the whole screen, games
 //! included. Geometry from the 640x480 design, text with the launcher's
-//! fonts and catalogs.
+//! fonts and catalogs, in the colours of the active theme (look.rs).
+use crate::look::{Look, Palette};
 use crate::proto::{Alert, Disc, Report};
 use ab_glyph::{Font, FontVec, PxScale, ScaleFont};
 use resvg::tiny_skia as sk;
 use std::{collections::HashMap, path::Path, time::Duration};
-
-const VEIL: [u8; 4] = [5, 8, 11, 115]; // rgba(5,8,11,.45)
-const CARD: [u8; 4] = [17, 22, 28, 240]; // rgba(17,22,28,.94)
-const DANGER: [u8; 3] = [0xF8, 0x51, 0x49];
-const DANGER_EDGE: [u8; 3] = [0x5C, 0x23, 0x28];
-const WARNING: [u8; 3] = [0xE3, 0xA0, 0x08];
-const ACCENT: [u8; 3] = [0x1E, 0x88, 0xFF];
-const SUCCESS: [u8; 3] = [0x3F, 0xB9, 0x50];
-const EDGE: [u8; 3] = [0x1C, 0x23, 0x2C];
-const TEXT: [u8; 3] = [0xE6, 0xED, 0xF3];
-const BODY: [u8; 3] = [0xC5, 0xCF, 0xDA];
-const MUTED: [u8; 3] = [0x9B, 0xA7, 0xB4];
-const TRACK: [u8; 3] = [0x1C, 0x25, 0x30];
 
 /// How long a card stays after its last message: the critical one is sent
 /// every second while it counts.
@@ -36,17 +24,16 @@ pub struct Assets {
     regular: Option<FontVec>,
     semibold: Option<FontVec>,
     text: HashMap<String, String>,
+    share: std::path::PathBuf,
+    /// The theme's faces the fonts were loaded for.
+    faces: (Option<std::path::PathBuf>, Option<std::path::PathBuf>),
+    pub palette: Palette,
 }
 
 impl Assets {
     /// `share` holds the launcher's themes/ and locales/; `config` is
     /// system.cfg, for system.language.
     pub fn load(share: &Path, config: &Path) -> Self {
-        let font = |name: &str| {
-            std::fs::read(share.join("themes/default/fonts").join(name))
-                .ok()
-                .and_then(|bytes| FontVec::try_from_vec(bytes).ok())
-        };
         let language = std::fs::read_to_string(config)
             .unwrap_or_default()
             .lines()
@@ -66,11 +53,49 @@ impl Assets {
                     .collect()
             })
             .unwrap_or_default();
-        Self {
-            regular: font("Inter-Regular.ttf"),
-            semibold: font("Inter-SemiBold.ttf"),
+        let mut assets = Self {
+            regular: None,
+            semibold: None,
             text,
+            share: share.to_owned(),
+            faces: (None, None),
+            palette: Palette::DEFAULT,
+        };
+        assets.load_fonts();
+        assets
+    }
+    /// The theme's colours and faces; a face that does not load is the
+    /// default theme's.
+    pub fn restyle(&mut self, look: &Look) {
+        self.palette = look.palette;
+        let faces = (look.font.clone(), look.font_semibold.clone());
+        if faces != self.faces || self.regular.is_none() {
+            self.faces = faces;
+            self.load_fonts();
         }
+    }
+    fn load_fonts(&mut self) {
+        let read = |path: &Path| {
+            std::fs::read(path)
+                .ok()
+                .and_then(|bytes| FontVec::try_from_vec(bytes).ok())
+        };
+        let font = |own: &Option<std::path::PathBuf>, name: &str| {
+            own.as_deref()
+                .and_then(read)
+                .or_else(|| read(&self.share.join("themes/default/fonts").join(name)))
+        };
+        // A theme with only a regular face uses it for the titles too, as
+        // the launcher does.
+        let semibold = match &self.faces {
+            (Some(_), None) => &self.faces.0,
+            (_, semibold) => semibold,
+        };
+        let (regular, semibold) = (
+            font(&self.faces.0, "Inter-Regular.ttf"),
+            font(semibold, "Inter-SemiBold.ttf"),
+        );
+        (self.regular, self.semibold) = (regular, semibold);
     }
     fn tr(&self, key: &str, english: &str, values: &[(&str, String)]) -> String {
         let mut text = self
@@ -85,6 +110,13 @@ impl Assets {
     }
     /// The card's texts for a message.
     pub fn card(&self, alert: Alert) -> Card {
+        let Palette {
+            danger,
+            warning,
+            accent,
+            success,
+            ..
+        } = self.palette;
         let battery = match alert {
             Alert::Battery(battery) => battery,
             Alert::NoState => {
@@ -99,7 +131,7 @@ impl Assets {
                     bar: None,
                     critical: false,
                     icon: ALERT,
-                    accent: WARNING,
+                    accent: warning,
                 }
             }
             Alert::Disc(step) => {
@@ -112,7 +144,7 @@ impl Assets {
                             &[],
                         ),
                         LOADER,
-                        ACCENT,
+                        accent,
                     ),
                     Disc::NoSpace => (
                         self.tr("osd.disc_nospace_title", "No room for the disc", &[]),
@@ -122,7 +154,7 @@ impl Assets {
                             &[],
                         ),
                         FAILED,
-                        DANGER,
+                        danger,
                     ),
                 };
                 return Card {
@@ -141,7 +173,7 @@ impl Assets {
                         self.tr("osd.report_start_title", "Creating the report…", &[]),
                         self.tr("osd.report_start", "It takes about 20 seconds.", &[]),
                         LOADER,
-                        ACCENT,
+                        accent,
                     ),
                     Report::Done => (
                         self.tr("osd.report_done_title", "Report saved", &[]),
@@ -151,13 +183,13 @@ impl Assets {
                             &[],
                         ),
                         CHECK,
-                        SUCCESS,
+                        success,
                     ),
                     Report::Failed => (
                         self.tr("osd.report_failed_title", "No report", &[]),
                         self.tr("osd.report_failed", "The report could not be created.", &[]),
                         FAILED,
-                        DANGER,
+                        danger,
                     ),
                 };
                 return Card {
@@ -192,7 +224,7 @@ impl Assets {
                     bar: Some(1.0 - f32::from(left.saturating_sub(1)) / f32::from(total.max(1))),
                     critical: true,
                     icon: BATTERY,
-                    accent: DANGER,
+                    accent: danger,
                 }
             }
             None => Card {
@@ -202,7 +234,7 @@ impl Assets {
                 bar: None,
                 critical: false,
                 icon: BATTERY,
-                accent: WARNING,
+                accent: warning,
             },
         }
     }
@@ -350,8 +382,10 @@ pub fn render(
 ) -> sk::Pixmap {
     let mut out = sk::Pixmap::new(width.max(1), height.max(1)).expect("surface size");
     let s = (width as f32 / 640.0).min(height as f32 / 480.0).max(0.5);
+    let p = assets.palette;
     if card.critical {
-        out.fill(sk::Color::from_rgba8(VEIL[0], VEIL[1], VEIL[2], VEIL[3]));
+        let [r, g, b, a] = p.veil;
+        out.fill(sk::Color::from_rgba8(r, g, b, a));
     }
     let (Some(regular), Some(semibold)) = (&assets.regular, &assets.semibold) else {
         return out;
@@ -373,8 +407,8 @@ pub fn render(
     let x = ((width as f32 - card_w) / 2.0).round();
     let y = ((height as f32 - card_h) / 2.0).round();
     let edge = match (card.critical, card.bar) {
-        (true, _) => DANGER_EDGE,
-        _ => EDGE,
+        (true, _) => p.danger_edge,
+        _ => p.edge,
     };
     let accent = card.accent;
     rounded(
@@ -387,7 +421,7 @@ pub fn render(
         &mut out,
         (x, y, card_w, card_h),
         16.0 * s,
-        &paint([CARD[0], CARD[1], CARD[2]], CARD[3]),
+        &paint([p.card[0], p.card[1], p.card[2]], p.card[3]),
     );
 
     // The icon in its tinted circle, the title beside it.
@@ -414,7 +448,7 @@ pub fn render(
         semibold,
         title_px,
         (cx + circle + 12.0 * s, cy + circle / 2.0 + title_px * 0.36),
-        TEXT,
+        p.text,
         &card.title,
     );
     let mut line_y = cy + circle + gap;
@@ -424,7 +458,7 @@ pub fn render(
             regular,
             body_px,
             (x + pad, line_y + body_px * 1.08),
-            BODY,
+            p.body,
             line,
         );
         line_y += body_line;
@@ -432,13 +466,13 @@ pub fn render(
     if let Some(done) = card.bar {
         line_y += gap;
         let bar = (x + pad, line_y, inner, 6.0 * s);
-        rounded(&mut out, bar, 3.0 * s, &paint(TRACK, 255));
+        rounded(&mut out, bar, 3.0 * s, &paint(p.track, 255));
         let fill = (inner * done.clamp(0.0, 1.0)).max(6.0 * s);
         rounded(
             &mut out,
             (bar.0, bar.1, fill, bar.3),
             3.0 * s,
-            &paint(DANGER, 255),
+            &paint(p.danger, 255),
         );
         line_y += 6.0 * s;
     }
@@ -448,7 +482,7 @@ pub fn render(
         icon(
             &mut out,
             PLUG,
-            MUTED,
+            p.muted,
             size,
             ((x + pad) as i32, (line_y + s) as i32),
         );
@@ -458,7 +492,7 @@ pub fn render(
             regular,
             px,
             (x + pad + 20.0 * s, line_y + 12.0 * s),
-            MUTED,
+            p.muted,
             hint,
         );
     }
@@ -532,16 +566,51 @@ mod tests {
         );
         let disc = |step| assets("pt_BR").card(Alert::Disc(step));
         assert_eq!(disc(Disc::Start).title, "Preparando o disco…");
-        assert_eq!((disc(Disc::Start).icon, disc(Disc::Start).accent), (LOADER, ACCENT));
+        assert_eq!(
+            (disc(Disc::Start).icon, disc(Disc::Start).accent),
+            (LOADER, Palette::DEFAULT.accent)
+        );
         assert_eq!(disc(Disc::NoSpace).title, "Sem espaço para o disco");
-        assert_eq!(disc(Disc::NoSpace).accent, DANGER);
+        assert_eq!(disc(Disc::NoSpace).accent, Palette::DEFAULT.danger);
         let done = report("pt_BR", Report::Done);
         assert_eq!(done.body, "Em roms/relatorios, visível no PC.");
         assert_eq!(
             (done.critical, done.icon, done.accent),
-            (false, CHECK, SUCCESS)
+            (false, CHECK, Palette::DEFAULT.success)
         );
-        assert_eq!(report("xx_YY", Report::Failed).accent, DANGER);
+        assert_eq!(
+            report("xx_YY", Report::Failed).accent,
+            Palette::DEFAULT.danger
+        );
+    }
+
+    #[test]
+    fn the_card_takes_the_themes_colours() {
+        let mut a = assets("pt_BR");
+        let low = Alert::Battery(Battery {
+            level: 10,
+            left: None,
+            game: false,
+        });
+        assert_eq!(a.card(low).accent, Palette::DEFAULT.warning);
+        a.restyle(&crate::look::Look::parse(
+            "[colors]\nwarning = \"#FFAA00\"\nsurface = \"#202020\"\n",
+        ));
+        let card = a.card(low);
+        assert_eq!(card.accent, [0xFF, 0xAA, 0]);
+        let frame = render(&card, &a, (640, 480), 1.0);
+        let c = frame.pixel(320, 250).unwrap().demultiply();
+        // Premultiplied storage: one step of rounding.
+        assert!(
+            [c.red(), c.green(), c.blue()]
+                .iter()
+                .all(|v| v.abs_diff(0x20) <= 1),
+            "{c:?}"
+        );
+        // A face that does not load is the default one: the text still shows.
+        a.restyle(&crate::look::Look::parse("font = \"/nonexistent.ttf\"\n"));
+        assert!(a.regular.is_some() && a.semibold.is_some());
+        assert_eq!(a.palette, Palette::DEFAULT);
     }
 
     #[test]
@@ -555,7 +624,7 @@ mod tests {
         let frame = render(&card, &a, (640, 480), 1.0);
         let at = |x: u32, y: u32| frame.pixel(x, y).unwrap();
         // The veil in a corner, the card's own colour in its middle.
-        assert_eq!(at(4, 4).alpha(), VEIL[3]);
+        assert_eq!(at(4, 4).alpha(), Palette::DEFAULT.veil[3]);
         assert_eq!(at(320, 236).alpha(), 255);
         if let Some(dir) = std::env::var_os("ARCHR_OSD_CAPTURE_DIR") {
             for language in ["pt_BR", "ru"] {
