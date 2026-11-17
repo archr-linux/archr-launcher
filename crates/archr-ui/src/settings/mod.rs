@@ -1994,6 +1994,9 @@ impl Settings {
         None
     }
     pub fn handle(&mut self, button: Button) -> Effect {
+        // → opens the focused page from the root, like A (the sidebar's
+        // focus moves to the page); on a page it steps values, like R.
+        let right = button == Button::Right;
         let button = button.shoulder();
         if self.reboot_prompt.is_some() {
             return match button {
@@ -2048,6 +2051,9 @@ impl Settings {
             Button::Down => self.cursor = (self.cursor + 1).min(len.saturating_sub(1)),
             Button::Y if page == Page::Root => self.open(Page::Info),
             Button::A if page == Page::Root => {
+                self.open(CATEGORIES[self.cursor.min(CATEGORIES.len() - 1)].0)
+            }
+            Button::R if page == Page::Root && right => {
                 self.open(CATEGORIES[self.cursor.min(CATEGORIES.len() - 1)].0)
             }
             Button::A | Button::L | Button::R if self.pending.is_none() && !self.loading => {

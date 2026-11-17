@@ -17,6 +17,19 @@ fn breadcrumbs_restore_focus_and_root_back_closes() {
 }
 
 #[test]
+fn right_opens_the_focused_page_from_the_root_but_the_shoulder_does_not() {
+    let mut s = Settings::default();
+    s.loading = false;
+    s.cursor = 3;
+    assert_eq!(s.handle(Button::R), Effect::None);
+    assert_eq!(s.page(), Page::Root);
+    assert_eq!(s.handle(Button::Right), Effect::None);
+    assert_eq!(s.page(), Page::Games);
+    s.handle(Button::B);
+    assert_eq!((s.page(), s.cursor), (Page::Root, 3));
+}
+
+#[test]
 fn sliders_clamp_and_coalesce_while_a_value_is_applied() {
     let mut s = Settings::default();
     s.loading = false;
