@@ -2518,12 +2518,13 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         let radius = style.radius.map_or(radius, |r| self.frame.size(r));
         if style.glass {
             self.cast_shadow(panel, radius)?;
-            // Glass over a dimmed screen: the theme's surface under it.
+            // Glass over a dimmed screen: the theme's surface under it,
+            // nearly opaque, so the page under it never reads through.
             self.rounded(
                 panel,
                 radius,
                 Rgba {
-                    a: 200,
+                    a: 240,
                     ..theme.surface
                 },
                 None,

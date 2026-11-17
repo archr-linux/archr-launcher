@@ -261,12 +261,15 @@ impl Ui<'_, '_> {
         // Footer: where the list came from, then the buttons.
         let h = self.frame.size(theme.footer_height).round().max(1.) as u32;
         let y = height as i32 - h as i32;
-        self.divider(0, y, width, theme.border)?;
+        // The theme's hints ([hints], a capsule) need no rule above them.
+        if theme.screens.hints == crate::screens::Hints::default() {
+            self.divider(0, y, width, theme.border)?;
+        }
         let hints = [
             (HintButton::Pair('L', 'R'), "hint.page"),
             (HintButton::Key('B'), "hint.back"),
         ];
-        let left = self.hints(&hints, theme, width, y, h)?;
+        let left = self.placed_hints(&hints, theme, (width, y, h))?;
         let status = match sheet.fetch {
             Fetch::Fresh => Some("settings.updated_now"),
             Fetch::Saved => Some("cheevos.saved"),

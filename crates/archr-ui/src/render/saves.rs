@@ -94,12 +94,16 @@ impl Ui<'_, '_> {
         let Frame { width, height, .. } = self.frame;
         let h = self.frame.size(theme.footer_height).round().max(1.) as u32;
         let y = height as i32 - h as i32;
-        if !self.has_frame("footer") {
+        // The theme's hints ([hints], a capsule) need no rule above them.
+        let placed = theme.screens.hints != crate::screens::Hints::default();
+        if !self.has_frame("footer") && !placed {
             self.divider(0, y, width, theme.border)?;
         }
         // Outlined like the other footers, over a theme's picture.
         self.look.outlining = true;
-        let drawn = self.hints(hints, theme, width, y, h).and_then(|left| {
+        let drawn = self
+            .placed_hints(hints, theme, (width, y, h))
+            .and_then(|left| {
             self.label(
                 summary,
                 (Face::Regular, 13., theme.muted),
@@ -1015,21 +1019,22 @@ impl Ui<'_, '_> {
             )?;
         }
 
-        // The footer answers the question.
+        // The footer answers the question: on a bar, or in the theme's
+        // capsule ([hints]).
         let fy = height as i32 - footer as i32;
-        self.canvas.set_draw_color(color(theme.background));
-        self.canvas.fill_rect(Rect::new(0, fy, width, footer))?;
-        self.divider(0, fy, width, theme.border)?;
-        self.hints(
+        if theme.screens.hints == crate::screens::Hints::default() {
+            self.canvas.set_draw_color(color(theme.background));
+            self.canvas.fill_rect(Rect::new(0, fy, width, footer))?;
+            self.divider(0, fy, width, theme.border)?;
+        }
+        self.placed_hints(
             &[
                 (HintButton::Pair('‹', '›'), "hint.choose"),
                 ('A'.into(), "hint.confirm"),
                 ('B'.into(), "hint.cancel"),
             ],
             theme,
-            width,
-            fy,
-            footer,
+            (width, fy, footer),
         )?;
         Ok(())
     }

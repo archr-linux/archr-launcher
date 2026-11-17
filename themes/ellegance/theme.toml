@@ -96,8 +96,8 @@ badge_radius = 0.02
 
 [saves]
 style = "preview"
-preview = { x = 0.05, y = 0.12, w = 0.5, h = 0.72 }
-list = { x = 0.58, y = 0.12, w = 0.37, h = 0.72 }
+preview = { x = 0.05, y = 0.12, w = 0.55, h = 0.72 }
+list = { x = 0.625, y = 0.12, w = 0.325, h = 0.72 }
 
 [shots]
 sections = true

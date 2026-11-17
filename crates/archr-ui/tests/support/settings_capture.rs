@@ -3972,11 +3972,25 @@ fn sidebar_settings(theme_dir: &str, out: Option<std::path::PathBuf>, golden: Op
     let mut root = ready();
     root.cursor = 1;
     let mut states = vec![("raiz", root)];
-    let wanted = ["wifi", "services", "games", "sound-sliding"];
-    states.extend(pages().into_iter().filter(|(n, _)| wanted.contains(n)));
+    let wanted = [
+        "wifi",
+        "wifi-searching-a",
+        "wifi-empty-a",
+        "password",
+        "services",
+        "games",
+        "sound-sliding",
+    ];
+    // ARCHR_SETTINGS_EVERY: every page, to look them all over.
+    let every = std::env::var_os("ARCHR_SETTINGS_EVERY").is_some();
+    states.extend(
+        pages()
+            .into_iter()
+            .filter(|(n, _)| every || wanted.contains(n)),
+    );
     let picks = ["list-games-core", "list-timezone"];
     states.extend(lists().into_iter().filter(|(n, _)| picks.contains(n)));
-    assert_eq!(states.len(), 7, "every state found");
+    assert!(every || states.len() == 10, "every state found");
     let ttf = sdl2::ttf::init().unwrap();
     for (w, h) in [(640, 480), (720, 720), (480, 320)] {
         let creator;

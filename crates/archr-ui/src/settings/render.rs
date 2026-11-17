@@ -856,7 +856,6 @@ impl View<'_, '_, '_> {
         let look = self.look();
         look.sidebar
             && look.title_below
-            && !state.picker.as_ref().is_some_and(|p| p.full())
             && !matches!(
                 state.page(),
                 Page::Root
@@ -866,22 +865,13 @@ impl View<'_, '_, '_> {
                     | Page::Store
                     | Page::StoreTheme
                     | Page::Module(..)
-                    | Page::Modules
                     | Page::ModuleStore
                     | Page::ModuleInfo
                     | Page::ModuleOffer
-                    | Page::AccentColor
-                    | Page::Mangohud
-                    | Page::MangohudItems
                     | Page::Keyboard
                     | Page::Updates
                     | Page::UpdatePackages
                     | Page::RaImport
-                    | Page::RaImportList
-                    | Page::Roms
-                    | Page::RomsList
-                    | Page::UsbAdapters
-                    | Page::ErrorReports
                     | Page::ReportText
                     | Page::Bios
                     | Page::Shortcuts
@@ -1534,14 +1524,31 @@ impl View<'_, '_, '_> {
                 .map(|(lines, size, _)| lines.len() as f32 * view.pitch(size, size + 3.))
         };
         let title = height(self, question, 18., 63.)?;
-        let body = height(self, detail, 14., 136.)?;
+        // A question without explanation closes up on its answers.
+        let (body, gap) = if detail.trim().is_empty() {
+            (0., 0.)
+        } else {
+            (height(self, detail, 14., 136.)?, 8.)
+        };
         let icon = if style.icon { 56. } else { 0. };
         let buttons = if style.buttons_row { 38. } else { 34. };
-        let total = 20. + icon + title + 8. + body + 18. + buttons + 16.;
+        let total = 20. + icon + title + gap + body + 18. + buttons + 16.;
         let top = ((432. - total) / 2.).round();
         let rect = self.rect((x, top, w, total));
         let radius = self.ui.px(style.radius.map_or(10., |r| r * 480.)) as f32;
         if style.glass {
+            // Over the page dimmed: the surface under the glass, so the
+            // rows under the question never read through it.
+            self.ui.cast_shadow(rect, radius)?;
+            self.ui.rounded(
+                rect,
+                radius,
+                Rgba {
+                    a: 240,
+                    ..self.theme.surface
+                },
+                None,
+            )?;
             self.ui.glass(rect, radius, &self.theme.glass_or_default())?;
         } else {
             self.ui
@@ -1557,11 +1564,13 @@ impl View<'_, '_, '_> {
         }
         let y = top + 20. + icon;
         self.text((x + 24., y, tw, title), question, (18., self.theme.text, align))?;
-        self.text(
-            (x + 24., y + title + 8., tw, body),
-            detail,
-            (14., self.theme.muted, align),
-        )?;
+        if body > 0. {
+            self.text(
+                (x + 24., y + title + gap, tw, body),
+                detail,
+                (14., self.theme.muted, align),
+            )?;
+        }
         let bottom = top + total - 16. - buttons;
         if !style.buttons_row {
             return self

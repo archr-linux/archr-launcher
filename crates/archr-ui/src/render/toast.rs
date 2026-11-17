@@ -38,9 +38,14 @@ impl Ui<'_, '_> {
         let text_w = (w - text_x - pad).max(1) as u32;
         let step = self.px(16.);
         let slide = self.motion.travel(SLIDE).as_secs_f32();
-        // Below the status pill, which is centred in the header.
+        // In a corner: below the status pill, which is centred in the
+        // header. From the top, centered: a banner over the header.
         let header = self.frame.size(theme.header_height).round() as i32;
-        let mut next = header / 2 + self.px(13. + 10.);
+        let mut next = if style.position == Corner::Top {
+            self.px(12.)
+        } else {
+            header / 2 + self.px(13. + 10.)
+        };
         for card in &cards {
             let y = next;
             let toast = &card.toast;
@@ -88,7 +93,20 @@ impl Ui<'_, '_> {
                 theme.border
             };
             if style.glass {
-                self.glass(rect, self.px(12.) as f32, &theme.glass_or_default())?;
+                // Over whatever is under it: the surface beneath the
+                // glass, the theme's card corners.
+                let radius = self.frame.size(theme.radius_card).round();
+                self.cast_shadow(rect, radius)?;
+                self.rounded(
+                    rect,
+                    radius,
+                    Rgba {
+                        a: 235,
+                        ..theme.surface
+                    },
+                    None,
+                )?;
+                self.glass(rect, radius, &theme.glass_or_default())?;
             } else {
                 self.panel(rect, self.px(12.) as f32, theme.surface, edge)?;
             }

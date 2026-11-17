@@ -3,6 +3,9 @@ use super::*;
 
 /// Result rows, in reference pixels.
 const ROW: f32 = 34.;
+/// Text this small (screen pixels) or smaller draws a bold face no bolder
+/// than a regular one.
+const SMALL_TEXT: u16 = 11;
 
 impl Ui<'_, '_> {
     /// `<System> / Search` and "N of TOTAL", the field, the results, and
@@ -415,6 +418,9 @@ impl Ui<'_, '_> {
             (&name[start..start + term.len()], Face::Bold),
             (&name[start + term.len()..], Face::Regular),
         ];
+        // Small text hints a bold stem to one pixel, as a regular one: there
+        // the rest of the name steps back so the term still stands out.
+        let small = self.frame.font_size(15.) <= SMALL_TEXT;
         let mut left = x;
         for (text, face) in parts {
             if text.is_empty() {
@@ -425,7 +431,12 @@ impl Ui<'_, '_> {
             if room == 0 {
                 break;
             }
-            self.label(text, (face, 15., theme.text), Rect::new(left, y, room, h))?;
+            let ink = if small && face == Face::Regular {
+                theme.text_secondary
+            } else {
+                theme.text
+            };
+            self.label(text, (face, 15., ink), Rect::new(left, y, room, h))?;
             left += w;
         }
         Ok(())
