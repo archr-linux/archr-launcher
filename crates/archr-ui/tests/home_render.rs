@@ -7,7 +7,9 @@ use archr_ui::{
     apps::Row,
     render::Ui,
     resume::Recent,
+    settings::{Page, Settings},
     state::{App, Button, DataSource, Screen},
+    toast::{Category, Kind, Toast},
     Rect01, Theme,
 };
 use common::FakeData;
@@ -187,7 +189,7 @@ fn the_shelves_fit_and_draw_at_every_size() {
             archr_ui::covers::CoverCache::new(&creator, root.path().join("thumbs"), size.0, size.1);
         let mut covers =
             archr_ui::covers::CoverCache::new(&creator, root.path().join("covers"), 320, 240);
-        let mut shot = |ui: &mut Ui, name: &str, app: &App| {
+        let mut shot = |ui: &mut Ui, name: &str, app: &App, settings: Option<&Settings>| {
             // Pictures load on workers: with captures, wait for them.
             let rounds = if out.is_some() { 40 } else { 2 };
             for _ in 0..rounds {
@@ -204,7 +206,7 @@ fn the_shelves_fit_and_draw_at_every_size() {
                     pictures: Some(&pictures),
                     ..Default::default()
                 };
-                ui.draw_with_settings(app, &data, &theme, art, None)
+                ui.draw_with_settings(app, &data, &theme, art, settings)
                     .unwrap();
                 if rounds > 2 {
                     std::thread::sleep(std::time::Duration::from_millis(25));
@@ -225,23 +227,39 @@ fn the_shelves_fit_and_draw_at_every_size() {
             }
         };
         assert!(matches!(app.screen, Screen::Home { .. }));
-        shot(&mut ui, "inicio", &app);
+        shot(&mut ui, "inicio", &app, None);
         app.handle(Button::Down, &data);
         app.handle(Button::Right, &data);
-        shot(&mut ui, "inicio-sistemas", &app);
+        shot(&mut ui, "inicio-sistemas", &app, None);
         app.handle(Button::Down, &data);
-        shot(&mut ui, "inicio-app", &app);
+        shot(&mut ui, "inicio-app", &app, None);
         app.handle(Button::R, &data);
-        shot(&mut ui, "biblioteca", &app);
+        shot(&mut ui, "biblioteca", &app, None);
         app.handle(Button::A, &data);
         app.handle(Button::Right, &data);
         app.handle(Button::Right, &data);
         app.handle(Button::Right, &data);
-        shot(&mut ui, "jogos", &app);
+        shot(&mut ui, "jogos", &app, None);
         app.handle(Button::B, &data);
         app.handle(Button::R, &data);
-        shot(&mut ui, "favoritos", &app);
+        shot(&mut ui, "favoritos", &app, None);
         app.handle(Button::Y, &data);
-        shot(&mut ui, "favoritos-menu", &app);
+        shot(&mut ui, "favoritos-menu", &app, None);
+        // [toast]: a notice at the top, on glass.
+        app.handle(Button::B, &data);
+        ui.toasts.push(
+            Toast::new(Kind::Info, Category::Updates, "Atualização disponível")
+                .detail("3 pacotes do sistema estão prontos para instalar."),
+            std::time::Instant::now(),
+        );
+        shot(&mut ui, "aviso", &app, None);
+        // [dialog]: a question with its icon and answers side by side.
+        let mut settings = Settings::default();
+        settings.loading = false;
+        settings.open(Page::Wifi);
+        settings.open(Page::Bluetooth);
+        settings.cursor = 2;
+        settings.confirm_forget = Some("00:1A:2B:3C:4D:5E".into());
+        shot(&mut ui, "dialogo", &app, Some(&settings));
     }
 }
