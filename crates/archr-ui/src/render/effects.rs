@@ -99,6 +99,8 @@ impl<'t> Ui<'_, 't> {
             .create_texture_target(PixelFormatEnum::ARGB8888, w.max(1), h.max(1))
             .ok()?;
         texture.set_blend_mode(BlendMode::Blend);
+        // Drawn 1:1 it reads the same; scaled (a slide, a blur) it stays smooth.
+        texture.set_scale_mode(sdl2::render::ScaleMode::Linear);
         Some(texture)
     }
     /// The launcher opens with its screen fading in from the top, band by band.

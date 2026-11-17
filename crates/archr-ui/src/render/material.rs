@@ -147,8 +147,11 @@ impl<'t> Ui<'_, 't> {
     }
     /// The blurred copy of the picture behind the screen, made the first
     /// time it is asked for: reduced `steps` times, each a linear 2×2
-    /// average, then drawn back enlarged. Never once a frame.
-    /// `first` draws the picture at `path` over the whole target.
+    /// average, then grown back up to two halvings short of the screen,
+    /// each step a tent of four taps (a dual filter), so the screen-sized
+    /// copy drawn from it is smooth instead of a mesh of linear creases.
+    /// Never once a frame. `first` draws the picture at `path` over the
+    /// whole target.
     pub(super) fn blurred(
         &mut self,
         path: &Path,
@@ -202,8 +205,36 @@ impl<'t> Ui<'_, 't> {
             next.set_scale_mode(ScaleMode::Linear);
             current = Some(next);
         }
+        // Back up, each step twice the size, four half-texel taps averaged.
+        let kept = steps.min(2);
+        for _ in kept..steps {
+            let previous = current.as_mut()?;
+            (w, h) = (w * 2, h * 2);
+            let next = self.target_texture((w, h))?;
+            if !target(Some(&next), &mut self.canvas) {
+                saved.restore(&mut self.canvas);
+                return None;
+            }
+            self.canvas.set_viewport(None);
+            self.canvas.set_clip_rect(None);
+            for (n, (dx, dy)) in [(-1, -1), (1, 1), (1, -1), (-1, 1)].into_iter().enumerate() {
+                // The first replaces, the others blend in at 1/2, 1/3, 1/4.
+                let mode = if n == 0 { BlendMode::None } else { BlendMode::Blend };
+                previous.set_blend_mode(mode);
+                previous.set_alpha_mod((255. / (n + 1) as f32).round() as u8);
+                let dst = Rect::new(dx - 1, dy - 1, w + 2, h + 2);
+                if self.canvas.copy(previous, None, dst).is_err() {
+                    saved.restore(&mut self.canvas);
+                    return None;
+                }
+            }
+            let mut next = next;
+            next.set_scale_mode(ScaleMode::Linear);
+            current = Some(next);
+        }
         saved.restore(&mut self.canvas);
         let mut blurred = current?;
+        blurred.set_alpha_mod(255);
         blurred.set_blend_mode(BlendMode::Blend);
         let blurs = &mut self.materials.blurs;
         if blurs.len() == BLURS {
@@ -400,7 +431,11 @@ mod tests {
         assert_eq!(ui.blurred(path, 3, &mut draw), Some(first), "kept");
         assert_eq!(made, 1, "made once, never again for this picture");
         let size = ui.materials.blurs[first].2.query();
-        assert_eq!((size.width, size.height), (8, 6), "reduced three times");
+        assert_eq!(
+            (size.width, size.height),
+            (16, 12),
+            "reduced three times, grown back once"
+        );
         // Drawn back over the screen, the stripes are an even grey.
         ui.canvas.set_draw_color(sdl2::pixels::Color::BLACK);
         ui.canvas.clear();
