@@ -73,36 +73,7 @@ impl Ui<'_, '_> {
         // Back to the system, in a capsule of glass; the status at the right.
         let name = system_title(system, data, &self.catalog);
         let margin = self.px(28.);
-        let cap_h = self.px(30.);
-        let text_w = self.measure(&name, Face::Semibold, 13.)? as i32;
-        let chevron = self.px(14.);
-        let cap_w = (self.px(12.) + chevron + self.px(4.) + text_w + self.px(14.))
-            .min(w / 2)
-            .max(cap_h);
-        let capsule = Rect::new(
-            margin - self.px(8.),
-            self.px(14.),
-            cap_w as u32,
-            cap_h as u32,
-        );
-        self.glass(capsule, cap_h as f32 / 2., &theme.glass_or_default())?;
-        let glyph = Rect::new(
-            capsule.x() + self.px(10.),
-            capsule.y() + (cap_h - chevron) / 2,
-            chevron as u32,
-            chevron as u32,
-        );
-        self.icon(Glyph::ChevronLeft, glyph, theme.text)?;
-        self.label(
-            &name,
-            (Face::Semibold, 13., theme.text),
-            Rect::new(
-                glyph.right() + self.px(4.),
-                capsule.y(),
-                (capsule.right() - glyph.right() - self.px(10.)).max(1) as u32,
-                cap_h as u32,
-            ),
-        )?;
+        let capsule = self.back_capsule(&name, theme)?;
         self.status_header(theme)?;
 
         // The shelf below takes cards up to a height; a taller screen gives

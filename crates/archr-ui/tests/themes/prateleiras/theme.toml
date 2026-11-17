@@ -91,6 +91,9 @@ field = { x = 0.0375, y = 0.1, w = 0.925, h = 0.083 }
 results = { x = 0.0375, y = 0.2, w = 0.925, h = 0.3 }
 dock = "results"
 
+[header]
+style = "capsule"
+
 [keyboard]
 sheet = true
 key = { h = 0.075, gap = 0.0125, radius = 0.025 }

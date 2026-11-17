@@ -2,7 +2,7 @@
 //! the whole screen), with the question before playing or deleting. The
 //! list, the card and the grid sit in theme rectangles (`saves_*`,
 //! `shots_grid`), like the details.
-use super::details::fit;
+use super::details::{fit, lowered};
 use super::*;
 use crate::{
     primitives::crop,
@@ -113,20 +113,19 @@ impl Ui<'_, '_> {
         self.look.outlining = false;
         drawn
     }
+    /// The path (or the theme's capsule header) over Saves or Screenshots;
+    /// returns how far the content lowers.
     fn progress_crumbs(
         &mut self,
         (system, game): (&str, usize),
         key: &str,
         data: &dyn DataSource,
         theme: &Theme,
-    ) -> Result<(), String> {
+    ) -> Result<i32, String> {
         let name = data.games(system).get(game).map_or("", |g| g.name.as_str());
         let trail = format!("{} / {name}", system_title(system, data, &self.catalog));
         let current = self.catalog.text(key);
-        self.look.outlining = true;
-        let drawn = self.crumbs(&trail, &current, theme);
-        self.look.outlining = false;
-        drawn
+        self.game_header((&trail, name), &current, true, theme)
     }
 
     /// The game menu's value for Saves ("5 · last 2 h ago") and Screenshots.
@@ -160,15 +159,15 @@ impl Ui<'_, '_> {
         theme: &Theme,
         art: Art<'_, '_>,
     ) -> Result<(), String> {
-        self.progress_crumbs(game, "menu.saves", data, theme)?;
+        let lower = self.progress_crumbs(game, "menu.saves", data, theme)?;
         if theme.screens.saves.preview {
-            self.saves_preview(app, theme, art)?;
+            self.saves_preview(app, theme, art, lower)?;
             return self.saves_footer(app, theme);
         }
         let Frame { width, height, .. } = self.frame;
         let saves = &app.progress.saves;
-        let list = pixels(theme.saves_list, width, height);
-        let card = pixels(theme.saves_card, width, height);
+        let list = lowered(pixels(theme.saves_list, width, height), lower);
+        let card = lowered(pixels(theme.saves_card, width, height), lower);
         let (row, gap) = (self.px(ROW), self.px(ROW_GAP));
         let visible = ((list.height() as i32 + gap) / (row + gap)).max(1) as usize;
         self.saves_page = visible;
@@ -345,15 +344,42 @@ impl Ui<'_, '_> {
     /// The selected state's picture large in the card's place, its name
     /// and when it was saved over its foot; the states in a group of glass
     /// in the list's place, each with its picture.
-    fn saves_preview(&mut self, app: &App, theme: &Theme, art: Art<'_, '_>) -> Result<(), String> {
+    fn saves_preview(
+        &mut self,
+        app: &App,
+        theme: &Theme,
+        art: Art<'_, '_>,
+        lower: i32,
+    ) -> Result<(), String> {
         let Frame { width, height, .. } = self.frame;
         let style = theme.screens.saves;
         let saves = &app.progress.saves;
-        let card = pixels(theme.saves_card, width, height);
-        let list = pixels(theme.saves_list, width, height);
-        // The picture, 4:3 as wide as the card allows.
-        let h = (card.width() * 3 / 4).min(card.height());
-        let w = (h * 4 / 3).min(card.width());
+        let card = lowered(pixels(theme.saves_card, width, height), lower);
+        let list = lowered(pixels(theme.saves_list, width, height), lower);
+        // The picture, 4:3 as wide as the card allows with what playing
+        // the state does whole under it: a shorter card (a lower screen, a
+        // header's title line) takes a smaller picture, never the note.
+        let note = saves.get(app.cursor).map(|save| self.save_note(app, save));
+        let step = self.px(17.);
+        let mut h = (card.width() * 3 / 4).min(card.height());
+        let mut w = (h * 4 / 3).min(card.width());
+        let mut lines = Vec::new();
+        for _ in 0..3 {
+            if let Some(note) = &note {
+                lines = self.wrap(note, Face::Regular, 12., w)?;
+            }
+            let under = if lines.is_empty() {
+                0
+            } else {
+                self.px(14.) + step * lines.len() as i32
+            };
+            let room = (card.height() as i32 - under).max(card.height() as i32 / 2) as u32;
+            if h <= room {
+                break;
+            }
+            h = room;
+            w = (h * 4 / 3).min(card.width());
+        }
         let shot = Rect::new(card.x(), card.y(), w, h);
         let radius = self.px(16.) as f32;
         self.cast_shadow(shot, radius)?;
@@ -400,18 +426,14 @@ impl Ui<'_, '_> {
             )?;
         }
         // What playing it does, under the picture.
-        if let Some(save) = saves.get(app.cursor) {
-            let note = self.save_note(app, save);
-            let step = self.px(17.);
-            let mut y = shot.bottom() + self.px(14.);
-            for text in self.wrap(&note, Face::Regular, 12., shot.width())? {
-                if y + step > card.bottom() {
-                    break;
-                }
-                let band = Rect::new(shot.x(), y, shot.width(), step as u32);
-                self.label(&text, (Face::Regular, 12., theme.muted), band)?;
-                y += step;
+        let mut y = shot.bottom() + self.px(14.);
+        for text in &lines {
+            if y + step > card.bottom() {
+                break;
             }
+            let band = Rect::new(shot.x(), y, shot.width(), step as u32);
+            self.label(text, (Face::Regular, 12., theme.muted), band)?;
+            y += step;
         }
         // The list in a group of glass, a page at a time.
         let row = self.px(style.row * 480.);
@@ -497,10 +519,10 @@ impl Ui<'_, '_> {
         theme: &Theme,
         art: Art<'_, '_>,
     ) -> Result<(), String> {
-        self.progress_crumbs(game, "menu.shots", data, theme)?;
+        let lower = self.progress_crumbs(game, "menu.shots", data, theme)?;
         let Frame { width, height, .. } = self.frame;
         let shots = &app.progress.shots;
-        let grid = pixels(theme.shots_grid, width, height);
+        let grid = lowered(pixels(theme.shots_grid, width, height), lower);
         let style = theme.screens.shots;
         let gap = self.px(style.gap * 480.);
         // As many cells near the reference width as fit, stretched to fill,

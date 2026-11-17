@@ -53,17 +53,20 @@ impl Ui<'_, '_> {
             u32::MAX,
             Align::Right,
         )?;
-        let title = self.catalog.format(
-            "search.title",
-            &[("system", &system_title(system, data, &self.catalog))],
-        );
-        let pad = self.px(24.);
-        let width = (right - pad - self.px(10.)).max(1) as u32;
-        self.label(
-            &title,
-            (Face::Semibold, 15., theme.text),
-            Rect::new(pad, 0, width, header),
-        )?;
+        let name = system_title(system, data, &self.catalog);
+        if theme.screens.header.capsule {
+            // The theme's capsule header: back to the system.
+            self.back_capsule(&name, theme)?;
+        } else {
+            let title = self.catalog.format("search.title", &[("system", &name)]);
+            let pad = self.px(24.);
+            let width = (right - pad - self.px(10.)).max(1) as u32;
+            self.label(
+                &title,
+                (Face::Semibold, 15., theme.text),
+                Rect::new(pad, 0, width, header),
+            )?;
+        }
         // The field, its border lit while typing.
         let field = at(self, 24., 50., 592., 38.);
         let typing = !search.results;
@@ -194,23 +197,41 @@ impl Ui<'_, '_> {
         let found = app.search_results(data, system);
         let games = data.games(system);
         let dirs = data.folders(system);
-        let header = self.frame.size(theme.header_height).round() as u32;
-        let right = self.status_header(theme)?;
-        let title = self.catalog.format(
-            "search.title",
-            &[("system", &system_title(system, data, &self.catalog))],
-        );
-        let pad = self.px(24.);
-        self.label(
-            &title,
-            (Face::Semibold, 15., theme.text),
-            Rect::new(pad, 0, (right - pad - self.px(10.)).max(1) as u32, header),
-        )?;
+        // Under the theme's capsule header the field takes the top, with
+        // Cancel beside it; else the path and the status over it.
+        let capsule = theme.screens.header.capsule;
+        if !capsule {
+            let header = self.frame.size(theme.header_height).round() as u32;
+            let right = self.status_header(theme)?;
+            let title = self.catalog.format(
+                "search.title",
+                &[("system", &system_title(system, data, &self.catalog))],
+            );
+            let pad = self.px(24.);
+            self.label(
+                &title,
+                (Face::Semibold, 15., theme.text),
+                Rect::new(pad, 0, (right - pad - self.px(10.)).max(1) as u32, header),
+            )?;
+        }
         // The field: a capsule of glass, lit while typing; where the theme
-        // puts it, else under the header.
+        // puts it, else under the header (or at the top).
         let fh = style.height * 480.;
         let field = match style.field_at {
             Some(r) => self.area(r),
+            None if capsule => {
+                let cancel = self.catalog.text("hint.cancel");
+                let right = self.frame.width as i32 - self.px(24.);
+                let left = self.packed_label(
+                    &cancel,
+                    (Face::Regular, 14., theme.highlight_bg),
+                    (right, self.px(16.), self.px(fh) as u32),
+                    u32::MAX,
+                    Align::Right,
+                )?;
+                let w = (left - self.px(10.) - self.px(24.)).max(1) as u32;
+                Rect::new(self.px(24.), self.px(16.), w, self.px(fh) as u32)
+            }
             None => at(self, 24., 50., 592., fh),
         };
         let typing = !search.results;

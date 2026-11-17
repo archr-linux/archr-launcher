@@ -97,6 +97,16 @@ impl Default for StatusStyle {
     }
 }
 
+/// The top of a game's screens (achievements, saves, screenshots and the
+/// search): the path in text with the status at the right (as always), or
+/// (`style = "capsule"`) "‹ <game>" in a capsule of glass with the screen's
+/// title large on a line of its own under it, the content lowered by that
+/// line; the search drops the path and takes the top with its field.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct HeaderStyle {
+    pub capsule: bool,
+}
+
 /// Questions and alerts.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct DialogStyle {
@@ -483,6 +493,7 @@ pub struct Screens {
     pub toast: ToastStyle,
     pub hints: Hints,
     pub status: StatusStyle,
+    pub header: HeaderStyle,
     pub dialog: DialogStyle,
     pub start: StartStyle,
     pub menu: MenuStyle,
@@ -524,6 +535,7 @@ pub const TABLES: &[&str] = &[
     "toast",
     "hints",
     "status",
+    "header",
     "dialog",
     "details",
     "achievements",
@@ -581,6 +593,7 @@ fn style_keys(screen: &str) -> &'static [&'static str] {
         "toast" => &["position", "width", "icon", "style"],
         "hints" => &["style", "position", "lit"],
         "status" => &["style", "battery", "radios", "clock", "rect"],
+        "header" => &["style"],
         "dialog" => &["width", "radius", "icon", "buttons", "style"],
         "start" => &["style", "radius", "shortcut", "clock", "tiles", "shortcuts"],
         "menu" => &["style", "anchor", "width", "row", "radius", "rect"],
@@ -667,6 +680,14 @@ impl Screens {
             own.status.radios = r.flag("radios", own.status.radios);
             own.status.mono = r.pick("clock", own.status.mono, &[("mono", true), ("text", false)]);
             own.status.rect = r.rect("rect").or(own.status.rect);
+        }
+        if let Some(t) = get("header") {
+            let r = Reader("header", t);
+            own.header.capsule = r.pick(
+                "style",
+                own.header.capsule,
+                &[("path", false), ("capsule", true)],
+            );
         }
         if let Some(t) = get("dialog") {
             let r = Reader("dialog", t);
@@ -1096,6 +1117,16 @@ mod tests {
             wrong,
             SettingsStyle::default(),
             "wrong values: warned, kept"
+        );
+    }
+    #[test]
+    fn the_header_table_reads_its_style() {
+        assert!(!read("").header.capsule);
+        assert!(read("[header]\nstyle = 'capsule'").header.capsule);
+        assert!(!read("[header]\nstyle = 'path'").header.capsule);
+        assert!(
+            !read("[header]\nstyle = 'pill'").header.capsule,
+            "wrong value: warned, kept"
         );
     }
     #[test]

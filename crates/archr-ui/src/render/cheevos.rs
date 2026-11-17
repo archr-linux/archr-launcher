@@ -12,18 +12,26 @@ impl Ui<'_, '_> {
         art: Art<'_, '_>,
     ) -> Result<(), String> {
         let current = self.catalog.text("menu.achievements");
-        self.crumbs(game, &current, theme)?;
+        let style = theme.screens.achievements;
+        // Under the theme's capsule header the ring carries the title
+        // beside it, on the line the title would take.
+        let lower = self.game_header((game, game), &current, !style.ring, theme)?;
         let sheet = &app.sheet;
         let Frame { width, height, .. } = self.frame;
         let (done, earned, total_points) = sheet.progress();
 
-        let style = theme.screens.achievements;
         // The newer look: a group of glass, locks on the locked ones.
         let fancy = style.ring || style.glass;
         // Progress: label and counts over a bar, the hardcore chip beside them.
-        let block = pixels(theme.achievements_progress, width, height);
+        let block =
+            super::details::lowered(pixels(theme.achievements_progress, width, height), lower);
         if style.ring {
-            self.cheevos_ring(sheet, game, block, theme)?;
+            let title = if theme.screens.header.capsule {
+                (current.as_str(), 28.)
+            } else {
+                (game, 24.)
+            };
+            self.cheevos_ring(sheet, title, block, theme)?;
         }
         let pad = self.px(10.);
         let mut right = block.right() - pad;
@@ -79,7 +87,7 @@ impl Ui<'_, '_> {
         }
 
         // The list, a page at a time; the page follows the cursor.
-        let list = pixels(theme.achievements_list, width, height);
+        let list = super::details::lowered(pixels(theme.achievements_list, width, height), lower);
         let (row, gap) = (self.px(style.row * 480.), self.px(style.gap * 480.));
         let visible = ((list.height() as i32 + gap) / (row + gap)).max(1) as usize;
         self.achievements_page = visible;
@@ -284,12 +292,13 @@ impl Ui<'_, '_> {
         }
         Ok(())
     }
-    /// The progress as a ring with "2/7" inside, the game's name large,
+    /// The progress as a ring with "2/7" inside, a title large (the
+    /// game's name, or the screen's under a capsule header, at its size),
     /// the points and the hardcore capsule in the theme's warning color.
     fn cheevos_ring(
         &mut self,
         sheet: &crate::cheevos::Sheet,
-        game: &str,
+        (game, big): (&str, f32),
         block: Rect,
         theme: &Theme,
     ) -> Result<(), String> {
@@ -353,7 +362,7 @@ impl Ui<'_, '_> {
         }
         let x = ring.right() + self.px(16.);
         let w = (block.right() - x).max(1) as u32;
-        let size = self.shrink(game, Face::Bold, 24., 15., w)?.unwrap_or(15.);
+        let size = self.shrink(game, Face::Bold, big, 15., w)?.unwrap_or(15.);
         let title_h = (self.frame.size(size / 480.) * 1.25).round() as i32;
         let line_h = self.px(18.);
         let chip_h = if sheet.hardcore {

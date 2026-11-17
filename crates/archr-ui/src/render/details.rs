@@ -3,6 +3,20 @@
 use super::*;
 use crate::state::DETAILS_ACTIONS;
 
+/// The line a theme's capsule header gives a game screen's title, in
+/// reference pixels: its content lowers by it.
+const TITLE_LINE: f32 = 44.;
+
+/// `rect` lowered by `by` pixels, its bottom where it was.
+pub(super) fn lowered(rect: Rect, by: i32) -> Rect {
+    Rect::new(
+        rect.x(),
+        rect.y() + by,
+        rect.width(),
+        (rect.height() as i32 - by).max(1) as u32,
+    )
+}
+
 /// Decoded art for the details screen; textures stay with their caches.
 #[derive(Clone, Copy, Default)]
 pub struct Art<'a, 't> {
@@ -193,6 +207,77 @@ impl Ui<'_, '_> {
         let trail = system_title(system, data, &self.catalog);
         self.look.outlining = true;
         let drawn = self.crumbs(&trail, game, theme);
+        self.look.outlining = false;
+        drawn
+    }
+
+    /// "‹ <back>" in a capsule of glass at the top left (the details' hero
+    /// and the theme's capsule header); returns the capsule.
+    pub(super) fn back_capsule(&mut self, back: &str, theme: &Theme) -> Result<Rect, String> {
+        let w = self.frame.width as i32;
+        let cap_h = self.px(30.);
+        let text_w = self.measure(back, Face::Semibold, 13.)? as i32;
+        let chevron = self.px(14.);
+        let cap_w = (self.px(12.) + chevron + self.px(4.) + text_w + self.px(14.))
+            .min(w / 2)
+            .max(cap_h);
+        let capsule = Rect::new(self.px(20.), self.px(14.), cap_w as u32, cap_h as u32);
+        self.glass(capsule, cap_h as f32 / 2., &theme.glass_or_default())?;
+        let glyph = Rect::new(
+            capsule.x() + self.px(10.),
+            capsule.y() + (cap_h - chevron) / 2,
+            chevron as u32,
+            chevron as u32,
+        );
+        self.icon(Glyph::ChevronLeft, glyph, theme.text)?;
+        self.label(
+            back,
+            (Face::Semibold, 13., theme.text),
+            Rect::new(
+                glyph.right() + self.px(4.),
+                capsule.y(),
+                (capsule.right() - glyph.right() - self.px(10.)).max(1) as u32,
+                cap_h as u32,
+            ),
+        )?;
+        Ok(capsule)
+    }
+
+    /// The top of a game's screen. As always, the path in text: "trail /"
+    /// and `title`. With the theme's capsule header (`[header] style =
+    /// "capsule"`), "‹ <game>" in a capsule, the status at the right and,
+    /// when `line`, `title` large on a line of its own under them. Returns
+    /// how far that line lowers the screen's content, in pixels.
+    pub(super) fn game_header(
+        &mut self,
+        (trail, game): (&str, &str),
+        title: &str,
+        line: bool,
+        theme: &Theme,
+    ) -> Result<i32, String> {
+        self.look.outlining = true;
+        let drawn = (|| {
+            if !theme.screens.header.capsule {
+                return self.crumbs(trail, title, theme).map(|()| 0);
+            }
+            self.back_capsule(game, theme)?;
+            self.status_header(theme)?;
+            if !line {
+                return Ok(0);
+            }
+            let x = self.px(32.);
+            let room = (self.frame.width as i32 - 2 * x).max(1) as u32;
+            let floor = self.frame.min_size().max(15.);
+            let size = self
+                .shrink(title, Face::Bold, 28., floor, room)?
+                .unwrap_or(floor);
+            self.label(
+                title,
+                (Face::Bold, size, theme.text),
+                Rect::new(x, self.px(52.), room, self.px(36.) as u32),
+            )?;
+            Ok(self.px(TITLE_LINE))
+        })();
         self.look.outlining = false;
         drawn
     }

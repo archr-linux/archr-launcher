@@ -765,6 +765,7 @@ pub const KNOWN_KEYS: &[&str] = &[
     "toast",
     "hints",
     "status",
+    "header",
     "dialog",
     "details",
     "achievements",
