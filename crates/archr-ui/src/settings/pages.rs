@@ -437,6 +437,22 @@ impl Settings {
             system_background: text(Id::SystemBackground),
         }
     }
+    /// Every Appearance choice but the theme back to what the theme says.
+    pub(super) fn restore_look(&mut self) {
+        for id in Appearance::IDS.into_iter().filter(|id| *id != Id::Theme) {
+            self.values.insert(id, id.default_value().into());
+        }
+    }
+    /// Another theme, as a draft shown at once: it comes whole, as its
+    /// author made it, the choices made over the last one dropped (as
+    /// Restore does); the view is the theme's first.
+    pub(super) fn choose_theme(&mut self, folder: String) -> Effect {
+        if self.value(Id::Theme) != folder {
+            self.restore_look();
+        }
+        self.values.insert(Id::Theme, folder.clone());
+        Effect::Theme(folder)
+    }
     /// B saves the draft only when something changed.
     pub(super) fn leave_appearance(&mut self) -> Effect {
         let changed = self.appearance() != self.appearance_saved;
@@ -511,11 +527,7 @@ impl Settings {
                 self.open_keyboard(Id::ScraperAccount, Mode::Text, user);
             }
             // Everything back to what the chosen theme says.
-            Id::Restore => {
-                for id in Appearance::IDS.into_iter().filter(|id| *id != Id::Theme) {
-                    self.values.insert(id, id.default_value().into());
-                }
-            }
+            Id::Restore => self.restore_look(),
             Id::ScraperStart if self.scrape.running => return Some(Effect::CancelScrape),
             // Pending from the first press: a second A never starts a second job.
             Id::ScraperStart if self.scrape.starting => {}

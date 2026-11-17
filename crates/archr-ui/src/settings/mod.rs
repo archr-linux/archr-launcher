@@ -2190,12 +2190,11 @@ impl Settings {
     fn write(&mut self, row: Row, next: String) -> Effect {
         if self.page() == Page::Appearance {
             // A draft: shown in the preview now, saved on leaving.
-            self.values.insert(row.id, next.clone());
-            return if row.id == Id::Theme {
-                Effect::Theme(next)
-            } else {
-                Effect::None
-            };
+            if row.id == Id::Theme {
+                return self.choose_theme(next);
+            }
+            self.values.insert(row.id, next);
+            return Effect::None;
         }
         let old = self.value(row.id).to_owned();
         if next == old {
@@ -2423,6 +2422,34 @@ mod appearance_tests {
         state.handle(Button::L);
         assert_eq!(state.handle(Button::B), Effect::None);
         assert_eq!(state.pending, None);
+    }
+    #[test]
+    fn choosing_a_theme_drops_the_choices_made_over_the_last_one() {
+        let mut state = page();
+        // Made over the first theme: an accent, a font size, another view.
+        for (id, value) in [
+            (Id::Accent, "pink"),
+            (Id::TextSize, "large"),
+            (Id::View, "vitrine"),
+            (Id::Background, "black"),
+        ] {
+            state.values.insert(id, value.into());
+        }
+        state.values.insert(Id::Language, "pt_BR".into());
+        assert_eq!(state.handle(Button::R), Effect::Theme("night".into()));
+        for id in crate::appearance::Appearance::IDS
+            .into_iter()
+            .filter(|id| *id != Id::Theme)
+        {
+            assert_eq!(state.value(id), id.default_value(), "{id:?}");
+        }
+        assert_eq!(state.value(Id::View), crate::layout::LISTA, "the theme's first view");
+        assert_eq!(state.value(Id::Language), "pt_BR", "not an Appearance choice");
+        // Back to the first one: it comes as its author made it too.
+        state.values.insert(Id::Accent, "teal".into());
+        assert_eq!(state.handle(Button::L), Effect::Theme("default".into()));
+        assert_eq!(state.value(Id::Accent), Id::Accent.default_value());
+        assert_eq!(state.appearance().text_size, Id::TextSize.default_value());
     }
     #[test]
     fn theme_changes_ask_the_host_to_load_the_preview() {

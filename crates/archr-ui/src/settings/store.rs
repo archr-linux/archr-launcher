@@ -353,10 +353,9 @@ impl Settings {
             Button::A => match self.store.action() {
                 Some("store.use") => {
                     // As choosing it on the Appearance page: a draft shown at once.
-                    self.values.insert(Id::Theme, folder.clone());
                     self.back();
                     self.back();
-                    return Effect::Theme(folder);
+                    return self.choose_theme(folder);
                 }
                 _ if detail.too_new => self.fail(None, "store.too_new".into()),
                 _ => {
@@ -604,9 +603,12 @@ mod tests {
         state.store_reply(Reply::Done(Ok("store.installed_ok")));
         assert!(state.options[&Id::Theme].contains(&"kaio-neon".to_owned()));
         assert_eq!(state.store.action(), Some("store.use"));
+        // Installed and used: it comes whole, the last theme's accent gone.
+        state.values.insert(Id::Accent, "pink".into());
         assert_eq!(state.handle(Button::A), Effect::Theme("kaio-neon".into()));
         assert_eq!(state.page(), Page::Appearance);
         assert_eq!(state.value(Id::Theme), "kaio-neon");
+        assert_eq!(state.value(Id::Accent), Id::Accent.default_value());
         assert_eq!(state.handle(Button::B), Effect::Appearance);
     }
 
