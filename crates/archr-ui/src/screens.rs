@@ -419,9 +419,7 @@ impl Screens {
             // `progress` is the bar's place, or a word, or a place with
             // its `style`.
             let progress = match t.get("progress") {
-                Some(Value::Table(at)) => {
-                    at.get("style").map(|_| Reader("achievements.progress", at))
-                }
+                Some(Value::Table(at)) => at.get("style").map(|_| Reader("achievements", at)),
                 Some(_) => Some(Reader("achievements", t)),
                 None => None,
             };
