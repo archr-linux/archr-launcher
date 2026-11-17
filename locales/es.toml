@@ -728,6 +728,8 @@
 "details.rescrape" = "Volver a descargar"
 "details.preview" = "Avance"
 "details.rescraping" = "Descargando…"
+"details.played" = "Jugado {ago}"
+"details.more_from" = "Más de {system}"
 "details.scroll" = "Desplazar texto"
 "details.options" = "Opciones"
 "details.genre" = "Género"

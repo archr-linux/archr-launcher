@@ -48,6 +48,9 @@ style = "control"
 [menu]
 style = "context"
 
+[details]
+style = "hero"
+
 [view.prateleiras]
 name = { en = "Shelves", pt_BR = "Prateleiras" }
 

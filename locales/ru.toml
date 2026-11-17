@@ -728,6 +728,8 @@
 "details.rescrape" = "Обновить"
 "details.preview" = "Превью"
 "details.rescraping" = "Загрузка…"
+"details.played" = "Запуск: {ago}"
+"details.more_from" = "Ещё: {system}"
 "details.scroll" = "Прокрутка"
 "details.options" = "Опции"
 "details.genre" = "Жанр"

@@ -20,6 +20,7 @@ mod cheevos;
 mod control;
 mod details;
 mod effects;
+mod hero;
 mod menu;
 pub(crate) use effects::Pop;
 mod home;
@@ -1162,8 +1163,12 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                     .games(system)
                     .get(*game)
                     .map_or("", |g| g.name.as_str());
-                self.details_header(system, name, data, theme)?;
-                self.details(app, (system, *game), data, theme, art)?;
+                if theme.screens.details.hero {
+                    self.details_hero(app, (system, *game), data, theme, art)?;
+                } else {
+                    self.details_header(system, name, data, theme)?;
+                    self.details(app, (system, *game), data, theme, art)?;
+                }
                 self.footer(app, data, theme, layout)?;
             } else {
                 if let (Screen::Games { .. }, Some(wash)) = (backdrop, layout.backdrop) {

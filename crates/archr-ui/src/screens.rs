@@ -154,6 +154,23 @@ impl Default for MenuStyle {
     }
 }
 
+/// The game's details: the theme's rectangles (as always), or a showcase
+/// over the whole screen (`style = "hero"`) with the game's picture
+/// blurred behind, its title large and, with `shelf`, more of its system.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DetailsStyle {
+    pub hero: bool,
+    pub shelf: bool,
+}
+impl Default for DetailsStyle {
+    fn default() -> Self {
+        Self {
+            hero: false,
+            shelf: true,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Screens {
     pub toast: ToastStyle,
@@ -162,6 +179,7 @@ pub struct Screens {
     pub dialog: DialogStyle,
     pub start: StartStyle,
     pub menu: MenuStyle,
+    pub details: DetailsStyle,
 }
 
 /// Rectangles the screen tables place, as (table, key, old loose key).
@@ -244,6 +262,7 @@ fn style_keys(screen: &str) -> &'static [&'static str] {
         "dialog" => &["width", "radius", "icon", "buttons", "style"],
         "start" => &["style", "radius", "shortcut", "clock"],
         "menu" => &["style", "anchor", "width", "row", "radius"],
+        "details" => &["style", "shelf"],
         _ => &[],
     }
 }
@@ -355,6 +374,15 @@ impl Screens {
             own.menu.width = r.number("width", own.menu.width, 0.4, 1.0);
             own.menu.row = r.number("row", own.menu.row, 0.06, 0.12);
             own.menu.radius = r.number("radius", own.menu.radius, 0., 0.1);
+        }
+        if let Some(t) = get("details") {
+            let r = Reader("details", t);
+            own.details.hero = r.pick(
+                "style",
+                own.details.hero,
+                &[("panels", false), ("hero", true)],
+            );
+            own.details.shelf = r.flag("shelf", own.details.shelf);
         }
         own
     }

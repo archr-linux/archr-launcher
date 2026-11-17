@@ -728,6 +728,8 @@
 "details.rescrape" = "Scrape again"
 "details.preview" = "Preview"
 "details.rescraping" = "Scraping…"
+"details.played" = "Played {ago}"
+"details.more_from" = "More from {system}"
 "details.scroll" = "Scroll text"
 "details.options" = "Options"
 "details.genre" = "Genre"

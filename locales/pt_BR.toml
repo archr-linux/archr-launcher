@@ -728,6 +728,8 @@
 "details.rescrape" = "Coletar de novo"
 "details.preview" = "Prévia"
 "details.rescraping" = "Coletando…"
+"details.played" = "Jogado {ago}"
+"details.more_from" = "Mais de {system}"
 "details.scroll" = "Rolar texto"
 "details.options" = "Opções"
 "details.genre" = "Gênero"

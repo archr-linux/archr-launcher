@@ -788,6 +788,25 @@ título pequeno; Desligar e Tirar dos recentes saem em vermelho (`danger`). A
 lista rola quando não cabe. As ações são as mesmas do menu de sempre, mais
 Jogar e Favorito no topo.
 
+### Detalhes do jogo em destaque: `[details]`
+
+```toml
+[details]
+style = "hero"        # "panels" (como sempre, nos retângulos) ou "hero"
+shelf = true          # a prateleira "Mais de <sistema>" embaixo
+```
+
+Com `"hero"` a tela de detalhes ocupa a tela inteira: a captura (ou a capa)
+do jogo desfocada atrás, com véus de degradê na cor `background`; uma cápsula
+de vidro "‹ Sistema" no alto à esquerda e o relógio à direita; o nome do jogo
+grande em `font_bold` (até duas linhas, encolhe antes de quebrar), a linha
+ano · gênero · jogadores · desenvolvedora (os últimos saem quando não cabe), a
+descrição (rola como sempre), os botões Jogar (claro), Favorito e Buscar de
+novo (redondos; o em foco ganha o contorno de `focus_ring`) e "Jogado há …". A
+captura fica à direita, com sombra; embaixo, as capas dos jogos vizinhos do
+mesmo sistema. Os retângulos `shot`, `info`, `title`... não valem nesse
+estilo. Os botões e as dicas do rodapé são os de sempre.
+
 ### Grade de jogos com título
 
 Numa visualização com [prateleiras](#prateleiras), a grade de jogos
