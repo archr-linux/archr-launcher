@@ -151,7 +151,6 @@ impl View<'_, '_, '_> {
         let positions = placements(state.page(), rows);
         let offset = self.ui.settings_scroll.tween.value(self.ui.frame.now);
         let place = positions.get(state.cursor).copied();
-        self.ui.scrim(self.theme, 1.)?;
         let (top, bottom) = (VIEW_TOP, self.view_bottom());
         let (row_top, row_bottom) =
             place.map_or((top, top), |p| (p.top - offset, p.bottom() - offset));

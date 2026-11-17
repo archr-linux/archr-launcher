@@ -471,6 +471,7 @@
 "settings.bt_available" = "Available"
 "settings.bt_pair" = "Pair"
 "settings.scan_wifi" = "SEARCHING FOR NETWORKS"
+"settings.networks" = "Networks"
 "settings.scan_bt" = "SEARCHING FOR DEVICES"
 "settings.bt_hint" = "Put the device in pairing mode"
 "settings.bt_controller" = "Controller"

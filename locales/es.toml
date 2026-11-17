@@ -471,6 +471,7 @@
 "settings.bt_available" = "Disponibles"
 "settings.bt_pair" = "Emparejar"
 "settings.scan_wifi" = "BUSCANDO REDES"
+"settings.networks" = "Redes"
 "settings.scan_bt" = "BUSCANDO DISPOSITIVOS"
 "settings.bt_hint" = "Pon el dispositivo en modo de emparejamiento"
 "settings.bt_controller" = "Mando"

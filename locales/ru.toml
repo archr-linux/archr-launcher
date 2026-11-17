@@ -471,6 +471,7 @@
 "settings.bt_available" = "Доступные"
 "settings.bt_pair" = "Связать"
 "settings.scan_wifi" = "ПОИСК СЕТЕЙ"
+"settings.networks" = "Сети"
 "settings.scan_bt" = "ПОИСК УСТРОЙСТВ"
 "settings.bt_hint" = "Переведите устройство в режим сопряжения"
 "settings.bt_controller" = "Геймпад"

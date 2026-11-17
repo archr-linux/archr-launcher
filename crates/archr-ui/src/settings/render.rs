@@ -51,6 +51,8 @@ const VIEW_BOTTOM: f32 = 428.;
 const FOOTER: f32 = 432.;
 const ROW_GAP: f32 = 3.;
 const SECTION_HEIGHT: f32 = 21.;
+/// Space between two groups of rows that follow without a heading.
+const GROUP_GAP: f32 = 12.;
 /// A placeholder row standing in for a network the search has not found yet.
 const SKELETON: f32 = 34.;
 /// Usage bar and percentage under the games card row (Config-armazenamento).
@@ -59,6 +61,10 @@ const CARD_METER: f32 = 34.;
 const HOTKEY_DIVIDER: f32 = 7.;
 /// Right edge of full-width rows; pages with a side panel stop earlier.
 const RIGHT: f32 = 624.;
+/// The line a page's title takes under the capsule (`[settings]`
+/// `title = "below"`), and the title's size.
+const TITLE_LINE: f32 = 36.;
+const TITLE_SIZE: f32 = 28.;
 #[derive(Clone, Copy)]
 struct Placement {
     top: f32,
@@ -407,6 +413,25 @@ impl View<'_, '_, '_> {
     /// of placeholder rows. Looping state comes from the clock, never stored.
     fn searching(&mut self, key: &str, top: f32, skeleton: f32) -> Result<(), String> {
         let (secs, motion) = (self.clock(), self.ui.motion);
+        if self.look().inset {
+            // Over a group: the heading as every other, a spinner after it.
+            let heading = self.tr(key).to_uppercase();
+            self.text(
+                (28., top, 540., SECTION_HEIGHT),
+                &heading,
+                (11., self.theme.muted, Align::Left),
+            )?;
+            let x = 28. + self.span(&heading, Face::Regular, 11.)? + 7.;
+            let angle = if motion == crate::motion::Motion::Off {
+                0.
+            } else {
+                f64::from(secs * 360.) % 360.
+            };
+            let mark = self.rect((x, top + (SECTION_HEIGHT - 12.) / 2., 12., 12.));
+            return self
+                .ui
+                .icon_turned(Glyph::Loader, mark, self.theme.text_secondary, angle);
+        }
         let mid = top + SECTION_HEIGHT / 2. + 1.;
         for n in 0..3 {
             let (alpha, lift) = motion.search_dot(secs, n);
@@ -811,20 +836,7 @@ impl View<'_, '_, '_> {
             .last()
             .cloned()
             .unwrap_or_else(|| self.tr("settings.title"));
-        let mut back = format!("‹ {parent}");
-        let most = self.rect((0., 0., 150., 1.)).width();
-        if self.ui.measure(&back, Face::Semibold, 13.)? > most {
-            back = self.ellipsized(&back, 13., Face::Semibold, most)?;
-        }
-        let width = self.span(&back, Face::Semibold, 13.)? + 26.;
-        self.pane((16., 9., width, 28.), 14.)?;
-        self.text_face(
-            (16., 9., width, 28.),
-            &back,
-            (13., self.theme.text, Align::Center),
-            Face::Semibold,
-        )?;
-        let x = 16. + width + 12.;
+        let x = self.back_capsule(&parent, 9.)? + 12.;
         let room = (right - 12. - x).max(40.);
         let mut size = 22.;
         while size > 15. && self.span(&current, Face::Bold, size)? > room {
@@ -836,6 +848,88 @@ impl View<'_, '_, '_> {
             (size, self.theme.text, Align::Left),
             Face::Bold,
         )
+    }
+    /// Whether this page's title stands on its own line under the capsule:
+    /// the theme asks for it, and the page is rows the line can move down
+    /// (pages laid out to the footer keep the title beside the capsule).
+    fn title_below(&self, state: &Settings) -> bool {
+        let look = self.look();
+        look.sidebar
+            && look.title_below
+            && !state.picker.as_ref().is_some_and(|p| p.full())
+            && !matches!(
+                state.page(),
+                Page::Root
+                    | Page::Info
+                    | Page::InfoDetail(_)
+                    | Page::Soon(_)
+                    | Page::Store
+                    | Page::StoreTheme
+                    | Page::Module(..)
+                    | Page::Modules
+                    | Page::ModuleStore
+                    | Page::ModuleInfo
+                    | Page::ModuleOffer
+                    | Page::AccentColor
+                    | Page::Mangohud
+                    | Page::MangohudItems
+                    | Page::Keyboard
+                    | Page::Updates
+                    | Page::UpdatePackages
+                    | Page::RaImport
+                    | Page::RaImportList
+                    | Page::Roms
+                    | Page::RomsList
+                    | Page::UsbAdapters
+                    | Page::ErrorReports
+                    | Page::ReportText
+                    | Page::Bios
+                    | Page::Shortcuts
+                    | Page::PadTest
+                    | Page::PadCalibrate
+                    | Page::Scraper
+                    | Page::Achievements
+            )
+    }
+    /// "‹ Parent" in its capsule, and the page's title large on the line
+    /// under it, aligned with the rows' text.
+    fn title_header(&mut self, state: &Settings) -> Result<(), String> {
+        let (trail, current) = self.crumbs(state);
+        let parent = trail
+            .last()
+            .cloned()
+            .unwrap_or_else(|| self.tr("settings.title"));
+        // Level with the status pill, as the title's line leaves room.
+        self.back_capsule(&parent, 13.)?;
+        let room = RIGHT - 28. - 12.;
+        let mut size = TITLE_SIZE;
+        while size > 18. && self.span(&current, Face::Bold, size)? > room {
+            size -= 1.;
+        }
+        self.text_face(
+            (28., 42., room, TITLE_LINE),
+            &current,
+            (size, self.theme.text, Align::Left),
+            Face::Bold,
+        )
+    }
+    /// "‹ Parent" in a capsule of the sidebar's material at the top left;
+    /// its right edge in reference pixels.
+    fn back_capsule(&mut self, parent: &str, top: f32) -> Result<f32, String> {
+        let mut back = format!("‹ {parent}");
+        let most = self.rect((0., 0., 150., 1.)).width();
+        if self.ui.measure(&back, Face::Semibold, 13.)? > most {
+            back = self.ellipsized(&back, 13., Face::Semibold, most)?;
+        }
+        let width = self.span(&back, Face::Semibold, 13.)? + 26.;
+        self.pane((16., top, width, 28.), 14.)?;
+        self.text_face(
+            (16., top, width, 28.),
+            &back,
+            (13., self.theme.text, Align::Center),
+            Face::Semibold,
+        )?;
+        Ok(16. + width)
     }
     fn draw(&mut self, state: &Settings) -> Result<(), String> {
         let right = self.ui.status_header(self.theme)? as f32 / self.ui.frame.scale;
@@ -884,98 +978,18 @@ impl View<'_, '_, '_> {
             match (self.look().sidebar, state.page()) {
                 // The sidebar holds the root's title.
                 (true, Page::Root) => {}
+                (true, _) if self.title_below(state) => self.title_header(state)?,
                 (true, _) => self.back_header(state, right)?,
                 (false, _) => self.breadcrumbs(state, right)?,
             }
         }
         let rows: Vec<Row> = state.visible_rows();
         let picker = state.picker.as_ref();
-        match state.page() {
-            _ if picker.is_some_and(|p| p.full()) => self.picker_page(state)?,
-            Page::Root => self.root(state)?,
-            Page::Info => self.info(state)?,
-            Page::InfoDetail(index) => self.info_detail(state, index)?,
-            Page::Soon(_) => {
-                self.panel((24., 90., 592., 100.), false)?;
-                self.text(
-                    (40., 100., 560., 80.),
-                    &self.tr("settings.soon"),
-                    (20., self.theme.text, Align::Center),
-                )?;
-            }
-            Page::Appearance => self.appearance_page(state, &rows)?,
-            Page::Store => self.store_grid(state)?,
-            Page::StoreTheme => self.store_detail(state)?,
-            Page::Modules => self.modules_list(state, &rows)?,
-            Page::Module(..) => self.module_page(state, &rows)?,
-            Page::ModuleStore => self.module_store(state)?,
-            Page::ModuleInfo | Page::ModuleOffer => self.module_offer(state)?,
-            Page::AccentColor => self.custom_page(state)?,
-            Page::Mangohud => self.mangohud_page(state, &rows)?,
-            Page::MangohudItems => self.mangohud_items(state)?,
-            Page::Wifi => self.wifi(state)?,
-            Page::Services => self.services(state, &rows)?,
-            Page::Bluetooth => self.bluetooth(state)?,
-            Page::Keyboard => self.keyboard(state)?,
-            Page::Updates => self.updates_page(state, &rows)?,
-            Page::UpdatePackages => self.update_packages(state)?,
-            Page::RaImport => self.raimport_page(state, &rows)?,
-            Page::RaImportList => self.raimport_list(state)?,
-            Page::Roms => self.roms_page(state, &rows)?,
-            Page::RomsList => self.roms_list(state)?,
-            Page::UsbAdapters => self.usb_page(state)?,
-            Page::Diagnostics => self.diag_page(state, &rows)?,
-            Page::ErrorReports => self.reports_page(state, &rows)?,
-            Page::ReportText => self.report_text(state)?,
-            Page::Bios => self.bios_page(state)?,
-            Page::Shortcuts => self.shortcuts_page(state)?,
-            Page::PadTest => self.pad_test(state)?,
-            Page::PadCalibrate => self.pad_calibrate(state)?,
-            Page::Scraper => {
-                self.rows_at(state, &rows, &placements(Page::Scraper, &rows), 384.)?;
-                self.scraper_panel(state)?;
-            }
-            Page::Achievements => {
-                let right = cheevos::ROWS_RIGHT;
-                self.rows_at(state, &rows, &placements(Page::Achievements, &rows), right)?;
-                self.cheevos_panel(state)?;
-            }
-            Page::Storage => {
-                let positions = placements(Page::Storage, &rows);
-                self.list(
-                    state,
-                    &positions,
-                    RIGHT,
-                    |view, n, y, position, selected| {
-                        view.row(state, &rows[n], (y, position.height), RIGHT, selected)?;
-                        let card = match rows[n].id {
-                            Id::UnifiedCard => state.storage.unified.as_ref(),
-                            Id::StorageCard => state.storage.card.as_ref(),
-                            Id::SecondCard => state.storage.second.as_ref(),
-                            _ => None,
-                        };
-                        match card {
-                            Some(card) => view.card_meter(card.percent, y + position.height),
-                            None => Ok(()),
-                        }
-                    },
-                )?
-            }
-            Page::Hotkeys => {
-                let positions = placements(Page::Hotkeys, &rows);
-                self.rows_at(state, &rows, &positions, RIGHT)?;
-                let rule = positions[0].bottom() + ROW_GAP + 3.;
-                self.ui.divider(
-                    self.ui.px(28.),
-                    self.ui.px(rule),
-                    self.ui.px(RIGHT - 40.) as u32,
-                    self.theme.border,
-                )?;
-            }
-            page => self.rows_at(state, &rows, &placements(page, &rows), RIGHT)?,
-        }
+        self.under_title(state, |view| view.content(state, &rows))?;
         if let Some(picker) = picker.filter(|p| !p.full()) {
-            self.picker_panel(state, &rows, picker)?;
+            // The whole screen dimmed, the header too; then the list.
+            self.ui.scrim(self.theme, 1.)?;
+            self.under_title(state, |view| view.picker_panel(state, &rows, picker))?;
         }
         let error = state.error.as_ref().filter(|(id, _)| {
             !matches!(state.page(), Page::Info | Page::InfoDetail(_))
@@ -1317,6 +1331,114 @@ impl View<'_, '_, '_> {
                 });
         }
         Ok(())
+    }
+    /// The page under its header: rows, panels and the open list.
+    fn content(&mut self, state: &Settings, rows: &[Row]) -> Result<(), String> {
+        let picker = state.picker.as_ref();
+        match state.page() {
+            _ if picker.is_some_and(|p| p.full()) => self.picker_page(state)?,
+            Page::Root => self.root(state)?,
+            Page::Info => self.info(state)?,
+            Page::InfoDetail(index) => self.info_detail(state, index)?,
+            Page::Soon(_) => {
+                self.panel((24., 90., 592., 100.), false)?;
+                self.text(
+                    (40., 100., 560., 80.),
+                    &self.tr("settings.soon"),
+                    (20., self.theme.text, Align::Center),
+                )?;
+            }
+            Page::Appearance => self.appearance_page(state, &rows)?,
+            Page::Store => self.store_grid(state)?,
+            Page::StoreTheme => self.store_detail(state)?,
+            Page::Modules => self.modules_list(state, &rows)?,
+            Page::Module(..) => self.module_page(state, &rows)?,
+            Page::ModuleStore => self.module_store(state)?,
+            Page::ModuleInfo | Page::ModuleOffer => self.module_offer(state)?,
+            Page::AccentColor => self.custom_page(state)?,
+            Page::Mangohud => self.mangohud_page(state, &rows)?,
+            Page::MangohudItems => self.mangohud_items(state)?,
+            Page::Wifi => self.wifi(state)?,
+            Page::Services => self.services(state, &rows)?,
+            Page::Bluetooth => self.bluetooth(state)?,
+            Page::Keyboard => self.keyboard(state)?,
+            Page::Updates => self.updates_page(state, &rows)?,
+            Page::UpdatePackages => self.update_packages(state)?,
+            Page::RaImport => self.raimport_page(state, &rows)?,
+            Page::RaImportList => self.raimport_list(state)?,
+            Page::Roms => self.roms_page(state, &rows)?,
+            Page::RomsList => self.roms_list(state)?,
+            Page::UsbAdapters => self.usb_page(state)?,
+            Page::Diagnostics => self.diag_page(state, &rows)?,
+            Page::ErrorReports => self.reports_page(state, &rows)?,
+            Page::ReportText => self.report_text(state)?,
+            Page::Bios => self.bios_page(state)?,
+            Page::Shortcuts => self.shortcuts_page(state)?,
+            Page::PadTest => self.pad_test(state)?,
+            Page::PadCalibrate => self.pad_calibrate(state)?,
+            Page::Scraper => {
+                self.rows_at(state, &rows, &placements(Page::Scraper, &rows), 384.)?;
+                self.scraper_panel(state)?;
+            }
+            Page::Achievements => {
+                let right = cheevos::ROWS_RIGHT;
+                self.rows_at(state, &rows, &placements(Page::Achievements, &rows), right)?;
+                self.cheevos_panel(state)?;
+            }
+            Page::Storage => {
+                let positions = placements(Page::Storage, &rows);
+                self.list(
+                    state,
+                    &positions,
+                    RIGHT,
+                    |view, n, y, position, selected| {
+                        view.row(state, &rows[n], (y, position.height), RIGHT, selected)?;
+                        let card = match rows[n].id {
+                            Id::UnifiedCard => state.storage.unified.as_ref(),
+                            Id::StorageCard => state.storage.card.as_ref(),
+                            Id::SecondCard => state.storage.second.as_ref(),
+                            _ => None,
+                        };
+                        match card {
+                            Some(card) => view.card_meter(card.percent, y + position.height),
+                            None => Ok(()),
+                        }
+                    },
+                )?
+            }
+            Page::Hotkeys => {
+                let positions = placements(Page::Hotkeys, &rows);
+                self.rows_at(state, &rows, &positions, RIGHT)?;
+                let rule = positions[0].bottom() + ROW_GAP + 3.;
+                self.ui.divider(
+                    self.ui.px(28.),
+                    self.ui.px(rule),
+                    self.ui.px(RIGHT - 40.) as u32,
+                    self.theme.border,
+                )?;
+            }
+            page => self.rows_at(state, &rows, &placements(page, &rows), RIGHT)?,
+        }
+        Ok(())
+    }
+    /// `draw` where the page's content stands: under the title's own line
+    /// when it has one (`title_below`), the whole page moved down by that
+    /// line and ending where it always did; else the page as it is.
+    fn under_title(
+        &mut self,
+        state: &Settings,
+        draw: impl FnOnce(&mut View<'_, '_, '_>) -> Result<(), String>,
+    ) -> Result<(), String> {
+        if !self.title_below(state) {
+            return draw(self);
+        }
+        let theme = self.theme;
+        let line = self.ui.px(TITLE_LINE);
+        let (width, height) = (self.ui.frame.width, self.ui.frame.height);
+        let area = Rect::new(0, line, width, height.saturating_sub(line as u32).max(1));
+        let tall = self.bottom() - TITLE_LINE;
+        self.ui
+            .staged_in(area, (640., tall), |ui| draw(&mut View { ui, theme }))
     }
     /// A question with its explanation and answers, or a wait message.
     fn dialog(

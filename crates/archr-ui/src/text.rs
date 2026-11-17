@@ -790,6 +790,9 @@ mod tests {
 
     #[test]
     fn tracking_moves_the_glyphs_where_the_line_puts_them() {
+        let _sdl = crate::SDL_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let ttf = sdl2::ttf::init().unwrap();
         let font = load_font(&ttf, "Inter-SemiBold", 34);
         let ink = Color::RGBA(245, 245, 247, 255);

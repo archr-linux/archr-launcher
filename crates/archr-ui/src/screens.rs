@@ -391,6 +391,9 @@ pub struct SettingsStyle {
     pub row: f32,
     pub tiles: bool,
     pub inset: bool,
+    /// A page's title on a line of its own under the "‹ Parent" capsule,
+    /// large (`title = "below"`), instead of beside it.
+    pub title_below: bool,
     /// By `SETTINGS_PAGES`; None: the launcher's colour for that page.
     pub icon_colors: [Option<Rgba>; 9],
 }
@@ -402,6 +405,7 @@ impl Default for SettingsStyle {
             row: 36. / 480.,
             tiles: false,
             inset: false,
+            title_below: false,
             icon_colors: [None; 9],
         }
     }
@@ -541,7 +545,15 @@ fn style_keys(screen: &str) -> &'static [&'static str] {
         "search" => &["style", "row", "height"],
         "keyboard" => &["sheet", "key"],
         "osd" => &["style", "position", "fill", "track", "radius"],
-        "settings" => &["layout", "sidebar", "row", "icon", "groups", "icon_colors"],
+        "settings" => &[
+            "layout",
+            "sidebar",
+            "row",
+            "icon",
+            "groups",
+            "title",
+            "icon_colors",
+        ],
         _ => &[],
     }
 }
@@ -799,6 +811,11 @@ fn read_settings(t: &Table, inherited: SettingsStyle) -> SettingsStyle {
     own.row = r.number("row", own.row, 0.06, 0.12);
     own.tiles = r.pick("icon", own.tiles, &[("plain", false), ("tile", true)]);
     own.inset = r.pick("groups", own.inset, &[("flat", false), ("inset", true)]);
+    own.title_below = r.pick(
+        "title",
+        own.title_below,
+        &[("beside", false), ("below", true)],
+    );
     match t.get("sidebar") {
         None => {}
         Some(Value::Table(bar)) => {
@@ -966,11 +983,13 @@ mod tests {
         assert!(!plain.themed() && !plain.light_focus());
         let own = read(
             "[settings]\nlayout = 'sidebar'\nicon = 'tile'\ngroups = 'inset'\nrow = 0.08\n\
+             title = 'below'\n\
              sidebar = { x = 0.03, w = 0.4, style = 'plain', title = 0.05 }\n\
              [settings.icon_colors]\nnetwork = '#112233'\nkitchen = '#FFFFFF'",
         )
         .settings;
         assert!(own.sidebar && own.tiles && own.inset && own.themed() && own.light_focus());
+        assert!(own.title_below);
         assert_eq!(own.row, 0.08);
         assert_eq!(
             own.bar,

@@ -471,6 +471,7 @@
 "settings.bt_available" = "Disponíveis"
 "settings.bt_pair" = "Parear"
 "settings.scan_wifi" = "BUSCANDO REDES"
+"settings.networks" = "Redes"
 "settings.scan_bt" = "PROCURANDO DISPOSITIVOS"
 "settings.bt_hint" = "Coloque o aparelho em modo de pareamento"
 "settings.bt_controller" = "Controle"
