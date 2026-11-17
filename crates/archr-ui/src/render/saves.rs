@@ -1019,12 +1019,23 @@ impl Ui<'_, '_> {
             )?;
         }
 
-        // The footer answers the question: on a bar, or in the theme's
-        // capsule ([hints]).
+        // The footer answers the question, over the screen's own hints: on
+        // a bar, or in the theme's capsule ([hints]) on the background as
+        // the scrim leaves it, so no band shows.
         let fy = height as i32 - footer as i32;
-        if theme.screens.hints == crate::screens::Hints::default() {
-            self.canvas.set_draw_color(color(theme.background));
-            self.canvas.fill_rect(Rect::new(0, fy, width, footer))?;
+        let bar = theme.screens.hints == crate::screens::Hints::default();
+        let ground = if bar {
+            theme.background
+        } else {
+            let veil = Rgba {
+                a: 255,
+                ..theme.scrim
+            };
+            crate::appearance::mix(theme.background, veil, f32::from(theme.scrim.a) / 255.)
+        };
+        self.canvas.set_draw_color(color(ground));
+        self.canvas.fill_rect(Rect::new(0, fy, width, footer))?;
+        if bar {
             self.divider(0, fy, width, theme.border)?;
         }
         self.placed_hints(

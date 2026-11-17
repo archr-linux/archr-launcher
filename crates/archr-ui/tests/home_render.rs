@@ -51,12 +51,16 @@ fn pin(ui: &mut Ui, instant: std::time::Instant) {
 /// depends on how fast the workers were: `draw` asks, polls and draws, and
 /// says whether its caches are idle.
 fn settle(mut draw: impl FnMut() -> bool) {
-    for round in 0..400 {
+    // Generous: the workers share the machine with the rest of the tests.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    let mut round = 0;
+    while std::time::Instant::now() < deadline {
         if draw() && round >= 2 {
             // Once more over what the last poll brought in.
             draw();
             return;
         }
+        round += 1;
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
     panic!("pictures never finished loading");
