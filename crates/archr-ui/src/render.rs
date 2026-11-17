@@ -458,6 +458,9 @@ pub struct Ui<'font, 'texture> {
     /// columns and pictures per page, for the host's paging.
     pub saves_page: usize,
     pub shots_grid: (usize, usize),
+    /// Where the Screenshots grid's second section (the older pictures)
+    /// starts on a row of its own, when the theme groups them.
+    pub shots_split: Option<usize>,
     /// The active view and the theme it was resolved from.
     view: Option<(Theme, View)>,
     animating: bool,
@@ -585,6 +588,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             achievements_page: 1,
             saves_page: 1,
             shots_grid: (1, 1),
+            shots_split: None,
             view: None,
             animating: false,
             born: Instant::now(),

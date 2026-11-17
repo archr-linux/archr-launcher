@@ -197,6 +197,46 @@ impl Default for AchievementsStyle {
     }
 }
 
+/// A game's saves: the list and its card (as always), or the selected
+/// state's picture large in `preview` with its list in a group of glass
+/// (`style = "preview"`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SavesStyle {
+    pub preview: bool,
+    /// Sizes (of 480): a row of the list and its picture's width.
+    pub row: f32,
+    pub thumb: f32,
+}
+impl Default for SavesStyle {
+    fn default() -> Self {
+        Self {
+            preview: false,
+            row: 56. / 480.,
+            thumb: 56. / 480.,
+        }
+    }
+}
+
+/// A game's screenshots: the grid's columns (0: as many as fit), gap and
+/// corners, and the pictures grouped by when they were taken.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ShotsStyle {
+    pub sections: bool,
+    pub columns: u32,
+    pub gap: f32,
+    pub radius: f32,
+}
+impl Default for ShotsStyle {
+    fn default() -> Self {
+        Self {
+            sections: false,
+            columns: 0,
+            gap: 12. / 480.,
+            radius: 8. / 480.,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Screens {
     pub toast: ToastStyle,
@@ -207,6 +247,8 @@ pub struct Screens {
     pub menu: MenuStyle,
     pub details: DetailsStyle,
     pub achievements: AchievementsStyle,
+    pub saves: SavesStyle,
+    pub shots: ShotsStyle,
 }
 
 /// Rectangles the screen tables place, as (table, key, old loose key).
@@ -293,6 +335,8 @@ fn style_keys(screen: &str) -> &'static [&'static str] {
         "menu" => &["style", "anchor", "width", "row", "radius"],
         "details" => &["style", "shelf"],
         "achievements" => &["style", "row", "gap", "badge", "badge_radius"],
+        "saves" => &["style", "row", "thumb"],
+        "shots" => &["sections", "columns", "gap", "radius"],
         _ => &[],
     }
 }
@@ -445,6 +489,25 @@ impl Screens {
             a.gap = r.number("gap", a.gap, 0., 0.05);
             a.badge = r.number("badge", a.badge, 0.03, 0.15);
             a.badge_radius = r.number("badge_radius", a.badge_radius, 0., 0.075);
+        }
+        if let Some(t) = get("saves") {
+            let r = Reader("saves", t);
+            own.saves.preview = r.pick(
+                "style",
+                own.saves.preview,
+                &[("list", false), ("preview", true)],
+            );
+            own.saves.row = r.number("row", own.saves.row, 0.06, 0.2);
+            own.saves.thumb = r.number("thumb", own.saves.thumb, 0.04, 0.3);
+        }
+        if let Some(t) = get("shots") {
+            let r = Reader("shots", t);
+            own.shots.sections = r.flag("sections", own.shots.sections);
+            own.shots.columns = r
+                .number("columns", own.shots.columns as f32, 0., 8.)
+                .round() as u32;
+            own.shots.gap = r.number("gap", own.shots.gap, 0., 0.08);
+            own.shots.radius = r.number("radius", own.shots.radius, 0., 0.08);
         }
         own
     }

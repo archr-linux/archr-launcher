@@ -1195,6 +1195,9 @@
 "saves.emulator" = "Emulator"
 "saves.size" = "Size"
 "saves.total" = { one = "{count} save · {size}", other = "{count} saves · {size}" }
+"saves.saved_line" = "Saved {date} · {ago}"
+"shots.this_week" = "This week"
+"shots.earlier" = "Earlier"
 "saves.note_slot" = "The game opens at this point. New saves go on in slot {n}."
 "saves.note_auto" = "The game opens at this point. The automatic save is written again on exit."
 "saves.note_state" = "The game opens at this point."

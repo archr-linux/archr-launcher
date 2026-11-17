@@ -1195,6 +1195,9 @@
 "saves.emulator" = "Эмулятор"
 "saves.size" = "Размер"
 "saves.total" = { one = "{count} сохранение · {size}", few = "{count} сохранения · {size}", many = "{count} сохранений · {size}", other = "{count} сохранения · {size}" }
+"saves.saved_line" = "Сохранено {date} · {ago}"
+"shots.this_week" = "На этой неделе"
+"shots.earlier" = "Раньше"
 "saves.note_slot" = "Игра откроется с этого места. Новые сохранения пойдут в слот {n}."
 "saves.note_auto" = "Игра откроется с этого места. При выходе автосохранение запишется заново."
 "saves.note_state" = "Игра откроется с этого места."

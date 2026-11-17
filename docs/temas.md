@@ -971,6 +971,37 @@ nas notas, `dim` no tempo relativo, `danger` no botão Apagar da confirmação.
 A captura aberta ocupa a tela inteira, com o nome do jogo no alto e os botões
 no rodapé; as confirmações (Jogar daqui e Apagar) são janelas centradas.
 
+### `[saves]`: a prévia grande
+
+```toml
+[saves]
+style = "preview"     # "list" (como sempre) ou "preview"
+preview = { x = 0.05, y = 0.12, w = 0.5, h = 0.72 }
+list = { x = 0.58, y = 0.12, w = 0.37, h = 0.72 }
+row = 0.117           # altura de uma vaga na lista (tamanho; padrão 56 px)
+thumb = 0.117         # largura da miniatura (padrão 56 px, 4:3)
+```
+
+Com `"preview"` a imagem do save em foco fica grande no retângulo `preview`
+(4:3, cantos de 16 px, sombra), com o nome da vaga em `font_bold` e "Salvo em
+… · há N dias" sobre um véu no pé dela, e o que acontece ao jogar logo abaixo.
+As vagas ficam num grupo de vidro no retângulo `list`, cada uma com a
+miniatura, o nome e há quanto tempo; a em foco ganha um fundo claro.
+
+### `[shots]`: a grade por data
+
+```toml
+[shots]
+sections = true       # agrupa em "Esta semana" e "Antes", cada grupo começando uma linha
+columns = 4           # colunas (0: quantas couberem, como sempre)
+gap = 0.025           # espaço entre as imagens (padrão 12 px)
+radius = 0.025        # cantos (padrão 8 px)
+```
+
+Com `sections` as capturas dos últimos 7 dias ficam sob "Esta semana" e as
+outras sob "Antes" (títulos em `font_bold`); ↑ ↓ andam pela mesma coluna e
+passam de um grupo ao outro.
+
 ## Alternador e retomada ao ligar
 
 O Alternador (um toque no FN durante o jogo: o jogo é salvo e fechado e

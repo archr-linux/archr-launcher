@@ -1181,6 +1181,7 @@ fn run(
             app.sheet_page = ui.achievements_page;
             app.saves_page = ui.saves_page;
             (app.shots_columns, app.shots_page) = ui.shots_grid;
+            app.shots_split = ui.shots_split;
             dirty = false;
         }
         #[cfg(test)]

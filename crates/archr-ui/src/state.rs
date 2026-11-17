@@ -436,6 +436,8 @@ pub struct App {
     pub saves_page: usize,
     pub shots_columns: usize,
     pub shots_page: usize,
+    /// The grid's second section starts here, on a row of its own.
+    pub shots_split: Option<usize>,
     /// The switcher's games, filled by the host, and the one just left.
     pub switcher: Vec<crate::resume::Recent>,
     pub switcher_left: Option<crate::resume::Recent>,
@@ -467,6 +469,46 @@ pub struct App {
     selected_core: Option<(String, String)>,
     /// The open game menu's MangoHud: the game's value, the system's.
     selected_mangohud: (String, String),
+}
+
+/// The picture above or below `at` in a grid of `columns` whose last
+/// picture is `last` and whose second section starts at `split` on a row
+/// of its own: the same column a row away, else the nearest one there.
+pub fn grid_step(
+    at: usize,
+    columns: usize,
+    split: Option<usize>,
+    last: usize,
+    down: bool,
+) -> usize {
+    let columns = columns.max(1);
+    let split = split.filter(|s| (1..=last).contains(s));
+    // The section `at` is in, as first and last index.
+    let section = |n: usize| match split {
+        Some(s) if n >= s => (s, last),
+        Some(s) => (0, s - 1),
+        None => (0, last),
+    };
+    let (start, end) = section(at);
+    let (row, col) = ((at - start) / columns, (at - start) % columns);
+    if down {
+        if at + columns <= end {
+            at + columns
+        } else if row < (end - start) / columns {
+            end
+        } else if end < last {
+            (end + 1 + col).min(last)
+        } else {
+            at
+        }
+    } else if row > 0 {
+        at - columns
+    } else if start > 0 {
+        let (before, end) = section(start - 1);
+        (before + (end - before) / columns * columns + col).min(end)
+    } else {
+        at
+    }
 }
 
 impl App {
@@ -508,6 +550,7 @@ impl App {
             saves_page: 1,
             shots_columns: 1,
             shots_page: 1,
+            shots_split: None,
             switcher: Vec::new(),
             switcher_left: None,
             hub_from: None,
@@ -1316,17 +1359,10 @@ impl App {
             (Screen::Saves { .. }, Button::X) if len > 0 => {
                 self.confirm = ask(Action::DeleteSave, save, false)
             }
-            (Screen::Shots { .. }, Button::Up) => {
+            (Screen::Shots { .. }, Button::Up | Button::Down) => {
                 let columns = self.shots_columns.max(1);
-                if self.cursor >= columns {
-                    self.cursor -= columns;
-                }
-            }
-            (Screen::Shots { .. }, Button::Down) => {
-                let columns = self.shots_columns.max(1);
-                if self.cursor / columns < last / columns {
-                    self.cursor = (self.cursor + columns).min(last);
-                }
+                let down = b == Button::Down;
+                self.cursor = grid_step(self.cursor, columns, self.shots_split, last, down);
             }
             (Screen::Shots { .. } | Screen::Shot { .. }, Button::L) => {
                 self.cursor = self.cursor.saturating_sub(1)
@@ -1553,5 +1589,26 @@ impl App {
         let (screen, cursor) = self.history.pop().unwrap_or_else(|| (self.root(), 0));
         self.screen = screen;
         self.cursor = cursor;
+    }
+}
+
+#[cfg(test)]
+mod grid_tests {
+    use super::grid_step;
+
+    #[test]
+    fn a_grid_steps_by_rows_and_its_sections_start_rows_of_their_own() {
+        // 4 columns, 7 pictures, one section: as the grid always moved.
+        assert_eq!(grid_step(1, 4, None, 6, true), 5);
+        assert_eq!(grid_step(2, 4, None, 6, true), 6, "the short last row");
+        assert_eq!(grid_step(5, 4, None, 6, true), 5);
+        assert_eq!(grid_step(5, 4, None, 6, false), 1);
+        // This week 0..=2, earlier 3..=6 on a row of their own.
+        assert_eq!(grid_step(1, 4, Some(3), 6, true), 4, "same column below");
+        assert_eq!(grid_step(2, 4, Some(3), 6, true), 5);
+        assert_eq!(grid_step(4, 4, Some(3), 6, false), 1);
+        assert_eq!(grid_step(6, 4, Some(3), 6, false), 2, "the nearest one");
+        assert_eq!(grid_step(0, 4, Some(3), 6, false), 0);
+        assert_eq!(grid_step(5, 4, Some(3), 6, true), 5);
     }
 }

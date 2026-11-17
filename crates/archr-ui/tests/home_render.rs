@@ -325,7 +325,11 @@ fn every_screen_table_draws_at_every_size() {
         kirby.details.description = "Kirby volta em oito aventuras: engula os inimigos, copie seus poderes e jogue com um amigo no modo cooperativo.".into();
         kirby.details.screenshot = Some(pictures_at[1].clone());
     }
-    let now = 1_700_000_000u64;
+    // Pictures of this week and before (the sections of [shots]).
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
     let saves: Vec<Save> = (0..4)
         .map(|n| Save {
             path: root.path().join(format!("state{n}")),

@@ -9,12 +9,11 @@ use crate::{
     saves::{Action, Blocked, Kind, Save},
 };
 
-/// Saves rows, and the screenshot cells (4:3 near 138×104) with their gap,
-/// at the 640×480 reference.
+/// Saves rows, and the screenshot cells (4:3 near 138×104; their gap is
+/// the theme's `[shots]` one, 12 px by default), at the 640×480 reference.
 const ROW: f32 = 62.;
 const ROW_GAP: f32 = 4.;
 const CELL: f32 = 138.;
-const CELL_GAP: f32 = 12.;
 
 impl Ui<'_, '_> {
     /// A date in the locale's `key` pattern: {day} {d} {month} {month_name}
@@ -158,6 +157,10 @@ impl Ui<'_, '_> {
         art: Art<'_, '_>,
     ) -> Result<(), String> {
         self.progress_crumbs(game, "menu.saves", data, theme)?;
+        if theme.screens.saves.preview {
+            self.saves_preview(app, theme, art)?;
+            return self.saves_footer(app, theme);
+        }
         let Frame { width, height, .. } = self.frame;
         let saves = &app.progress.saves;
         let list = pixels(theme.saves_list, width, height);
@@ -281,20 +284,7 @@ impl Ui<'_, '_> {
                 self.divider(card.x(), y + line - 1, card.width(), theme.border)?;
                 y += line;
             }
-            let note = match (save.kind, save.slot) {
-                _ if !save.playable => self.catalog.text("saves.note_other"),
-                (Kind::RetroArch, _) if app.progress.blocked == Some(Blocked::Hardcore) => {
-                    self.catalog.text("saves.note_hardcore")
-                }
-                (Kind::RetroArch, _) if app.progress.blocked == Some(Blocked::Netplay) => {
-                    self.catalog.text("saves.note_netplay")
-                }
-                (Kind::RetroArch, Some(n)) => self
-                    .catalog
-                    .format("saves.note_slot", &[("n", &n.to_string())]),
-                (Kind::RetroArch, None) => self.catalog.text("saves.note_auto"),
-                (Kind::Standalone, _) => self.catalog.text("saves.note_state"),
-            };
+            let note = self.save_note(app, save);
             let lines = self.wrap(&note, Face::Regular, 12., card.width())?;
             let step = self.px(17.);
             y += self.px(8.);
@@ -308,6 +298,29 @@ impl Ui<'_, '_> {
             }
         }
 
+        self.saves_footer(app, theme)
+    }
+    /// What playing `save` does, or why it cannot.
+    fn save_note(&self, app: &App, save: &Save) -> String {
+        match (save.kind, save.slot) {
+            _ if !save.playable => self.catalog.text("saves.note_other"),
+            (Kind::RetroArch, _) if app.progress.blocked == Some(Blocked::Hardcore) => {
+                self.catalog.text("saves.note_hardcore")
+            }
+            (Kind::RetroArch, _) if app.progress.blocked == Some(Blocked::Netplay) => {
+                self.catalog.text("saves.note_netplay")
+            }
+            (Kind::RetroArch, Some(n)) => self
+                .catalog
+                .format("saves.note_slot", &[("n", &n.to_string())]),
+            (Kind::RetroArch, None) => self.catalog.text("saves.note_auto"),
+            (Kind::Standalone, _) => self.catalog.text("saves.note_state"),
+        }
+    }
+    /// The saves' count and size, and the buttons.
+    fn saves_footer(&mut self, app: &App, theme: &Theme) -> Result<(), String> {
+        let saves = &app.progress.saves;
+        let selected = saves.get(app.cursor);
         let total: u64 = saves.iter().map(|s| s.bytes).sum();
         let summary = self.catalog.plural(
             "saves.total",
@@ -325,6 +338,153 @@ impl Ui<'_, '_> {
         self.progress_footer(&summary, &hints, theme)
     }
 
+    /// The selected state's picture large in the card's place, its name
+    /// and when it was saved over its foot; the states in a group of glass
+    /// in the list's place, each with its picture.
+    fn saves_preview(&mut self, app: &App, theme: &Theme, art: Art<'_, '_>) -> Result<(), String> {
+        let Frame { width, height, .. } = self.frame;
+        let style = theme.screens.saves;
+        let saves = &app.progress.saves;
+        let card = pixels(theme.saves_card, width, height);
+        let list = pixels(theme.saves_list, width, height);
+        // The picture, 4:3 as wide as the card allows.
+        let h = (card.width() * 3 / 4).min(card.height());
+        let w = (h * 4 / 3).min(card.width());
+        let shot = Rect::new(card.x(), card.y(), w, h);
+        let radius = self.px(16.) as f32;
+        self.cast_shadow(shot, radius)?;
+        match art.picture {
+            Some(texture) => {
+                let size = texture.query();
+                let part = crop((size.width, size.height), (shot.width(), shot.height()));
+                self.geometry
+                    .cover(&mut self.canvas, texture, shot, radius, 255, part)?;
+            }
+            None => self.filled(None, shot, 16., theme)?,
+        }
+        if let Some(save) = saves.get(app.cursor) {
+            let foot = self.px(64.).min(shot.height() as i32);
+            let band = Rect::new(shot.x(), shot.bottom() - foot, shot.width(), foot as u32);
+            let shade = Rgba {
+                a: 230,
+                ..theme.background
+            };
+            self.veil(band, Rgba { a: 0, ..shade }, shade)?;
+            let x = shot.x() + self.px(16.);
+            let room = shot.width().saturating_sub(self.px(32.) as u32).max(1);
+            let title = self.slot_name(save);
+            let size = self
+                .shrink(&title, Face::Bold, 20., 13., room)?
+                .unwrap_or(13.);
+            self.label(
+                &title,
+                (Face::Bold, size, theme.text),
+                Rect::new(x, shot.bottom() - self.px(48.), room, self.px(24.) as u32),
+            )?;
+            let ago = self.catalog.relative_time(save.saved, self.frame.unix);
+            let date = self.when(save.saved, "saves.date_long");
+            let line = self
+                .catalog
+                .format("saves.saved_line", &[("date", &date), ("ago", &ago)]);
+            let size = self
+                .shrink(&line, Face::Regular, 12., 10., room)?
+                .unwrap_or(10.);
+            self.label(
+                &line,
+                (Face::Regular, size, theme.text_secondary),
+                Rect::new(x, shot.bottom() - self.px(24.), room, self.px(16.) as u32),
+            )?;
+        }
+        // What playing it does, under the picture.
+        if let Some(save) = saves.get(app.cursor) {
+            let note = self.save_note(app, save);
+            let step = self.px(17.);
+            let mut y = shot.bottom() + self.px(14.);
+            for text in self.wrap(&note, Face::Regular, 12., shot.width())? {
+                if y + step > card.bottom() {
+                    break;
+                }
+                let band = Rect::new(shot.x(), y, shot.width(), step as u32);
+                self.label(&text, (Face::Regular, 12., theme.muted), band)?;
+                y += step;
+            }
+        }
+        // The list in a group of glass, a page at a time.
+        let row = self.px(style.row * 480.);
+        let visible = (list.height() as i32 / row).max(1) as usize;
+        self.saves_page = visible;
+        let first = app.cursor / visible * visible;
+        let shown = saves.len().saturating_sub(first).min(visible) as i32;
+        if shown == 0 {
+            return Ok(());
+        }
+        let group = Rect::new(list.x(), list.y(), list.width(), (shown * row) as u32);
+        self.glass(group, self.px(16.) as f32, &theme.glass_or_default())?;
+        let thumb_w = self.px(style.thumb * 480.);
+        for (n, save) in saves.iter().enumerate().skip(first).take(visible) {
+            let y = list.y() + (n - first) as i32 * row;
+            let rect = Rect::new(list.x(), y, list.width(), row as u32);
+            let selected = n == app.cursor;
+            if selected {
+                let band = Rect::new(
+                    rect.x() + self.px(4.),
+                    y + self.px(3.),
+                    rect.width().saturating_sub(self.px(8.) as u32).max(1),
+                    (row - self.px(6.)).max(1) as u32,
+                );
+                let lit = Rgba {
+                    a: 0x24,
+                    ..theme.text
+                };
+                self.rounded(band, self.px(12.) as f32, lit, None)?;
+            } else if n + 1 < first + shown as usize && n + 1 != app.cursor {
+                let inset = self.px(12.) + thumb_w + self.px(12.);
+                self.divider(
+                    rect.x() + inset,
+                    rect.bottom(),
+                    rect.width()
+                        .saturating_sub(inset as u32 + self.px(12.) as u32),
+                    Rgba {
+                        a: 0x1A,
+                        ..theme.text
+                    },
+                )?;
+            }
+            let th = (thumb_w * 3 / 4).min(row - self.px(10.)).max(1);
+            let thumb = Rect::new(
+                rect.x() + self.px(12.),
+                y + (row - th) / 2,
+                thumb_w.max(1) as u32,
+                th as u32,
+            );
+            let texture = save
+                .picture
+                .as_ref()
+                .and_then(|path| art.thumbs.and_then(|cache| cache.peek(path)));
+            self.filled(texture, thumb, 6., theme)?;
+            let x = thumb.right() + self.px(12.);
+            let room = (rect.right() - self.px(12.) - x).max(1) as u32;
+            let face = if selected {
+                Face::Semibold
+            } else {
+                Face::Regular
+            };
+            let middle = y + row / 2;
+            self.label(
+                &self.slot_name(save),
+                (face, 14., theme.text),
+                Rect::new(x, middle - self.px(19.), room, self.px(19.) as u32),
+            )?;
+            let ago = self.catalog.relative_time(save.saved, self.frame.unix);
+            self.label(
+                &ago,
+                (Face::Regular, 12., theme.text_secondary),
+                Rect::new(x, middle + self.px(1.), room, self.px(16.) as u32),
+            )?;
+        }
+        Ok(())
+    }
+
     pub(super) fn shots(
         &mut self,
         app: &App,
@@ -337,24 +497,76 @@ impl Ui<'_, '_> {
         let Frame { width, height, .. } = self.frame;
         let shots = &app.progress.shots;
         let grid = pixels(theme.shots_grid, width, height);
-        let gap = self.px(CELL_GAP);
-        // As many cells near the reference width as fit, stretched to fill.
-        let columns = ((grid.width() as i32 + gap) / (self.px(CELL) + gap)).max(1);
+        let style = theme.screens.shots;
+        let gap = self.px(style.gap * 480.);
+        // As many cells near the reference width as fit, stretched to fill,
+        // or the theme's columns.
+        let columns = match style.columns {
+            0 => ((grid.width() as i32 + gap) / (self.px(CELL) + gap)).max(1),
+            n => n as i32,
+        };
         let cell_w = ((grid.width() as i32 - gap * (columns - 1)) / columns).max(1);
         let cell_h = (cell_w * 104 / 138).max(1);
-        let rows = ((grid.height() as i32 + gap) / (cell_h + gap)).max(1);
+        // Grouped by when they were taken: this week, then before, each
+        // under its title and starting a row of its own.
+        let week = self.frame.unix.saturating_sub(7 * 86_400);
+        let sorted = shots.windows(2).all(|w| w[0].taken >= w[1].taken);
+        let sections = style.sections && sorted;
+        let split = shots
+            .iter()
+            .position(|s| s.taken < week)
+            .filter(|_| sections);
+        self.shots_split = split.filter(|&n| n > 0);
+        let title_h = if sections { self.px(28.) } else { 0 };
+        let titles = if sections { 2 } else { 0 };
+        let rows = ((grid.height() as i32 - title_h * titles + gap) / (cell_h + gap)).max(1);
         let page = (columns * rows) as usize;
         self.shots_grid = (columns as usize, page);
         let first = app.cursor / page * page;
-        let radius = self.px(8.) as f32;
-        for (n, shot) in shots.iter().enumerate().skip(first).take(page) {
-            let k = (n - first) as i32;
-            let cell = Rect::new(
+        let radius = self.px(style.radius * 480.) as f32;
+        // Where each section starts on this page, and its row there.
+        let split_here = self.shots_split.filter(|&n| n > first && n < first + page);
+        let before = split_here.map_or(0, |n| n - first) as i32;
+        let rows_before = (before + columns - 1) / columns;
+        let place = |n: usize| -> Rect {
+            let (k, top) = match split_here {
+                Some(at) if n >= at => (
+                    (n - at) as i32,
+                    grid.y() + 2 * title_h + rows_before * (cell_h + gap),
+                ),
+                _ => ((n - first) as i32, grid.y() + title_h),
+            };
+            Rect::new(
                 grid.x() + k % columns * (cell_w + gap),
-                grid.y() + k / columns * (cell_h + gap),
+                top + k / columns * (cell_h + gap),
                 cell_w as u32,
                 cell_h as u32,
-            );
+            )
+        };
+        if sections && first < shots.len() {
+            let older = |n: usize| split.is_some_and(|at| n >= at);
+            let mut heads = vec![(first, older(first))];
+            if let Some(at) = split_here {
+                heads.push((at, true));
+            }
+            for (n, old) in heads {
+                let key = if old {
+                    "shots.earlier"
+                } else {
+                    "shots.this_week"
+                };
+                let cell = place(n);
+                let at = Rect::new(
+                    grid.x(),
+                    cell.y() - title_h,
+                    grid.width(),
+                    (title_h - self.px(6.)).max(1) as u32,
+                );
+                self.label(&self.catalog.text(key), (Face::Bold, 15., theme.text), at)?;
+            }
+        }
+        for (n, shot) in shots.iter().enumerate().skip(first).take(page) {
+            let cell = place(n);
             let grow = |r: Rect, by: i32| {
                 Rect::new(
                     r.x() - by,

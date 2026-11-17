@@ -59,6 +59,17 @@ row = 0.1
 badge = 0.075
 badge_radius = 0.02
 
+[saves]
+style = "preview"
+preview = { x = 0.05, y = 0.12, w = 0.5, h = 0.72 }
+list = { x = 0.58, y = 0.12, w = 0.37, h = 0.72 }
+
+[shots]
+sections = true
+columns = 4
+gap = 0.025
+radius = 0.025
+
 [view.prateleiras]
 name = { en = "Shelves", pt_BR = "Prateleiras" }
 

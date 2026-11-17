@@ -1195,6 +1195,9 @@
 "saves.emulator" = "Emulador"
 "saves.size" = "Tamaño"
 "saves.total" = { one = "{count} partida · {size}", other = "{count} partidas · {size}" }
+"saves.saved_line" = "Guardado el {date} · {ago}"
+"shots.this_week" = "Esta semana"
+"shots.earlier" = "Antes"
 "saves.note_slot" = "El juego se abre en este punto. Las nuevas partidas siguen en la ranura {n}."
 "saves.note_auto" = "El juego se abre en este punto. La partida automática se vuelve a guardar al salir."
 "saves.note_state" = "El juego se abre en este punto."
