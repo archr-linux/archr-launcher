@@ -25,6 +25,8 @@ fonte, ele usa as fontes do padrão; sem a imagem de um console, a do padrão;
 sem um ícone, o do padrão; sem um som, o do padrão.
 Um exemplo completo e pequeno está em `themes/praia/` (aparece como "Exemplo";
 o tema Praia completo é publicado à parte, na Loja de temas).
+O tema de referência da API 3.1 é `themes/ellegance/` (Ellegance): usa
+todas as chaves novas e serve de modelo (veja [Ellegance](#ellegance-o-tema-de-referência-da-31)).
 
 ## Nome
 
@@ -684,6 +686,53 @@ O tema de teste `crates/archr-ui/tests/themes/prateleiras` usa todos; o teste
 (`ARCHR_HOME_CAPTURE_DIR=<pasta> cargo test -p archr-ui --test home_render`
 grava os PNGs).
 
+### Ellegance, o tema de referência da 3.1
+
+`themes/ellegance/` é um tema completo que usa toda a API 3.1: estilo
+(`font_bold`, sombra, vidro, foco `"lift"`, `motion = "spring"`, gradiente),
+prateleiras, uma tabela por tela, Configurações em barra lateral, o OSD em
+cápsula e `[aspect.square]`/`[aspect.wide]` para 720x720 e 480x320. Copie a
+pasta e mude o que quiser. O começo dele:
+
+```toml
+name = "Ellegance"
+font_bold = "fonts/Inter-Bold.ttf"
+glass = { fill = "#FFFFFF17", border = "#FFFFFF21", highlight = "#FFFFFF29", blur = 0.05 }
+focus = "lift"
+motion = "spring"
+gradient = { from = "#121219", to = "#07070A", angle = 90 }
+
+[start]
+style = "control"
+
+[settings]
+layout = "sidebar"
+icon = "tile"
+groups = "inset"
+
+# "lista" é a visualização de quem acabou de instalar: aqui, as prateleiras.
+[view.lista.home.shelves]
+order = ["continue", "systems", "apps"]
+
+[view.lista.games]
+list = { x = 0.05, y = 0.31, w = 0.9, h = 0.57, row = 0.2167, mark = "grid", columns = 4 }
+strip = { x = 0.05, y = 0.225, w = 0.9, h = 0.06 }
+
+# Para quem prefere a lista de sempre.
+[view.classica]
+name = { en = "List", pt_BR = "Lista" }
+```
+
+Um tema não escolhe a visualização inicial: ela é a `launcher.view` do
+usuário, `lista` numa instalação nova. Por isso o Ellegance põe as
+prateleiras na própria `lista` e oferece a lista clássica como `classica`.
+
+O teste `home_render` desenha todas as telas do Ellegance nos três tamanhos
+e compara as de 640x480 com `tests/golden/ellegance-640x480`
+(`ARCHR_ELLEGANCE_CAPTURE_DIR=<pasta>` grava os PNGs;
+`ARCHR_GOLDEN_UPDATE=1` regrava as referências). O teste `shipped_themes`
+confere que todo tema de `themes/` carrega sem um aviso no log.
+
 ### Posições das telas
 
 `[details]`, `[achievements]`, `[saves]`, `[shots]`, `[switcher]`, `[resume]` e
@@ -907,6 +956,11 @@ padrão.
 Para ver os estilos no PC: `ARCHR_OSD_STYLES=<pasta> cargo test -p archr-osd
 -- --ignored styles` grava o volume em pill e capsule, em cada borda, sobre
 um fundo cinza de 640x480.
+Sobre telas do launcher, com o arquivo que um tema gera:
+`ARCHR_OSD_THEME_OUT=/tmp/osd.toml cargo test -p archr-launcher
+ellegance_gives` grava o do Ellegance, e `ARCHR_OSD_LOOK=/tmp/osd.toml
+ARCHR_OSD_SCENES=<pasta de PNGs> ARCHR_OSD_OUT=<pasta> cargo test -p archr-osd
+-- --ignored over_screens` desenha o volume a 60 % sobre cada PNG.
 
 ### Configurações: `[settings]`
 
@@ -969,6 +1023,9 @@ O tema de teste `prateleiras` usa a barra lateral, os quadrados e os grupos;
 `ARCHR_SETTINGS_THEMED_DIR=<pasta> cargo test -p archr-ui --lib
 the_sidebar_theme` grava a raiz, Wi-Fi, Serviços de rede, Jogos, Som e tela e
 as duas listas de escolhas em 640x480, 720x720 e 480x320.
+O mesmo para o Ellegance: `ARCHR_ELLEGANCE_CAPTURE_DIR=<pasta> cargo test
+-p archr-ui --lib ellegance_draws_settings` (a raiz, Jogos, Serviços de rede e
+a lista de núcleos em 640x480 são referências em `tests/golden/ellegance-640x480`).
 
 ### Grade de jogos com título
 
