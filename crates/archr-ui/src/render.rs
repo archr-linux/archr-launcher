@@ -1110,6 +1110,12 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 // follows the systems screen's header, whatever lies behind.
                 if matches!(app.screen, Screen::StartHub { .. }) {
                     self.header(&app.screen, cursor, data, theme, &view.systems)?;
+                } else if matches!(backdrop, Screen::Games { .. })
+                    && layout.list.mark == Mark::Grid
+                    && view.home.is_some()
+                {
+                    // The grid has the shelves' large title instead.
+                    self.status_header(theme)?;
                 } else {
                     self.header(backdrop, cursor, data, theme, layout)?;
                 }
@@ -1125,7 +1131,8 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                     let lifted = app.moving().is_some();
                     self.faded(layout.list.opacity, |ui| match backdrop {
                         Screen::Games { system, folder } if layout.list.mark == Mark::Grid => {
-                            ui.games_grid((system, folder), cursor, data, theme, art, layout)
+                            let heading = view.home.as_ref();
+                            ui.games_grid((system, folder), cursor, (data, heading), theme, art, layout)
                         }
                         _ => ui.list(backdrop, (&rows, lifted), cursor, data, theme, layout),
                     })?;

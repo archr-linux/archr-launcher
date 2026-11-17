@@ -831,11 +831,31 @@ impl<'t> Ui<'_, 't> {
         &mut self,
         (system, folder): (&str, &str),
         cursor: usize,
-        data: &dyn DataSource,
+        (data, home): (&dyn DataSource, Option<&Home>),
         theme: &Theme,
         art: Art<'_, '_>,
         layout: &Layout,
     ) -> Result<(), String> {
+        if let Some(home) = home {
+            let len = App::list_len(data, system, folder);
+            let note = self.catalog.format(
+                "switcher.position",
+                &[
+                    ("n", &(cursor + 1).min(len).to_string()),
+                    ("count", &len.to_string()),
+                ],
+            );
+            let rect = self.area(home.heading);
+            let title = system_title(system, data, &self.catalog);
+            let size = home.heading_size * 480.;
+            self.label(&title, (Face::Bold, size, theme.text), rect)?;
+            self.label_aligned(
+                &note,
+                (Face::Regular, 13., theme.text_secondary),
+                rect,
+                Align::Right,
+            )?;
+        }
         if let Some(strip) = layout.strip {
             self.strip(self.area(strip), system, data, theme)?;
         }
