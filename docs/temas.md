@@ -675,6 +675,7 @@ tela é desenhada como sempre:
 | `[keyboard]` | `sheet = true`, `key` | edição numa folha, teclas do tema |
 | `[dialog]` | `buttons = "row"`, `style` | perguntas em cápsulas, destrutivas em vermelho |
 | `[status]` | `rect` | onde fica a pílula do relógio |
+| `[osd]` | `style = "capsule"`, `position` | indicador de volume e brilho em cápsula de vidro ([OSD](#osd-de-volume-e-brilho-osd)) |
 
 O tema de teste `crates/archr-ui/tests/themes/prateleiras` usa todos; o teste
 `home_render` desenha cada tela em 640x480, 720x720 e 480x320
@@ -860,6 +861,50 @@ regra, o campo em cápsula e as teclas; nas teclas, a em foco fica clara (cor
 `text`, letra `background`), a de confirmar na cor de destaque e as outras
 em vidro. B continua cancelando e START confirmando, como dizem as dicas.
 `key` vale também sem a folha, e para o teclado da busca.
+
+### OSD de volume e brilho: `[osd]`
+
+O indicador de volume e brilho (e os cartões de bateria, relatório e disco)
+é desenhado pelo `archr-osd`, um processo à parte que fica por cima de tudo,
+jogos inclusive. Ele não lê o `theme.toml`: ao iniciar e sempre que aplica a
+aparência (troca de tema ou de qualquer opção de Aparência), o launcher grava
+o tema ativo já resolvido em `/run/archr-launcher/osd-theme.toml` (arquivo
+temporário + rename, nunca pela metade). O OSD relê o arquivo quando ele
+muda, na próxima vez que algo aparece; sem o arquivo, ou com ele quebrado,
+desenha como sempre.
+
+```toml
+[osd]
+style = "capsule"     # "pill" (padrão) ou "capsule"
+position = "right"    # "right" (padrão), "left", "top" ou "bottom"
+fill = "#F5F5F7"      # cor do nível (padrão #F1F3F7)
+track = "#1C1C22A6"   # fundo atrás do nível (padrão: o do estilo)
+radius = 0.0375       # cantos, em tamanho de 480 (pill 16 px, capsule 18 px)
+```
+
+- `pill`: a pílula escura de 44x136 px (em 640x480) com o nível claro subindo
+  de baixo, o ícone embaixo, a 24 px da borda. É o desenho de sempre.
+- `capsule`: cápsula vertical maior (50x200 px), de vidro escuro translúcido
+  com borda clara de 1 px, brilho no topo e sombra; o nível claro sobe de
+  baixo e o ícone fica embaixo, escuro sobre o nível e claro sobre o vidro.
+- `position`: centrado na borda escolhida; em `top` e `bottom` o indicador
+  fica deitado e o nível cresce da esquerda para a direita, com o ícone à
+  esquerda.
+- `fill` e `track` aceitam `#RRGGBB` ou `#RRGGBBAA`. Sobre um `fill` escuro o
+  ícone fica claro.
+
+Os cartões do OSD (bateria baixa e crítica, relatório, disco, sem salvar
+estado) usam as cores do tema: `surface` (o cartão), `border`, `badge` (a
+barra da contagem), `text`, `text_secondary`, `muted`, `accent`, `success`,
+`warning`, `danger` e `scrim` (o véu da bateria crítica), e as fontes `font`
+e `font_semibold`. O arquivo só leva as cores que diferem do tema padrão: o
+padrão do OSD é o próprio Grafite, então um tema que não muda uma cor deixa
+o OSD como sempre. Uma fonte que não carrega volta para a Inter do tema
+padrão.
+
+Para ver os estilos no PC: `ARCHR_OSD_STYLES=<pasta> cargo test -p archr-osd
+-- --ignored styles` grava o volume em pill e capsule, em cada borda, sobre
+um fundo cinza de 640x480.
 
 ### Grade de jogos com título
 
