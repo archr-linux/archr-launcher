@@ -752,4 +752,50 @@ mod tests {
             scene.save_png(dir.join(format!("{name}.png"))).unwrap();
         }
     }
+
+    /// The volume at 60 % over launcher screens, drawn with an
+    /// osd-theme.toml: ARCHR_OSD_LOOK=<osd-theme.toml>
+    /// ARCHR_OSD_SCENES=<dir of *-WxH.png> ARCHR_OSD_OUT=<dir>
+    /// `cargo test -p archr-osd -- --ignored over_screens`. Writes
+    /// osd-volume-<scene>.png, the level where the OSD puts it.
+    #[test]
+    #[ignore]
+    fn over_screens() {
+        use crate::look::Edge;
+        let var = |name| std::path::PathBuf::from(std::env::var(name).unwrap());
+        let look = crate::look::Look::load(&var("ARCHR_OSD_LOOK"));
+        let out = var("ARCHR_OSD_OUT");
+        std::fs::create_dir_all(&out).unwrap();
+        for entry in std::fs::read_dir(var("ARCHR_OSD_SCENES")).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().and_then(|e| e.to_str()) != Some("png") {
+                continue;
+            }
+            let mut scene = sk::Pixmap::load_png(&path).unwrap();
+            let (sw, sh) = (scene.width() as i32, scene.height() as i32);
+            let level = look.level;
+            let g = Geometry::for_output(sw, sh, &level);
+            let painter = Painter::new(g, level);
+            let (w, h) = (g.width as i32, g.height as i32);
+            let (x, y) = match level.edge {
+                Edge::Right => (sw - w, (sh - h) / 2),
+                Edge::Left => (0, (sh - h) / 2),
+                Edge::Top => ((sw - w) / 2, 0),
+                Edge::Bottom => ((sw - w) / 2, sh - h),
+            };
+            let frame = painter.paint(Icon::Volume2, 0.6, 1.0);
+            scene.draw_pixmap(
+                x,
+                y,
+                frame.as_ref(),
+                &sk::PixmapPaint::default(),
+                sk::Transform::identity(),
+                None,
+            );
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            scene
+                .save_png(out.join(format!("osd-volume-{name}")))
+                .unwrap();
+        }
+    }
 }

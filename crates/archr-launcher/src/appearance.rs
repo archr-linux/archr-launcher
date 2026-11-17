@@ -167,6 +167,27 @@ pub fn publish_osd_theme(paths: &Paths, theme: &Theme) {
 mod tests {
     use super::*;
 
+    /// Ellegance hands the OSD its capsule on the right, its own colours
+    /// and Inter. ARCHR_OSD_THEME_OUT=<file> keeps what it writes (for the
+    /// OSD's `over_screens` capture).
+    #[test]
+    fn ellegance_gives_the_osd_its_capsule() {
+        let themes = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../themes");
+        let theme = Theme::load(&themes.join("ellegance"));
+        let text = osd_theme(&theme);
+        let table: toml::Table = toml::from_str(&text).unwrap();
+        assert_eq!(table["osd"]["style"].as_str(), Some("capsule"));
+        assert_eq!(table["osd"]["position"].as_str(), Some("right"));
+        assert_eq!(table["colors"]["danger"].as_str(), Some("#FF453A"));
+        assert!(table["font"]
+            .as_str()
+            .unwrap()
+            .ends_with("Inter-Regular.ttf"));
+        if let Some(out) = std::env::var_os("ARCHR_OSD_THEME_OUT") {
+            fs::write(out, text).unwrap();
+        }
+    }
+
     #[test]
     fn the_osd_gets_the_fonts_its_table_and_only_changed_colours() {
         let root = tempfile::TempDir::new().unwrap();
