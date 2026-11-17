@@ -92,7 +92,10 @@ pub fn osd_theme(theme: &Theme) -> String {
         })
     };
     let mut root = Table::new();
-    for (key, font) in [("font", &theme.font), ("font_semibold", &theme.font_semibold)] {
+    for (key, font) in [
+        ("font", &theme.font),
+        ("font_semibold", &theme.font_semibold),
+    ] {
         if let Some(path) = font {
             root.insert(key.into(), Value::String(path.to_string_lossy().into()));
         }
@@ -170,10 +173,14 @@ mod tests {
         let paths = Paths::new(Some(root.path().to_path_buf()));
         let path = paths.run.join(OSD_THEME);
         let mut theme = Theme::builtin();
-        theme.font = Some("/usr/share/archr-launcher/themes/default/fonts/Inter-Regular.ttf".into());
+        theme.font =
+            Some("/usr/share/archr-launcher/themes/default/fonts/Inter-Regular.ttf".into());
         publish_osd_theme(&paths, &theme);
         let table: toml::Table = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
-        assert!(table.get("colors").is_none(), "the default writes no colour");
+        assert!(
+            table.get("colors").is_none(),
+            "the default writes no colour"
+        );
         assert_eq!(
             table["font"].as_str(),
             Some("/usr/share/archr-launcher/themes/default/fonts/Inter-Regular.ttf")
@@ -204,7 +211,10 @@ mod tests {
         // Replaced whole: no temporary file is left beside it.
         assert_eq!(fs::read_dir(&paths.run).unwrap().count(), 1);
         use std::os::unix::fs::PermissionsExt;
-        assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o644);
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o644
+        );
     }
 
     #[test]

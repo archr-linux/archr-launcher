@@ -839,7 +839,11 @@ mod tests {
         assert_eq!(wrong.osd.style, OsdShape::Pill, "wrong value: warned, kept");
         assert_eq!(wrong.osd.position, OsdEdge::Right);
         assert_eq!(wrong.osd.fill, None);
-        assert_eq!(wrong.osd.radius, Some(16. / 480.), "out of range: the pill's");
+        assert_eq!(
+            wrong.osd.radius,
+            Some(16. / 480.),
+            "out of range: the pill's"
+        );
     }
     #[test]
     fn the_status_pill_takes_a_box_inside_the_screen() {
