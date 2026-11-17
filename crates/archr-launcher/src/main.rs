@@ -329,8 +329,8 @@ fn run(
     let mut covers = CoverCache::new(
         &creator,
         paths.cache.join("thumbs"),
-        cover_box.0,
-        cover_box.1,
+        cover_box[0].0,
+        cover_box[0].1,
     );
     // Details art: the screen shot box and the logo title, at their own sizes.
     let sized = |rect: archr_ui::theme::Rect01| {
@@ -349,12 +349,12 @@ fn run(
     let mut thumbs = CoverCache::new(&creator, paths.cache.join("thumbs"), cell(138.), cell(104.));
     let mut pictures = CoverCache::new(&creator, paths.cache.join("thumbs"), width, height);
     // An app's pictures (API 4), from its own folder: the list's at the
-    // cover's size, the detail's at the screen shot box's.
+    // size of its [app] art, the detail's at the screen shot box's.
     let mut app_covers = CoverCache::new(
         &creator,
         paths.cache.join("thumbs/apps"),
-        cover_box.0,
-        cover_box.1,
+        cover_box[1].0,
+        cover_box[1].1,
     );
     let mut app_shots = CoverCache::new(&creator, paths.cache.join("thumbs/apps"), shot_w, shot_h);
     // The host's copies of the pictures the app's screen asked for, by the
@@ -498,14 +498,14 @@ fn run(
                 covers = CoverCache::new(
                     &creator,
                     paths.cache.join("thumbs"),
-                    cover_box.0,
-                    cover_box.1,
+                    cover_box[0].0,
+                    cover_box[0].1,
                 );
                 app_covers = CoverCache::new(
                     &creator,
                     paths.cache.join("thumbs/apps"),
-                    cover_box.0,
-                    cover_box.1,
+                    cover_box[1].0,
+                    cover_box[1].1,
                 );
             }
             dirty = true;
@@ -1740,14 +1740,17 @@ fn badge_paths(app: &App) -> Vec<PathBuf> {
         .collect()
 }
 
-/// Pixel size of the games screen's cover in the active view.
-fn cover_size(theme: &archr_ui::Theme, (width, height): (u32, u32)) -> (u32, u32) {
+/// Pixel sizes of the games screen's cover and of an app's picture (its
+/// `[app]` art) in the active view: each is made at the size drawn.
+fn cover_size(theme: &archr_ui::Theme, (width, height): (u32, u32)) -> [(u32, u32); 2] {
     let view = theme.view(&theme.active_view);
-    let rect = view.games.art.map_or(theme.cover, |art| art.rect);
-    (
-        (rect.w * width as f32).round().max(1.) as u32,
-        (rect.h * height as f32).round().max(1.) as u32,
-    )
+    [&view.games, &view.app].map(|layout| {
+        let rect = layout.art.map_or(theme.cover, |art| art.rect);
+        (
+            (rect.w * width as f32).round().max(1.) as u32,
+            (rect.h * height as f32).round().max(1.) as u32,
+        )
+    })
 }
 /// Recent games the Continue shelf shows at most.
 const HOME_RECENT: usize = 12;
