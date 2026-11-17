@@ -128,6 +128,28 @@ impl Mesh {
             ]);
         }
     }
+    /// A picture's `crop` filling the rounded `rect`, its edge softened by
+    /// a pixel outside it as every shape's is, so the corners never step.
+    fn picture(&mut self, rect: Rect, radius: f32, crop: [f32; 4]) {
+        let points = outline(rect, radius);
+        self.fan(&points, Color::WHITE, rect, Some(crop));
+        // The fan's own edge vertices follow its center: the rim's start
+        // at 1, each with the texel under it and nothing past it.
+        let outer = outline(grown(rect, 1), radius + 1.);
+        let base = self.vertices.len() as u16;
+        for (n, &q) in outer.iter().enumerate() {
+            let edge = self.vertices[base as usize - POINTS + n];
+            let mut faded = vertex(q, Color::RGBA(255, 255, 255, 0), (0., 0.));
+            faded.tex_coord = edge.tex_coord;
+            self.vertices.push(faded);
+        }
+        let rim = base - POINTS as u16;
+        for i in 0..POINTS as u16 {
+            let j = (i + 1) % POINTS as u16;
+            self.indices
+                .extend([rim + i, base + i, rim + j, rim + j, base + i, base + j]);
+        }
+    }
     /// Filled, with a `width` pixel border when `border` is given.
     fn rounded(&mut self, rect: Rect, radius: f32, fill: Rgba, border: Option<(Rgba, u32)>) {
         let points = outline(rect, radius);
@@ -361,12 +383,9 @@ impl Geometry {
                 Key::Rounded(rect, r, fill, border) => {
                     mesh.rounded(rect, f32::from_bits(r), fill, border)
                 }
-                Key::Cover(rect, r, crop) => mesh.fan(
-                    &outline(rect, f32::from_bits(r)),
-                    Color::WHITE,
-                    rect,
-                    Some(crop.map(f32::from_bits)),
-                ),
+                Key::Cover(rect, r, crop) => {
+                    mesh.picture(rect, f32::from_bits(r), crop.map(f32::from_bits))
+                }
                 Key::Dashed(rect, r, c) => mesh.dashed(rect, f32::from_bits(r), c),
                 Key::Shaded(rect, r, (from, to, angle), border) => {
                     let gradient = Gradient {
@@ -464,8 +483,12 @@ impl Geometry {
         crop: [f32; 4],
     ) -> Result<(), String> {
         let radius = radius * self.corners;
+        if alpha == 0 {
+            return Ok(());
+        }
         let mesh = self.mesh(Key::Cover(rect, radius.to_bits(), crop.map(f32::to_bits)));
-        for vertex in &mut mesh.vertices {
+        // The rim stays clear: only what is drawn takes the alpha.
+        for vertex in mesh.vertices.iter_mut().filter(|v| v.color.a != 0) {
             vertex.color.a = alpha;
         }
         mesh.draw(canvas, Some(texture))
