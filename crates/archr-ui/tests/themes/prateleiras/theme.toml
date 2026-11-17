@@ -78,6 +78,13 @@ info = { x = 0.0, y = 0.74, w = 1.0, h = 0.14 }
 [resume]
 style = "title"
 
+[search]
+style = "field"
+
+[keyboard]
+sheet = true
+key = { h = 0.075, gap = 0.0125, radius = 0.025 }
+
 [view.prateleiras]
 name = { en = "Shelves", pt_BR = "Prateleiras" }
 

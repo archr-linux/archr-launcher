@@ -807,6 +807,37 @@ captura fica à direita, com sombra; embaixo, as capas dos jogos vizinhos do
 mesmo sistema. Os retângulos `shot`, `info`, `title`... não valem nesse
 estilo. Os botões e as dicas do rodapé são os de sempre.
 
+### Busca: `[search]`
+
+```toml
+[search]
+style = "field"       # "plain" (como sempre) ou "field"
+row = 0.079           # altura de um resultado (tamanho, fração de 480; 38 px)
+height = 0.083        # altura do campo (40 px)
+```
+
+Com `"field"` o campo vira uma cápsula de vidro com a lupa, o texto, o cursor
+e "N de TOTAL" dentro, contornada na cor de destaque enquanto se digita; os
+resultados ficam num grupo de vidro, cada um com a capa, o nome com o termo
+buscado em `font_bold` e o sistema (ou a pasta) à direita; o teclado fica
+encaixado embaixo, numa folha de vidro. As teclas seguem `[keyboard]`.
+
+### Teclado na tela: `[keyboard]`
+
+```toml
+[keyboard]
+sheet = true          # a edição numa folha de vidro
+key = { h = 0.075, gap = 0.0125, radius = 0.025 }   # altura, espaço e cantos das teclas (padrão 34, 6 e 8 px)
+```
+
+Com `sheet = true` a edição de texto das Configurações (senha do Wi-Fi, contas,
+cores...) fica numa folha de vidro com "Cancelar" à esquerda, o nome do campo
+no meio e a confirmação ("Conectar", "Confirmar") à direita, a legenda e a
+regra, o campo em cápsula e as teclas; nas teclas, a em foco fica clara (cor
+`text`, letra `background`), a de confirmar na cor de destaque e as outras
+em vidro. B continua cancelando e START confirmando, como dizem as dicas.
+`key` vale também sem a folha, e para o teclado da busca.
+
 ### Grade de jogos com título
 
 Numa visualização com [prateleiras](#prateleiras), a grade de jogos

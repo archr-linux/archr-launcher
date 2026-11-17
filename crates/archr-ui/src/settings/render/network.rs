@@ -294,6 +294,9 @@ impl View<'_, '_, '_> {
             _ => (self.keyboard_name(state), None),
         };
         let rule = rule.map(|key| self.tr(key));
+        if self.theme.screens.keyboard.sheet {
+            return self.keyboard_sheet(state, keyboard, (&caption, rule.as_deref()));
+        }
         let rule_width = match &rule {
             Some(rule) => self.span(rule, Face::Regular, 12.)? + 8.,
             None => 0.,
@@ -340,14 +343,119 @@ impl View<'_, '_, '_> {
             self.ui
                 .icon(eye, self.rect((584., 84., 18., 18.)), self.theme.muted)?;
         }
-        let submit = match state.keyboard_target {
-            Some(Id::WifiSwitch) => "settings.connect",
-            Some(Id::ScraperPassword) => "settings.sign_in_short",
-            _ => "hint.confirm",
-        };
+        let submit = Self::submit_key(state);
         let labels = (self.tr("settings.space"), self.ui.catalog.text(submit));
         self.ui
             .keyboard_keys(keyboard, 129., (&labels.0, &labels.1), self.theme)
+    }
+    /// What the keyboard's confirmation says.
+    fn submit_key(state: &Settings) -> &'static str {
+        match state.keyboard_target {
+            Some(Id::WifiSwitch) => "settings.connect",
+            Some(Id::ScraperPassword) => "settings.sign_in_short",
+            _ => "hint.confirm",
+        }
+    }
+    /// The keyboard on a sheet of glass (the theme's `[keyboard]`
+    /// `sheet = true`): Cancel, the field's name and the confirmation on
+    /// top, the field, its caption and rule, and the keys.
+    fn keyboard_sheet(
+        &mut self,
+        state: &Settings,
+        keyboard: &crate::keyboard::Keyboard,
+        (caption, rule): (&str, Option<&str>),
+    ) -> Result<(), String> {
+        let theme = self.theme;
+        let sheet = self.rect((12., 44., 616., 384.));
+        let radius = self.ui.px(22.) as f32;
+        self.ui.cast_shadow(sheet, radius)?;
+        self.ui.glass(sheet, radius, &theme.glass_or_default())?;
+        // Cancel at the left, the field's name, the confirmation at the right.
+        let cancel = self.tr("hint.cancel");
+        self.text(
+            (32., 52., 160., 30.),
+            &cancel,
+            (14., theme.highlight_bg, Align::Left),
+        )?;
+        let submit = self.ui.catalog.text(Self::submit_key(state));
+        self.text_face(
+            (448., 52., 160., 30.),
+            &submit,
+            (14., theme.highlight_bg, Align::Right),
+            Face::Semibold,
+        )?;
+        let title = self.keyboard_name(state);
+        self.text_face(
+            (196., 52., 248., 30.),
+            &title,
+            (15., theme.text, Align::Center),
+            Face::Semibold,
+        )?;
+        self.ui.divider(
+            sheet.x(),
+            self.ui.px(88.),
+            sheet.width(),
+            Rgba {
+                a: 0x1A,
+                ..theme.text
+            },
+        )?;
+        // The caption and its rule, then the field.
+        let rule_width = match rule {
+            Some(rule) => self.span(rule, Face::Regular, 12.)? + 8.,
+            None => 0.,
+        };
+        self.note((32., 96., 576. - rule_width, 18.), caption, 12.)?;
+        if let Some(rule) = rule {
+            self.text(
+                (608. - rule_width, 96., rule_width, 18.),
+                rule,
+                (12., theme.muted, Align::Right),
+            )?;
+        }
+        let field = self.rect((28., 118., 584., 42.));
+        let round = field.height() as f32 / 2.;
+        self.ui.rounded(
+            field,
+            round,
+            Rgba {
+                a: 150,
+                ..theme.background
+            },
+            None,
+        )?;
+        let width = 2. * self.ui.frame.scale;
+        self.ui
+            .geometry
+            .ring(&mut self.ui.canvas, field, round, width, theme.highlight_bg)?;
+        let text = keyboard.display();
+        let mut size = 18.;
+        while size > 12. && self.span(&text, Face::Mono, size)? > 520. {
+            size -= 1.;
+        }
+        let shown = self.ui.measure(&text, Face::Mono, size)? as f32 / self.ui.frame.scale;
+        self.ui.label_aligned(
+            &text,
+            (Face::Mono, size, theme.text),
+            self.rect((48., 118., 530., 42.)),
+            Align::Left,
+        )?;
+        self.ui.canvas.set_draw_color(color(theme.highlight_bg));
+        self.ui
+            .canvas
+            .fill_rect(self.rect((48. + shown.min(530.) + 3., 129., 2., 20.)))?;
+        if keyboard.mode == Mode::Secret {
+            let eye = if keyboard.reveal {
+                Glyph::EyeOff
+            } else {
+                Glyph::Eye
+            };
+            self.ui
+                .icon(eye, self.rect((582., 130., 18., 18.)), theme.muted)?;
+        }
+        let labels = (self.tr("settings.space"), submit);
+        self.ui
+            .keyboard_keys(keyboard, 174., (&labels.0, &labels.1), theme)
     }
     /// Config-scraper side panel: last or running collection.
     pub(super) fn scraper_panel(&mut self, state: &Settings) -> Result<(), String> {

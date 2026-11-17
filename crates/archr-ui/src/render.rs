@@ -1155,7 +1155,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             } else if let Screen::Shot { system, game } = backdrop {
                 self.shot(app, (system, *game), data, theme, art)?;
             } else if let Screen::Search { system } = backdrop {
-                self.search(app, (system, cursor), data, theme)?;
+                self.search(app, (system, cursor), data, theme, art)?;
             } else if let Screen::Achievements { system, game } = backdrop {
                 let name = data
                     .games(system)

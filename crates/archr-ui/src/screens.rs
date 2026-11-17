@@ -253,6 +253,48 @@ pub struct ResumeStyle {
     pub title: bool,
 }
 
+/// The list's search: the field and plain rows (as always), or a field of
+/// glass with the count inside, the results in a group of glass with their
+/// covers and the term in bold, and the keyboard docked on a sheet
+/// (`style = "field"`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SearchStyle {
+    pub field: bool,
+    /// Sizes (of 480): a result's row and the field's height.
+    pub row: f32,
+    pub height: f32,
+}
+impl Default for SearchStyle {
+    fn default() -> Self {
+        Self {
+            field: false,
+            row: 38. / 480.,
+            height: 40. / 480.,
+        }
+    }
+}
+
+/// The on-screen keyboard: its keys (height, gap, corners, in sizes of
+/// 480) and, with `sheet`, the editing on a sheet of glass with Cancel and
+/// the confirmation at its top; the focused key light.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct KeyboardStyle {
+    pub sheet: bool,
+    pub key_h: f32,
+    pub key_gap: f32,
+    pub key_radius: f32,
+}
+impl Default for KeyboardStyle {
+    fn default() -> Self {
+        Self {
+            sheet: false,
+            key_h: 34. / 480.,
+            key_gap: 6. / 480.,
+            key_radius: 8. / 480.,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Screens {
     pub toast: ToastStyle,
@@ -267,6 +309,8 @@ pub struct Screens {
     pub shots: ShotsStyle,
     pub switcher: SwitcherStyle,
     pub resume: ResumeStyle,
+    pub search: SearchStyle,
+    pub keyboard: KeyboardStyle,
 }
 
 /// Rectangles the screen tables place, as (table, key, old loose key).
@@ -304,6 +348,8 @@ pub const TABLES: &[&str] = &[
     "resume",
     "start",
     "menu",
+    "search",
+    "keyboard",
 ];
 
 /// `table` with each screen table's rectangle under its old loose key, so
@@ -357,6 +403,8 @@ fn style_keys(screen: &str) -> &'static [&'static str] {
         "shots" => &["sections", "columns", "gap", "radius"],
         "switcher" => &["cards"],
         "resume" => &["style"],
+        "search" => &["style", "row", "height"],
+        "keyboard" => &["sheet", "key"],
         _ => &[],
     }
 }
@@ -544,6 +592,37 @@ impl Screens {
                 own.resume.title,
                 &[("picture", false), ("title", true)],
             );
+        }
+        if let Some(t) = get("search") {
+            let r = Reader("search", t);
+            own.search.field = r.pick(
+                "style",
+                own.search.field,
+                &[("plain", false), ("field", true)],
+            );
+            own.search.row = r.number("row", own.search.row, 0.05, 0.12);
+            own.search.height = r.number("height", own.search.height, 0.06, 0.12);
+        }
+        if let Some(t) = get("keyboard") {
+            let r = Reader("keyboard", t);
+            own.keyboard.sheet = r.flag("sheet", own.keyboard.sheet);
+            match t.get("key") {
+                None => {}
+                Some(Value::Table(key)) => {
+                    let r = Reader("keyboard", key);
+                    let k = &mut own.keyboard;
+                    k.key_h = r.number("h", k.key_h, 0.05, 0.1);
+                    k.key_gap = r.number("gap", k.key_gap, 0., 0.03);
+                    k.key_radius = r.number("radius", k.key_radius, 0., 0.05);
+                    for name in key
+                        .keys()
+                        .filter(|n| !["h", "gap", "radius"].contains(&n.as_str()))
+                    {
+                        log::warn!("Unknown theme key keyboard.key.{name}; ignored");
+                    }
+                }
+                Some(_) => log::warn!("Theme keyboard.key must be {{ h, gap, radius }}; ignored"),
+            }
         }
         own
     }
