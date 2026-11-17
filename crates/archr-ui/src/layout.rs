@@ -8,6 +8,8 @@
 pub use crate::text::Align;
 use crate::theme::{Gradient, Rect01, Theme};
 use toml::{Table, Value};
+mod home;
+pub use home::{Grid, Hero, Home, ShelfKind, ShelfStyle, Tab};
 
 /// Id of the classic list layout, which every theme offers.
 pub const LISTA: &str = "lista";
@@ -24,6 +26,8 @@ pub enum Mark {
     Pill,
     Bar,
     Tile,
+    /// Games in a grid of covers with their names under them.
+    Grid,
 }
 /// The list scrolls only when the selection reaches an edge, or keeps it centered.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -60,6 +64,8 @@ pub struct List {
     pub cursor: String,
     /// Every element is drawn at its `opacity` (0 to 1).
     pub opacity: f32,
+    /// Columns of a grid (`mark = "grid"`).
+    pub columns: usize,
 }
 /// What a panel is made of: the theme's surface, or its glass.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -146,6 +152,8 @@ pub struct Layout {
     pub info: Option<Info>,
     pub meta: Option<Meta>,
     pub dots: Option<Rect01>,
+    /// The row of systems above a games grid, switched with L1 and R1.
+    pub strip: Option<Rect01>,
     pub decor: Vec<Decor>,
 }
 #[derive(Clone, Debug, PartialEq)]
@@ -153,6 +161,8 @@ pub struct View {
     pub id: String,
     pub systems: Layout,
     pub games: Layout,
+    /// The shelves the launcher opens on instead of the systems list.
+    pub home: Option<Home>,
     /// The screen it was laid out for, in pixels.
     pub screen: (u32, u32),
 }
@@ -243,6 +253,7 @@ impl View {
             scroll: Scroll::Edge,
             cursor: String::new(),
             opacity: 1.,
+            columns: 4,
         };
         let column = |x, width| Rect01 {
             x,
@@ -263,11 +274,13 @@ impl View {
             info: None,
             meta: None,
             dots: None,
+            strip: None,
             decor: Vec::new(),
         };
         let cover = t.cover;
         Self {
             id: LISTA.into(),
+            home: None,
             screen: t.shape.screen,
             systems: Layout {
                 panel: Some(Panel {
@@ -347,7 +360,10 @@ impl View {
     }
     /// Lays the `[view.<id>]` table over this view.
     pub(crate) fn overlay(&mut self, table: &Table, at: &str) {
-        known(table, at, &["name", "systems", "games"]);
+        known(table, at, &["name", "systems", "games", "home"]);
+        if let Some(value) = table.get("home") {
+            Home::overlay(&mut self.home, value, &format!("{at}.home"));
+        }
         for (key, layout) in [("systems", &mut self.systems), ("games", &mut self.games)] {
             if let Some(table) = sub(table, at, key) {
                 layout.overlay(table, &format!("{at}.{key}"));
@@ -429,7 +445,7 @@ impl Layout {
             t,
             at,
             &[
-                "header", "title", "status", "divider", "summary", "list", "panel", "art",
+                "header", "title", "status", "divider", "summary", "list", "panel", "art", "strip",
                 "backdrop", "info", "meta", "dots", "decor",
             ],
         );
@@ -508,6 +524,10 @@ impl Layout {
             m.size = r.number("size", m.size, 0.01, 0.3);
         });
         element(t, at, "dots", &mut self.dots, |d, r| *d = r.rect(*d));
+        element(t, at, "strip", &mut self.strip, |s, r| {
+            r.known(&["x", "y", "w", "h"]);
+            *s = r.rect(*s);
+        });
         match t.get("decor") {
             None => {}
             Some(Value::Array(items)) => {
@@ -577,8 +597,10 @@ impl List {
                 "scroll",
                 "cursor",
                 "opacity",
+                "columns",
             ],
         );
+        self.columns = r.number("columns", self.columns as f32, 1., 8.) as usize;
         self.opacity = r.opacity(self.opacity);
         self.rect = r.rect(self.rect);
         self.row = r.number("row", self.row, 0.02, 1.);
@@ -602,6 +624,7 @@ impl List {
                 ("pill", Mark::Pill),
                 ("bar", Mark::Bar),
                 ("tile", Mark::Tile),
+                ("grid", Mark::Grid),
             ],
         );
         self.scroll = r.pick(
@@ -615,12 +638,25 @@ impl List {
             Some(_) => log::warn!("Theme {at}.cursor must be text; ignored"),
         }
         // A tile list is always a centered horizontal row.
+        if self.mark == Mark::Grid {
+            self.axis = Axis::Vertical;
+        }
         if self.mark == Mark::Tile {
             self.axis = Axis::Horizontal;
         }
     }
 }
 
+/// The rectangle in the sub-table `key` (`{ x, y, w, h }`), over `current`.
+fn element_rect(table: &Table, at: &str, key: &str, current: Rect01) -> Rect01 {
+    match sub(table, at, key) {
+        Some(t) => {
+            let at = format!("{at}.{key}");
+            Reader { table: t, at: &at }.rect(current)
+        }
+        None => current,
+    }
+}
 fn known(table: &Table, at: &str, keys: &[&str]) {
     for key in table.keys().filter(|k| !keys.contains(&k.as_str())) {
         log::warn!("Unknown theme key {at}.{key}; ignored");

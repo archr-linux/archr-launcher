@@ -1077,7 +1077,7 @@ fn decor_files(
         .into_iter()
         .flat_map(|views| views.values())
         .filter_map(toml::Value::as_table)
-        .flat_map(|view| ["systems", "games"].map(|screen| view.get(screen)))
+        .flat_map(|view| ["systems", "games", "home"].map(|screen| view.get(screen)))
         .flatten()
         .filter_map(|screen| screen.get("decor")?.as_array())
         .flatten()
