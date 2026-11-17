@@ -10,6 +10,8 @@ pub const SELECT: Duration = Duration::from_millis(180);
 pub const SCREEN: Duration = Duration::from_millis(220);
 /// A cover or console picture giving way to the next one.
 pub const CROSSFADE: Duration = Duration::from_millis(200);
+/// A newly focused item rising (`focus = "lift"`).
+pub const LIFT: Duration = Duration::from_millis(200);
 /// Menus and dialogs appearing.
 pub const DIALOG: Duration = Duration::from_millis(160);
 /// Notices rising from the bottom.

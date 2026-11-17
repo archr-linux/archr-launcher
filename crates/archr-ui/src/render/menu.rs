@@ -282,8 +282,8 @@ impl Ui<'_, '_> {
             }
             if titled(n) {
                 let key = section(item).unwrap_or_default();
-                self.label(
-                    &self.catalog.text(key).to_uppercase(),
+                self.caps_label(
+                    &self.catalog.text(key),
                     (Face::Semibold, 10., theme.muted),
                     Rect::new(
                         left + px(self, 4.),
@@ -291,6 +291,7 @@ impl Ui<'_, '_> {
                         inner,
                         px(self, 16.) as u32,
                     ),
+                    Align::Left,
                 )?;
             }
             let focused = cursor == Some(n);

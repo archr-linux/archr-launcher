@@ -9,7 +9,7 @@ use crate::layout::{ShelfKind, Tab};
 use std::path::PathBuf;
 
 /// Something on a shelf.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Item {
     /// A recent game: its index in `App::recent`.
     Recent(usize),

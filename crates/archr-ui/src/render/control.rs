@@ -93,7 +93,8 @@ impl Ui<'_, '_> {
             let x = first + index as f32 * step;
             let mut rect = Rect::new(px(x), px(top), px(tile_w) as u32, px(tile_h) as u32);
             let ink = if focus {
-                rect = self.lift_focus(rect, radius, 1., theme)?;
+                let grow = self.lifting(("start", index));
+                rect = self.lift_focus(rect, radius, grow, theme)?;
                 self.rounded(rect, radius, theme.text, None)?;
                 theme.background
             } else {

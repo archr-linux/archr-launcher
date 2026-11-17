@@ -40,16 +40,18 @@ radius_card = 0.0375 # 18 px
 # of this theme is made of, a focus that lifts, spring motion and a faint
 # light from the top of the screen.
 shadow = "soft"
-shadow_color = "#000000B0"
-shadow_blur = 0.04
-shadow_offset = 0.012
-glass = { fill = "#FFFFFF17", border = "#FFFFFF21", highlight = "#FFFFFF29", blur = 0.05 }
+shadow_color = "#000000F0"
+shadow_blur = 0.075 # 36 px, 18 px down: the mock-ups' 0 18px 36px
+shadow_offset = 0.0375
+glass = { fill = "#FFFFFF14", border = "#FFFFFF1F", highlight = "#FFFFFF29", blur = 0.05 }
 focus = "lift"
 focus_scale = 1.05
 focus_ring = { color = "#F5F5F7EB", width = 2 }
 motion = "spring"
 # Large titles set tight, as display type wants; body text keeps Inter's.
 title_tracking = -0.022
+# The small capitals over a title, spaced as the mock-ups' 0.12em.
+caps_tracking = 0.12
 gradient = { from = "#121219", to = "#07070A", angle = 90 }
 
 # One table per screen (docs/temas.md, Uma tabela por tela).

@@ -4,7 +4,7 @@ use crate::{
     i18n::I18n,
     icons::Glyph,
     layout::{Backdrop, Header, Layout, List, Mark, Scroll, View},
-    motion::{Motion, Tween, CROSSFADE, SELECT},
+    motion::{Motion, Tween, CROSSFADE, LIFT, SELECT},
     primitives::{crop, gradient, Geometry, Shadow, WHOLE},
     startup::StartupTrace,
     startup_phase,
@@ -444,6 +444,10 @@ pub struct Ui<'font, 'texture> {
     /// Where this frame drew the focused item of the browsing screen: a
     /// context menu (`[menu]`) stands beside it.
     focus_at: Option<Rect>,
+    /// The lifted focus (`focus = "lift"`) of shelves and grids: what it
+    /// lifts (a key of the item) and how far it has grown, so a new focus
+    /// rises on the theme's motion instead of popping up.
+    lift: (Option<u64>, Tween),
     /// Each settings switch's last state and its knob's position.
     switches: std::collections::BTreeMap<crate::settings::Id, Tween>,
     cover_key: Option<PathBuf>,
@@ -479,6 +483,9 @@ pub struct Ui<'font, 'texture> {
     soft: crate::primitives::SoftLook,
     /// The theme's `title_tracking` (em) while drawing its screens.
     tracking: f32,
+    /// The theme's `caps_tracking` (em), and whether the label being
+    /// drawn is small capitals that take it.
+    caps: (f32, bool),
     /// A clock that stands still (`pin_clock`): captures and tests only.
     pinned: Option<(Instant, u64)>,
     pixel_art: bool,
@@ -585,6 +592,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             menu_open: false,
             hub_behind: false,
             focus_at: None,
+            lift: (None, Tween::new(1., LIFT)),
             switches: std::collections::BTreeMap::new(),
             lobby: None,
             cover_key: None,
@@ -606,6 +614,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             shadow_style: ShadowStyle::Soft,
             soft: Default::default(),
             tracking: 0.,
+            caps: (0., false),
             pinned: None,
             pixel_art: false,
             blink: None,
@@ -732,6 +741,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             switch.snap();
         }
         self.cover_fade.snap();
+        self.lift.1.snap();
         self.effects.snap();
     }
     pub fn motion(&self) -> Motion {
@@ -807,6 +817,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
     /// in Settings, where the theme only colors, fonts and icons.
     fn finish(&mut self, theme: &Theme, settings: bool) {
         self.tracking = if settings { 0. } else { theme.title_tracking };
+        self.caps = (if settings { 0. } else { theme.caps_tracking }, false);
         if settings {
             self.geometry.style(1., self.px(1.) as u32);
             self.shadow_style = ShadowStyle::Soft;
@@ -849,6 +860,19 @@ impl<'font, 'texture> Ui<'font, 'texture> {
     fn label(&mut self, text: &str, style: (Face, f32, Rgba), panel: Rect) -> Result<(), String> {
         self.label_aligned(text, style, panel, Align::Left)
     }
+    /// `text` in small capitals, spaced by the theme's `caps_tracking`.
+    fn caps_label(
+        &mut self,
+        text: &str,
+        style: (Face, f32, Rgba),
+        panel: Rect,
+        align: Align,
+    ) -> Result<(), String> {
+        self.caps.1 = true;
+        let drawn = self.label_aligned(&text.to_uppercase(), style, panel, align);
+        self.caps.1 = false;
+        drawn
+    }
     fn label_aligned(
         &mut self,
         text: &str,
@@ -857,11 +881,15 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         align: Align,
     ) -> Result<(), String> {
         let px = self.frame.font_size(size);
+        let tracking = match self.caps {
+            (em, true) => (em * f32::from(px) * 64.).round() as i16,
+            _ => self.tracking(size, px),
+        };
         let mut style = Style {
             face,
             size: px,
             color,
-            tracking: self.tracking(size, px),
+            tracking,
         };
         let outline = self.outline();
         let text_cache = self
@@ -1336,7 +1364,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             self.notice(&banner, theme)?;
         }
         self.settle_entrances();
-        self.animating |= self.effects.active(now);
+        self.animating |= self.effects.active(now) || self.lift.1.active(now);
         self.capture()?;
         startup_phase!(self.startup, "first frame draw");
         self.canvas.present();

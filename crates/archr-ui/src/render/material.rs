@@ -511,4 +511,21 @@ mod tests {
         assert_eq!(pixel(&ui, grown.x() as usize, 50)[..3], [255, 0, 0]);
         assert_eq!(pixel(&ui, 60, 50), inside, "only a ring");
     }
+
+    #[test]
+    fn a_new_focus_rises_on_the_motion_and_the_first_is_up_at_once() {
+        let _sdl = crate::SDL_TEST_LOCK.lock().unwrap();
+        std::env::set_var("SDL_VIDEODRIVER", "offscreen");
+        let mut ui = Ui::new(160, 120, true).unwrap();
+        ui.set_motion(crate::motion::Motion::On);
+        assert_eq!(ui.lifting("first"), 1., "the screen opens on it lifted");
+        assert!(ui.lifting("next") < 0.05, "a new focus starts low");
+        ui.frame.now += std::time::Duration::from_millis(100);
+        let rising = ui.lifting("next");
+        assert!((0.2..1.).contains(&rising), "{rising}");
+        ui.frame.now += std::time::Duration::from_millis(400);
+        assert_eq!(ui.lifting("next"), 1., "settled");
+        ui.set_motion(crate::motion::Motion::Off);
+        assert_eq!(ui.lifting("still"), 1., "no motion: up at once");
+    }
 }

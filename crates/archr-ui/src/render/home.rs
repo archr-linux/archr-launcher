@@ -303,10 +303,11 @@ impl<'t> Ui<'_, 't> {
         };
         let mut y = rect.y();
         let line_h = |ui: &Self, size: f32| (ui.frame.size(size / 480.) * 1.3).round() as i32;
-        self.label(
-            &kicker.to_uppercase(),
+        self.caps_label(
+            &kicker,
             (Face::Semibold, 10., theme.text_secondary),
             Rect::new(rect.x(), y, rect.width(), line_h(self, 10.) as u32),
+            Align::Left,
         )?;
         y += line_h(self, 10.) + self.px(4.);
         let big = home.hero.title * 480.;
@@ -607,7 +608,7 @@ impl<'t> Ui<'_, 't> {
         on: bool,
     ) -> Result<(), String> {
         let radius = self.frame.size(style.radius);
-        let (rect, radius) = self.focus_box(rect, radius, on, theme)?;
+        let (rect, radius) = self.focus_box(rect, radius, on.then_some(item), theme)?;
         let name = match item {
             Item::Recent(n) => app.recent.get(*n).map(|r| r.name.clone()),
             Item::Game { system, game } => data.games(system).get(*game).map(|g| g.name.clone()),
@@ -702,20 +703,39 @@ impl<'t> Ui<'_, 't> {
 
     /// `rect` for a focused item: grown and raised with `focus = "lift"`;
     /// the box and radius to draw it in.
+    /// How far the focus on the item `key` has risen (0 to 1): a new one
+    /// starts low and rises on the theme's motion; the first one drawn is
+    /// up at once.
+    pub(super) fn lifting(&mut self, key: impl std::hash::Hash) -> f32 {
+        use std::hash::{BuildHasher, BuildHasherDefault};
+        let key = BuildHasherDefault::<std::collections::hash_map::DefaultHasher>::default()
+            .hash_one(key);
+        let now = self.frame.now;
+        if self.lift.0 != Some(key) {
+            let from = if self.lift.0.is_some() { 0. } else { 1. };
+            let time = self.motion.travel(crate::motion::LIFT);
+            self.lift = (Some(key), crate::motion::Tween::starting(from, 1., time, now));
+        }
+        self.lift.1.value(now)
+    }
+    /// `rect` lifted when it holds the focus (`on`: a key of its item):
+    /// a newly focused item rises on the theme's motion.
     fn focus_box(
         &mut self,
         rect: Rect,
         radius: f32,
-        on: bool,
+        on: Option<impl std::hash::Hash>,
         theme: &Theme,
     ) -> Result<(Rect, f32), String> {
-        if on {
-            self.focus_at = Some(rect);
-        }
-        if !on || theme.focus != FocusStyle::Lift {
+        let Some(key) = on else {
+            return Ok((rect, radius));
+        };
+        self.focus_at = Some(rect);
+        if theme.focus != FocusStyle::Lift {
             return Ok((rect, radius));
         }
-        let grown = self.lift_focus(rect, radius, 1., theme)?;
+        let grow = self.lifting(key);
+        let grown = self.lift_focus(rect, radius, grow, theme)?;
         Ok((
             grown,
             radius * grown.width() as f32 / rect.width().max(1) as f32,
@@ -847,7 +867,7 @@ impl<'t> Ui<'_, 't> {
                 h.max(1) as u32,
             );
             let on = n == focus;
-            let (rect, r) = self.focus_box(rect, radius, on, theme)?;
+            let (rect, r) = self.focus_box(rect, radius, on.then_some(("library", system)), theme)?;
             let count = data
                 .systems()
                 .iter()
@@ -945,7 +965,7 @@ impl<'t> Ui<'_, 't> {
                 break;
             }
             let on = n == cursor;
-            let (rect, r) = self.focus_box(rect, radius, on, theme)?;
+            let (rect, r) = self.focus_box(rect, radius, on.then_some(("grid", system, folder, n)), theme)?;
             let folder_name = level.as_ref().and_then(|l| l.folder(n)).map(str::to_owned);
             let game = App::list_game(data, system, folder, n).and_then(|g| games.get(g));
             let cover = game

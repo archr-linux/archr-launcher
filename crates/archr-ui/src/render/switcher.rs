@@ -494,8 +494,8 @@ impl Ui<'_, '_> {
             _ => String::new(),
         };
         let line_h = self.px(18.);
-        self.label_aligned(
-            &above.to_uppercase(),
+        self.caps_label(
+            &above,
             (Face::Semibold, 11., theme.text_secondary),
             Rect::new(
                 card.x(),
@@ -595,8 +595,8 @@ impl Ui<'_, '_> {
         let block = self.px(20.) + step * shown + self.px(28.) + self.px(30.) + self.px(30.);
         let mut y = (height as i32 - block) / 2;
         let center = |y: i32, h: i32| Rect::new(pad, y, room, h.max(1) as u32);
-        let returning = self.catalog.text("resume.returning").to_uppercase();
-        self.label_aligned(
+        let returning = self.catalog.text("resume.returning");
+        self.caps_label(
             &returning,
             (Face::Semibold, 12., theme.text_secondary),
             center(y, self.px(18.)),

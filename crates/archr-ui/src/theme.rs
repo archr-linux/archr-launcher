@@ -272,6 +272,10 @@ pub struct Theme {
     /// pixels and up), in em: negative tightens, as large display type
     /// wants. 0 keeps the font's own spacing.
     pub title_tracking: f32,
+    /// Space between the letters of the small capitals over a title (the
+    /// shelves' kicker, "2 DAYS AGO" over a card), in em. 0 keeps the
+    /// font's own spacing.
+    pub caps_tracking: f32,
     /// The browsing screens' background shaded instead of plain.
     pub gradient: Option<Gradient>,
     /// One table per screen (`[toast]`, `[hints]`, `[status]`, `[dialog]`).
@@ -584,6 +588,13 @@ impl Theme {
                 defaults.map(|d| d.title_tracking),
             )
             .unwrap_or(0.),
+            caps_tracking: optional(
+                table,
+                "caps_tracking",
+                caps_tracking,
+                defaults.map(|d| d.caps_tracking),
+            )
+            .unwrap_or(0.),
             screens: crate::screens::Screens::read(
                 table,
                 defaults.map(|d| d.screens).unwrap_or_default(),
@@ -749,6 +760,7 @@ pub const KNOWN_KEYS: &[&str] = &[
     "focus_ring",
     "motion",
     "title_tracking",
+    "caps_tracking",
     "gradient",
     "toast",
     "hints",
@@ -950,6 +962,9 @@ fn focus_scale(value: f32) -> Option<f32> {
 pub const TITLE_SIZE: f32 = 20.;
 fn title_tracking(value: f32) -> Option<f32> {
     (-0.1..=0.1).contains(&value).then_some(value)
+}
+fn caps_tracking(value: f32) -> Option<f32> {
+    (0.0..=0.3).contains(&value).then_some(value)
 }
 fn motion(value: String) -> Option<MotionStyle> {
     choice(
