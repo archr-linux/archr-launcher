@@ -522,8 +522,13 @@ impl Settings {
                     },
                 ));
             }
+            // Signed in, the row signs out; another account needs that first.
+            Id::ScraperAccount if !self.scrape.user.is_empty() => {
+                self.scrape.verifying = true;
+                return Some(Effect::ScraperLogout);
+            }
             Id::ScraperAccount => {
-                let user = self.scrape.user.clone();
+                let user = self.scrape.draft.clone();
                 self.open_keyboard(Id::ScraperAccount, Mode::Text, user);
             }
             // Everything back to what the chosen theme says.
@@ -766,12 +771,15 @@ mod tests {
         state.scrape.user = "saved".into();
         state.open(Page::Scraper);
         state.cursor = 1;
-        state.handle(Button::A);
-        state.handle(Button::A);
-        state.handle(Button::Start);
-        assert_eq!(state.scrape.user, "saved");
-        state.handle(Button::B);
-        assert_eq!(state.page(), Page::Scraper);
+        let catalog = crate::i18n::I18n::default();
+        assert_eq!(
+            state.choice_text(Id::ScraperAccount, "", &catalog),
+            catalog.text("settings.sign_out")
+        );
+        // Signed in, A signs out; the account stays shown until that is done.
+        assert_eq!(state.handle(Button::A), Effect::ScraperLogout);
+        assert!(state.scrape.verifying);
+        assert!(state.keyboard.is_none());
         assert_eq!(state.scrape.user, "saved");
     }
     #[test]

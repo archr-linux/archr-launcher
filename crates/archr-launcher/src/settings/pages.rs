@@ -338,6 +338,11 @@ impl Backend {
     }
     /// Blocking login check; the login is stored only once the service accepts it.
     pub(super) fn login(&self, user: &str, password: &str) -> Result<(String, usize), String> {
+        // The site takes the e-mail address, the API only the user name:
+        // say so, instead of the server's "wrong user or password".
+        if user.contains('@') {
+            return Err("settings.scrape_email".into());
+        }
         let creds = Credentials {
             user: user.trim().into(),
             password: password.into(),
@@ -345,6 +350,10 @@ impl Backend {
         let engine = Engine::production(self.paths.cache.clone(), Some(creds.clone()))
             .ok_or("settings.scraper_unavailable")?;
         self.save_login(&engine, creds)
+    }
+    /// Forgets the saved ScreenScraper login.
+    pub(super) fn scraper_logout(&self) -> Result<(), String> {
+        Credentials::clear(&self.paths.store).map_err(|e| e.to_string())
     }
     /// Any refusal or failure leaves the saved login as it was.
     fn save_login(&self, engine: &Engine, creds: Credentials) -> Result<(String, usize), String> {
@@ -846,6 +855,16 @@ mod tests {
             calls(&root),
             "swaymsg input * xkb_variant \"\"; input * xkb_layout us\narchr-keyboard set us \n"
         );
+    }
+    #[test]
+    fn an_email_address_is_answered_before_asking_the_server() {
+        let (_root, paths) = fixture("");
+        let backend = Backend::new(paths.clone());
+        assert_eq!(
+            backend.login("someone@example.com", "secret"),
+            Err("settings.scrape_email".into())
+        );
+        assert!(!paths.store.join("scraper.toml").exists());
     }
     #[test]
     fn scraper_stays_disabled_without_the_build_credential() {
