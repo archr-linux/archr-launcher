@@ -718,6 +718,7 @@ font_bold = "fonts/Inter-Bold.ttf"
 glass = { fill = "#FFFFFF17", border = "#FFFFFF21", highlight = "#FFFFFF29", blur = 0.05 }
 focus = "lift"
 motion = "spring"
+title_tracking = -0.022
 gradient = { from = "#121219", to = "#07070A", angle = 90 }
 
 [start]
@@ -727,6 +728,7 @@ style = "control"
 layout = "sidebar"
 icon = "tile"
 groups = "inset"
+title = "below"
 
 # "lista" é a visualização de quem acabou de instalar: aqui, as prateleiras.
 [view.lista.home.shelves]
