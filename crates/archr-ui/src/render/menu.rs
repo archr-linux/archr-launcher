@@ -110,6 +110,9 @@ impl Ui<'_, '_> {
     ) -> Result<(), String> {
         let style = theme.screens.menu;
         let Frame { width, height, .. } = self.frame;
+        // The button hints stay at the bottom: the card stops above them.
+        let footer = self.frame.size(theme.footer_height).round().max(0.) as u32;
+        let height = height.saturating_sub(footer).max(1);
         let px = |ui: &Self, n: f32| ui.px(n);
         let items = app.quick_menu_items(data);
         let quick = app.quick_row(data);
