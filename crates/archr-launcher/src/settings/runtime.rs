@@ -241,6 +241,10 @@ impl Runtime {
                 self.watch_update();
             }
             super::updates::checked(&mut self.state.updates, result);
+            // The row under System says the same version as the check.
+            if let Some(report) = &self.state.updates.report {
+                self.state.values.insert(Id::Update, report.version.clone());
+            }
             changed = true;
         }
         if let Some(install) = &self.install {
@@ -564,7 +568,9 @@ impl Runtime {
         }
         if !self.closing && !self.busy() && self.active && now >= self.next_info {
             match self.state.page() {
-                Page::Info | Page::InfoDetail(_) => self.send(Work::Info),
+                // System too: its Update row shows the version, which an
+                // update (perhaps from a shell) changes under it.
+                Page::Info | Page::InfoDetail(_) | Page::System => self.send(Work::Info),
                 Page::Services if self.state.usb_network() => self.send(Work::Usb),
                 _ => {}
             }

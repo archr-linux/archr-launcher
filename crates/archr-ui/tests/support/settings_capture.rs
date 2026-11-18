@@ -1645,11 +1645,11 @@ fn updates_pages() -> Vec<(&'static str, Settings)> {
         size,
     };
     let mut page = ready();
-    page.info.version = "2.1.1".into();
+    page.info.version = "v3.1.0 · 20261118.3".into();
     page.open_updates();
     page.updates.checked = Instant::now().checked_sub(Duration::from_secs(125));
     page.updates.report = Some(Report {
-        version: "2.1.1".into(),
+        version: "v3.1.0 · 20261118.3".into(),
         channel: "stable".into(),
         packages: vec![
             package("archr-launcher", "1.4.2", "1.5.0", 2_202_009),
@@ -1659,13 +1659,13 @@ fn updates_pages() -> Vec<(&'static str, Settings)> {
         ],
         download: 50_541_772,
         reboot: Some(Reboot::Kernel),
-        new_version: "2.1.2".into(),
+        new_version: "20261118.4".into(),
         news: "Launcher 1.5: loja de temas e sons. Kernel com carregamento mais rápido. RetroArch 1.22."
             .into(),
     });
     let mut current = page.clone();
     current.updates.report = Some(Report {
-        version: "2.1.1".into(),
+        version: "v3.1.0 · 20261118.3".into(),
         ..Default::default()
     });
     current.cursor = 3;
@@ -2273,7 +2273,13 @@ fn module_pages(dir: &std::path::Path) -> Vec<(&'static str, Settings)> {
     let mut list = ready();
     list.set_modules(view.clone());
     list.open(Page::System);
-    let system = list.clone();
+    let mut system = list.clone();
+    // The Update row as a console on 3.1.0 shows it, up to date.
+    system.values.insert(Id::Update, "v3.1.0 · 20261118.3".into());
+    system.updates.report = Some(crate::settings::updates::Report {
+        version: "v3.1.0 · 20261118.3".into(),
+        ..Default::default()
+    });
     list.open(Page::Modules);
     let mut none = ready();
     none.open(Page::System);

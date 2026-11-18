@@ -344,7 +344,10 @@ impl Backend {
             log::warn!("archr-update check: {e}");
             "unknown".to_owned()
         })?;
-        report(&String::from_utf8_lossy(&output.stdout))
+        report(&String::from_utf8_lossy(&output.stdout)).map(|mut report| {
+            report.version = self.with_release(&report.version);
+            report
+        })
     }
     fn update_card(&self) -> Option<Card> {
         self.command_with_timeout("archr-update", &["offline", "--json"], CARD_TIMEOUT)

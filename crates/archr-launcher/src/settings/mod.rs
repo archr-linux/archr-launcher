@@ -35,6 +35,8 @@ use std::{
 pub struct Backend {
     paths: Paths,
     identity: std::sync::OnceLock<info::Identity>,
+    /// The system version as shown, and the files' times it was read at.
+    version: std::sync::Mutex<Option<info::VersionStamp>>,
     cpu_ticks: std::sync::Mutex<BTreeMap<u32, (u64, u64)>>,
 }
 impl Backend {
@@ -42,6 +44,7 @@ impl Backend {
         Self {
             paths,
             identity: std::sync::OnceLock::new(),
+            version: std::sync::Mutex::new(None),
             cpu_ticks: std::sync::Mutex::new(BTreeMap::new()),
         }
     }
@@ -1076,7 +1079,10 @@ impl Worker {
                         }
                     }
                 }
-                Reply::Info(info) => state.info = info,
+                Reply::Info(info) => {
+                    state.values.insert(Id::Update, info.version.clone());
+                    state.info = info;
+                }
                 Reply::Usb(usb) => state.usb = usb,
                 Reply::Store(reply) => state.store_reply(reply),
                 Reply::Theme(loaded) => (state.base_theme, state.base_dir) = *loaded,

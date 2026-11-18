@@ -203,9 +203,12 @@ fn mhz(value: Option<u64>, divisor: u64) -> String {
         .map(|v| format!("@{} MHz", v / divisor))
         .unwrap_or_default()
 }
-/// Cached identity only; live cards are built once per refresh.
+/// When the shown version was read: the times of archr-update's version
+/// file and of the release file.
+pub(super) type VersionStamp = ([Option<std::time::SystemTime>; 2], String);
+/// Cached identity only; live cards are built once per refresh. The system
+/// version is not here: an update changes it while the launcher runs.
 pub(super) struct Identity {
-    version: String,
     device: String,
     kernel: String,
     cpu: String,
@@ -278,13 +281,6 @@ impl Backend {
         .to_owned();
         let rk3326 = model.contains("RK3326");
         Identity {
-            // archr-update decides it (a newer recorded update, else the
-            // image); its own fallback, the image's, when it cannot run.
-            version: self
-                .command("archr-update", &["version"])
-                .ok()
-                .filter(|v| !v.is_empty())
-                .unwrap_or_else(|| self.image_version()),
             device: self
                 .read("/sys/firmware/devicetree/base/model")
                 .trim_end_matches('\0')
@@ -304,6 +300,40 @@ impl Backend {
             },
         }
     }
+    /// "v3.1.0 · 20261118.3": the release the installed `archr` package
+    /// belongs to, then the update the system is on. Without a release
+    /// file (a system from before 3.1.0) the update alone.
+    pub(super) fn with_release(&self, version: &str) -> String {
+        match self.read("/usr/share/archr/release").trim() {
+            "" => version.to_owned(),
+            release => format!("v{release} · {version}"),
+        }
+    }
+    /// The system's version as shown. archr-update decides the update (a
+    /// newer recorded one, else the image's); the image's when it cannot
+    /// run. Read again only when an update has written its files since:
+    /// the info page refreshes every two seconds.
+    pub(super) fn system_version(&self) -> String {
+        let stamp = ["/var/lib/archr-update/version", "/usr/share/archr/release"].map(|path| {
+            fs::metadata(self.paths.at(path))
+                .and_then(|m| m.modified())
+                .ok()
+        });
+        let mut cached = self.version.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((at, version)) = cached.as_ref() {
+            if *at == stamp {
+                return version.clone();
+            }
+        }
+        let update = self
+            .command("archr-update", &["version"])
+            .ok()
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| self.image_version());
+        let version = self.with_release(&update);
+        *cached = Some((stamp, version.clone()));
+        version
+    }
     pub(super) fn refresh_info(&self) -> Information {
         let identity = self.identity.get_or_init(|| self.identity());
         let cfg = self.cfg().ok();
@@ -314,7 +344,7 @@ impl Backend {
             .and_then(|v| v.parse::<f64>().ok())
             .unwrap_or(0.) as u64;
         Information {
-            version: identity.version.clone(),
+            version: self.system_version(),
             device: identity.device.clone(),
             kernel: identity.kernel.clone(),
             cards: vec![
@@ -934,13 +964,22 @@ mod tests {
         std::fs::create_dir_all(dir.path().join("etc")).unwrap();
         std::fs::write(dir.path().join("etc/os-release"), "VERSION_ID=\"2.1.1\"\n").unwrap();
         let backend = super::super::Backend::new(paths.clone());
-        assert_eq!(backend.identity().version, "2.1.1");
+        assert_eq!(backend.system_version(), "2.1.1");
         let bin = dir.path().join("usr/bin");
         std::fs::create_dir_all(&bin).unwrap();
         let script = bin.join("archr-update");
         std::fs::write(&script, "#!/bin/sh\n[ \"$1\" = version ] && echo 2.1.2\n").unwrap();
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let backend = super::super::Backend::new(paths);
-        assert_eq!(backend.identity().version, "2.1.2");
+        // The same launcher sees an update made while it runs.
+        assert_eq!(backend.system_version(), "2.1.1");
+        let state = dir.path().join("var/lib/archr-update");
+        std::fs::create_dir_all(&state).unwrap();
+        std::fs::write(state.join("version"), "2.1.2").unwrap();
+        assert_eq!(backend.system_version(), "2.1.2");
+        // The release the archr package installs goes in front.
+        std::fs::create_dir_all(dir.path().join("usr/share/archr")).unwrap();
+        std::fs::write(dir.path().join("usr/share/archr/release"), "3.1.0\n").unwrap();
+        assert_eq!(backend.system_version(), "v3.1.0 · 2.1.2");
+        assert_eq!(backend.with_release("2.1.3"), "v3.1.0 · 2.1.3");
     }
 }
