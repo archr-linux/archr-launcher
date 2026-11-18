@@ -28,7 +28,7 @@ fn shipped_fonts_cover_cyrillic_and_phase_one_labels_fit() {
     let notice_font = ttf
         .load_font(root.join("themes/default/fonts/Inter-SemiBold.ttf"), 16)
         .unwrap();
-    for code in ["en", "pt_BR", "es", "ru"] {
+    for code in ["en", "pt_BR", "es", "ru", "de", "zh_CN"] {
         let i = I18n::load(&root.join("locales"), Some(code), None);
         // Real footer allocation: 24px side margins, 20px badge, 6px gap,
         // and 16px between hints. No text may be truncated or leave the screen.

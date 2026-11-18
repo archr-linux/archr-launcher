@@ -727,7 +727,17 @@ fn capture_network_and_games_pages() {
         std::env::var("ARCHR_SETTINGS_CAPTURE_LANGUAGES").unwrap_or_else(|_| "pt_BR,ru".into());
     for language in languages.split(',') {
         ui.catalog = I18n::load(std::path::Path::new("/nonexistent"), Some(language), None);
-        for (name, state) in pages() {
+        for (name, mut state) in pages() {
+            if state.page() == Page::Region {
+                let code = match ui.catalog.language() {
+                    "en" => "en_US",
+                    "es" => "es_ES",
+                    "ru" => "ru_RU",
+                    "de" => "de_DE",
+                    code => code,
+                };
+                state.values.insert(Id::Language, code.into());
+            }
             ui.canvas.set_draw_color(color(theme.background));
             ui.canvas.clear();
             let look = if name.starts_with("applied-") {
@@ -1312,7 +1322,7 @@ fn capture_achievements() {
         std::thread::sleep(Duration::from_millis(10));
     }
     let shelf = Shelf::new();
-    for language in ["pt_BR", "ru", "es", "en"] {
+    for language in ["pt_BR", "ru", "es", "en", "de", "zh_CN"] {
         ui.catalog = I18n::load(std::path::Path::new("/nonexistent"), Some(language), None);
         for (name, state) in cheevos_pages() {
             // Each state is a fresh page, not a switch flipped on the last one.
@@ -1600,7 +1610,7 @@ fn capture_store() {
     ui.configure(&ttf, &creator, &theme, None).unwrap();
     ui.root = Some(images.path().to_path_buf());
     let pages = store_pages(images.path());
-    for language in ["pt_BR", "ru", "es", "en"] {
+    for language in ["pt_BR", "ru", "es", "en", "de", "zh_CN"] {
         ui.catalog = I18n::load(std::path::Path::new("/nonexistent"), Some(language), None);
         for (name, state) in &pages {
             // Draw, let the loader decode what the page asked for, draw again.
@@ -1838,7 +1848,7 @@ fn capture_updates() {
         .unwrap();
     };
     let shelf = Shelf::new();
-    for language in ["pt_BR", "ru", "en", "es"] {
+    for language in ["pt_BR", "ru", "en", "es", "de", "zh_CN"] {
         ui.catalog = I18n::load(std::path::Path::new("/nonexistent"), Some(language), None);
         for (name, state) in updates_pages() {
             ui.switches.clear();
@@ -1907,7 +1917,7 @@ fn update_versions_stay_inside_their_line() {
     if let Some(report) = &mut empty.updates.report {
         report.packages.clear();
     }
-    for language in ["pt_BR", "ru"] {
+    for language in ["pt_BR", "ru", "de", "zh_CN"] {
         ui.catalog = I18n::load(std::path::Path::new("/nonexistent"), Some(language), None);
         // The gap column and the right margin, beside the package lines.
         for area in [
@@ -1946,7 +1956,7 @@ fn update_versions_stay_inside_their_line() {
         format!("{:-<30}", "python-requests-toolbelt"),
         format!("{:-<40}", "rk3326-mali-bifrost-userspace-driver"),
     ];
-    for language in ["pt_BR", "ru"] {
+    for language in ["pt_BR", "ru", "de", "zh_CN"] {
         ui.catalog = I18n::load(std::path::Path::new("/nonexistent"), Some(language), None);
         if language == "pt_BR" {
             assert_eq!(ui.catalog.size(1_048_471_142), "999,9 MB");
@@ -2597,7 +2607,7 @@ fn capture_modules() {
         )
         .unwrap();
     };
-    for language in ["pt_BR", "ru", "es", "en"] {
+    for language in ["pt_BR", "ru", "es", "en", "de", "zh_CN"] {
         ui.catalog = I18n::load(std::path::Path::new("/nonexistent"), Some(language), None);
         for (name, state) in &pages {
             let deadline = Instant::now() + Duration::from_secs(5);
@@ -3060,7 +3070,7 @@ fn capture_resume() {
     power.values.insert(Id::Idle, "5".into());
     power.values.insert(Id::IdleGame, "15".into());
     power.values.insert(Id::Suspend, "off".into());
-    for language in ["pt_BR", "ru"] {
+    for language in ["pt_BR", "ru", "de", "zh_CN"] {
         ui.catalog = I18n::load(std::path::Path::new("/nonexistent"), Some(language), None);
         for (name, state) in [("config-retomar", &resume), ("config-energia", &power)] {
             ui.switches.clear();
@@ -3451,7 +3461,7 @@ fn capture_tune() {
     })
     .save(&picture)
     .unwrap();
-    for language in ["pt_BR", "ru", "es", "en"] {
+    for language in ["pt_BR", "ru", "es", "en", "de", "zh_CN"] {
         ui.catalog = I18n::load(std::path::Path::new("/nonexistent"), Some(language), None);
         for (name, state) in tune_pages(language, &picture) {
             let deadline = Instant::now() + Duration::from_secs(5);

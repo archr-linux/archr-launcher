@@ -140,7 +140,7 @@ fn the_card_update_draws_in_every_language_at_every_size() {
         ui.configure(&ttf, &creator, &theme, Some(temp.path()))
             .unwrap();
         ui.set_motion(Motion::Off);
-        for language in ["en", "pt_BR", "es", "ru"] {
+        for language in ["en", "pt_BR", "es", "ru", "de", "zh_CN"] {
             ui.catalog = I18n::load(Path::new("/nonexistent"), Some(language), None);
             for (name, state) in screens() {
                 ui.screenshot = Some(dir.join(format!("{name}-{language}-{width}x{height}.png")));

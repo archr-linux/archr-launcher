@@ -166,7 +166,7 @@ fn tester_and_calibration_draw_in_every_language() {
     zone.joypad_input(Input::Stick(1, -2900), now);
     let mut summary = zone.clone();
     press(&mut summary, Pad::A, now);
-    for language in ["en", "pt_BR", "es", "ru"] {
+    for language in ["en", "pt_BR", "es", "ru", "de", "zh_CN"] {
         ui.catalog = I18n::load(std::path::Path::new("/nonexistent"), Some(language), None);
         for (name, state) in [
             ("testar-controle", tester()),

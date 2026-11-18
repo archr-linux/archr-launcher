@@ -123,7 +123,7 @@ fn details_render_in_every_locale_with_and_without_art_and_text() {
     let logo = creator
         .create_texture_from_surface(surface(320, 80, true))
         .unwrap();
-    for language in ["en", "pt_BR", "es", "ru"] {
+    for language in ["en", "pt_BR", "es", "ru", "de", "zh_CN"] {
         ui.catalog = I18n::load(std::path::Path::new("/nonexistent"), Some(language), None);
         for rich in [true, false] {
             let data = data(rich);
@@ -166,7 +166,7 @@ fn capture_details() {
     let logo = creator
         .create_texture_from_surface(surface(320, 80, true))
         .unwrap();
-    for language in ["pt_BR", "ru"] {
+    for language in ["pt_BR", "ru", "de", "zh_CN"] {
         ui.catalog = I18n::load(std::path::Path::new("/nonexistent"), Some(language), None);
         for (name, rich, scrolled) in [
             ("details", true, false),
@@ -258,7 +258,7 @@ fn capture_scraping_again() {
         ..Art::default()
     };
     let data = data(true);
-    for language in ["pt_BR", "ru"] {
+    for language in ["pt_BR", "ru", "de", "zh_CN"] {
         ui.catalog = I18n::load(std::path::Path::new("/nonexistent"), Some(language), None);
         for (focus, rescraping) in [(2, true), (0, true), (0, false)] {
             let mut app = open(&data);

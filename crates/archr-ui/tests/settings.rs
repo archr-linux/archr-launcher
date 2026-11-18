@@ -246,3 +246,29 @@ fn theme_store_grid_moves_by_column_and_row_and_tabs_at_the_edges() {
         "→ at the right edge changes the tab"
     );
 }
+
+#[test]
+fn german_and_simplified_chinese_are_selectable_in_region_settings() {
+    for (from, to, name) in [
+        ("ru_RU", "de_DE", "Deutsch"),
+        ("de_DE", "zh_CN", "简体中文"),
+    ] {
+        let mut state = Settings::default();
+        state.loading = false;
+        state.open(Page::Region);
+        state.cursor = state
+            .visible_rows()
+            .iter()
+            .position(|row| row.id == Id::Language)
+            .unwrap();
+        state.values.insert(Id::Language, from.into());
+        assert_eq!(
+            state.handle(Button::R),
+            Effect::Set(Id::Language, to.into())
+        );
+        state.complete(Id::Language, Ok(to.into()));
+        let catalog =
+            archr_ui::i18n::I18n::load(std::path::Path::new("/nonexistent"), Some(to), None);
+        assert_eq!(state.display_value(Id::Language, &catalog), name);
+    }
+}

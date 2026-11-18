@@ -1704,3 +1704,6 @@
 "home.kicker_app" = "Приложение · модуль"
 "home.empty" = "Здесь пока пусто"
 "home.systems_count" = { one = "{count} система", few = "{count} системы", many = "{count} систем", other = "{count} системы" }
+
+"settings.lang_de" = "Deutsch"
+"settings.lang_zh" = "简体中文"

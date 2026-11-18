@@ -17,9 +17,9 @@ pub(crate) mod games;
 pub(crate) mod information;
 pub use custom::Custom;
 pub mod hotkeys;
-pub mod picture;
 pub mod joypad;
 pub mod mangohud;
+pub mod picture;
 pub use games::{GameCore, GameSystem, Games};
 pub mod network;
 pub(crate) mod pages;
@@ -715,7 +715,7 @@ impl Id {
         match self {
             Self::Gpu => &["libmali", "panfrost"],
             Self::HotkeyModifier => &hotkeys::MODIFIERS,
-            Self::Language => &["en_US", "pt_BR", "es_ES", "ru_RU"],
+            Self::Language => &["en_US", "pt_BR", "es_ES", "ru_RU", "de_DE", "zh_CN"],
             Self::Idle | Self::IdleGame => &["0", "1", "2", "5", "10", "15", "30"],
             Self::ResumeBoot => &["off", "last"],
             Self::ResumeWait => &["3", "5", "10"],
@@ -1341,6 +1341,8 @@ impl Settings {
             (Id::Language, "pt_BR") => "settings.lang_pt",
             (Id::Language, "es_ES") => "settings.lang_es",
             (Id::Language, "ru_RU") => "settings.lang_ru",
+            (Id::Language, "de_DE") => "settings.lang_de",
+            (Id::Language, "zh_CN") => "settings.lang_zh",
             (Id::Idle | Id::IdleGame, "0") => "settings.never",
             (Id::Idle | Id::IdleGame, v) => {
                 return catalog.format("settings.minutes", &[("count", v)])

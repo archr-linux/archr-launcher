@@ -286,8 +286,8 @@ O driver `SNAPSHOT` também aguarda as operações pendentes de configurações.
 ## Idiomas
 
 Instale `locales/*.toml` em `/usr/share/archr-launcher/locales/` (também sob
-`ARCHR_LAUNCHER_ROOT` nos testes de PC). A v1 inclui `en`, `pt_BR`, `es` e `ru`.
-Os quatro catálogos ficam embutidos no binário: esses idiomas não consultam
+`ARCHR_LAUNCHER_ROOT` nos testes de PC). A v1 inclui `en`, `pt_BR`, `es`, `ru`, `de` e `zh_CN`.
+Os seis catálogos ficam embutidos no binário: esses idiomas não consultam
 arquivos de locale antes da primeira tela, mesmo quando há arquivos instalados.
 Somente códigos que não resolvem para um idioma embutido consultam o diretório
 externo (novos idiomas ou catálogos personalizados); esse caminho raro é síncrono.
@@ -306,7 +306,8 @@ ou catálogos.
 Os catálogos são TOML plano: chaves pontuadas devem estar entre aspas, por exemplo
 `"hint.open" = "Abrir"`. Para plurais, use uma tabela inline com categorias CLDR:
 `"games.count" = { one = "{count} jogo", other = "{count} jogos" }`.
-`other` é obrigatório; russo também usa `few` e `many`. Interpolação por `{name}`
+`other` é obrigatório; russo também usa `few` e `many`, alemão usa `one`/`other`
+e chinês usa somente `other`. Interpolação por `{name}`
 não reinterpreta os valores inseridos. Arquivos precisam ser regulares, não podem
 ser links simbólicos e têm limite de 64 KiB; falhas usam o próximo fallback.
 
@@ -317,10 +318,21 @@ conferem chaves, categorias, placeholders, larguras das dicas/menu e cobertura
 cirílica dos quatro TTF distribuídos. As traduções ainda precisam de revisão
 por falantes dos idiomas antes de fechar a versão.
 
-Francês, alemão, chinês simplificado e japonês ficam para a fase 2. A extensão para
-uma fonte CJK lazy está marcada em `crates/archr-ui/src/text.rs`; nenhuma fonte CJK
-é aberta agora. Tempo relativo usa meses aproximados de 30 dias e anos de 365 dias,
-e datas futuras aparecem como “agora”.
+Alemão (`de_DE`) e chinês simplificado (`zh_CN`) estão em Configurações › Região ›
+Idioma. `de_AT`/`de_CH` usam o catálogo `de`; `zh`, `zh_SG` e `zh_Hans` usam
+`zh_CN`. Chinês tradicional (`zh_TW`/`zh_Hant`) não é tratado como simplificado.
+
+Inter e JetBrains Mono continuam desenhando os caracteres que já cobrem. Apenas
+caracteres ausentes usam o subconjunto lazy de Noto Sans CJK SC, embutido no
+launcher e no OSD (OFL 1.1; fonte, licença e reprodução em `fonts/cjk/README.txt`).
+O subconjunto cobre os textos da interface, não nomes arbitrários de jogos ou
+textos externos; regenere com `tools/subset-cjk.py` ao mudar o catálogo chinês.
+O teclado virtual continua latino/símbolos, sem IME/Pinyin; valores Unicode são
+preservados e apagados por caractere. Cabeçalhos usam maiúsculas Unicode
+(`Größe` → `GRÖSSE`; chinês não muda).
+
+Francês e japonês ficam para depois. Tempo relativo usa meses aproximados de
+30 dias e anos de 365 dias, e datas futuras aparecem como “agora”.
 
 ## Instalação no ArchR
 

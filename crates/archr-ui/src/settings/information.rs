@@ -129,7 +129,7 @@ pub(crate) fn value(catalog: &crate::i18n::I18n, text: &str) -> String {
                         .chain(std::iter::once(ch))
                 })
                 .collect();
-            let decimal = if catalog.language() == "en" { '.' } else { ',' };
+            let decimal = catalog.text("details.decimal");
             format!(
                 "{sign}{grouped}{}{}",
                 fraction
@@ -143,6 +143,14 @@ pub(crate) fn value(catalog: &crate::i18n::I18n, text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn new_locales_use_their_decimal_mark_in_hardware_values() {
+        for (code, expected) in [("de_DE", "0,42"), ("zh_CN", "0.42")] {
+            let catalog =
+                crate::i18n::I18n::load(std::path::Path::new("/nonexistent"), Some(code), None);
+            assert_eq!(value(&catalog, "@0.42"), expected, "{code}");
+        }
+    }
     #[test]
     fn localized_values_group_numbers_pluralize_cores_and_preserve_ips() {
         let catalog =

@@ -315,6 +315,26 @@ mod tests {
         keyboard.handle(Button::A)
     }
     #[test]
+    fn german_and_chinese_values_keep_unicode_boundaries_and_case() {
+        let mut keyboard = Keyboard::new(Mode::Text, "Größe中文".into());
+        keyboard.handle(Button::Y);
+        assert_eq!(keyboard.text(), "Größe中");
+        keyboard.shifted = true;
+        keyboard.push("äöüß");
+        assert_eq!(keyboard.text(), "Größe中ÄÖÜSS");
+        keyboard.shifted = true;
+        keyboard.push("语言");
+        assert_eq!(keyboard.text(), "Größe中ÄÖÜSS语言");
+        assert_eq!(
+            keyboard.handle(Button::Start),
+            Some("Größe中ÄÖÜSS语言".into())
+        );
+        // The common keyboard is Latin/symbol input, not a Chinese IME.
+        assert_eq!("简体中文".to_uppercase(), "简体中文");
+        assert_eq!("Größe".to_uppercase(), "GRÖSSE");
+    }
+
+    #[test]
     fn every_printable_ascii_character_is_reachable() {
         let mut keyboard = Keyboard::new(Mode::Secret, String::new());
         for layer in 0..3 {

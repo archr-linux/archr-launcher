@@ -102,7 +102,7 @@ fn capture_long_page_scrolled_in_both_languages() {
         &std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../themes/default"),
     );
     ui.configure(&ttf, &creator, &theme, None).unwrap();
-    for language in ["pt_BR", "ru"] {
+    for language in ["pt_BR", "ru", "de", "zh_CN"] {
         ui.catalog = I18n::load(std::path::Path::new("/nonexistent"), Some(language), None);
         let mut state = Settings::default();
         state.loading = false;

@@ -1,7 +1,6 @@
 //! Bounded text textures, lazily loaded font faces, and measured ellipsis.
-// TODO(CJK): add a lazy per-glyph fallback font here (Noto Sans CJK subset or
-// image-provided font), loaded only for a CJK locale or an uncovered glyph.
-// Keep phase-1 Latin/Cyrillic startup free of CJK font I/O and memory costs.
+// CJK uses a lazy, embedded OFL subset only for glyphs absent from the theme
+// face. Covered text keeps its original shaping, hinting and rasterization.
 use crate::{
     badges::{self, BadgeKey},
     icons::{self, Glyph},
@@ -161,6 +160,7 @@ struct Fonts<'font> {
     measurements: VecDeque<(String, Face, u16, i16, u32)>,
     /// The theme's `font_hinting`; mono unless it says (see force_autohint).
     hinting: Hinting,
+    cjk: Option<(u16, Font<'font, 'static>)>,
 }
 impl<'font> Fonts<'font> {
     fn new(ttf: &'font Sdl2TtfContext, paths: FacePaths) -> Self {
@@ -172,6 +172,7 @@ impl<'font> Fonts<'font> {
             resolved: HashMap::new(),
             measurements: VecDeque::new(),
             hinting: Hinting::Mono,
+            cjk: None,
         }
     }
     /// Every face, loaded and to load, hinted `hinting`; widths measured
@@ -180,6 +181,9 @@ impl<'font> Fonts<'font> {
         self.hinting = hinting;
         for loaded in &mut self.fonts {
             loaded.font.set_hinting(hinting.sdl());
+        }
+        if let Some((_, font)) = &mut self.cjk {
+            font.set_hinting(hinting.sdl());
         }
         self.measurements.clear();
     }
@@ -193,8 +197,7 @@ impl<'font> Fonts<'font> {
             return Ok(*width);
         }
         let text = sanitize(source);
-        let font = self.font(face, size)?;
-        let width = tracked_width(font, &text, f32::from(tracking) / 64.)?;
+        let width = self.width(&text, face, size, f32::from(tracking) / 64.)?;
         startup_phase!(
             self.startup,
             "text measurement [face={face:?}; size={size}px]"
@@ -206,6 +209,187 @@ impl<'font> Fonts<'font> {
             .push_back((source.to_owned(), face, size, tracking, width));
         Ok(width)
     }
+    /// Kept in the executable so every installed theme has the same fallback;
+    /// no open, allocation or FreeType face until an uncovered glyph is seen.
+    fn cjk_font(&mut self, face: Face, size: u16) -> Result<&Font<'font, 'static>, String> {
+        if self.cjk.is_none() {
+            let bytes = include_bytes!("../../../fonts/cjk/ArchR-UI-SC.otf");
+            let mut font = self
+                .ttf
+                .load_font_from_rwops(RWops::from_bytes(bytes)?, size)?;
+            font.set_hinting(self.hinting.sdl());
+            self.cjk = Some((size, font));
+        }
+        let (loaded_size, font) = self.cjk.as_mut().expect("loaded CJK face");
+        if *loaded_size != size {
+            // SAFETY: exclusively owned live font, as with the primary faces.
+            if unsafe { sdl2::sys::ttf::TTF_SetFontSize(font.raw(), i32::from(size)) } != 0 {
+                return Err(sdl2::get_error());
+            }
+            *loaded_size = size;
+        }
+        let style = if matches!(face, Face::Semibold | Face::MonoMedium | Face::Bold) {
+            FontStyle::BOLD
+        } else {
+            FontStyle::NORMAL
+        };
+        if font.get_style() != style {
+            font.set_style(style);
+        }
+        Ok(font)
+    }
+
+    /// Keep adjacent glyphs on the same face together (Latin kerning survives
+    /// next to Chinese). Unsupported characters outside the subset keep the
+    /// primary font's missing-glyph behavior; this is an interface subset,
+    /// not a full font for arbitrary Chinese game titles or user input.
+    fn runs<'a>(
+        &mut self,
+        text: &'a str,
+        face: Face,
+        size: u16,
+    ) -> Result<Vec<(bool, &'a str)>, String> {
+        let primary = self.font(face, size)?;
+        let mut glyphs: Vec<_> = text
+            .char_indices()
+            .map(|(at, ch)| (at, ch, primary.find_glyph(ch).is_none()))
+            .collect();
+        if glyphs.iter().any(|(_, _, missing)| *missing) {
+            let fallback = self.cjk_font(face, size)?;
+            for (_, ch, missing) in &mut glyphs {
+                *missing = *missing && fallback.find_glyph(*ch).is_some();
+            }
+        }
+        let mut runs = Vec::new();
+        let mut start = 0;
+        let mut fallback = glyphs.first().is_some_and(|g| g.2);
+        for (at, _, next) in glyphs {
+            if next != fallback {
+                runs.push((fallback, &text[start..at]));
+                start = at;
+                fallback = next;
+            }
+        }
+        if start < text.len() {
+            runs.push((fallback, &text[start..]));
+        }
+        Ok(runs)
+    }
+
+    fn run_font(
+        &mut self,
+        fallback: bool,
+        face: Face,
+        size: u16,
+    ) -> Result<&Font<'font, 'static>, String> {
+        if fallback {
+            self.cjk_font(face, size)
+        } else {
+            self.font(face, size)
+        }
+    }
+
+    fn width(&mut self, text: &str, face: Face, size: u16, track: f32) -> Result<u32, String> {
+        let mut width = 0;
+        for (fallback, run) in self.runs(text, face, size)? {
+            width += self
+                .run_font(fallback, face, size)?
+                .size_of(run)
+                .map_err(|e| e.to_string())?
+                .0;
+        }
+        let gaps = text.chars().count().saturating_sub(1) as f32;
+        Ok((width as f32 + gaps * track).round().max(0.) as u32)
+    }
+
+    fn fitted(&mut self, text: &str, style: Style, limit: u32) -> Result<String, String> {
+        fit_measured(text, limit, |s| {
+            self.width(s, style.face, style.size, style.track())
+        })
+    }
+
+    fn rasterize(
+        &mut self,
+        text: &str,
+        style: Style,
+        smooth: bool,
+    ) -> Result<Surface<'static>, String> {
+        let runs = self.runs(text, style.face, style.size)?;
+        if let [(false, run)] = runs.as_slice() {
+            return rasterize(self.font(style.face, style.size)?, run, style, smooth);
+        }
+        use sdl2::pixels::PixelFormatEnum;
+        // Use the theme's line box even for an all-Chinese label. Noto's
+        // larger typographic ascender/descent is mostly blank space: centring
+        // it would shift every adjacent Latin label to a different baseline.
+        let primary = self.font(style.face, style.size)?;
+        let baseline = primary.ascent();
+        let (mut top, mut bottom) = (0, primary.height());
+        let (mut advance, mut letters, mut right) = (0, 0, 0);
+        let mut surfaces = Vec::new();
+        for (fallback, run) in runs {
+            let font = self.run_font(fallback, style.face, style.size)?;
+            let x = advance as i32 + (letters as f32 * style.track()).round() as i32;
+            let surface = rasterize(font, run, style, smooth)?
+                .convert_format(PixelFormatEnum::ARGB8888)
+                .map_err(|e| e.to_string())?;
+            let y = baseline - font.ascent();
+            // Only actual ink may extend the line box, never a fallback's
+            // blank padding. This also protects unusual custom theme fonts.
+            if let Some((first, last)) = ink_rows(&surface) {
+                top = top.min(y + first);
+                bottom = bottom.max(y + last);
+            }
+            right = right.max(x + surface.width() as i32);
+            surfaces.push((x, y, surface));
+            advance += font.size_of(run).map_err(|e| e.to_string())?.0;
+            letters += run.chars().count();
+        }
+        let width = self
+            .width(text, style.face, style.size, style.track())?
+            .max(right.max(1) as u32);
+        let mut out = Surface::new(
+            width,
+            (bottom - top).max(1) as u32,
+            PixelFormatEnum::ARGB8888,
+        )?;
+        let ink = color(style.color);
+        out.fill_rect(None, Color::RGBA(ink.r, ink.g, ink.b, 0))?;
+        // Merge coverage instead of alpha-blitting colour onto transparent
+        // black, which would darken the anti-aliased edges a second time.
+        let pitch = out.pitch() as usize;
+        let height = out.height() as usize;
+        out.with_lock_mut(|dst| {
+            for (x, y, surface) in &surfaces {
+                let gp = surface.pitch() as usize;
+                surface.with_lock(|src| {
+                    for row in 0..surface.height() as usize {
+                        let dy = row as i32 + y - top;
+                        if dy < 0 || dy >= height as i32 {
+                            continue;
+                        }
+                        for col in 0..surface.width() as usize {
+                            let dx = *x + col as i32;
+                            if dx < 0 || dx >= width as i32 {
+                                continue;
+                            }
+                            let at = row * gp + col * 4;
+                            let cover =
+                                u32::from_ne_bytes(src[at..at + 4].try_into().unwrap()) >> 24;
+                            let at = dy as usize * pitch + dx as usize * 4;
+                            let under = u32::from_ne_bytes(dst[at..at + 4].try_into().unwrap());
+                            let alpha = cover + (under >> 24) * (255 - cover) / 255;
+                            dst[at..at + 4].copy_from_slice(
+                                &((alpha << 24) | (under & 0x00ff_ffff)).to_ne_bytes(),
+                            );
+                        }
+                    }
+                });
+            }
+        });
+        Ok(out)
+    }
+
     fn font(&mut self, face: Face, size: u16) -> Result<&Font<'font, 'static>, String> {
         let key = face;
         if !self.resolved.contains_key(&key) {
@@ -352,12 +536,11 @@ impl<'font> PreparedText<'font> {
         {
             return Ok(());
         }
-        let font = self.fonts.font(style.face, style.size)?;
-        let text = ellipsis(font, &sanitize(source), width, style.track())?;
+        let text = self.fonts.fitted(&sanitize(source), style, width)?;
         if text.is_empty() {
             return Ok(());
         }
-        let surface = rasterize(font, &text, style, true)?;
+        let surface = self.fonts.rasterize(&text, style, true)?;
         self.first_rasterization
             .phase_once("first text rasterization");
         self.entries
@@ -591,12 +774,11 @@ impl<'font, 'texture> TextCache<'font, 'texture> {
             self.entries.remove(index).expect("located text")
         } else {
             let smooth = self.smooth;
-            let font = self.font(style.face, style.size)?;
-            let text = ellipsis(font, &sanitize(source), limit, style.track())?;
+            let text = self.fonts.fitted(&sanitize(source), style, limit)?;
             if text.is_empty() {
                 return Ok(());
             }
-            let surface = rasterize(font, &text, style, smooth)?;
+            let surface = self.fonts.rasterize(&text, style, smooth)?;
             startup_phase!(
                 self.startup,
                 "text rasterization [face={:?}; size={}px]",
@@ -652,6 +834,25 @@ fn sanitize(s: &str) -> String {
         .map(|c| if c == '\0' { '\u{fffd}' } else { c })
         .collect()
 }
+/// Nontransparent row bounds in an ARGB8888 surface (end exclusive).
+fn ink_rows(surface: &Surface<'_>) -> Option<(i32, i32)> {
+    let pitch = surface.pitch() as usize;
+    surface.with_lock(|bytes| {
+        let mut bounds = None;
+        for row in 0..surface.height() as usize {
+            let inked = (0..surface.width() as usize).any(|col| {
+                let at = row * pitch + col * 4;
+                u32::from_ne_bytes(bytes[at..at + 4].try_into().unwrap()) >> 24 != 0
+            });
+            if inked {
+                let (first, _) = bounds.get_or_insert((row as i32, row as i32 + 1));
+                bounds = Some((*first, row as i32 + 1));
+            }
+        }
+        bounds
+    })
+}
+
 /// `text` in `style`, smooth or hard-edged.
 fn rasterize(
     font: &Font<'_, '_>,
@@ -766,8 +967,15 @@ fn tracked(
     });
     Ok(out)
 }
+#[cfg(test)]
 fn ellipsis(font: &Font<'_, '_>, text: &str, limit: u32, track: f32) -> Result<String, String> {
-    let width = |s: &str| tracked_width(font, s, track);
+    fit_measured(text, limit, |s| tracked_width(font, s, track))
+}
+fn fit_measured(
+    text: &str,
+    limit: u32,
+    mut width: impl FnMut(&str) -> Result<u32, String>,
+) -> Result<String, String> {
     if text.is_empty() || width(text)? <= limit {
         return Ok(text.to_owned());
     }
@@ -825,6 +1033,286 @@ mod tests {
                 })
                 .collect()
         })
+    }
+
+    #[test]
+    fn chinese_labels_render_distinct_glyphs_instead_of_missing_boxes() {
+        let _sdl = crate::SDL_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let ttf = sdl2::ttf::init().unwrap();
+        let mut prepared = PreparedText::new(
+            &ttf,
+            std::array::from_fn(|_| vec![bundled_font("Inter-Regular")]),
+            StartupTrace::default(),
+        );
+        let style = Style {
+            face: Face::Regular,
+            size: 17,
+            color: Rgba {
+                r: 255,
+                g: 255,
+                b: 255,
+                a: 255,
+            },
+            tracking: 0,
+        };
+        for text in ["设置", "语言"] {
+            prepared.label(text, style, 200).unwrap();
+        }
+        assert_ne!(
+            coverage(&prepared.entries[0].3),
+            coverage(&prepared.entries[1].3)
+        );
+    }
+
+    #[test]
+    fn cjk_subset_covers_every_catalog_glyph_and_uppercase_heading() {
+        let _sdl = crate::SDL_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let ttf = sdl2::ttf::init().unwrap();
+        let mut fonts = Fonts::new(
+            &ttf,
+            std::array::from_fn(|_| vec![bundled_font("Inter-Regular")]),
+        );
+        // Future image/save-sync translations must survive a subset rebuild
+        // even before their catalog keys are merged into this branch.
+        let fallback = fonts.cjk_font(Face::Regular, 17).unwrap();
+        for ch in include_str!("../../../fonts/cjk/pending-glyphs.txt")
+            .chars()
+            .filter(|ch| !ch.is_whitespace())
+        {
+            assert!(fallback.find_glyph(ch).is_some(), "reserved glyph: {ch}");
+        }
+        let catalog: toml::Table =
+            toml::from_str(include_str!("../../../locales/zh_CN.toml")).unwrap();
+        for (key, value) in catalog {
+            let strings: Vec<&str> = if let Some(s) = value.as_str() {
+                vec![s]
+            } else {
+                value
+                    .as_table()
+                    .unwrap()
+                    .values()
+                    .map(|v| v.as_str().unwrap())
+                    .collect()
+            };
+            for text in strings {
+                for ch in text.chars().chain(text.to_uppercase().chars()) {
+                    if ch.is_control() {
+                        continue;
+                    }
+                    let covered = fonts
+                        .font(Face::Regular, 17)
+                        .unwrap()
+                        .find_glyph(ch)
+                        .is_some()
+                        || fonts
+                            .cjk_font(Face::Regular, 17)
+                            .unwrap()
+                            .find_glyph(ch)
+                            .is_some();
+                    assert!(
+                        covered,
+                        "{key}: missing {ch} (U+{:04X}); rebuild the CJK subset",
+                        ch as u32
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn mixed_and_chinese_labels_keep_the_primary_baseline() {
+        let _sdl = crate::SDL_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let ttf = sdl2::ttf::init().unwrap();
+        let mut fonts = Fonts::new(
+            &ttf,
+            std::array::from_fn(|_| vec![bundled_font("Inter-Regular")]),
+        );
+        for size in [10, 13, 17, 24, 34] {
+            let style = Style {
+                face: Face::Regular,
+                size,
+                color: Rgba {
+                    r: 255,
+                    g: 255,
+                    b: 255,
+                    a: 255,
+                },
+                tracking: 0,
+            };
+            for prefix in ["Settings", "设置"] {
+                let alone = fonts.rasterize(prefix, style, true).unwrap();
+                let mixed = fonts
+                    .rasterize(&format!("{prefix} RetroArch 设置"), style, true)
+                    .unwrap();
+                let primary_height = fonts.font(Face::Regular, size).unwrap().height() as u32;
+                assert_eq!(alone.height(), primary_height, "{prefix} at {size}");
+                assert_eq!(mixed.height(), primary_height, "mixed at {size}");
+                let a = coverage(&alone);
+                let b = coverage(&mixed);
+                for (a, b) in a.iter().zip(b) {
+                    assert_eq!(a, &b[..a.len()], "same prefix baseline: {prefix} at {size}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn fallback_is_lazy_and_preserves_latin_cyrillic_and_mixed_runs() {
+        let _sdl = crate::SDL_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let ttf = sdl2::ttf::init().unwrap();
+        let mut fonts = Fonts::new(
+            &ttf,
+            std::array::from_fn(|_| vec![bundled_font("Inter-Regular")]),
+        );
+        let ink = Rgba {
+            r: 240,
+            g: 230,
+            b: 220,
+            a: 180,
+        };
+        for face in [
+            Face::Regular,
+            Face::Semibold,
+            Face::Mono,
+            Face::MonoMedium,
+            Face::Fallback,
+            Face::Bold,
+        ] {
+            for size in [10, 13, 17, 24, 34] {
+                for tracking in [0, -48, 32] {
+                    let style = Style {
+                        face,
+                        size,
+                        color: ink,
+                        tracking,
+                    };
+                    let text = "Größe ÄÖÜ · Русский · AV RetroArch";
+                    let plain =
+                        rasterize(fonts.font(face, size).unwrap(), text, style, true).unwrap();
+                    assert_eq!(
+                        fonts.measure(text, face, size, tracking).unwrap(),
+                        tracked_width(fonts.font(face, size).unwrap(), text, style.track())
+                            .unwrap()
+                    );
+                    assert_eq!(
+                        coverage(&fonts.rasterize(text, style, true).unwrap()),
+                        coverage(&plain)
+                    );
+                }
+            }
+        }
+        assert!(
+            fonts.cjk.is_none(),
+            "covered text must not load the fallback"
+        );
+        for face in [
+            Face::Regular,
+            Face::Semibold,
+            Face::Mono,
+            Face::MonoMedium,
+            Face::Fallback,
+            Face::Bold,
+        ] {
+            for size in [10, 13, 17, 24, 34] {
+                for tracking in [0, -48, 32] {
+                    let style = Style {
+                        face,
+                        size,
+                        color: ink,
+                        tracking,
+                    };
+                    let text = "设置 RetroArch · 语言";
+                    assert_eq!(
+                        fonts.runs(text, face, size).unwrap(),
+                        [(true, "设置"), (false, " RetroArch · "), (true, "语言")]
+                    );
+                    let width = fonts.measure(text, face, size, tracking).unwrap();
+                    let fitted = fonts.fitted(text, style, width / 2).unwrap();
+                    assert!(fitted.ends_with('…'));
+                    assert!(fonts.measure(&fitted, face, size, tracking).unwrap() <= width / 2);
+                    for smooth in [true, false] {
+                        let surface = fonts.rasterize(text, style, smooth).unwrap();
+                        assert!(
+                            surface.width().abs_diff(width) <= 2,
+                            "{size} {tracking}: {} vs {width}",
+                            surface.width()
+                        );
+                        assert!(coverage(&surface).iter().flatten().any(|a| *a > 0));
+                    }
+                }
+            }
+        }
+        assert!(fonts.cjk.is_some());
+        // Switching hinting also updates the already loaded fallback.
+        fonts.set_hinting(Hinting::None);
+        assert_eq!(
+            fonts.cjk.as_ref().unwrap().1.get_hinting(),
+            sdl2::ttf::Hinting::None
+        );
+    }
+
+    #[test]
+    fn translated_fixed_labels_fit_with_production_fallback_metrics() {
+        let _sdl = crate::SDL_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let ttf = sdl2::ttf::init().unwrap();
+        let mut paths = std::array::from_fn(|_| vec![bundled_font("Inter-Regular")]);
+        paths[1] = vec![bundled_font("Inter-SemiBold")];
+        let mut fonts = Fonts::new(&ttf, paths);
+        for code in ["en", "pt_BR", "es", "ru", "de", "zh_CN"] {
+            let catalog = crate::i18n::I18n::load(Path::new("/nonexistent"), Some(code), None);
+            for keys in [
+                &["hint.open", "hint.menu"][..],
+                &["hint.play", "hint.back", "hint.favorite", "hint.menu"][..],
+                &["hint.choose", "hint.close"][..],
+            ] {
+                let width = keys
+                    .iter()
+                    .map(|key| {
+                        fonts
+                            .measure(&catalog.text(key), Face::Regular, 13, 0)
+                            .unwrap()
+                            + 26
+                    })
+                    .sum::<u32>()
+                    + 16 * (keys.len() as u32 - 1);
+                assert!(width <= 592, "{code}: footer {width}px");
+            }
+            for key in ["menu.title", "menu.suspend", "menu.reboot", "menu.shutdown"] {
+                let width = fonts
+                    .measure(&catalog.text(key), Face::Semibold, 15, 0)
+                    .unwrap();
+                assert!(width <= 292, "{code}: {key}: {width}px");
+            }
+            for key in [
+                "notice.suspend",
+                "notice.shutdown",
+                "notice.reboot",
+                "error.operation",
+            ] {
+                for line in catalog.text(key).lines() {
+                    let width = fonts.measure(line, Face::Semibold, 16, 0).unwrap();
+                    assert!(width <= 332, "{code}: {key}: {width}px");
+                }
+            }
+            let default = fonts
+                .measure(&catalog.text("menu.default"), Face::Semibold, 15, 0)
+                .unwrap();
+            assert!(default <= 146, "{code}: default core {default}px");
+            let core = fonts
+                .measure(&catalog.text("menu.core"), Face::Semibold, 15, 0)
+                .unwrap();
+            assert!(core + default + 44 <= 292, "{code}: core row");
+        }
     }
 
     #[test]

@@ -108,7 +108,7 @@ fn every_locale_renders_the_lobby_and_menu_without_warnings() {
     ui.configure(&ttf, &creator, &theme, None).unwrap();
     let (app, data) = (App::new(10), FakeData::default());
     let shots = std::env::var_os("ARCHR_NETPLAY_SHOTS").map(std::path::PathBuf::from);
-    for language in ["en", "pt_BR", "es", "ru"] {
+    for language in ["en", "pt_BR", "es", "ru", "de", "zh_CN"] {
         ui.catalog = I18n::load(std::path::Path::new("/nonexistent"), Some(language), None);
         let mut lobby = Lobby::default();
         ui.lobby = Some(Lobby::default());

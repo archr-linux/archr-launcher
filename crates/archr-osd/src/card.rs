@@ -3,7 +3,7 @@
 //! fonts and catalogs, in the colours of the active theme (look.rs).
 use crate::look::{Look, Palette};
 use crate::proto::{Alert, Disc, Report};
-use ab_glyph::{Font, FontVec, PxScale, ScaleFont};
+use ab_glyph::{Font, FontArc, PxScale, ScaleFont};
 use resvg::tiny_skia as sk;
 use std::{collections::HashMap, path::Path, time::Duration};
 
@@ -21,8 +21,8 @@ const FAILED: &str = include_str!("../../../themes/default/icons/circle-x.svg");
 
 /// The launcher's installed fonts and the language's catalog.
 pub struct Assets {
-    regular: Option<FontVec>,
-    semibold: Option<FontVec>,
+    regular: Option<FontArc>,
+    semibold: Option<FontArc>,
     text: HashMap<String, String>,
     share: std::path::PathBuf,
     /// The theme's faces the fonts were loaded for.
@@ -78,7 +78,7 @@ impl Assets {
         let read = |path: &Path| {
             std::fs::read(path)
                 .ok()
-                .and_then(|bytes| FontVec::try_from_vec(bytes).ok())
+                .and_then(|bytes| FontArc::try_from_vec(bytes).ok())
         };
         let font = |own: &Option<std::path::PathBuf>, name: &str| {
             own.as_deref()
@@ -275,37 +275,72 @@ fn rounded(out: &mut sk::Pixmap, (x, y, w, h): (f32, f32, f32, f32), r: f32, p: 
     );
 }
 
+/// Same lazy interface subset as the SDL renderer; never replace a covered
+/// Latin/Cyrillic glyph. FontArc keeps both the primary and fallback type the
+/// same without copying the embedded bytes.
+fn glyph_font<'a>(primary: &'a FontArc, ch: char) -> &'a FontArc {
+    if primary.glyph_id(ch).0 != 0 {
+        return primary;
+    }
+    static CJK: std::sync::OnceLock<FontArc> = std::sync::OnceLock::new();
+    let fallback = CJK.get_or_init(|| {
+        FontArc::try_from_slice(include_bytes!("../../../fonts/cjk/ArchR-UI-SC.otf"))
+            .expect("valid embedded CJK subset")
+    });
+    if fallback.glyph_id(ch).0 != 0 {
+        fallback
+    } else {
+        primary
+    }
+}
+
 /// CSS pixels to the font's scale.
-fn scale(font: &FontVec, px: f32) -> PxScale {
+fn scale(font: &FontArc, px: f32) -> PxScale {
     font.pt_to_px_scale(px * 0.75).unwrap_or(PxScale::from(px))
 }
 
-fn width(font: &FontVec, px: f32, text: &str) -> f32 {
-    let font = font.as_scaled(scale(font, px));
+fn width(font: &FontArc, px: f32, text: &str) -> f32 {
     let mut last = None;
     let mut w = 0.0;
     for c in text.chars() {
-        let id = font.glyph_id(c);
-        if let Some(prev) = last {
-            w += font.kern(prev, id);
+        let face = glyph_font(font, c);
+        let scaled = face.as_scaled(scale(face, px));
+        let id = scaled.glyph_id(c);
+        if let Some((previous_face, previous_id)) = last {
+            if std::ptr::eq(previous_face, face) {
+                w += scaled.kern(previous_id, id);
+            }
         }
-        w += font.h_advance(id);
-        last = Some(id);
+        w += scaled.h_advance(id);
+        last = Some((face, id));
     }
     w
 }
 
-/// Words never split: lines of at most `max` pixels.
-fn wrap(font: &FontVec, px: f32, text: &str, max: f32) -> Vec<String> {
+/// Wrap words at spaces and oversized words at Unicode character boundaries
+/// (Chinese has no word spaces). Every line stays within the card.
+fn wrap(font: &FontArc, px: f32, text: &str, max: f32) -> Vec<String> {
     let mut lines: Vec<String> = Vec::new();
     for word in text.split_whitespace() {
-        match lines.last_mut() {
-            Some(line) if width(font, px, &format!("{line} {word}")) <= max => {
+        if let Some(line) = lines.last_mut() {
+            if width(font, px, &format!("{line} {word}")) <= max {
                 line.push(' ');
                 line.push_str(word);
+                continue;
             }
-            _ => lines.push(word.to_owned()),
         }
+        if width(font, px, word) <= max {
+            lines.push(word.to_owned());
+            continue;
+        }
+        let mut line = String::new();
+        for ch in word.chars() {
+            if !line.is_empty() && width(font, px, &format!("{line}{ch}")) > max {
+                lines.push(std::mem::take(&mut line));
+            }
+            line.push(ch);
+        }
+        lines.push(line);
     }
     lines
 }
@@ -313,25 +348,28 @@ fn wrap(font: &FontVec, px: f32, text: &str, max: f32) -> Vec<String> {
 /// Draws `text` with its baseline at `y`.
 fn text(
     out: &mut sk::Pixmap,
-    font: &FontVec,
+    font: &FontArc,
     px: f32,
     (x, y): (f32, f32),
     color: [u8; 3],
     text: &str,
 ) {
-    let scaled = font.as_scaled(scale(font, px));
     let (w, h) = (out.width() as i32, out.height() as i32);
     let mut caret = x;
     let mut last = None;
     for c in text.chars() {
+        let face = glyph_font(font, c);
+        let scaled = face.as_scaled(scale(face, px));
         let id = scaled.glyph_id(c);
-        if let Some(prev) = last {
-            caret += scaled.kern(prev, id);
+        if let Some((previous_face, previous_id)) = last {
+            if std::ptr::eq(previous_face, face) {
+                caret += scaled.kern(previous_id, id);
+            }
         }
-        let glyph = id.with_scale_and_position(scale(font, px), ab_glyph::point(caret, y));
+        let glyph = id.with_scale_and_position(scale(face, px), ab_glyph::point(caret, y));
         caret += scaled.h_advance(id);
-        last = Some(id);
-        let Some(outline) = font.outline_glyph(glyph) else {
+        last = Some((face, id));
+        let Some(outline) = face.outline_glyph(glyph) else {
             continue;
         };
         let bounds = outline.px_bounds();
@@ -530,6 +568,55 @@ mod tests {
     }
 
     #[test]
+    fn chinese_notifications_have_real_glyphs_and_wrap_inside_the_card() {
+        let a = assets("zh_CN");
+        let font = a.regular.as_ref().unwrap();
+        let mut first = sk::Pixmap::new(200, 40).unwrap();
+        let mut second = first.clone();
+        text(&mut first, font, 17., (0., 25.), [255; 3], "设置");
+        text(&mut second, font, 17., (0., 25.), [255; 3], "语言");
+        assert_ne!(
+            first.data(),
+            second.data(),
+            "different Chinese text must not be identical boxes"
+        );
+        let source = "此模拟器不支持即时存档，请使用游戏内菜单保存。";
+        let lines = wrap(font, 14., source, 100.);
+        assert_eq!(lines.concat(), source);
+        assert!(lines.iter().all(|line| width(font, 14., line) <= 100.));
+    }
+
+    #[test]
+    fn notification_catalogs_have_glyphs_and_keep_covered_theme_characters() {
+        for language in ["de_DE", "zh_CN"] {
+            let a = assets(language);
+            for font in [a.regular.as_ref().unwrap(), a.semibold.as_ref().unwrap()] {
+                for ch in "Größe ÄÖÜ · Русский · AV RetroArch".chars() {
+                    assert!(std::ptr::eq(glyph_font(font, ch), font));
+                }
+                let mut count = 0;
+                for (key, value) in &a.text {
+                    if !key.starts_with("osd.") {
+                        continue;
+                    }
+                    count += 1;
+                    for ch in value.chars().filter(|ch| !ch.is_whitespace()) {
+                        let face = glyph_font(font, ch);
+                        let id = face.glyph_id(ch);
+                        assert_ne!(id.0, 0, "{language} {key}: {ch}");
+                        assert!(
+                            face.outline_glyph(id.with_scale(scale(face, 17.)))
+                                .is_some(),
+                            "{language} {key}: no outline for {ch}"
+                        );
+                    }
+                }
+                assert!(count > 0, "notification catalog was loaded");
+            }
+        }
+    }
+
+    #[test]
     fn texts_follow_the_message_and_the_language() {
         let a = assets("pt_BR");
         let critical = a.card(Alert::Battery(Battery {
@@ -627,13 +714,13 @@ mod tests {
         assert_eq!(at(4, 4).alpha(), Palette::DEFAULT.veil[3]);
         assert_eq!(at(320, 236).alpha(), 255);
         if let Some(dir) = std::env::var_os("ARCHR_OSD_CAPTURE_DIR") {
-            for language in ["pt_BR", "ru"] {
+            for language in ["pt_BR", "ru", "de", "zh_CN"] {
                 let a = assets(language);
                 render(&a.card(Alert::NoState), &a, (640, 480), 1.0)
                     .save_png(Path::new(&dir).join(format!("sem-estado-{language}.png")))
                     .unwrap();
             }
-            for language in ["pt_BR", "ru"] {
+            for language in ["pt_BR", "ru", "de", "zh_CN"] {
                 let a = assets(language);
                 for (name, step) in [
                     ("relatorio-gerando", Report::Start),
@@ -645,7 +732,12 @@ mod tests {
                         .unwrap();
                 }
             }
-            for (name, language) in [("bateria-critica", "pt_BR"), ("bateria-critica-ru", "ru")] {
+            for (name, language) in [
+                ("bateria-critica", "pt_BR"),
+                ("bateria-critica-ru", "ru"),
+                ("bateria-critica-de", "de_DE"),
+                ("bateria-critica-zh_CN", "zh_CN"),
+            ] {
                 let a = assets(language);
                 let card = a.card(Alert::Battery(Battery {
                     level: 3,

@@ -244,15 +244,15 @@ impl Table {
         }
         table
     }
-    /// "30/10/2026" (en: 2026-10-30, ru: 30.10.2026).
+    /// "30/10/2026" (en/zh: 2026-10-30, de/ru: 30.10.2026).
     pub fn day(&self, language: &str) -> String {
         let mut parts = self.date.split('-');
         let (Some(y), Some(m), Some(d)) = (parts.next(), parts.next(), parts.next()) else {
             return self.date.clone();
         };
         match language {
-            "en" | "en_US" => self.date.clone(),
-            "ru" | "ru_RU" => format!("{d}.{m}.{y}"),
+            "en" | "en_US" | "zh" | "zh_CN" => self.date.clone(),
+            "ru" | "ru_RU" | "de" | "de_DE" => format!("{d}.{m}.{y}"),
             _ => format!("{d}/{m}/{y}"),
         }
     }
@@ -373,6 +373,9 @@ mod tests {
         assert_eq!(page.table.chips.len(), 5);
         assert_eq!(page.table.day("pt_BR"), "30/10/2026");
         assert_eq!(page.table.day("ru_RU"), "30.10.2026");
+        assert_eq!(page.table.day("de_DE"), "30.10.2026");
+        assert_eq!(page.table.day("de"), "30.10.2026");
+        assert_eq!(page.table.day("zh_CN"), "2026-10-30");
     }
     #[test]
     fn texts_follow_the_mockups() {

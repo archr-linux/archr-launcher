@@ -102,7 +102,7 @@ fn title_and_date_sit_on_a_plate_over_a_bright_picture() {
     let temp = tempfile::tempdir().unwrap();
     let dir = std::env::var_os("ARCHR_SHOT_CAPTURE_DIR")
         .map_or_else(|| temp.path().to_path_buf(), Into::into);
-    for language in ["pt_BR", "ru"] {
+    for language in ["pt_BR", "ru", "de", "zh_CN"] {
         for (name, png) in render(&dir, language) {
             let image = image::load_from_memory(&png).unwrap().to_rgba8();
             // Beside the text, left of the counter pill: plate, not picture.

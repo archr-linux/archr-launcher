@@ -104,7 +104,7 @@ fn diagnostics_and_bios_draw_in_every_language() {
     let mut off = diagnostics();
     off.cursor = 4;
     off.values.insert(Id::ErrorReports, "0".into());
-    for language in ["en", "pt_BR", "es", "ru"] {
+    for language in ["en", "pt_BR", "es", "ru", "de", "zh_CN"] {
         ui.catalog = I18n::load(std::path::Path::new("/nonexistent"), Some(language), None);
         for (name, state) in [
             ("diagnostico", diagnostics()),

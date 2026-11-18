@@ -13,6 +13,8 @@ const EMBEDDED: &[(&str, &str)] = &[
     ("pt_BR", include_str!("../../../locales/pt_BR.toml")),
     ("es", include_str!("../../../locales/es.toml")),
     ("ru", include_str!("../../../locales/ru.toml")),
+    ("de", include_str!("../../../locales/de.toml")),
+    ("zh_CN", include_str!("../../../locales/zh_CN.toml")),
 ];
 // Portuguese users in any region are better served by Brazilian Portuguese
 // than English until additional Portuguese catalogs are shipped.
@@ -195,6 +197,15 @@ fn normalize(source: &str) -> String {
             part.to_owned()
         });
     }
+    // Only Simplified Chinese is shipped. Do not silently map Traditional
+    // Chinese (Hant/TW/HK/MO) to it via a generic language alias.
+    if code == "zh"
+        || code == "zh_SG"
+        || code.eq_ignore_ascii_case("zh_hans")
+        || code.to_ascii_lowercase().starts_with("zh_hans_")
+    {
+        return "zh_CN".into();
+    }
     code
 }
 fn parse(source: &str) -> Result<Catalog, String> {
@@ -246,6 +257,7 @@ pub fn plural_category(language: &str, n: f64) -> &'static str {
     let n = n.abs();
     let lang = language.split('_').next().unwrap_or(language);
     match lang {
+        "zh" => "other",
         "ru" if n.fract() != 0. => "other",
         "ru" => {
             let last = n % 10.;

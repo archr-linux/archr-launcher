@@ -32,7 +32,7 @@ fn all_locales_and_pages_render_and_selected_on_toggle_has_contrast() {
     creator = ui.canvas.texture_creator();
     let theme = Theme::builtin();
     ui.configure(&ttf, &creator, &theme, None).unwrap();
-    for language in ["en", "pt_BR", "es", "ru"] {
+    for language in ["en", "pt_BR", "es", "ru", "de", "zh_CN"] {
         ui.catalog = I18n::load(std::path::Path::new("/nonexistent"), Some(language), None);
         for page in [
             Page::Root,

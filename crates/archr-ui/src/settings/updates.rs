@@ -610,7 +610,7 @@ mod tests {
         ] {
             assert_eq!(failure(reason), key, "{reason}");
         }
-        for language in ["en", "pt_BR", "es", "ru"] {
+        for language in ["en", "pt_BR", "es", "ru", "de", "zh_CN"] {
             let catalog =
                 crate::i18n::I18n::load(std::path::Path::new("/nonexistent"), Some(language), None);
             for key in ["offline_invalid", "offline_old", "offline_incomplete"] {

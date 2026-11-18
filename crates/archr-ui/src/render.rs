@@ -3433,11 +3433,14 @@ mod tests {
         let _sdl = crate::SDL_TEST_LOCK.lock().unwrap();
         let ttf = sdl2::ttf::init().unwrap();
         let fonts = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../themes/default/fonts");
-        let font = |size: f32| {
-            crate::text::production_font(&ttf, &fonts.join("Inter-Regular.ttf"), size as u16)
-        };
-        let measure = |text: &str, size: f32| Ok(font(size).size_of(text).unwrap().0);
-        for code in ["en", "pt_BR", "es", "ru"] {
+        let mut prepared = PreparedText::new(
+            &ttf,
+            std::array::from_fn(|_| vec![fonts.join("Inter-Regular.ttf")]),
+            StartupTrace::default(),
+        );
+        let mut measure =
+            |text: &str, size: f32| prepared.measure(text, Face::Regular, size as u16);
+        for code in ["en", "pt_BR", "es", "ru", "de", "zh_CN"] {
             let i = I18n::load(
                 &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../locales"),
                 Some(code),
@@ -3461,7 +3464,7 @@ mod tests {
                     name,
                     width,
                     |name, status| status_text(&i, name, (12, 34), status),
-                    measure,
+                    &mut measure,
                 )
                 .unwrap();
                 assert!(

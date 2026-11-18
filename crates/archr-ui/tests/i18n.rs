@@ -22,7 +22,10 @@ fn launcher_plural_rules() {
     ] {
         assert_eq!(plural_category("ru", n), want, "ru {n}");
     }
-    for lang in ["en", "es"] {
+    for n in [0., 1., 2., 1.5, -1., f64::INFINITY, f64::NAN] {
+        assert_eq!(plural_category("zh_CN", n), "other", "zh_CN {n}");
+    }
+    for lang in ["en", "es", "de", "de_DE"] {
         assert_eq!(plural_category(lang, 0.), "other");
         assert_eq!(plural_category(lang, 1.), "one");
         assert_eq!(plural_category(lang, 2.), "other");
@@ -71,6 +74,18 @@ fn resolution_full_language_environment_and_english() {
         (Some("es_MX"), None, "es"),
         (Some("ru_RU"), None, "ru"),
         (Some("en_US"), None, "en"),
+        (Some("de_DE"), None, "de"),
+        (Some("de-AT.UTF-8"), None, "de"),
+        (Some("zh_CN"), None, "zh_CN"),
+        (Some("zh-cn.UTF-8"), None, "zh_CN"),
+        (Some("zh_Hans"), None, "zh_CN"),
+        (Some("zh-Hans-CN"), None, "zh_CN"),
+        (Some("zh_SG"), None, "zh_CN"),
+        (Some("zh"), None, "zh_CN"),
+        (Some("zh_TW"), None, "en"),
+        (Some("zh_Hant"), None, "en"),
+        (None, Some("de_DE.UTF-8"), "de"),
+        (None, Some("zh_CN.UTF-8"), "zh_CN"),
         (None, Some("ru_RU.UTF-8"), "ru"),
         (Some("xx"), Some("ru"), "en"),
         (None, None, "en"),
@@ -150,7 +165,7 @@ fn every_catalog_has_exactly_the_english_keys_categories_and_placeholders() {
     for key in ["menu.settings", "notice.settings"] {
         assert!(!english.contains_key(key));
     }
-    for code in ["pt_BR", "es", "ru"] {
+    for code in ["pt_BR", "es", "ru", "de", "zh_CN"] {
         let source = fs::read_to_string(locales().join(format!("{code}.toml"))).unwrap();
         let other: toml::Table = toml::from_str(&source).unwrap();
         assert_eq!(
@@ -184,6 +199,8 @@ fn every_catalog_has_exactly_the_english_keys_categories_and_placeholders() {
                 let table = other[key].as_table().unwrap();
                 for category in if code == "ru" {
                     &["one", "few", "many", "other"][..]
+                } else if code == "zh_CN" {
+                    &["other"][..]
                 } else {
                     &["one", "other"][..]
                 } {
@@ -298,6 +315,8 @@ fn shipped_languages_are_embedded_and_ignore_external_overrides() {
         ("pt_BR", "Abrir"),
         ("es_MX", "Abrir"),
         ("ru_RU", "Открыть"),
+        ("de_DE", "Öffnen"),
+        ("zh_CN", "打开"),
     ] {
         // No locale directory exists at all on the fast path.
         let i = I18n::load(&dir.path().join("absent"), Some(code), None);

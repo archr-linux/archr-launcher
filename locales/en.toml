@@ -1704,3 +1704,6 @@
 "home.kicker_app" = "App · module"
 "home.empty" = "Nothing here yet"
 "home.systems_count" = { one = "{count} system", other = "{count} systems" }
+
+"settings.lang_de" = "Deutsch"
+"settings.lang_zh" = "简体中文"
