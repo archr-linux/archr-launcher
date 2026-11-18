@@ -29,7 +29,54 @@ fn ready() -> Settings {
     state
 }
 /// Every page this branch draws, in the shipped theme fonts.
+/// Save sync's pages, apart from `pages` so its frame stays small.
+fn savesync_pages() -> Vec<(&'static str, Settings)> {
+    // Save sync (Saves-sync, Saves-destino, Saves-conflito), as in the
+    // mockups: a PC share, a sync an hour ago, a test that found 3 consoles.
+    let synced = |page: Page| {
+        let mut state = ready();
+        state.open(Page::SaveSync);
+        if page != Page::SaveSync {
+            state.open(page);
+        }
+        state.values.insert(Id::SaveSync, "1".into());
+        state.values.insert(Id::SaveSyncAddress, "\\\\DESKTOP\\SaveSync".into());
+        state.values.insert(Id::SaveSyncUser, "ana".into());
+        state.savesync_done(
+            &crate::settings::savesync::Action::Status,
+            Ok(r#"{"enabled": true, "password": true,
+                "last": {"ok": true, "at": 1700000000, "up": 2, "systems": ["gba"]},
+                "conflicts": [{"key": "saves/gba/Pokemon Emerald.srm",
+                    "local": {"at": 1700000000, "size": 131072},
+                    "remote": {"at": 1699990000, "size": 131072, "by": "R36S Soy Sauce"}}]}"#
+                .into()),
+        );
+        state
+    };
+    let saves = synced(Page::SaveSync);
+    let mut saves_target = synced(Page::SaveSyncTarget);
+    saves_target.savesync_done(
+        &crate::settings::savesync::Action::Test,
+        Ok(r#"{"ok": true, "consoles": 3}"#.into()),
+    );
+    let saves_conflict = synced(Page::SaveSyncConflict);
+    vec![
+        ("saves", saves),
+        ("saves-destino", saves_target),
+        ("saves-conflito", saves_conflict),
+    ]
+}
+/// Every sample state. Built on a thread of its own: some seventy states
+/// of several KB each, in a debug build, overflow a test thread's stack.
 fn pages() -> Vec<(&'static str, Settings)> {
+    std::thread::Builder::new()
+        .stack_size(64 << 20)
+        .spawn(sample_pages)
+        .expect("sample thread")
+        .join()
+        .expect("sample states")
+}
+fn sample_pages() -> Vec<(&'static str, Settings)> {
     let now = Instant::now();
     let mut wifi = ready();
     wifi.open(Page::Wifi);
@@ -474,7 +521,8 @@ fn pages() -> Vec<(&'static str, Settings)> {
     image.open(Page::Image);
     image.values.insert(Id::Gamma, "1.10".into());
     image.values.insert(Id::ColorTemp, "4500".into());
-    vec![
+    let mut all = savesync_pages();
+    all.splice(0..0, [
         // First, so the list snaps to its scrolled end.
         ("storage-end", storage_end),
         ("sound-sliding", sound),
@@ -554,10 +602,8 @@ fn pages() -> Vec<(&'static str, Settings)> {
         ("roms-confirm", roms_confirm),
         ("roms-armed", roms_armed),
         ("roms-exfat", roms_exfat),
-    ]
-    .into_iter()
-    .chain(lists())
-    .collect()
+    ]);
+    all.into_iter().chain(lists()).collect()
 }
 /// Lista-media and Lista-longa: the row's mark and hint, the panel on the
 /// SNES cores, the pages of time zones and of systems.
@@ -4024,6 +4070,9 @@ fn sidebar_settings(theme_dir: &str, out: Option<std::path::PathBuf>, golden: Op
         "games",
         "sound-sliding",
         "imagem",
+        "saves",
+        "saves-destino",
+        "saves-conflito",
     ];
     // ARCHR_SETTINGS_EVERY: every page, to look them all over.
     let every = std::env::var_os("ARCHR_SETTINGS_EVERY").is_some();
@@ -4053,7 +4102,7 @@ fn sidebar_settings(theme_dir: &str, out: Option<std::path::PathBuf>, golden: Op
             .filter(|(n, _)| picks.contains(n))
             .map(|(n, state)| (n.to_owned(), state)),
     );
-    assert!(every || states.len() == 11, "every state found");
+    assert!(every || states.len() == 14, "every state found");
     let ttf = sdl2::ttf::init().unwrap();
     for (w, h) in [(640, 480), (720, 720), (480, 320)] {
         let creator;

@@ -186,6 +186,8 @@ impl Backend {
             Page::Resume,
             Page::Power,
             Page::Image,
+            Page::SaveSync,
+            Page::SaveSyncTarget,
             Page::Toasts,
         ]
         .iter()
@@ -324,7 +326,16 @@ impl Backend {
             | Id::Language
             | Id::ErrorReports
             | Id::Gamma
-            | Id::ColorTemp => id.choices().contains(&value),
+            | Id::ColorTemp
+            | Id::SaveSync
+            | Id::SaveSyncBoot
+            | Id::SaveSyncExit
+            | Id::SaveSyncStates
+            | Id::SaveSyncTarget => id.choices().contains(&value),
+            // \\PC\Share\folder or a user name: one line, printable.
+            Id::SaveSyncAddress | Id::SaveSyncUser => {
+                value.len() <= 255 && !value.chars().any(char::is_control)
+            }
             Id::Buttons => archr_ui::pad::bindings_text(&archr_ui::pad::bindings(value)) == value,
             Id::Suspend => {
                 matches!(value, "default" | "off")
@@ -476,6 +487,7 @@ pub(super) enum Work {
     SendReport(String),
     Bios,
     BiosInstall(String),
+    SaveSync(archr_ui::settings::savesync::Action),
     /// The controller tester's lane (`joypad::lane`).
     Joypad(archr_ui::settings::joypad::Command),
 }
@@ -534,6 +546,8 @@ enum Reply {
     ReportSent(Result<i32, String>),
     Bios(Result<Vec<archr_ui::settings::bios::System>, String>),
     BiosInstall(Result<(), String>),
+    /// What archr-savesync printed for this action, or why it did not run.
+    SaveSync(Box<(archr_ui::settings::savesync::Action, Result<String, String>)>),
     /// The driver's axes; None without calibration.
     JoypadOpened(Option<Box<archr_ui::settings::joypad::Axes>>),
     JoypadRead(Box<archr_ui::settings::joypad::Axes>, std::time::Instant),
@@ -733,6 +747,7 @@ impl Worker {
                         | Work::SendReport(_)
                         | Work::Bios
                         | Work::BiosInstall(_)
+                        | Work::SaveSync(_)
                         | Work::Joypad(_) => {
                             unreachable!("these have their own lanes")
                         }
@@ -844,6 +859,7 @@ impl Worker {
             Work::SendReport(ref name) => Some(diag::Slow::Send(name.clone())),
             Work::Bios => Some(diag::Slow::Bios),
             Work::BiosInstall(ref free) => Some(diag::Slow::BiosInstall(free.clone())),
+            Work::SaveSync(ref action) => Some(diag::Slow::SaveSync(action.clone())),
             _ => None,
         };
         if let Some(slow) = slow {
@@ -945,6 +961,7 @@ impl Worker {
                     | Reply::ReportSent(_)
                     | Reply::Bios(_)
                     | Reply::BiosInstall(_)
+                    | Reply::SaveSync(_)
                     | Reply::JoypadOpened(_)
                     | Reply::JoypadRead(..)
                     | Reply::JoypadDone(..)
@@ -1123,6 +1140,10 @@ impl Worker {
                     state.fail(None, "bios.check_failed".into());
                 }
                 Reply::BiosInstall(result) => state.bios_installed(result),
+                Reply::SaveSync(reply) => {
+                    let (action, result) = *reply;
+                    state.savesync_done(&action, result);
+                }
                 Reply::JoypadOpened(axes) => state.joypad_opened(axes.map(|a| *a)),
                 Reply::JoypadRead(axes, at) => state.joypad_read(*axes, at),
                 Reply::JoypadDone(command, result) => state.joypad_done(&command, result),

@@ -12,6 +12,8 @@ const REPORT_TIME: Duration = Duration::from_secs(180);
 const SEND_TIME: Duration = Duration::from_secs(300);
 /// Every BIOS file is read for its MD5; a big Neo Geo zip takes seconds.
 const BIOS_TIME: Duration = Duration::from_secs(120);
+/// A first sync of every save over a slow Wi-Fi.
+const SYNC_TIME: Duration = Duration::from_secs(600);
 /// pacman may download the package first.
 const INSTALL_TIME: Duration = Duration::from_secs(300);
 
@@ -22,6 +24,7 @@ pub(super) enum Slow {
     Send(String),
     Bios,
     BiosInstall(String),
+    SaveSync(archr_ui::settings::savesync::Action),
 }
 
 impl Backend {
@@ -38,6 +41,18 @@ impl Backend {
                 self.command_with_timeout("archr-bios-livres", &["install", &free], INSTALL_TIME)
                     .map(drop),
             ),
+            // A failure archr-savesync knows is JSON on its stdout too.
+            Slow::SaveSync(action) => {
+                let (args, input) = action.command();
+                let args: Vec<&str> = args.iter().map(String::as_str).collect();
+                let result = self.command_with_input(
+                    "archr-savesync",
+                    &args,
+                    input.as_deref().map(str::as_bytes),
+                    SYNC_TIME,
+                );
+                Reply::SaveSync(Box::new((action, result)))
+            }
         }
     }
     /// `archr-debug status` and the newest report.
