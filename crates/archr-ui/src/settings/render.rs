@@ -86,6 +86,9 @@ fn faded(c: Rgba, alpha: f32) -> Rgba {
         ..c
     }
 }
+/// Punctuation a CJK line may not start with, and may not end with.
+const CJK_CLOSING: &str = "。，、；：！？）」』》〉】〕…—．,.;:!?)";
+const CJK_OPENING: &str = "（「『《〈【〔";
 /// Answers that destroy or restart: red in the theme's `[dialog]` row.
 const DESTRUCTIVE: &[&str] = &[
     "settings.forget",
@@ -636,7 +639,18 @@ impl View<'_, '_, '_> {
                     lines.push(format!("{rest}{ch}"));
                 } else {
                     split |= ch != ' ';
-                    lines.push(ch.to_string());
+                    // CJK line rules: closing punctuation never starts a
+                    // line, opening punctuation never ends one; the
+                    // character next to it moves along.
+                    let mut carried = String::new();
+                    let last = line.chars().last();
+                    if line.chars().count() > 1
+                        && (CJK_CLOSING.contains(ch) || last.is_some_and(|c| CJK_OPENING.contains(c)))
+                    {
+                        carried.push(line.pop().expect("a character"));
+                    }
+                    carried.push(ch);
+                    lines.push(carried);
                 }
             } else {
                 line.push(ch);
