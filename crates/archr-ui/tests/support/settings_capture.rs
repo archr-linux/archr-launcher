@@ -1645,11 +1645,11 @@ fn updates_pages() -> Vec<(&'static str, Settings)> {
         size,
     };
     let mut page = ready();
-    page.info.version = "v3.1.0 · 20261118.3".into();
+    page.info.version = "v3.0.3 · 20261118.3".into();
     page.open_updates();
     page.updates.checked = Instant::now().checked_sub(Duration::from_secs(125));
     page.updates.report = Some(Report {
-        version: "v3.1.0 · 20261118.3".into(),
+        version: "v3.0.3 · 20261118.3".into(),
         channel: "stable".into(),
         packages: vec![
             package("archr-launcher", "1.4.2", "1.5.0", 2_202_009),
@@ -1665,7 +1665,7 @@ fn updates_pages() -> Vec<(&'static str, Settings)> {
     });
     let mut current = page.clone();
     current.updates.report = Some(Report {
-        version: "v3.1.0 · 20261118.3".into(),
+        version: "v3.0.3 · 20261118.3".into(),
         ..Default::default()
     });
     current.cursor = 3;
@@ -2274,10 +2274,10 @@ fn module_pages(dir: &std::path::Path) -> Vec<(&'static str, Settings)> {
     list.set_modules(view.clone());
     list.open(Page::System);
     let mut system = list.clone();
-    // The Update row as a console on 3.1.0 shows it, up to date.
-    system.values.insert(Id::Update, "v3.1.0 · 20261118.3".into());
+    // The Update row as a console on 3.0.3 shows it, up to date.
+    system.values.insert(Id::Update, "v3.0.3 · 20261118.3".into());
     system.updates.report = Some(crate::settings::updates::Report {
-        version: "v3.1.0 · 20261118.3".into(),
+        version: "v3.0.3 · 20261118.3".into(),
         ..Default::default()
     });
     list.open(Page::Modules);

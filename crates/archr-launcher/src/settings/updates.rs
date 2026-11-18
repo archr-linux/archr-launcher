@@ -46,7 +46,7 @@ pub(super) fn report(json: &str) -> Result<Report, String> {
         })
         .collect();
     Ok(Report {
-        version: text(&value, "os_version"),
+        version: super::info::shown_version(&text(&value, "release"), &text(&value, "os_version")),
         channel: text(&value, "channel"),
         packages,
         download: number(&value, "download_size"),
@@ -344,10 +344,7 @@ impl Backend {
             log::warn!("archr-update check: {e}");
             "unknown".to_owned()
         })?;
-        report(&String::from_utf8_lossy(&output.stdout)).map(|mut report| {
-            report.version = self.with_release(&report.version);
-            report
-        })
+        report(&String::from_utf8_lossy(&output.stdout))
     }
     fn update_card(&self) -> Option<Card> {
         self.command_with_timeout("archr-update", &["offline", "--json"], CARD_TIMEOUT)
@@ -748,5 +745,16 @@ if false; then"#,
         runtime.handle(Button::B);
         assert!(runtime.state.updates.run.is_none());
         until(&mut runtime, |r| r.state.updates.card_looked);
+    }
+    #[test]
+    fn the_report_names_the_release_before_the_update() {
+        let json =
+            r#"{"os_version":"20261118.3","release":"3.0.3","channel":"stable","packages":[]}"#;
+        assert_eq!(super::report(json).unwrap().version, "v3.0.3 · 20261118.3");
+        // No release reached, or an archr-update that does not say: the update alone.
+        let json = r#"{"os_version":"20261118.3","release":"","channel":"stable","packages":[]}"#;
+        assert_eq!(super::report(json).unwrap().version, "20261118.3");
+        let json = r#"{"os_version":"20261118.3","channel":"stable","packages":[]}"#;
+        assert_eq!(super::report(json).unwrap().version, "20261118.3");
     }
 }
