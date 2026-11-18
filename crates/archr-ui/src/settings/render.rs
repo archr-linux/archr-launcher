@@ -46,6 +46,8 @@ mod store;
 mod updates;
 #[path = "render/usb.rs"]
 mod usb;
+#[path = "render/picture.rs"]
+mod picture;
 const VIEW_TOP: f32 = 50.;
 const VIEW_BOTTOM: f32 = 428.;
 const FOOTER: f32 = 432.;
@@ -159,6 +161,8 @@ fn group_boxes(positions: &[Placement], offset: f32, (top, bottom): (f32, f32)) 
 fn placements(page: Page, rows: &[Row]) -> Vec<Placement> {
     let mut top = if page == Page::Updates {
         updates::ROWS_TOP
+    } else if page == Page::Image {
+        picture::ROWS_TOP
     } else {
         VIEW_TOP
     };
@@ -173,7 +177,8 @@ fn placements(page: Page, rows: &[Row]) -> Vec<Placement> {
                 top += SECTION_HEIGHT;
             }
             let height = match page {
-                Page::Resume | Page::Power | Page::Image => 38.,
+                Page::Resume | Page::Power => 38.,
+                Page::Image => 44.,
                 Page::Games if row.subtitle.is_some() => 40.,
                 Page::Netplay | Page::Games => 34.,
                 Page::Services => 38.,
@@ -1141,7 +1146,7 @@ impl View<'_, '_, '_> {
         } else if state.page() == Page::Power {
             Some(self.tr("power.note"))
         } else if state.page() == Page::Image {
-            Some(self.tr("image.note"))
+            Some(self.tr("image.hint"))
         } else if state.capturing() && state.page() == Page::LauncherControls {
             Some(self.tr(&format!(
                 "controls.press_hint|button={}",
@@ -1444,6 +1449,7 @@ impl View<'_, '_, '_> {
                     self.theme.border,
                 )?;
             }
+            Page::Image => self.picture_page(state, rows)?,
             page => self.rows_at(state, rows, &placements(page, rows), RIGHT)?,
         }
         Ok(())
@@ -1783,7 +1789,7 @@ impl View<'_, '_, '_> {
             }
             // Resume and Power: short choices between arrows leave the
             // long descriptions their room (Config-retomar, Config-energia).
-            Kind::Value if matches!(state.page(), Page::Resume | Page::Power) => {
+            Kind::Value if matches!(state.page(), Page::Resume | Page::Power | Page::Image) => {
                 self.ui
                     .measure(&state.display_value(row.id, &self.ui.catalog), face, 14.)?
                     as f32

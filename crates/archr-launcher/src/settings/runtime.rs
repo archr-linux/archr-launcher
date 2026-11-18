@@ -345,6 +345,10 @@ impl Runtime {
                 self.send(Work::Game(system, id, value));
             }
             Effect::Set(id, value) => self.send(Work::Set(id, value)),
+            Effect::Picture(gamma, temperature) => {
+                self.send(Work::Set(Id::Gamma, gamma));
+                self.send(Work::Set(Id::ColorTemp, temperature));
+            }
             Effect::Level(id, Level::Hold(up)) => {
                 if let Some(old) = self.level_hold.replace(id).filter(|old| *old != id) {
                     self.send(Work::Level(old, Level::Release));

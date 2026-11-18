@@ -292,6 +292,7 @@ impl Settings {
             Page::ReportText => self.report_text_input(button),
             Page::UsbAdapters => self.usb_input(button),
             Page::Bios => self.bios_input(button),
+            Page::Image => self.image_input(button),
             Page::Diagnostics => self.diag_input(button),
             Page::Shortcuts => self.shortcuts_input(button),
             Page::Modules
@@ -484,7 +485,7 @@ impl Settings {
             Id::HotkeysLink => self.open(Page::Hotkeys),
             Id::ResumeLink => self.open(Page::Resume),
             Id::PowerLink => self.open(Page::Power),
-            Id::ImageLink => self.open(Page::Image),
+            Id::ImageLink => self.open_image(),
             Id::PadTestLink => self.open_joypad(),
             Id::MangohudItems => self.open(Page::MangohudItems),
             // Every visit looks at the card again.

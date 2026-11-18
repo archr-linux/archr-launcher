@@ -17,6 +17,7 @@ pub(crate) mod games;
 pub(crate) mod information;
 pub use custom::Custom;
 pub mod hotkeys;
+pub mod picture;
 pub mod joypad;
 pub mod mangohud;
 pub use games::{GameCore, GameSystem, Games};
@@ -222,7 +223,7 @@ impl Page {
             Self::ErrorReports => reports::ROWS,
             Self::Resume => resume::RESUME,
             Self::Power => resume::POWER,
-            Self::Image => IMAGE,
+            Self::Image => picture::IMAGE,
             _ => &[],
         }
     }
@@ -448,6 +449,8 @@ pub enum Id {
     ImageLink,
     Gamma,
     ColorTemp,
+    /// Picture: back to 1.00 and 6500 K.
+    ImageRestore,
     BatteryCritical,
     BatteryLow,
     /// `system.shutdown_delay`, and the running game's copy of it.
@@ -654,6 +657,7 @@ impl Id {
             Self::ResumeLink
             | Self::PowerLink
             | Self::ImageLink
+            | Self::ImageRestore
             | Self::ShortcutsLink
             | Self::Shortcut(_)
             | Self::ToastsLink => ("", ""),
@@ -911,14 +915,6 @@ const SOUND: &[Row] = &[
     row(Id::Mute, "settings.mute", Kind::Toggle),
     described(Id::ImageLink, "settings.image", "image.link_detail").kind(Kind::Action),
 ];
-const IMAGE: &[Row] = &[
-    described(Id::Gamma, "image.gamma", "image.gamma_detail"),
-    described(
-        Id::ColorTemp,
-        "image.temperature",
-        "image.temperature_detail",
-    ),
-];
 const SYSTEM: &[Row] = &[
     described(Id::Gpu, "settings.gpu", "settings.reboot_required"),
     row(Id::PowerLink, "settings.power", Kind::Action),
@@ -981,6 +977,8 @@ pub enum Effect {
     Level(Id, Level),
     Reboot,
     Scan,
+    /// Picture: gamma and colour temperature together (undo, restore).
+    Picture(String, String),
     Connect(String, String),
     Forget(String),
     Bluetooth(Action, String),
@@ -1043,6 +1041,7 @@ impl std::fmt::Debug for Effect {
             Self::Set(id, value) => write!(f, "Set({id:?}, {value:?})"),
             Self::Level(id, level) => write!(f, "Level({id:?}, {level:?})"),
             Self::Reboot => write!(f, "Reboot"),
+            Self::Picture(g, t) => write!(f, "Picture({g:?}, {t:?})"),
             Self::Scan => write!(f, "Scan"),
             Self::Connect(ssid, _) => write!(f, "Connect({ssid:?}, <hidden>)"),
             Self::Forget(ssid) => write!(f, "Forget({ssid:?})"),
@@ -1143,6 +1142,8 @@ pub struct Settings {
     pub confirm_forget: Option<String>,
     pub keyboard: Option<Keyboard>,
     pub keyboard_target: Option<Id>,
+    /// Picture's gamma and temperature when the page opened (B restores).
+    pub image_entry: Option<(String, String)>,
     pub wifi_ssid: String,
     pub wifi_hidden: bool,
     pub access_ip: String,
@@ -1234,6 +1235,7 @@ impl Default for Settings {
             confirm_forget: None,
             keyboard: None,
             keyboard_target: None,
+            image_entry: None,
             wifi_ssid: String::new(),
             wifi_hidden: false,
             access_ip: String::new(),
@@ -1456,6 +1458,7 @@ impl Settings {
                 | Id::ResumeLink
                 | Id::PowerLink
                 | Id::ImageLink
+                | Id::ImageRestore
                 | Id::PadTestLink
                 | Id::ShortcutsLink
                 | Id::ToastsLink,
@@ -1763,6 +1766,7 @@ impl Settings {
             Page::ReportText => &[(Key('↕'), "details.scroll"), (Key('B'), "hint.back")],
             Page::UsbAdapters => self.usb_hints(),
             Page::Bios => self.bios_hints(),
+            Page::Image => &[(Key('A'), "image.save"), (Key('B'), "image.undo")],
             Page::Shortcuts => self.shortcuts_hints(),
             Page::PadTest | Page::PadCalibrate => self.joypad_hints(),
             Page::Root => &[

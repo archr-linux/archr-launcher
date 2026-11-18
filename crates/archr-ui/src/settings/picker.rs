@@ -85,6 +85,8 @@ impl Settings {
         kind == Kind::Value
             && count >= MIN
             && id != Id::Accent
+            // Picture: A keeps the value, it opens no list.
+            && self.page() != super::Page::Image
             && !Self::is_colour(id)
             && !Self::text_input(id)
             && !self.disabled(id)
