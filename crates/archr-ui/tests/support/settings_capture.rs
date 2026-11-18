@@ -2506,8 +2506,16 @@ fn module_pages(dir: &std::path::Path) -> Vec<(&'static str, Settings)> {
             ..Offer::default()
         })),
     ));
+    // Information's header: the version on one line beside the longest
+    // device name on the right.
+    let mut info = ready();
+    info.info.version = "v3.0.3 · 20261118.3".into();
+    info.info.device = "Game Console R36S Soysauce".into();
+    info.info.kernel = "6.12.114".into();
+    info.open(Page::Info);
     vec![
         ("sistema", system),
+        ("informacoes", info),
         ("loja-modulo-fase2", api2),
         ("loja-modulo-sistema", actions),
         ("loja-modulo-atualizacao", update),

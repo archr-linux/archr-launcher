@@ -14,8 +14,10 @@ impl View<'_, '_, '_> {
             (26., self.theme.text, Align::Left),
             Face::Semibold,
         )?;
+        // "v3.0.3 · 20261118.3" on one line; the device line, right-aligned,
+        // keeps room for "Game Console R36S Soysauce · kernel 6.12.114".
         self.text_face(
-            (113., 44., 130., 36.),
+            (113., 44., 175., 36.),
             &info.version,
             (14., self.theme.highlight_bg, Align::Left),
             Face::Mono,
@@ -25,7 +27,7 @@ impl View<'_, '_, '_> {
             &[("device", &info.device), ("kernel", &info.kernel)],
         );
         self.text_face(
-            (252., 44., 364., 36.),
+            (292., 44., 324., 36.),
             &device,
             (12., self.theme.muted, Align::Right),
             Face::Mono,
