@@ -107,6 +107,12 @@ impl Ui<'_, '_> {
                 255,
                 [0., 0., 1., 1.],
             )?;
+        } else {
+            // No art for the game: its console, as on the home screen.
+            let path = self.art.as_ref().and_then(|a| a.key(system));
+            if !self.console_image(pic, path.as_ref(), 255) {
+                self.generated_card(pic, system, theme)?;
+            }
         }
         // The text beside it: the title, the facts, the description,
         // the buttons and when it was played, one block in the middle of
