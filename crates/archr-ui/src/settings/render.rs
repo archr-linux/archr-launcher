@@ -1783,7 +1783,7 @@ impl View<'_, '_, '_> {
             }
             // Resume and Power: short choices between arrows leave the
             // long descriptions their room (Config-retomar, Config-energia).
-            Kind::Value if matches!(state.page(), Page::Resume | Page::Power | Page::Image) => {
+            Kind::Value if matches!(state.page(), Page::Resume | Page::Power) => {
                 self.ui
                     .measure(&state.display_value(row.id, &self.ui.catalog), face, 14.)?
                     as f32

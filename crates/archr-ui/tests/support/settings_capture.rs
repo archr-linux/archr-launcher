@@ -469,10 +469,16 @@ fn pages() -> Vec<(&'static str, Settings)> {
     hotkey_conflict.captured(crate::pad::Pad::A);
     let mut hotkey_modifier = hotkeys.clone();
     hotkey_modifier.cursor = 0;
+    // Sound and display › Picture (Tela-imagem): a raised gamma, warm.
+    let mut image = ready();
+    image.open(Page::Image);
+    image.values.insert(Id::Gamma, "1.10".into());
+    image.values.insert(Id::ColorTemp, "4500".into());
     vec![
         // First, so the list snaps to its scrolled end.
         ("storage-end", storage_end),
         ("sound-sliding", sound),
+        ("imagem", image),
         ("wifi", wifi),
         ("wifi-searching-a", wifi_searching.clone()),
         ("wifi-searching-b", wifi_searching),
@@ -2275,7 +2281,9 @@ fn module_pages(dir: &std::path::Path) -> Vec<(&'static str, Settings)> {
     list.open(Page::System);
     let mut system = list.clone();
     // The Update row as a console on 3.0.3 shows it, up to date.
-    system.values.insert(Id::Update, "v3.0.3 · 20261118.3".into());
+    system
+        .values
+        .insert(Id::Update, "v3.0.3 · 20261118.3".into());
     system.updates.report = Some(crate::settings::updates::Report {
         version: "v3.0.3 · 20261118.3".into(),
         ..Default::default()
@@ -3774,6 +3782,12 @@ fn golden_frames_at_640x480() {
     sound.open(Page::Sound);
     settled(&mut ui, &sound);
     keep(&mut ui, "settings-sound");
+    let mut picture = root.clone();
+    picture.open(Page::Image);
+    picture.values.insert(Id::Gamma, "1.10".into());
+    picture.values.insert(Id::ColorTemp, "4500".into());
+    settled(&mut ui, &picture);
+    keep(&mut ui, "settings-image");
     let mut forget = pages()
         .into_iter()
         .find(|(name, _)| *name == "bluetooth-forget")
@@ -4009,6 +4023,7 @@ fn sidebar_settings(theme_dir: &str, out: Option<std::path::PathBuf>, golden: Op
         "services",
         "games",
         "sound-sliding",
+        "imagem",
     ];
     // ARCHR_SETTINGS_EVERY: every page, to look them all over.
     let every = std::env::var_os("ARCHR_SETTINGS_EVERY").is_some();
@@ -4038,7 +4053,7 @@ fn sidebar_settings(theme_dir: &str, out: Option<std::path::PathBuf>, golden: Op
             .filter(|(n, _)| picks.contains(n))
             .map(|(n, state)| (n.to_owned(), state)),
     );
-    assert!(every || states.len() == 10, "every state found");
+    assert!(every || states.len() == 11, "every state found");
     let ttf = sdl2::ttf::init().unwrap();
     for (w, h) in [(640, 480), (720, 720), (480, 320)] {
         let creator;
