@@ -185,6 +185,7 @@ impl Backend {
             Page::Region,
             Page::Resume,
             Page::Power,
+            Page::Image,
             Page::Toasts,
         ]
         .iter()
@@ -321,9 +322,9 @@ impl Backend {
             | Id::Gpu
             | Id::Governor
             | Id::Language
-            | Id::ErrorReports => {
-                id.choices().contains(&value)
-            }
+            | Id::ErrorReports
+            | Id::Gamma
+            | Id::ColorTemp => id.choices().contains(&value),
             Id::Buttons => archr_ui::pad::bindings_text(&archr_ui::pad::bindings(value)) == value,
             Id::Suspend => {
                 matches!(value, "default" | "off")
@@ -408,6 +409,10 @@ impl Backend {
             _ => {}
         }
         self.save(id, value)?;
+        // archr-gamma reads the curve again; started now if it was not.
+        if matches!(id, Id::Gamma | Id::ColorTemp) {
+            self.command("systemctl", &["reload-or-restart", "archr-gamma.service"])?;
+        }
         if id == Id::ErrorReports && value == "0" {
             crate::reports::purge(&self.paths);
         }

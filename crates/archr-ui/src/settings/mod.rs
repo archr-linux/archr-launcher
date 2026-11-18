@@ -8,8 +8,8 @@ use std::time::Instant;
 pub mod bios;
 pub mod bluetooth;
 pub mod cheevos;
-pub mod datetime;
 mod controls;
+pub mod datetime;
 pub use controls::Capture;
 mod custom;
 pub mod diag;
@@ -91,6 +91,9 @@ pub enum Page {
     Resume,
     /// System › Power (Config-energia).
     Power,
+    /// Sound and display › Picture (Tela-imagem): gamma and colour
+    /// temperature, held by archr-gamma.
+    Image,
     /// Appearance › Start shortcuts (Hub-atalhos-editar).
     Shortcuts,
     /// Appearance › Notifications (Avisos): the toasts.
@@ -147,6 +150,7 @@ impl Page {
             Self::Bios => "bios.title",
             Self::Resume => "settings.resume",
             Self::Power => "settings.power",
+            Self::Image => "settings.image",
             Self::Shortcuts => "shortcuts.title",
             Self::Toasts => "settings.toasts",
             Self::ErrorReports => "reports.title",
@@ -185,6 +189,7 @@ impl Page {
             Self::DateTime => &["settings.region"],
             Self::ScraperMedia => &["settings.games", "settings.scraper_short"],
             Self::Updates | Self::Power => &["settings.system"],
+            Self::Image => &["settings.sound"],
             Self::UpdatePackages => &["settings.system", "updates.title"],
             _ => &[],
         }
@@ -217,6 +222,7 @@ impl Page {
             Self::ErrorReports => reports::ROWS,
             Self::Resume => resume::RESUME,
             Self::Power => resume::POWER,
+            Self::Image => IMAGE,
             _ => &[],
         }
     }
@@ -438,6 +444,10 @@ pub enum Id {
     ResumeStandalone,
     /// System link to Power, and its own rows (with Idle, IdleGame, Suspend).
     PowerLink,
+    /// Sound and display link to Picture, and its rows.
+    ImageLink,
+    Gamma,
+    ColorTemp,
     BatteryCritical,
     BatteryLow,
     /// `system.shutdown_delay`, and the running game's copy of it.
@@ -638,8 +648,12 @@ impl Id {
             Self::BatteryCritical => ("power.battery.critical", "3"),
             Self::BatteryLow => ("power.battery.low", "10"),
             Self::ShutdownDelay => ("system.shutdown_delay", "900"),
+            // archr-gamma reads them (SIGHUP from the page).
+            Self::Gamma => ("display.gamma", "1.00"),
+            Self::ColorTemp => ("display.temperature", "6500"),
             Self::ResumeLink
             | Self::PowerLink
+            | Self::ImageLink
             | Self::ShortcutsLink
             | Self::Shortcut(_)
             | Self::ToastsLink => ("", ""),
@@ -707,6 +721,10 @@ impl Id {
             Self::BatteryCritical => &["0", "2", "3", "5", "8"],
             Self::BatteryLow => &["0", "5", "10", "15", "20"],
             Self::ShutdownDelay => &["300", "900", "1800", "3600"],
+            Self::Gamma => &[
+                "0.70", "0.80", "0.90", "1.00", "1.10", "1.20", "1.30", "1.40", "1.50",
+            ],
+            Self::ColorTemp => &["6500", "6000", "5500", "5000", "4500", "4000", "3500"],
             Self::Governor => &["ondemand", "performance", "schedutil", "powersave"],
             Self::Sounds
             | Self::Mute
@@ -891,6 +909,15 @@ const SOUND: &[Row] = &[
         },
     ),
     row(Id::Mute, "settings.mute", Kind::Toggle),
+    described(Id::ImageLink, "settings.image", "image.link_detail").kind(Kind::Action),
+];
+const IMAGE: &[Row] = &[
+    described(Id::Gamma, "image.gamma", "image.gamma_detail"),
+    described(
+        Id::ColorTemp,
+        "image.temperature",
+        "image.temperature_detail",
+    ),
 ];
 const SYSTEM: &[Row] = &[
     described(Id::Gpu, "settings.gpu", "settings.reboot_required"),
@@ -907,7 +934,12 @@ const REGION: &[Row] = &[
     row(Id::Language, "settings.language", Kind::Value),
     row(Id::Timezone, "settings.timezone", Kind::Value),
     row(Id::ClockFormat, "settings.clock_format", Kind::Value),
-    described(Id::DateTime, "settings.datetime", "settings.datetime_detail").kind(Kind::Action),
+    described(
+        Id::DateTime,
+        "settings.datetime",
+        "settings.datetime_detail",
+    )
+    .kind(Kind::Action),
     described(
         Id::KeyboardLayout,
         "settings.keyboard_layout",
@@ -1423,11 +1455,15 @@ impl Settings {
                 | Id::BiosLink
                 | Id::ResumeLink
                 | Id::PowerLink
+                | Id::ImageLink
                 | Id::PadTestLink
                 | Id::ShortcutsLink
                 | Id::ToastsLink,
                 _,
             ) => return "›".into(),
+            (Id::ColorTemp, "6500") => "image.neutral",
+            (Id::ColorTemp, v) => return format!("{v} K"),
+            (Id::Gamma, v) => return v.to_owned(),
             (Id::ToastsPosition, "left") => "settings.toasts_left",
             (Id::ToastsPosition, _) => "settings.toasts_right",
             (Id::ToastsDuration, v) => return catalog.format("resume.seconds", &[("count", v)]),
@@ -2447,8 +2483,16 @@ mod appearance_tests {
         {
             assert_eq!(state.value(id), id.default_value(), "{id:?}");
         }
-        assert_eq!(state.value(Id::View), crate::layout::LISTA, "the theme's first view");
-        assert_eq!(state.value(Id::Language), "pt_BR", "not an Appearance choice");
+        assert_eq!(
+            state.value(Id::View),
+            crate::layout::LISTA,
+            "the theme's first view"
+        );
+        assert_eq!(
+            state.value(Id::Language),
+            "pt_BR",
+            "not an Appearance choice"
+        );
         // Back to the first one: it comes as its author made it too.
         state.values.insert(Id::Accent, "teal".into());
         assert_eq!(state.handle(Button::L), Effect::Theme("default".into()));

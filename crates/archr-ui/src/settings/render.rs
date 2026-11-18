@@ -173,7 +173,7 @@ fn placements(page: Page, rows: &[Row]) -> Vec<Placement> {
                 top += SECTION_HEIGHT;
             }
             let height = match page {
-                Page::Resume | Page::Power => 38.,
+                Page::Resume | Page::Power | Page::Image => 38.,
                 Page::Games if row.subtitle.is_some() => 40.,
                 Page::Netplay | Page::Games => 34.,
                 Page::Services => 38.,
@@ -1140,6 +1140,8 @@ impl View<'_, '_, '_> {
             Some(self.tr("resume.note"))
         } else if state.page() == Page::Power {
             Some(self.tr("power.note"))
+        } else if state.page() == Page::Image {
+            Some(self.tr("image.note"))
         } else if state.capturing() && state.page() == Page::LauncherControls {
             Some(self.tr(&format!(
                 "controls.press_hint|button={}",
@@ -1593,21 +1595,31 @@ impl View<'_, '_, '_> {
                 },
                 None,
             )?;
-            self.ui.glass(rect, radius, &self.theme.glass_or_default())?;
+            self.ui
+                .glass(rect, radius, &self.theme.glass_or_default())?;
         } else {
             self.ui
                 .rounded(rect, radius, self.theme.surface, Some(self.theme.border))?;
         }
-        let align = if style.icon { Align::Center } else { Align::Left };
+        let align = if style.icon {
+            Align::Center
+        } else {
+            Align::Left
+        };
         if style.icon {
             let disc = self.rect((320. - 22., top + 18., 44., 44.));
             let ring = mix(self.theme.surface, self.theme.warning, 0.22);
-            self.ui.rounded(disc, disc.width() as f32 / 2., ring, None)?;
+            self.ui
+                .rounded(disc, disc.width() as f32 / 2., ring, None)?;
             let glyph = self.rect((320. - 11., top + 29., 22., 22.));
             self.ui.icon(Glyph::Alert, glyph, self.theme.warning)?;
         }
         let y = top + 20. + icon;
-        self.text((x + 24., y, tw, title), question, (18., self.theme.text, align))?;
+        self.text(
+            (x + 24., y, tw, title),
+            question,
+            (18., self.theme.text, align),
+        )?;
         if body > 0. {
             self.text(
                 (x + 24., y + title + gap, tw, body),
@@ -1771,7 +1783,7 @@ impl View<'_, '_, '_> {
             }
             // Resume and Power: short choices between arrows leave the
             // long descriptions their room (Config-retomar, Config-energia).
-            Kind::Value if matches!(state.page(), Page::Resume | Page::Power) => {
+            Kind::Value if matches!(state.page(), Page::Resume | Page::Power | Page::Image) => {
                 self.ui
                     .measure(&state.display_value(row.id, &self.ui.catalog), face, 14.)?
                     as f32

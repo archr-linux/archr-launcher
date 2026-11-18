@@ -357,6 +357,8 @@ const CONFIG_KEYS: &[&str] = &[
     "launcher.resume.standalone",
     "launcher.resume.wait",
     "launcher.switcher.count",
+    "display.gamma",
+    "display.temperature",
     "power.battery.critical",
     "power.battery.low",
     "system.cfg",

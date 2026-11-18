@@ -3,6 +3,8 @@
 Description=ArchR launcher session with Sway
 Requires=sway.service
 After=sway.service
+# The panel's gamma curve (Settings › Sound and display › Picture).
+Wants=archr-gamma.service
 RequiresMountsFor=/storage
 StartLimitIntervalSec=60
 StartLimitBurst=5
