@@ -1845,7 +1845,11 @@ impl View<'_, '_, '_> {
             _ => state.subtitle(row).map(|text| self.tr(&text)),
         };
         let expand = subtitle.is_none()
-            && (row.kind == Kind::Value || row.id == Id::MangohudItems)
+            && (row.kind == Kind::Value
+                || matches!(
+                    row.id,
+                    Id::MangohudItems | Id::SaveSyncAddress | Id::SaveSyncUser
+                ))
             && self.span(&state.display_value(row.id, &self.ui.catalog), face, 14.)?
                 > right - full - 66.;
         let label_width = if expand {

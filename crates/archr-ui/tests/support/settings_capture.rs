@@ -40,7 +40,7 @@ fn savesync_pages() -> Vec<(&'static str, Settings)> {
             state.open(page);
         }
         state.values.insert(Id::SaveSync, "1".into());
-        state.values.insert(Id::SaveSyncAddress, "\\\\DESKTOP\\SaveSync".into());
+        state.values.insert(Id::SaveSyncAddress, "\\\\192.168.3.14\\games-roms\\SaveSync".into());
         state.values.insert(Id::SaveSyncUser, "ana".into());
         state.savesync_done(
             &crate::settings::savesync::Action::Status,
