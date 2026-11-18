@@ -411,6 +411,13 @@ pub fn permissions(manifest: &Manifest, names: &BTreeMap<String, String>) -> Vec
             "modules.perm_cpu_tune_detail",
             false,
         ),
+        // It caps the clocks the games get.
+        (
+            "perf-limits",
+            "modules.perm_perf_limits",
+            "modules.perm_perf_limits_detail",
+            true,
+        ),
         (
             "brightness",
             "modules.perm_brightness",

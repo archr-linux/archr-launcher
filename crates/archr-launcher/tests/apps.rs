@@ -72,6 +72,7 @@ fn start(root: &Path, id: &str, granted: &[&str]) -> Modules {
         bin: root.join("bin"),
         shop: None,
         cpufreq: root.join("cpufreq/policy0"),
+        gpufreq: root.join("gpufreq"),
         perf: root.join("run/perf-last.json"),
         library: Some(Paths::new(Some(root.to_owned()))),
     })

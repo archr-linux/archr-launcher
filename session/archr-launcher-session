@@ -60,6 +60,7 @@ launcher=/usr/bin/archr-launcher
 log_file=/var/log/archr-launcher-session.log
 kill_file=/tmp/.process-kill-data
 cpufreq=/sys/devices/system/cpu/cpufreq
+system_cfg=/storage/.config/system/configs/system.cfg
 save_exit=/usr/bin/archr-game-save-exit
 sway_attempts=100
 sleep_bin=sleep
@@ -74,6 +75,7 @@ if [ "${ARCHR_SESSION_TEST:-0}" = 1 ]; then
     log_file=${ARCHR_SESSION_LOG:?}
     kill_file=${ARCHR_SESSION_KILL_FILE:?}
     cpufreq=${ARCHR_SESSION_CPUFREQ:?}
+    system_cfg=${ARCHR_SESSION_SYSTEM_CFG:-/nonexistent}
     save_exit=${ARCHR_SESSION_SAVE_EXIT:?}
     sway_attempts=${ARCHR_SESSION_SWAY_ATTEMPTS:-100}
     sleep_bin=${ARCHR_SESSION_SLEEP:?}
@@ -233,10 +235,18 @@ fi
 restore_cpu_max() {
     boost=
     [ "$(cat "$cpufreq/boost" 2>/dev/null)" != 1 ] || boost=scaling_boost_frequencies
+    # The user's own ceiling (archr-perf-limits), when it is one of the
+    # CPU's frequencies: never above it.
+    cap=$(sed -n 's/^system\.cpu\.max_khz=\([0-9][0-9]*\)$/\1/p' "$system_cfg" 2>/dev/null | tail -n 1)
     for policy in "$cpufreq"/policy[0-9]*; do
         [ -w "$policy/scaling_max_freq" ] || continue
         top=$(cd "$policy" && cat scaling_available_frequencies $boost 2>/dev/null |
             tr ' ' '\n' | grep -E '^[0-9]+$' | sort -n | tail -n 1)
+        if [ -n "$cap" ] && [ -n "$top" ] && [ "$cap" -lt "$top" ] &&
+            (cd "$policy" && cat scaling_available_frequencies scaling_boost_frequencies 2>/dev/null) |
+            tr ' ' '\n' | grep -qx "$cap"; then
+            top=$cap
+        fi
         [ -z "$top" ] || echo "$top" >"$policy/scaling_max_freq" 2>/dev/null || :
     done
 }

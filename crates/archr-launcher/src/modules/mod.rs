@@ -120,6 +120,9 @@ pub struct Config {
     /// The CPU's cpufreq policy (`scaling_available_frequencies`...): the
     /// ceilings a `cpu-tune` module may choose.
     pub cpufreq: PathBuf,
+    /// The GPU's devfreq (`available_frequencies`): the ceilings a
+    /// `perf-limits` module may set.
+    pub gpufreq: PathBuf,
     /// What archr-perf-probe measured in the last game (runemu.sh --measure).
     pub perf: PathBuf,
     /// The library's paths: the systems `rom.install` writes to (API 4).
@@ -160,6 +163,7 @@ impl Config {
             bin: paths.at("/usr/bin"),
             shop: Some(shop),
             cpufreq: paths.at("/sys/devices/system/cpu/cpufreq/policy0"),
+            gpufreq: paths.at("/sys/class/devfreq/ff400000.gpu"),
             perf: paths.at("/run/archr/perf-last.json"),
             library: Some(paths.clone()),
         }
@@ -227,13 +231,16 @@ enum Input {
     GameStarted(Json),
     /// Settings are open: something private may be on the screen.
     Private(bool),
-    /// A `system.call` ended: module, its process then, request id, success.
+    /// A `system.call` ended: module, its process then, request id,
+    /// success, and the script's last line for the calls that answer with
+    /// one (`gpu_bench`).
     System {
         id: String,
         generation: u64,
         request: Json,
         name: &'static str,
         ok: bool,
+        output: Option<String>,
     },
     /// `launch.before` to the modules with the hook; their choice comes back.
     Before(Json, Governor),
@@ -837,10 +844,15 @@ impl Host {
                 request,
                 name,
                 ok,
+                output,
             } => {
                 self.system_running.remove(name);
                 let reply = if ok {
-                    json!({"jsonrpc": "2.0", "id": request, "result": {}})
+                    let result = match output {
+                        Some(output) => json!({"output": output}),
+                        None => json!({}),
+                    };
+                    json!({"jsonrpc": "2.0", "id": request, "result": result})
                 } else {
                     log::warn!("Module {id}: the system could not do {name}");
                     json!({"jsonrpc": "2.0", "id": request,
@@ -1529,9 +1541,16 @@ impl Host {
             "capabilities": capabilities,
             "role": if app { "app" } else { "daemon" },
         });
-        if permissions.iter().any(|p| p == "system:cpu-tune") {
+        if permissions
+            .iter()
+            .any(|p| p == "system:cpu-tune" || p == "system:perf-limits")
+        {
             let opps = self.cpu_opps();
             params["cpu"] = json!({"opps": opps, "max_khz": opps.last()});
+        }
+        if permissions.iter().any(|p| p == "system:perf-limits") {
+            let opps = self.gpu_opps();
+            params["gpu"] = json!({"opps": opps, "max_hz": opps.last()});
         }
         self.send(
             key,
@@ -2522,6 +2541,20 @@ impl Host {
         self.active(id)
             .is_some_and(|(_, m)| m.permissions.system.iter().any(|s| s == system))
     }
+    /// The GPU ceilings a `perf-limits` module may set, in Hz, lowest first.
+    fn gpu_opps(&self) -> Vec<u64> {
+        let mut opps: Vec<u64> =
+            fs::read_to_string(self.config.gpufreq.join("available_frequencies"))
+                .map(|list| {
+                    list.split_whitespace()
+                        .filter_map(|f| f.parse().ok())
+                        .collect()
+                })
+                .unwrap_or_default();
+        opps.sort_unstable();
+        opps.dedup();
+        opps
+    }
     /// The ceilings a `cpu-tune` module may choose, in kHz, lowest first:
     /// the regular ones and, with boost on, the boost ones.
     fn cpu_opps(&self) -> Vec<u32> {
@@ -2622,9 +2655,17 @@ impl Host {
             Some("volume") => "volume",
             Some("wifi") => "wifi",
             Some("screenshot") => "screenshot",
+            Some("cpu_max") => "cpu_max",
+            Some("gpu_max") => "gpu_max",
+            Some("gpu_bench") => "gpu_bench",
             _ => return Err((-32602, "name")),
         };
-        if !manifest.permissions.system.iter().any(|s| s == name) {
+        // The clock ceilings and the GPU benchmark are one permission.
+        let permission = match name {
+            "cpu_max" | "gpu_max" | "gpu_bench" => "perf-limits",
+            other => other,
+        };
+        if !manifest.permissions.system.iter().any(|s| s == permission) {
             return Err((-32001, "permission denied"));
         }
         if self.stopped {
@@ -2656,6 +2697,31 @@ impl Host {
                 let on = params["value"].as_bool().ok_or((-32602, "value"))?;
                 (60, 60, Work::Wifi(on))
             }
+            // A ceiling is one of the kernel's own frequencies, or 0 for
+            // none; archr-perf-limits checks it again and keeps it.
+            "cpu_max" | "gpu_max" => {
+                let v = params["value"].as_u64().ok_or((-32602, "value"))?;
+                let known = if name == "cpu_max" {
+                    self.cpu_opps().iter().any(|f| u64::from(*f) == v)
+                } else {
+                    self.gpu_opps().contains(&v)
+                };
+                if v != 0 && !known {
+                    return Err((-32602, "value"));
+                }
+                let value = if v == 0 {
+                    "default".to_owned()
+                } else {
+                    v.to_string()
+                };
+                let what = if name == "cpu_max" { "cpu" } else { "gpu" };
+                (
+                    1,
+                    1,
+                    Work::Run(vec![s(&["archr-perf-limits", what, &value])]),
+                )
+            }
+            "gpu_bench" => (30, 30, Work::Output(s(&["archr-perf-limits", "gpu-bench"]))),
             _ => {
                 if self.private {
                     return Err((-32001, "not while Settings are open"));
@@ -2687,13 +2753,14 @@ impl Host {
         let inbox = self.inbox.clone();
         let done = {
             let (id, inbox) = (owner, inbox.clone());
-            move |ok: bool| {
+            move |ok: bool, output: Option<String>| {
                 let _ = inbox.send(Input::System {
                     id,
                     generation,
                     request,
                     name,
                     ok,
+                    output,
                 });
             }
         };
@@ -2706,7 +2773,7 @@ impl Host {
                     self.config.system_cfg.clone(),
                     self.config.lock.clone(),
                 );
-                match crate::wifi::switch(tool, on, done) {
+                match crate::wifi::switch(tool, on, move |ok| done(ok, None)) {
                     Ok(true) => {}
                     Ok(false) => return Err((-32003, "the Wi-Fi is switching already")),
                     Err(_) => return Err((-32000, "failed")),
@@ -2715,26 +2782,33 @@ impl Host {
             Work::Run(commands) => {
                 let bin = self.config.bin.clone();
                 thread::spawn(move || {
-                    let run = |argv: &[String]| {
-                        let mut command = std::process::Command::new(bin.join(&argv[0]));
-                        command.args(&argv[1..]).stdin(std::process::Stdio::null());
-                        std::os::unix::process::CommandExt::process_group(&mut command, 0);
-                        crate::process::capture(
-                            &mut command,
-                            SYSTEM_TIMEOUT,
-                            &std::sync::atomic::AtomicBool::new(false),
-                            4096,
-                        )
-                        .is_ok_and(|out| out.status.success())
-                    };
                     // The first command does the work; the OSD only shows it.
-                    let ok = run(&commands[0]);
+                    let ok = system_run(&bin, &commands[0]).is_some();
                     if ok {
                         for extra in &commands[1..] {
-                            run(extra);
+                            system_run(&bin, extra);
                         }
                     }
-                    done(ok);
+                    done(ok, None);
+                });
+            }
+            // The script's last line goes back to the module: plain text
+            // from the system's own script, at most 200 bytes.
+            Work::Output(command) => {
+                let bin = self.config.bin.clone();
+                thread::spawn(move || {
+                    let out = system_run(&bin, &command);
+                    let line = out.as_ref().and_then(|out| {
+                        let text = String::from_utf8_lossy(out);
+                        let last = text.lines().rev().find(|l| !l.trim().is_empty())?.trim();
+                        Some(
+                            last.chars()
+                                .filter(|c| !c.is_control())
+                                .take(200)
+                                .collect::<String>(),
+                        )
+                    });
+                    done(out.is_some(), line);
                 });
             }
         }
@@ -3027,7 +3101,25 @@ impl Host {
 /// What a `system.call` does.
 enum Work {
     Run(Vec<Vec<String>>),
+    /// One command whose last line of output is the answer.
+    Output(Vec<String>),
     Wifi(bool),
+}
+/// A system script run for `system.call`: its stdout when it succeeded
+/// within the time limit, else nothing.
+fn system_run(bin: &std::path::Path, argv: &[String]) -> Option<Vec<u8>> {
+    let mut command = std::process::Command::new(bin.join(&argv[0]));
+    command.args(&argv[1..]).stdin(std::process::Stdio::null());
+    std::os::unix::process::CommandExt::process_group(&mut command, 0);
+    crate::process::capture(
+        &mut command,
+        SYSTEM_TIMEOUT,
+        &std::sync::atomic::AtomicBool::new(false),
+        4096,
+    )
+    .ok()
+    .filter(|out| out.status.success())
+    .map(|out| out.stdout)
 }
 fn s(words: &[&str]) -> Vec<String> {
     words.iter().map(|w| (*w).to_owned()).collect()

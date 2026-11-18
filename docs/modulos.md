@@ -187,6 +187,7 @@ usuário do próprio módulo. O valor também chega no `initialize` e no
 | `hooks = ["launch"]` | recebe `launch.before` antes de cada jogo (API 2) | "Vê cada jogo que você abre" |
 | `system = ["cpu-profile"]` | em `launch.before`, pode escolher o governador daquela abertura (API 2) | "Escolhe o perfil de CPU de um jogo" |
 | `system = ["cpu-tune"]` | em `launch.before`, pode escolher o teto de CPU daquela abertura; recebe a medida do jogo no `game.ended` (API 3) | "Ajusta a CPU de cada jogo" |
+| `system = ["perf-limits"]` | `system.call` define o teto de CPU e de GPU de todos os jogos, mantido ao reiniciar, e roda o benchmark de GPU (API 3; seção 9.3) | "Limita os clocks da CPU e da GPU" (âmbar) |
 | `system = ["brightness"]` | `system.call` muda o brilho, 10–100 % (API 2) | "Muda o brilho da tela" |
 | `system = ["volume"]` | `system.call` muda o volume, 0–100 % (API 2) | "Muda o volume" |
 | `system = ["wifi"]` | `system.call` liga ou desliga o Wi-Fi (API 2) | "Liga e desliga o Wi-Fi" (âmbar) |
@@ -369,6 +370,9 @@ de cada uma, com tempo limite de 15 s, nunca um comando do módulo):
 | `volume` | inteiro 0–100 | `volume <v>` e o indicador (`archr-osd send volume <v>`) | 1 por segundo |
 | `wifi` | `true`/`false` | `wifictl enable` / `wifictl disable`; aviso na faixa | 1 por minuto |
 | `screenshot` | — | `archr-screenshot` (respeita `archr.screenshot.enabled`); aviso na faixa; recusado (`-32001`) com um teclado aberto | 1 a cada 10 s |
+| `cpu_max` (`perf-limits`) | kHz de `cpu.opps`, ou `0` para tirar o teto | `archr-perf-limits cpu <kHz\|default>` | 1 por segundo |
+| `gpu_max` (`perf-limits`) | Hz de `gpu.opps`, ou `0` para tirar o teto | `archr-perf-limits gpu <Hz\|default>` | 1 por segundo |
+| `gpu_bench` (`perf-limits`) | — | `archr-perf-limits gpu-bench`; a resposta traz `{"output": "result score=<n>"}` | 1 a cada 30 s |
 
 Nada disso roda durante um jogo: nenhum módulo roda enquanto o jogo tem a
 tela, então não há como pedir (o brilho e o volume do jogo continuam nas
@@ -746,6 +750,27 @@ teto e descarta sessões curtas ou ociosas; N64, PSP, Dreamcast e Saturn
 ficam fora. A lista vai em páginas de 18 jogos (os que estão aprendendo, depois
 os de fora, depois os aprendidos), com itens `open: false` para a página
 seguinte e a anterior, no máximo 20 itens por atualização. Teste no PC: `bash examples/modules/ajuste-cpu.test.sh`.
+
+### 9.3 `system = ["perf-limits"]`
+
+Os **tetos de clock do usuário**, para todos os jogos, e o benchmark de GPU.
+Nunca uma tensão, nunca escrita livre em `/sys`: o launcher confere o valor
+e chama `archr-perf-limits`, que confere de novo contra as tabelas do kernel
+e grava `system.cpu.max_khz` e `system.gpu.max_hz` no `system.cfg`.
+
+- `initialize` traz `cpu: {opps, max_khz}` (como o `cpu-tune`) e
+  `gpu: {opps, max_hz}`, em Hz, da menor para a maior.
+- O teto vale **em todo jogo** e depois de reiniciar: `set_cpu_max_freq` e
+  `set_gpu_min_freq` (`099-freqfunctions`) nunca passam dele, nem o teto de
+  uma abertura do `cpu-tune`; a sessão do launcher o devolve depois de cada
+  jogo; o boot o aplica (`097-perf-limits`). `0` tira o teto.
+- `gpu_bench` roda o `glmark2-es2-wayland` fora da tela, cerca de 10 s, e
+  devolve a última linha do script em `result.output` (até 200 bytes, texto
+  puro). É a única chamada com resultado; as outras respondem `{}`.
+- O módulo não consegue rodar nada disso sozinho: o sandbox não tem root
+  nem `/dev/dri`.
+
+Exemplo: o módulo `desempenho` (`archr-linux/archr-module-desempenho`).
 
 ## 10. API 4 — apps
 

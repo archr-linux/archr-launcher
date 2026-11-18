@@ -54,6 +54,7 @@ pub const HOOKS: &[&str] = &["launch"];
 pub const SYSTEM: &[&str] = &[
     "cpu-profile",
     "cpu-tune",
+    "perf-limits",
     "brightness",
     "volume",
     "wifi",
@@ -420,11 +421,13 @@ pub fn parse(source: &str) -> Result<(Manifest, Vec<String>), Vec<String>> {
             "permissions: config_write, hooks, system and launch need api_version = {API_2}"
         ));
     }
-    if permissions.system.iter().any(|s| s == "cpu-tune") && api_version.is_some_and(|v| v < API_3)
-    {
-        errors.push(format!(
-            "permissions.system: cpu-tune needs api_version = {API_3}"
-        ));
+    for system in ["cpu-tune", "perf-limits"] {
+        if permissions.system.iter().any(|s| s == system) && api_version.is_some_and(|v| v < API_3)
+        {
+            errors.push(format!(
+                "permissions.system: {system} needs api_version = {API_3}"
+            ));
+        }
     }
     if !permissions.install.is_empty() && api_version.is_some_and(|v| v < API_4) {
         errors.push(format!("permissions.install: needs api_version = {API_4}"));

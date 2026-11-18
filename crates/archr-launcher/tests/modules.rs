@@ -81,6 +81,7 @@ fn start_with(
         bin: base.join("bin"),
         shop: None,
         cpufreq: base.join("cpufreq/policy0"),
+        gpufreq: base.join("gpufreq"),
         perf: base.join("run/perf-last.json"),
         library: Some(archr_launcher::paths::Paths::new(Some(base.to_owned()))),
     })
@@ -1235,6 +1236,7 @@ fn no_module_gets_the_network_before_the_modules_firewall_is_up() {
             bin: base.join("bin"),
             shop: None,
             cpufreq: base.join("cpufreq/policy0"),
+            gpufreq: base.join("gpufreq"),
             perf: base.join("run/perf-last.json"),
             library: None,
         }),
@@ -1421,6 +1423,110 @@ fn system_calls_need_the_permission_and_report_a_failing_script() {
         probe.notices.is_empty(),
         "nothing happened: {:?}",
         probe.notices
+    );
+}
+
+#[test]
+fn perf_limits_sets_only_the_kernels_own_ceilings_and_returns_the_gpu_score() {
+    let root = tempfile::tempdir().unwrap();
+    let base = root.path();
+    system_bin(base);
+    // archr-perf-limits logs its arguments; gpu-bench answers with a score.
+    let script = format!(
+        "#!/bin/sh\necho \"archr-perf-limits $*\" >> \"{log}\"\n\
+         [ \"$1\" = gpu-bench ] && echo 'glmark2 noise' && echo 'result score=695'\nexit 0\n",
+        log = base.join("system.log").display()
+    );
+    let path = base.join("bin/archr-perf-limits");
+    fs::write(&path, script).unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+    let cpufreq = base.join("cpufreq/policy0");
+    fs::create_dir_all(&cpufreq).unwrap();
+    fs::write(
+        cpufreq.join("scaling_available_frequencies"),
+        "408000 816000 1008000 1416000 \n",
+    )
+    .unwrap();
+    fs::write(cpufreq.join("scaling_boost_frequencies"), "1512000 \n").unwrap();
+    fs::write(base.join("cpufreq/boost"), "0\n").unwrap();
+    fs::create_dir_all(base.join("gpufreq")).unwrap();
+    fs::write(
+        base.join("gpufreq/available_frequencies"),
+        "650000000 200000000 400000000\n",
+    )
+    .unwrap();
+    let dir = api_2(
+        base,
+        "desempenho",
+        "system = [\"perf-limits\"]",
+        &["system:perf-limits"],
+    );
+    let toml = fs::read_to_string(dir.join("module.toml")).unwrap();
+    fs::write(
+        dir.join("module.toml"),
+        toml.replace("api_version = 2", "api_version = 3"),
+    )
+    .unwrap();
+    let call = |id: &str, params: &str| rpc(id, "system.call", params);
+    let lines = [
+        call("c1", r#"{"name":"cpu_max","value":1008000}"#),
+        // A boost frequency with boost off, a made-up one, a string.
+        call("c2", r#"{"name":"gpu_max","value":400000000}"#),
+        call("c3", r#"{"name":"cpu_max","value":1512000}"#),
+        call("c4", r#"{"name":"gpu_max","value":123}"#),
+        call("c5", r#"{"name":"gpu_max","value":"650000000; reboot"}"#),
+        call("g1", r#"{"name":"gpu_bench"}"#),
+        // Not this module's.
+        call("b1", r#"{"name":"brightness","value":50}"#),
+    ];
+    fs::write(dir.join("go.jsonl"), lines.concat()).unwrap();
+    let probe = Probe::new(base);
+    ready(base, &["desempenho"]);
+    let log = base.join("module-data/desempenho/seen.log");
+    let init = fs::read_to_string(&log).unwrap();
+    assert!(
+        init.contains(r#""cpu":{"max_khz":1416000,"opps":[408000,816000,1008000,1416000]}"#),
+        "{init}"
+    );
+    assert!(
+        init.contains(r#""gpu":{"max_hz":650000000,"opps":[200000000,400000000,650000000]}"#),
+        "{init}"
+    );
+    probe.invoke("desempenho", "go");
+    let seen = until_all(&log, &["c1", "c2", "c3", "c4", "c5", "g1", "b1"]);
+    let ok = |id: &str| answer(&seen, id).contains("\"result\"");
+    let refused = |id: &str, code: &str| answer(&seen, id).contains(code);
+    assert!(ok("c1") && ok("c2"), "{seen}");
+    assert!(refused("c3", "-32602") && refused("c4", "-32602"), "{seen}");
+    assert!(refused("c5", "-32602"), "{seen}");
+    assert!(
+        answer(&seen, "g1").contains(r#""result":{"output":"result score=695"}"#),
+        "the script's last line: {seen}"
+    );
+    assert!(refused("b1", "-32001"), "{seen}");
+    let ran = fs::read_to_string(base.join("system.log")).unwrap();
+    for expected in [
+        "archr-perf-limits cpu 1008000",
+        "archr-perf-limits gpu 400000000",
+        "archr-perf-limits gpu-bench",
+    ] {
+        assert!(ran.lines().any(|l| l == expected), "{expected}: {ran}");
+    }
+    assert_eq!(ran.lines().count(), 3, "nothing else ran: {ran}");
+    // 0 lifts a ceiling: "default" for the script.
+    std::thread::sleep(Duration::from_millis(1_100));
+    fs::write(
+        dir.join("reset.jsonl"),
+        call("r1", r#"{"name":"cpu_max","value":0}"#),
+    )
+    .unwrap();
+    probe.invoke("desempenho", "reset");
+    let seen = until(&log, "\"id\":\"r1\"");
+    assert!(answer(&seen, "r1").contains("\"result\""), "{seen}");
+    let ran = fs::read_to_string(base.join("system.log")).unwrap();
+    assert!(
+        ran.lines().any(|l| l == "archr-perf-limits cpu default"),
+        "{ran}"
     );
 }
 

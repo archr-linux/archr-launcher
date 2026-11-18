@@ -84,6 +84,8 @@ printf '%s\n' "$n" >"$CASE_DIR/count"
 if [ -f "$ARCHR_SESSION_RUN_DIR/last-exit" ]; then
   top=1416000
   [ "$(cat "$ARCHR_SESSION_CPUFREQ/boost")" != 1 ] || top=1512000
+  cap=$(sed -n 's/^system\.cpu\.max_khz=//p' "$ARCHR_SESSION_SYSTEM_CFG" 2>/dev/null)
+  [ -z "$cap" ] || top=$cap
   [ "$(cat "$ARCHR_SESSION_CPUFREQ/policy0/scaling_max_freq")" = "$top" ]
   : >"$CASE_DIR/cpu-restored-before-launcher"
 fi
@@ -357,6 +359,10 @@ setup_case() {
   echo '408000 816000 1008000 1416000 ' >"$ARCHR_SESSION_CPUFREQ/policy0/scaling_available_frequencies"
   echo '1512000 ' >"$ARCHR_SESSION_CPUFREQ/policy0/scaling_boost_frequencies"
   echo 816000 >"$ARCHR_SESSION_CPUFREQ/policy0/scaling_max_freq"
+  # The user's own ceiling (archr-perf-limits), when the case has one.
+  export ARCHR_SESSION_SYSTEM_CFG="$CASE_DIR/system.cfg"
+  : >"$ARCHR_SESSION_SYSTEM_CFG"
+  [ -z "${CASE_CAP:-}" ] || echo "system.cpu.max_khz=$CASE_CAP" >"$ARCHR_SESSION_SYSTEM_CFG"
   printf '%s\n' "$2" >"$CASE_DIR/plan"
 }
 
@@ -418,6 +424,12 @@ END'
 [ "$(grep -c 'Game exited' "$ARCHR_SESSION_LOG")" = 2 ]
 [ "$(cut -d ' ' -f2 "$CASE_DIR/scope-runs" | sort -u | wc -l)" -eq 2 ]
 printf '%s\n' 'PASS CPU ceiling restored after every game; scope names never reused'
+
+# The user's ceiling holds after a game, turbo or not.
+CASE_BOOST=1 CASE_CAP=1008000 run_case cpu-cap 'game runemu.sh demo
+END'
+[ "$(cat "$ARCHR_SESSION_CPUFREQ/policy0/scaling_max_freq")" = 1008000 ]
+printf '%s\n' 'PASS the user CPU ceiling stays after a game'
 
 run_case stale-scope 'CLEAN
 END'

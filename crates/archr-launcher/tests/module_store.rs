@@ -562,6 +562,7 @@ fn host(
         bin: std::path::PathBuf::from("/nonexistent"),
         shop: Some(shop(root, fake)),
         cpufreq: root.join("cpufreq/policy0"),
+        gpufreq: root.join("gpufreq"),
         perf: root.join("run/perf-last.json"),
         library: None,
     })

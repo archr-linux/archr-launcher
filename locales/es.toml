@@ -1048,6 +1048,8 @@
 "modules.perm_cpu_profile_detail" = "Solo en ese inicio; tu ajuste no cambia"
 "modules.perm_cpu_tune" = "Ajusta la CPU de cada juego"
 "modules.perm_cpu_tune_detail" = "Tope de frecuencia solo en ese inicio; mide el juego para aprender"
+"modules.perm_perf_limits" = "Limita las frecuencias de la CPU y la GPU"
+"modules.perm_perf_limits_detail" = "Tope para todos los juegos, se mantiene al reiniciar; también mide la GPU"
 "modules.perm_launch" = "Abre juegos"
 "modules.perm_launch_detail" = "Solo justo después de que elijas una de sus acciones"
 "modules.perm_tile" = "Bloque en el menú Start"
