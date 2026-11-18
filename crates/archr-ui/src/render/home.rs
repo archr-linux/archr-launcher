@@ -403,6 +403,19 @@ impl<'t> Ui<'_, 't> {
                         255,
                         [0., 0., 1., 1.],
                     )?;
+                } else {
+                    // A game without art shows its console, never a hole.
+                    let system = match focused {
+                        Item::Recent(n) => app.recent.get(*n).map(|r| r.system.as_str()),
+                        Item::Game { system, .. } => Some(system.as_str()),
+                        _ => None,
+                    };
+                    if let Some(name) = system {
+                        let path = self.art.as_ref().and_then(|a| a.key(name));
+                        if !self.console_image(picture, path.as_ref(), 255) {
+                            self.generated_card(picture, name, theme)?;
+                        }
+                    }
                 }
             }
         }
