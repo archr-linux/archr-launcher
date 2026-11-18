@@ -48,7 +48,7 @@ fn savesync_pages() -> Vec<(&'static str, Settings)> {
                 "last": {"ok": true, "at": 1700000000, "up": 2, "systems": ["gba"]},
                 "conflicts": [{"key": "saves/gba/Pokemon Emerald.srm",
                     "local": {"at": 1700000000, "size": 131072},
-                    "remote": {"at": 1699990000, "size": 131072, "by": "R36S Soy Sauce"}}]}"#
+                    "remote": {"at": 1699990000, "size": 131072, "by": "Game Console R36S Soysauce"}}]}"#
                 .into()),
         );
         state

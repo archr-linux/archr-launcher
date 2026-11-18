@@ -146,7 +146,8 @@ impl View<'_, '_, '_> {
                 (16., title, Align::Left),
                 Face::Semibold,
             )?;
-            self.text((left, y + 60., inner, 20.), &who, (12., muted, Align::Left))?;
+            // Two lines: a console's name can be long.
+            self.text((left, y + 58., inner, 30.), &who, (12., muted, Align::Left))?;
         }
         Ok(())
     }
