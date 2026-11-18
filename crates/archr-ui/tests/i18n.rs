@@ -379,6 +379,8 @@ const CONFIG_KEYS: &[&str] = &[
     "display.gamma",
     "display.temperature",
     "power.battery.critical",
+    "savesync.smb.address",
+    "savesync.smb.user",
     "power.battery.low",
     "system.cfg",
     "system.shutdown_delay",

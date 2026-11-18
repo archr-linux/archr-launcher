@@ -216,7 +216,12 @@ impl Settings {
     pub(crate) fn text_input(id: Id) -> bool {
         matches!(
             id,
-            Id::Nickname | Id::NetplayHost | Id::NetplayPort | Id::CustomServer
+            Id::Nickname
+                | Id::NetplayHost
+                | Id::NetplayPort
+                | Id::CustomServer
+                | Id::SaveSyncAddress
+                | Id::SaveSyncUser
         )
     }
     pub(super) fn open_keyboard(&mut self, id: Id, mode: Mode, value: String) {
@@ -293,6 +298,8 @@ impl Settings {
             Page::UsbAdapters => self.usb_input(button),
             Page::Bios => self.bios_input(button),
             Page::Image => self.image_input(button),
+            Page::SaveSyncTarget => self.savesync_target_input(button),
+            Page::SaveSyncConflict => self.savesync_conflict_input(button),
             Page::Diagnostics => self.diag_input(button),
             Page::Shortcuts => self.shortcuts_input(button),
             Page::Modules
@@ -360,6 +367,7 @@ impl Settings {
             Id::CheevosAccount | Id::CheevosPassword | Id::CheevosWebKey => {
                 self.cheevos_typed(target, value)
             }
+            Id::SaveSyncPassword => self.savesync_typed(value),
             Id::ModuleRow(_) => self.module_set(target, value),
             id => {
                 self.pending = Some(id);
@@ -486,6 +494,18 @@ impl Settings {
             Id::ResumeLink => self.open(Page::Resume),
             Id::PowerLink => self.open(Page::Power),
             Id::ImageLink => self.open_image(),
+            // Every visit reads the status again.
+            Id::SaveSyncLink => {
+                self.savesync.stale = true;
+                self.open(Page::SaveSync);
+            }
+            id @ (Id::SaveSyncTargetLink
+            | Id::SaveSyncNow
+            | Id::SaveSyncConflicts
+            | Id::SaveSyncPc
+            | Id::SaveSyncCloud
+            | Id::SaveSyncPassword
+            | Id::SaveSyncTest) => return self.savesync_activate(id),
             Id::PadTestLink => self.open_joypad(),
             Id::MangohudItems => self.open(Page::MangohudItems),
             // Every visit looks at the card again.

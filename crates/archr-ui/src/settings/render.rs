@@ -48,6 +48,8 @@ mod updates;
 mod usb;
 #[path = "render/picture.rs"]
 mod picture;
+#[path = "render/savesync.rs"]
+mod savesync;
 const VIEW_TOP: f32 = 50.;
 const VIEW_BOTTOM: f32 = 428.;
 const FOOTER: f32 = 432.;
@@ -1147,6 +1149,8 @@ impl View<'_, '_, '_> {
             Some(self.tr("power.note"))
         } else if state.page() == Page::Image {
             Some(self.tr("image.hint"))
+        } else if let Some(note) = state.savesync_note() {
+            Some(self.tr(&note))
         } else if state.capturing() && state.page() == Page::LauncherControls {
             Some(self.tr(&format!(
                 "controls.press_hint|button={}",
@@ -1450,6 +1454,8 @@ impl View<'_, '_, '_> {
                 )?;
             }
             Page::Image => self.picture_page(state, rows)?,
+            Page::SaveSync | Page::SaveSyncTarget => self.savesync_page(state, rows)?,
+            Page::SaveSyncConflict => self.savesync_conflict_page(state)?,
             page => self.rows_at(state, rows, &placements(page, rows), RIGHT)?,
         }
         Ok(())
@@ -1839,7 +1845,11 @@ impl View<'_, '_, '_> {
             _ => state.subtitle(row).map(|text| self.tr(&text)),
         };
         let expand = subtitle.is_none()
-            && (row.kind == Kind::Value || row.id == Id::MangohudItems)
+            && (row.kind == Kind::Value
+                || matches!(
+                    row.id,
+                    Id::MangohudItems | Id::SaveSyncAddress | Id::SaveSyncUser
+                ))
             && self.span(&state.display_value(row.id, &self.ui.catalog), face, 14.)?
                 > right - full - 66.;
         let label_width = if expand {
@@ -1978,7 +1988,14 @@ impl View<'_, '_, '_> {
         if busy && kind != Kind::Toggle {
             return self.busy_dots((x, y, w, h), selected);
         }
-        let ink = match state.roms_ink(id).or_else(|| state.diag_ink(id)) {
+        if let Some(chosen) = state.savesync_radio(id) {
+            return self.savesync_radio(chosen, selected, (x, y, w, h));
+        }
+        let ink = match state
+            .roms_ink(id)
+            .or_else(|| state.diag_ink(id))
+            .or_else(|| state.savesync_ink(id))
+        {
             Some(power) if !selected => {
                 if power {
                     self.theme.success

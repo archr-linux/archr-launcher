@@ -31,6 +31,7 @@ pub mod raimport;
 pub mod reports;
 pub(crate) mod resume;
 pub mod roms;
+pub mod savesync;
 pub mod shortcuts;
 pub mod storage;
 pub mod store;
@@ -95,6 +96,11 @@ pub enum Page {
     /// Sound and display › Picture (Tela-imagem): gamma and colour
     /// temperature, held by archr-gamma.
     Image,
+    /// System › Save sync (Saves-sync), its destination (Saves-destino)
+    /// and a conflict (Saves-conflito).
+    SaveSync,
+    SaveSyncTarget,
+    SaveSyncConflict,
     /// Appearance › Start shortcuts (Hub-atalhos-editar).
     Shortcuts,
     /// Appearance › Notifications (Avisos): the toasts.
@@ -152,6 +158,9 @@ impl Page {
             Self::Resume => "settings.resume",
             Self::Power => "settings.power",
             Self::Image => "settings.image",
+            Self::SaveSync => "savesync.title",
+            Self::SaveSyncTarget => "savesync.target",
+            Self::SaveSyncConflict => "savesync.conflict",
             Self::Shortcuts => "shortcuts.title",
             Self::Toasts => "settings.toasts",
             Self::ErrorReports => "reports.title",
@@ -191,6 +200,8 @@ impl Page {
             Self::ScraperMedia => &["settings.games", "settings.scraper_short"],
             Self::Updates | Self::Power => &["settings.system"],
             Self::Image => &["settings.sound"],
+            Self::SaveSync => &["settings.system"],
+            Self::SaveSyncTarget | Self::SaveSyncConflict => &["settings.system", "savesync.title"],
             Self::UpdatePackages => &["settings.system", "updates.title"],
             _ => &[],
         }
@@ -224,6 +235,9 @@ impl Page {
             Self::Resume => resume::RESUME,
             Self::Power => resume::POWER,
             Self::Image => picture::IMAGE,
+            Self::SaveSync => savesync::SAVESYNC,
+            Self::SaveSyncTarget => savesync::TARGET,
+            Self::SaveSyncConflict => &[],
             _ => &[],
         }
     }
@@ -451,6 +465,23 @@ pub enum Id {
     ColorTemp,
     /// Picture: back to 1.00 and 6500 K.
     ImageRestore,
+    /// System link to Save sync, its rows, the destination's rows and the
+    /// configuration key of the destination's choice.
+    SaveSyncLink,
+    SaveSync,
+    SaveSyncTargetLink,
+    SaveSyncBoot,
+    SaveSyncExit,
+    SaveSyncStates,
+    SaveSyncNow,
+    SaveSyncConflicts,
+    SaveSyncTarget,
+    SaveSyncPc,
+    SaveSyncCloud,
+    SaveSyncAddress,
+    SaveSyncUser,
+    SaveSyncPassword,
+    SaveSyncTest,
     BatteryCritical,
     BatteryLow,
     /// `system.shutdown_delay`, and the running game's copy of it.
@@ -653,11 +684,27 @@ impl Id {
             Self::ShutdownDelay => ("system.shutdown_delay", "900"),
             // archr-gamma reads them (SIGHUP from the page).
             Self::Gamma => ("display.gamma", "1.00"),
+            // archr-savesync reads them.
+            Self::SaveSync => ("savesync.enabled", "0"),
+            Self::SaveSyncBoot => ("savesync.on_boot", "1"),
+            Self::SaveSyncExit => ("savesync.on_exit", "1"),
+            Self::SaveSyncStates => ("savesync.states", "0"),
+            Self::SaveSyncTarget => ("savesync.target", "smb"),
+            Self::SaveSyncAddress => ("savesync.smb.address", ""),
+            Self::SaveSyncUser => ("savesync.smb.user", ""),
             Self::ColorTemp => ("display.temperature", "6500"),
             Self::ResumeLink
             | Self::PowerLink
             | Self::ImageLink
             | Self::ImageRestore
+            | Self::SaveSyncLink
+            | Self::SaveSyncTargetLink
+            | Self::SaveSyncNow
+            | Self::SaveSyncConflicts
+            | Self::SaveSyncPc
+            | Self::SaveSyncCloud
+            | Self::SaveSyncPassword
+            | Self::SaveSyncTest
             | Self::ShortcutsLink
             | Self::Shortcut(_)
             | Self::ToastsLink => ("", ""),
@@ -730,8 +777,13 @@ impl Id {
             ],
             Self::ColorTemp => &["6500", "6000", "5500", "5000", "4500", "4000", "3500"],
             Self::Governor => &["ondemand", "performance", "schedutil", "powersave"],
+            Self::SaveSyncTarget => &["smb", "cloud"],
             Self::Sounds
             | Self::Mute
+            | Self::SaveSync
+            | Self::SaveSyncBoot
+            | Self::SaveSyncExit
+            | Self::SaveSyncStates
             | Self::Turbo
             | Self::WifiSwitch
             | Self::BtSwitch
@@ -922,6 +974,7 @@ const SYSTEM: &[Row] = &[
     row(Id::Turbo, "settings.turbo", Kind::Toggle),
     row(Id::Update, "settings.update", Kind::Action),
     row(Id::ModulesLink, "settings.modules", Kind::Action),
+    row(Id::SaveSyncLink, "savesync.title", Kind::Action),
     row(Id::RaImportLink, "raimport.title", Kind::Action),
     row(Id::DiagLink, "diag.title", Kind::Action),
     row(Id::ReportsLink, "reports.title", Kind::Action),
@@ -977,6 +1030,8 @@ pub enum Effect {
     Level(Id, Level),
     Reboot,
     Scan,
+    /// archr-savesync: status, test, sync, password or a conflict's choice.
+    SaveSync(savesync::Action),
     /// Picture: gamma and colour temperature together (undo, restore).
     Picture(String, String),
     Connect(String, String),
@@ -1042,6 +1097,7 @@ impl std::fmt::Debug for Effect {
             Self::Level(id, level) => write!(f, "Level({id:?}, {level:?})"),
             Self::Reboot => write!(f, "Reboot"),
             Self::Picture(g, t) => write!(f, "Picture({g:?}, {t:?})"),
+            Self::SaveSync(action) => write!(f, "SaveSync({action:?})"),
             Self::Scan => write!(f, "Scan"),
             Self::Connect(ssid, _) => write!(f, "Connect({ssid:?}, <hidden>)"),
             Self::Forget(ssid) => write!(f, "Forget({ssid:?})"),
@@ -1144,6 +1200,7 @@ pub struct Settings {
     pub keyboard_target: Option<Id>,
     /// Picture's gamma and temperature when the page opened (B restores).
     pub image_entry: Option<(String, String)>,
+    pub savesync: Box<savesync::SaveSync>,
     pub wifi_ssid: String,
     pub wifi_hidden: bool,
     pub access_ip: String,
@@ -1236,6 +1293,7 @@ impl Default for Settings {
             keyboard: None,
             keyboard_target: None,
             image_entry: None,
+            savesync: Box::default(),
             wifi_ssid: String::new(),
             wifi_hidden: false,
             access_ip: String::new(),
@@ -1307,6 +1365,9 @@ impl Settings {
                 | Id::ReportsView
         ) {
             return information::value(catalog, &self.reports_value(id));
+        }
+        if savesync::IDS.contains(&id) && !matches!(id, Id::SaveSyncAddress | Id::SaveSyncUser) {
+            return information::value(catalog, &self.savesync_value(id));
         }
         self.choice_text(id, self.chosen(id), catalog)
     }
@@ -1518,7 +1579,14 @@ impl Settings {
             (Id::Relay, "custom") => "settings.relay_custom",
             (Id::ScraperSource, _) => return "ScreenScraper".into(),
             (Id::ScraperMedia, _) => "settings.choose_link",
-            (Id::Nickname | Id::NetplayHost | Id::CustomServer, "") => "settings.define",
+            (
+                Id::Nickname
+                | Id::NetplayHost
+                | Id::CustomServer
+                | Id::SaveSyncAddress
+                | Id::SaveSyncUser,
+                "",
+            ) => "settings.define",
             (_, "") => "settings.unavailable",
             _ => return value.into(),
         };
@@ -1531,6 +1599,9 @@ impl Settings {
                 .roms_subtitle(row.id)
                 .or_else(|| row.subtitle.map(Into::into))
                 .filter(|s| !s.is_empty());
+        }
+        if savesync::IDS.contains(&row.id) {
+            return self.savesync_subtitle(row).filter(|s| !s.is_empty());
         }
         let ip = &self.access_ip;
         Some(match row.id {
@@ -1651,6 +1722,7 @@ impl Settings {
                 | Id::CheevosWebKey
                 | Id::CheevosWebKeyRemove
                 | Id::CheevosLogout) => self.cheevos_visible(id),
+                id if savesync::IDS.contains(&id) => self.savesync_visible(id),
                 _ => true,
             })
             .copied()
@@ -1769,6 +1841,17 @@ impl Settings {
             Page::UsbAdapters => self.usb_hints(),
             Page::Bios => self.bios_hints(),
             Page::Image => &[(Key('A'), "image.save"), (Key('B'), "image.undo")],
+            Page::SaveSync => &[(Key('A'), "savesync.change"), (Key('B'), "hint.back")],
+            Page::SaveSyncTarget => &[
+                (Key('A'), "savesync.edit"),
+                (Key('Y'), "savesync.test_short"),
+                (Key('B'), "hint.back"),
+            ],
+            Page::SaveSyncConflict => &[
+                (Key('A'), "savesync.keep_this"),
+                (Key('X'), "savesync.use_pc"),
+                (Key('B'), "savesync.later"),
+            ],
             Page::Shortcuts => self.shortcuts_hints(),
             Page::PadTest | Page::PadCalibrate => self.joypad_hints(),
             Page::Root => &[

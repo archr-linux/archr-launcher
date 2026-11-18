@@ -417,6 +417,7 @@ impl Runtime {
             Effect::Report => self.send(Work::Report),
             Effect::SendReport(name) => self.send(Work::SendReport(name)),
             Effect::BiosInstall(free) => self.send(Work::BiosInstall(free)),
+            Effect::SaveSync(action) => self.send(Work::SaveSync(action)),
             Effect::Module(request) => return Outcome::Module(request),
             Effect::Reboot => return Outcome::Action(SessionAction::Reboot),
             Effect::None => {}
@@ -521,6 +522,11 @@ impl Runtime {
         if self.active && !self.closing && self.state.reports_wants_scan() {
             self.state.reports.scanning = true;
             self.send(Work::Reports);
+            dirty = true;
+        }
+        if self.active && !self.closing && self.state.savesync_wants_status() {
+            self.state.savesync.loading = true;
+            self.send(Work::SaveSync(archr_ui::settings::savesync::Action::Status));
             dirty = true;
         }
         if self.active && !self.closing && self.state.bios_wants_scan() {
