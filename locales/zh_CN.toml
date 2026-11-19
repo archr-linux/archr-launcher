@@ -30,6 +30,8 @@
 "menu.show_hidden" = "显示隐藏的平台"
 "menu.forget_recent" = "从最近玩过中移除"
 "menu.default" = "默认"
+"menu.core_retroarch" = "{core}（RetroArch）"
+"menu.core_standalone" = "{core}（独立）"
 "menu.mangohud" = "MangoHud"
 "menu.mangohud_detail" = "仅此游戏 · 平台：{system}"
 "menu.as_system" = "跟随平台设置"

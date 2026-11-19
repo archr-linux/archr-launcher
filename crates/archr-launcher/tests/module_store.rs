@@ -120,7 +120,7 @@ fn publish(fake: &Fake, manifest: &str, tarball: &[u8], digest: &str, reviewed: 
         tarball.to_vec(),
     );
     let list = format!(
-        r#"{{"serial":5,"expires":4102444800,"modules":[{{"repo":"kaio-dev/archr-bateria","digest":"sha256:{reviewed}"}}]}}"#
+        r#"{{"serial":8,"expires":4102444800,"modules":[{{"repo":"kaio-dev/archr-bateria","digest":"sha256:{reviewed}"}}]}}"#
     );
     review(fake, list.as_bytes(), &sign(list.as_bytes()));
 }
@@ -683,7 +683,7 @@ fn only_a_list_signed_by_the_archr_key_and_not_older_gives_badges() {
     let tarball = Tarball::module(MANIFEST).bytes();
     let digest = sha(&tarball);
     let body = format!(
-        r#"{{"serial":5,"expires":4102444800,"modules":[{{"repo":"kaio-dev/archr-bateria","digest":"sha256:{digest}"}}]}}"#
+        r#"{{"serial":8,"expires":4102444800,"modules":[{{"repo":"kaio-dev/archr-bateria","digest":"sha256:{digest}"}}]}}"#
     );
     let stranger = {
         use ed25519_dalek::Signer;
@@ -720,7 +720,7 @@ fn only_a_list_signed_by_the_archr_key_and_not_older_gives_badges() {
     publish(&fake, MANIFEST, &tarball, &digest, &digest);
     assert!(shop(root.path(), &fake).offer(&card()).unwrap().reviewed);
     fs::remove_dir_all(root.path().join("cache")).unwrap();
-    let old = body.replace("\"serial\":5", "\"serial\":4");
+    let old = body.replace("\"serial\":8", "\"serial\":7");
     review(&fake, old.as_bytes(), &sign(old.as_bytes()));
     let StoreReply::Listed { problem, .. } = shop(root.path(), &fake).list(Tab::All, false) else {
         panic!("not a list");
@@ -730,7 +730,7 @@ fn only_a_list_signed_by_the_archr_key_and_not_older_gives_badges() {
     use archr_launcher::modules::store::MIN_SERIAL;
     fs::remove_file(root.path().join("modules-reviewed.serial")).unwrap();
     fs::remove_dir_all(root.path().join("cache")).unwrap();
-    let zero = body.replace("\"serial\":5", &format!("\"serial\":{}", MIN_SERIAL - 1));
+    let zero = body.replace("\"serial\":8", &format!("\"serial\":{}", MIN_SERIAL - 1));
     review(&fake, zero.as_bytes(), &sign(zero.as_bytes()));
     let problem = |root: &Path| match shop(root, &fake).list(Tab::All, false) {
         StoreReply::Listed { problem, .. } => problem,
@@ -753,7 +753,7 @@ fn an_expired_list_or_one_with_another_lists_signature_reviews_nothing() {
         _ => panic!("not a list"),
     };
     // Signed, but past its date (or with none).
-    for body in [list(3, 1000), r#"{"serial":3,"modules":[]}"#.to_owned()] {
+    for body in [list(6, 1000), r#"{"serial":6,"modules":[]}"#.to_owned()] {
         let root = tempfile::tempdir().unwrap();
         let fake = Fake::default();
         publish(&fake, MANIFEST, &tarball, &digest, &digest);
@@ -769,7 +769,7 @@ fn an_expired_list_or_one_with_another_lists_signature_reviews_nothing() {
     let root = tempfile::tempdir().unwrap();
     let fake = Fake::default();
     publish(&fake, MANIFEST, &tarball, &digest, &digest);
-    let (old, new) = (list(3, 4_102_444_800), list(4, 4_102_444_800));
+    let (old, new) = (list(6, 4_102_444_800), list(7, 4_102_444_800));
     review(&fake, old.as_bytes(), &sign(old.as_bytes()));
     assert_eq!(listed(root.path(), &fake), (None, true));
     review(&fake, new.as_bytes(), &sign(old.as_bytes()));
@@ -917,7 +917,7 @@ fn the_badge_follows_the_kept_list_and_the_files_on_disk() {
     fs::write(&script, original).unwrap();
     // The kept list expired: no badge.
     let expired = format!(
-        r#"{{"serial":3,"expires":1000,"modules":[{{"repo":"kaio-dev/archr-bateria","digest":"{}"}}]}}"#,
+        r#"{{"serial":6,"expires":1000,"modules":[{{"repo":"kaio-dev/archr-bateria","digest":"{}"}}]}}"#,
         record.digest
     );
     fs::write(root.path().join("modules-reviewed.json"), &expired).unwrap();
@@ -947,7 +947,7 @@ fn a_revoking_list_takes_the_badge_off_installed_modules() {
     let revoked = Fake::default();
     let tarball = Tarball::module(MANIFEST).bytes();
     publish(&revoked, MANIFEST, &tarball, &sha(&tarball), "");
-    let list = r#"{"serial":6,"expires":4102444800,"modules":[]}"#;
+    let list = r#"{"serial":9,"expires":4102444800,"modules":[]}"#;
     review(&revoked, list.as_bytes(), &sign(list.as_bytes()));
     let modules = host(root.path(), &revoked, std::time::Duration::from_secs(3600));
     assert_eq!(
@@ -973,7 +973,7 @@ fn the_badge_goes_when_the_list_expires_with_the_launcher_open() {
         .as_secs()
         + 5;
     let list = format!(
-        r#"{{"serial":6,"expires":{soon},"modules":[{{"repo":"kaio-dev/archr-bateria","digest":"sha256:{}"}}]}}"#,
+        r#"{{"serial":9,"expires":{soon},"modules":[{{"repo":"kaio-dev/archr-bateria","digest":"sha256:{}"}}]}}"#,
         sha(&tarball)
     );
     review(&fake, list.as_bytes(), &sign(list.as_bytes()));
@@ -1000,7 +1000,7 @@ fn a_revoking_list_from_an_offer_takes_the_badge_off() {
     let revoked = Fake::default();
     let tarball = Tarball::module(MANIFEST).bytes();
     publish(&revoked, MANIFEST, &tarball, &sha(&tarball), "");
-    let list = r#"{"serial":6,"expires":4102444800,"modules":[]}"#;
+    let list = r#"{"serial":9,"expires":4102444800,"modules":[]}"#;
     review(&revoked, list.as_bytes(), &sign(list.as_bytes()));
     let modules = host(root.path(), &revoked, std::time::Duration::from_secs(3600));
     assert_eq!(

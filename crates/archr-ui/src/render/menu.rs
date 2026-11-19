@@ -371,10 +371,7 @@ impl Ui<'_, '_> {
                 QuickItem::Saves | QuickItem::Shots => {
                     self.progress_value(app, *item).map(|(_, short)| short)
                 }
-                QuickItem::Core => Some(match app.selected_core().1 {
-                    "" => self.catalog.text("menu.default"),
-                    core => core.to_owned(),
-                }),
+                QuickItem::Core => Some(app.core_label(&self.catalog)),
                 QuickItem::Mangohud => Some(self.catalog.text(match app.selected_mangohud().0 {
                     "" => "menu.as_system",
                     "1" => "settings.on",

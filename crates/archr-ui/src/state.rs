@@ -472,6 +472,9 @@ pub struct App {
     /// that list follows it once the host changed the data (`follow_row`).
     keep_game: Option<(String, usize)>,
     selected_core: Option<(String, String)>,
+    /// The open game menu's system has RetroArch cores and standalone
+    /// emulators: the core's name then says which one it is.
+    cores_mixed: bool,
     /// The open game menu's MangoHud: the game's value, the system's.
     selected_mangohud: (String, String),
 }
@@ -544,6 +547,7 @@ impl App {
             keep_row: None,
             keep_game: None,
             selected_core: None,
+            cores_mixed: false,
             selected_mangohud: Default::default(),
             modules: std::sync::Arc::default(),
             hub_widget: 0,
@@ -747,6 +751,18 @@ impl App {
     /// The game menu's MangoHud row: the game's value and the system's.
     pub fn selected_mangohud(&self) -> (&str, &str) {
         (&self.selected_mangohud.0, &self.selected_mangohud.1)
+    }
+    /// The game menu's core as the player reads it: "Default", the core's
+    /// name, and in a system with both kinds "ppsspp (RetroArch)" or
+    /// "ppsspp (standalone)", since a standalone emulator and a RetroArch
+    /// core often share a name.
+    pub fn core_label(&self, catalog: &crate::i18n::I18n) -> String {
+        match self.selected_core() {
+            (_, "") => catalog.text("menu.default"),
+            (_, core) if !self.cores_mixed => core.to_owned(),
+            ("retroarch", core) => catalog.format("menu.core_retroarch", &[("core", core)]),
+            (_, core) => catalog.format("menu.core_standalone", &[("core", core)]),
+        }
     }
     pub fn selected_core(&self) -> (&str, &str) {
         self.selected_core
@@ -1198,6 +1214,9 @@ impl App {
             return;
         }
         self.selected_core = data.current_core(&system, game);
+        let cores = data.cores(&system);
+        self.cores_mixed = cores.iter().any(|(e, _)| e == "retroarch")
+            && cores.iter().any(|(e, _)| e != "retroarch");
         self.selected_mangohud = data.mangohud(&system, game);
         self.enter(Screen::QuickMenu {
             game: Some((system, game)),

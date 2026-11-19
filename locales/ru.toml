@@ -30,6 +30,8 @@
 "menu.show_hidden" = "Показать скрытые системы"
 "menu.forget_recent" = "Убрать из недавних"
 "menu.default" = "По умолчанию"
+"menu.core_retroarch" = "{core} (RetroArch)"
+"menu.core_standalone" = "{core} (отдельный)"
 "menu.mangohud" = "MangoHud"
 "menu.mangohud_detail" = "Только эта игра · система: {system}"
 "menu.as_system" = "Как в системе"

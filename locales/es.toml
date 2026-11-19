@@ -30,6 +30,8 @@
 "menu.show_hidden" = "Mostrar sistemas ocultos"
 "menu.forget_recent" = "Quitar de recientes"
 "menu.default" = "Por defecto"
+"menu.core_retroarch" = "{core} (RetroArch)"
+"menu.core_standalone" = "{core} (standalone)"
 "menu.mangohud" = "MangoHud"
 "menu.mangohud_detail" = "Solo en este juego · sistema: {system}"
 "menu.as_system" = "Como el sistema"

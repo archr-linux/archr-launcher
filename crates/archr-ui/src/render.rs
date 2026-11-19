@@ -2930,7 +2930,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 continue;
             };
             let value = match (item, value) {
-                (QuickItem::Core, "") => self.catalog.text("menu.default"),
+                (QuickItem::Core, _) => app.core_label(&self.catalog),
                 (QuickItem::Mangohud, "") => self.catalog.text("menu.as_system"),
                 (QuickItem::Mangohud, "1") => self.catalog.text("settings.on"),
                 (QuickItem::Mangohud, _) => self.catalog.text("settings.off"),
