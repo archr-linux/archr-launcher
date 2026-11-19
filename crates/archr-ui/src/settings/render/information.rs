@@ -203,9 +203,9 @@ impl View<'_, '_, '_> {
             return Ok(());
         };
         // Under a large title (inset themes) the item's name is the title:
-        // the subtitle alone, and the panels 50 px higher, as groups.
+        // the subtitle alone, and the panels 38 px higher, as groups.
         let inset = self.look().inset && self.title_below(state);
-        let dy = if inset { -50. } else { 0. };
+        let dy = if inset { -38. } else { 0. };
         if inset {
             let line =
                 if card.detail.heading.is_empty() || card.detail.heading == ITEMS[index.min(5)].0 {
@@ -217,7 +217,7 @@ impl View<'_, '_, '_> {
                         self.tr(&card.detail.subtitle)
                     )
                 };
-            self.note((28., VIEW_TOP - 4., 588., 22.), &line, 12.)?;
+            self.note((28., VIEW_TOP - 6., 588., 20.), &line, 12.)?;
         } else {
             self.ui.icon(
                 ITEMS[index.min(5)].1,
