@@ -539,7 +539,7 @@ Elementos de cada tela (`[view.<id>.systems]` ou `[view.<id>.games]`):
 | `info` | nome do sistema e detalhes | `x y w h`, `title`, `meta` (tamanhos), `align` (`left`/`center`/`right`), `valign` (`top`/`bottom`), `details` (`stacked`: fabricante, nome, contagem; `inline`: nome e "213 jogos · Nintendo · 1990"), `opacity` |
 | `meta` | ano, jogadores e "jogado há" sob a capa | `x y w h`, `size`, `opacity` |
 | `dots` | pontos de posição entre sistemas | `x y w h` |
-| `strip` | faixa de sistemas acima de uma grade de jogos (L1/R1 trocam de sistema) | `x y w h` |
+| `strip` | faixa de sistemas acima de uma grade de jogos (L1/R1 trocam de sistema; a linha Módulos entra depois de Tools, e na grade dela cada módulo é um cartão com o ícone sobre uma cor fixa do módulo) | `x y w h` |
 | `decor` | imagens soltas (ver [Decorações](#decorações)) | lista de `{ image, x, y, scale, frames, fps, layer }` |
 
 Valores de `list`:
@@ -648,7 +648,7 @@ em `[aspect.square]` ou `[aspect.wide]` se quiser outra proporção.
 | nome | o que mostra |
 |---|---|
 | `continue` | os jogos recentes, com a imagem de onde pararam (a mesma do Alternador); A continua de onde parou |
-| `systems` | os sistemas, com a imagem do console |
+| `systems` | os sistemas, com a imagem do console, e por último a linha Módulos (quando há módulo ligado com página; o destaque mostra o ícone de módulo sobre o acento) |
 | `favorites` | os jogos favoritos |
 | `apps` | os apps de módulos |
 | `collections` | Favoritos, Recentes e as outras coleções |

@@ -166,6 +166,17 @@ default = true
 | `page` (API 3) | A abre outra página do módulo; B volta | `page` (o `id` da página), `label`, `subtitle` |
 | `list` | linhas que o módulo manda: `ui.update` para `row:<id>` com `items: [{id, title, subtitle?, value?, action?}]` (até 20); A numa linha com `id` e `action` envia `action.invoke` com `context: {item: "<id>"}` (o id, não a posição: a lista pode mudar entre o desenho e o botão) | `id` |
 
+**Linha Módulos na biblioteca.** Todo módulo ligado (permitido e pronto) que
+tem página em Configurações entra numa linha "Módulos" da biblioteca, depois
+de Tools, com a contagem à direita, e funciona como um sistema: a lista (ou a
+grade, no tema que a usa) traz um módulo por linha, com o ícone (`icon` do
+manifesto), versão, origem, autor e descrição. A abre a primeira página do
+módulo direto (a mesma de Configurações › Sistema › Módulos › Y › Abrir) e B
+nela volta para a lista; Y abre os detalhes do módulo em Configurações, onde
+ele é desligado ou removido. Módulos com app (API 4, seção 10) ficam de fora:
+o app já tem a própria linha. Sem nenhum módulo assim, a linha não aparece,
+nem nos chips da grade nem nas prateleiras.
+
 Os valores são do launcher (um dono por chave): ele grava
 `/storage/.config/archr-launcher/module-settings/<id>.json` de forma atômica.
 O módulo lê esse arquivo (`ARCHR_MODULE_SETTINGS`), nunca escreve nele; toggles e
