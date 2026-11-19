@@ -29,6 +29,33 @@ fn ready() -> Settings {
     state
 }
 /// Every page this branch draws, in the shipped theme fonts.
+/// System information as an R36S shows it.
+fn sample_info() -> crate::settings::Information {
+    let card = |main: &str, second: &str, percent: Option<u8>| crate::settings::InfoCard {
+        lines: vec![main.into(), second.into()],
+        percent,
+        detail: crate::settings::InfoDetail {
+            rows: vec![
+                ("settings.design_capacity", "@3200 mAh".into()),
+                ("settings.min_max", "@408 · @1512 MHz".into()),
+            ],
+            ..Default::default()
+        },
+    };
+    crate::settings::Information {
+        device: "Game Console R36S".into(),
+        kernel: "6.12.114".into(),
+        version: "v3.1.0 · 20261119.1".into(),
+        cards: vec![
+            card("Rockchip RK3326 · 4 núcleos", "1,01 GHz · ondemand · 57,3 °C", None),
+            card("Mali-G31 · Panfrost", "Mesa 26.2.7", None),
+            card("264 MB de 983 MB", "26% em uso", Some(26)),
+            card("4,5 GB de 17,0 GB", "sistema 19 MB de 255 MB", Some(26)),
+            card("Wi-Fi conectado", "192.168.3.10 · archr-f01b", None),
+            card("100% · Na bateria", "ligado há 59 min", Some(100)),
+        ],
+    }
+}
 /// Save sync's pages, apart from `pages` so its frame stays small.
 fn savesync_pages() -> Vec<(&'static str, Settings)> {
     // Save sync (Saves-sync, Saves-destino, Saves-conflito), as in the
@@ -4116,6 +4143,12 @@ fn sidebar_settings(theme_dir: &str, out: Option<std::path::PathBuf>, golden: Op
             let mut state = ready();
             if page != Root {
                 state.open(page);
+            }
+            if page == Info {
+                state.info = sample_info();
+                let mut detail = state.clone();
+                detail.open(InfoDetail(2));
+                chosen.push(("pagina-infodetail".into(), detail));
             }
             chosen.push((format!("pagina-{page:?}").to_lowercase(), state));
         }

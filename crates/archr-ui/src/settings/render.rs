@@ -961,7 +961,17 @@ impl View<'_, '_, '_> {
             self.ui.scrim(self.theme, 1.)?;
         }
         let right = self.ui.status_header(self.theme)? as f32 / self.ui.frame.scale;
-        if let Page::InfoDetail(index) = state.page() {
+        if let (Page::InfoDetail(index), true) = (state.page(), self.title_below(state)) {
+            // "‹ System information" and the item as the large title.
+            self.back_capsule(&self.tr("settings.info"), 13.)?;
+            let item = self.tr(crate::settings::information::ITEMS[index.min(5)].0);
+            self.text_face(
+                (28., 42., RIGHT - 40., TITLE_LINE),
+                &item,
+                (TITLE_SIZE, self.theme.text, Align::Left),
+                Face::Bold,
+            )?;
+        } else if let Page::InfoDetail(index) = state.page() {
             let base = self.tr("settings.info");
             let item = self.tr(crate::settings::information::ITEMS[index.min(5)].0);
             let title = format!("{base} › {item}");

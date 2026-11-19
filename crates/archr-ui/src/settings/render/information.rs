@@ -7,6 +7,9 @@ use crate::settings::{
 
 impl View<'_, '_, '_> {
     pub(super) fn info(&mut self, state: &Settings) -> Result<(), String> {
+        if self.look().inset {
+            return self.info_inset(state);
+        }
         let info = &state.info;
         self.text_face(
             (24., 44., 77., 36.),
@@ -109,32 +112,136 @@ impl View<'_, '_, '_> {
         }
         Ok(())
     }
+    /// The grid in a theme of inset groups (Ellegance), under its large
+    /// title: the version and device on one quiet line, the cards as groups
+    /// with the rows' margins, the selected one in the theme's focus ring.
+    fn info_inset(&mut self, state: &Settings) -> Result<(), String> {
+        let info = &state.info;
+        let (left, right) = (16., RIGHT);
+        let width = (right - left - 8.) / 2.;
+        let version = format!("ArchR {}", info.version);
+        self.text_face(
+            (28., VIEW_TOP - 4., 200., 20.),
+            &version,
+            (13., self.theme.highlight_bg, Align::Left),
+            Face::Mono,
+        )?;
+        let device = self.ui.catalog.format(
+            "settings.device_line",
+            &[("device", &info.device), ("kernel", &info.kernel)],
+        );
+        self.text_face(
+            (232., VIEW_TOP - 4., right - 12. - 232., 20.),
+            &device,
+            (12., self.theme.muted, Align::Right),
+            Face::Mono,
+        )?;
+        // Three rows of cards down to the end of the page's area.
+        let top = VIEW_TOP + 22.;
+        let height = ((self.view_bottom() - top - 16.) / 3.).min(100.);
+        for (index, card) in info.cards.iter().take(6).enumerate() {
+            let x = left + (index % 2) as f32 * (width + 8.);
+            let y = top + (index / 2) as f32 * (height + 8.);
+            let bounds = (x, y, width, height);
+            self.ui.rounded(
+                self.rect(bounds),
+                self.ui.px(14.) as f32,
+                self.group_fill(),
+                None,
+            )?;
+            if index == state.cursor {
+                self.lit_focus(bounds, 14.)?;
+            }
+            self.ui.icon(
+                ITEMS[index].1,
+                self.rect((x + 14., y + 12., 16., 16.)),
+                self.theme.highlight_bg,
+            )?;
+            self.note(
+                (x + 38., y + 9., width - 52., 22.),
+                &self.tr(ITEMS[index].0).to_uppercase(),
+                12.,
+            )?;
+            let main = card
+                .lines
+                .first()
+                .filter(|s| !s.is_empty())
+                .map(|s| self.tr(s))
+                .unwrap_or_else(|| self.tr("settings.unavailable"));
+            self.text_face(
+                (x + 14., y + 31., width - 28., 25.),
+                &main,
+                (15., self.theme.text, Align::Left),
+                Face::Semibold,
+            )?;
+            let secondary = card.lines.get(1).map(|s| self.tr(s)).unwrap_or_default();
+            if let Some(value) = card.percent {
+                self.bar(
+                    (x + 14., y + 60., width - 28., 6.),
+                    value,
+                    self.theme.highlight_bg,
+                )?;
+                self.text_face(
+                    (x + 14., y + 68., width - 28., 20.),
+                    &secondary,
+                    (12., self.theme.muted, Align::Left),
+                    Face::Mono,
+                )?;
+            } else {
+                self.text_face(
+                    (x + 14., y + 58., width - 28., 26.),
+                    &secondary,
+                    (12., self.theme.muted, Align::Left),
+                    Face::Mono,
+                )?;
+            }
+        }
+        Ok(())
+    }
     pub(super) fn info_detail(&mut self, state: &Settings, index: usize) -> Result<(), String> {
         let Some(card) = state.info.cards.get(index) else {
             return Ok(());
         };
-        self.ui.icon(
-            ITEMS[index.min(5)].1,
-            self.rect((24., 54., 28., 28.)),
-            self.theme.highlight_bg,
-        )?;
-        let heading = if card.detail.heading.is_empty() {
-            self.tr(ITEMS[index].0)
+        // Under a large title (inset themes) the item's name is the title:
+        // the subtitle alone, and the panels 50 px higher, as groups.
+        let inset = self.look().inset && self.title_below(state);
+        let dy = if inset { -50. } else { 0. };
+        if inset {
+            let line =
+                if card.detail.heading.is_empty() || card.detail.heading == ITEMS[index.min(5)].0 {
+                    self.tr(&card.detail.subtitle)
+                } else {
+                    format!(
+                        "{} · {}",
+                        self.tr(&card.detail.heading),
+                        self.tr(&card.detail.subtitle)
+                    )
+                };
+            self.note((28., VIEW_TOP - 4., 588., 22.), &line, 12.)?;
         } else {
-            self.tr(&card.detail.heading)
-        };
-        self.text_face(
-            (64., 44., 552., 32.),
-            &heading,
-            (20., self.theme.text, Align::Left),
-            Face::Semibold,
-        )?;
-        self.note((64., 76., 552., 22.), &self.tr(&card.detail.subtitle), 12.)?;
+            self.ui.icon(
+                ITEMS[index.min(5)].1,
+                self.rect((24., 54., 28., 28.)),
+                self.theme.highlight_bg,
+            )?;
+            let heading = if card.detail.heading.is_empty() {
+                self.tr(ITEMS[index].0)
+            } else {
+                self.tr(&card.detail.heading)
+            };
+            self.text_face(
+                (64., 44., 552., 32.),
+                &heading,
+                (20., self.theme.text, Align::Left),
+                Face::Semibold,
+            )?;
+            self.note((64., 76., 552., 22.), &self.tr(&card.detail.subtitle), 12.)?;
+        }
         if index == STORAGE {
-            self.panel((24., 106., 592., 310.), false)?;
+            self.detail_panel((24., 106. + dy, 592., 310.), inset)?;
             // Each actual mounted filesystem has a label, usage, and its own bar.
             for (n, meter) in card.detail.meters.iter().take(5).enumerate() {
-                let y = 118. + n as f32 * 58.;
+                let y = 118. + dy + n as f32 * 58.;
                 self.label((38., y, 564., 18.), &meter.label, 13.)?;
                 self.note((38., y + 20., 564., 18.), &self.tr(&meter.value), 12.)?;
                 if let Some(value) = meter.percent {
@@ -143,23 +250,27 @@ impl View<'_, '_, '_> {
             }
             if card.detail.meters.is_empty() {
                 self.note(
-                    (38., 118., 336., 36.),
+                    (38., 118. + dy, 336., 36.),
                     &self.tr("settings.unavailable"),
                     14.,
                 )?;
             }
             return Ok(());
         } else {
-            self.panel((24., 106., 364., 310.), false)?;
-            self.panel((402., 106., 214., 310.), false)?;
+            self.detail_panel((24., 106. + dy, 364., 310.), inset)?;
+            self.detail_panel((402., 106. + dy, 214., 310.), inset)?;
             for (n, (key, value)) in card.detail.rows.iter().take(8).enumerate() {
-                let y = 106. + n as f32 * 34.;
+                let y = 106. + dy + n as f32 * 34.;
                 if n > 0 {
                     self.ui.divider(
                         self.ui.px(24.),
                         self.ui.px(y),
                         self.ui.px(364.) as u32,
-                        self.theme.border,
+                        if inset {
+                            self.group_rule()
+                        } else {
+                            self.theme.border
+                        },
                     )?;
                 }
                 self.note((38., y, 160., 34.), &self.tr(key), 14.)?;
@@ -176,10 +287,20 @@ impl View<'_, '_, '_> {
                 )?;
             }
         }
-        self.detail_meters(card, index)
+        self.detail_meters(card, index, dy)
     }
-    fn detail_meters(&mut self, card: &InfoCard, index: usize) -> Result<(), String> {
-        let mut y = 118.;
+    /// A detail panel: the theme's group fill when inset, else the panel.
+    fn detail_panel(&mut self, bounds: Bounds, inset: bool) -> Result<(), String> {
+        if inset {
+            let fill = self.group_fill();
+            self.ui
+                .rounded(self.rect(bounds), self.ui.px(14.) as f32, fill, None)
+        } else {
+            self.panel(bounds, false)
+        }
+    }
+    fn detail_meters(&mut self, card: &InfoCard, index: usize, dy: f32) -> Result<(), String> {
+        let mut y = 118. + dy;
         let meters = &card.detail.meters;
         if index == CPU {
             self.note(
