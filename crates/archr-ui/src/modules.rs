@@ -18,6 +18,10 @@ pub const WIDGETS: (usize, usize) = (2, 1);
 pub const ITEMS: usize = 20;
 /// Cards of a `stats` row.
 pub const STATS: usize = 3;
+/// Choices a `value` row may get from `ui.update`.
+pub const CHOICES: usize = 32;
+/// Blocks of a page's side panel.
+pub const ASIDE: usize = 3;
 
 /// What choosing a tile or shortcut does.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -59,11 +63,16 @@ pub enum RowKind {
     Toggle {
         key: String,
     },
-    /// Sliders arrive here too, as their steps.
+    /// Sliders arrive here too, as their steps. `choices` may be empty
+    /// until the module sends them (`ui.update`, `RowState`). API 3: A
+    /// sends `action` and X `alt`, each an action and its hint text, with
+    /// the row's key and value.
     Value {
         key: String,
         choices: Vec<String>,
         labels: Vec<String>,
+        action: Option<(String, String)>,
+        alt: Option<(String, String)>,
     },
     Check {
         key: String,
@@ -114,6 +123,10 @@ pub enum RowKind {
     Facts {
         id: String,
     },
+    /// API 3: A opens the module's page with this index.
+    Page {
+        page: u8,
+    },
 }
 impl RowKind {
     /// The setting this row edits.
@@ -149,6 +162,26 @@ pub struct Page {
     pub detail: bool,
     /// API 3: the footer note.
     pub hint: Option<String>,
+    /// API 3: a panel beside the rows, up to `ASIDE` headed paragraphs
+    /// (title, text), and a small line at its foot.
+    pub aside: Vec<(String, String)>,
+    pub aside_note: Option<String>,
+}
+impl Page {
+    pub fn has_aside(&self) -> bool {
+        !self.aside.is_empty() || self.aside_note.is_some()
+    }
+}
+
+/// What `ui.update` sent for a `value` row (`row:<key>`): its choices and
+/// their labels when the module gives them at run time, a tag before the
+/// value and a subtitle in place of the declared one.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RowState {
+    pub choices: Option<(Vec<String>, Vec<String>)>,
+    pub badge: String,
+    pub tone: Tone,
+    pub subtitle: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -234,6 +267,8 @@ pub struct View {
     pub details: BTreeMap<(String, String), String>,
     pub progress: BTreeMap<(String, String), u8>,
     pub items: BTreeMap<(String, String), Vec<Item>>,
+    /// `value` rows by module id and key, as `ui.update` left them.
+    pub rows: BTreeMap<(String, String), RowState>,
 }
 
 /// One row of a `list` row, as the module sent it, or one entry of the
@@ -336,6 +371,10 @@ impl View {
     pub fn items(&self, module: &str, target: &str) -> &[Item] {
         Self::extra(&self.items, module, target).map_or(&[], Vec::as_slice)
     }
+    /// A `value` row's state from `ui.update`, by its key.
+    pub fn row(&self, module: &str, key: &str) -> Option<&RowState> {
+        Self::extra(&self.rows, module, key)
+    }
     /// The carousel rows of the active apps, with their `app:summary`.
     pub fn apps(&self) -> Vec<crate::apps::Row> {
         self.modules
@@ -397,6 +436,8 @@ pub struct Call {
     /// API 4: the app screen it was chosen on, and the button.
     pub screen: Option<String>,
     pub button: Option<String>,
+    /// API 3: A or X on a `value` row: its key and value.
+    pub setting: Option<(String, String)>,
 }
 
 /// The store tabs (Loja-modulos).

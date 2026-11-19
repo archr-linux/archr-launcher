@@ -194,6 +194,13 @@ impl Settings {
                     if detail && !matches!(row.kind, RowKind::Action { .. }) {
                         continue;
                     }
+                    // A `value` row the module hid (`ui.update`, API 3).
+                    if let (RowKind::Value { key, .. }, Some(module)) = (&row.kind, module) {
+                        let target = (module.id.clone(), format!("row:{key}"));
+                        if self.modules.view.hidden.contains(&target) {
+                            continue;
+                        }
+                    }
                     let kind = match row.kind {
                         RowKind::Stats { .. }
                         | RowKind::Header { .. }
@@ -201,7 +208,9 @@ impl Settings {
                         | RowKind::Facts { .. } => continue,
                         RowKind::Toggle { .. } => Kind::Toggle,
                         RowKind::Check { .. } => Kind::Check,
-                        RowKind::Action { .. } | RowKind::Keyboard { .. } => Kind::Action,
+                        RowKind::Action { .. }
+                        | RowKind::Keyboard { .. }
+                        | RowKind::Page { .. } => Kind::Action,
                         RowKind::Value { .. } | RowKind::Text { .. } | RowKind::Progress { .. } => {
                             Kind::Value
                         }
@@ -223,6 +232,12 @@ impl Settings {
                         // A bar takes the second line.
                         subtitle: match row.kind {
                             RowKind::Progress { .. } => Some(""),
+                            _ if self
+                                .module_row_state(page, row)
+                                .is_some_and(|s| s.subtitle.is_some()) =>
+                            {
+                                Some("")
+                            }
                             _ => row.subtitle.as_ref().map(|_| ""),
                         },
                         section,
@@ -290,7 +305,54 @@ impl Settings {
         if let Id::ModuleItem(..) = id {
             return self.module_item(id).map(|i| i.subtitle.clone());
         }
-        self.module_row(id)?.subtitle.clone()
+        let row = self.module_row(id)?;
+        self.module_row_state(self.page(), row)
+            .and_then(|s| s.subtitle.clone())
+            .or_else(|| row.subtitle.clone())
+    }
+    /// What `ui.update` sent for a `value` row of the open page (API 3).
+    fn module_row_state(
+        &self,
+        page: Page,
+        row: &crate::modules::Row,
+    ) -> Option<&crate::modules::RowState> {
+        let RowKind::Value { key, .. } = &row.kind else {
+            return None;
+        };
+        let module = self.modules.page_module(page)?;
+        self.modules.view.row(&module.id, key)
+    }
+    /// A `value` row's choices and labels: the module's own from
+    /// `ui.update` when it sent them, else the declared ones.
+    fn module_choices<'a>(&'a self, row: &'a crate::modules::Row) -> (&'a [String], &'a [String]) {
+        match (&row.kind, self.module_row_state(self.page(), row)) {
+            (
+                _,
+                Some(crate::modules::RowState {
+                    choices: Some((choices, labels)),
+                    ..
+                }),
+            ) => (choices, labels),
+            (
+                RowKind::Value {
+                    choices, labels, ..
+                },
+                _,
+            ) => (choices, labels),
+            _ => (&[], &[]),
+        }
+    }
+    /// The tag before a `value` row's value, and its tone (API 3).
+    pub fn module_badge(&self, id: Id) -> Option<(String, crate::modules::Tone)> {
+        let state = self.module_row_state(self.page(), self.module_row(id)?)?;
+        (!state.badge.is_empty()).then(|| (state.badge.clone(), state.tone))
+    }
+    /// A `value` row (API 3 draws it as the module pages' tuner rows).
+    pub fn module_is_value(&self, id: Id) -> bool {
+        matches!(
+            (id, self.module_row(id).map(|r| &r.kind)),
+            (Id::ModuleRow(_), Some(RowKind::Value { .. }))
+        )
     }
     /// The heading above the module row with this id.
     pub fn section_text(&self, id: Id) -> String {
@@ -310,14 +372,19 @@ impl Settings {
         })?;
         let value = self.value(id);
         Some(match &row.kind {
-            RowKind::Value {
-                choices, labels, ..
-            } => choices
-                .iter()
-                .position(|c| c == value)
-                .and_then(|n| labels.get(n))
-                .cloned()
-                .unwrap_or_else(|| value.to_owned()),
+            RowKind::Value { .. } => {
+                let (choices, labels) = self.module_choices(row);
+                // `choices = []` until the module sends them.
+                if choices.is_empty() {
+                    return Some("…".into());
+                }
+                choices
+                    .iter()
+                    .position(|c| c == value)
+                    .and_then(|n| labels.get(n))
+                    .cloned()
+                    .unwrap_or_else(|| value.to_owned())
+            }
             RowKind::Text { id } | RowKind::Progress { id } => self
                 .modules
                 .view
@@ -448,6 +515,18 @@ impl Settings {
     pub fn module_icon(&self, id: Id) -> Option<Arc<str>> {
         match &self.module_row(id)?.kind {
             RowKind::Action { icon, .. } => icon.clone(),
+            _ => None,
+        }
+    }
+    /// The selected `value` row's hints (API 3): what A and X send, by
+    /// the texts the module gave.
+    pub fn module_value_hints(&self) -> Option<(Option<String>, Option<String>)> {
+        let id = self.module_rows().get(self.cursor)?.id;
+        match &self.module_row(id)?.kind {
+            RowKind::Value { action, alt, .. } if action.is_some() || alt.is_some() => Some((
+                action.as_ref().map(|(_, label)| label.clone()),
+                alt.as_ref().map(|(_, label)| label.clone()),
+            )),
             _ => None,
         }
     }
@@ -613,18 +692,43 @@ impl Settings {
                 call: call(item.id),
             }));
         }
+        let row = self.module_row(id)?.clone();
+        let old = self.value(id).to_owned();
+        // A and X on a `value` row (API 3): its action, with its key and
+        // the value shown.
+        if let (
+            RowKind::Value {
+                key, action, alt, ..
+            },
+            Button::A | Button::X,
+        ) = (&row.kind, button)
+        {
+            let chosen = if button == Button::A { action } else { alt };
+            let Some((action, _)) = chosen else {
+                return (button == Button::A).then_some(Effect::None);
+            };
+            return Some(Effect::Module(Request::Invoke {
+                module,
+                action: action.clone(),
+                call: Some(crate::modules::Call {
+                    setting: Some((key.clone(), old)),
+                    ..Default::default()
+                }),
+            }));
+        }
         if button == Button::X {
             return None;
         }
-        let row = self.module_row(id)?.clone();
-        let old = self.value(id).to_owned();
         let next = match &row.kind {
             RowKind::Toggle { .. } | RowKind::Check { .. }
                 if button == Button::A || matches!(row.kind, RowKind::Toggle { .. }) =>
             {
                 if old == "1" { "0" } else { "1" }.to_owned()
             }
-            RowKind::Value { choices, .. } if button != Button::A && !choices.is_empty() => {
+            RowKind::Value { .. }
+                if button != Button::A && !self.module_choices(&row).0.is_empty() =>
+            {
+                let choices = self.module_choices(&row).0;
                 let at = choices.iter().position(|c| *c == old).unwrap_or(0);
                 let step = if button == Button::L {
                     choices.len() - 1
@@ -643,6 +747,12 @@ impl Settings {
                     }
                     None => self.invoke(module, action.clone()),
                 });
+            }
+            // Another page of the module (API 3); B comes back.
+            RowKind::Page { page } if button == Button::A => {
+                self.open(Page::Module(m, *page));
+                self.sync_modules();
+                return Some(Effect::None);
             }
             RowKind::Keyboard { max, secret, .. } if button == Button::A => {
                 let mode = if *secret { Mode::Secret } else { Mode::Text };
@@ -881,6 +991,8 @@ mod tests {
                 title: "Bateria".into(),
                 detail: false,
                 hint: None,
+                aside: Vec::new(),
+                aside_note: None,
                 rows: vec![
                     ModuleRow {
                         label: "Mostrar potência".into(),
@@ -899,6 +1011,8 @@ mod tests {
                             key: "intervalo".into(),
                             choices: vec!["5".into(), "15".into()],
                             labels: vec!["5 s".into(), "15 s".into()],
+                            action: None,
+                            alt: None,
                         },
                         default: "15".into(),
                     },
@@ -1121,6 +1235,8 @@ mod tests {
             title: "Jogo".into(),
             detail: true,
             hint: None,
+            aside: Vec::new(),
+            aside_note: None,
             rows: vec![
                 row(RowKind::Header {
                     id: "cabeca".into(),
@@ -1287,6 +1403,130 @@ mod tests {
             })
         );
         assert_eq!(state.handle(Button::B), Effect::Close, "back to START");
+    }
+
+    /// API 3 (Modulo-tuner-tensao): a `page` row opens the module's other
+    /// page; its `value` rows take choices, a tag, a subtitle and hiding
+    /// from the module, and A and X send their actions with the setting.
+    #[test]
+    fn tuner_rows_follow_the_module_and_a_page_row_opens_their_page() {
+        use crate::modules::{RowState, Tone};
+        let value = |key: &str| ModuleRow {
+            label: key.into(),
+            subtitle: Some("declarado".into()),
+            section: None,
+            kind: RowKind::Value {
+                key: key.into(),
+                choices: Vec::new(),
+                labels: Vec::new(),
+                action: Some(("aplicar".into(), "Aplicar".into())),
+                alt: Some(("todos".into(), "Todos".into())),
+            },
+            default: String::new(),
+        };
+        let page = |id: &str, rows| crate::modules::Page {
+            id: id.into(),
+            title: id.into(),
+            rows,
+            detail: false,
+            hint: None,
+            aside: Vec::new(),
+            aside_note: None,
+        };
+        let module = Module {
+            id: "desempenho".into(),
+            enabled: true,
+            granted: true,
+            pages: vec![
+                page(
+                    "main",
+                    vec![ModuleRow {
+                        label: "Tensões".into(),
+                        subtitle: None,
+                        section: None,
+                        kind: RowKind::Page { page: 1 },
+                        default: String::new(),
+                    }],
+                ),
+                page("tensoes", vec![value("cpu"), value("gpu")]),
+            ],
+            settings: [("cpu".to_owned(), "1325".to_owned())].into(),
+            ..Module::default()
+        };
+        let mut view = View {
+            modules: vec![module],
+            ..View::default()
+        };
+        let mut state = Settings {
+            loading: false,
+            ..Settings::default()
+        };
+        state.set_modules(Arc::new(view.clone()));
+        state.open_module_page("desempenho", 0);
+        assert_eq!(state.handle(Button::A), Effect::None);
+        assert_eq!(state.page(), Page::Module(0, 1));
+        let catalog = crate::i18n::I18n::default();
+        assert_eq!(state.display_value(Id::ModuleRow(0), &catalog), "…");
+        assert_eq!(
+            state.handle(Button::R),
+            Effect::None,
+            "nothing to choose yet"
+        );
+        let choices = vec!["1350".to_owned(), "1325".into(), "1300".into()];
+        let labels = choices.iter().map(|c| format!("{c} mV")).collect();
+        view.rows.insert(
+            ("desempenho".into(), "cpu".into()),
+            RowState {
+                choices: Some((choices, labels)),
+                badge: "novo".into(),
+                tone: Tone::Info,
+                subtitle: Some("padrão 1350 mV".into()),
+            },
+        );
+        view.hidden.insert(("desempenho".into(), "row:gpu".into()));
+        state.set_modules(Arc::new(view));
+        assert_eq!(state.visible_rows().len(), 1, "the module hid the GPU row");
+        assert_eq!(state.display_value(Id::ModuleRow(0), &catalog), "1325 mV");
+        assert_eq!(
+            state.module_badge(Id::ModuleRow(0)),
+            Some(("novo".into(), Tone::Info))
+        );
+        assert_eq!(
+            state.module_subtitle(Id::ModuleRow(0)).as_deref(),
+            Some("padrão 1350 mV")
+        );
+        assert_eq!(
+            state.handle(Button::R),
+            Effect::Module(Request::Set {
+                module: "desempenho".into(),
+                key: "cpu".into(),
+                value: "1300".into()
+            })
+        );
+        assert_eq!(
+            state.module_value_hints(),
+            Some((Some("Aplicar".into()), Some("Todos".into())))
+        );
+        for (button, action) in [(Button::A, "aplicar"), (Button::X, "todos")] {
+            assert_eq!(
+                state.handle(button),
+                Effect::Module(Request::Invoke {
+                    module: "desempenho".into(),
+                    action: action.into(),
+                    call: Some(crate::modules::Call {
+                        setting: Some(("cpu".into(), "1300".into())),
+                        ..Default::default()
+                    }),
+                })
+            );
+        }
+        state.handle(Button::B);
+        assert_eq!(
+            state.page(),
+            Page::Module(0, 0),
+            "B returns to the first page"
+        );
+        assert_eq!(state.module_value_hints(), None);
     }
 
     /// Issue #51: B on a module page opened from its START tile left for

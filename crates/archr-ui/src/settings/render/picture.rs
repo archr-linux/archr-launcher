@@ -72,38 +72,111 @@ impl View<'_, '_, '_> {
     }
     /// A card of headed paragraphs, and a small line at its foot.
     pub(super) fn aside(&mut self, blocks: &[(&str, &str)], foot: &str) -> Result<(), String> {
-        let (x, w) = ASIDE;
-        let bottom = self.view_bottom() - 8.;
+        let blocks: Vec<(String, String)> = blocks
+            .iter()
+            .map(|(title, detail)| (self.tr(title), self.tr(detail)))
+            .collect();
+        let foot = self.tr(foot);
+        self.aside_card(&blocks, Some(&foot), ASIDE, false)
+    }
+    /// The card from texts already in the user's language, at `(x, w)`:
+    /// down to the footer with the foot line at its bottom, or `fit`ted to
+    /// its texts with the foot line right under them (a module page in a
+    /// theme of grouped rows, Ellegance-Modulo-tuner-tensao).
+    pub(super) fn aside_card(
+        &mut self,
+        blocks: &[(String, String)],
+        foot: Option<&str>,
+        (x, w): (f32, f32),
+        fit: bool,
+    ) -> Result<(), String> {
         let theme = self.theme;
-        self.ui.rounded(
-            self.rect((x, VIEW_TOP, w, bottom - VIEW_TOP)),
-            self.ui.px(14.) as f32,
-            theme.surface,
-            Some(theme.border),
-        )?;
         let (left, inner) = (x + 14., w - 28.);
-        let mut y = VIEW_TOP + 12.;
-        for (title, detail) in blocks {
-            self.text_face(
-                (left, y, inner, 20.),
-                &self.tr(title),
-                (14., theme.text, Align::Left),
-                Face::Semibold,
-            )?;
-            y += 22.;
-            let text = self.tr(detail);
-            let width = self.rect((left, y, inner, 1.)).width();
-            let lines = self.lines(&text, 12., width)?.len() as f32;
-            self.note((left, y, inner, lines * 17.), &text, 12.)?;
-            y += lines * 17. + 10.;
-        }
-        let text = self.tr(foot);
         let width = self.rect((left, 0., inner, 1.)).width();
-        let lines = self.lines(&text, 11., width)?.len() as f32;
-        self.note(
-            (left, bottom - 12. - lines * 15., inner, lines * 15.),
-            &text,
-            11.,
-        )
+        // A fitted card measures its texts as the small screens draw them,
+        // at the screen-pixel floor; the other keeps its fixed lines.
+        let floor = if fit { self.ui.frame.min_size() } else { 0. };
+        let (title_size, gap): (f32, f32) = if fit { (13., 6.) } else { (14., 10.) };
+        let head = title_size.max(floor) + 6.;
+        let (text_size, foot_size) = (12_f32.max(floor), 11_f32.max(floor));
+        let (step, foot_step) = if fit {
+            (
+                self.pitch(text_size, text_size + 5.),
+                self.pitch(foot_size, foot_size + 4.),
+            )
+        } else {
+            (17., 15.)
+        };
+        // Every paragraph's lines first: a fitted card is as tall as they are.
+        let mut texts = Vec::new();
+        for (title, detail) in blocks {
+            let lines = self.lines(detail, text_size, width)?.len() as f32;
+            texts.push((title, detail, lines));
+        }
+        let foot_lines = match foot {
+            Some(foot) => self.lines(foot, foot_size, width)?.len() as f32,
+            None => 0.,
+        };
+        let content: f32 = texts
+            .iter()
+            .map(|(title, _, lines)| {
+                let head = if title.is_empty() { 0. } else { head };
+                head + lines * step + gap
+            })
+            .sum();
+        let bottom = if fit {
+            let foot = if foot_lines > 0. {
+                2. + foot_lines * foot_step
+            } else {
+                -gap
+            };
+            (VIEW_TOP + 12. + content + foot + 12.).min(self.view_bottom() - 8.)
+        } else {
+            self.view_bottom() - 8.
+        };
+        if fit {
+            self.group((x, VIEW_TOP, w, bottom - VIEW_TOP), &[])?;
+        } else {
+            self.ui.rounded(
+                self.rect((x, VIEW_TOP, w, bottom - VIEW_TOP)),
+                self.ui.px(14.) as f32,
+                theme.surface,
+                Some(theme.border),
+            )?;
+        }
+        let mut y = VIEW_TOP + 12.;
+        for (title, detail, lines) in texts {
+            if !title.is_empty() {
+                self.text_face(
+                    (left, y, inner, head),
+                    title,
+                    (title_size, theme.text, Align::Left),
+                    Face::Semibold,
+                )?;
+                y += head + if fit { 0. } else { 2. };
+            }
+            self.note((left, y, inner, lines * step), detail, 12.)?;
+            y += lines * step + gap;
+        }
+        let Some(foot) = foot else {
+            return Ok(());
+        };
+        let top = if fit {
+            y + 2.
+        } else {
+            bottom - 12. - foot_lines * foot_step
+        };
+        let ink = if fit { theme.dim_text } else { theme.muted };
+        // On a small screen a fitted card stops at the footer: the foot line
+        // keeps the lines left there, the last one shortened.
+        let room = if fit {
+            (bottom - 10. - top).min(foot_lines * foot_step)
+        } else {
+            foot_lines * foot_step
+        };
+        if room < foot_step {
+            return Ok(());
+        }
+        self.text((left, top, inner, room), foot, (11., ink, Align::Left))
     }
 }

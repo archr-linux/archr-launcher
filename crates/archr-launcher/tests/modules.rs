@@ -6,7 +6,7 @@ use archr_launcher::modules::{
     registry::{Dirs, Record, State},
     Config, Event, Modules, Notice, Tune,
 };
-use archr_ui::modules::{Request, Status, View};
+use archr_ui::modules::{Request, Status, Tone, View};
 use std::{
     fs,
     os::unix::fs::{MetadataExt, PermissionsExt},
@@ -1208,6 +1208,89 @@ fn widgets_bars_and_lists_reach_the_screens_and_items_answer_with_their_index() 
         "\"action\":\"abrir\"",
     );
     assert!(seen.contains(r#""context":{"item":"zelda"}"#), "{seen}");
+}
+
+/// API 3: a `value` row declared with `choices = []` gets them, a tag, a
+/// subtitle and its value from the module, saved without
+/// `settings.changed`; bad ones change nothing. A and X answer with the
+/// row's key and value.
+#[test]
+fn value_rows_take_their_choices_from_the_module_and_answer_with_their_setting() {
+    let root = tempfile::tempdir().unwrap();
+    let base = root.path();
+    let pages = r#"
+[[settings.pages]]
+id = "main"
+[[settings.pages.rows]]
+type = "value"
+key = "cpu"
+label = "CPU"
+choices = []
+action = "aplicar"
+action_label = "Apply"
+"#;
+    let dir = api_2(base, "tuner", pages, &[]);
+    let toml = fs::read_to_string(dir.join("module.toml")).unwrap();
+    fs::write(
+        dir.join("module.toml"),
+        toml.replace("api_version = 2", "api_version = 3"),
+    )
+    .unwrap();
+    let many: Vec<String> = (0..33).map(|n| format!("\"{n}\"")).collect();
+    let updates = [
+        r#"{"jsonrpc":"2.0","method":"ui.update","params":{"target":"row:cpu","choices":["1350","1325"],"labels":["1350 mV",{"key":"@hello","args":{"who":"1325"}}],"value":"1325","badge":"novo","tone":"info","subtitle":"padrão 1350 mV"}}"#.to_owned(),
+        r#"{"jsonrpc":"2.0","method":"ui.update","params":{"target":"row:cpu","value":"999"}}"#.to_owned(),
+        format!(
+            r#"{{"jsonrpc":"2.0","method":"ui.update","params":{{"target":"row:cpu","choices":[{}]}}}}"#,
+            many.join(",")
+        ),
+        r#"{"jsonrpc":"2.0","method":"ui.update","params":{"target":"row:cpu","hidden":true}}"#.to_owned(),
+        r#"{"jsonrpc":"2.0","method":"ui.update","params":{"target":"tile:fim","value":"1"}}"#.to_owned(),
+    ];
+    fs::write(dir.join("go.jsonl"), updates.join("\n") + "\n").unwrap();
+    fs::write(dir.join("aplicar.jsonl"), "").unwrap();
+    let mut probe = Probe::new(base);
+    ready(base, &["tuner"]);
+    probe.invoke("tuner", "go");
+    let view = probe.wait(|v, _| value(v, "tuner", "tile:fim").is_some());
+    let row = view.row("tuner", "cpu").expect("the row's state");
+    let (choices, labels) = row.choices.clone().unwrap();
+    assert_eq!(choices, ["1350", "1325"], "33 choices are too many");
+    assert_eq!(labels, ["1350 mV", "Hello 1325"]);
+    assert_eq!((row.badge.as_str(), row.tone), ("novo", Tone::Info));
+    assert_eq!(row.subtitle.as_deref(), Some("padrão 1350 mV"));
+    assert_eq!(view.modules[0].settings["cpu"], "1325", "999 is no choice");
+    assert!(view.hidden.contains(&("tuner".into(), "row:cpu".into())));
+    let settings = base.join("module-settings/tuner.json");
+    assert_eq!(fs::read_to_string(&settings).unwrap(), r#"{"cpu":"1325"}"#);
+    // The user's choice among the module's own reaches it as an event.
+    probe.request(Request::Set {
+        module: "tuner".into(),
+        key: "cpu".into(),
+        value: "1350".into(),
+    });
+    probe.wait(|v, _| v.modules[0].settings["cpu"] == "1350");
+    probe.request(Request::Invoke {
+        module: "tuner".into(),
+        action: "aplicar".into(),
+        call: Some(archr_ui::modules::Call {
+            setting: Some(("cpu".into(), "1350".into())),
+            ..Default::default()
+        }),
+    });
+    let seen = until(
+        &base.join("module-data/tuner/seen.log"),
+        "\"action\":\"aplicar\"",
+    );
+    assert!(
+        seen.contains(r#""context":{"key":"cpu","value":"1350"}"#),
+        "{seen}"
+    );
+    assert_eq!(
+        seen.matches("settings.changed").count(),
+        1,
+        "only the user's change: {seen}"
+    );
 }
 
 #[test]

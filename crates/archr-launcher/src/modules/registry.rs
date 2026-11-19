@@ -527,9 +527,10 @@ pub fn settings_json(manifest: &Manifest, values: &BTreeMap<String, String>) -> 
         let value = values.get(key).unwrap_or(&row.default);
         let json = match &row.kind {
             RowKind::Toggle { .. } | RowKind::Check { .. } => Json::Bool(value == "1"),
+            // Choices the module sends itself (`choices = []`) stay text.
             RowKind::Value {
                 labels, choices, ..
-            } if labels == choices && value.parse::<i64>().is_ok() => {
+            } if !choices.is_empty() && labels == choices && value.parse::<i64>().is_ok() => {
                 Json::from(value.parse::<i64>().unwrap_or(0))
             }
             _ => Json::String(value.clone()),
@@ -689,6 +690,12 @@ pub fn module(
                 title: tr(&page.title),
                 detail: page.detail,
                 hint: page.hint.as_deref().map(tr),
+                aside: page
+                    .aside
+                    .iter()
+                    .map(|(title, text)| (tr(title), tr(text)))
+                    .collect(),
+                aside_note: page.aside_note.as_deref().map(tr),
                 rows: page
                     .rows
                     .iter()
@@ -701,6 +708,8 @@ pub fn module(
                                 key,
                                 choices,
                                 labels,
+                                action,
+                                alt,
                             } => RowKind::Value {
                                 key: key.clone(),
                                 choices: choices.clone(),
@@ -709,6 +718,8 @@ pub fn module(
                                     .zip(choices)
                                     .map(|(l, c)| if l.is_empty() { c.clone() } else { tr(l) })
                                     .collect(),
+                                action: action.as_ref().map(|(a, label)| (a.clone(), tr(label))),
+                                alt: alt.as_ref().map(|(a, label)| (a.clone(), tr(label))),
                             },
                             RowKind::Action {
                                 action,
@@ -1006,6 +1017,53 @@ mod tests {
         assert!(matches!(
             &module.pages[0].rows[1].kind,
             RowKind::List { open: Some(1), alt: Some((_, label)), .. } if label == "Reaprender"
+        ));
+    }
+
+    #[test]
+    fn a_side_panel_and_the_buttons_of_a_value_row_come_translated() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("desempenho");
+        std::fs::create_dir_all(dir.join("locales")).unwrap();
+        std::fs::write(dir.join("locales/en.toml"), "").unwrap();
+        std::fs::write(
+            dir.join("module.toml"),
+            "id = \"desempenho\"\nversion = \"1.0.0\"\napi_version = 3\n\
+             [run]\nruntime = \"bash\"\nentry = \"main.sh\"\nmode = \"daemon\"\n\
+             [[settings.pages]]\nid = \"main\"\n\
+             aside = [{ title = \"@boot\", text = \"@boot_text\" }]\n\
+             aside_note = \"@note\"\n\
+             [[settings.pages.rows]]\ntype = \"value\"\nkey = \"cpu\"\nchoices = []\n\
+             action = \"aplicar\"\naction_label = \"@apply\"\n\
+             alt_action = \"todos\"\nalt_label = \"@all\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("locales/pt_BR.toml"),
+            "boot = \"Ao reiniciar\"\nboot_text = \"Tudo vai para o overlay.\"\n\
+             note = \"Margem pequena.\"\napply = \"Aplicar\"\nall = \"Todos\"\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join("main.sh"), "").unwrap();
+        let installed = Installed::read(&dir, "pt_BR");
+        assert!(installed.manifest.is_some(), "{}", installed.problem);
+        let data = tempfile::tempdir().unwrap();
+        let module = module(
+            &Dirs::new(data.path()),
+            &installed,
+            None,
+            ("pt_BR", &BTreeMap::new()),
+        );
+        let page = &module.pages[0];
+        assert_eq!(
+            page.aside,
+            [("Ao reiniciar".into(), "Tudo vai para o overlay.".into())]
+        );
+        assert_eq!(page.aside_note.as_deref(), Some("Margem pequena."));
+        assert!(matches!(
+            &page.rows[0].kind,
+            RowKind::Value { action: Some((_, a)), alt: Some((_, x)), .. }
+                if a == "Aplicar" && x == "Todos"
         ));
     }
 }

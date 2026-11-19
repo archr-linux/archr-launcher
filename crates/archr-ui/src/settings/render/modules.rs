@@ -23,6 +23,8 @@ const CARDS_ROOM: f32 = 88.;
 const DETAIL_LEFT: (f32, f32) = (20., 348.);
 const DETAIL_SIDE: (f32, f32) = (384., 236.);
 const PICTURE: (f32, f32) = (96., 72.);
+/// A row of a module page with a side panel.
+const TUNER_ROW: f32 = 44.;
 
 impl View<'_, '_, '_> {
     /// "1.0.2 · Revisado · bloco no Start", or why it is off.
@@ -117,6 +119,21 @@ impl View<'_, '_, '_> {
             .modules
             .page_items(page, |k| matches!(k, RowKind::Stats { .. }));
         let mut positions = placements(page, rows);
+        // A side panel (API 3, Modulo-tuner-tensao): the rows narrow beside
+        // it, 44 px each.
+        let aside = declared.filter(|p| p.has_aside());
+        let (panel, right) = self.module_aside_place();
+        let right = if aside.is_some() { right } else { RIGHT };
+        if aside.is_some() {
+            let mut shift = 0.;
+            for place in &mut positions {
+                place.top -= shift;
+                if place.height > TUNER_ROW {
+                    shift += place.height - TUNER_ROW;
+                    place.height = TUNER_ROW;
+                }
+            }
+        }
         let top = if cards.is_empty() {
             VIEW_TOP
         } else {
@@ -127,7 +144,7 @@ impl View<'_, '_, '_> {
         self.list_from(
             state,
             &positions,
-            (top, RIGHT),
+            (top, right),
             |view, n, y, position, selected| {
                 let row = &rows[n];
                 if let Some(item) = state
@@ -136,8 +153,13 @@ impl View<'_, '_, '_> {
                 {
                     return view.item_row(state, row, item, (y, position.height), selected);
                 }
+                if state.module_is_value(row.id)
+                    && (aside.is_some() || state.module_badge(row.id).is_some())
+                {
+                    return view.tuner_row(state, row, (y, position.height), right, selected);
+                }
                 let Some(progress) = state.module_progress(row.id) else {
-                    return view.row(state, row, (y, position.height), RIGHT, selected);
+                    return view.row(state, row, (y, position.height), right, selected);
                 };
                 let theme = view.theme;
                 let value = state.display_value(row.id, &view.ui.catalog);
@@ -158,7 +180,98 @@ impl View<'_, '_, '_> {
                     theme.highlight_bg,
                 )
             },
-        )
+        )?;
+        match aside {
+            Some(page) => {
+                let fit = self.look().inset;
+                self.aside_card(&page.aside, page.aside_note.as_deref(), panel, fit)
+            }
+            None => Ok(()),
+        }
+    }
+    /// The side panel of a module page, and where its rows stop: a card
+    /// down to the footer, or in a theme of grouped rows a narrower one
+    /// as tall as its texts (Ellegance-Modulo-tuner-tensao).
+    fn module_aside_place(&self) -> ((f32, f32), f32) {
+        if self.look().inset {
+            let panel = (RIGHT - 8. - 180., 180.);
+            (panel, panel.0 - 14.)
+        } else {
+            (picture::ASIDE, picture::ROWS_RIGHT)
+        }
+    }
+    /// A `value` row of a module page beside its panel, or with a tag:
+    /// name and line on the left; the tag, then the value, on the right,
+    /// between arrows only while selected (Modulo-tuner-tensao).
+    fn tuner_row(
+        &mut self,
+        state: &Settings,
+        row: &Row,
+        (y, height): (f32, f32),
+        right: f32,
+        selected: bool,
+    ) -> Result<(), String> {
+        let theme = self.theme;
+        let ink = self.ink(selected);
+        let soft = selection(selected, theme.muted, theme.accent_text_secondary);
+        let face = selection(selected, Face::Regular, Face::Semibold);
+        let value = state.display_value(row.id, &self.ui.catalog);
+        let edge = right - 14.;
+        // Grouped rows (Ellegance) keep the theme's face for numbers.
+        let digits = if self.look().inset {
+            selection(selected, Face::Regular, Face::Semibold)
+        } else {
+            Face::Mono
+        };
+        let value_w = self.width(&value, digits, 13.)?;
+        let middle = y + height / 2.;
+        let mut left = if selected {
+            let arrow = 14.;
+            let chevron = |x: f32| (x, middle - arrow / 2., arrow, arrow);
+            let right_arrow = self.rect(chevron(edge - arrow));
+            self.ui.icon(Glyph::ChevronRight, right_arrow, ink)?;
+            let start = edge - arrow - 6. - value_w;
+            let left_arrow = self.rect(chevron(start - 6. - arrow));
+            self.ui.icon(Glyph::ChevronLeft, left_arrow, ink)?;
+            self.plain(
+                &value,
+                (start, middle - 9., value_w + 1., 18.),
+                (digits, 13., ink),
+            )?;
+            start - 6. - arrow
+        } else {
+            let ink = selection(selected, theme.text_secondary, ink);
+            self.plain(
+                &value,
+                (edge - value_w, middle - 9., value_w + 1., 18.),
+                (digits, 13., ink),
+            )?;
+            edge - value_w
+        };
+        if let Some((badge, tone)) = state.module_badge(row.id) {
+            left -= 8.;
+            left -= self.module_tag(&badge, tone, (left, middle - 9.5))?;
+        }
+        let width = (left - 12. - 30.).max(40.);
+        let subtitle = state.subtitle(row).map(|text| self.tr(&text));
+        let half = ((height - 4.) / 2.).floor();
+        let title_height = if subtitle.is_some() {
+            height - half
+        } else {
+            height
+        };
+        let label = self.tr(&state.label(row));
+        self.text_face(
+            (30., y, width, title_height),
+            &label,
+            (15., ink, Align::Left),
+            face,
+        )?;
+        if let Some(subtitle) = subtitle {
+            let line = (30., y + title_height - 2., width, half);
+            self.text(line, &subtitle, (12., soft, Align::Left))?;
+        }
+        Ok(())
     }
     /// A tone's ink: theme colours only.
     fn tone(&self, tone: Tone) -> Rgba {
@@ -384,6 +497,13 @@ impl View<'_, '_, '_> {
         if !matches!(state.page(), Page::Module(..)) || modules.confirm.is_some() || modules.working
         {
             return None;
+        }
+        if let Some((action, alt)) = state.module_value_hints() {
+            let mut hints: Vec<(HintButton, String)> = Vec::new();
+            hints.extend(action.map(|label| (HintButton::Key('A'), label)));
+            hints.extend(alt.map(|label| (HintButton::Key('X'), label)));
+            hints.push((HintButton::Key('B'), self.tr("hint.back")));
+            return Some(hints);
         }
         let (opens, alt) = state.module_item_hints()?;
         if !opens && alt.is_none() {

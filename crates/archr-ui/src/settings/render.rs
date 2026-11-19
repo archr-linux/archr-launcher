@@ -826,8 +826,11 @@ impl View<'_, '_, '_> {
                 let card = card.or_else(|| state.modules.cards().get(state.cursor));
                 card.map_or_else(|| self.tr(page.title()), |c| c.title().to_owned())
             }
-            // A detail page: "Módulos / <first page> / <its item>".
-            Page::Module(m, _) if state.modules.declared(page).is_some_and(|d| d.detail) => {
+            // A detail page: "Módulos / <first page> / <its item>"; another
+            // page of the module: "Módulos / <first page> / <page>".
+            Page::Module(m, p)
+                if p > 0 || state.modules.declared(page).is_some_and(|d| d.detail) =>
+            {
                 let module = state.modules.view.modules.get(usize::from(m));
                 trail.push(self.tr("settings.modules"));
                 trail.extend(module.map(|m| {
@@ -1494,6 +1497,10 @@ impl View<'_, '_, '_> {
         );
         let sheet = state.page() == Page::Keyboard && self.theme.screens.keyboard.sheet;
         let left = match self.module_hints(state) {
+            // A module's own texts, in the theme's capsule too.
+            Some(labels) if self.look().themed() && !sheet => {
+                self.ui.placed_labels(&labels, self.theme, (width, y, h))?
+            }
             Some(labels) => self.ui.hint_labels(&labels, self.theme, width, y, h)?,
             None if self.look().themed() && !sheet => {
                 self.ui

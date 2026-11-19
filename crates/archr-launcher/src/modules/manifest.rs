@@ -2,7 +2,7 @@
 //! Unknown keys and wrong types are warnings and the field is dropped; only
 //! what decides how and whether the module runs is fatal.
 use archr_io::{read_bytes, read_utf8, Symlinks};
-use archr_ui::modules::{Context, Entry, Page, Quick, Row, RowKind, Target};
+use archr_ui::modules::{Context, Entry, Page, Quick, Row, RowKind, Target, ASIDE};
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeSet, fs, path::Path};
 use toml::{Table, Value};
@@ -703,9 +703,16 @@ fn read_quick(table: &Table, warnings: &mut Vec<String>) -> Option<Quick> {
 }
 
 /// Keys and row types a manifest may use only from API 3 on.
-const PAGE_3: &[&str] = &["layout", "hint"];
-const ROW_3: &[&str] = &["open", "alt_action", "alt_label", "icon"];
-const TYPES_3: &[&str] = &["stats", "header", "bars", "facts"];
+const PAGE_3: &[&str] = &["layout", "hint", "aside", "aside_note"];
+const ROW_3: &[&str] = &[
+    "open",
+    "alt_action",
+    "alt_label",
+    "icon",
+    "action_label",
+    "page",
+];
+const TYPES_3: &[&str] = &["stats", "header", "bars", "facts", "page"];
 
 /// Warns about and drops the API 3 keys of an older manifest.
 fn older(table: &Table, keys: &[&str], api: i64, at: &str, warnings: &mut Vec<String>) -> Table {
@@ -723,7 +730,15 @@ fn older(table: &Table, keys: &[&str], api: i64, at: &str, warnings: &mut Vec<St
 fn read_page(table: &Table, api: i64, ids: &[&str], warnings: &mut Vec<String>) -> Option<Page> {
     let table = older(table, PAGE_3, api, "settings.pages.", warnings);
     let mut page = reader(&table, "settings.pages.", warnings);
-    page.check(&["id", "title", "rows", "layout", "hint"]);
+    page.check(&[
+        "id",
+        "title",
+        "rows",
+        "layout",
+        "hint",
+        "aside",
+        "aside_note",
+    ]);
     let id = page.text("id")?;
     let title = page.text("title").unwrap_or_default();
     let detail = match page.text("layout").as_deref() {
@@ -736,6 +751,29 @@ fn read_page(table: &Table, api: i64, ids: &[&str], warnings: &mut Vec<String>) 
         }
     };
     let hint = page.text("hint");
+    let blocks = page.tables("aside");
+    if blocks.len() > ASIDE {
+        page.warnings.push(format!(
+            "settings.pages.aside: more than {ASIDE} blocks, the rest ignored"
+        ));
+    }
+    let aside = blocks
+        .iter()
+        .take(ASIDE)
+        .filter_map(|block| {
+            let mut block = reader(block, "settings.pages.aside.", &mut *page.warnings);
+            block.check(&["title", "text"]);
+            let (title, text) = (block.text("title"), block.text("text"));
+            if title.is_none() && text.is_none() {
+                block
+                    .warnings
+                    .push("settings.pages.aside: an empty block, ignored".into());
+            }
+            Some((title.unwrap_or_default(), text.unwrap_or_default()))
+                .filter(|(t, x)| !t.is_empty() || !x.is_empty())
+        })
+        .collect();
+    let aside_note = page.text("aside_note");
     let rows = page.tables("rows");
     let rows = rows
         .iter()
@@ -747,6 +785,8 @@ fn read_page(table: &Table, api: i64, ids: &[&str], warnings: &mut Vec<String>) 
         rows,
         detail,
         hint,
+        aside,
+        aside_note,
     })
 }
 
@@ -775,6 +815,8 @@ fn read_row(table: &Table, api: i64, ids: &[&str], warnings: &mut Vec<String>) -
         "alt_action",
         "alt_label",
         "icon",
+        "action_label",
+        "page",
     ]);
     let kind = row.text("type")?;
     if api < API_3 && TYPES_3.contains(&kind.as_str()) {
@@ -793,19 +835,38 @@ fn read_row(table: &Table, api: i64, ids: &[&str], warnings: &mut Vec<String>) -
         "toggle" => (RowKind::Toggle { key: key()? }, flag(&mut row)),
         "check" => (RowKind::Check { key: key()? }, flag(&mut row)),
         "value" => {
+            if !table.contains_key("choices") {
+                row.warnings
+                    .push(format!("{at}choices: missing in a value row, ignored"));
+                return None;
+            }
             let choices = row.texts("choices");
             let mut labels = row.texts("labels");
             labels.resize(choices.len(), String::new());
-            let default = row
-                .text("default")
-                .filter(|d| choices.contains(d))
-                .or_else(|| choices.first().cloned())?;
+            // `choices = []`: the module sends them with `ui.update`; until
+            // then the row shows "…" and its saved value, or `default`.
+            let default = if choices.is_empty() {
+                row.text("default").unwrap_or_default()
+            } else {
+                row.text("default")
+                    .filter(|d| choices.contains(d))
+                    .or_else(|| choices.first().cloned())?
+            };
             let key = key()?;
+            let action = row
+                .text("action")
+                .filter(|_| api >= API_3)
+                .map(|action| (action, row.text("action_label").unwrap_or_default()));
+            let alt = row
+                .text("alt_action")
+                .map(|action| (action, row.text("alt_label").unwrap_or_default()));
             (
                 RowKind::Value {
                     key,
                     choices,
                     labels,
+                    action,
+                    alt,
                 },
                 default,
             )
@@ -833,6 +894,8 @@ fn read_row(table: &Table, api: i64, ids: &[&str], warnings: &mut Vec<String>) -
                     key: key()?,
                     choices,
                     labels,
+                    action: None,
+                    alt: None,
                 },
                 default,
             )
@@ -903,6 +966,15 @@ fn read_row(table: &Table, api: i64, ids: &[&str], warnings: &mut Vec<String>) -
             },
             String::new(),
         ),
+        "page" => {
+            let wanted = row.text("page")?;
+            let Some(page) = ids.iter().position(|id| *id == wanted) else {
+                row.warnings
+                    .push(format!("{at}page: no page {wanted}, ignored"));
+                return None;
+            };
+            (RowKind::Page { page: page as u8 }, String::new())
+        }
         "keyboard" => (
             RowKind::Keyboard {
                 key: key()?,
@@ -1294,6 +1366,98 @@ icon = "zap"
             RowKind::Action { icon: None, .. }
         ));
         for expected in ["layout", "hint", "open", "alt_action", "icon", "type stats"] {
+            assert!(
+                warnings.iter().any(|w| w.contains(expected)),
+                "{expected}: {warnings:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn api_3_pages_get_a_side_panel_tuner_rows_and_page_links() {
+        let three = r#"
+id = "desempenho"
+version = "1.0.0"
+api_version = 3
+[run]
+runtime = "bash"
+entry = "main.sh"
+mode = "daemon"
+[[settings.pages]]
+id = "main"
+[[settings.pages.rows]]
+type = "page"
+page = "tensoes"
+label = "@row.tensoes"
+[[settings.pages.rows]]
+type = "page"
+page = "nenhuma"
+[[settings.pages]]
+id = "tensoes"
+aside = [
+    { title = "@aside.boot", text = "@aside.boot_text" },
+    { title = "@aside.steps", text = "@aside.steps_text" },
+    { text = "@aside.more" },
+    { title = "@aside.fourth", text = "@aside.fourth" },
+]
+aside_note = "@aside.note"
+[[settings.pages.rows]]
+type = "value"
+key = "cpu_1416"
+choices = []
+action = "aplicar"
+action_label = "@apply"
+alt_action = "todos"
+alt_label = "@all"
+[[settings.pages.rows]]
+type = "value"
+key = "cpu_1296"
+choices = []
+default = "1300"
+[[settings.pages.rows]]
+type = "value"
+key = "sem_escolhas"
+"#;
+        let (manifest, warnings) = parse(three).unwrap();
+        let (main, tuner) = (&manifest.pages[0], &manifest.pages[1]);
+        assert_eq!(main.rows.len(), 1, "{warnings:?}");
+        assert!(matches!(main.rows[0].kind, RowKind::Page { page: 1 }));
+        assert!(warnings.iter().any(|w| w.contains("no page nenhuma")));
+        assert_eq!(
+            tuner.aside,
+            [
+                ("@aside.boot".into(), "@aside.boot_text".into()),
+                ("@aside.steps".into(), "@aside.steps_text".into()),
+                (String::new(), "@aside.more".into()),
+            ]
+        );
+        assert!(warnings.iter().any(|w| w.contains("more than 3 blocks")));
+        assert_eq!(tuner.aside_note.as_deref(), Some("@aside.note"));
+        assert_eq!(tuner.rows.len(), 2, "a value row needs choices, if empty");
+        assert!(warnings.iter().any(|w| w.contains("choices: missing")));
+        assert!(matches!(
+            &tuner.rows[0].kind,
+            RowKind::Value { choices, action: Some((a, al)), alt: Some((x, xl)), .. }
+                if choices.is_empty() && a == "aplicar" && al == "@apply"
+                    && x == "todos" && xl == "@all"
+        ));
+        assert_eq!(tuner.rows[0].default, "");
+        assert_eq!(tuner.rows[1].default, "1300", "kept until the choices come");
+        // Before API 3: no panel, no page row, no buttons on a value row.
+        let (manifest, warnings) =
+            parse(&three.replace("api_version = 3", "api_version = 2")).unwrap();
+        let (main, tuner) = (&manifest.pages[0], &manifest.pages[1]);
+        assert!(main.rows.is_empty());
+        assert!(tuner.aside.is_empty() && tuner.aside_note.is_none());
+        assert!(matches!(
+            &tuner.rows[0].kind,
+            RowKind::Value {
+                action: None,
+                alt: None,
+                ..
+            }
+        ));
+        for expected in ["aside", "aside_note", "action_label", "type page"] {
             assert!(
                 warnings.iter().any(|w| w.contains(expected)),
                 "{expected}: {warnings:?}"

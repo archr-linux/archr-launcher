@@ -1048,6 +1048,11 @@ impl Host {
                 context
             }
             (None, Some(item)) => json!({"item": item}),
+            // A or X on a `value` row: the setting and the value shown.
+            (None, None) if c.setting.is_some() => {
+                let (key, value) = c.setting.unwrap_or_default();
+                json!({"key": key, "value": value})
+            }
             (None, None) => json!({"system": c.system, "game_key": c.game_key, "rom": c.rom}),
         });
         let params = json!({"action": action, "context": context});
@@ -1100,7 +1105,9 @@ impl Host {
         use archr_ui::modules::RowKind;
         let valid = match &row.kind {
             RowKind::Toggle { .. } | RowKind::Check { .. } => matches!(value, "0" | "1"),
-            RowKind::Value { choices, .. } => choices.iter().any(|c| c == value),
+            RowKind::Value { choices, .. } => {
+                choices.iter().any(|c| c == value) || self.sent_choice(id, key, value)
+            }
             RowKind::Keyboard { max, .. } => {
                 value.chars().count() <= usize::from(*max) && !value.chars().any(char::is_control)
             }
@@ -1110,17 +1117,9 @@ impl Host {
             log::warn!("Module {id}: setting {key} refused");
             return;
         }
-        let owner = self.owner(id);
-        let Some(module) = self.view.modules.iter_mut().find(|m| m.id == id) else {
+        let Some(json) = self.store_setting(id, &manifest, key, value) else {
             return;
         };
-        module.settings.insert(key.to_owned(), value.to_owned());
-        if let Err(error) =
-            registry::save_settings(&self.config.dirs, &manifest, &module.settings, owner)
-        {
-            log::warn!("Module {id}: cannot save settings: {error}");
-        }
-        let json = registry::settings_json(&manifest, &module.settings);
         self.publish();
         let data = json!({"key": key, "value": json[key]});
         for process in [id.to_owned(), app_key(id)] {
@@ -1128,6 +1127,110 @@ impl Host {
                 self.send(&process, &self.event_for(id, "settings.changed", &data));
             }
         }
+    }
+    /// One of the choices the module sent for a `value` row (`ui.update`).
+    fn sent_choice(&self, id: &str, key: &str, value: &str) -> bool {
+        self.view
+            .row(id, key)
+            .and_then(|r| r.choices.as_ref())
+            .is_some_and(|(choices, _)| choices.iter().any(|c| c == value))
+    }
+    /// Saves a checked setting; the settings as the module reads them.
+    fn store_setting(
+        &mut self,
+        id: &str,
+        manifest: &manifest::Manifest,
+        key: &str,
+        value: &str,
+    ) -> Option<Json> {
+        let owner = self.owner(id);
+        let module = self.view.modules.iter_mut().find(|m| m.id == id)?;
+        module.settings.insert(key.to_owned(), value.to_owned());
+        if let Err(error) =
+            registry::save_settings(&self.config.dirs, manifest, &module.settings, owner)
+        {
+            log::warn!("Module {id}: cannot save settings: {error}");
+        }
+        Some(registry::settings_json(manifest, &module.settings))
+    }
+    /// `ui.update` for a `value` row (`row:<key>`): the choices and their
+    /// labels, the tag, the subtitle, and the value, saved without
+    /// `settings.changed` (the module chose it). Bad choices change nothing.
+    fn row_update(&mut self, id: &str, key: &str, params: &Json) {
+        let Some(installed) = self.find(id) else {
+            return;
+        };
+        let Some(manifest) = installed.manifest.clone() else {
+            return;
+        };
+        let message = |value: &Json| installed.message(value);
+        let short = |v: &Json| {
+            v.as_str()
+                .filter(|t| (1..=64).contains(&t.len()) && !t.chars().any(char::is_control))
+                .map(str::to_owned)
+        };
+        let choices = params["choices"].as_array().and_then(|list| {
+            let choices: Option<Vec<String>> = list.iter().map(short).collect();
+            match choices {
+                Some(c) if c.len() <= archr_ui::modules::CHOICES => Some(c),
+                _ => {
+                    log::warn!("Module {id}: choices of {key} refused");
+                    None
+                }
+            }
+        });
+        let choices = choices.map(|choices| {
+            let labels: Option<Vec<String>> = params["labels"]
+                .as_array()
+                .filter(|l| l.len() == choices.len())
+                .and_then(|l| l.iter().map(message).collect());
+            if labels.is_none() && !params["labels"].is_null() {
+                log::warn!("Module {id}: labels of {key} refused");
+            }
+            let labels = labels.unwrap_or_else(|| choices.clone());
+            (choices, labels)
+        });
+        let badge = params.get("badge").map(|b| message(b).unwrap_or_default());
+        let subtitle = params.get("subtitle").map(message);
+        let tone = params["tone"].as_str().map(archr_ui::modules::Tone::parse);
+        let value = params["value"].as_str().map(str::to_owned);
+        let state = self
+            .view
+            .rows
+            .entry((id.to_owned(), key.to_owned()))
+            .or_default();
+        if let Some(choices) = choices {
+            state.choices = Some(choices);
+        }
+        if let Some(badge) = badge {
+            state.badge = badge;
+        }
+        if let Some(tone) = tone {
+            state.tone = tone;
+        }
+        if let Some(subtitle) = subtitle {
+            state.subtitle = subtitle.filter(|s| !s.is_empty());
+        }
+        let declared = manifest
+            .pages
+            .iter()
+            .flat_map(|p| &p.rows)
+            .find(|r| r.kind.key() == Some(key))
+            .is_some_and(|r| match &r.kind {
+                archr_ui::modules::RowKind::Value { choices, .. } => {
+                    value.as_ref().is_some_and(|v| choices.contains(v))
+                }
+                _ => false,
+            });
+        let saved = self.module(id).and_then(|m| m.settings.get(key)).cloned();
+        if let Some(value) = value.filter(|v| saved.as_ref() != Some(v)) {
+            if declared || self.sent_choice(id, key, &value) {
+                self.store_setting(id, &manifest, key, &value);
+            } else {
+                log::warn!("Module {id}: value of {key} refused");
+            }
+        }
+        self.touch();
     }
     fn enable(&mut self, id: &str, on: bool, grant: bool) {
         let tokens: Vec<String> = match self.find(id).and_then(|i| i.manifest.as_ref()) {
@@ -1932,6 +2035,25 @@ impl Host {
                     return;
                 };
                 let key = (id.to_owned(), target.to_owned());
+                // A `value` row: `row:<key>` names its setting (API 3).
+                let setting = target.strip_prefix("row:").filter(|k| {
+                    installed.manifest.as_ref().is_some_and(|m| {
+                        m.pages.iter().flat_map(|p| &p.rows).any(|r| {
+                            matches!(r.kind, archr_ui::modules::RowKind::Value { .. })
+                                && r.kind.key() == Some(k)
+                        })
+                    })
+                });
+                if let Some(setting) = setting {
+                    let setting = setting.to_owned();
+                    if params["hidden"] == true {
+                        self.view.hidden.insert(key);
+                    } else {
+                        self.view.hidden.remove(&key);
+                    }
+                    self.row_update(id, &setting, params);
+                    return;
+                }
                 let message = |field: &str| params.get(field).and_then(|v| installed.message(v));
                 let (value, detail) = (message("value"), message("detail"));
                 let items: Option<Vec<archr_ui::modules::Item>> =

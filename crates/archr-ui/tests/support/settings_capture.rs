@@ -2181,6 +2181,8 @@ fn module_view() -> crate::modules::View {
             title: "Bateria detalhada".into(),
             detail: false,
             hint: None,
+            aside: Vec::new(),
+            aside_note: None,
             rows: vec![
                 row(
                     "Agora",
@@ -2208,6 +2210,8 @@ fn module_view() -> crate::modules::View {
                             "15 segundos".into(),
                             "30 segundos".into(),
                         ],
+                        action: None,
+                        alt: None,
                     },
                     "15",
                 ),
@@ -2294,6 +2298,8 @@ fn module_view() -> crate::modules::View {
             title: "Backup na nuvem".into(),
             detail: false,
             hint: None,
+            aside: Vec::new(),
+            aside_note: None,
             rows: vec![
                 row(
                     "Enviando saves",
@@ -2357,6 +2363,134 @@ fn module_view() -> crate::modules::View {
     }
     view
 }
+/// Desempenho e chip › Tensões e overclock (Modulo-tuner-tensao): value
+/// rows whose choices, tags and values the module sent, a side panel and
+/// A, X and B in the footer; opened from the module's first page by its
+/// `page` row.
+fn tuner_page() -> Settings {
+    use crate::modules::{Module, Page as ModPage, Row as ModRow, RowKind, RowState, Tone};
+    let value = |key: &str, label: &str, subtitle: &str, section: Option<&str>| ModRow {
+        label: label.into(),
+        subtitle: Some(subtitle.into()),
+        section: section.map(Into::into),
+        kind: RowKind::Value {
+            key: key.into(),
+            choices: Vec::new(),
+            labels: Vec::new(),
+            action: Some(("aplicar".into(), "Aplicar".into())),
+            alt: Some(("todos".into(), "Todos".into())),
+        },
+        default: String::new(),
+    };
+    let module = Module {
+        id: "desempenho".into(),
+        name: "Desempenho e chip".into(),
+        enabled: true,
+        granted: true,
+        pages: vec![
+            ModPage {
+                id: "main".into(),
+                title: "Desempenho e chip".into(),
+                detail: false,
+                hint: None,
+                aside: Vec::new(),
+                aside_note: None,
+                rows: vec![ModRow {
+                    label: "Tensões e overclock".into(),
+                    subtitle: Some("Undervolt da CPU a partir do próximo boot".into()),
+                    section: None,
+                    kind: RowKind::Page { page: 1 },
+                    default: String::new(),
+                }],
+            },
+            ModPage {
+                id: "tensoes".into(),
+                title: "Tensões e overclock".into(),
+                detail: false,
+                hint: Some("X: mesmo undervolt em toda a CPU".into()),
+                aside: vec![
+                    (
+                        "Ao reiniciar".into(),
+                        "Tudo vai para overlays/tuning.dtbo. O DTB do sistema não é \
+                         tocado, e os updates não apagam o ajuste."
+                            .into(),
+                    ),
+                    (
+                        "Passos de 12,5 mV".into(),
+                        "Abaixo do padrão, um de cada vez, com benchmark entre eles.".into(),
+                    ),
+                ],
+                aside_note: Some(
+                    "vdd_logic alimenta GPU, RAM e o resto do chip: margem pequena.".into(),
+                ),
+                rows: vec![
+                    value(
+                        "cpu_1416",
+                        "1416 MHz",
+                        "padrão 1350 mV",
+                        Some("CPU · vdd_arm"),
+                    ),
+                    value("cpu_1296", "1296 MHz", "para chips que travam a 1416", None),
+                    value("cpu_1200", "1200 MHz", "passo novo", None),
+                    value("cpu_1008", "1008 MHz", "padrão 1175 mV", None),
+                    value(
+                        "gpu_650",
+                        "GPU 650 MHz",
+                        "turbo · teto do regulador",
+                        Some("GPU e RAM · vdd_logic, compartilhado"),
+                    ),
+                ],
+            },
+        ],
+        settings: [
+            ("cpu_1416", "1325"),
+            ("cpu_1296", "1300"),
+            ("cpu_1200", "1250"),
+            ("cpu_1008", "1175"),
+            ("gpu_650", "1150"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_owned(), v.to_owned()))
+        .collect(),
+        ..Module::default()
+    };
+    let mut view = crate::modules::View {
+        modules: vec![module],
+        ..Default::default()
+    };
+    // What the module sent: 12.5 mV steps under each default, and tags.
+    for (key, top, badge) in [
+        ("cpu_1416", 13500, ""),
+        ("cpu_1296", 13250, "novo"),
+        ("cpu_1200", 12750, "novo"),
+        ("cpu_1008", 11750, ""),
+        ("gpu_650", 11500, ""),
+    ] {
+        let choices: Vec<String> = (0..8)
+            .map(|n| (top - n * 125) as f64 / 10.)
+            .map(|mv| format!("{mv}"))
+            .collect();
+        let labels = choices
+            .iter()
+            .map(|c| format!("{} mV", c.replace('.', ",")))
+            .collect();
+        view.rows.insert(
+            ("desempenho".into(), key.into()),
+            RowState {
+                choices: Some((choices, labels)),
+                badge: badge.into(),
+                tone: Tone::Info,
+                subtitle: None,
+            },
+        );
+    }
+    let mut state = ready();
+    state.set_modules(std::sync::Arc::new(view));
+    state.open_module_page("desempenho", 0);
+    state.handle(Button::A);
+    state
+}
+
 fn module_pages(dir: &std::path::Path) -> Vec<(&'static str, Settings)> {
     use crate::modules::{Card, Offer, Permission, StoreReply, Tab as ModTab};
     let view = std::sync::Arc::new(module_view());
@@ -2619,6 +2753,7 @@ fn module_pages(dir: &std::path::Path) -> Vec<(&'static str, Settings)> {
         ("pagina-modulo", page),
         ("loja-modulos", store),
         ("permissoes", offer),
+        ("tensoes", tuner_page()),
     ]
 }
 #[test]
@@ -3289,6 +3424,8 @@ fn tune_pages(language: &str, picture: &std::path::Path) -> Vec<(&'static str, S
                 title: tr("@title", &[]),
                 detail: false,
                 hint: Some(tr("@hint.page", &[])),
+                aside: Vec::new(),
+                aside_note: None,
                 rows: vec![
                     row(
                         RowKind::Stats {
@@ -3313,6 +3450,8 @@ fn tune_pages(language: &str, picture: &std::path::Path) -> Vec<(&'static str, S
                 title: tr("@title", &[]),
                 detail: true,
                 hint: Some(tr("@hint.detail", &[])),
+                aside: Vec::new(),
+                aside_note: None,
                 rows: vec![
                     row(
                         RowKind::Header {
