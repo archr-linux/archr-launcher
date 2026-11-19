@@ -557,14 +557,19 @@ impl Backend {
             .filter_map(Result::ok)
             .find(|e| e.file_name().to_string_lossy().contains("gpu"))
             .map(|e| format!("/sys/class/devfreq/{}", e.file_name().to_string_lossy()));
-        let resolution = self
-            .read("/sys/class/graphics/fb0/virtual_size")
-            .replace(',', " × ");
-        // fb mode strings include refresh where exported (e.g. U:640x480p-60).
+        // fb mode strings carry the panel's mode and, where exported, its
+        // refresh (e.g. U:640x480p-60). virtual_size is the drawing area:
+        // double-buffered it is twice the height (640,960), so it is only
+        // the fallback.
         let mode = self.read("/sys/class/graphics/fb0/mode");
+        let resolution = mode_size(&mode).unwrap_or_else(|| {
+            self.read("/sys/class/graphics/fb0/virtual_size")
+                .replace(',', " × ")
+        });
         let refresh = mode
             .rsplit_once('-')
             .and_then(|(_, s)| s.parse::<f64>().ok())
+            .filter(|v| *v > 0.)
             .map(|v| format!("@{v} Hz"))
             .unwrap_or_default();
         let current = devfreq
@@ -996,5 +1001,35 @@ mod tests {
         std::fs::create_dir_all(dir.path().join("usr/share/archr")).unwrap();
         std::fs::write(dir.path().join("usr/share/archr/releases"), "2.1.3 3.0.3\n").unwrap();
         assert_eq!(backend.system_version(), "v3.0.3 · 2.1.3");
+    }
+}
+
+/// "640 × 480" from an fb mode such as "U:640x480p-60".
+fn mode_size(mode: &str) -> Option<String> {
+    let size = mode.split(':').next_back()?;
+    let size = size.split(['p', 'i', '-']).next()?;
+    let (w, h) = size.split_once('x')?;
+    let (w, h) = (w.trim().parse::<u32>().ok()?, h.trim().parse::<u32>().ok()?);
+    (w > 0 && h > 0).then(|| format!("{w} × {h}"))
+}
+
+#[cfg(test)]
+mod mode_size_tests {
+    #[test]
+    fn the_resolution_is_the_mode_not_the_double_buffered_area() {
+        assert_eq!(
+            super::mode_size("U:640x480p-0").as_deref(),
+            Some("640 × 480")
+        );
+        assert_eq!(
+            super::mode_size("U:720x720p-60").as_deref(),
+            Some("720 × 720")
+        );
+        assert_eq!(
+            super::mode_size("S:1920x1080i-50").as_deref(),
+            Some("1920 × 1080")
+        );
+        assert_eq!(super::mode_size(""), None);
+        assert_eq!(super::mode_size("garbage"), None);
     }
 }
