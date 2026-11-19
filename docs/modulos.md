@@ -157,12 +157,13 @@ default = true
 |---|---|---|
 | `toggle` | interruptor | `key`, `default` (bool) |
 | `check` | caixa marcada com A | `key`, `default` (bool) |
-| `value` | ‹ › entre escolhas | `key`, `choices`, `labels`, `default` |
+| `value` | ‹ › entre escolhas | `key`, `choices`, `labels`, `default`; API 3: `choices = []` (as escolhas vêm do módulo, seção 9.2), `action` + `action_label` (A), `alt_action` + `alt_label` (X) |
 | `slider` | ‹ › numérico (vira um `value` com os passos) | `key`, `min`, `max`, `step`, `default` |
 | `action` | A envia `action.invoke`; mostra "…" até a resposta | `action`, `confirm` (pergunta opcional) |
 | `text` | só leitura; valor vem de `ui.update` para `row:<id>` | `id`, `value` inicial |
 | `keyboard` | abre o teclado do launcher | `key`, `max` (≤ 64), `secret` |
 | `progress` | título, texto à direita e barra; tudo de `ui.update` para `row:<id>` (`value`, `progress` 0–100) | `id` |
+| `page` (API 3) | A abre outra página do módulo; B volta | `page` (o `id` da página), `label`, `subtitle` |
 | `list` | linhas que o módulo manda: `ui.update` para `row:<id>` com `items: [{id, title, subtitle?, value?, action?}]` (até 20); A numa linha com `id` e `action` envia `action.invoke` com `context: {item: "<id>"}` (o id, não a posição: a lista pode mudar entre o desenho e o botão) | `id` |
 
 Os valores são do launcher (um dono por chave): ele grava
@@ -322,7 +323,7 @@ leitura), `ARCHR_MODULE_SETTINGS` (JSON dos ajustes), `ARCHR_MODULE_SECRETS`
 | método | params | result |
 |---|---|---|
 | `initialize` (só daemon) | `{api_version, launcher_version, language, device, settings, permissions, capabilities}` | `{"ready": true}` |
-| `action.invoke` | `{action, context: {system?, game_key?, rom?}}` | `{}` |
+| `action.invoke` | `{action, context: {system?, game_key?, rom?}}`; de um item de `list`, `context: {item}`; de A ou X numa linha `value` (API 3), `context: {key, value}` | `{}` |
 | `shutdown` (só daemon) | `{}` | `{}`, e sair |
 | `launch.before` (só daemon, com `hooks = ["launch"]`) | `{game: {system, game_key, name}}` | `{"decision": "allow"}` ou `{"decision": "modify", "changes": {"governor": "<g>"}}` |
 
@@ -353,7 +354,7 @@ só para quem assinou em `[[hooks]]`:
 
 | método | tipo | params |
 |---|---|---|
-| `ui.update` | notificação | `{target: "tile:<id>" \| "shortcut:<id>" \| "widget:<id>" \| "row:<id>" \| "quick:<id>", value?: texto ou {key, args}, detail?: texto, progress?: 0–100, items?: [...], hidden?: bool}` |
+| `ui.update` | notificação | `{target: "tile:<id>" \| "shortcut:<id>" \| "widget:<id>" \| "row:<id>" \| "quick:<id>", value?: texto ou {key, args}, detail?: texto, progress?: 0–100, items?: [...], hidden?: bool}`; numa linha `value`, `row:<key>` com `choices?`, `labels?`, `value?`, `badge?`, `tone?`, `subtitle?`, `hidden?` (API 3, seção 9.2) |
 | `ui.notify` | notificação | `{text: texto ou {key,args}}` ou `{key, args}`; faixa de aviso, no máx. 1 a cada 10 s |
 | `log` | notificação | `{level: "info" \| "error", message}` |
 | `settings.set` | pedido | `{key, value}`, só chaves declaradas no manifesto → `{}` |
@@ -726,6 +727,12 @@ Todos são desenhados pelo launcher; o conteúdo vem de `ui.update` com
 | `open = "<página>"` | linha `list` | A num item envia a ação dele e abre essa página, que mostra só aquele item |
 | `alt_action`, `alt_label` | linha `list` | X num item envia `alt_action` com `context.item`; o rodapé mostra `alt_label` |
 | `icon` | linha `action` | ícone Lucide do botão numa página de detalhe |
+| `aside = [{title, text}, ...]` | página | painel à direita das linhas, até 3 blocos título + texto (`@chave` do locales); a coluna das linhas estreita |
+| `aside_note` | página | linha pequena no pé do painel |
+| `action`, `action_label` | linha `value` | A envia `action` com `context: {key, value}` (a chave da linha e a escolha mostrada); o rodapé mostra `action_label` |
+| `alt_action`, `alt_label` | linha `value` | X, do mesmo jeito; o rodapé mostra `alt_label` |
+| `choices = []` | linha `value` | as escolhas vêm do módulo (abaixo); até lá a linha mostra "…" e ◀▶ não fazem nada |
+| `type = "page"`, `page = "<id>"` | linha | A abre aquela página do módulo; B volta à anterior |
 
 | `type` | desenho | campos dos itens |
 |---|---|---|
@@ -733,6 +740,78 @@ Todos são desenhados pelo launcher; o conteúdo vem de `ui.update` com
 | `header` | cabeçalho da página de detalhe: a capa do jogo, nome, linha e selo | `id` (o do item aberto), `title`, `subtitle`, `badge`, `tone`, `game: {system, game_key}` |
 | `bars` | barras com título à esquerda e valor à direita; o `label` da linha é o título da seção | `title`, `value`, `progress` (0–100), `tone` |
 | `facts` | linhas nome/valor na coluna da direita | `title`, `value`, `tone` |
+
+**Linhas `value` vivas.** `ui.update` com `target: "row:<key>"` (a `key` da
+linha, não um `id`) muda uma linha `value`; cada campo é opcional e só o que
+vier muda:
+
+| campo | efeito |
+|---|---|
+| `choices` | até 32 textos (1–64 bytes cada) no lugar das escolhas do manifesto; uma lista maior ou com algo que não é texto é recusada inteira |
+| `labels` | o que a linha mostra para cada escolha, do mesmo tamanho de `choices` (texto, `@chave` ou `{key, args}`); sem ele, as próprias escolhas |
+| `value` | a escolha atual: grava o valor da linha **sem** `settings.changed` (o módulo é quem escolheu); precisa ser uma das escolhas (do manifesto ou enviadas) |
+| `badge`, `tone` | selo antes do valor, na cor do `tone`; `""` tira |
+| `subtitle` | linha de baixo no lugar da declarada; `""` volta à declarada |
+| `hidden` | `true` esconde a linha; um `ui.update` sem `hidden: true` mostra de novo |
+
+◀▶ do usuário escolhem entre as escolhas enviadas, gravam e mandam
+`settings.changed` com o valor como texto (escolhas enviadas nunca viram
+número no arquivo de ajustes). Numa página com `aside`, as linhas `value` têm
+44 px, o valor fica à direita e só a linha com o foco mostra ◀ ▶; o selo vem
+antes do valor. O `hint` da página continua sendo o texto à esquerda do
+rodapé; à direita, A com `action_label`, X com `alt_label` e B Voltar, quando a
+linha com o foco os tem.
+
+Exemplo (Desempenho e chip › Tensões e overclock):
+
+```toml
+[[settings.pages]]
+id = "main"
+title = "@title"
+
+[[settings.pages.rows]]
+type = "page"
+page = "tensoes"
+label = "@row.tensoes"
+subtitle = "@row.tensoes_sub"
+
+[[settings.pages]]
+id = "tensoes"
+title = "@title.tensoes"
+hint = "@hint.tensoes"              # "X: mesmo undervolt em toda a CPU"
+aside = [
+    { title = "@aside.boot", text = "@aside.boot_text" },
+    { title = "@aside.steps", text = "@aside.steps_text" },
+]
+aside_note = "@aside.note"
+
+[[settings.pages.rows]]
+type = "value"
+key = "cpu_1416"
+label = "1416 MHz"
+subtitle = "@row.default_1350"
+section = "@section.cpu"
+choices = []
+action = "aplicar"
+action_label = "@apply"
+alt_action = "todos"
+alt_label = "@all"
+```
+
+```json
+{"jsonrpc":"2.0","method":"ui.update","params":{"target":"row:cpu_1416",
+ "choices":["1350","1337.5","1325"],"labels":["1350 mV","1337,5 mV","1325 mV"],
+ "value":"1325","badge":"novo","tone":"info"}}
+```
+
+A na linha manda
+`{"method":"action.invoke","params":{"action":"aplicar","context":{"key":"cpu_1416","value":"1325"}}}`.
+
+**Outras páginas.** A primeira página (`main`) é a que abre por
+Sistema › Módulos. As outras abrem por uma linha `type = "page"` (B volta),
+por um bloco, atalho ou widget do Start com `open = "<id>"`, ou, a de detalhe,
+por um item de `list` com `open`. O caminho no topo fica
+"Módulos / <título da primeira página> / <título da página>".
 
 Itens de `list` ganham `detail` (segunda linha, à direita), `badge` (selo no
 lugar do valor), `tone` e `open: false`: A envia a ação do item sem abrir a
