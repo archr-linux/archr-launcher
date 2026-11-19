@@ -1531,15 +1531,21 @@ fn perf_limits_sets_only_the_kernels_own_ceilings_and_returns_the_gpu_score() {
 }
 
 #[test]
-fn boot_tuning_asks_only_for_offsets_in_the_systems_range() {
+fn boot_tuning_asks_only_for_voltages_in_the_regulators_steps() {
     let root = tempfile::tempdir().unwrap();
     let base = root.path();
     system_bin(base);
-    // archr-boot-tuning logs its arguments; brief answers with the state.
+    // archr-boot-tuning logs its arguments; brief answers with a table
+    // longer than the 200 bytes of the other calls.
+    let table = format!(
+        "{{\"cpu\": [{}]}}",
+        vec!["[1416, 1350, 1350, 1300, 1375]"; 12].join(", ")
+    );
+    assert!(table.len() > 200 && table.len() < 600);
     let script = format!(
         "#!/bin/sh\necho \"archr-boot-tuning $*\" >> \"{log}\"\n\
-         [ \"$1\" = brief ] && echo '{{\"offset\": -25, \"pending\": true}}'\n\
-         [ \"$1\" = cpu ] && echo '{{\"ok\": true, \"reboot\": true}}'\nexit 0\n",
+         [ \"$1\" = brief ] && echo '{table}'\n\
+         [ \"$1\" != brief ] && echo '{{\"ok\": true, \"reboot\": true}}'\nexit 0\n",
         log = base.join("system.log").display()
     );
     let path = base.join("bin/archr-boot-tuning");
@@ -1559,11 +1565,28 @@ fn boot_tuning_asks_only_for_offsets_in_the_systems_range() {
     .unwrap();
     let call = |id: &str, params: &str| rpc(id, "system.call", params);
     let lines = [
-        call("o1", r#"{"name":"cpu_offset","value":-25}"#),
-        // Past the range, off the 5 mV step, a string.
-        call("o2", r#"{"name":"cpu_offset","value":-50}"#),
-        call("o3", r#"{"name":"cpu_offset","value":-12}"#),
-        call("o4", r#"{"name":"cpu_offset","value":"-25; reboot"}"#),
+        call("o1", r#"{"name":"cpu_offset","value":-25000}"#),
+        // Past the range, off the 12.5 mV step, a string.
+        call("o2", r#"{"name":"cpu_offset","value":-62500}"#),
+        call("o3", r#"{"name":"cpu_offset","value":-5000}"#),
+        call("o4", r#"{"name":"cpu_offset","value":"-25000; reboot"}"#),
+        call(
+            "t1",
+            r#"{"name":"tuning_set","value":{"table":"cpu","mhz":1296,"uv":1312500}}"#,
+        ),
+        // A table of its own, a voltage off the step, past the rail.
+        call(
+            "t2",
+            r#"{"name":"tuning_set","value":{"table":"dmc","mhz":666,"uv":1150000}}"#,
+        ),
+        call(
+            "t3",
+            r#"{"name":"tuning_set","value":{"table":"gpu","mhz":650,"uv":1130000}}"#,
+        ),
+        call(
+            "t4",
+            r#"{"name":"tuning_set","value":{"table":"gpu","mhz":650,"uv":1500000}}"#,
+        ),
         call("s1", r#"{"name":"tuning_status"}"#),
         // Not this module's.
         call("p1", r#"{"name":"cpu_max","value":0}"#),
@@ -1574,37 +1597,45 @@ fn boot_tuning_asks_only_for_offsets_in_the_systems_range() {
     let log = base.join("module-data/desempenho/seen.log");
     let init = fs::read_to_string(&log).unwrap();
     assert!(
-        init.contains(r#""boot_tuning":{"cpu_offset_mv":[-40,25],"step_mv":5}"#),
+        init.contains(r#""boot_tuning":{"cpu_offset_uv":[-50000,25000],"step_uv":12500}"#),
         "{init}"
     );
     probe.invoke("desempenho", "go");
-    let seen = until_all(&log, &["o1", "o2", "o3", "o4", "s1", "p1"]);
-    let refused = |id: &str, code: &str| answer(&seen, id).contains(code);
-    assert!(
-        answer(&seen, "o1").contains(r#""output":"{\"ok\": true, \"reboot\": true}""#),
-        "{seen}"
+    let seen = until_all(
+        &log,
+        &["o1", "o2", "o3", "o4", "t1", "t2", "t3", "t4", "s1", "p1"],
     );
-    assert!(refused("o2", "-32602") && refused("o3", "-32602"), "{seen}");
-    assert!(refused("o4", "-32602"), "{seen}");
+    let refused = |id: &str, code: &str| answer(&seen, id).contains(code);
+    let applied = r#""output":"{\"ok\": true, \"reboot\": true}""#;
+    assert!(answer(&seen, "o1").contains(applied), "{seen}");
+    assert!(answer(&seen, "t1").contains(applied), "{seen}");
+    for id in ["o2", "o3", "o4", "t2", "t3", "t4"] {
+        assert!(refused(id, "-32602"), "{id}: {seen}");
+    }
+    let whole = format!("\"output\":{}", serde_json::to_string(&table).unwrap());
     assert!(
-        answer(&seen, "s1").contains(r#""output":"{\"offset\": -25, \"pending\": true}""#),
-        "{seen}"
+        answer(&seen, "s1").contains(&whole),
+        "the whole table: {seen}"
     );
     assert!(refused("p1", "-32001"), "{seen}");
-    // Each call runs on its own thread: in either order.
+    // Each call runs on its own thread: in any order.
     let ran = fs::read_to_string(base.join("system.log")).unwrap();
     let mut ran: Vec<_> = ran.lines().collect();
     ran.sort_unstable();
     assert_eq!(
         ran,
-        ["archr-boot-tuning brief", "archr-boot-tuning cpu -25"],
+        [
+            "archr-boot-tuning brief",
+            "archr-boot-tuning offset cpu -25000",
+            "archr-boot-tuning set cpu 1296 1312500",
+        ],
         "nothing else ran"
     );
-    // 0 is the stock voltages: reset, after the 5 s between two offsets.
+    // The stock voltages everywhere, after the 5 s between two offsets.
     std::thread::sleep(Duration::from_millis(5_100));
     fs::write(
         dir.join("reset.jsonl"),
-        call("r1", r#"{"name":"cpu_offset","value":0}"#),
+        call("r1", r#"{"name":"tuning_reset"}"#),
     )
     .unwrap();
     probe.invoke("desempenho", "reset");

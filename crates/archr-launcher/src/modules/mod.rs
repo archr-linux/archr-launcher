@@ -28,9 +28,13 @@ pub const DAEMONS: usize = 3;
 /// ~2 s at 408 MHz (powersave), more while the boot is busy: 3 s was not
 /// enough there (a Soysauce on powersave, 2026-11-15).
 const INITIALIZE: Duration = Duration::from_secs(10);
-/// The CPU voltage offsets, in mV, a `boot-tuning` module may ask for:
-/// archr-boot-tuning's own range (-50 already hangs some R36S chips).
-const BOOT_TUNING_MV: std::ops::RangeInclusive<i64> = -40..=25;
+/// The CPU voltage offset, in µV, a `boot-tuning` module may ask for on
+/// every step at once: archr-boot-tuning's own range, in the regulators'
+/// 12.5 mV steps (-50 mV already hangs the top steps of some R36S chips).
+const BOOT_TUNING_OFFSET_UV: std::ops::RangeInclusive<i64> = -50_000..=25_000;
+/// One step's voltage, in µV: the widest any rail of these SoCs takes.
+const BOOT_TUNING_UV: std::ops::RangeInclusive<u64> = 850_000..=1_450_000;
+const BOOT_TUNING_STEP_UV: i64 = 12_500;
 const INVOKE: Duration = Duration::from_secs(1);
 /// A one-shot's whole run: start, one message, exit.
 const ONESHOT: Duration = Duration::from_secs(2);
@@ -1557,8 +1561,8 @@ impl Host {
         }
         if permissions.iter().any(|p| p == "system:boot-tuning") {
             params["boot_tuning"] = json!({
-                "cpu_offset_mv": [BOOT_TUNING_MV.start(), BOOT_TUNING_MV.end()],
-                "step_mv": 5,
+                "cpu_offset_uv": [BOOT_TUNING_OFFSET_UV.start(), BOOT_TUNING_OFFSET_UV.end()],
+                "step_uv": BOOT_TUNING_STEP_UV,
             });
         }
         self.send(
@@ -2668,13 +2672,15 @@ impl Host {
             Some("gpu_max") => "gpu_max",
             Some("gpu_bench") => "gpu_bench",
             Some("cpu_offset") => "cpu_offset",
+            Some("tuning_set") => "tuning_set",
+            Some("tuning_reset") => "tuning_reset",
             Some("tuning_status") => "tuning_status",
             _ => return Err((-32602, "name")),
         };
         // The clock ceilings and the GPU benchmark are one permission.
         let permission = match name {
             "cpu_max" | "gpu_max" | "gpu_bench" => "perf-limits",
-            "cpu_offset" | "tuning_status" => "boot-tuning",
+            "cpu_offset" | "tuning_set" | "tuning_reset" | "tuning_status" => "boot-tuning",
             other => other,
         };
         if !manifest.permissions.system.iter().any(|s| s == permission) {
@@ -2733,23 +2739,55 @@ impl Host {
                     Work::Run(vec![s(&["archr-perf-limits", what, &value])]),
                 )
             }
-            "gpu_bench" => (30, 30, Work::Output(s(&["archr-perf-limits", "gpu-bench"]))),
-            // Millivolts on every CPU step from the next boot, in the
-            // system's range; archr-boot-tuning checks it again, and its
-            // guard in the initramfs undoes one that hangs the console.
+            "gpu_bench" => (
+                30,
+                30,
+                Work::Output(s(&["archr-perf-limits", "gpu-bench"]), 200),
+            ),
+            // Voltages from the next boot, in µV and the regulators' 12.5 mV
+            // steps; archr-boot-tuning checks each against the stock table
+            // again, and its guard in the initramfs undoes one that hangs
+            // the console. The answer is the script's last line.
             "cpu_offset" => {
                 let v = params["value"]
                     .as_i64()
-                    .filter(|v| BOOT_TUNING_MV.contains(v) && v % 5 == 0)
+                    .filter(|v| BOOT_TUNING_OFFSET_UV.contains(v) && v % BOOT_TUNING_STEP_UV == 0)
                     .ok_or((-32602, "value"))?;
-                let command = if v == 0 {
-                    s(&["archr-boot-tuning", "reset"])
-                } else {
-                    s(&["archr-boot-tuning", "cpu", &v.to_string()])
-                };
-                (5, 5, Work::Output(command))
+                let command = s(&["archr-boot-tuning", "offset", "cpu", &v.to_string()]);
+                (5, 5, Work::Output(command, 200))
             }
-            "tuning_status" => (1, 1, Work::Output(s(&["archr-boot-tuning", "brief"]))),
+            // One step: {table: "cpu" | "gpu", mhz, uv}; uv 0 is the stock
+            // voltage, or no step for one the stock table lacks.
+            "tuning_set" => {
+                let value = &params["value"];
+                let table = match value["table"].as_str() {
+                    Some("cpu") => "cpu",
+                    Some("gpu") => "gpu",
+                    _ => return Err((-32602, "value")),
+                };
+                let mhz = value["mhz"]
+                    .as_u64()
+                    .filter(|m| (100..=2_000).contains(m))
+                    .ok_or((-32602, "value"))?;
+                let uv = value["uv"]
+                    .as_u64()
+                    .filter(|u| {
+                        *u == 0
+                            || (BOOT_TUNING_UV.contains(u) && *u as i64 % BOOT_TUNING_STEP_UV == 0)
+                    })
+                    .ok_or((-32602, "value"))?;
+                let command = s(&[
+                    "archr-boot-tuning",
+                    "set",
+                    table,
+                    &mhz.to_string(),
+                    &uv.to_string(),
+                ]);
+                (1, 1, Work::Output(command, 200))
+            }
+            "tuning_reset" => (5, 5, Work::Output(s(&["archr-boot-tuning", "reset"]), 200)),
+            // Every step with its stock voltage and range: a longer line.
+            "tuning_status" => (1, 1, Work::Output(s(&["archr-boot-tuning", "brief"]), 600)),
             _ => {
                 if self.private {
                     return Err((-32001, "not while Settings are open"));
@@ -2821,8 +2859,9 @@ impl Host {
                 });
             }
             // The script's last line goes back to the module: plain text
-            // from the system's own script, at most 200 bytes.
-            Work::Output(command) => {
+            // from the system's own script, at most 200 bytes (600 for the
+            // whole tuning table).
+            Work::Output(command, limit) => {
                 let bin = self.config.bin.clone();
                 thread::spawn(move || {
                     let out = system_run(&bin, &command);
@@ -2832,7 +2871,7 @@ impl Host {
                         Some(
                             last.chars()
                                 .filter(|c| !c.is_control())
-                                .take(200)
+                                .take(limit)
                                 .collect::<String>(),
                         )
                     });
@@ -3129,8 +3168,9 @@ impl Host {
 /// What a `system.call` does.
 enum Work {
     Run(Vec<Vec<String>>),
-    /// One command whose last line of output is the answer.
-    Output(Vec<String>),
+    /// One command whose last line of output is the answer, at most that
+    /// many bytes.
+    Output(Vec<String>, usize),
     Wifi(bool),
 }
 /// A system script run for `system.call`: its stdout when it succeeded
