@@ -379,8 +379,11 @@ impl Ui<'_, '_> {
                 })),
                 _ => None,
             };
+            let tx = icon.right() + px(self, 12.);
             if let Some(value) = value {
-                let cap = inner / 2;
+                // Half the row at least; more when the label leaves it free.
+                let room = right - tx - self.measure(&label, face, 14.)? as i32 - px(self, 16.);
+                let cap = room.max((inner / 2) as i32) as u32;
                 right = self.packed_label(
                     &value,
                     (Face::Regular, 13., dim),
@@ -389,7 +392,6 @@ impl Ui<'_, '_> {
                     Align::Right,
                 )? - px(self, 8.);
             }
-            let tx = icon.right() + px(self, 12.);
             let tw = (right - tx).max(1) as u32;
             self.label(&label, (face, 14., ink), Rect::new(tx, y, tw, row as u32))?;
         }

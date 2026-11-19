@@ -2953,7 +2953,11 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             let end = panel.right() - self.px(24.);
             let arrows =
                 self.measure("‹", Face::Regular, 12.)? + self.measure("›", Face::Regular, 12.)?;
-            let block = arrows + self.measure(&value, Face::Regular, 15.)?.min(content_w / 2);
+            // Half the row at least; more when the label leaves it free.
+            let room = content_w
+                .saturating_sub(self.measure(label, face, 15.)? + arrows + 4 * space as u32)
+                .max(content_w / 2);
+            let block = arrows + self.measure(&value, Face::Regular, 15.)?.min(room);
             let beside = content_w.saturating_sub(block + 3 * space as u32).max(1);
             let floor = self.frame.min_size();
             let mut band = (y, item_height);
@@ -2975,12 +2979,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             let mut right = end;
             for (text, style, cap, align) in [
                 ("›", (Face::Regular, 12., cc), u32::MAX, Align::Left),
-                (
-                    value.as_str(),
-                    (Face::Regular, 15., c),
-                    content_w / 2,
-                    Align::Right,
-                ),
+                (value.as_str(), (Face::Regular, 15., c), room, Align::Right),
                 ("‹", (Face::Regular, 12., cc), u32::MAX, Align::Left),
             ] {
                 right =
