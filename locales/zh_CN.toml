@@ -1051,6 +1051,8 @@
 "modules.perm_cpu_tune_detail" = "频率上限仅用于本次启动，并通过测量游戏表现进行学习"
 "modules.perm_perf_limits" = "限制 CPU 和 GPU 频率"
 "modules.perm_perf_limits_detail" = "上限适用于所有游戏，重启后保留；也会测试 GPU 性能"
+"modules.perm_boot_tuning" = "更改 CPU 电压"
+"modules.perm_boot_tuning_detail" = "下次启动后生效；如果主机连续两次死机，将恢复出厂电压"
 "modules.perm_launch" = "打开游戏"
 "modules.perm_launch_detail" = "仅在你选择模块的一项操作后立即执行"
 "modules.perm_tile" = "在开始菜单添加磁贴"

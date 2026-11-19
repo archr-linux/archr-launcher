@@ -418,6 +418,13 @@ pub fn permissions(manifest: &Manifest, names: &BTreeMap<String, String>) -> Vec
             "modules.perm_perf_limits_detail",
             true,
         ),
+        // A voltage too low hangs the console until the guard undoes it.
+        (
+            "boot-tuning",
+            "modules.perm_boot_tuning",
+            "modules.perm_boot_tuning_detail",
+            true,
+        ),
         (
             "brightness",
             "modules.perm_brightness",

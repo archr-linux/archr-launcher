@@ -1531,6 +1531,90 @@ fn perf_limits_sets_only_the_kernels_own_ceilings_and_returns_the_gpu_score() {
 }
 
 #[test]
+fn boot_tuning_asks_only_for_offsets_in_the_systems_range() {
+    let root = tempfile::tempdir().unwrap();
+    let base = root.path();
+    system_bin(base);
+    // archr-boot-tuning logs its arguments; brief answers with the state.
+    let script = format!(
+        "#!/bin/sh\necho \"archr-boot-tuning $*\" >> \"{log}\"\n\
+         [ \"$1\" = brief ] && echo '{{\"offset\": -25, \"pending\": true}}'\n\
+         [ \"$1\" = cpu ] && echo '{{\"ok\": true, \"reboot\": true}}'\nexit 0\n",
+        log = base.join("system.log").display()
+    );
+    let path = base.join("bin/archr-boot-tuning");
+    fs::write(&path, script).unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+    let dir = api_2(
+        base,
+        "desempenho",
+        "system = [\"boot-tuning\"]",
+        &["system:boot-tuning"],
+    );
+    let toml = fs::read_to_string(dir.join("module.toml")).unwrap();
+    fs::write(
+        dir.join("module.toml"),
+        toml.replace("api_version = 2", "api_version = 3"),
+    )
+    .unwrap();
+    let call = |id: &str, params: &str| rpc(id, "system.call", params);
+    let lines = [
+        call("o1", r#"{"name":"cpu_offset","value":-25}"#),
+        // Past the range, off the 5 mV step, a string.
+        call("o2", r#"{"name":"cpu_offset","value":-50}"#),
+        call("o3", r#"{"name":"cpu_offset","value":-12}"#),
+        call("o4", r#"{"name":"cpu_offset","value":"-25; reboot"}"#),
+        call("s1", r#"{"name":"tuning_status"}"#),
+        // Not this module's.
+        call("p1", r#"{"name":"cpu_max","value":0}"#),
+    ];
+    fs::write(dir.join("go.jsonl"), lines.concat()).unwrap();
+    let probe = Probe::new(base);
+    ready(base, &["desempenho"]);
+    let log = base.join("module-data/desempenho/seen.log");
+    let init = fs::read_to_string(&log).unwrap();
+    assert!(
+        init.contains(r#""boot_tuning":{"cpu_offset_mv":[-40,25],"step_mv":5}"#),
+        "{init}"
+    );
+    probe.invoke("desempenho", "go");
+    let seen = until_all(&log, &["o1", "o2", "o3", "o4", "s1", "p1"]);
+    let refused = |id: &str, code: &str| answer(&seen, id).contains(code);
+    assert!(
+        answer(&seen, "o1").contains(r#""output":"{\"ok\": true, \"reboot\": true}""#),
+        "{seen}"
+    );
+    assert!(refused("o2", "-32602") && refused("o3", "-32602"), "{seen}");
+    assert!(refused("o4", "-32602"), "{seen}");
+    assert!(
+        answer(&seen, "s1").contains(r#""output":"{\"offset\": -25, \"pending\": true}""#),
+        "{seen}"
+    );
+    assert!(refused("p1", "-32001"), "{seen}");
+    // Each call runs on its own thread: in either order.
+    let ran = fs::read_to_string(base.join("system.log")).unwrap();
+    let mut ran: Vec<_> = ran.lines().collect();
+    ran.sort_unstable();
+    assert_eq!(
+        ran,
+        ["archr-boot-tuning brief", "archr-boot-tuning cpu -25"],
+        "nothing else ran"
+    );
+    // 0 is the stock voltages: reset, after the 5 s between two offsets.
+    std::thread::sleep(Duration::from_millis(5_100));
+    fs::write(
+        dir.join("reset.jsonl"),
+        call("r1", r#"{"name":"cpu_offset","value":0}"#),
+    )
+    .unwrap();
+    probe.invoke("desempenho", "reset");
+    let seen = until(&log, "\"id\":\"r1\"");
+    assert!(answer(&seen, "r1").contains("\"result\""), "{seen}");
+    let ran = fs::read_to_string(base.join("system.log")).unwrap();
+    assert!(ran.lines().any(|l| l == "archr-boot-tuning reset"), "{ran}");
+}
+
+#[test]
 fn the_user_and_a_module_never_switch_the_wifi_at_once() {
     let _wifi = WIFI.lock().unwrap_or_else(|e| e.into_inner());
     let root = tempfile::tempdir().unwrap();

@@ -55,6 +55,7 @@ pub const SYSTEM: &[&str] = &[
     "cpu-profile",
     "cpu-tune",
     "perf-limits",
+    "boot-tuning",
     "brightness",
     "volume",
     "wifi",
@@ -421,7 +422,7 @@ pub fn parse(source: &str) -> Result<(Manifest, Vec<String>), Vec<String>> {
             "permissions: config_write, hooks, system and launch need api_version = {API_2}"
         ));
     }
-    for system in ["cpu-tune", "perf-limits"] {
+    for system in ["cpu-tune", "perf-limits", "boot-tuning"] {
         if permissions.system.iter().any(|s| s == system) && api_version.is_some_and(|v| v < API_3)
         {
             errors.push(format!(

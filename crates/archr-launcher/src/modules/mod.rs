@@ -28,6 +28,9 @@ pub const DAEMONS: usize = 3;
 /// ~2 s at 408 MHz (powersave), more while the boot is busy: 3 s was not
 /// enough there (a Soysauce on powersave, 2026-11-15).
 const INITIALIZE: Duration = Duration::from_secs(10);
+/// The CPU voltage offsets, in mV, a `boot-tuning` module may ask for:
+/// archr-boot-tuning's own range (-50 already hangs some R36S chips).
+const BOOT_TUNING_MV: std::ops::RangeInclusive<i64> = -40..=25;
 const INVOKE: Duration = Duration::from_secs(1);
 /// A one-shot's whole run: start, one message, exit.
 const ONESHOT: Duration = Duration::from_secs(2);
@@ -1552,6 +1555,12 @@ impl Host {
             let opps = self.gpu_opps();
             params["gpu"] = json!({"opps": opps, "max_hz": opps.last()});
         }
+        if permissions.iter().any(|p| p == "system:boot-tuning") {
+            params["boot_tuning"] = json!({
+                "cpu_offset_mv": [BOOT_TUNING_MV.start(), BOOT_TUNING_MV.end()],
+                "step_mv": 5,
+            });
+        }
         self.send(
             key,
             &json!({"jsonrpc": "2.0", "id": request, "method": "initialize", "params": params}),
@@ -2658,11 +2667,14 @@ impl Host {
             Some("cpu_max") => "cpu_max",
             Some("gpu_max") => "gpu_max",
             Some("gpu_bench") => "gpu_bench",
+            Some("cpu_offset") => "cpu_offset",
+            Some("tuning_status") => "tuning_status",
             _ => return Err((-32602, "name")),
         };
         // The clock ceilings and the GPU benchmark are one permission.
         let permission = match name {
             "cpu_max" | "gpu_max" | "gpu_bench" => "perf-limits",
+            "cpu_offset" | "tuning_status" => "boot-tuning",
             other => other,
         };
         if !manifest.permissions.system.iter().any(|s| s == permission) {
@@ -2722,6 +2734,22 @@ impl Host {
                 )
             }
             "gpu_bench" => (30, 30, Work::Output(s(&["archr-perf-limits", "gpu-bench"]))),
+            // Millivolts on every CPU step from the next boot, in the
+            // system's range; archr-boot-tuning checks it again, and its
+            // guard in the initramfs undoes one that hangs the console.
+            "cpu_offset" => {
+                let v = params["value"]
+                    .as_i64()
+                    .filter(|v| BOOT_TUNING_MV.contains(v) && v % 5 == 0)
+                    .ok_or((-32602, "value"))?;
+                let command = if v == 0 {
+                    s(&["archr-boot-tuning", "reset"])
+                } else {
+                    s(&["archr-boot-tuning", "cpu", &v.to_string()])
+                };
+                (5, 5, Work::Output(command))
+            }
+            "tuning_status" => (1, 1, Work::Output(s(&["archr-boot-tuning", "brief"]))),
             _ => {
                 if self.private {
                     return Err((-32001, "not while Settings are open"));

@@ -1050,6 +1050,8 @@
 "modules.perm_cpu_tune_detail" = "Предел частоты только для этого запуска; измеряет игру, чтобы обучиться"
 "modules.perm_perf_limits" = "Ограничивает частоты ЦП и ГП"
 "modules.perm_perf_limits_detail" = "Предел для всех игр, сохраняется после перезагрузки; также измеряет ГП"
+"modules.perm_boot_tuning" = "Меняет напряжения ЦП"
+"modules.perm_boot_tuning_detail" = "Со следующей загрузки; если консоль зависнет дважды подряд, вернутся заводские напряжения"
 "modules.perm_launch" = "Запускает игры"
 "modules.perm_launch_detail" = "Только сразу после того, как вы выбрали его действие"
 "modules.perm_tile" = "Плитка в меню Start"
