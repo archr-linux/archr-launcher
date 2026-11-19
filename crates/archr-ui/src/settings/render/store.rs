@@ -12,7 +12,9 @@ const GAP: f32 = 10.;
 /// The details page: picture column and text column (flex 1.25 : 1, gap 16).
 const PICTURE: (f32, f32, f32, f32) = (20., 50., 324., 200.);
 const TEXT: (f32, f32) = (360., 260.);
-const BUTTONS: f32 = 388.;
+/// The buttons' line, 40 px over the end of the page's area (VIEW_BOTTOM
+/// on a plain page; higher under a title line).
+const BUTTONS_ABOVE: f32 = 40.;
 
 impl View<'_, '_, '_> {
     /// `path`'s picture inside `bounds`: cropped to fill, or whole and centred.
@@ -393,7 +395,7 @@ impl View<'_, '_, '_> {
             let lines = self.lines(&value, 12., width)?;
             let pitch = self.pitch(12., 15.);
             let height = lines.len() as f32 * pitch + 6.;
-            if y + height > BUTTONS - 6. {
+            if y + height > (self.view_bottom() - BUTTONS_ABOVE) - 6. {
                 break;
             }
             self.text(
@@ -423,7 +425,7 @@ impl View<'_, '_, '_> {
         let pill = self.span(&count, Face::Regular, 14.)? + 14. + 4. + 24.;
         let pill_x = x + w - pill;
         self.ui.rounded(
-            self.rect((pill_x, BUTTONS, pill, 36.)),
+            self.rect((pill_x, (self.view_bottom() - BUTTONS_ABOVE), pill, 36.)),
             self.ui.px(10.) as f32,
             theme.surface,
             Some(theme.border),
@@ -431,11 +433,11 @@ impl View<'_, '_, '_> {
         self.stars(
             detail.card.stars,
             x + w - 12.,
-            (BUTTONS, 36.),
+            ((self.view_bottom() - BUTTONS_ABOVE), 36.),
             (14., theme.muted),
         )?;
         if let Some(action) = store.action() {
-            let button = (x, BUTTONS, pill_x - 8. - x, 36.);
+            let button = (x, (self.view_bottom() - BUTTONS_ABOVE), pill_x - 8. - x, 36.);
             self.ui.rounded(
                 self.rect(button),
                 self.ui.px(10.) as f32,

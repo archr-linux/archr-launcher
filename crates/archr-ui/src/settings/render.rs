@@ -193,7 +193,7 @@ fn placements(page: Page, rows: &[Row]) -> Vec<Placement> {
                 Page::LauncherControls | Page::Hotkeys if row.subtitle.is_none() => 38.,
                 Page::Hotkeys => 44.,
                 Page::Updates if row.subtitle.is_some() => 44.,
-                Page::RaImport => 38.,
+                Page::RaImport => 35.,
                 Page::Updates => 40.,
                 _ if row.subtitle.is_some() => 46.,
                 _ => 40.,
@@ -910,30 +910,7 @@ impl View<'_, '_, '_> {
         let look = self.look();
         look.sidebar
             && look.title_below
-            && !matches!(
-                state.page(),
-                Page::Root
-                    | Page::Info
-                    | Page::InfoDetail(_)
-                    | Page::Soon(_)
-                    | Page::Store
-                    | Page::StoreTheme
-                    | Page::Module(..)
-                    | Page::ModuleStore
-                    | Page::ModuleInfo
-                    | Page::ModuleOffer
-                    | Page::Keyboard
-                    | Page::Updates
-                    | Page::UpdatePackages
-                    | Page::RaImport
-                    | Page::ReportText
-                    | Page::Bios
-                    | Page::Shortcuts
-                    | Page::PadTest
-                    | Page::PadCalibrate
-                    | Page::Scraper
-                    | Page::Achievements
-            )
+            && !matches!(state.page(), Page::Root | Page::Keyboard)
     }
     /// "‹ Parent" in its capsule, and the page's title large on the line
     /// under it, aligned with the rows' text.
@@ -1017,6 +994,8 @@ impl View<'_, '_, '_> {
                 (size, self.theme.text, Align::Left),
                 Face::Semibold,
             )?;
+        } else if state.page() == Page::Info && self.title_below(state) {
+            self.title_header(state)?;
         } else if state.page() == Page::Info {
             self.text_face(
                 (24., 0., right - 24., 44.),

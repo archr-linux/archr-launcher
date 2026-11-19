@@ -13,7 +13,9 @@ const EMPTY_NOTE: f32 = 52.;
 /// The permission page: left column, then the list of permissions.
 const LEFT: (f32, f32) = (20., 334.);
 const ASKS: (f32, f32) = (370., 250.);
-const BUTTON: f32 = 384.;
+/// The buttons' line, 44 px over the end of the page's area (VIEW_BOTTOM
+/// on a plain page; higher under a title line).
+const BUTTON_ABOVE: f32 = 44.;
 /// The `stats` cards over a module page's rows, and the room they take.
 const CARDS: (f32, f32) = (48., 78.);
 const CARDS_ROOM: f32 = 88.;
@@ -667,7 +669,7 @@ impl View<'_, '_, '_> {
             )?;
             return self.asks(state, &asks, &added, &kept, "modules.asks_more");
         }
-        let picture = (x, below + 8., w, (BUTTON + 36. - below - 8.).min(118.));
+        let picture = (x, below + 8., w, ((self.view_bottom() - BUTTON_ABOVE) + 36. - below - 8.).min(118.));
         if picture.3 > 40. {
             self.ui.rounded(
                 self.rect(picture),
@@ -815,7 +817,7 @@ impl View<'_, '_, '_> {
         let gap = 8.;
         let each = (w - gap * (buttons.len() as f32 - 1.)) / buttons.len() as f32;
         for (n, key) in buttons.iter().enumerate() {
-            let rect = (x + n as f32 * (each + gap), BUTTON, each, 36.);
+            let rect = (x + n as f32 * (each + gap), (self.view_bottom() - BUTTON_ABOVE), each, 36.);
             let focus = n == state.modules.button.min(buttons.len() - 1);
             let (fill, edge, ink) = if focus {
                 (theme.highlight_bg, None, theme.highlight_text)
@@ -892,7 +894,7 @@ impl View<'_, '_, '_> {
         let list = if update { added } else { asks };
         let button = state.offer_action();
         let bottom = if button.is_some() {
-            BUTTON - 8.
+            (self.view_bottom() - BUTTON_ABOVE) - 8.
         } else {
             self.footer_top() - 8.
         };
@@ -1029,7 +1031,7 @@ impl View<'_, '_, '_> {
             } else {
                 (theme.highlight_bg, theme.highlight_text)
             };
-            let rect = (x, BUTTON, w, 36.);
+            let rect = (x, (self.view_bottom() - BUTTON_ABOVE), w, 36.);
             self.ui
                 .rounded(self.rect(rect), self.ui.px(10.) as f32, fill, None)?;
             self.text_face(

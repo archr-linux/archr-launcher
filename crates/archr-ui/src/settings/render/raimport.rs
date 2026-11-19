@@ -5,7 +5,7 @@ use super::*;
 use crate::settings::raimport::FOLDER;
 
 const NOTE_SIZE: f32 = 13.;
-const NOTE_LINE: f32 = 19.;
+const NOTE_LINE: f32 = 18.;
 
 impl View<'_, '_, '_> {
     pub(super) fn raimport_page(&mut self, state: &Settings, rows: &[Row]) -> Result<(), String> {

@@ -4093,6 +4093,33 @@ fn sidebar_settings(theme_dir: &str, out: Option<std::path::PathBuf>, golden: Op
         .filter(|(n, _)| every || wanted.contains(n))
         .map(|(n, state)| (n.to_owned(), state))
         .collect();
+    // ARCHR_SETTINGS_ALL: every page the launcher has, those with samples
+    // elsewhere (achievements, updates, store, modules) and one plain state
+    // for each page without a sample, to find any the theme misses.
+    let images = tempfile::tempdir().unwrap();
+    if std::env::var_os("ARCHR_SETTINGS_ALL").is_some() {
+        let extra = cheevos_pages()
+            .into_iter()
+            .chain(updates_pages())
+            .chain(store_pages(images.path()))
+            .chain(module_pages(images.path()));
+        chosen.extend(extra.map(|(n, state)| (n.to_owned(), state)));
+        use Page::*;
+        for page in [
+            Root, Sound, System, Region, Info, Wifi, Bluetooth, Services, Games, Netplay,
+            Scraper, ScraperMedia, Appearance, AccentColor, Storage, Mangohud, MangohudItems,
+            Achievements, Controls, LauncherControls, Hotkeys, Store, Updates, UpdatePackages,
+            Modules, ModuleStore, RaImport, RaImportList, Roms, RomsList, UsbAdapters,
+            Diagnostics, Bios, Resume, Power, Image, SaveSync, SaveSyncTarget, Shortcuts, Toasts,
+            ErrorReports, ReportText, PadTest, PadCalibrate, DateTime,
+        ] {
+            let mut state = ready();
+            if page != Root {
+                state.open(page);
+            }
+            chosen.push((format!("pagina-{page:?}").to_lowercase(), state));
+        }
+    }
     if every {
         // Each long page also scrolled to its last row.
         let ends: Vec<_> = chosen
@@ -4114,7 +4141,8 @@ fn sidebar_settings(theme_dir: &str, out: Option<std::path::PathBuf>, golden: Op
             .filter(|(n, _)| picks.contains(n))
             .map(|(n, state)| (n.to_owned(), state)),
     );
-    assert!(every || states.len() == 14, "every state found");
+    let all = std::env::var_os("ARCHR_SETTINGS_ALL").is_some();
+    assert!(every || all || states.len() == 14, "every state found");
     let ttf = sdl2::ttf::init().unwrap();
     for (w, h) in [(640, 480), (720, 720), (480, 320)] {
         let creator;
@@ -4123,6 +4151,7 @@ fn sidebar_settings(theme_dir: &str, out: Option<std::path::PathBuf>, golden: Op
         let theme = base.fitted(w, h);
         ui.set_motion(crate::motion::Motion::Off);
         ui.configure(&ttf, &creator, &theme, None).unwrap();
+        ui.root = Some(images.path().to_path_buf());
         ui.catalog = I18n::load(std::path::Path::new("/nonexistent"), Some("pt_BR"), None);
         let mut status = crate::status::Status::new(None, Instant::now());
         status.clock = "14:32".into();
