@@ -561,7 +561,17 @@ impl Backend {
         // refresh (e.g. U:640x480p-60). virtual_size is the drawing area:
         // double-buffered it is twice the height (640,960), so it is only
         // the fallback.
-        let mode = self.read("/sys/class/graphics/fb0/mode");
+        // `mode` is empty on the 6.12 kernel; `modes` lists the panel's mode
+        // first.
+        let mode = Some(self.read("/sys/class/graphics/fb0/mode"))
+            .filter(|m| mode_size(m).is_some())
+            .unwrap_or_else(|| {
+                self.read("/sys/class/graphics/fb0/modes")
+                    .lines()
+                    .next()
+                    .unwrap_or_default()
+                    .to_owned()
+            });
         let resolution = mode_size(&mode).unwrap_or_else(|| {
             self.read("/sys/class/graphics/fb0/virtual_size")
                 .replace(',', " × ")
@@ -964,6 +974,42 @@ mod tests {
             assert!(!name.is_empty());
             assert!(!address.parse::<Ipv4Addr>().unwrap().is_loopback());
         }
+    }
+    #[test]
+    fn graphics_shows_the_panel_mode_even_when_fb_mode_is_empty() {
+        // As an R36S has it on 6.12: mode empty, modes the panel's,
+        // virtual_size the double-buffered area.
+        let dir = tempfile::tempdir().unwrap();
+        let fb = dir.path().join("sys/class/graphics/fb0");
+        std::fs::create_dir_all(&fb).unwrap();
+        std::fs::write(fb.join("mode"), "").unwrap();
+        std::fs::write(fb.join("modes"), "U:640x480p-0\n").unwrap();
+        std::fs::write(fb.join("virtual_size"), "640,960\n").unwrap();
+        let backend = super::super::Backend::new(crate::paths::Paths::new(Some(dir.path().into())));
+        let identity = super::Identity {
+            device: String::new(),
+            kernel: String::new(),
+            cpu: String::new(),
+            core_type: String::new(),
+            cores: 4,
+            gpu: "Mali-G31".into(),
+        };
+        let card = backend.gpu_info(&identity, None);
+        let resolution = card
+            .detail
+            .rows
+            .iter()
+            .find(|(key, _)| *key == "settings.resolution")
+            .map(|(_, v)| v.as_str());
+        assert_eq!(resolution, Some("640 × 480"));
+        // Without a mode anywhere, the drawing area is the fallback.
+        std::fs::write(fb.join("modes"), "").unwrap();
+        let card = backend.gpu_info(&identity, None);
+        assert!(card
+            .detail
+            .rows
+            .iter()
+            .any(|(k, v)| *k == "settings.resolution" && v == "640 × 960"));
     }
     #[test]
     fn version_comes_from_archr_update_else_the_image() {
