@@ -1050,7 +1050,7 @@
 "modules.perm_cpu_tune_detail" = "Frequency ceiling for that launch only; measures the game to learn"
 "modules.perm_perf_limits" = "Limits the CPU and GPU clocks"
 "modules.perm_perf_limits_detail" = "Ceilings for every game, kept after a restart; also benchmarks the GPU"
-"modules.perm_boot_tuning" = "Changes the CPU voltages"
+"modules.perm_boot_tuning" = "Changes the CPU and GPU voltages"
 "modules.perm_boot_tuning_detail" = "From the next boot; if the console hangs twice in a row the stock voltages come back"
 "modules.perm_launch" = "Opens games"
 "modules.perm_launch_detail" = "Only right after you choose one of its actions"

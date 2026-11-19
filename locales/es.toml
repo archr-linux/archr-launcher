@@ -1050,7 +1050,7 @@
 "modules.perm_cpu_tune_detail" = "Tope de frecuencia solo en ese inicio; mide el juego para aprender"
 "modules.perm_perf_limits" = "Limita las frecuencias de la CPU y la GPU"
 "modules.perm_perf_limits_detail" = "Tope para todos los juegos, se mantiene al reiniciar; también mide la GPU"
-"modules.perm_boot_tuning" = "Cambia los voltajes de la CPU"
+"modules.perm_boot_tuning" = "Cambia los voltajes de la CPU y la GPU"
 "modules.perm_boot_tuning_detail" = "Desde el próximo arranque; si la consola se cuelga dos veces seguidas, vuelven los voltajes de fábrica"
 "modules.perm_launch" = "Abre juegos"
 "modules.perm_launch_detail" = "Solo justo después de que elijas una de sus acciones"

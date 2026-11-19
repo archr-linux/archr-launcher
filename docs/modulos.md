@@ -189,7 +189,7 @@ usuário do próprio módulo. O valor também chega no `initialize` e no
 | `system = ["cpu-profile"]` | em `launch.before`, pode escolher o governador daquela abertura (API 2) | "Escolhe o perfil de CPU de um jogo" |
 | `system = ["cpu-tune"]` | em `launch.before`, pode escolher o teto de CPU daquela abertura; recebe a medida do jogo no `game.ended` (API 3) | "Ajusta a CPU de cada jogo" |
 | `system = ["perf-limits"]` | `system.call` define o teto de CPU e de GPU de todos os jogos, mantido ao reiniciar, e roda o benchmark de GPU (API 3; seção 9.3) | "Limita os clocks da CPU e da GPU" (âmbar) |
-| `system = ["boot-tuning"]` | `system.call` muda as tensões da CPU a partir do próximo boot, com volta automática às de fábrica (API 3; seção 9.4) | "Muda as tensões da CPU" (âmbar) |
+| `system = ["boot-tuning"]` | `system.call` muda as tensões da CPU e da GPU a partir do próximo boot, com volta automática às de fábrica (API 3; seção 9.4) | "Muda as tensões da CPU e da GPU" (âmbar) |
 | `system = ["brightness"]` | `system.call` muda o brilho, 10–100 % (API 2) | "Muda o brilho da tela" |
 | `system = ["volume"]` | `system.call` muda o volume, 0–100 % (API 2) | "Muda o volume" |
 | `system = ["wifi"]` | `system.call` liga ou desliga o Wi-Fi (API 2) | "Liga e desliga o Wi-Fi" (âmbar) |
@@ -375,8 +375,10 @@ de cada uma, com tempo limite de 15 s, nunca um comando do módulo):
 | `cpu_max` (`perf-limits`) | kHz de `cpu.opps`, ou `0` para tirar o teto | `archr-perf-limits cpu <kHz\|default>` | 1 por segundo |
 | `gpu_max` (`perf-limits`) | Hz de `gpu.opps`, ou `0` para tirar o teto | `archr-perf-limits gpu <Hz\|default>` | 1 por segundo |
 | `gpu_bench` (`perf-limits`) | — | `archr-perf-limits gpu-bench`; a resposta traz `{"output": "result score=<n>"}` | 1 a cada 30 s |
-| `cpu_offset` (`boot-tuning`) | mV de `boot_tuning.cpu_offset_mv`, de 5 em 5, ou `0` para as de fábrica | `archr-boot-tuning cpu <mV>` ou `reset`; a resposta traz `{"output": "{\"ok\": true, \"reboot\": true}"}` | 1 a cada 5 s |
-| `tuning_status` (`boot-tuning`) | — | `archr-boot-tuning brief`; a resposta traz o estado numa linha JSON | 1 por segundo |
+| `tuning_status` (`boot-tuning`) | — | `archr-boot-tuning brief`; a resposta traz a tabela de passos (até 600 bytes) | 1 por segundo |
+| `tuning_set` (`boot-tuning`) | `{table: "cpu" \| "gpu", mhz, uv}`, `uv` em passos de 12500 ou 0 | `archr-boot-tuning set <tabela> <MHz> <uV>` | 1 por segundo |
+| `cpu_offset` (`boot-tuning`) | µV de `boot_tuning.cpu_offset_uv`, em passos de 12500 | `archr-boot-tuning offset cpu <uV>` | 1 a cada 5 s |
+| `tuning_reset` (`boot-tuning`) | — | `archr-boot-tuning reset` | 1 a cada 5 s |
 
 Nada disso roda durante um jogo: nenhum módulo roda enquanto o jogo tem a
 tela, então não há como pedir (o brilho e o volume do jogo continuam nas
@@ -856,23 +858,32 @@ Exemplo: o módulo `desempenho` (`archr-linux/archr-module-desempenho`).
 
 ### 9.4 `system = ["boot-tuning"]`
 
-As **tensões da CPU**, num deslocamento em mV aplicado a todos os passos.
-Valem a partir do próximo boot: `archr-boot-tuning` grava
+As **tensões da CPU e da GPU** e dois passos novos de CPU (1200 e 1296 MHz),
+a partir do próximo boot. `archr-boot-tuning` grava
 `/flash/overlays/tuning.dtbo` (nunca o DTB do sistema, que os updates trocam)
-e o põe no `FDTOVERLAYS` do `extlinux.conf`. O launcher confere o valor e o
-script confere de novo.
+e o põe no `FDTOVERLAYS` do `extlinux.conf`. Tudo em µV, nos passos de
+12,5 mV do regulador (RK817). O launcher confere a forma do valor e o script
+confere cada passo contra a tabela de fábrica.
 
-- `initialize` traz `boot_tuning: {cpu_offset_mv: [mín, máx], step_mv: 5}`;
-  hoje de -40 a +25 mV (-50 já trava alguns R36S).
-- `cpu_offset` grava o ajuste e responde a linha do script
-  (`{"ok": true, "reboot": true}`, ou `{"ok": false, "error": "..."}`: `no_stock`
-  quando o aparelho não tem a tabela, ou quando já há um ajuste esperando o
-  boot). `0` volta às tensões de fábrica. O módulo diz ao usuário para
-  reiniciar; o launcher não reinicia sozinho.
-- `tuning_status` devolve `{"offset", "pending", "reverted", "supported",
-  "top_mv", "range", "step"}`: `pending` enquanto o ajuste espera o boot,
-  `reverted` quando a guarda já desfez um, `top_mv` a tensão do passo mais
-  alto agora.
+- `initialize` traz `boot_tuning: {cpu_offset_uv: [-50000, 25000], step_uv: 12500}`.
+- `tuning_status` devolve a tabela numa linha JSON (até 600 bytes):
+  `{"cpu": [[MHz, escolhido, fábrica, mín, máx], ...], "gpu": [...],
+  "pending", "reverted", "supported"}`, tensões em mV (podem ter ,5).
+  `escolhido` 0 é a tensão de fábrica, ou passo desligado; `fábrica` 0 é um
+  passo novo. `supported: false` quando o aparelho não tem tabela.
+- `tuning_set` com `{table: "cpu" | "gpu", mhz, uv}` grava um passo; `uv` 0
+  volta à tensão de fábrica, ou desliga um passo novo.
+- `cpu_offset` (µV) põe todos os passos de CPU à mesma distância da tensão de
+  fábrica; um passo novo ligado parte da tensão de fábrica do passo acima.
+- `tuning_reset` volta tudo ao de fábrica.
+- As escritas respondem a linha do script: `{"ok": true, "reboot": true}`
+  ou `{"ok": false, "error": "out_of_range" | "no_step" | "no_stock"}`. O
+  módulo diz ao usuário que vale no próximo boot; o launcher não reinicia.
+- Faixas do script: CPU de 50 mV abaixo a 25 mV acima da tensão de fábrica
+  (-50 mV já trava os passos altos de alguns R36S); passos novos entre as
+  tensões de fábrica dos passos vizinhos; GPU só entre 1,1 V, o piso do
+  vdd_logic que também alimenta a RAM (abaixo disso a memória se corrompe),
+  e a tensão de fábrica, que é o teto do regulador.
 - **A volta é automática.** Com um ajuste ativo, o initramfs arma o watchdog
   (30 s) e conta os boots em `/flash/tuning.trial`; o desligamento normal
   zera a conta. Dois boots seguidos sem desligar direito (um travamento, o

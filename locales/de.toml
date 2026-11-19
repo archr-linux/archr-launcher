@@ -1051,7 +1051,7 @@
 "modules.perm_cpu_tune_detail" = "Taktgrenze nur für diesen Start; misst das Spiel, um dazuzulernen"
 "modules.perm_perf_limits" = "Begrenzt CPU- und GPU-Takt"
 "modules.perm_perf_limits_detail" = "Grenzen für alle Spiele, auch nach Neustart; misst zudem die GPU-Leistung"
-"modules.perm_boot_tuning" = "Ändert die CPU-Spannungen"
+"modules.perm_boot_tuning" = "Ändert die CPU- und GPU-Spannungen"
 "modules.perm_boot_tuning_detail" = "Ab dem nächsten Start; hängt die Konsole zweimal hintereinander, gelten wieder die Werksspannungen"
 "modules.perm_launch" = "Öffnet Spiele"
 "modules.perm_launch_detail" = "Nur direkt nach Auswahl einer seiner Aktionen"

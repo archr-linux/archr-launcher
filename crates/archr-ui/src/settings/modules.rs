@@ -403,6 +403,8 @@ impl Settings {
             RowKind::Keyboard { secret: true, .. } if !value.is_empty() => "•".repeat(8),
             RowKind::Keyboard { .. } if value.is_empty() => catalog.text("settings.define"),
             RowKind::Keyboard { .. } => value.to_owned(),
+            // Opens another page, like the system's own links.
+            RowKind::Page { .. } => "›".into(),
             _ => String::new(),
         })
     }
@@ -1463,9 +1465,11 @@ mod tests {
         };
         state.set_modules(Arc::new(view.clone()));
         state.open_module_page("desempenho", 0);
+        // It ends in the same mark as the system's own links.
+        let catalog = crate::i18n::I18n::default();
+        assert_eq!(state.display_value(Id::ModuleRow(0), &catalog), "›");
         assert_eq!(state.handle(Button::A), Effect::None);
         assert_eq!(state.page(), Page::Module(0, 1));
-        let catalog = crate::i18n::I18n::default();
         assert_eq!(state.display_value(Id::ModuleRow(0), &catalog), "…");
         assert_eq!(
             state.handle(Button::R),
