@@ -567,7 +567,7 @@ impl Id {
             // Comma-separated `MEDIA` tokens; "none" when nothing is checked.
             Self::ScraperMedia => ("launcher.scraper.media", "box,screenshot,wheel"),
             Self::ScraperMissing => ("launcher.scraper.only_missing", "1"),
-            Self::Theme => ("launcher.theme", "default"),
+            Self::Theme => ("launcher.theme", "ellegance"),
             Self::View => ("launcher.view", crate::layout::LISTA),
             Self::Accent => ("launcher.accent", ""),
             Self::Background => ("launcher.background", ""),
@@ -2700,7 +2700,7 @@ mod appearance_tests {
             state.appearance(),
             Appearance {
                 text_size: "normal".into(),
-                theme: "default".into(),
+                theme: "ellegance".into(),
                 animations: crate::motion::Motion::On,
                 view: "lista".into(),
                 battery_percent: "1".into(),

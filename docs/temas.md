@@ -3,7 +3,8 @@
 Um tema é uma pasta com um `theme.toml`. Ele pode trocar cores, fontes, ícones,
 imagens de console e também **onde cada coisa fica** nas telas de sistemas e de
 jogos. Tudo é opcional: o que o tema não diz vem do tema padrão (Grafite),
-chave por chave.
+chave por chave. O tema escolhido de fábrica (`launcher.theme` sem valor) é o
+Ellegance; o Grafite (`default`) continua sendo a base de que todo tema herda.
 
 ## Onde ficam
 
