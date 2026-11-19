@@ -327,6 +327,7 @@ impl Backend {
             | Id::ErrorReports
             | Id::Gamma
             | Id::ColorTemp
+            | Id::Saturation
             | Id::SaveSync
             | Id::SaveSyncBoot
             | Id::SaveSyncExit
@@ -421,7 +422,7 @@ impl Backend {
         }
         self.save(id, value)?;
         // archr-gamma reads the curve again; started now if it was not.
-        if matches!(id, Id::Gamma | Id::ColorTemp) {
+        if matches!(id, Id::Gamma | Id::ColorTemp | Id::Saturation) {
             self.command("systemctl", &["reload-or-restart", "archr-gamma.service"])?;
         }
         if id == Id::ErrorReports && value == "0" {

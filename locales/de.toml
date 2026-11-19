@@ -1462,6 +1462,8 @@
 "image.link_detail" = "Gamma und Farbtemperatur des Displays"
 "image.gamma" = "Gamma"
 "image.gamma_detail" = "Hellt Mitteltöne auf oder dunkelt sie ab"
+"image.saturation" = "Sättigung"
+"image.saturation_detail" = "Wie kräftig die Farben sind"
 "image.temperature" = "Farbtemperatur"
 "image.temperature_detail" = "Wärmer verringert den Blauanteil"
 "image.neutral" = "Neutral"

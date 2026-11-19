@@ -378,6 +378,7 @@ const CONFIG_KEYS: &[&str] = &[
     "launcher.switcher.count",
     "display.gamma",
     "display.temperature",
+    "display.saturation",
     "power.battery.critical",
     "savesync.smb.address",
     "savesync.smb.user",

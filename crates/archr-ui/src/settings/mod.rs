@@ -463,6 +463,8 @@ pub enum Id {
     ImageLink,
     Gamma,
     ColorTemp,
+    /// Picture: the BCSH saturation, 0 to 100 (50 = the panel as it is).
+    Saturation,
     /// Picture: back to 1.00 and 6500 K.
     ImageRestore,
     /// System link to Save sync, its rows, the destination's rows and the
@@ -693,6 +695,7 @@ impl Id {
             Self::SaveSyncAddress => ("savesync.smb.address", ""),
             Self::SaveSyncUser => ("savesync.smb.user", ""),
             Self::ColorTemp => ("display.temperature", "6500"),
+            Self::Saturation => ("display.saturation", "50"),
             Self::ResumeLink
             | Self::PowerLink
             | Self::ImageLink
@@ -776,6 +779,9 @@ impl Id {
                 "0.70", "0.80", "0.90", "1.00", "1.10", "1.20", "1.30", "1.40", "1.50",
             ],
             Self::ColorTemp => &["6500", "6000", "5500", "5000", "4500", "4000", "3500"],
+            Self::Saturation => &[
+                "0", "10", "20", "30", "40", "50", "60", "70", "80", "90", "100",
+            ],
             Self::Governor => &["ondemand", "performance", "schedutil", "powersave"],
             Self::SaveSyncTarget => &["smb", "cloud"],
             Self::Sounds
@@ -1033,7 +1039,8 @@ pub enum Effect {
     /// archr-savesync: status, test, sync, password or a conflict's choice.
     SaveSync(savesync::Action),
     /// Picture: gamma and colour temperature together (undo, restore).
-    Picture(String, String),
+    /// Gamma, saturation and colour temperature together (undo, restore).
+    Picture(String, String, String),
     Connect(String, String),
     Forget(String),
     Bluetooth(Action, String),
@@ -1096,7 +1103,7 @@ impl std::fmt::Debug for Effect {
             Self::Set(id, value) => write!(f, "Set({id:?}, {value:?})"),
             Self::Level(id, level) => write!(f, "Level({id:?}, {level:?})"),
             Self::Reboot => write!(f, "Reboot"),
-            Self::Picture(g, t) => write!(f, "Picture({g:?}, {t:?})"),
+            Self::Picture(g, s, t) => write!(f, "Picture({g:?}, {s:?}, {t:?})"),
             Self::SaveSync(action) => write!(f, "SaveSync({action:?})"),
             Self::Scan => write!(f, "Scan"),
             Self::Connect(ssid, _) => write!(f, "Connect({ssid:?}, <hidden>)"),
@@ -1199,7 +1206,7 @@ pub struct Settings {
     pub keyboard: Option<Keyboard>,
     pub keyboard_target: Option<Id>,
     /// Picture's gamma and temperature when the page opened (B restores).
-    pub image_entry: Option<(String, String)>,
+    pub image_entry: Option<(String, String, String)>,
     pub savesync: Box<savesync::SaveSync>,
     pub wifi_ssid: String,
     pub wifi_hidden: bool,
@@ -1530,6 +1537,12 @@ impl Settings {
             (Id::ColorTemp, "6500") => "image.neutral",
             (Id::ColorTemp, v) => return format!("{v} K"),
             (Id::Gamma, v) => return v.to_owned(),
+            // 50 is the panel as it is: 100%.
+            (Id::Saturation, v) => {
+                return v
+                    .parse::<u32>()
+                    .map_or_else(|_| v.to_owned(), |n| format!("{}%", n * 2))
+            }
             (Id::ToastsPosition, "left") => "settings.toasts_left",
             (Id::ToastsPosition, _) => "settings.toasts_right",
             (Id::ToastsDuration, v) => return catalog.format("resume.seconds", &[("count", v)]),

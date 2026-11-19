@@ -1461,6 +1461,8 @@
 "image.link_detail" = "Гамма и цветовая температура экрана"
 "image.gamma" = "Гамма"
 "image.gamma_detail" = "Делает средние тона светлее или темнее"
+"image.saturation" = "Насыщенность"
+"image.saturation_detail" = "Яркость цветов"
 "image.temperature" = "Цветовая температура"
 "image.temperature_detail" = "Теплее — меньше синего"
 "image.neutral" = "Нейтральная"

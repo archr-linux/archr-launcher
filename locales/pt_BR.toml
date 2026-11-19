@@ -1461,6 +1461,8 @@
 "image.link_detail" = "Gamma e temperatura de cor do painel"
 "image.gamma" = "Gamma"
 "image.gamma_detail" = "Clareia ou escurece os tons médios"
+"image.saturation" = "Saturação"
+"image.saturation_detail" = "A força das cores"
 "image.temperature" = "Temperatura de cor"
 "image.temperature_detail" = "Mais quente reduz o azul"
 "image.neutral" = "Neutra"

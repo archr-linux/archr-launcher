@@ -521,6 +521,7 @@ fn sample_pages() -> Vec<(&'static str, Settings)> {
     image.open(Page::Image);
     image.values.insert(Id::Gamma, "1.10".into());
     image.values.insert(Id::ColorTemp, "4500".into());
+    image.values.insert(Id::Saturation, "60".into());
     let mut all = savesync_pages();
     all.splice(0..0, [
         // First, so the list snaps to its scrolled end.
@@ -3842,6 +3843,7 @@ fn golden_frames_at_640x480() {
     picture.open(Page::Image);
     picture.values.insert(Id::Gamma, "1.10".into());
     picture.values.insert(Id::ColorTemp, "4500".into());
+    picture.values.insert(Id::Saturation, "60".into());
     settled(&mut ui, &picture);
     keep(&mut ui, "settings-image");
     let mut forget = pages()

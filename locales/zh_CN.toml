@@ -1469,6 +1469,8 @@
 "image.link_detail" = "屏幕的伽马与色温"
 "image.gamma" = "伽马"
 "image.gamma_detail" = "调亮或调暗中间调"
+"image.saturation" = "饱和度"
+"image.saturation_detail" = "颜色的强度"
 "image.temperature" = "色温"
 "image.temperature_detail" = "偏暖可减少蓝光"
 "image.neutral" = "中性"

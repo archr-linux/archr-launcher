@@ -345,8 +345,9 @@ impl Runtime {
                 self.send(Work::Game(system, id, value));
             }
             Effect::Set(id, value) => self.send(Work::Set(id, value)),
-            Effect::Picture(gamma, temperature) => {
+            Effect::Picture(gamma, saturation, temperature) => {
                 self.send(Work::Set(Id::Gamma, gamma));
+                self.send(Work::Set(Id::Saturation, saturation));
                 self.send(Work::Set(Id::ColorTemp, temperature));
             }
             Effect::Level(id, Level::Hold(up)) => {
