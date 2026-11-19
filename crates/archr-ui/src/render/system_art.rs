@@ -88,6 +88,15 @@ fn lookup(table: &[(&'static str, &'static str)], name: &str) -> Option<&'static
 pub(super) fn short_name(name: &str) -> String {
     lookup(SHORT_NAMES, name).map_or_else(|| name.to_uppercase(), str::to_owned)
 }
+/// The short name drawn where a system has no picture; the Modules row's
+/// is its name, in the user's language.
+pub(super) fn short_label(name: &str, catalog: &I18n) -> String {
+    if name == crate::modules::SYSTEM {
+        catalog.text("settings.modules").to_uppercase()
+    } else {
+        short_name(name)
+    }
+}
 
 /// User directory first, then the theme; within each, the system's own file
 /// before its alias. An app's picture is `app-<id>` there, else its own.
@@ -211,12 +220,12 @@ impl<'a> SystemArt<'a> {
 
 fn has_picture(name: &str) -> bool {
     !name.starts_with('@')
-        || name == crate::moonlight::SYSTEM
+        || crate::modules::system_row(name)
         || crate::apps::module_of(name).is_some()
 }
 /// A collection's glyph; apps draw their own icon instead.
 fn collection(name: &str) -> bool {
-    name.starts_with('@') && name != crate::moonlight::SYSTEM
+    name.starts_with('@') && !crate::modules::system_row(name)
 }
 /// Entries `cursor` and its neighbours, the selection first.
 fn nearby(rows: &[String], cursor: usize, reach: usize) -> Vec<&str> {
@@ -496,7 +505,7 @@ impl Ui<'_, '_> {
             let glyph = selection(name == "@favorites", Glyph::Clock, Glyph::Star);
             return self.icon(glyph, icon, ink);
         }
-        let text = short_name(name);
+        let text = short_label(name, &self.catalog);
         let mut size = rect.height() as f32 / self.frame.scale * 0.16;
         while size > 10. && self.measure(&text, Face::Semibold, size)? > inner.width() {
             size -= 1.;
@@ -610,7 +619,8 @@ impl Ui<'_, '_> {
             };
             return self.icon(glyph, icon, ink);
         }
-        let label = generated_label(self.frame, rect, name, theme, |text, face, size| {
+        let text = short_label(name, &self.catalog);
+        let label = generated_label(self.frame, rect, text, theme, |text, face, size| {
             self.measure(text, face, size)
         })?;
         self.label_aligned(&label.text, label.style, label.rect, Align::Right)
@@ -657,11 +667,10 @@ struct PanelLabel {
 fn generated_label(
     frame: Frame,
     rect: Rect,
-    name: &str,
+    text: String,
     theme: &Theme,
     mut measure: impl FnMut(&str, Face, f32) -> Result<u32, String>,
 ) -> Result<PanelLabel, String> {
-    let text = short_name(name);
     let (face, size) = (Face::Semibold, 128.);
     let width = rect.width().saturating_sub(frame.px(24.) as u32);
     let natural = measure(&text, face, size)?.max(1);
@@ -740,7 +749,12 @@ fn panel_labels(
     let (title, meta) = (info.title * 480., info.meta * 480.);
     let games = system_count(name, data);
     let count = |key, n: usize| catalog.plural(key, n as f64, &[("count", &n.to_string())]);
-    let maker = maker(data, name);
+    // The Modules row is the launcher's own: "Arch R · Modules".
+    let maker = if name == crate::modules::SYSTEM {
+        vec!["Arch R".to_owned(), catalog.text("settings.modules")]
+    } else {
+        maker(data, name)
+    };
     let title_text = system_title(name, data, catalog);
     let title_block = (
         title_text,
@@ -752,6 +766,8 @@ fn panel_labels(
     let blocks: Vec<Block> = if info.inline {
         let mut details = vec![if name == crate::moonlight::SYSTEM {
             catalog.text("moonlight.description")
+        } else if name == crate::modules::SYSTEM {
+            count("modules.listed_panel", games)
         } else if let Some(app) = data.apps().iter().find(|a| a.key == name) {
             app_line(app)
         } else if data.is_tools(name) {
@@ -772,6 +788,8 @@ fn panel_labels(
     } else {
         let stats = if name == crate::moonlight::SYSTEM {
             catalog.text("moonlight.description")
+        } else if name == crate::modules::SYSTEM {
+            count("modules.listed_panel", games)
         } else if let Some(app) = data.apps().iter().find(|a| a.key == name) {
             app_line(app)
         } else if name.starts_with('@') {
@@ -1037,7 +1055,7 @@ mod tests {
         let advance =
             |text: &str, size: f32| text.chars().count() as u32 * (size * 0.703).ceil() as u32;
         for name in ["n64", "gba", "psx", "snes", "megadrive"] {
-            let label = generated_label(frame, rect, name, &theme, |text, _, size| {
+            let label = generated_label(frame, rect, short_name(name), &theme, |text, _, size| {
                 Ok(advance(text, size))
             })
             .unwrap();

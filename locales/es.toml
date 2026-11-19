@@ -997,6 +997,9 @@
 "updates.why_offline_incomplete" = "Consola antigua para este archivo: graba la imagen nueva de arch-r.io."
 
 "settings.modules" = "Módulos"
+"modules.listed" = { one = "{count} módulo", other = "{count} módulos" }
+"modules.listed_panel" = { one = "{count} activo · con página", other = "{count} activos · con página" }
+"modules.listed_on" = { one = "{count} módulo activo", other = "{count} módulos activos" }
 "modules.store" = "Tienda de módulos"
 "modules.reviewed_tab" = "Revisados"
 "modules.all_tab" = "Todos"

@@ -998,6 +998,9 @@
 "updates.why_offline_incomplete" = "System zu alt für diese Datei. Schreibe das neue Image von arch-r.io auf die Karte."
 
 "settings.modules" = "Module"
+"modules.listed" = { one = "{count} Modul", other = "{count} Module" }
+"modules.listed_panel" = { one = "{count} an · mit Seite", other = "{count} an · mit Seite" }
+"modules.listed_on" = { one = "{count} Modul an", other = "{count} Module an" }
 "modules.store" = "Modul-Store"
 "modules.reviewed_tab" = "Geprüft"
 "modules.all_tab" = "Alle"

@@ -997,6 +997,9 @@
 "updates.why_offline_incomplete" = "This console is too old for this file. Flash the new image from arch-r.io."
 
 "settings.modules" = "Modules"
+"modules.listed" = { one = "{count} module", other = "{count} modules" }
+"modules.listed_panel" = { one = "{count} on · with a page", other = "{count} on · with a page" }
+"modules.listed_on" = { one = "{count} module on", other = "{count} modules on" }
 "modules.store" = "Module store"
 "modules.reviewed_tab" = "Reviewed"
 "modules.all_tab" = "All"

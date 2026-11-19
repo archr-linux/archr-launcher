@@ -997,6 +997,9 @@
 "updates.why_offline_incomplete" = "Эта консоль слишком старая для этого файла. Запишите новый образ с arch-r.io."
 
 "settings.modules" = "Модули"
+"modules.listed" = { one = "{count} модуль", few = "{count} модуля", many = "{count} модулей", other = "{count} модуля" }
+"modules.listed_panel" = { one = "{count} включён · со страницей", few = "{count} включены · со страницей", many = "{count} включены · со страницей", other = "{count} включены · со страницей" }
+"modules.listed_on" = { one = "{count} модуль включён", few = "{count} модуля включены", many = "{count} модулей включены", other = "{count} модуля включены" }
 "modules.store" = "Магазин модулей"
 "modules.reviewed_tab" = "Проверенные"
 "modules.all_tab" = "Все"

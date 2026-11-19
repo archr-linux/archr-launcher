@@ -998,6 +998,9 @@
 
 # 模块与应用
 "settings.modules" = "模块"
+"modules.listed" = { other = "{count} 个模块" }
+"modules.listed_panel" = { other = "{count} 个已开启 · 有页面" }
+"modules.listed_on" = { other = "已开启 {count} 个模块" }
 "modules.store" = "模块商店"
 "modules.reviewed_tab" = "已审核"
 "modules.all_tab" = "全部"

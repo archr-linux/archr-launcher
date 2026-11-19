@@ -427,6 +427,23 @@ impl Settings {
     /// From a START tile: Settings opens on a module's page, over System ›
     /// Modules like the page opened from there, and B on it returns to START.
     pub fn open_module_page(&mut self, module: &str, page: u8) {
+        if self.open_module_list(module) {
+            self.open(Page::Module(self.modules.opened as u8, page));
+            self.entry = Some(self.stack.len());
+            self.sync_modules();
+        }
+    }
+    /// The details of `module` (Modulo-detalhes) from outside Settings: B
+    /// there closes Settings again.
+    pub fn open_module_info(&mut self, module: &str) {
+        if self.open_module_list(module) {
+            self.open_info();
+            self.entry = Some(self.stack.len());
+        }
+    }
+    /// System, Modules with `module` selected under the categories, as if
+    /// walked to; false when it is not installed.
+    fn open_module_list(&mut self, module: &str) -> bool {
         let Some(index) = self
             .modules
             .view
@@ -434,7 +451,7 @@ impl Settings {
             .iter()
             .position(|m| m.id == module)
         else {
-            return;
+            return false;
         };
         self.home();
         self.cursor = super::CATEGORIES
@@ -450,9 +467,7 @@ impl Settings {
         self.open(Page::Modules);
         self.modules.opened = index;
         self.cursor = index;
-        self.open(Page::Module(index as u8, page));
-        self.entry = Some(self.stack.len());
-        self.sync_modules();
+        true
     }
     pub(super) fn modules_input(&mut self, button: Button) -> Option<Effect> {
         if self.modules.working {
@@ -470,6 +485,11 @@ impl Settings {
             let data = std::mem::take(&mut self.modules.remove_data);
             return Some(match button {
                 Button::A | Button::X => {
+                    // Opened from outside Settings too, the removal ends
+                    // on the module list, without it.
+                    if self.entry == Some(self.stack.len()) {
+                        self.entry = None;
+                    }
                     self.back();
                     Effect::Module(Request::Remove {
                         module,

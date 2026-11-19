@@ -988,7 +988,7 @@ impl Host {
                     let _ = store.send(action);
                 }
             }
-            Request::Open { .. } => {}
+            Request::Open { .. } | Request::Details(_) => {}
             Request::OpenApp(id) => self.open_app(&id),
             Request::CloseApp(id) => {
                 if self.app.as_deref() == Some(id.as_str()) {

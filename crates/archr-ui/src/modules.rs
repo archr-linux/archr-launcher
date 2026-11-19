@@ -6,6 +6,10 @@ use std::{
     sync::Arc,
 };
 
+/// The Modules row of the library: the modules that are on and have a
+/// Settings page, listed as the games of a system (docs/modulos.md).
+pub const SYSTEM: &str = "@modules";
+
 /// Start tiles in all, and per module.
 pub const TILES: (usize, usize) = (4, 2);
 /// Start shortcuts in all, and per module.
@@ -387,6 +391,34 @@ impl View {
             })
             .collect()
     }
+    /// The modules the Modules row lists: on, with a Settings page, and
+    /// not an app (an app has a row of its own).
+    pub fn listed(&self) -> impl Iterator<Item = &Module> {
+        self.modules
+            .iter()
+            .filter(|m| m.active() && !m.pages.is_empty() && m.app.is_none())
+    }
+    /// The Modules row's list as games: each path is the module's id.
+    pub fn listed_games(&self) -> Vec<archr_index::Game> {
+        self.listed()
+            .map(|m| archr_index::Game {
+                path: m.id.clone().into(),
+                name: m.name.clone(),
+                image: None,
+                video: None,
+                favorite: false,
+                last_played: None,
+                year: None,
+                players: None,
+                details: Default::default(),
+            })
+            .collect()
+    }
+    /// The module a row of the Modules list stands for.
+    pub fn listed_module(&self, game: &archr_index::Game) -> Option<&Module> {
+        let id = game.path.to_str()?;
+        self.listed().find(|m| m.id == id)
+    }
     /// Installed modules the store has a newer version of.
     pub fn outdated(&self) -> usize {
         self.updates().len()
@@ -423,6 +455,32 @@ impl View {
             .take(QUICK.0)
             .collect()
     }
+}
+
+/// The Modules row among the systems, last, while it lists a module
+/// (`count`); none at all when it lists nothing.
+pub fn collection(systems: &mut Vec<archr_index::cache::SystemEntry>, count: usize) {
+    systems.retain(|s| s.name != SYSTEM);
+    if count > 0 {
+        systems.push(archr_index::cache::SystemEntry {
+            name: SYSTEM.into(),
+            fullname: "Modules".into(),
+            game_count: count as u32,
+            dir_mtime: 0,
+            source_fingerprint: 0,
+        });
+    }
+}
+
+/// A row that starts with `@` but stands among the systems, drawn like
+/// one: Moonlight and the Modules row (the others are collections and apps).
+pub fn system_row(name: &str) -> bool {
+    name == SYSTEM || name == crate::moonlight::SYSTEM
+}
+/// A row of the shelves' Systems and of the games strip: a real system, or
+/// the Modules row after them.
+pub fn among_systems(name: &str) -> bool {
+    !name.starts_with('@') || name == SYSTEM
 }
 
 /// Where an action was chosen.
@@ -563,6 +621,9 @@ pub enum Request {
         module: String,
         page: u8,
     },
+    /// Open a module's details in Settings, where it is switched off or
+    /// removed (handled by the launcher itself).
+    Details(String),
     Set {
         module: String,
         key: String,

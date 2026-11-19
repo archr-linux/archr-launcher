@@ -3,7 +3,7 @@
 //! and the Favorites tab; and the games grid with its strip of systems.
 //! Everything is placed by the view's `home` and drawn with the style
 //! primitives (glass, lift, the cached blur, gradients, the bold face).
-use super::{details::Art, system_art::short_name, system_title, Frame, Ui};
+use super::{details::Art, system_art::short_label, system_title, Frame, Ui};
 use crate::{
     appearance::mix,
     icons::Glyph,
@@ -280,14 +280,15 @@ impl<'t> Ui<'_, 't> {
                     .iter()
                     .find(|s| s.name == *name)
                     .map_or_else(|| data.collection_len(name), |s| s.game_count as usize);
+                let key = if name == crate::modules::SYSTEM {
+                    "modules.listed_on"
+                } else {
+                    "games.count"
+                };
                 (
                     catalog.text("home.kicker_system"),
                     system_title(name, data, catalog),
-                    catalog.plural(
-                        "games.count",
-                        count as f64,
-                        &[("count", &count.to_string())],
-                    ),
+                    catalog.plural(key, count as f64, &[("count", &count.to_string())]),
                     catalog.text("home.open"),
                 )
             }
@@ -362,6 +363,23 @@ impl<'t> Ui<'_, 't> {
         // The picture beside the text.
         let picture = self.area(home.hero.art);
         match focused {
+            Item::System(name) if name == crate::modules::SYSTEM => {
+                let side = picture.width().min(picture.height());
+                let tile = Rect::new(
+                    picture.center().x() - side as i32 / 2,
+                    picture.y(),
+                    side,
+                    side,
+                );
+                let accent = theme.highlight_bg;
+                let svg = Some(super::module_row::MODULES_SVG);
+                self.icon_tile(
+                    tile,
+                    (accent, mix(accent, theme.background, 0.3)),
+                    svg,
+                    theme,
+                )?;
+            }
             Item::System(name) => {
                 let path = self.art.as_ref().and_then(|a| a.key(name));
                 if !self.console_image(picture, path.as_ref(), 255) {
@@ -785,7 +803,7 @@ impl<'t> Ui<'_, 't> {
         );
         let path = self.art.as_ref().and_then(|a| a.key(system));
         if !self.console_image(inner, path.as_ref(), 255) {
-            let text = short_name(system);
+            let text = short_label(system, &self.catalog);
             self.label_aligned(
                 &text,
                 (Face::Semibold, 13., theme.text_secondary),
@@ -823,14 +841,28 @@ impl<'t> Ui<'_, 't> {
 
     /// A module's app: its icon in white on the accent.
     fn app_tile(&mut self, rect: Rect, row: &str, theme: &Theme) -> Result<(), String> {
+        let svg = self.art.as_ref().and_then(|a| a.icon(row));
+        let accent = theme.highlight_bg;
+        let fill = (accent, mix(accent, theme.background, 0.3));
+        self.icon_tile(rect, fill, svg.as_deref(), theme)
+    }
+    /// A module's icon in white on a rounded square, `fill` from its top
+    /// corner to the opposite one.
+    pub(super) fn icon_tile(
+        &mut self,
+        rect: Rect,
+        (from, to): (Rgba, Rgba),
+        svg: Option<&str>,
+        theme: &Theme,
+    ) -> Result<(), String> {
         let radius = rect.height() as f32 * 0.28;
         self.geometry.shaded(
             &mut self.canvas,
             rect,
             radius,
             &Gradient {
-                from: theme.highlight_bg,
-                to: mix(theme.highlight_bg, theme.background, 0.3),
+                from,
+                to,
                 angle: 55.,
             },
             None,
@@ -842,8 +874,7 @@ impl<'t> Ui<'_, 't> {
             side,
             side,
         );
-        let svg = self.art.as_ref().and_then(|a| a.icon(row));
-        self.module_icon((svg.as_deref(), ""), icon, theme.highlight_text)
+        self.module_icon((svg, ""), icon, theme.highlight_text)
     }
 
     /// Every system in the Library's grid, scrolled to the focused row.
@@ -952,8 +983,21 @@ impl<'t> Ui<'_, 't> {
         let gap = self.frame.size(list.gap).round().max(self.px(8.) as f32) as i32;
         let w = (area.width() as i32 - gap * (columns - 1)) / columns;
         let h = self.frame.size(list.row).round() as i32;
-        let label = (self.frame.size(list.font) * 1.6).round() as i32;
+        let mut label = (self.frame.size(list.font) * 1.6).round() as i32;
+        // A module's name is all its card shows: on two lines when one is
+        // too long even at the smallest text.
+        let floor = self.frame.min_size();
+        if system == crate::modules::SYSTEM {
+            let mut long = false;
+            for game in data.games(system) {
+                long |= self.measure(&game.name, Face::Semibold, floor)? > w.max(1) as u32;
+            }
+            if long {
+                label *= 2;
+            }
+        }
         let pitch = h + label + gap;
+        let modules = self.modules.clone();
         let radius = self.frame.size(list.radius);
         let len = App::list_len(data, system, folder);
         let rows_shown = ((area.height() as i32 + gap) / pitch).max(1);
@@ -993,7 +1037,14 @@ impl<'t> Ui<'_, 't> {
             let cover = game
                 .and_then(|g| g.image.as_ref())
                 .and_then(|path| art.covers.and_then(|c| c.peek(path)));
+            let module = game
+                .filter(|_| system == crate::modules::SYSTEM)
+                .and_then(|g| modules.listed_module(g));
             match cover {
+                _ if module.is_some() => {
+                    let module = module.expect("a module row");
+                    self.module_card(rect, r, module, theme)?;
+                }
                 Some(texture) => {
                     let size = texture.query();
                     let part = crop((size.width, size.height), (rect.width(), rect.height()));
@@ -1040,7 +1091,27 @@ impl<'t> Ui<'_, 't> {
                     rect.width(),
                     label.max(1) as u32,
                 );
-                self.label(&name, style, below)?;
+                // A module's name: smaller before it is cut, then on two lines.
+                let fit = match module {
+                    Some(_) => self.shrink(&name, style.0, style.1, floor, rect.width())?,
+                    None => Some(style.1),
+                };
+                match fit {
+                    Some(size) => self.label(&name, (style.0, size, style.2), below)?,
+                    None => {
+                        let step = (f32::from(self.frame.font_size(floor)) * 1.3).round() as i32;
+                        let lines = self.wrap(&name, style.0, floor, rect.width())?;
+                        for (n, text) in lines.iter().take(2).enumerate() {
+                            let at = Rect::new(
+                                below.x(),
+                                below.y() + n as i32 * step,
+                                below.width(),
+                                step.max(1) as u32,
+                            );
+                            self.label(text, (style.0, floor, style.2), at)?;
+                        }
+                    }
+                }
             }
         }
         self.canvas.set_clip_rect(None);
@@ -1058,7 +1129,7 @@ impl<'t> Ui<'_, 't> {
     ) -> Result<(), String> {
         let systems: Vec<String> = App::system_rows(data)
             .into_iter()
-            .filter(|row| !row.starts_with('@'))
+            .filter(|row| crate::modules::among_systems(row))
             .collect();
         let h = area.height().min(self.px(26.) as u32);
         let y = area.y() + (area.height() as i32 - h as i32) / 2;

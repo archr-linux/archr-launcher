@@ -933,6 +933,9 @@ impl App {
             | Screen::Resume => {
                 unreachable!()
             }
+            Screen::Games { system, .. } if system == crate::modules::SYSTEM => {
+                return self.module_row(b, data);
+            }
             Screen::Games { system, folder } => match b {
                 Button::B => self.back(),
                 Button::A | Button::X | Button::Y => {
@@ -1543,6 +1546,24 @@ impl App {
         }
     }
 
+    /// The Modules list: A opens the module's first page in Settings (B
+    /// there comes back here), Y its details, B goes back.
+    fn module_row(&mut self, b: Button, data: &dyn DataSource) -> Outcome {
+        if b == Button::B {
+            self.back();
+            return Outcome::None;
+        }
+        let Some(game) = data.games(crate::modules::SYSTEM).get(self.cursor) else {
+            return Outcome::None;
+        };
+        let module = game.path.to_string_lossy().into_owned();
+        Outcome::Module(match b {
+            Button::A => crate::modules::Request::Open { module, page: 0 },
+            Button::Y => crate::modules::Request::Details(module),
+            _ => return Outcome::None,
+        })
+    }
+
     /// A games grid: ←/→ step a game, ↑/↓ a row, L1/R1 change system along
     /// the strip; None leaves the press to the list (A, X, Y, B).
     fn handle_grid(
@@ -1569,7 +1590,7 @@ impl App {
             Button::L | Button::R => {
                 let systems: Vec<String> = Self::system_rows(data)
                     .into_iter()
-                    .filter(|row| !row.starts_with('@'))
+                    .filter(|row| crate::modules::among_systems(row))
                     .collect();
                 let at = systems.iter().position(|s| *s == system)?;
                 let next = if raw == Button::L {
@@ -1597,6 +1618,26 @@ impl App {
         let (screen, cursor) = self.history.pop().unwrap_or_else(|| (self.root(), 0));
         self.screen = screen;
         self.cursor = cursor;
+    }
+
+    /// The host changed the Modules row's list (a module switched off,
+    /// removed or given its first page): its screen keeps the cursor on a
+    /// module, and goes back once the list is empty.
+    pub fn modules_changed(&mut self, data: &dyn DataSource) {
+        if !matches!(&self.screen, Screen::Games { system, .. } if system == crate::modules::SYSTEM)
+        {
+            return;
+        }
+        match data.games(crate::modules::SYSTEM).len() {
+            0 => {
+                self.back();
+                if self.screen == Screen::Systems {
+                    let rows = Self::system_rows(data).len();
+                    self.cursor = self.cursor.min(rows.saturating_sub(1));
+                }
+            }
+            len => self.cursor = self.cursor.min(len - 1),
+        }
     }
 }
 

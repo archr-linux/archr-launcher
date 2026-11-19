@@ -115,6 +115,21 @@ impl Library {
             worker: None,
         }
     }
+    /// The Modules row's list: the modules on with a Settings page.
+    pub fn modules(&self) -> &[Game] {
+        self.games(archr_ui::modules::SYSTEM)
+    }
+    /// A new Modules list (`modules::View::listed_games`); the row goes
+    /// away while it is empty.
+    pub fn set_modules(&mut self, games: Vec<Game>) {
+        archr_ui::modules::collection(&mut self.overview.systems, games.len());
+        if games.is_empty() {
+            self.games.remove(archr_ui::modules::SYSTEM);
+        } else {
+            self.games
+                .insert(archr_ui::modules::SYSTEM.to_owned(), games);
+        }
+    }
     pub fn start(&mut self) {
         self.store_writer = Some(StoreWriter::new(self.paths.store.clone()));
         self.worker = Some(worker::start(self.paths.clone(), self.definitions.clone()));
@@ -249,6 +264,8 @@ impl Library {
                 Update::Overview(overview) => {
                     self.overview = overview;
                     crate::moonlight::collection(&mut self.overview, self.moonlight_available);
+                    let listed = self.modules().len();
+                    archr_ui::modules::collection(&mut self.overview.systems, listed);
                     self.counts_known = true;
                 }
                 Update::Games(system, mut games) => {

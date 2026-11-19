@@ -28,6 +28,7 @@ mod hub;
 mod keyboard;
 mod look;
 mod material;
+mod module_row;
 mod moonlight;
 mod netplay;
 mod roms_move;
@@ -512,6 +513,9 @@ pub struct Ui<'font, 'texture> {
     pub moonlight: Option<crate::moonlight::State>,
     /// The open app (API 4); the main loop owns and changes it here.
     pub app: Option<crate::apps::Session>,
+    /// The modules as the frame being drawn sees them (`App::modules`):
+    /// the Modules row draws their icons and texts.
+    modules: std::sync::Arc<crate::modules::View>,
     /// Active theme directory; its `systems/` folder holds console images.
     pub theme_dir: Option<PathBuf>,
     /// Root-mapped installed default theme: icons and console images the
@@ -633,6 +637,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             transition: None,
             moonlight: None,
             app: None,
+            modules: Default::default(),
             theme_dir: None,
             default_theme_dir: None,
         })
@@ -1086,6 +1091,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
     ) -> Result<(), String> {
         self.frame = self.fresh_frame()?;
         self.frame.text = self.text_scale;
+        self.modules = app.modules.clone();
         let now = self.frame.now;
         self.canvas.set_draw_color(color(theme.background));
         self.canvas.clear();
@@ -1837,6 +1843,17 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                     let ink = selection(accent_ink, self.tone(tone, theme), theme.highlight_text);
                     right -= self.tone_tag(badge, ink, (right, y + rh as i32 / 2))? + self.px(10.);
                 }
+                // A module row opens its page: the › of a page row.
+                if system == crate::modules::SYSTEM {
+                    let mark = self.frame.square(
+                        right - self.px(16.),
+                        y + (rh as i32 - self.px(16.)) / 2,
+                        16.,
+                    );
+                    let ink = selection(accent_ink, theme.dim_text, theme.highlight_text);
+                    self.icon(Glyph::ChevronRight, mark, ink)?;
+                    right -= self.px(26.);
+                }
                 game.name.clone()
             } else {
                 let name = systems.get(i).expect("visible system row");
@@ -1871,8 +1888,9 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                         u32::MAX,
                         Align::Right,
                     )? - self.px(14.);
-                    // Moonlight is drawn like a regular system row, without an icon.
-                    if name.starts_with('@') && name != crate::moonlight::SYSTEM {
+                    // Moonlight and the Modules row are drawn like a
+                    // regular system row, without an icon.
+                    if name.starts_with('@') && !crate::modules::system_row(name) {
                         let icon = self
                             .frame
                             .square(x, y + (rh as i32 - self.px(16.)) / 2, 16.);
@@ -1990,6 +2008,9 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         layout: &Layout,
     ) -> Result<(), String> {
         let Frame { now, .. } = self.frame;
+        if system == crate::modules::SYSTEM {
+            return self.module_art(data.games(system).get(cursor), theme, layout);
+        }
         if let Some(panel) = layout.panel {
             self.layout_panel("art", &panel, theme)?;
         }
@@ -2188,6 +2209,22 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 ('B', "hint.cancel"),
             ],
             Screen::Systems => &[('A', "hint.open"), ('Y', "hint.menu")],
+            // A module row opens; Y shows its details. The grid's hints put
+            // Back last, as the shelves' footer does.
+            Screen::Games { ref system, .. }
+                if system == crate::modules::SYSTEM && layout.list.mark == Mark::Grid =>
+            {
+                &[
+                    ('A', "hint.open"),
+                    ('Y', "menu.details"),
+                    ('B', "hint.back"),
+                ]
+            }
+            Screen::Games { ref system, .. } if system == crate::modules::SYSTEM => &[
+                ('A', "hint.open"),
+                ('B', "hint.back"),
+                ('Y', "menu.details"),
+            ],
             Screen::Games {
                 ref system,
                 ref folder,
@@ -2213,6 +2250,19 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         if let Some(key) = alert {
             let text = self.catalog.text(key);
             return self.footer_alert(&text, theme, (y, h), left);
+        }
+        let modules = matches!(&app.screen, Screen::Games { system, .. }
+            if system == crate::modules::SYSTEM && layout.summary && layout.list.mark != Mark::Grid);
+        if modules {
+            let n = data.games(crate::modules::SYSTEM).len();
+            let text =
+                self.catalog
+                    .plural("modules.listed", n as f64, &[("count", &n.to_string())]);
+            self.label(
+                &text,
+                (Face::Regular, 13., theme.muted),
+                Rect::new(self.px(24.), y, (left - self.px(40.)).max(1) as u32, h),
+            )?;
         }
         if matches!(app.screen, Screen::Systems) && (layout.summary || moving.is_some()) {
             let width = (left - self.px(40.)).max(1) as u32;
@@ -2990,6 +3040,7 @@ fn system_title(name: &str, data: &dyn DataSource, catalog: &I18n) -> String {
     match name {
         "@favorites" => catalog.text("collections.favorites"),
         "@recent" => catalog.text("collections.recent"),
+        crate::modules::SYSTEM => catalog.text("settings.modules"),
         _ => data
             .systems()
             .iter()
@@ -3024,7 +3075,7 @@ fn row_style(
 }
 /// Games in a system or collection.
 fn system_count(name: &str, data: &dyn DataSource) -> usize {
-    if name.starts_with('@') {
+    if name.starts_with('@') && !crate::modules::system_row(name) {
         data.collection_len(name)
     } else {
         data.systems()
@@ -3160,7 +3211,7 @@ pub fn prepare_first_frame<'font>(
         if y >= bottom {
             break;
         }
-        if name.starts_with('@') && name != crate::moonlight::SYSTEM {
+        if name.starts_with('@') && !crate::modules::system_row(name) {
             first_icons.push((
                 if name == "@favorites" {
                     Glyph::Star
@@ -3193,7 +3244,7 @@ pub fn prepare_first_frame<'font>(
             } else {
                 0
             }
-            + if name.starts_with('@') {
+            + if name.starts_with('@') && !crate::modules::system_row(name) {
                 frame.px(26.)
             } else {
                 0

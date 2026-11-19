@@ -997,6 +997,9 @@
 "updates.why_offline_incomplete" = "Este console é antigo demais para este arquivo. Grave a imagem nova pelo site arch-r.io."
 
 "settings.modules" = "Módulos"
+"modules.listed" = { one = "{count} módulo", other = "{count} módulos" }
+"modules.listed_panel" = { one = "{count} ligado · com página", other = "{count} ligados · com página" }
+"modules.listed_on" = { one = "{count} módulo ligado", other = "{count} módulos ligados" }
 "modules.store" = "Loja de módulos"
 "modules.reviewed_tab" = "Revisados"
 "modules.all_tab" = "Todos"

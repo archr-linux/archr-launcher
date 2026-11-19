@@ -70,11 +70,11 @@ impl App {
             .collect()
     }
 
-    /// The real systems, in the user's order.
+    /// The real systems and the Modules row, in the user's order.
     fn home_systems(data: &dyn DataSource) -> Vec<String> {
         Self::system_rows(data)
             .into_iter()
-            .filter(|row| !row.starts_with('@'))
+            .filter(|row| crate::modules::among_systems(row))
             .collect()
     }
     /// The favorite games by their real system and index.
@@ -118,7 +118,8 @@ impl App {
                         ShelfKind::Collections => Self::system_rows(data)
                             .into_iter()
                             .filter(|row| {
-                                row.starts_with('@') && crate::apps::module_of(row).is_none()
+                                !crate::modules::among_systems(row)
+                                    && crate::apps::module_of(row).is_none()
                             })
                             .map(Item::System)
                             .collect(),

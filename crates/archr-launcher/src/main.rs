@@ -623,17 +623,21 @@ fn run(
                             images.insert(game.clone(), image);
                         }
                     }
-                    // App rows come and go: the cursor stays on its row.
+                    // App rows and the Modules row come and go: the cursor
+                    // stays on its row.
                     let apps = view.apps();
-                    if library.apps != apps {
+                    let listed = view.listed_games();
+                    if library.apps != apps || library.modules() != listed.as_slice() {
                         let row = app.rows(&library).get(app.cursor).cloned();
                         library.apps = apps;
+                        library.set_modules(listed);
                         let rows = app.rows(&library);
                         if let Some(at) = row.and_then(|r| rows.iter().position(|n| *n == r)) {
                             if app.screen == Screen::Systems {
                                 app.cursor = at;
                             }
                         }
+                        app.modules_changed(&library);
                     }
                     app.modules = view.clone();
                     settings.state.set_modules(view);
@@ -1529,6 +1533,10 @@ fn run(
                     archr_ui::modules::Request::Open { module, page } => {
                         settings.open();
                         settings.state.open_module_page(module, *page);
+                    }
+                    archr_ui::modules::Request::Details(module) => {
+                        settings.open();
+                        settings.state.open_module_info(module);
                     }
                     archr_ui::modules::Request::OpenApp(module) => {
                         let found = app.modules.modules.iter().find(|m| m.id == *module);
