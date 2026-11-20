@@ -119,6 +119,23 @@ pub struct Search {
 /// Buttons of the details screen, left to right.
 pub const DETAILS_ACTIONS: [&str; 3] = ["hint.play", "hint.favorite", "details.rescrape"];
 
+/// The GPU drivers a port may need (Ports-panfrost, Ports-libmali).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GpuDriver {
+    Panfrost,
+    Libmali,
+}
+
+impl GpuDriver {
+    /// Its value in system.cfg (`gpu.driver`).
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Panfrost => "panfrost",
+            Self::Libmali => "libmali",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SessionAction {
     Shutdown,
@@ -133,8 +150,9 @@ pub enum Outcome {
     Convert(Box<crate::convert::Offer>),
     /// The error reports notice was answered: keep them on (true) or not.
     ReportsNotice(bool),
-    /// Ports-panfrost was accepted: set the GPU driver to panfrost, then reboot.
-    Panfrost,
+    /// Ports-panfrost or Ports-libmali was accepted: set this GPU driver,
+    /// then reboot.
+    SwitchGpu(GpuDriver),
     Settings,
     /// Opens Settings, System, Updates.
     Updates,
@@ -431,9 +449,9 @@ pub struct App {
     pub convert: Option<crate::convert::Offer>,
     /// Error reports are on: said once, over the Start screen (Relatorios-aviso).
     pub reports_notice: Option<crate::settings::reports::Notice>,
-    /// A port that runs only on panfrost, by its title, asked instead of
-    /// launched (Ports-panfrost).
-    pub panfrost: Option<String>,
+    /// A port that runs only on another GPU driver, by its title and that
+    /// driver, asked instead of launched (Ports-panfrost, Ports-libmali).
+    pub gpu_offer: Option<(String, GpuDriver)>,
     /// States per page and the screenshot grid, reported by the renderer.
     pub saves_page: usize,
     pub shots_columns: usize,
@@ -556,7 +574,7 @@ impl App {
             confirm: None,
             convert: None,
             reports_notice: None,
-            panfrost: None,
+            gpu_offer: None,
             saves_page: 1,
             shots_columns: 1,
             shots_page: 1,
@@ -801,14 +819,14 @@ impl App {
                 None => Outcome::None,
             };
         }
-        if self.panfrost.is_some() {
+        if let Some((_, driver)) = self.gpu_offer {
             return match b {
                 Button::A => {
-                    self.panfrost = None;
-                    Outcome::Panfrost
+                    self.gpu_offer = None;
+                    Outcome::SwitchGpu(driver)
                 }
                 Button::B => {
-                    self.panfrost = None;
+                    self.gpu_offer = None;
                     Outcome::None
                 }
                 _ => Outcome::None,

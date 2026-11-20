@@ -1698,6 +1698,8 @@
 "ports.panfrost_body" = "Este jogo só roda com o driver de GPU Panfrost; o atual (libmali) não consegue rodá-lo."
 "ports.panfrost_note" = "A troca vale para todo o sistema e o console reinicia. Para voltar: Configurações › Sistema › Driver de GPU."
 "ports.panfrost_switch" = "Trocar e reiniciar"
+"ports.libmali_title" = "{name} precisa do driver libmali"
+"ports.libmali_body" = "Este jogo só roda com o driver de GPU libmali; o atual (Panfrost) não consegue rodá-lo."
 
 # List search and folders
 "menu.search" = "Buscar na lista"

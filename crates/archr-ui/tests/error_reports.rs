@@ -100,7 +100,10 @@ fn start() -> App {
 fn panfrost() -> App {
     let mut app = App::new(9);
     app.screen = Screen::games("ports");
-    app.panfrost = Some("Bugdom 2: The Lost Gnome Kingdoms".into());
+    app.gpu_offer = Some((
+        "Bugdom 2: The Lost Gnome Kingdoms".into(),
+        archr_ui::state::GpuDriver::Panfrost,
+    ));
     app
 }
 #[test]
@@ -152,11 +155,14 @@ fn the_panfrost_question_switches_on_a_and_closes_on_b() {
     let data = FakeData::default();
     let mut app = panfrost();
     assert_eq!(app.handle(Button::Down, &data), Outcome::None);
-    assert!(app.panfrost.is_some(), "only A or B answer");
-    assert_eq!(app.handle(Button::A, &data), Outcome::Panfrost);
-    assert!(app.panfrost.is_none());
+    assert!(app.gpu_offer.is_some(), "only A or B answer");
+    assert_eq!(
+        app.handle(Button::A, &data),
+        Outcome::SwitchGpu(archr_ui::state::GpuDriver::Panfrost)
+    );
+    assert!(app.gpu_offer.is_none());
     let mut app = panfrost();
     assert_eq!(app.handle(Button::B, &data), Outcome::None);
-    assert!(app.panfrost.is_none());
+    assert!(app.gpu_offer.is_none());
     assert_eq!(app.screen, Screen::games("ports"), "B stays on the list");
 }

@@ -114,13 +114,13 @@ impl Runtime {
     pub fn take_launch_saved(&mut self) -> bool {
         std::mem::take(&mut self.launch_saved)
     }
-    /// Ports-panfrost: panfrost through the GPU driver row's own path
-    /// (`gpudriver`, then the value read back).
-    pub fn switch_gpu(&mut self) {
+    /// Ports-panfrost and Ports-libmali: `driver` through the GPU driver
+    /// row's own path (`gpudriver`, then the value read back).
+    pub fn switch_gpu(&mut self, driver: &str) {
         self.state.error = None;
         self.state.pending = Some(Id::Gpu);
         self.gpu_switch = true;
-        self.send(Work::Set(Id::Gpu, "panfrost".into()));
+        self.send(Work::Set(Id::Gpu, driver.into()));
     }
     /// The START menu's Bluetooth shortcut: the Bluetooth page's own switch
     /// (`archr-bluetooth`), a failure told by a toast. Ignored while

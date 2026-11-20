@@ -1698,6 +1698,8 @@
 "ports.panfrost_body" = "Este juego solo funciona con el controlador GPU Panfrost; el actual (libmali) no puede ejecutarlo."
 "ports.panfrost_note" = "El cambio vale para todo el sistema y la consola se reinicia. Para volver: Configuración › Sistema › Controlador GPU."
 "ports.panfrost_switch" = "Cambiar y reiniciar"
+"ports.libmali_title" = "{name} necesita el controlador libmali"
+"ports.libmali_body" = "Este juego solo funciona con el controlador de GPU libmali; el actual (Panfrost) no puede ejecutarlo."
 
 # List search and folders
 "menu.search" = "Buscar en la lista"

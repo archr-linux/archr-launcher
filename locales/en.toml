@@ -1698,6 +1698,8 @@
 "ports.panfrost_body" = "This game runs only on the Panfrost GPU driver; the current one (libmali) cannot run it."
 "ports.panfrost_note" = "The switch applies to the whole system and the console restarts. To go back: Settings › System › GPU driver."
 "ports.panfrost_switch" = "Switch and restart"
+"ports.libmali_title" = "{name} needs the libmali driver"
+"ports.libmali_body" = "This game runs only on the libmali GPU driver; the current one (Panfrost) cannot run it."
 
 # List search and folders
 "menu.search" = "Search in list"

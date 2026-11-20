@@ -1698,6 +1698,8 @@
 "ports.panfrost_body" = "Эта игра работает только с драйвером GPU Panfrost; текущий (libmali) её не запускает."
 "ports.panfrost_note" = "Смена действует для всей системы, консоль перезагрузится. Вернуть: Настройки › Система › Драйвер GPU."
 "ports.panfrost_switch" = "Сменить и перезапуск"
+"ports.libmali_title" = "{name} требует драйвер libmali"
+"ports.libmali_body" = "Эта игра работает только с драйвером GPU libmali; текущий (Panfrost) не может её запустить."
 
 # List search and folders
 "menu.search" = "Поиск в списке"

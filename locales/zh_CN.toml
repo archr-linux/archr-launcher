@@ -1611,6 +1611,8 @@
 "ports.panfrost_body" = "此游戏只能使用 Panfrost GPU 驱动运行，当前的 libmali 驱动无法运行它。"
 "ports.panfrost_note" = "切换将影响整个系统，并重启设备。要切回原驱动，请前往设置 › 系统 › GPU 驱动。"
 "ports.panfrost_switch" = "切换并重启"
+"ports.libmali_title" = "{name} 需要 libmali 驱动"
+"ports.libmali_body" = "此游戏只能在 libmali GPU 驱动下运行；当前驱动（Panfrost）无法运行它。"
 
 # 搜索、文件夹及控制器
 "menu.search" = "搜索列表"

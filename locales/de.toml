@@ -1604,6 +1604,8 @@
 "ports.panfrost_body" = "Dieses Spiel läuft nur mit dem Panfrost-GPU-Treiber; der aktuelle Treiber (libmali) kann es nicht ausführen."
 "ports.panfrost_note" = "Der Wechsel gilt für das ganze System und startet die Konsole neu. Zurückwechseln: Einstellungen › System › GPU-Treiber."
 "ports.panfrost_switch" = "Wechseln und neustarten"
+"ports.libmali_title" = "{name} braucht den Treiber libmali"
+"ports.libmali_body" = "Dieses Spiel läuft nur mit dem GPU-Treiber libmali; der aktuelle (Panfrost) kann es nicht ausführen."
 
 # Listensuche und Ordner
 "menu.search" = "In Liste suchen"

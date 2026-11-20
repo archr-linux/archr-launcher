@@ -28,14 +28,21 @@ impl Ui<'_, '_> {
             theme,
         )
     }
-    pub(crate) fn panfrost_notice(&mut self, title: &str, theme: &Theme) -> Result<(), String> {
+    pub(crate) fn gpu_notice(
+        &mut self,
+        title: &str,
+        driver: crate::state::GpuDriver,
+        theme: &Theme,
+    ) -> Result<(), String> {
+        use crate::state::GpuDriver;
         // Why it cannot run, then what the switch does and how to undo it.
-        let paragraphs =
-            ["ports.panfrost_body", "ports.panfrost_note"].map(|key| self.catalog.text(key));
+        let (heading, body) = match driver {
+            GpuDriver::Panfrost => ("ports.panfrost_title", "ports.panfrost_body"),
+            GpuDriver::Libmali => ("ports.libmali_title", "ports.libmali_body"),
+        };
+        let paragraphs = [body, "ports.panfrost_note"].map(|key| self.catalog.text(key));
         self.notice_dialog(
-            &self
-                .catalog
-                .format("ports.panfrost_title", &[("name", title)]),
+            &self.catalog.format(heading, &[("name", title)]),
             &paragraphs,
             // The switch restarts the console.
             (["ports.panfrost_switch", "hint.cancel"], true, true),

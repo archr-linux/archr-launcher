@@ -1363,11 +1363,11 @@ fn run(
                 Outcome::None
             } else {
                 match app.handle(button, &library) {
-                    // Ports-panfrost: asked instead of a launch that fails on libmali.
-                    Outcome::Launch { system, game } => match library.needs_panfrost(&system, game)
-                    {
-                        Some(title) => {
-                            app.panfrost = Some(title);
+                    // Ports-panfrost and Ports-libmali: asked instead of a
+                    // launch that fails on the driver set.
+                    Outcome::Launch { system, game } => match library.needs_driver(&system, game) {
+                        Some(offer) => {
+                            app.gpu_offer = Some(offer);
                             Outcome::None
                         }
                         None => Outcome::Launch { system, game },
@@ -1477,8 +1477,8 @@ fn run(
                     archr_launcher::reports::answer(paths.clone(), on);
                     Outcome::None
                 }
-                Outcome::Panfrost => {
-                    settings.switch_gpu();
+                Outcome::SwitchGpu(driver) => {
+                    settings.switch_gpu(driver.key());
                     Outcome::None
                 }
                 requested => requested,

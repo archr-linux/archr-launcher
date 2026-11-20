@@ -192,18 +192,27 @@ impl Library {
         }
         let _ = self.send(Work::Count);
     }
-    /// Ports-panfrost: the port's title, when it runs only on panfrost and
-    /// the GPU driver set is libmali.
-    pub fn needs_panfrost(&self, system: &str, game: usize) -> Option<String> {
-        use archr_ui::settings::Id;
+    /// Ports-panfrost and Ports-libmali: the port's title and the driver it
+    /// needs, when that is not the GPU driver set.
+    pub fn needs_driver(
+        &self,
+        system: &str,
+        game: usize,
+    ) -> Option<(String, archr_ui::state::GpuDriver)> {
+        use archr_ui::{settings::Id, state::GpuDriver};
         let game = self.games(system).get(game).filter(|_| system == "ports")?;
         let driver = SystemCfg::load(&self.paths.config)
             .ok()
             .and_then(|cfg| cfg.get_setting(Id::Gpu.key(), None, None))
             .unwrap_or_else(|| Id::Gpu.default_value().into());
-        (driver == "libmali"
-            && crate::panfrost::needed(&game.path, &self.paths.at(crate::panfrost::LIST)))
-        .then(|| game.name.clone())
+        let needed = if driver == "libmali" {
+            crate::panfrost::needed(&game.path, &self.paths.at(crate::panfrost::LIST))
+                .then_some(GpuDriver::Panfrost)
+        } else {
+            crate::panfrost::needs_libmali(&game.path, &self.paths.at(crate::panfrost::LIBMALI))
+                .then_some(GpuDriver::Libmali)
+        };
+        needed.map(|driver| (game.name.clone(), driver))
     }
     /// Launch choices saved elsewhere (the Games settings page) apply next launch.
     pub fn reload_config(&self) {
@@ -481,7 +490,7 @@ impl Library {
             | Outcome::UseShot { .. }
             | Outcome::Convert(_)
             | Outcome::ReportsNotice(_)
-            | Outcome::Panfrost => return Err("error.operation".to_owned()),
+            | Outcome::SwitchGpu(_) => return Err("error.operation".to_owned()),
         }
         Ok(false)
     }

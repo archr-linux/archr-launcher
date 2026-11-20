@@ -425,6 +425,8 @@ const CONFIG_KEYS: &[&str] = &[
     // Ports-panfrost: a PortMaster package and Arch R's list of them.
     "bugdom.zip",
     "panfrost.txt",
+    // Ports-libmali: Arch R's list of ports built for gl4es.
+    "libmali.txt",
     "port.list",
     "port.progress",
     "port.remove",

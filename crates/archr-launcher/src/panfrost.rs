@@ -20,6 +20,23 @@ pub fn active(bound: &Path) -> bool {
 /// Arch R's PortMaster packages that need panfrost, one per line.
 pub const LIST: &str = "/usr/share/archr/portmaster/panfrost.txt";
 
+/// Ports-libmali: the packages that run only on libmali, one per line
+/// (built for gl4es on OpenGL ES, which fails on panfrost).
+pub const LIBMALI: &str = "/usr/share/archr/portmaster/libmali.txt";
+
+/// Whether the port `script` needs libmali: its package is on `list`.
+pub fn needs_libmali(script: &Path, list: &Path) -> bool {
+    let mut head = Vec::new();
+    if fs::File::open(script)
+        .and_then(|file| file.take(4096).read_to_end(&mut head))
+        .is_err()
+    {
+        return false;
+    }
+    package(&String::from_utf8_lossy(&head))
+        .is_some_and(|package| listed(&fs::read_to_string(list).unwrap_or_default(), package))
+}
+
 /// Whether the port `script` needs panfrost: its package is on `list`, or
 /// its PortMaster `port.json` requires OpenGL. A script without the
 /// PortMaster header never does.
@@ -120,6 +137,23 @@ mod tests {
         assert_eq!(opengl(plain, "A.zip"), Some(false));
         assert_eq!(opengl(r#"{"name": "A.zip"}"#, "A.zip"), Some(false));
         assert_eq!(opengl("not json", "A.zip"), None);
+    }
+    #[test]
+    fn libmali_is_needed_only_by_a_listed_package() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("Billy Frontier.sh");
+        let list = dir.path().join("libmali.txt");
+        assert!(!needs_libmali(&script, &list), "no script");
+        fs::write(
+            &script,
+            "#!/bin/bash\n# PORTMASTER: billyfrontier.zip, Billy Frontier.sh\n",
+        )
+        .unwrap();
+        assert!(!needs_libmali(&script, &list), "no list");
+        fs::write(&list, "# gl4es on GLES\nBillyFrontier.zip\n").unwrap();
+        assert!(needs_libmali(&script, &list));
+        fs::write(&list, "a7xpg.zip\n").unwrap();
+        assert!(!needs_libmali(&script, &list), "another package");
     }
     #[test]
     fn panfrost_is_active_with_a_bound_gpu() {
