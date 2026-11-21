@@ -1848,7 +1848,7 @@
 "launcher.clear" = "Limpiar"
 "launcher.working" = "…"
 "launcher.synced" = "Última lectura {time}"
-"launcher.prune_what" = "Los juegos que ya no están en la tarjeta salen de favoritos y recientes. No se borra ningún archivo."
+"launcher.prune_what" = "Los juegos que ya no están en la tarjeta salen de favoritos y recientes. No se borra ningún archivo. Si una tarjeta está fuera, vuelve a ponerla antes."
 "launcher.restart_question" = "¿Reiniciar el launcher?"
 "launcher.restart_what" = "La pantalla se apaga unos segundos y el launcher vuelve."
 "launcher.restore_question" = "¿Restaurar los ajustes del launcher?"

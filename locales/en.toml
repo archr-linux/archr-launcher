@@ -1848,7 +1848,7 @@
 "launcher.clear" = "Clear"
 "launcher.working" = "…"
 "launcher.synced" = "Last read {time}"
-"launcher.prune_what" = "Games that are no longer on the card leave favorites and recent games. No file is deleted."
+"launcher.prune_what" = "Games that are no longer on the card leave favorites and recent games. No file is deleted. If a card is out, put it back first."
 "launcher.restart_question" = "Restart the launcher?"
 "launcher.restart_what" = "The screen goes dark for a few seconds and the launcher comes back."
 "launcher.restore_question" = "Restore the launcher settings?"

@@ -1848,7 +1848,7 @@
 "launcher.clear" = "Leeren"
 "launcher.working" = "…"
 "launcher.synced" = "Zuletzt gelesen {time}"
-"launcher.prune_what" = "Spiele, die nicht mehr auf der Karte sind, verlassen Favoriten und zuletzt gespielt. Keine Datei wird gelöscht."
+"launcher.prune_what" = "Spiele, die nicht mehr auf der Karte sind, verlassen Favoriten und zuletzt gespielt. Keine Datei wird gelöscht. Ist eine Karte nicht eingesteckt, stecke sie vorher ein."
 "launcher.restart_question" = "Launcher neu starten?"
 "launcher.restart_what" = "Der Bildschirm wird einige Sekunden dunkel, dann ist der Launcher zurück."
 "launcher.restore_question" = "Launcher-Einstellungen zurücksetzen?"

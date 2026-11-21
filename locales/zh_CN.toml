@@ -1855,7 +1855,7 @@
 "launcher.clear" = "清空"
 "launcher.working" = "…"
 "launcher.synced" = "上次读取 {time}"
-"launcher.prune_what" = "已不在存储卡上的游戏会移出收藏和最近游戏，不会删除任何文件。"
+"launcher.prune_what" = "已不在存储卡上的游戏会移出收藏和最近游戏，不会删除任何文件。如果存储卡不在，请先插入。"
 "launcher.restart_question" = "重启启动器？"
 "launcher.restart_what" = "屏幕会黑几秒，然后启动器回来。"
 "launcher.restore_question" = "恢复启动器设置？"

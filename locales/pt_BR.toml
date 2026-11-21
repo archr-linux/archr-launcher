@@ -1848,7 +1848,7 @@
 "launcher.clear" = "Limpar"
 "launcher.working" = "…"
 "launcher.synced" = "Última leitura {time}"
-"launcher.prune_what" = "Saem dos favoritos e dos recentes os jogos que não estão mais no cartão. Nenhum arquivo é apagado."
+"launcher.prune_what" = "Saem dos favoritos e dos recentes os jogos que não estão mais no cartão. Nenhum arquivo é apagado. Se um cartão estiver fora, coloque-o antes."
 "launcher.restart_question" = "Reiniciar o launcher?"
 "launcher.restart_what" = "A tela apaga por alguns segundos e o launcher volta."
 "launcher.restore_question" = "Restaurar os ajustes do launcher?"
