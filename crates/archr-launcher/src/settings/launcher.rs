@@ -9,8 +9,10 @@ use std::{
     path::Path,
 };
 
-/// The session's log: the launcher's messages and its children's.
+/// The session's own log: when it started and stopped the launcher. The
+/// launcher's messages are in the journal, read first.
 pub const LOG: &str = "/var/log/archr-launcher-session.log";
+const UNIT: &str = "archr-launcher-session";
 /// The end of the log read for the viewer, and its lines at most.
 const LOG_TAIL: u64 = 64 * 1024;
 const LOG_LINES: usize = 400;
@@ -39,8 +41,45 @@ pub fn clear_covers(paths: &Paths) {
     }
 }
 
-/// The last lines of the session's log, newest last.
+/// The launcher's last messages, newest last: the session's journal, else
+/// (no journal, or a PC fixture) the session's own log file.
 pub fn read_log(paths: &Paths) -> Vec<String> {
+    if paths.root.is_none() {
+        if let Some(lines) = journal() {
+            return lines;
+        }
+    }
+    read_file(paths)
+}
+
+fn journal() -> Option<Vec<String>> {
+    let lines = LOG_LINES.to_string();
+    let output = std::process::Command::new("journalctl")
+        .args(["-u", UNIT, "-n", &lines, "-q", "--no-pager", "-o", "short-iso"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let lines: Vec<String> = text.lines().map(short_line).collect();
+    (!lines.is_empty()).then_some(lines)
+}
+
+/// `2026-11-21T13:15:16-0300 host unit[pid]: archr-launcher: text` →
+/// `13:15:16 text`: the time and the message, what fits the screen.
+fn short_line(line: &str) -> String {
+    let mut parts = line.splitn(3, ' ');
+    let (Some(stamp), Some(_host), Some(rest)) = (parts.next(), parts.next(), parts.next()) else {
+        return clean(line);
+    };
+    let time = stamp.get(11..19).unwrap_or(stamp);
+    let message = rest.split_once(": ").map_or(rest, |(_, m)| m);
+    let message = message.strip_prefix("archr-launcher: ").unwrap_or(message);
+    clean(&format!("{time} {message}"))
+}
+
+fn read_file(paths: &Paths) -> Vec<String> {
     let Ok(mut file) = fs::File::open(paths.at(LOG)) else {
         return Vec::new();
     };
@@ -141,6 +180,22 @@ mod tests {
         assert_eq!(lines.last().unwrap(), "line 4999 ok");
         assert!(lines.iter().all(|line| line.starts_with("line ")));
         assert!(read_log(&Paths::new(Some(root.path().join("none")))).is_empty());
+    }
+
+    #[test]
+    fn journal_lines_keep_the_time_and_the_message() {
+        assert_eq!(
+            short_line(
+                "2026-11-21T13:15:16-0300 archr-f01b archr-launcher-session[8348]: \
+                 archr-launcher: first frame 311 ms (9 system rows)"
+            ),
+            "13:15:16 first frame 311 ms (9 system rows)"
+        );
+        assert_eq!(
+            short_line("2026-11-21T13:15:16-0300 host systemd[1]: Started x."),
+            "13:15:16 Started x."
+        );
+        assert_eq!(short_line("odd"), "odd");
     }
 
     #[test]

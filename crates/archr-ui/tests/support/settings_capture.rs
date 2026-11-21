@@ -653,7 +653,11 @@ fn sample_pages() -> Vec<(&'static str, Settings)> {
     let mut launcher_ask = launcher.clone();
     launcher_ask.cursor = 1;
     launcher_ask.launcher.confirm = Some(Id::PruneMissing);
+    let mut launcher_done = launcher.clone();
+    launcher_done.cursor = 1;
+    launcher_done.note("launcher.pruned|count=4".into());
     all.extend([
+        ("config-launcher-aviso", launcher_done),
         ("config-launcher", launcher),
         ("config-launcher-fim", launcher_end),
         ("config-launcher-pergunta", launcher_ask),
@@ -4033,6 +4037,7 @@ fn golden_frames_at_640x480() {
         ("settings-launcher", "config-launcher"),
         ("settings-launcher-fim", "config-launcher-fim"),
         ("settings-launcher-pergunta", "config-launcher-pergunta"),
+        ("settings-launcher-aviso", "config-launcher-aviso"),
     ] {
         let state = &launcher_pages.iter().find(|(n, _)| *n == sample).unwrap().1;
         settled(&mut ui, state);

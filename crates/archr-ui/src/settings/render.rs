@@ -1092,6 +1092,7 @@ impl View<'_, '_, '_> {
                 "bios.",
                 "shortcuts.",
                 "pad.",
+                "launcher.",
             ]
             .iter()
             .any(|prefix| error.starts_with(prefix))
