@@ -417,6 +417,8 @@ impl Backend {
                 | Id::BatteryCritical
                 | Id::BatteryLow
                 | Id::ShutdownDelay
+                | Id::ShowEmpty
+                | Id::OpenAt
         ) {
             return None;
         }
@@ -643,6 +645,17 @@ mod tests {
     }
     fn calls(root: &tempfile::TempDir) -> String {
         fs::read_to_string(root.path().join("calls")).unwrap_or_default()
+    }
+    #[test]
+    fn launcher_page_settings_are_saved_and_read_back() {
+        let (_root, paths) = fixture("");
+        let backend = Backend::new(paths.clone());
+        assert_eq!(backend.apply_page(Id::ShowEmpty, "1"), Some(Ok("1".into())));
+        assert_eq!(backend.apply_page(Id::OpenAt, "game"), Some(Ok("game".into())));
+        assert!(backend.apply_page(Id::OpenAt, "nowhere").unwrap().is_err());
+        let state = backend.load().unwrap();
+        assert_eq!(state.value(Id::ShowEmpty), "1");
+        assert_eq!(state.value(Id::OpenAt), "game");
     }
     #[test]
     fn ssh_toggle_prepares_marker_starts_unit_then_persists() {

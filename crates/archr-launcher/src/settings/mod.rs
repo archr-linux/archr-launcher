@@ -190,6 +190,7 @@ impl Backend {
             Page::SaveSync,
             Page::SaveSyncTarget,
             Page::Toasts,
+            Page::Launcher,
         ]
         .iter()
         .flat_map(|page| page.rows().iter().map(|row| row.id))
