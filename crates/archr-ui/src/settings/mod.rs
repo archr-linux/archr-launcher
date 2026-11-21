@@ -15,6 +15,7 @@ mod custom;
 pub mod diag;
 pub(crate) mod games;
 pub(crate) mod information;
+pub mod launcher;
 pub use custom::Custom;
 pub mod hotkeys;
 pub mod joypad;
@@ -115,6 +116,9 @@ pub enum Page {
     PadCalibrate,
     /// Region › Date and time: the clock, one field per row.
     DateTime,
+    /// Settings › Launcher (Config-launcher), and its log viewer.
+    Launcher,
+    LauncherLog,
     Soon(&'static str),
 }
 impl Page {
@@ -167,6 +171,8 @@ impl Page {
             Self::ReportText => "reports.view_title",
             Self::PadTest => "pad.title",
             Self::PadCalibrate => "pad.calibrate",
+            Self::Launcher => "launcher.title",
+            Self::LauncherLog => "launcher.log_title",
             Self::Soon(key) => key,
         }
     }
@@ -203,6 +209,7 @@ impl Page {
             Self::SaveSync => &["settings.system"],
             Self::SaveSyncTarget | Self::SaveSyncConflict => &["settings.system", "savesync.title"],
             Self::UpdatePackages => &["settings.system", "updates.title"],
+            Self::LauncherLog => &["launcher.title"],
             _ => &[],
         }
     }
@@ -231,6 +238,7 @@ impl Page {
             Self::RaImport => raimport::ROWS,
             Self::Roms => roms::ROWS,
             Self::Diagnostics => diag::ROWS,
+            Self::Launcher => launcher::ROWS,
             Self::ErrorReports => reports::ROWS,
             Self::Resume => resume::RESUME,
             Self::Power => resume::POWER,
@@ -304,7 +312,18 @@ pub enum Id {
     CustomServer,
     OnlyRelay,
     MissingGames,
-    IndexNow,
+    /// Settings › Launcher's rows.
+    Resync,
+    PruneMissing,
+    ShowEmpty,
+    ClearCovers,
+    OpenAt,
+    HiddenSystems,
+    ClearRecent,
+    RestartLauncher,
+    RestoreLauncher,
+    LauncherLog,
+    LauncherVersion,
     ScraperLink,
     ScraperSource,
     ScraperAccount,
@@ -628,13 +647,23 @@ impl Id {
             Self::UpdateBoot => ("updates.check_on_boot", "1"),
             Self::UpdateNotify => ("updates.notify_start", "1"),
             Self::ModulesAuto => ("launcher.modules.autoupdate", "0"),
+            Self::ShowEmpty => ("launcher.show_empty", "0"),
+            Self::OpenAt => ("launcher.open_at", "first"),
             Self::Update
             | Self::Restore
             | Self::ThemeStore
             | Self::Hidden
             | Self::GameSystem
             | Self::NetplayLink
-            | Self::IndexNow
+            | Self::Resync
+            | Self::PruneMissing
+            | Self::ClearCovers
+            | Self::HiddenSystems
+            | Self::ClearRecent
+            | Self::RestartLauncher
+            | Self::RestoreLauncher
+            | Self::LauncherLog
+            | Self::LauncherVersion
             | Self::ScraperLink
             | Self::ScraperAccount
             | Self::ScraperPassword
@@ -801,6 +830,7 @@ impl Id {
             | Self::NetplayEnabled
             | Self::OnlyRelay
             | Self::MissingGames
+            | Self::ShowEmpty
             | Self::ScraperMissing
             | Self::PreviewVideo
             | Self::BatteryPercent
@@ -853,6 +883,7 @@ impl Id {
                 "full",
             ],
             Self::ClockFormat => &["24", "12"],
+            Self::OpenAt => &["first", "system", "game"],
             Self::Player => &["1", "2", "3", "4"],
             Self::Channel => &["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"],
             Self::UsbMode => &["disabled", "network", "internet", "file_transfer"],
@@ -1019,6 +1050,7 @@ pub(crate) const CATEGORIES: &[(Page, &str, Glyph)] = &[
         "settings.appearance_detail",
         Glyph::Palette,
     ),
+    (Page::Launcher, "launcher.detail", Glyph::Grid),
     (
         Page::Achievements,
         "settings.achievements_detail",
@@ -1085,6 +1117,8 @@ pub enum Effect {
     SendReport(String),
     /// Install a free BIOS: "psx" or "msx" (archr-bios-livres).
     BiosInstall(String),
+    /// Settings › Launcher: the host reads or acts.
+    Launcher(launcher::Action),
 }
 /// A level slider held on L/R: a press starts the hold (up?), its repeats
 /// renew it, and the host releases it when the button comes up.
@@ -1135,6 +1169,7 @@ impl std::fmt::Debug for Effect {
             Self::Report => write!(f, "Report"),
             Self::SendReport(name) => write!(f, "SendReport({name:?})"),
             Self::BiosInstall(free) => write!(f, "BiosInstall({free:?})"),
+            Self::Launcher(action) => write!(f, "Launcher({action:?})"),
         }
     }
 }
@@ -1260,6 +1295,7 @@ pub struct Settings {
     pub convert: Option<crate::convert::Offer>,
     pub converting: bool,
     pub diag: diag::Diag,
+    pub launcher: launcher::LauncherPage,
     pub reports: reports::Reports,
     pub bios: bios::Bios,
     pub shortcuts: shortcuts::Shortcuts,
@@ -1335,6 +1371,7 @@ impl Default for Settings {
             convert: None,
             converting: false,
             diag: diag::Diag::default(),
+            launcher: launcher::LauncherPage::default(),
             reports: reports::Reports::default(),
             bios: bios::Bios::default(),
             shortcuts: shortcuts::Shortcuts::default(),
@@ -1354,6 +1391,15 @@ impl Settings {
         }
         if id.roms() {
             return information::value(catalog, &self.roms_value(id));
+        }
+        if launcher::IDS.contains(&id) && id != Id::ShowEmpty && id != Id::OpenAt {
+            let value = information::value(catalog, &self.launcher_value(id));
+            // An action with something to act on reads as one (Config-launcher).
+            return if self.launcher_arrow(id) {
+                format!("{value} ›")
+            } else {
+                value
+            };
         }
         if matches!(
             id,
@@ -1484,7 +1530,9 @@ impl Settings {
             (Id::HotkeyModifier, key) => return hotkeys::key_name(key).into(),
             (Id::Hotkey(n), _) if self.value(Id::HotkeyOn(n)) == "0" => "settings.off",
             (Id::Hotkey(n), _) => return self.hotkey_pads(usize::from(n)).join(" + "),
-            (Id::IndexNow, _) => "settings.soon",
+            (Id::OpenAt, "system") => "launcher.open_system",
+            (Id::OpenAt, "game") => "launcher.open_game",
+            (Id::OpenAt, _) => "launcher.open_first",
             (Id::ScraperAccount, _) if !self.scrape.user.is_empty() => "settings.sign_out",
             (Id::ScraperAccount | Id::CheevosAccount, _) => "settings.sign_in",
             (Id::CheevosSound, "none") => "settings.cheevos_no_sound",
@@ -1757,6 +1805,7 @@ impl Settings {
             Id::StorageCard | Id::UnifiedCard | Id::UsbAddress | Id::UsbState => true,
             Id::RomsNow | Id::RomsCard | Id::RomsPower | Id::RomsLeft => true,
             Id::Crashes | Id::ReportLast => true,
+            Id::LauncherVersion => true,
             Id::ReportsQueue | Id::ReportsToday | Id::ConsoleId | Id::ReportsLatest => true,
             Id::ModuleRow(_) | Id::ModuleItem(..) => self.module_fixed(id),
             _ => false,
@@ -1765,7 +1814,7 @@ impl Settings {
     /// Disabled rows are drawn muted and accept no input.
     pub fn disabled(&self, id: Id) -> bool {
         match id {
-            Id::IndexNow => true,
+            id if launcher::IDS.contains(&id) => self.launcher_disabled(id),
             Id::ReportNow => self.diag.running,
             Id::ReportSend => self.diag_send_disabled(),
             Id::UpdateInstall => self.updates.count() == 0 || self.updates.checking,
@@ -1840,6 +1889,9 @@ impl Settings {
         if self.diag.confirm_send {
             return diag::SEND_HINTS;
         }
+        if self.launcher.confirm.is_some() {
+            return launcher::CONFIRM_HINTS;
+        }
         if let Some(hints) = self.modules_hints() {
             return hints;
         }
@@ -1850,7 +1902,9 @@ impl Settings {
             Page::Updates | Page::UpdatePackages => self.updates_hints(),
             Page::RaImport | Page::RaImportList => self.raimport_hints(),
             Page::RomsList => BACK,
-            Page::ReportText => &[(Key('↕'), "details.scroll"), (Key('B'), "hint.back")],
+            Page::ReportText | Page::LauncherLog => {
+                &[(Key('↕'), "details.scroll"), (Key('B'), "hint.back")]
+            }
             Page::UsbAdapters => self.usb_hints(),
             Page::Bios => self.bios_hints(),
             Page::Image => &[(Key('A'), "image.save"), (Key('B'), "image.undo")],
@@ -1872,6 +1926,7 @@ impl Settings {
                 (Key('B'), "hint.back"),
                 (Key('Y'), "settings.info_short"),
             ],
+            Page::Launcher if self.launcher_verb().is_some() => self.launcher_hints(),
             Page::Info => &[(Key('A'), "settings.details"), (Key('B'), "hint.back")],
             Page::MangohudItems => &[(Key('A'), "mangohud.mark"), (Key('B'), "hint.back")],
             Page::Store | Page::StoreTheme => self.store_hints(),
@@ -2048,6 +2103,11 @@ impl Settings {
         self.stack.last_mut().expect("root page").1 = self.cursor;
         self.stack.push((page, 0));
         self.cursor = 0;
+        // Every visit looks again.
+        if page == Page::Launcher {
+            self.launcher.facts = None;
+            self.launcher.busy = None;
+        }
         if page == Page::Appearance {
             self.appearance_saved = self.appearance();
             if let Some(rgb) = appearance::parse_hex(self.value(Id::Accent)) {
@@ -2374,6 +2434,7 @@ mod tests {
                 Page::Games => "games",
                 Page::Region => "region",
                 Page::Appearance => "appearance",
+                Page::Launcher => "launcher",
                 Page::Achievements => "achievements",
                 Page::System => "system",
                 Page::Storage => "storage",
@@ -2446,9 +2507,10 @@ mod tests {
         assert_eq!(state.hints().len(), 1, "no developer key: no sign-in");
         state.scrape.available = true;
         assert_eq!(state.hints().len(), 2);
-        state.open(Page::Netplay);
-        state.cursor = state.visible_rows().len() - 1;
-        assert_eq!(state.visible_rows()[state.cursor].id, Id::IndexNow);
+        state.open(Page::Launcher);
+        state.cursor = 1;
+        assert_eq!(state.visible_rows()[1].id, Id::PruneMissing);
+        assert!(state.disabled(Id::PruneMissing), "nothing counted yet");
         assert_eq!(state.hints().len(), 1);
     }
     #[test]

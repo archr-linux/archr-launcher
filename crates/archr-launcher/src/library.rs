@@ -42,6 +42,10 @@ pub struct Library {
     store: Store,
     store_writer: Option<StoreWriter>,
     worker: Option<Worker>,
+    /// Settings › Launcher › Show empty systems.
+    pub show_empty: bool,
+    /// Bumped by every new overview: a resync is over once it moves.
+    pub overview_seq: u64,
 }
 impl Library {
     /// Only the overview and (on a cold start) system names are read here.
@@ -113,6 +117,8 @@ impl Library {
             store,
             store_writer: None,
             worker: None,
+            show_empty: false,
+            overview_seq: 0,
         }
     }
     /// The Modules row's list: the modules on with a Settings page.
@@ -181,6 +187,96 @@ impl Library {
             {
                 self.requested.insert(name.clone(), true);
             }
+        }
+    }
+    /// Settings › Launcher › Resync: the cached lists and counts are
+    /// dropped, then every list already read and the counts are read again
+    /// from the folders, off-thread. The old lists stay on screen meanwhile.
+    pub fn resync(&mut self) {
+        let cache = &self.paths.cache;
+        if let Ok(entries) = std::fs::read_dir(cache.join("systems")) {
+            for entry in entries.flatten() {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+        let _ = std::fs::remove_file(cache.join(cache::OVERVIEW_FILE));
+        let names: Vec<_> = self
+            .games
+            .keys()
+            .chain(self.requested.keys())
+            .filter(|name| !name.starts_with('@'))
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        for name in names {
+            if self.send(Work::Reload(name.clone())).is_ok() {
+                self.requested.insert(name, true);
+            }
+        }
+        let _ = self.send(Work::Count);
+    }
+    /// Every game the overview counts.
+    pub fn game_total(&self) -> usize {
+        self.overview
+            .systems
+            .iter()
+            .filter(|system| !system.name.starts_with('@'))
+            .map(|system| system.game_count as usize)
+            .sum()
+    }
+    /// Favorites and recents whose file is gone from the cards.
+    pub fn missing_games(&self) -> Vec<String> {
+        self.store
+            .missing(&self.definitions, |path| self.paths.remap(path).exists())
+    }
+    /// Takes them off favorites and recents; how many went.
+    pub fn prune_missing(&mut self) -> usize {
+        let missing = self.missing_games();
+        if !missing.is_empty() {
+            self.store.forget(&missing);
+            self.rebuild_collections();
+            self.queue_store();
+        }
+        missing.len()
+    }
+    pub fn clear_recent(&mut self) {
+        self.store.clear_recent();
+        self.rebuild_collections();
+        self.queue_store();
+    }
+    pub fn hidden_count(&self) -> usize {
+        self.store.hidden().len()
+    }
+    pub fn recent_count(&self) -> usize {
+        self.store.recent().len()
+    }
+    /// Settings › Launcher › Restore: order, hidden systems, folders and the
+    /// Start row back to their defaults.
+    pub fn restore_defaults(&mut self) {
+        self.store.restore_defaults();
+        self.queue_store();
+    }
+    /// After favorites or recents changed in bulk: every list's star, then
+    /// both collections built again.
+    fn rebuild_collections(&mut self) {
+        for games in self.games.values_mut() {
+            for game in games.iter_mut() {
+                game.favorite = false;
+            }
+        }
+        for (key, (system, index)) in &self.members {
+            if self.store.is_favorite(key) {
+                if let Some(game) = self.games.get_mut(system).and_then(|g| g.get_mut(*index)) {
+                    game.favorite = true;
+                }
+            }
+        }
+        for name in ["@favorites", "@recent"] {
+            if self.origins.get_mut(name).map(Vec::clear).is_some() {
+                self.games.remove(name);
+            }
+            self.refresh_collection(name);
         }
     }
     /// A module installed or removed a game of `system`: its list and the
@@ -276,6 +372,7 @@ impl Library {
                     let listed = self.modules().len();
                     archr_ui::modules::collection(&mut self.overview.systems, listed);
                     self.counts_known = true;
+                    self.overview_seq += 1;
                 }
                 Update::Games(system, mut games) => {
                     // A rescan may hold other games (a card came or left).
@@ -490,7 +587,8 @@ impl Library {
             | Outcome::UseShot { .. }
             | Outcome::Convert(_)
             | Outcome::ReportsNotice(_)
-            | Outcome::SwitchGpu(_) => return Err("error.operation".to_owned()),
+            | Outcome::SwitchGpu(_)
+            | Outcome::Launcher(_) => return Err("error.operation".to_owned()),
         }
         Ok(false)
     }
@@ -717,6 +815,9 @@ impl DataSource for Library {
     }
     fn hidden_systems(&self) -> &[String] {
         self.store.hidden()
+    }
+    fn show_empty(&self) -> bool {
+        self.show_empty
     }
     fn shows_folders(&self, system: &str) -> bool {
         self.store.shows_folders(system)

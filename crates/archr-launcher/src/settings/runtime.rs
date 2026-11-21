@@ -421,6 +421,7 @@ impl Runtime {
             Effect::SaveSync(action) => self.send(Work::SaveSync(action)),
             Effect::Module(request) => return Outcome::Module(request),
             Effect::Reboot => return Outcome::Action(SessionAction::Reboot),
+            Effect::Launcher(action) => return Outcome::Launcher(action),
             Effect::None => {}
         }
         Outcome::None
@@ -477,6 +478,13 @@ impl Runtime {
     /// Conversion work for the host's runner, which answers in main.
     pub fn take_convert(&mut self) -> Vec<crate::convert::Request> {
         std::mem::take(&mut self.convert)
+    }
+    /// Settings › Launcher › Restore: the look the page put back is shown
+    /// and saved, as leaving Appearance does.
+    pub fn persist_look(&mut self) {
+        let theme = self.state.value(Id::Theme).to_owned();
+        self.send(Work::Theme(theme));
+        self.apply(Effect::Appearance);
     }
     /// Systems to reload once a scraping run has ended.
     pub fn take_scraped(&mut self) -> Option<Vec<String>> {

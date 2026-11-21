@@ -7,6 +7,7 @@ mod diag;
 mod games;
 mod info;
 mod joypad;
+pub mod launcher;
 mod levels;
 mod mangohud;
 pub use mangohud::supported as mangohud_supported;

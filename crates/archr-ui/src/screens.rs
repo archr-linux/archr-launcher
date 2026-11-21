@@ -389,13 +389,14 @@ pub struct OsdStyle {
 
 /// The Settings pages in the order of their root, by the ids the theme's
 /// `[settings.icon_colors]` names them with.
-pub const SETTINGS_PAGES: [&str; 9] = [
+pub const SETTINGS_PAGES: [&str; 10] = [
     "network",
     "sound",
     "controls",
     "games",
     "region",
     "appearance",
+    "launcher",
     "achievements",
     "system",
     "storage",
@@ -405,13 +406,14 @@ pub const SETTINGS_PAGES: [&str; 9] = [
 const fn rgb(r: u8, g: u8, b: u8) -> Rgba {
     Rgba { r, g, b, a: 255 }
 }
-const TILE_COLORS: [Rgba; 9] = [
+const TILE_COLORS: [Rgba; SETTINGS_PAGES.len()] = [
     rgb(0x0A, 0x84, 0xFF),
     rgb(0xFF, 0x37, 0x5F),
     rgb(0x30, 0xB0, 0x50),
     rgb(0xFF, 0x7A, 0x00),
     rgb(0x5E, 0x5C, 0xE6),
     rgb(0xBF, 0x5A, 0xF2),
+    rgb(0x30, 0xB0, 0xC7),
     rgb(0xD9, 0x8E, 0x04),
     rgb(0x6E, 0x6E, 0x76),
     rgb(0x1E, 0x9B, 0xD7),
@@ -453,7 +455,7 @@ pub struct SettingsStyle {
     /// large (`title = "below"`), instead of beside it.
     pub title_below: bool,
     /// By `SETTINGS_PAGES`; None: the launcher's colour for that page.
-    pub icon_colors: [Option<Rgba>; 9],
+    pub icon_colors: [Option<Rgba>; SETTINGS_PAGES.len()],
 }
 impl Default for SettingsStyle {
     fn default() -> Self {
@@ -464,7 +466,7 @@ impl Default for SettingsStyle {
             tiles: false,
             inset: false,
             title_below: false,
-            icon_colors: [None; 9],
+            icon_colors: [None; SETTINGS_PAGES.len()],
         }
     }
 }

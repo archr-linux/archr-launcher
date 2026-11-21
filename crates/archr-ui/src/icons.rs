@@ -41,6 +41,7 @@ glyphs! {
     BatteryCharging => "battery-charging",
     Controls => "gamepad", Play => "play", Sound => "volume-2",
     Globe => "globe", Palette => "palette", Trophy => "trophy", Storage => "hard-drive",
+    Grid => "layout-grid",
     StorageIn => "hard-drive-download",
     ChevronLeft => "chevron-left", ChevronRight => "chevron-right",
     ArrowUpDown => "arrow-up-down", ChevronsUpDown => "chevrons-up-down",

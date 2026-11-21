@@ -275,6 +275,56 @@ impl Store {
     pub fn recent(&self) -> &[String] {
         &self.recent
     }
+
+    /// Favorites and recents whose file is on neither of its system's
+    /// folders. A key of an unknown system, or of a system whose folder is
+    /// not there at all, is never counted: its card may just be out.
+    pub fn missing(&self, systems: &[SystemDef], exists: impl Fn(&Path) -> bool) -> Vec<String> {
+        let mut seen = HashSet::new();
+        self.favorites
+            .iter()
+            .chain(&self.recent)
+            .filter(|key| seen.insert(key.as_str()))
+            .filter(|key| {
+                let Some((name, relative)) = key.split_once('/') else {
+                    return false;
+                };
+                let Some(system) = systems.iter().find(|s| s.name == name) else {
+                    return false;
+                };
+                if relative.is_empty() || !exists(&system.path) {
+                    return false;
+                }
+                !std::iter::once(&system.path)
+                    .chain(&system.external)
+                    .any(|root| exists(&root.join(relative)))
+            })
+            .cloned()
+            .collect()
+    }
+
+    /// Off favorites and recents.
+    pub fn forget(&mut self, keys: &[String]) {
+        self.favorites.retain(|key| !keys.contains(key));
+        self.recent.retain(|key| !keys.contains(key));
+        self.imported_times.retain(|key, _| !keys.contains(key));
+        self.members = self.favorites.iter().cloned().collect();
+    }
+
+    pub fn clear_recent(&mut self) {
+        self.recent.clear();
+        self.imported_times.clear();
+    }
+
+    /// Settings › Launcher › Restore: the systems screen and the Start row
+    /// as they come; favorites, recents and the last place stay.
+    pub fn restore_defaults(&mut self) {
+        self.order.clear();
+        self.hidden.clear();
+        self.folders.clear();
+        self.favorites_mixed = false;
+        self.shortcuts = archr_ui::shortcuts::Saved::default();
+    }
 }
 
 /// A catalog command that launches a program, not an emulator wrapper.

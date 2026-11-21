@@ -158,6 +158,8 @@ pub enum Outcome {
     Updates,
     /// Opens a settings page from the START menu (`Settings::open_page`).
     Open(crate::settings::Page),
+    /// Settings › Launcher: the host reads the library or acts on it.
+    Launcher(crate::settings::launcher::Action),
     /// Opens the Netplay lobby.
     OpenNetplay,
     /// Starts a lobby room as a netplay client.
@@ -315,6 +317,10 @@ pub trait DataSource {
     /// Rows the user took off the systems screen.
     fn hidden_systems(&self) -> &[String] {
         &[]
+    }
+    /// Settings › Launcher › Show empty systems: systems without games list too.
+    fn show_empty(&self) -> bool {
+        false
     }
     fn cores(&self, system: &str) -> Vec<(String, String)>;
     fn current_core(&self, system: &str, game: usize) -> Option<(String, String)>;

@@ -8,9 +8,11 @@ pub(super) struct Moving {
 }
 
 impl App {
-    /// Rows in their default order: collections first, then systems with games.
+    /// Rows in their default order: collections first, then systems with
+    /// games (every system, Settings › Launcher › Show empty systems on).
     pub fn default_rows(data: &dyn DataSource) -> Vec<String> {
         let hidden = data.hidden_systems();
+        let empty = data.show_empty();
         ["@favorites", "@recent"]
             .into_iter()
             .filter(|name| data.collection_len(name) > 0)
@@ -19,7 +21,7 @@ impl App {
             .chain(
                 data.systems()
                     .iter()
-                    .filter(|system| system.game_count > 0)
+                    .filter(|system| empty || system.game_count > 0)
                     .map(|system| system.name.clone()),
             )
             .filter(|row| !hidden.contains(row))

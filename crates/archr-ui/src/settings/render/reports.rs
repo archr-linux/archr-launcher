@@ -54,6 +54,10 @@ impl View<'_, '_, '_> {
         let Some(last) = state.reports_last() else {
             return Ok(());
         };
+        self.text_lines(&last.lines, state.reports.scroll)
+    }
+    /// A text in mono lines from `scroll` on: the report, the launcher's log.
+    pub(super) fn text_lines(&mut self, lines: &[String], scroll: usize) -> Result<(), String> {
         let (x, y, w) = TEXT;
         // As tall as the screen allows; a taller one shows more lines.
         let h = self.view_bottom() - y - 6.;
@@ -67,8 +71,8 @@ impl View<'_, '_, '_> {
             size -= 0.5;
         }
         let shown = (((h - 24.) / STEP) as usize).max(PAGE_LINES);
-        let first = state.reports.scroll.min(last.lines.len());
-        for (n, line) in last.lines[first..].iter().take(shown).enumerate() {
+        let first = scroll.min(lines.len());
+        for (n, line) in lines[first..].iter().take(shown).enumerate() {
             if line.is_empty() {
                 continue;
             }

@@ -182,7 +182,7 @@ fn placements(page: Page, rows: &[Row]) -> Vec<Placement> {
                 top += SECTION_HEIGHT;
             }
             let height = match page {
-                Page::Resume | Page::Power => 38.,
+                Page::Resume | Page::Power | Page::Launcher => 38.,
                 Page::Image => 44.,
                 Page::Games if row.subtitle.is_some() => 40.,
                 Page::Netplay | Page::Games => 34.,
@@ -1149,6 +1149,9 @@ impl View<'_, '_, '_> {
             Some(self.tr("bios.footer"))
         } else if state.page() == Page::ReportText {
             self.report_status(state)
+        } else if let Some(ago) = state.launcher_note(std::time::SystemTime::now()) {
+            let ago = crate::settings::information::value(&self.ui.catalog, &ago);
+            Some(self.ui.catalog.format("launcher.synced", &[("time", &ago)]))
         } else if state.page() == Page::Resume {
             Some(self.tr("resume.note"))
         } else if state.page() == Page::Power {
@@ -1244,6 +1247,12 @@ impl View<'_, '_, '_> {
                     self.tr("diag.send_question"),
                     Some(self.tr("diag.send_what")),
                     Some(crate::settings::diag::SEND_HINTS),
+                ))
+            } else if let Some((question, detail)) = state.launcher_question() {
+                Some((
+                    crate::settings::information::value(&self.ui.catalog, &question),
+                    Some(self.tr(detail)),
+                    Some(crate::settings::launcher::CONFIRM_HINTS),
                 ))
             } else if let Some((title, detail)) = state.hotkey_prompt() {
                 Some((
@@ -1414,6 +1423,10 @@ impl View<'_, '_, '_> {
             Page::Diagnostics => self.diag_page(state, rows)?,
             Page::ErrorReports => self.reports_page(state, rows)?,
             Page::ReportText => self.report_text(state)?,
+            Page::LauncherLog => {
+                let launcher = &state.launcher;
+                self.text_lines(&launcher.log, launcher.scroll)?
+            }
             Page::Bios => self.bios_page(state)?,
             Page::Shortcuts => self.shortcuts_page(state)?,
             Page::PadTest => self.pad_test(state)?,
@@ -1805,7 +1818,12 @@ impl View<'_, '_, '_> {
             }
             // Resume and Power: short choices between arrows leave the
             // long descriptions their room (Config-retomar, Config-energia).
-            Kind::Value if matches!(state.page(), Page::Resume | Page::Power | Page::Image) => {
+            Kind::Value
+                if matches!(
+                    state.page(),
+                    Page::Resume | Page::Power | Page::Image | Page::Launcher
+                ) =>
+            {
                 self.ui
                     .measure(&state.display_value(row.id, &self.ui.catalog), face, 14.)?
                     as f32

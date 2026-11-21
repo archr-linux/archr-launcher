@@ -50,8 +50,10 @@ struct GameCache {
 }
 
 /// Load only the small overview. Missing, incompatible, or corrupt caches miss.
+/// The counts' cache file, under the cache folder.
+pub const OVERVIEW_FILE: &str = "overview.bin";
 pub fn load_overview(cache_dir: &Path) -> Option<Overview> {
-    read_cache(&cache_dir.join("overview.bin"), MAX_OVERVIEW_BYTES)
+    read_cache(&cache_dir.join(OVERVIEW_FILE), MAX_OVERVIEW_BYTES)
 }
 
 /// Scan every system, including empty/missing ones (which receive a zero count).
@@ -99,7 +101,7 @@ pub fn refresh_overview_with_mapper(
 
 /// Atomically replace the overview, creating the cache directory if necessary.
 pub fn save_overview(cache_dir: &Path, overview: &Overview) -> io::Result<()> {
-    let path = cache_dir.join("overview.bin");
+    let path = cache_dir.join(OVERVIEW_FILE);
     write_cache(&path, overview, MAX_OVERVIEW_BYTES)
 }
 

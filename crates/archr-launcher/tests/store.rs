@@ -317,3 +317,76 @@ fn the_start_shortcut_row_survives_a_restart_and_old_stores_load() {
     store.save(&dir).unwrap();
     assert_eq!(Store::load(&dir).shortcuts(), &row);
 }
+
+#[test]
+fn missing_games_are_those_on_neither_card() {
+    use std::path::Path;
+    let root = tempdir().unwrap();
+    let internal = root.path().join("roms/snes");
+    let card = root.path().join("card/snes");
+    fs::create_dir_all(&internal).unwrap();
+    fs::create_dir_all(&card).unwrap();
+    fs::write(internal.join("Here.sfc"), b"").unwrap();
+    fs::write(card.join("OnCard.sfc"), b"").unwrap();
+    let systems = vec![
+        archr_index::SystemDef {
+            name: "snes".into(),
+            path: internal.clone(),
+            external: Some(card.clone()),
+            ..Default::default()
+        },
+        // Its folder is not there: a card that is out, never "missing".
+        archr_index::SystemDef {
+            name: "gba".into(),
+            path: root.path().join("absent/gba"),
+            ..Default::default()
+        },
+    ];
+    let dir = root.path().join("config");
+    let mut store = Store::load(&dir);
+    for key in [
+        "snes/Here.sfc",
+        "snes/OnCard.sfc",
+        "snes/Gone.sfc",
+        "gba/Away.gba",
+        "unknown/X.bin",
+    ] {
+        store.toggle_favorite(key);
+    }
+    store.push_recent("snes/Gone.sfc");
+    store.push_recent("snes/Old.sfc");
+    store.push_recent("snes/Here.sfc");
+    let exists = |path: &Path| path.exists();
+    assert_eq!(
+        store.missing(&systems, exists),
+        vec!["snes/Gone.sfc".to_owned(), "snes/Old.sfc".to_owned()]
+    );
+    store.forget(&store.missing(&systems, exists));
+    assert!(store.missing(&systems, exists).is_empty());
+    assert!(!store.is_favorite("snes/Gone.sfc"));
+    assert!(store.is_favorite("snes/OnCard.sfc"));
+    assert!(store.is_favorite("gba/Away.gba"));
+    assert_eq!(store.recent(), ["snes/Here.sfc"]);
+}
+
+#[test]
+fn restore_defaults_keeps_favorites_and_recents() {
+    let root = tempdir().unwrap();
+    let mut store = Store::load(&root.path().join("config"));
+    store.toggle_favorite("snes/A.sfc");
+    store.push_recent("snes/A.sfc");
+    store.hide("gba");
+    store.set_folders("snes", true);
+    store.set_favorites_first(false);
+    store.set_order(vec!["snes".into(), "gba".into()], |_| true);
+    store.restore_defaults();
+    assert!(store.hidden().is_empty());
+    assert!(store.order().is_empty());
+    assert!(!store.shows_folders("snes"));
+    assert!(store.favorites_first());
+    assert!(store.is_favorite("snes/A.sfc"));
+    assert_eq!(store.recent(), ["snes/A.sfc"]);
+    store.clear_recent();
+    assert!(store.recent().is_empty());
+    assert!(store.is_favorite("snes/A.sfc"));
+}

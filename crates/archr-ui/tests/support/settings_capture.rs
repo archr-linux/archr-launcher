@@ -631,6 +631,33 @@ fn sample_pages() -> Vec<(&'static str, Settings)> {
         ("roms-armed", roms_armed),
         ("roms-exfat", roms_exfat),
     ]);
+    // Settings › Launcher (Config-launcher, Config-launcher-fim).
+    let mut launcher = ready();
+    launcher.open(Page::Launcher);
+    launcher.launcher_facts(crate::settings::launcher::Facts {
+        games: 1284,
+        missing: 12,
+        cover_bytes: 142 * 1024 * 1024,
+        hidden: 2,
+        recent: 5,
+        synced: Some(std::time::SystemTime::now() - Duration::from_secs(2 * 3600 + 60)),
+        version: "1241a58".into(),
+    });
+    launcher.values.insert(Id::OpenAt, "system".into());
+    let mut launcher_end = launcher.clone();
+    launcher_end.cursor = launcher_end
+        .visible_rows()
+        .iter()
+        .position(|row| row.id == Id::RestartLauncher)
+        .unwrap();
+    let mut launcher_ask = launcher.clone();
+    launcher_ask.cursor = 1;
+    launcher_ask.launcher.confirm = Some(Id::PruneMissing);
+    all.extend([
+        ("config-launcher", launcher),
+        ("config-launcher-fim", launcher_end),
+        ("config-launcher-pergunta", launcher_ask),
+    ]);
     all.into_iter().chain(lists()).collect()
 }
 /// Lista-media and Lista-longa: the row's mark and hint, the panel on the
@@ -4001,6 +4028,16 @@ fn golden_frames_at_640x480() {
     root.loading = false;
     settled(&mut ui, &root);
     keep(&mut ui, "settings");
+    let launcher_pages = pages();
+    for (golden_name, sample) in [
+        ("settings-launcher", "config-launcher"),
+        ("settings-launcher-fim", "config-launcher-fim"),
+        ("settings-launcher-pergunta", "config-launcher-pergunta"),
+    ] {
+        let state = &launcher_pages.iter().find(|(n, _)| *n == sample).unwrap().1;
+        settled(&mut ui, state);
+        keep(&mut ui, golden_name);
+    }
     let mut sound = root.clone();
     sound.open(Page::Sound);
     settled(&mut ui, &sound);
@@ -4251,6 +4288,9 @@ fn sidebar_settings(theme_dir: &str, out: Option<std::path::PathBuf>, golden: Op
         "saves",
         "saves-destino",
         "saves-conflito",
+        "config-launcher",
+        "config-launcher-fim",
+        "config-launcher-pergunta",
     ];
     // ARCHR_SETTINGS_EVERY: every page, to look them all over.
     let every = std::env::var_os("ARCHR_SETTINGS_EVERY").is_some();
@@ -4314,7 +4354,7 @@ fn sidebar_settings(theme_dir: &str, out: Option<std::path::PathBuf>, golden: Op
             .map(|(n, state)| (n.to_owned(), state)),
     );
     let all = std::env::var_os("ARCHR_SETTINGS_ALL").is_some();
-    assert!(every || all || states.len() == 14, "every state found");
+    assert!(every || all || states.len() == 17, "every state found");
     let ttf = sdl2::ttf::init().unwrap();
     for (w, h) in [(640, 480), (720, 720), (480, 320)] {
         let creator;

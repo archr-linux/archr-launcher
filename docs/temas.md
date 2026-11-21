@@ -1142,10 +1142,11 @@ sound = "#FF375F"
 - `icon = "tile"`: o ícone de cada entrada da raiz fica branco num quadrado
   arredondado de 26 px. Cores padrão: Rede `#0A84FF`, Som e tela `#FF375F`,
   Controles `#30B050`, Jogos `#FF7A00`, Região e idioma `#5E5CE6`, Aparência
-  `#BF5AF2`, Conquistas `#D98E04`, Sistema `#6E6E76`, Armazenamento
-  `#1E9BD7`. Chaves de `[settings.icon_colors]`: `network`, `sound`,
-  `controls`, `games`, `region`, `appearance`, `achievements`, `system`,
-  `storage`; a página que o tema não cita fica com a cor padrão.
+  `#BF5AF2`, Launcher `#30B0C7`, Conquistas `#D98E04`, Sistema `#6E6E76`,
+  Armazenamento `#1E9BD7`. Chaves de `[settings.icon_colors]`: `network`,
+  `sound`, `controls`, `games`, `region`, `appearance`, `launcher`,
+  `achievements`, `system`, `storage`; a página que o tema não cita fica com
+  a cor padrão.
 - `groups = "inset"`: em todas as páginas, as linhas seguidas sem título de
   seção entre elas formam um grupo arredondado (raio 14 px) no preenchimento
   do vidro do tema (sem vidro, o texto bem fraco), com uma regra fina entre

@@ -137,7 +137,6 @@ pub const NETPLAY: &[Row] = &[
     row(Id::CustomServer, "settings.custom_server", Kind::Value),
     row(Id::OnlyRelay, "settings.only_relay", Kind::Toggle).under("settings.rooms"),
     row(Id::MissingGames, "settings.missing_games", Kind::Toggle),
-    row(Id::IndexNow, "settings.index_now", Kind::Action).under("settings.games_index"),
 ];
 pub const SCRAPER: &[Row] = &[
     row(Id::ScraperSource, "settings.source", Kind::Value),
@@ -301,6 +300,8 @@ impl Settings {
             Page::SaveSyncTarget => self.savesync_target_input(button),
             Page::SaveSyncConflict => self.savesync_conflict_input(button),
             Page::Diagnostics => self.diag_input(button),
+            Page::Launcher => self.launcher_input(button),
+            Page::LauncherLog => self.launcher_log_input(button),
             Page::Shortcuts => self.shortcuts_input(button),
             Page::Modules
             | Page::ModuleInfo
@@ -584,6 +585,15 @@ impl Settings {
             }
             id @ (Id::DiagLink | Id::ReportNow | Id::ReportSend) => return self.diag_activate(id),
             id @ (Id::ReportsLink | Id::ReportsView) => return self.reports_activate(id),
+            id @ (Id::Resync
+            | Id::PruneMissing
+            | Id::ClearCovers
+            | Id::HiddenSystems
+            | Id::ClearRecent
+            | Id::RestartLauncher
+            | Id::RestoreLauncher
+            | Id::LauncherLog
+            | Id::LauncherVersion) => return self.launcher_activate(id),
             id => return self.storage_activate(id),
         }
         Some(Effect::None)

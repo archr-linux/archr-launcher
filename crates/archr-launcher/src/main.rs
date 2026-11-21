@@ -249,6 +249,7 @@ fn run(
     let mut resuming = None;
     // Back where the last game was chosen when coming back from a game; a
     // power on (Start::Boot) opens on the first system.
+    let powered_on = matches!(start, Start::Boot);
     let mut returning = matches!(start, Start::Plain)
         .then(|| library.place().cloned())
         .flatten();
@@ -303,6 +304,19 @@ fn run(
             .and_then(|cfg| cfg.get_setting(id.key(), None, None))
             .unwrap_or_else(|| id.default_value().into())
     };
+    library.show_empty = saved(Id::ShowEmpty) == "1";
+    // Settings › Launcher › Open on: a power on may come back where the last
+    // game was chosen, or to its system's row.
+    if powered_on {
+        returning = match saved(Id::OpenAt).as_str() {
+            "game" => library.place().cloned(),
+            "system" => library.place().map(|place| archr_launcher::store::Place {
+                row: place.row.clone(),
+                game: None,
+            }),
+            _ => None,
+        };
+    }
     // Read before Settings first opens: the details screen needs them now.
     let toasts = Page::Toasts.rows().iter().map(|row| row.id);
     for id in [Id::UpdateNotify, Id::PreviewVideo]
@@ -383,6 +397,8 @@ fn run(
     let mut dirty = false;
     let mut deferred = None;
     let mut closing = false;
+    // Settings › Launcher › Resync under way: the overview it waits past.
+    let mut resync_from: Option<u64> = None;
     // A game menu core change: the game and its pair before, until the menu closes.
     let mut core_change: Option<(String, usize, (String, String))> = None;
     // The one owner of save conversion work, for Settings and the game menu.
@@ -514,6 +530,28 @@ fn run(
             library.reload(&systems);
             covers.clear();
             dirty = true;
+        }
+        // Settings › Launcher: its readings on every visit, and the end of a
+        // resync, once the counts read from the folders arrive.
+        if settings.active && settings.state.launcher_wants_look() {
+            let facts = archr_launcher::settings::launcher::facts(&library, &paths);
+            settings.state.launcher_facts(facts);
+            dirty = true;
+        }
+        if resync_from.is_some_and(|seq| library.overview_seq != seq) {
+            resync_from = None;
+            let facts = archr_launcher::settings::launcher::facts(&library, &paths);
+            settings.state.launcher_facts(facts);
+            settings.state.note("launcher.resynced".into());
+            dirty = true;
+        }
+        if let Some(value) = settings.state.values.get(&Id::ShowEmpty) {
+            let on = value == "1";
+            if library.show_empty != on {
+                library.show_empty = on;
+                app.follow_row(&library);
+                dirty = true;
+            }
         }
         dirty |= moonlight.poll();
         if update_check.is_some_and(|at| Instant::now() >= at) {
@@ -1526,6 +1564,60 @@ fn run(
                         rom.path.clone(),
                     ));
                     app.rescraping = true;
+                }
+                outcome = Some(Outcome::None);
+            } else if let Outcome::Launcher(action) = &requested {
+                use archr_launcher::settings::launcher as host;
+                use archr_ui::settings::launcher::Action;
+                let note = match action {
+                    Action::Look => None,
+                    Action::Resync => {
+                        library.resync();
+                        resync_from = Some(library.overview_seq);
+                        None
+                    }
+                    Action::Prune => {
+                        let count = library.prune_missing();
+                        Some(format!("launcher.pruned|count={count}"))
+                    }
+                    Action::ClearCovers => {
+                        host::clear_covers(&paths);
+                        Some("launcher.covers_cleared".to_owned())
+                    }
+                    Action::ShowHidden => {
+                        library.handle(Outcome::ShowSystems, &controllers.configuration())?;
+                        app.follow_row(&library);
+                        Some("launcher.shown".to_owned())
+                    }
+                    Action::ClearRecent => {
+                        library.clear_recent();
+                        Some("launcher.recent_cleared".to_owned())
+                    }
+                    Action::Restore => {
+                        library.restore_defaults();
+                        app.shortcuts = library.shortcuts().clone();
+                        app.follow_row(&library);
+                        settings.persist_look();
+                        Some("launcher.restored".to_owned())
+                    }
+                    // A clean exit: the session starts the launcher again.
+                    Action::Restart => {
+                        closing = true;
+                        None
+                    }
+                    Action::ReadLog => {
+                        let mut lines = host::read_log(&paths);
+                        if lines.is_empty() {
+                            lines.push(ui.catalog.text("launcher.log_empty"));
+                        }
+                        settings.state.launcher_log(lines);
+                        None
+                    }
+                };
+                if let Some(note) = note {
+                    let facts = host::facts(&library, &paths);
+                    settings.state.launcher_facts(facts);
+                    settings.state.note(note);
                 }
                 outcome = Some(Outcome::None);
             } else if let Outcome::Module(request) = &requested {
