@@ -1589,6 +1589,18 @@ impl App {
         }
     }
 
+    /// Settings › Launcher › Open on › Last system, at power on: the row of
+    /// the systems screen, or on a home (shelves) root, that system's list.
+    pub fn open_row(&mut self, row: usize, data: &dyn DataSource) {
+        let Some(system) = Self::system_rows(data).get(row).cloned() else {
+            return;
+        };
+        self.return_to(row, None, data);
+        if self.home.is_some() {
+            self.enter(Screen::games(system));
+        }
+    }
+
     /// The Modules list: A opens the module's first page in Settings (B
     /// there comes back here), Y its details, B goes back.
     fn module_row(&mut self, b: Button, data: &dyn DataSource) -> Outcome {

@@ -307,13 +307,18 @@ fn run(
     library.show_empty = saved(Id::ShowEmpty) == "1";
     // Settings › Launcher › Open on: a power on may come back where the last
     // game was chosen, or to its system's row.
+    // Last system: that system's row, or its list on a home root.
+    let mut open_row = false;
     if powered_on {
         returning = match saved(Id::OpenAt).as_str() {
             "game" => library.place().cloned(),
-            "system" => library.place().map(|place| archr_launcher::store::Place {
-                row: place.row.clone(),
-                game: None,
-            }),
+            "system" => {
+                open_row = true;
+                library.place().map(|place| archr_launcher::store::Place {
+                    row: place.row.clone(),
+                    game: None,
+                })
+            }
             _ => None,
         };
     }
@@ -877,8 +882,13 @@ fn run(
                     .iter()
                     .position(|r| *r == place.row)
                 {
-                    app.return_to(row, game, &library);
+                    if open_row {
+                        app.open_row(row, &library);
+                    } else {
+                        app.return_to(row, game, &library);
+                    }
                 }
+                open_row = false;
                 returning = None;
                 dirty = true;
             }

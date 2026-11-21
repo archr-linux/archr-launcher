@@ -276,3 +276,20 @@ fn up_from_the_first_shelf_reaches_the_showcase_buttons() {
     app.handle(Button::R, &data);
     assert_eq!((at(&app).0, app.home_hero), (Tab::Library, None));
 }
+
+#[test]
+fn last_system_at_power_on_opens_its_list_on_shelves_and_its_row_on_a_list() {
+    let data = library();
+    let gba = App::system_rows(&data)
+        .iter()
+        .position(|row| row == "gba")
+        .unwrap();
+    let mut app = shelves();
+    app.open_row(gba, &data);
+    assert_eq!(app.screen, Screen::games("gba"));
+    let mut list = App::new(1);
+    list.set_view(&Theme::builtin().view("lista"));
+    list.open_row(gba, &data);
+    assert_eq!(list.screen, Screen::Systems);
+    assert_eq!(list.cursor, gba);
+}

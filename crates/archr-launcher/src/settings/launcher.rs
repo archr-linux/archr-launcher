@@ -71,8 +71,18 @@ fn journal() -> Option<Vec<String>> {
         return None;
     }
     let text = String::from_utf8_lossy(&output.stdout);
-    let lines: Vec<String> = text.lines().map(short_line).collect();
+    let lines: Vec<String> = text
+        .lines()
+        .filter(|line| !noise(line))
+        .map(short_line)
+        .collect();
     (!lines.is_empty()).then_some(lines)
+}
+
+/// systemctl's warning for each unset variable of the session's environment
+/// file, a screenful at every start: not the launcher's.
+fn noise(line: &str) -> bool {
+    line.contains("Environment variable $") && line.ends_with("not set, ignoring.")
 }
 
 /// `2026-11-21T13:15:16-0300 host unit[pid]: archr-launcher: text` →
@@ -205,6 +215,12 @@ mod tests {
             "13:15:16 Started x."
         );
         assert_eq!(short_line("odd"), "odd");
+        assert!(noise(
+            "2026-11-21T13:27:55-0300 h systemctl[1]: Environment variable $DEVICE_WIFI not set, ignoring."
+        ));
+        assert!(!noise(
+            "2026-11-21T13:27:56-0300 h x[1]: archr-launcher: first frame 312 ms"
+        ));
     }
 
     #[test]
