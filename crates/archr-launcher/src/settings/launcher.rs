@@ -55,7 +55,16 @@ pub fn read_log(paths: &Paths) -> Vec<String> {
 fn journal() -> Option<Vec<String>> {
     let lines = LOG_LINES.to_string();
     let output = std::process::Command::new("journalctl")
-        .args(["-u", UNIT, "-n", &lines, "-q", "--no-pager", "-o", "short-iso"])
+        .args([
+            "-u",
+            UNIT,
+            "-n",
+            &lines,
+            "-q",
+            "--no-pager",
+            "-o",
+            "short-iso",
+        ])
         .output()
         .ok()?;
     if !output.status.success() {
