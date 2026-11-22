@@ -186,6 +186,7 @@ impl Backend {
             Page::Region,
             Page::Resume,
             Page::Power,
+            Page::InGame,
             Page::Image,
             Page::SaveSync,
             Page::SaveSyncTarget,

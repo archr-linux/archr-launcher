@@ -3310,9 +3310,16 @@ fn capture_resume() {
     power.values.insert(Id::Idle, "5".into());
     power.values.insert(Id::IdleGame, "15".into());
     power.values.insert(Id::Suspend, "off".into());
-    for language in ["pt_BR", "ru", "de", "zh_CN"] {
+    let mut in_game = Settings::default();
+    in_game.loading = false;
+    in_game.open(Page::InGame);
+    for language in ["pt_BR", "ru", "de", "zh_CN", "en", "es"] {
         ui.catalog = I18n::load(std::path::Path::new("/nonexistent"), Some(language), None);
-        for (name, state) in [("config-retomar", &resume), ("config-energia", &power)] {
+        for (name, state) in [
+            ("config-retomar", &resume),
+            ("config-energia", &power),
+            ("config-durante-jogo", &in_game),
+        ] {
             ui.switches.clear();
             for _ in 0..2 {
                 ui.snap_animations();

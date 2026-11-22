@@ -115,12 +115,12 @@ fn localized_values_and_footer_affordances_match_actions() {
         assert_eq!(s.display_value(Id::Suspend, &ru), ru.text(key));
         assert_ne!(s.display_value(Id::Suspend, &ru), value);
     }
-    s.cursor = 3;
+    s.cursor = 4;
     assert_eq!(
         s.hints().iter().map(|h| h.0).collect::<Vec<_>>(),
         [Pair('L', 'R'), Key('A'), Key('B')]
     );
-    s.cursor = 4;
+    s.cursor = 5;
     assert_eq!(
         s.hints().iter().map(|h| h.0).collect::<Vec<_>>(),
         [Key('A'), Key('B')]

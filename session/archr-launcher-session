@@ -401,6 +401,11 @@ while :; do
             [ "$stop_pending" -eq 0 ] || stop_session
             session_log "Game exited with $game_status"
             restore_cpu_max
+            # runemu.sh brings back what System › During a game stopped; a
+            # runemu that was killed did not. Nothing to do when it did.
+            if command -v archr-game-services >/dev/null 2>&1; then
+                setsid archr-game-services resume >/dev/null 2>&1 </dev/null &
+            fi
             printf '%s\n' "$game_status" >"$run_dir/last-exit.tmp" &&
                 mv -f "$run_dir/last-exit.tmp" "$run_dir/last-exit" || exit 1
             ;;

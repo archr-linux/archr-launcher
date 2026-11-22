@@ -386,6 +386,13 @@ const CONFIG_KEYS: &[&str] = &[
     "system.cfg",
     "system.shutdown_delay",
     "system.shutdown_delay_running_game",
+    "game.wifi",
+    "game.bluetooth",
+    "game.sharing",
+    "game.ssh",
+    "game.memory_guard",
+    "memory.zram",
+    "memory.ramplus",
     // Module protocol methods and events, store hosts and file names.
     "action.invoke",
     "config.get",

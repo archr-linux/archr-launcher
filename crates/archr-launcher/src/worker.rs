@@ -119,6 +119,9 @@ fn refresh_overview(paths: &Paths, systems: &[SystemDef], done: &Sender<Update>)
     });
 }
 
+/// The note archr-memory-guard leaves in the run folder: the game it closed.
+const OUT_OF_MEMORY: &str = "out-of-memory";
+
 pub fn start(paths: Paths, initial: Vec<SystemDef>) -> Worker {
     let (send, jobs) = mpsc::channel();
     let (done, ready) = mpsc::channel();
@@ -139,6 +142,14 @@ pub fn start(paths: Paths, initial: Vec<SystemDef>) -> Worker {
         if let Some(code) = read_last_exit(&paths.run).filter(|code| *code != 0) {
             log::warn!("Game exited with code {code}; log: /var/log/exec.log");
             banner = Some(Message::new("error.game_exit").with("code", code));
+        }
+        // archr-memory-guard closed it (System › During a game): say why.
+        let out_of_memory = paths.run.join(OUT_OF_MEMORY);
+        if let Ok(game) = fs::read_to_string(&out_of_memory) {
+            let game = game.lines().next().unwrap_or("").trim().to_owned();
+            log::warn!("The memory guard closed {game}");
+            banner = Some(Message::new("error.game_out_of_memory").with("game", game));
+            let _ = fs::remove_file(&out_of_memory);
         }
         // A ROMs move the launcher armed ran at boot, before it: say how it went.
         if banner.is_none() {

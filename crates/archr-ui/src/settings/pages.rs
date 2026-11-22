@@ -494,6 +494,7 @@ impl Settings {
             Id::HotkeysLink => self.open(Page::Hotkeys),
             Id::ResumeLink => self.open(Page::Resume),
             Id::PowerLink => self.open(Page::Power),
+            Id::InGameLink => self.open(Page::InGame),
             Id::ImageLink => self.open_image(),
             // Every visit reads the status again.
             Id::SaveSyncLink => {

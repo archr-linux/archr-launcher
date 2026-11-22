@@ -31,6 +31,7 @@ pub mod modules;
 pub mod raimport;
 pub mod reports;
 pub(crate) mod resume;
+pub(crate) mod ingame;
 pub mod roms;
 pub mod savesync;
 pub mod shortcuts;
@@ -94,6 +95,8 @@ pub enum Page {
     Resume,
     /// System › Power (Config-energia).
     Power,
+    /// System › During a game (Config-durante-jogo).
+    InGame,
     /// Sound and display › Picture (Tela-imagem): gamma and colour
     /// temperature, held by archr-gamma.
     Image,
@@ -161,6 +164,7 @@ impl Page {
             Self::Bios => "bios.title",
             Self::Resume => "settings.resume",
             Self::Power => "settings.power",
+            Self::InGame => "settings.in_game",
             Self::Image => "settings.image",
             Self::SaveSync => "savesync.title",
             Self::SaveSyncTarget => "savesync.target",
@@ -204,7 +208,7 @@ impl Page {
             Self::LauncherControls | Self::Hotkeys => &["settings.controls"],
             Self::DateTime => &["settings.region"],
             Self::ScraperMedia => &["settings.games", "settings.scraper_short"],
-            Self::Updates | Self::Power => &["settings.system"],
+            Self::Updates | Self::Power | Self::InGame => &["settings.system"],
             Self::Image => &["settings.sound"],
             Self::SaveSync => &["settings.system"],
             Self::SaveSyncTarget | Self::SaveSyncConflict => &["settings.system", "savesync.title"],
@@ -242,6 +246,7 @@ impl Page {
             Self::ErrorReports => reports::ROWS,
             Self::Resume => resume::RESUME,
             Self::Power => resume::POWER,
+            Self::InGame => ingame::ROWS,
             Self::Image => picture::IMAGE,
             Self::SaveSync => savesync::SAVESYNC,
             Self::SaveSyncTarget => savesync::TARGET,
@@ -478,6 +483,15 @@ pub enum Id {
     ResumeStandalone,
     /// System link to Power, and its own rows (with Idle, IdleGame, Suspend).
     PowerLink,
+    /// System link to During a game, and that page's rows.
+    InGameLink,
+    GameWifi,
+    GameBluetooth,
+    GameSharing,
+    GameSsh,
+    MemoryZram,
+    MemoryRamPlus,
+    MemoryGuard,
     /// Sound and display link to Picture, and its rows.
     ImageLink,
     Gamma,
@@ -713,6 +727,15 @@ impl Id {
             Self::BatteryCritical => ("power.battery.critical", "3"),
             Self::BatteryLow => ("power.battery.low", "10"),
             Self::ShutdownDelay => ("system.shutdown_delay", "900"),
+            // archr-game-services and archr-memory-guard read these at each
+            // game; archr-memory-manager the memory ones at boot.
+            Self::GameWifi => ("game.wifi", "keep"),
+            Self::GameBluetooth => ("game.bluetooth", "keep"),
+            Self::GameSharing => ("game.sharing", "pause"),
+            Self::GameSsh => ("game.ssh", "keep"),
+            Self::MemoryGuard => ("game.memory_guard", "1"),
+            Self::MemoryZram => ("memory.zram", "1024"),
+            Self::MemoryRamPlus => ("memory.ramplus", "0"),
             // archr-gamma reads them (SIGHUP from the page).
             Self::Gamma => ("display.gamma", "1.00"),
             // archr-savesync reads them.
@@ -727,6 +750,7 @@ impl Id {
             Self::Saturation => ("display.saturation", "50"),
             Self::ResumeLink
             | Self::PowerLink
+            | Self::InGameLink
             | Self::ImageLink
             | Self::ImageRestore
             | Self::SaveSyncLink
@@ -804,6 +828,10 @@ impl Id {
             Self::BatteryCritical => &["0", "2", "3", "5", "8"],
             Self::BatteryLow => &["0", "5", "10", "15", "20"],
             Self::ShutdownDelay => &["300", "900", "1800", "3600"],
+            Self::GameWifi | Self::GameBluetooth | Self::GameSsh => &["keep", "off"],
+            Self::GameSharing => &["pause", "keep"],
+            Self::MemoryZram => &["512", "1024", "1536", "2048"],
+            Self::MemoryRamPlus => &["0", "512", "1024", "2048"],
             Self::Gamma => &[
                 "0.70", "0.80", "0.90", "1.00", "1.10", "1.20", "1.30", "1.40", "1.50",
             ],
@@ -854,6 +882,7 @@ impl Id {
             | Self::DebugMode
             | Self::ErrorReports
             | Self::SwitcherOn
+            | Self::MemoryGuard
             | Self::Toasts
             | Self::ToastsUpdates
             | Self::ToastsNetwork
@@ -1007,6 +1036,7 @@ const SOUND: &[Row] = &[
 const SYSTEM: &[Row] = &[
     described(Id::Gpu, "settings.gpu", "settings.reboot_required"),
     row(Id::PowerLink, "settings.power", Kind::Action),
+    row(Id::InGameLink, "settings.in_game", Kind::Action),
     row(Id::Governor, "settings.governor", Kind::Value),
     row(Id::Turbo, "settings.turbo", Kind::Toggle),
     row(Id::Update, "settings.update", Kind::Action),
@@ -1472,6 +1502,15 @@ impl Settings {
                 | Id::ShutdownDelay,
                 v,
             ) => return resume::value(catalog, id, v),
+            (
+                Id::GameWifi
+                | Id::GameBluetooth
+                | Id::GameSharing
+                | Id::GameSsh
+                | Id::MemoryZram
+                | Id::MemoryRamPlus,
+                v,
+            ) => return ingame::value(catalog, id, v),
             (Id::Suspend, "off") => "settings.off",
             (Id::Suspend, "default") => "menu.default",
             (Id::Suspend, "mem") => "settings.suspend_mem",
@@ -1575,6 +1614,7 @@ impl Settings {
                 | Id::BiosLink
                 | Id::ResumeLink
                 | Id::PowerLink
+                | Id::InGameLink
                 | Id::ImageLink
                 | Id::ImageRestore
                 | Id::PadTestLink

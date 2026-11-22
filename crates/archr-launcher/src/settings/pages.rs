@@ -417,6 +417,13 @@ impl Backend {
                 | Id::BatteryCritical
                 | Id::BatteryLow
                 | Id::ShutdownDelay
+                | Id::GameWifi
+                | Id::GameBluetooth
+                | Id::GameSharing
+                | Id::GameSsh
+                | Id::MemoryZram
+                | Id::MemoryRamPlus
+                | Id::MemoryGuard
                 | Id::ShowEmpty
                 | Id::OpenAt
         ) {
