@@ -1,11 +1,12 @@
 //! System › During a game (Config-durante-jogo): what stops while a game
-//! runs, and the memory a heavy one gets. archr-game-services and
-//! archr-memory-guard read the game rows when a game starts;
-//! archr-memory-manager reads the memory ones at boot.
+//! runs (archr-game-services reads it when a game starts). And System ›
+//! Performance (Config-desempenho): the CPU, and the memory a heavy game
+//! gets (archr-memory-manager reads it at boot, archr-memory-guard at each
+//! game).
 use super::{described, Id, Kind, Row};
 use crate::i18n::I18n;
 
-pub const ROWS: &[Row] = &[
+pub const IN_GAME: &[Row] = &[
     described(Id::GameWifi, "in_game.wifi", "in_game.wifi_detail").under("in_game.on_launch"),
     described(
         Id::GameBluetooth,
@@ -14,16 +15,17 @@ pub const ROWS: &[Row] = &[
     ),
     described(Id::GameSharing, "in_game.sharing", "in_game.sharing_detail"),
     described(Id::GameSsh, "in_game.ssh", "in_game.ssh_detail"),
-    described(Id::MemoryZram, "in_game.zram", "in_game.zram_detail").under("in_game.memory"),
-    described(
-        Id::MemoryRamPlus,
-        "in_game.ramplus",
-        "in_game.ramplus_detail",
-    ),
-    described(Id::MemoryGuard, "in_game.guard", "in_game.guard_detail").kind(Kind::Toggle),
 ];
 
-/// The shown value of a During a game row: sizes in MB below 1 GB, in GB
+pub const PERFORMANCE: &[Row] = &[
+    described(Id::Governor, "settings.governor", "perf.governor_detail").under("perf.cpu"),
+    described(Id::Turbo, "settings.turbo", "perf.turbo_detail").kind(Kind::Toggle),
+    described(Id::MemoryZram, "perf.zram", "perf.zram_detail").under("perf.memory"),
+    described(Id::MemoryRamPlus, "perf.ramplus", "perf.ramplus_detail"),
+    described(Id::MemoryGuard, "perf.guard", "perf.guard_detail").kind(Kind::Toggle),
+];
+
+/// The shown value of a During a game or Performance row: sizes in MB below 1 GB, in GB
 /// (with the language's decimal comma or point) from it.
 pub(super) fn value(catalog: &I18n, id: Id, value: &str) -> String {
     match (id, value) {
@@ -43,16 +45,16 @@ fn size(catalog: &I18n, mb: &str) -> String {
         return mb.to_owned();
     };
     if mb < 1024 {
-        return catalog.format("in_game.mb", &[("count", &mb.to_string())]);
+        return catalog.format("perf.mb", &[("count", &mb.to_string())]);
     }
     let whole = mb / 1024;
     let tenths = (mb % 1024) * 10 / 1024;
     let count = if tenths == 0 {
         whole.to_string()
     } else {
-        format!("{whole}{}{tenths}", catalog.text("in_game.decimal"))
+        format!("{whole}{}{tenths}", catalog.text("perf.decimal"))
     };
-    catalog.format("in_game.gb", &[("count", &count)])
+    catalog.format("perf.gb", &[("count", &count)])
 }
 
 #[cfg(test)]
@@ -61,15 +63,24 @@ mod tests {
     use crate::settings::{Page, Settings};
 
     #[test]
-    fn the_page_sits_in_system_with_its_rows() {
-        assert_eq!(Page::InGame.rows().len(), 7);
+    fn the_pages_sit_in_system_with_their_rows() {
+        assert_eq!(Page::InGame.rows().len(), 4);
+        assert_eq!(Page::Performance.rows().len(), 5);
         assert_eq!(Page::InGame.parent(), &["settings.system"]);
-        assert!(Page::System.rows().iter().any(|r| r.id == Id::InGameLink));
+        assert_eq!(Page::Performance.parent(), &["settings.system"]);
+        let system = Page::System.rows();
+        assert!(system.iter().any(|r| r.id == Id::InGameLink));
+        assert!(system.iter().any(|r| r.id == Id::PerformanceLink));
+        // The CPU moved from System to Performance.
+        for id in [Id::Governor, Id::Turbo] {
+            assert!(!system.iter().any(|r| r.id == id));
+            assert!(Page::Performance.rows().iter().any(|r| r.id == id));
+        }
     }
 
     #[test]
     fn defaults_are_valid_choices() {
-        for row in ROWS {
+        for row in IN_GAME.iter().chain(PERFORMANCE) {
             assert!(
                 row.id.choices().contains(&row.id.default_value()),
                 "{:?}",

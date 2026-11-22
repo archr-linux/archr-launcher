@@ -38,6 +38,7 @@ fn all_locales_and_pages_render_and_selected_on_toggle_has_contrast() {
             Page::Root,
             Page::Sound,
             Page::System,
+            Page::Performance,
             Page::Region,
             Page::Info,
             Page::InfoDetail(0),
@@ -83,9 +84,9 @@ fn all_locales_and_pages_render_and_selected_on_toggle_has_contrast() {
                 state.values.insert(Id::Idle, "5".into());
             }
 
-            if page == Page::System {
-                // Turbo, under the During a game link.
-                state.cursor = 4;
+            if page == Page::Performance {
+                // Turbo, under the governor.
+                state.cursor = 1;
                 state.values.insert(Id::Turbo, "1".into());
             }
             ui.draw_with_settings(
@@ -241,19 +242,19 @@ fn all_locales_and_pages_render_and_selected_on_toggle_has_contrast() {
                 )
                 .unwrap();
             }
-            if page == Page::System {
+            if page == Page::Performance {
                 let pixels = ui
                     .canvas
                     .read_pixels(None, sdl2::pixels::PixelFormatEnum::RGBA32)
                     .unwrap();
                 let pixel = |x: usize, y: usize| &pixels[(y * 640 + x) * 4..(y * 640 + x) * 4 + 3];
                 assert_eq!(
-                    pixel(580, 245),
+                    pixel(580, 130),
                     &[255, 255, 255],
                     "white selected switch track"
                 );
                 assert_eq!(
-                    pixel(600, 245),
+                    pixel(600, 130),
                     &[30, 136, 255],
                     "accent selected switch knob"
                 );

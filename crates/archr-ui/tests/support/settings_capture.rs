@@ -3313,12 +3313,17 @@ fn capture_resume() {
     let mut in_game = Settings::default();
     in_game.loading = false;
     in_game.open(Page::InGame);
+    let mut performance = Settings::default();
+    performance.loading = false;
+    performance.open(Page::Performance);
+    performance.values.insert(Id::Governor, "ondemand".into());
     for language in ["pt_BR", "ru", "de", "zh_CN", "en", "es"] {
         ui.catalog = I18n::load(std::path::Path::new("/nonexistent"), Some(language), None);
         for (name, state) in [
             ("config-retomar", &resume),
             ("config-energia", &power),
             ("config-durante-jogo", &in_game),
+            ("config-desempenho", &performance),
         ] {
             ui.switches.clear();
             for _ in 0..2 {

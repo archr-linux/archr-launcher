@@ -182,7 +182,9 @@ fn placements(page: Page, rows: &[Row]) -> Vec<Placement> {
                 top += SECTION_HEIGHT;
             }
             let height = match page {
-                Page::Resume | Page::Power | Page::InGame | Page::Launcher => 38.,
+                Page::Resume | Page::Power | Page::InGame | Page::Performance | Page::Launcher => {
+                    38.
+                }
                 Page::Image => 44.,
                 Page::Games if row.subtitle.is_some() => 40.,
                 Page::Netplay | Page::Games => 34.,
@@ -1159,6 +1161,8 @@ impl View<'_, '_, '_> {
             Some(self.tr("power.note"))
         } else if state.page() == Page::InGame {
             Some(self.tr("in_game.note"))
+        } else if state.page() == Page::Performance {
+            Some(self.tr("perf.note"))
         } else if state.page() == Page::Image {
             Some(self.tr("image.hint"))
         } else if let Some(note) = state.savesync_note() {
@@ -1824,7 +1828,12 @@ impl View<'_, '_, '_> {
             Kind::Value
                 if matches!(
                     state.page(),
-                    Page::Resume | Page::Power | Page::InGame | Page::Image | Page::Launcher
+                    Page::Resume
+                        | Page::Power
+                        | Page::InGame
+                        | Page::Performance
+                        | Page::Image
+                        | Page::Launcher
                 ) =>
             {
                 self.ui

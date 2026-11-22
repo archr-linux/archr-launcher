@@ -118,12 +118,14 @@ fn localized_values_and_footer_affordances_match_actions() {
     s.cursor = 4;
     assert_eq!(
         s.hints().iter().map(|h| h.0).collect::<Vec<_>>(),
-        [Pair('L', 'R'), Key('A'), Key('B')]
+        [Key('A'), Key('B')]
     );
-    s.cursor = 5;
+    // A switch: L/R and A (Turbo, in System › Performance).
+    s.open(Page::Performance);
+    s.cursor = 1;
     assert_eq!(
         s.hints().iter().map(|h| h.0).collect::<Vec<_>>(),
-        [Key('A'), Key('B')]
+        [Pair('L', 'R'), Key('A'), Key('B')]
     );
     s.open(Page::Info);
     assert_eq!(

@@ -97,6 +97,8 @@ pub enum Page {
     Power,
     /// System › During a game (Config-durante-jogo).
     InGame,
+    /// System › Performance (Config-desempenho): the CPU and the memory.
+    Performance,
     /// Sound and display › Picture (Tela-imagem): gamma and colour
     /// temperature, held by archr-gamma.
     Image,
@@ -165,6 +167,7 @@ impl Page {
             Self::Resume => "settings.resume",
             Self::Power => "settings.power",
             Self::InGame => "settings.in_game",
+            Self::Performance => "settings.performance",
             Self::Image => "settings.image",
             Self::SaveSync => "savesync.title",
             Self::SaveSyncTarget => "savesync.target",
@@ -208,7 +211,9 @@ impl Page {
             Self::LauncherControls | Self::Hotkeys => &["settings.controls"],
             Self::DateTime => &["settings.region"],
             Self::ScraperMedia => &["settings.games", "settings.scraper_short"],
-            Self::Updates | Self::Power | Self::InGame => &["settings.system"],
+            Self::Updates | Self::Power | Self::InGame | Self::Performance => {
+                &["settings.system"]
+            }
             Self::Image => &["settings.sound"],
             Self::SaveSync => &["settings.system"],
             Self::SaveSyncTarget | Self::SaveSyncConflict => &["settings.system", "savesync.title"],
@@ -246,7 +251,8 @@ impl Page {
             Self::ErrorReports => reports::ROWS,
             Self::Resume => resume::RESUME,
             Self::Power => resume::POWER,
-            Self::InGame => ingame::ROWS,
+            Self::InGame => ingame::IN_GAME,
+            Self::Performance => ingame::PERFORMANCE,
             Self::Image => picture::IMAGE,
             Self::SaveSync => savesync::SAVESYNC,
             Self::SaveSyncTarget => savesync::TARGET,
@@ -485,6 +491,7 @@ pub enum Id {
     PowerLink,
     /// System link to During a game, and that page's rows.
     InGameLink,
+    PerformanceLink,
     GameWifi,
     GameBluetooth,
     GameSharing,
@@ -751,6 +758,7 @@ impl Id {
             Self::ResumeLink
             | Self::PowerLink
             | Self::InGameLink
+            | Self::PerformanceLink
             | Self::ImageLink
             | Self::ImageRestore
             | Self::SaveSyncLink
@@ -1037,8 +1045,7 @@ const SYSTEM: &[Row] = &[
     described(Id::Gpu, "settings.gpu", "settings.reboot_required"),
     row(Id::PowerLink, "settings.power", Kind::Action),
     row(Id::InGameLink, "settings.in_game", Kind::Action),
-    row(Id::Governor, "settings.governor", Kind::Value),
-    row(Id::Turbo, "settings.turbo", Kind::Toggle),
+    row(Id::PerformanceLink, "settings.performance", Kind::Action),
     row(Id::Update, "settings.update", Kind::Action),
     row(Id::ModulesLink, "settings.modules", Kind::Action),
     row(Id::SaveSyncLink, "savesync.title", Kind::Action),
@@ -1615,6 +1622,7 @@ impl Settings {
                 | Id::ResumeLink
                 | Id::PowerLink
                 | Id::InGameLink
+                | Id::PerformanceLink
                 | Id::ImageLink
                 | Id::ImageRestore
                 | Id::PadTestLink

@@ -283,6 +283,7 @@ fn information_collects_detail_rows_and_core_deltas_without_commands() {
         ("proc/stat", "cpu 10 0 10 80 0 0 0 0\ncpu0 10 0 10 80 0 0 0 0\n"),
         ("proc/meminfo", "MemTotal: 1000000 kB\nMemAvailable: 750000 kB\nCached: 50000 kB\nSwapTotal: 100000 kB\nSwapFree: 90000 kB\n"),
         ("proc/uptime", "3540.0 0.0"),
+        ("proc/swaps", "Filename\t\t\t\tType\t\tSize\t\tUsed\t\tPriority\n/dev/zram0                              partition\t1048572\t\t262143\t\t100\n/storage/.cache/swapfile                file\t\t524284\t\t0\t\t-2\n"),
         ("proc/net/route", "Iface Destination Gateway Flags\nwlan0 00000000 0103A8C0 0003\n"),
         ("etc/resolv.conf", "nameserver 1.1.1.1\n"),
         ("proc/sys/kernel/hostname", "archr-test"),
@@ -321,6 +322,12 @@ fn information_collects_detail_rows_and_core_deltas_without_commands() {
         .iter()
         .any(|(_, v)| v == "192.168.3.1"));
     assert!(second.cards[0].lines[0].contains("Rockchip RK3326"));
+    // The compressed memory and RAM Plus, each on its own line.
+    let memory = &second.cards[2].detail;
+    let label = |key: &str| memory.meters.iter().find(|m| m.label == key).map(|m| m.percent);
+    assert_eq!(label("settings.zram"), Some(Some(25)));
+    assert_eq!(label("settings.ramplus"), Some(Some(0)));
+    assert_eq!(label("settings.swap"), None);
 }
 
 #[test]

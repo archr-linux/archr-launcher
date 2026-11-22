@@ -495,6 +495,7 @@ impl Settings {
             Id::ResumeLink => self.open(Page::Resume),
             Id::PowerLink => self.open(Page::Power),
             Id::InGameLink => self.open(Page::InGame),
+            Id::PerformanceLink => self.open(Page::Performance),
             Id::ImageLink => self.open_image(),
             // Every visit reads the status again.
             Id::SaveSyncLink => {

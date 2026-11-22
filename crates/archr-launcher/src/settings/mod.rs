@@ -187,6 +187,7 @@ impl Backend {
             Page::Resume,
             Page::Power,
             Page::InGame,
+            Page::Performance,
             Page::Image,
             Page::SaveSync,
             Page::SaveSyncTarget,

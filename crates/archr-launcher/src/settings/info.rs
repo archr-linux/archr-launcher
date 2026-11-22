@@ -660,23 +660,28 @@ impl Backend {
             rows.insert(1, ("settings.frequency", mhz(ddr, 1_000_000)));
         }
         let mut meters = vec![meter("settings.memory", usage(used, total), ratio)];
-        let zram_used = self
-            .read("/sys/block/zram0/mm_stat")
-            .split_whitespace()
-            .next()
-            .and_then(|v| v.parse().ok());
-        let zram_size = self.number_at("/sys/block/zram0/disksize");
-        let swap = kb("SwapTotal:");
-        if swap > zram_size.unwrap_or(0) {
-            let swap_used = swap.saturating_sub(kb("SwapFree:"));
-            let value = usage(swap_used, swap);
-            rows.push(("settings.swap", value.clone()));
-            meters.push(meter("settings.swap", value, percent(swap_used, swap)));
-        }
-        if let Some((used, total)) = zram_used.zip(zram_size) {
-            let value = usage(used, total);
-            rows.push(("settings.zram", value.clone()));
-            meters.push(meter("settings.zram", value, percent(used, total)));
+        // Each swap in /proc/swaps on its own line: the compressed memory
+        // (zram), RAM Plus (the file archr-memory-manager keeps on /storage,
+        // System › Performance) and any other swap.
+        for line in self.read("/proc/swaps").lines().skip(1) {
+            let fields: Vec<&str> = line.split_whitespace().collect();
+            let [name, kind, size, used, ..] = fields[..] else {
+                continue;
+            };
+            let (Ok(size), Ok(used)) = (size.parse::<u64>(), used.parse::<u64>()) else {
+                continue;
+            };
+            let (size, used) = (size.saturating_mul(1024), used.saturating_mul(1024));
+            let label = if name.starts_with("/dev/zram") {
+                "settings.zram"
+            } else if kind == "file" {
+                "settings.ramplus"
+            } else {
+                "settings.swap"
+            };
+            let value = usage(used, size);
+            rows.push((label, value.clone()));
+            meters.push(meter(label, value, percent(used, size)));
         }
         card(
             usage(used, total),
