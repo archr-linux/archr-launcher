@@ -76,18 +76,29 @@ fn run(
     #[cfg(test)] mut observe: impl FnMut(&App, &Library, Option<&Outcome>),
 ) -> Result<(), String> {
     let mut windowed = false;
+    // A window of another screen's size, to see a layout on a PC.
+    let mut window_size = (640, 480);
     let mut roms_screen = false;
     let mut script_source = None;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--windowed" => windowed = true,
+            "--window-size" => {
+                let size = args.next().ok_or("--window-size requires WIDTHxHEIGHT")?;
+                window_size = size
+                    .split_once('x')
+                    .and_then(|(w, h)| Some((w.parse::<u32>().ok()?, h.parse::<u32>().ok()?)))
+                    .filter(|&(w, h)| (240..=4096).contains(&w) && (240..=4096).contains(&h))
+                    .ok_or_else(|| format!("--window-size {size}: expected e.g. 1280x720"))?;
+                windowed = true;
+            }
             "--roms-migrate-screen" => roms_screen = true,
             "--script" => {
                 script_source = Some(args.next().ok_or("--script requires a button sequence")?)
             }
             "--help" => {
                 println!(
-                    "archr-launcher [--windowed] [--check-module <dir>] [--roms-migrate-screen]"
+                    "archr-launcher [--windowed] [--window-size WIDTHxHEIGHT] [--check-module <dir>] [--roms-migrate-screen]"
                 );
                 return Ok(());
             }
@@ -208,14 +219,14 @@ fn run(
         let video = sdl.video()?;
         startup_phase!(trace, "SDL_Init video");
         let size = if windowed {
-            (640, 480)
+            window_size
         } else {
             let mode = video.desktop_display_mode(0)?;
             (mode.w.max(1) as u32, mode.h.max(1) as u32)
         };
         // A stopped receiver is reported by join, preserving the worker error.
         let _ = sized.send(size);
-        let ui = Ui::with_video(sdl, video, (640, 480), windowed, trace);
+        let ui = Ui::with_video(sdl, video, size, windowed, trace);
         // Always join, including window/renderer errors, before TTF can quit.
         let assets = worker
             .join()
@@ -361,10 +372,13 @@ fn run(
     let mut shots = CoverCache::new(&creator, paths.cache.join("thumbs"), shot_w, shot_h);
     let mut logos = CoverCache::new(&creator, paths.cache.join("thumbs"), logo_w, logo_h);
     // Achievement badges, at the list icon's size.
-    let side = (36. * height as f32 / 480.).round().max(1.) as u32;
+    // The launcher's own scale (render.rs): the 640x480 design fitted to the
+    // screen, not the height alone, which oversizes them on a square one.
+    let scale = (width as f32 / 640.).min(height as f32 / 480.);
+    let side = (36. * scale).round().max(1.) as u32;
     let mut badges = CoverCache::new(&creator, paths.cache.join("thumbs"), side, side);
     // Saves and Screenshots: list and grid pictures, and the large one.
-    let cell = |w: f32| (w * height as f32 / 480.).round().max(1.) as u32;
+    let cell = |w: f32| (w * scale).round().max(1.) as u32;
     let mut thumbs = CoverCache::new(&creator, paths.cache.join("thumbs"), cell(138.), cell(104.));
     let mut pictures = CoverCache::new(&creator, paths.cache.join("thumbs"), width, height);
     // An app's pictures (API 4), from its own folder: the list's at the
