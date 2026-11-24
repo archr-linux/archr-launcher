@@ -1673,6 +1673,7 @@
 "osd.battery_low" = "Conecte o carregador logo."
 "osd.nostate_title" = "Sem salvar estado"
 "osd.nostate" = "Este emulador não salva estado; use o menu do jogo."
+"osd.nostate_exit" = "Este jogo não salva estado. Para sair, segure {keys}; para salvar, use o menu do próprio jogo."
 "osd.report_start_title" = "Gerando relatório…"
 "osd.report_start" = "Leva cerca de 20 segundos."
 "osd.report_done_title" = "Relatório salvo"

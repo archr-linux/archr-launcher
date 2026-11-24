@@ -25,6 +25,8 @@ pub struct Assets {
     semibold: Option<FontArc>,
     text: HashMap<String, String>,
     share: std::path::PathBuf,
+    /// system.cfg: the language at start, the exit shortcut at each card.
+    config: std::path::PathBuf,
     /// The theme's faces the fonts were loaded for.
     faces: (Option<std::path::PathBuf>, Option<std::path::PathBuf>),
     pub palette: Palette,
@@ -58,6 +60,7 @@ impl Assets {
             semibold: None,
             text,
             share: share.to_owned(),
+            config: config.to_owned(),
             faces: (None, None),
             palette: Palette::DEFAULT,
         };
@@ -120,19 +123,30 @@ impl Assets {
         let battery = match alert {
             Alert::Battery(battery) => battery,
             Alert::NoState => {
-                return Card {
-                    title: self.tr("osd.nostate_title", "No state saved", &[]),
-                    body: self.tr(
+                // How to leave the game, read now: the player may have
+                // changed the shortcut since the overlay started.
+                let config = std::fs::read_to_string(&self.config).unwrap_or_default();
+                let body = match exit_keys(&config) {
+                    Some(keys) => self.tr(
+                        "osd.nostate_exit",
+                        "This game saves no state. Hold {keys} to quit; save from the game's own menu.",
+                        &[("keys", keys)],
+                    ),
+                    None => self.tr(
                         "osd.nostate",
                         "This emulator does not save a state; use the game's menu.",
                         &[],
                     ),
+                };
+                return Card {
+                    title: self.tr("osd.nostate_title", "No state saved", &[]),
+                    body,
                     hint: None,
                     bar: None,
                     critical: false,
                     icon: ALERT,
                     accent: warning,
-                }
+                };
             }
             Alert::Disc(step) => {
                 let (title, body, icon, accent) = match step {
@@ -543,6 +557,64 @@ pub fn render(
     out
 }
 
+/// The exit shortcut as input_sense reads system.cfg: the hotkey modifier
+/// (key.hotkey.a, L1 by default) and the pair of hotkey.exit (or the older
+/// key.hotkey.b/.c), as the pad names them; `None` when it is off.
+fn exit_keys(config: &str) -> Option<String> {
+    let get = |key: &str| {
+        config
+            .lines()
+            .find_map(|l| l.strip_prefix(key)?.strip_prefix('=').map(str::trim))
+            .filter(|v| !v.is_empty())
+    };
+    let word = |v: &str| {
+        !v.is_empty()
+            && v.bytes()
+                .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')
+    };
+    if get("hotkey.exit.enabled") == Some("0") {
+        return None;
+    }
+    let one = |key, default: &'static str| get(key).filter(|v| word(v)).unwrap_or(default);
+    let pair: Vec<&str> = match get("hotkey.exit").map(|v| v.split('+').collect::<Vec<_>>()) {
+        Some(parts) if parts.len() == 2 && parts.iter().all(|p| word(p)) => parts,
+        _ => vec![
+            one("key.hotkey.b", "BTN_SELECT"),
+            one("key.hotkey.c", "BTN_START"),
+        ],
+    };
+    let keys = [one("key.hotkey.a", "BTN_TL"), pair[0], pair[1]];
+    Some(keys.map(pad_name).join(" + "))
+}
+
+/// The launcher's name for an evdev key (archr-ui's pad table), or the key
+/// without "BTN_".
+fn pad_name(key: &str) -> String {
+    const NAMES: [(&str, &str); 17] = [
+        ("BTN_EAST", "A"),
+        ("BTN_SOUTH", "B"),
+        ("BTN_NORTH", "X"),
+        ("BTN_WEST", "Y"),
+        ("BTN_TL", "L1"),
+        ("BTN_TR", "R1"),
+        ("BTN_TL2", "L2"),
+        ("BTN_TR2", "R2"),
+        ("BTN_SELECT", "SELECT"),
+        ("BTN_START", "START"),
+        ("BTN_THUMBL", "L3"),
+        ("BTN_THUMBR", "R3"),
+        ("BTN_MODE", "FN"),
+        ("BTN_DPAD_UP", "↑"),
+        ("BTN_DPAD_DOWN", "↓"),
+        ("BTN_DPAD_LEFT", "←"),
+        ("BTN_DPAD_RIGHT", "→"),
+    ];
+    NAMES.iter().find(|(k, _)| *k == key).map_or_else(
+        || key.trim_start_matches("BTN_").to_owned(),
+        |(_, n)| (*n).to_owned(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -644,6 +716,10 @@ mod tests {
         assert_eq!(en.bar, Some(1.0));
         let nostate = a.card(Alert::NoState);
         assert_eq!(nostate.title, "Sem salvar estado");
+        assert_eq!(
+            nostate.body,
+            "Este jogo não salva estado. Para sair, segure L1 + SELECT + START; para salvar, use o menu do próprio jogo."
+        );
         assert_eq!((nostate.critical, nostate.icon), (false, ALERT));
         let report = |language, step| assets(language).card(Alert::Report(step));
         assert_eq!(report("pt_BR", Report::Start).title, "Gerando relatório…");
@@ -755,5 +831,24 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn the_no_state_card_names_the_exit_shortcut_as_input_sense_reads_it() {
+        assert_eq!(exit_keys("").as_deref(), Some("L1 + SELECT + START"));
+        assert_eq!(
+            exit_keys("key.hotkey.a=BTN_MODE\nhotkey.exit=BTN_TR+BTN_START\n").as_deref(),
+            Some("FN + R1 + START")
+        );
+        // A malformed pair falls back to the older keys, as input_sense does.
+        assert_eq!(
+            exit_keys("hotkey.exit=select+start\nkey.hotkey.b=BTN_TL2\n").as_deref(),
+            Some("L1 + L2 + START")
+        );
+        assert_eq!(exit_keys("hotkey.exit.enabled=0\n"), None);
+        assert_eq!(
+            exit_keys("hotkey.exit.enabledx=0\n").as_deref(),
+            Some("L1 + SELECT + START")
+        );
     }
 }

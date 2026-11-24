@@ -1579,6 +1579,7 @@
 "osd.battery_low" = "Schließe bald das Ladegerät an."
 "osd.nostate_title" = "Kein Speicherzustand"
 "osd.nostate" = "Dieser Emulator speichert keinen Zustand; nutze das Spielmenü."
+"osd.nostate_exit" = "Dieses Spiel speichert keinen Zustand. Zum Beenden {keys} halten; speichern über das Menü des Spiels."
 "osd.report_start_title" = "Bericht wird erstellt…"
 "osd.report_start" = "Das dauert etwa 20 Sekunden."
 "osd.report_done_title" = "Bericht gespeichert"

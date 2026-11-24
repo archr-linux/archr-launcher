@@ -1586,6 +1586,7 @@
 "osd.battery_low" = "请尽快连接充电器。"
 "osd.nostate_title" = "未保存即时存档"
 "osd.nostate" = "此模拟器不支持即时存档，请使用游戏内菜单保存。"
+"osd.nostate_exit" = "此游戏不支持即时存档。按住 {keys} 退出；请使用游戏自带菜单保存。"
 "osd.report_start_title" = "正在创建报告…"
 "osd.report_start" = "约需 20 秒。"
 "osd.report_done_title" = "报告已保存"

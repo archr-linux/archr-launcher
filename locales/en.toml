@@ -1673,6 +1673,7 @@
 "osd.battery_low" = "Connect the charger soon."
 "osd.nostate_title" = "No state saved"
 "osd.nostate" = "This emulator does not save a state; use the game's menu."
+"osd.nostate_exit" = "This game saves no state. Hold {keys} to quit; save from the game's own menu."
 "osd.report_start_title" = "Creating the report…"
 "osd.report_start" = "It takes about 20 seconds."
 "osd.report_done_title" = "Report saved"
