@@ -510,6 +510,12 @@ impl Settings {
             | Id::SaveSyncPassword
             | Id::SaveSyncTest) => return self.savesync_activate(id),
             Id::PadTestLink => self.open_joypad(),
+            Id::RumbleLink => self.open(Page::Rumble),
+            Id::LedsLink => self.open(Page::StickLeds),
+            Id::RumbleTest => {
+                self.pending = Some(id);
+                return Some(Effect::Set(id, String::new()));
+            }
             Id::MangohudItems => self.open(Page::MangohudItems),
             // Every visit looks at the card again.
             Id::Update => {

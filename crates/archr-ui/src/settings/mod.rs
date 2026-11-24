@@ -17,6 +17,7 @@ pub(crate) mod games;
 pub(crate) mod information;
 pub mod launcher;
 pub use custom::Custom;
+pub mod hardware;
 pub mod hotkeys;
 pub mod joypad;
 pub mod mangohud;
@@ -102,6 +103,9 @@ pub enum Page {
     /// Sound and display › Picture (Tela-imagem): gamma and colour
     /// temperature, held by archr-gamma.
     Image,
+    /// Controls › Vibration and Stick LEDs, where the console has them.
+    Rumble,
+    StickLeds,
     /// System › Save sync (Saves-sync), its destination (Saves-destino)
     /// and a conflict (Saves-conflito).
     SaveSync,
@@ -169,6 +173,8 @@ impl Page {
             Self::InGame => "settings.in_game",
             Self::Performance => "settings.performance",
             Self::Image => "settings.image",
+            Self::Rumble => "rumble.title",
+            Self::StickLeds => "leds.title",
             Self::SaveSync => "savesync.title",
             Self::SaveSyncTarget => "savesync.target",
             Self::SaveSyncConflict => "savesync.conflict",
@@ -200,7 +206,7 @@ impl Page {
             | Self::RaImport
             | Self::Diagnostics
             | Self::ErrorReports => &["settings.system"],
-            Self::PadTest => &["settings.controls"],
+            Self::PadTest | Self::Rumble | Self::StickLeds => &["settings.controls"],
             Self::ReportText => &["settings.system", "reports.title"],
             Self::Bios => &["settings.games"],
             Self::RaImportList => &["settings.system", "raimport.title"],
@@ -254,6 +260,8 @@ impl Page {
             Self::InGame => ingame::IN_GAME,
             Self::Performance => ingame::PERFORMANCE,
             Self::Image => picture::IMAGE,
+            Self::Rumble => hardware::RUMBLE,
+            Self::StickLeds => hardware::LEDS,
             Self::SaveSync => savesync::SAVESYNC,
             Self::SaveSyncTarget => savesync::TARGET,
             Self::SaveSyncConflict => &[],
@@ -467,6 +475,16 @@ pub enum Id {
     RomsLeft,
     /// System link to the controller tester.
     PadTestLink,
+    /// Controls links to Vibration and Stick LEDs, and their rows: shown
+    /// only where archr-rumble and archr-stick-leds say `supported`.
+    RumbleLink,
+    Rumble,
+    RumbleStrength,
+    RumbleTest,
+    LedsLink,
+    LedsMode,
+    LedsColor,
+    LedsBrightness,
     /// System link to Diagnostics, and that page's rows.
     DiagLink,
     /// archr-debug owns system.loglevel: "1" while it is verbose.
@@ -754,6 +772,13 @@ impl Id {
             Self::SaveSyncAddress => ("savesync.smb.address", ""),
             Self::SaveSyncUser => ("savesync.smb.user", ""),
             Self::ColorTemp => ("display.temperature", "6500"),
+            // archr-rumble and archr-stick-leds read them on `apply`.
+            Self::Rumble => ("rumble.enabled", "1"),
+            Self::RumbleStrength => ("rumble.strength", "100"),
+            Self::LedsMode => ("leds.sticks.mode", "rainbow"),
+            Self::LedsColor => ("leds.sticks.color", "white"),
+            Self::LedsBrightness => ("leds.sticks.brightness", "3"),
+            Self::RumbleLink | Self::RumbleTest | Self::LedsLink => ("", ""),
             Self::Saturation => ("display.saturation", "50"),
             Self::ResumeLink
             | Self::PowerLink
@@ -848,9 +873,13 @@ impl Id {
                 "0", "10", "20", "30", "40", "50", "60", "70", "80", "90", "100",
             ],
             Self::Governor => &["ondemand", "performance", "schedutil", "powersave"],
+            Self::LedsMode => &hardware::MODES,
+            Self::LedsColor => &hardware::COLORS,
+            Self::LedsBrightness => &["1", "2", "3", "4", "5"],
             Self::SaveSyncTarget => &["smb", "cloud"],
             Self::Sounds
             | Self::Mute
+            | Self::Rumble
             | Self::SaveSync
             | Self::SaveSyncBoot
             | Self::SaveSyncExit
@@ -942,7 +971,10 @@ impl Id {
         if self == Self::Animations {
             return crate::motion::Motion::parse(value).code().into();
         }
-        if !matches!(self, Self::Volume | Self::Brightness | Self::SoundsVolume) {
+        if !matches!(
+            self,
+            Self::Volume | Self::Brightness | Self::SoundsVolume | Self::RumbleStrength
+        ) {
             return value.into();
         }
         let min = if self == Self::Brightness { 5 } else { 0 };
@@ -1310,6 +1342,9 @@ pub struct Settings {
     pub mangohud_supported: bool,
     /// The GPU driver in use is panfrost, the only one with Vulkan (PanVK).
     pub vulkan_supported: bool,
+    /// `archr-rumble supported` and `archr-stick-leds supported` succeeded.
+    pub rumble_supported: bool,
+    pub leds_supported: bool,
     /// Layout and items when the items page opened, to save or restore.
     pub mangohud_saved: (String, String),
     /// The clock being set on the Date and time page.
@@ -1393,6 +1428,8 @@ impl Default for Settings {
             custom: Custom::default(),
             mangohud_supported: false,
             vulkan_supported: false,
+            rumble_supported: false,
+            leds_supported: false,
             mangohud_saved: Default::default(),
             clock_draft: None,
             capture: None,
@@ -1569,7 +1606,7 @@ impl Settings {
                 crate::motion::Motion::Reduced => "appearance.anim_reduced",
                 crate::motion::Motion::Off => "appearance.anim_off",
             },
-            (Id::Restore | Id::Accent | Id::ButtonsRestore | Id::RaHotkeys, _) => {
+            (Id::Restore | Id::Accent | Id::ButtonsRestore | Id::RaHotkeys | Id::RumbleTest, _) => {
                 return String::new()
             }
             (Id::Bind(n), _) => return self.bindings()[usize::from(n)].name().into(),
@@ -1626,6 +1663,8 @@ impl Settings {
                 | Id::ImageLink
                 | Id::ImageRestore
                 | Id::PadTestLink
+                | Id::RumbleLink
+                | Id::LedsLink
                 | Id::ShortcutsLink
                 | Id::ToastsLink,
                 _,
@@ -1639,6 +1678,8 @@ impl Settings {
                     .parse::<u32>()
                     .map_or_else(|_| v.to_owned(), |n| format!("{}%", n * 2))
             }
+            (Id::LedsMode, "off") => "settings.off",
+            (Id::LedsMode | Id::LedsColor, v) => return hardware::label(catalog, v),
             (Id::ToastsPosition, "left") => "settings.toasts_left",
             (Id::ToastsPosition, _) => "settings.toasts_right",
             (Id::ToastsDuration, v) => return catalog.format("resume.seconds", &[("count", v)]),
@@ -1832,6 +1873,8 @@ impl Settings {
                 | Id::CheevosWebKeyRemove
                 | Id::CheevosLogout) => self.cheevos_visible(id),
                 id if savesync::IDS.contains(&id) => self.savesync_visible(id),
+                Id::RumbleLink => self.rumble_supported,
+                Id::LedsLink => self.leds_supported,
                 _ => true,
             })
             .copied()
@@ -1871,6 +1914,8 @@ impl Settings {
             Id::RestoreBackup => self.storage.backup.is_none(),
             Id::RomsMove | Id::RomsNames => self.roms_disabled(id),
             Id::ButtonsRestore => self.default_bindings(),
+            Id::RumbleStrength | Id::RumbleTest => self.value(Id::Rumble) != "1",
+            Id::LedsColor => !hardware::coloured(self.value(Id::LedsMode)),
             // With the toasts off, only their switch still means something.
             Id::ToastsPosition
             | Id::ToastsDuration

@@ -5,6 +5,7 @@ pub use cheevos::{TOKEN as CHEEVOS_TOKEN, USER as CHEEVOS_USER};
 mod controls;
 mod diag;
 mod games;
+mod hardware;
 mod info;
 mod joypad;
 pub mod launcher;
@@ -36,6 +37,8 @@ use std::{
 pub struct Backend {
     paths: Paths,
     identity: std::sync::OnceLock<info::Identity>,
+    /// Whether the console has vibration and stick LEDs, asked once.
+    hardware: std::sync::OnceLock<(bool, bool)>,
     /// The system version as shown, and the files' times it was read at.
     version: std::sync::Mutex<Option<info::VersionStamp>>,
     cpu_ticks: std::sync::Mutex<BTreeMap<u32, (u64, u64)>>,
@@ -45,6 +48,7 @@ impl Backend {
         Self {
             paths,
             identity: std::sync::OnceLock::new(),
+            hardware: std::sync::OnceLock::new(),
             version: std::sync::Mutex::new(None),
             cpu_ticks: std::sync::Mutex::new(BTreeMap::new()),
         }
@@ -189,6 +193,8 @@ impl Backend {
             Page::InGame,
             Page::Performance,
             Page::Image,
+            Page::Rumble,
+            Page::StickLeds,
             Page::SaveSync,
             Page::SaveSyncTarget,
             Page::Toasts,
@@ -207,6 +213,7 @@ impl Backend {
         self.load_mangohud(&cfg, &mut state);
         self.load_cheevos(&cfg, &mut state);
         self.load_controls(&cfg, &mut state);
+        self.load_hardware(&mut state);
         state.values.insert(
             Id::DebugMode,
             diag::debug_value(cfg.get_setting("system.loglevel", None, None)),
@@ -317,6 +324,7 @@ impl Backend {
             .or_else(|| self.apply_mangohud(id, value))
             .or_else(|| self.apply_cheevos(id, value))
             .or_else(|| self.apply_controls(id, value))
+            .or_else(|| self.apply_hardware(id, value))
         {
             return result;
         }
@@ -1001,6 +1009,8 @@ impl Worker {
                     state.scrape.available = loaded.scrape.available;
                     state.mangohud_supported = loaded.mangohud_supported;
                     state.vulkan_supported = loaded.vulkan_supported;
+                    state.rumble_supported = loaded.rumble_supported;
+                    state.leds_supported = loaded.leds_supported;
                     state.games.replace(loaded.games.systems);
                     state.sync_games();
                     state.values_loaded();

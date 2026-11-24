@@ -516,6 +516,25 @@ fn sample_pages() -> Vec<(&'static str, Settings)> {
     at_renderer(&mut games_renderer_libmali);
     let mut controls = ready();
     controls.open(Page::Controls);
+    // Controls on an AISLPC RK3562 handheld: Vibration and Stick LEDs.
+    let mut controls_hw = controls.clone();
+    controls_hw.rumble_supported = true;
+    controls_hw.leds_supported = true;
+    controls_hw.cursor = 3;
+    let mut rumble = controls_hw.clone();
+    rumble.open(Page::Rumble);
+    rumble.values.insert(Id::RumbleStrength, "70".into());
+    rumble.cursor = 1;
+    let mut rumble_off = rumble.clone();
+    rumble_off.values.insert(Id::Rumble, "0".into());
+    rumble_off.cursor = 0;
+    let mut leds = controls_hw.clone();
+    leds.open(Page::StickLeds);
+    leds.values.insert(Id::LedsMode, "static".into());
+    leds.values.insert(Id::LedsColor, "cyan".into());
+    leds.cursor = 1;
+    let mut leds_rainbow = controls_hw.clone();
+    leds_rainbow.open(Page::StickLeds);
     let mut launcher_controls = controls.clone();
     launcher_controls.open(Page::LauncherControls);
     launcher_controls
@@ -616,6 +635,11 @@ fn sample_pages() -> Vec<(&'static str, Settings)> {
         ("games-renderer", games_renderer),
         ("games-renderer-libmali", games_renderer_libmali),
         ("controls", controls),
+        ("controles-hw", controls_hw),
+        ("vibracao", rumble),
+        ("vibracao-desligada", rumble_off),
+        ("leds-analogicos", leds),
+        ("leds-analogicos-arcoiris", leds_rainbow),
         ("controls-launcher", launcher_controls),
         ("controls-launcher-press", launcher_press),
         ("controls-hotkeys", hotkeys),

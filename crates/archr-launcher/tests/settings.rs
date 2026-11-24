@@ -686,3 +686,92 @@ fn launcher_buttons_accept_only_a_full_mapping() {
         assert!(backend.apply(Id::Buttons, value).is_err(), "{value}");
     }
 }
+
+#[test]
+fn vibration_and_stick_leds_show_only_where_their_tools_say_supported() {
+    // No tools (R36S, PC): no pages.
+    let (_dir, backend) = fixture();
+    let state = backend.load().unwrap();
+    assert!(!state.rumble_supported && !state.leds_supported);
+    // A tool that answers "not here" hides its page too.
+    let (dir, backend) = fixture();
+    script(
+        &dir,
+        "archr-rumble",
+        "[ \"$1\" = supported ] && exit 1; exit 0",
+    );
+    script(&dir, "archr-stick-leds", "exit 0");
+    let state = backend.load().unwrap();
+    assert!(!state.rumble_supported && state.leds_supported);
+    // Asked once: the answer stays for the launcher's life.
+    script(&dir, "archr-rumble", "exit 0");
+    assert!(!backend.load().unwrap().rumble_supported);
+}
+
+#[test]
+fn vibration_and_stick_leds_save_then_apply_and_test() {
+    let (dir, backend) = fixture();
+    let log = dir.path().join("hw.log");
+    for name in ["archr-rumble", "archr-stick-leds"] {
+        script(
+            &dir,
+            name,
+            &format!("echo \"{name} $*\" >> '{}'", log.display()),
+        );
+    }
+    let config = || {
+        fs::read_to_string(dir.path().join("storage/.config/system/configs/system.cfg")).unwrap()
+    };
+    let state = backend.load().unwrap();
+    assert!(state.rumble_supported && state.leds_supported);
+    assert_eq!(
+        (state.value(Id::Rumble), state.value(Id::RumbleStrength)),
+        ("1", "100")
+    );
+    assert_eq!(state.value(Id::LedsMode), "rainbow");
+    assert_eq!(backend.apply(Id::RumbleStrength, "40").unwrap(), "40");
+    assert_eq!(backend.apply(Id::Rumble, "0").unwrap(), "0");
+    assert_eq!(backend.apply(Id::LedsMode, "static").unwrap(), "static");
+    assert_eq!(backend.apply(Id::LedsColor, "cyan").unwrap(), "cyan");
+    assert_eq!(backend.apply(Id::LedsBrightness, "5").unwrap(), "5");
+    assert_eq!(backend.apply(Id::RumbleTest, "").unwrap(), "");
+    for line in [
+        "rumble.strength=40",
+        "rumble.enabled=0",
+        "leds.sticks.mode=static",
+        "leds.sticks.color=cyan",
+        "leds.sticks.brightness=5",
+    ] {
+        assert!(config().contains(line), "{line}");
+    }
+    assert_eq!(
+        fs::read_to_string(&log).unwrap(),
+        "archr-rumble supported\narchr-stick-leds supported\n\
+         archr-rumble apply\narchr-rumble apply\narchr-stick-leds apply\n\
+         archr-stick-leds apply\narchr-stick-leds apply\narchr-rumble test\n"
+    );
+    let state = backend.load().unwrap();
+    assert_eq!(state.value(Id::LedsColor), "cyan");
+    for (id, value) in [
+        (Id::RumbleStrength, "101"),
+        (Id::Rumble, "yes"),
+        (Id::LedsMode, "blink"),
+        (Id::LedsColor, "orange"),
+        (Id::LedsBrightness, "0"),
+        (Id::LedsBrightness, "3\nrumble.enabled=1"),
+    ] {
+        assert!(backend.apply(id, value).is_err(), "{id:?} {value}");
+    }
+    // A failed apply leaves the value the console has.
+    script(&dir, "archr-stick-leds", "exit 1");
+    assert_eq!(
+        backend.apply(Id::LedsColor, "red"),
+        Err("controls.apply_failed".into())
+    );
+    assert!(config().contains("leds.sticks.color=cyan"));
+    script(&dir, "archr-rumble", "exit 1");
+    assert_eq!(
+        backend.apply(Id::RumbleTest, ""),
+        Err("rumble.test_failed".into())
+    );
+}
