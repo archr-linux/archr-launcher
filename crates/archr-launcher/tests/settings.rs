@@ -392,6 +392,29 @@ CPU part : 0xd03
 }
 
 #[test]
+fn rk3562_names_its_gpu() {
+    let (dir, backend) = fixture();
+    for (path, value) in [
+        ("proc/cpuinfo", "processor : 0\nCPU part : 0xd03\n"),
+        (
+            "sys/firmware/devicetree/base/compatible",
+            "aislpc,rg43v-pro\0rockchip,rk3562\0",
+        ),
+    ] {
+        let path = dir.path().join(path);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, value).unwrap();
+    }
+    let info = backend.load().unwrap().info;
+    assert!(info.cards.iter().any(|c| c
+        .lines
+        .iter()
+        .chain([&c.detail.heading, &c.detail.subtitle])
+        .chain(c.detail.rows.iter().map(|(_, v)| v))
+        .any(|l| l.contains("Mali-G52 2EE"))));
+}
+
+#[test]
 fn battery_formats_integer_current_and_capacity_without_a_restart_timer() {
     let (dir, backend) = fixture();
     for (name, value) in [

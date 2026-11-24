@@ -302,8 +302,11 @@ impl Backend {
                 core_type
             },
             cores: cpu.lines().filter(|l| l.starts_with("processor")).count(),
+            // The kernel names no GPU model: it follows from the SoC.
             gpu: if rk3326 {
                 "Mali-G31".into()
+            } else if compatible.contains("rk3562") {
+                "Mali-G52 2EE".into()
             } else {
                 String::new()
             },
