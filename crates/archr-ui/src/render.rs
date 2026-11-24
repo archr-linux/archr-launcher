@@ -2549,10 +2549,17 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                         size,
                         match (lit, primary) {
                             (_, true) => theme.text,
-                            (true, false) => Rgba { a: 51, ..theme.text },
+                            (true, false) => Rgba {
+                                a: 51,
+                                ..theme.text
+                            },
                             (false, _) => theme.badge,
                         },
-                        if primary { theme.background } else { theme.text },
+                        if primary {
+                            theme.background
+                        } else {
+                            theme.text
+                        },
                         badge,
                     )?;
                 if button == '↕' {
@@ -3030,6 +3037,26 @@ pub fn pixels(rect: Rect01, width: u32, height: u32) -> Rect {
         (rect.y * height as f32).round() as i32,
         (rect.w * width as f32).round().max(1.) as u32,
         (rect.h * height as f32).round().max(1.) as u32,
+    )
+}
+/// A game picture's box: `rect` in pixels, narrowed (or shortened) about its
+/// centre to 4:3. A theme box sized as screen fractions is 4:3 only at the
+/// proportion it was drawn for; on a 16:9 screen it would stretch the
+/// picture, and one `[aspect.wide]` table also has to serve 3:2.
+pub fn picture_pixels(rect: Rect01, width: u32, height: u32) -> Rect {
+    let r = pixels(rect, width, height);
+    let (w, h) = (r.width() as f32, r.height() as f32);
+    let (fit_w, fit_h) = if w * 3. > h * 4. {
+        (h * 4. / 3., h)
+    } else {
+        (w, w * 3. / 4.)
+    };
+    let (fit_w, fit_h) = (fit_w.round().max(1.), fit_h.round().max(1.));
+    Rect::new(
+        r.x() + ((w - fit_w) / 2.).round() as i32,
+        r.y() + ((h - fit_h) / 2.).round() as i32,
+        fit_w as u32,
+        fit_h as u32,
     )
 }
 fn system_title(name: &str, data: &dyn DataSource, catalog: &I18n) -> String {

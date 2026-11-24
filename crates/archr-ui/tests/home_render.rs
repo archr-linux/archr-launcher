@@ -19,7 +19,14 @@ use archr_ui::{
 use common::FakeData;
 use std::path::{Path, PathBuf};
 
-const SIZES: [(u32, u32); 3] = [(640, 480), (720, 720), (480, 320)];
+const SIZES: [(u32, u32); 6] = [
+    (640, 480),
+    (720, 720),
+    (480, 320),
+    (1024, 768),
+    (1024, 600),
+    (1280, 720),
+];
 
 /// SDL video runs one window at a time per process.
 static SDL: std::sync::Mutex<()> = std::sync::Mutex::new(());

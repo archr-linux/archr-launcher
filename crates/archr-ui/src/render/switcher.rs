@@ -125,8 +125,8 @@ impl Ui<'_, '_> {
         )?;
         let games = &app.switcher;
         let at = app.cursor.min(games.len().saturating_sub(1));
-        let card = pixels(theme.switcher_card, width, height);
-        let side = pixels(theme.switcher_side, width, height);
+        let card = picture_pixels(theme.switcher_card, width, height);
+        let side = picture_pixels(theme.switcher_side, width, height);
         let info = pixels(theme.switcher_info, width, height);
         if games.is_empty() {
             let text = self.catalog.text(if self.loading {
@@ -269,7 +269,7 @@ impl Ui<'_, '_> {
         if let Some(backdrop) = style.backdrop {
             self.blurred_game(&boot.game, &art, theme, backdrop)?;
         }
-        let shot = pixels(theme.resume_shot, width, height);
+        let shot = picture_pixels(theme.resume_shot, width, height);
         let info = pixels(theme.resume_info, width, height);
         let radius = self.px(12.) as f32;
         self.lift(shot, radius)?;
@@ -430,7 +430,7 @@ impl Ui<'_, '_> {
             self.blurred_game(game, &art, theme, Self::backdrop_or_default(theme, None))?;
         }
         self.status_header(theme)?;
-        let card = pixels(theme.switcher_card, width, height);
+        let card = picture_pixels(theme.switcher_card, width, height);
         let info = pixels(theme.switcher_info, width, height);
         if games.is_empty() {
             let text = self.catalog.text(if self.loading {

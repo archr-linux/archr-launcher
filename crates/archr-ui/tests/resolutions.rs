@@ -18,7 +18,14 @@ use std::path::{Path, PathBuf};
 /// SDL video runs one window at a time per process.
 static SDL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-const SIZES: [(u32, u32); 3] = [(640, 480), (720, 720), (480, 320)];
+const SIZES: [(u32, u32); 6] = [
+    (640, 480),
+    (720, 720),
+    (480, 320),
+    (1024, 768),
+    (1024, 600),
+    (1280, 720),
+];
 
 fn themes_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../themes")
@@ -142,12 +149,22 @@ fn the_switcher_and_resume_pictures_stay_four_by_three_on_every_screen() {
     let theme = Theme::load(&themes_dir().join("default"));
     for size in SIZES {
         let fitted = theme.fitted(size.0, size.1);
-        for rect in [fitted.switcher_card, fitted.resume_shot] {
-            let (l, t, r, b) = px(rect, size);
-            let ratio = (r - l) as f32 / (b - t) as f32;
+        // As drawn: the theme box narrowed (or shortened) to 4:3.
+        for rect in [
+            fitted.switcher_card,
+            fitted.switcher_side,
+            fitted.resume_shot,
+        ] {
+            let drawn = archr_ui::render::picture_pixels(rect, size.0, size.1);
+            let ratio = drawn.width() as f32 / drawn.height() as f32;
             assert!(
-                (1.3..=1.6).contains(&ratio),
-                "{rect:?} is {ratio} wide at {size:?}"
+                (1.3..=1.37).contains(&ratio),
+                "{rect:?} is drawn {ratio} wide at {size:?}"
+            );
+            let (l, t, r, b) = px(rect, size);
+            assert!(
+                drawn.x() >= l && drawn.y() >= t && drawn.right() <= r && drawn.bottom() <= b,
+                "{rect:?} drawn outside its box at {size:?}"
             );
         }
     }
