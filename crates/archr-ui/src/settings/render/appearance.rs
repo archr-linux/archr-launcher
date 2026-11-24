@@ -45,23 +45,38 @@ impl View<'_, '_, '_> {
         &mut self,
         state: &Settings,
         selected: bool,
+        bounds: Bounds,
+    ) -> Result<(), String> {
+        let colors: Vec<Option<Rgba>> = state
+            .accent_choices()
+            .iter()
+            .map(|choice| {
+                if choice.is_empty() {
+                    Some(state.base_theme.highlight_bg)
+                } else {
+                    ACCENTS
+                        .iter()
+                        .position(|name| name == choice)
+                        .map(|i| rgb(ACCENT_RGB[i]))
+                }
+            })
+            .collect();
+        let ink = self.ink(selected);
+        self.dots(&colors, state.accent_index(), selected, ink, bounds)
+    }
+    /// A row of colour dots, right-aligned; a ring of `ink` marks `chosen`
+    /// and None is drawn as a colour wheel.
+    pub(super) fn dots(
+        &mut self,
+        colors: &[Option<Rgba>],
+        chosen: usize,
+        selected: bool,
+        ink: Rgba,
         (x, y, w, h): Bounds,
     ) -> Result<(), String> {
-        let choices = state.accent_choices();
-        let chosen = state.accent_index();
-        let ink = self.ink(selected);
         let behind = selection(selected, self.theme.background, self.theme.highlight_bg);
-        let dots = choices.len();
-        let mut left = x + w - (dots as f32 * 26. - 8.);
-        for (n, choice) in choices.iter().enumerate() {
-            let color = if choice.is_empty() {
-                Some(state.base_theme.highlight_bg)
-            } else {
-                ACCENTS
-                    .iter()
-                    .position(|name| name == choice)
-                    .map(|i| rgb(ACCENT_RGB[i]))
-            };
+        let mut left = x + w - (colors.len() as f32 * 26. - 8.);
+        for (n, color) in colors.iter().enumerate() {
             let (cy, ring) = (y + h / 2., n == chosen);
             if ring {
                 for (size, fill) in [(26., ink), (22., behind)] {
@@ -84,7 +99,7 @@ impl View<'_, '_, '_> {
                 Some(color) => self.ui.rounded(
                     self.rect((left, cy - 9., 18., 18.)),
                     self.ui.px(9.) as f32,
-                    color,
+                    *color,
                     None,
                 )?,
                 None => self.wheel(self.rect((left, cy - 9., 18., 18.)), behind)?,

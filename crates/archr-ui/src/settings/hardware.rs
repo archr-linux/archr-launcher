@@ -24,6 +24,10 @@ pub const LEDS: &[Row] = &[
 ];
 pub const MODES: [&str; 4] = ["off", "static", "breathing", "rainbow"];
 pub const COLORS: [&str; 7] = ["red", "green", "blue", "cyan", "yellow", "magenta", "white"];
+/// What each colour looks like on the palette.
+pub const COLOR_RGB: [u32; 7] = [
+    0xEF4444, 0x22C55E, 0x3B82F6, 0x06B6D4, 0xFACC15, 0xD946EF, 0xF8FAFC,
+];
 
 /// The modes drawn in the chosen colour; the others ignore it.
 pub fn coloured(mode: &str) -> bool {
@@ -78,6 +82,9 @@ mod tests {
         assert_eq!(state.page(), Page::Rumble);
         assert_eq!(state.value(Id::RumbleStrength), "100");
         state.cursor = 1;
+        // A palette: L and R step through it, A opens no list.
+        assert!(!state.listable(Id::LedsColor, Kind::Value));
+        assert_eq!(state.handle(Button::A), Effect::None);
         assert_eq!(
             state.handle(Button::L),
             Effect::Set(Id::RumbleStrength, "90".into())
@@ -115,6 +122,9 @@ mod tests {
         state.complete(Id::LedsMode, Ok("static".into()));
         assert!(!state.disabled(Id::LedsColor));
         state.cursor = 1;
+        // A palette: L and R step through it, A opens no list.
+        assert!(!state.listable(Id::LedsColor, Kind::Value));
+        assert_eq!(state.handle(Button::A), Effect::None);
         assert_eq!(
             state.handle(Button::L),
             Effect::Set(Id::LedsColor, "magenta".into())

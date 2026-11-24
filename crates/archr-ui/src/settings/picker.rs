@@ -85,6 +85,7 @@ impl Settings {
         kind == Kind::Value
             && count >= MIN
             && id != Id::Accent
+            && id != Id::LedsColor
             // Picture: A keeps the value, it opens no list.
             && self.page() != super::Page::Image
             && !Self::is_colour(id)

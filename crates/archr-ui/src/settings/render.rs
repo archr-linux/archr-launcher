@@ -2,8 +2,9 @@
 use super::*;
 #[path = "render/bluetooth.rs"]
 mod bluetooth;
-use crate::appearance::mix;
+use crate::appearance::{mix, rgb};
 use crate::motion::SWITCH;
+use crate::settings::hardware::{COLORS, COLOR_RGB};
 use crate::settings::{
     pages::{MEDIA, MEDIA_SECTION},
     Id, Kind, Page, Row, Settings, CATEGORIES,
@@ -2025,7 +2026,8 @@ impl View<'_, '_, '_> {
             return self.pads(&names, selected, (x, y, w, h));
         }
         let busy = state.pending == Some(id);
-        if busy && kind != Kind::Toggle {
+        // The palette stays while a colour applies: the LEDs are the preview.
+        if busy && kind != Kind::Toggle && id != Id::LedsColor {
             return self.busy_dots((x, y, w, h), selected);
         }
         if let Some(chosen) = state.savesync_radio(id) {
@@ -2062,6 +2064,23 @@ impl View<'_, '_, '_> {
                 )?;
             }
             Kind::Value if id == Id::Accent => self.swatches(state, selected, (x, y, w, h))?,
+            Kind::Value if id == Id::LedsColor => {
+                let chosen = COLORS.iter().position(|c| *c == state.value(id));
+                // Greyed out, the dots fade into the row.
+                let fade = if state.disabled(id) { 0.65 } else { 0. };
+                let behind = selection(selected, self.theme.background, self.theme.highlight_bg);
+                let colors: Vec<_> = COLOR_RGB
+                    .iter()
+                    .map(|c| Some(mix(rgb(*c), behind, fade)))
+                    .collect();
+                self.dots(
+                    &colors,
+                    chosen.unwrap_or(usize::MAX),
+                    selected,
+                    ink,
+                    (x, y, w, h),
+                )?
+            }
             Kind::Check => {
                 let (on, used) = match id {
                     Id::MediaKind(n) => {
