@@ -1614,6 +1614,64 @@ fn perf_limits_sets_only_the_kernels_own_ceilings_and_returns_the_gpu_score() {
 }
 
 #[test]
+fn perf_limits_finds_another_chips_gpu() {
+    // No PX30 GPU (ff400000.gpu); the RK3562's ff320000.gpu beside it.
+    let root = tempfile::tempdir().unwrap();
+    let base = root.path();
+    system_bin(base);
+    let path = base.join("bin/archr-perf-limits");
+    fs::write(
+        &path,
+        format!(
+            "#!/bin/sh\necho \"archr-perf-limits $*\" >> \"{}\"\n",
+            base.join("system.log").display()
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+    fs::create_dir_all(base.join("ff320000.gpu")).unwrap();
+    fs::write(
+        base.join("ff320000.gpu/available_frequencies"),
+        "900000000 800000000 300000000\n",
+    )
+    .unwrap();
+    let dir = api_2(
+        base,
+        "desempenho",
+        "system = [\"perf-limits\"]",
+        &["system:perf-limits"],
+    );
+    let toml = fs::read_to_string(dir.join("module.toml")).unwrap();
+    fs::write(
+        dir.join("module.toml"),
+        toml.replace("api_version = 2", "api_version = 3"),
+    )
+    .unwrap();
+    fs::write(
+        dir.join("go.jsonl"),
+        rpc(
+            "c1",
+            "system.call",
+            r#"{"name":"gpu_max","value":800000000}"#,
+        ),
+    )
+    .unwrap();
+    let probe = Probe::new(base);
+    ready(base, &["desempenho"]);
+    let log = base.join("module-data/desempenho/seen.log");
+    let init = fs::read_to_string(&log).unwrap();
+    assert!(
+        init.contains(r#""gpu":{"max_hz":900000000,"opps":[300000000,800000000,900000000]}"#),
+        "{init}"
+    );
+    probe.invoke("desempenho", "go");
+    let seen = until_all(&log, &["c1"]);
+    assert!(answer(&seen, "c1").contains("\"result\""), "{seen}");
+    let ran = fs::read_to_string(base.join("system.log")).unwrap();
+    assert_eq!(ran.trim(), "archr-perf-limits gpu 800000000");
+}
+
+#[test]
 fn boot_tuning_asks_only_for_voltages_in_the_regulators_steps() {
     let root = tempfile::tempdir().unwrap();
     let base = root.path();

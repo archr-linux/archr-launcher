@@ -2677,15 +2677,29 @@ impl Host {
             .is_some_and(|(_, m)| m.permissions.system.iter().any(|s| s == system))
     }
     /// The GPU ceilings a `perf-limits` module may set, in Hz, lowest first.
+    /// The PX30's GPU (`ff400000.gpu`) by default; on another chip the
+    /// `*.gpu` devfreq beside it (the RK3562's `ff320000.gpu`).
     fn gpu_opps(&self) -> Vec<u64> {
-        let mut opps: Vec<u64> =
-            fs::read_to_string(self.config.gpufreq.join("available_frequencies"))
-                .map(|list| {
-                    list.split_whitespace()
-                        .filter_map(|f| f.parse().ok())
-                        .collect()
-                })
-                .unwrap_or_default();
+        let read = |dir: &std::path::Path| fs::read_to_string(dir.join("available_frequencies"));
+        let list = read(&self.config.gpufreq).or_else(|error| {
+            self.config
+                .gpufreq
+                .parent()
+                .and_then(|devfreq| fs::read_dir(devfreq).ok())
+                .into_iter()
+                .flatten()
+                .flatten()
+                .filter(|e| e.file_name().to_string_lossy().ends_with(".gpu"))
+                .find_map(|e| read(&e.path()).ok())
+                .ok_or(error)
+        });
+        let mut opps: Vec<u64> = list
+            .map(|list| {
+                list.split_whitespace()
+                    .filter_map(|f| f.parse().ok())
+                    .collect()
+            })
+            .unwrap_or_default();
         opps.sort_unstable();
         opps.dedup();
         opps
