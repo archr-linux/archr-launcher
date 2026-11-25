@@ -11,6 +11,7 @@ mod joypad;
 pub mod launcher;
 mod levels;
 mod mangohud;
+pub use hardware::npu_systems;
 pub use mangohud::supported as mangohud_supported;
 mod pages;
 mod raimport;

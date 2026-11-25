@@ -56,7 +56,7 @@ pub struct Games {
 }
 impl Games {
     /// Rows bound to the shown system, in page order.
-    pub const ROWS: [Id; 9] = [
+    pub const ROWS: [Id; 10] = [
         Id::Emulator,
         Id::Core,
         Id::Ratio,
@@ -65,6 +65,7 @@ impl Games {
         Id::StateSlot,
         Id::MangohudGame,
         Id::GraphicsBackend,
+        Id::NpuUpscale,
         Id::GameSystem,
     ];
     pub fn current(&self) -> Option<&GameSystem> {
@@ -112,6 +113,9 @@ impl Games {
         let Some(system) = self.current() else {
             return false;
         };
+        if id == Id::NpuUpscale {
+            return state.npu_systems.contains(&system.name);
+        }
         matches!(
             id,
             Id::Emulator | Id::Core | Id::MangohudGame | Id::GraphicsBackend | Id::GameSystem
@@ -160,6 +164,7 @@ impl Settings {
             Id::StateSlot,
             Id::MangohudGame,
             Id::GraphicsBackend,
+            Id::NpuUpscale,
         ] {
             values.push((id, saved(id).unwrap_or_else(|| id.default_value().into())));
         }
@@ -266,6 +271,30 @@ mod tests {
         assert!(!ids(&state).contains(&Id::Ratio));
         assert!(!ids(&state).contains(&Id::Autosave));
         assert!(ids(&state).contains(&Id::GameSystem));
+    }
+    #[test]
+    fn npu_upscaling_shows_only_for_the_systems_the_npu_lists() {
+        let mut state = state();
+        // No NPU: no row on any system.
+        assert!(!ids(&state).contains(&Id::NpuUpscale));
+        state.npu_systems = vec!["n64".into()];
+        assert!(!ids(&state).contains(&Id::NpuUpscale), "snes is not listed");
+        state.show_system(1);
+        assert!(ids(&state).contains(&Id::NpuUpscale));
+        assert_eq!(state.value(Id::NpuUpscale), "auto");
+        state.cursor = ids(&state)
+            .iter()
+            .position(|id| *id == Id::NpuUpscale)
+            .unwrap();
+        assert_eq!(
+            state.handle(Button::R),
+            Effect::Set(Id::NpuUpscale, "x2".into())
+        );
+        state.complete(Id::NpuUpscale, Ok("x2".into()));
+        assert_eq!(state.games.current().unwrap().saved[&Id::NpuUpscale], "x2");
+        state.show_system(0);
+        state.show_system(1);
+        assert_eq!(state.value(Id::NpuUpscale), "x2");
     }
     #[test]
     fn switching_systems_is_local_and_waits_for_a_pending_write() {

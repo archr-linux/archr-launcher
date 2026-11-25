@@ -217,6 +217,12 @@ pub enum Outcome {
         game: usize,
         value: String,
     },
+    /// This game's NPU upscaling: one of `NPU_GAME`, "" to follow the system.
+    SetNpu {
+        system: String,
+        game: usize,
+        value: String,
+    },
     Action(SessionAction),
     /// Replaces the saved system order; empty restores the default order.
     SetOrder(Vec<String>),
@@ -266,6 +272,8 @@ pub enum QuickItem {
     Core,
     /// This game's MangoHud, over the system's choice.
     Mangohud,
+    /// This game's AI upscaling on the NPU, over the system's choice.
+    Npu,
     Move,
     RestoreOrder,
     /// Take the system the menu was opened on off the systems screen.
@@ -328,6 +336,14 @@ pub trait DataSource {
     /// the system's, as a launch would resolve it without the game's.
     fn mangohud(&self, _system: &str, _game: usize) -> (String, String) {
         (String::new(), String::new())
+    }
+    /// This game's NPU upscaling ("" when it follows the system), and the
+    /// system's.
+    fn npu(&self, _system: &str, _game: usize) -> (String, String) {
+        (
+            String::new(),
+            crate::settings::Id::NpuUpscale.default_value().into(),
+        )
     }
     /// `system/relative/path.rom`, the key favorites and modules use.
     fn game_key(&self, _system: &str, _game: usize) -> Option<String> {
@@ -428,6 +444,8 @@ pub struct App {
     pub cheevos: bool,
     /// The device runs MangoHud: the game menu offers it per game.
     pub mangohud: bool,
+    /// Systems with AI upscaling on the NPU: the game menu offers it per game.
+    pub npu_systems: Vec<String>,
     /// The achievements screen's list, filled by the host.
     pub sheet: crate::cheevos::Sheet,
     /// Achievements per page, reported by the renderer (theme layout).
@@ -501,6 +519,18 @@ pub struct App {
     cores_mixed: bool,
     /// The open game menu's MangoHud: the game's value, the system's.
     selected_mangohud: (String, String),
+    /// The open game menu's NPU upscaling: the game's value, the system's.
+    selected_npu: (String, String),
+}
+
+/// A game's NPU upscaling: as the system (""), then the system's choices.
+pub const NPU_GAME: [&str; 5] = ["", "off", "auto", "x2", "x3"];
+
+/// The choice after (R) or before (L) `current`, wrapping around.
+fn stepped(choices: &[&str], current: &str, b: Button) -> String {
+    let at = choices.iter().position(|v| *v == current).unwrap_or(0);
+    let step = if b == Button::L { choices.len() - 1 } else { 1 };
+    choices[(at + step) % choices.len()].to_owned()
 }
 
 /// The picture above or below `at` in a grid of `columns` whose last
@@ -559,6 +589,7 @@ impl App {
             rescraping: false,
             cheevos: false,
             mangohud: false,
+            npu_systems: Vec::new(),
             sheet: crate::cheevos::Sheet::default(),
             sheet_page: 1,
             updates: 0,
@@ -573,6 +604,7 @@ impl App {
             selected_core: None,
             cores_mixed: false,
             selected_mangohud: Default::default(),
+            selected_npu: Default::default(),
             modules: std::sync::Arc::default(),
             hub_widget: 0,
             progress: Progress::default(),
@@ -675,6 +707,9 @@ impl App {
         if self.mangohud {
             items.push(Mangohud);
         }
+        if self.npu_systems.iter().any(|name| name == system) {
+            items.push(Npu);
+        }
         if self.on_recent_list() {
             items.push(ForgetRecent);
         }
@@ -775,6 +810,10 @@ impl App {
     /// The game menu's MangoHud row: the game's value and the system's.
     pub fn selected_mangohud(&self) -> (&str, &str) {
         (&self.selected_mangohud.0, &self.selected_mangohud.1)
+    }
+    /// The game menu's NPU upscaling row: the game's value and the system's.
+    pub fn selected_npu(&self) -> (&str, &str) {
+        (&self.selected_npu.0, &self.selected_npu.1)
     }
     /// The game menu's core as the player reads it: "Default", the core's
     /// name, and in a system with both kinds "ppsspp (RetroArch)" or
@@ -1148,6 +1187,17 @@ impl App {
                             return self.cycle_mangohud(b, system, game);
                         }
                     }
+                    (Button::L | Button::R, Some(QuickItem::Npu)) => {
+                        if let Some((system, game)) = game {
+                            let value = stepped(&NPU_GAME, &self.selected_npu.0, b);
+                            self.selected_npu.0.clone_from(&value);
+                            return Outcome::SetNpu {
+                                system,
+                                game,
+                                value,
+                            };
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -1242,6 +1292,7 @@ impl App {
         self.cores_mixed = cores.iter().any(|(e, _)| e == "retroarch")
             && cores.iter().any(|(e, _)| e != "retroarch");
         self.selected_mangohud = data.mangohud(&system, game);
+        self.selected_npu = data.npu(&system, game);
         self.enter(Screen::QuickMenu {
             game: Some((system, game)),
         });
@@ -1527,12 +1578,7 @@ impl App {
     /// "" (as the system), on, off: the system's own choices.
     fn cycle_mangohud(&mut self, b: Button, system: String, game: usize) -> Outcome {
         let choices = crate::settings::Id::MangohudGame.choices();
-        let at = choices
-            .iter()
-            .position(|v| *v == self.selected_mangohud.0)
-            .unwrap_or(0);
-        let step = if b == Button::L { choices.len() - 1 } else { 1 };
-        let value = choices[(at + step) % choices.len()].to_owned();
+        let value = stepped(choices, &self.selected_mangohud.0, b);
         self.selected_mangohud.0.clone_from(&value);
         Outcome::SetMangohud {
             system,

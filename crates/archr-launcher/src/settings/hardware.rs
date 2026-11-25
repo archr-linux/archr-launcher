@@ -1,11 +1,13 @@
 //! Vibration and stick LEDs: archr-rumble and archr-stick-leds read their
 //! system.cfg keys on `apply`. `supported` runs once per launcher; a missing
-//! tool or a failing answer keeps both pages away (R36S, PC).
-use super::Backend;
+//! tool or a failing answer keeps both pages away (R36S, PC). npu-upscale
+//! names the systems with AI upscaling the same way.
+use super::{Backend, Paths};
 use archr_ui::settings::{Id, Settings};
 use std::time::Duration;
 
 const TIMEOUT: Duration = Duration::from_secs(5);
+const NPU_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// The tool that owns a row's key.
 fn owner(id: Id) -> Option<&'static str> {
@@ -14,6 +16,23 @@ fn owner(id: Id) -> Option<&'static str> {
         Id::LedsMode | Id::LedsColor | Id::LedsBrightness => Some("archr-stick-leds"),
         _ => None,
     }
+}
+
+/// Systems with AI upscaling on the NPU, asked once per launcher run: none
+/// unless `npu-upscale supported` succeeds (AISLPC RK3562 today).
+pub fn npu_systems(paths: &Paths) -> Vec<String> {
+    let backend = Backend::new(paths.clone());
+    let ask = |what| backend.command_with_timeout("npu-upscale", &[what], NPU_TIMEOUT);
+    if ask("supported").is_err() {
+        return Vec::new();
+    }
+    ask("systems")
+        .unwrap_or_default()
+        .lines()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned)
+        .collect()
 }
 
 impl Backend {

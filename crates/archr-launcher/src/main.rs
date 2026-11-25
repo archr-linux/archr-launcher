@@ -251,6 +251,11 @@ fn run(
     app.netplay = netplay_on;
     app.cheevos = cheevos_on;
     app.mangohud = mangohud_on;
+    // AI upscaling on the NPU: asked once, beside the first frames.
+    let mut npu = Some({
+        let paths = paths.clone();
+        std::thread::spawn(move || archr_launcher::settings::npu_systems(&paths))
+    });
     // The switcher waits for the records; the resume for its game's system.
     let mut records = None;
     // The shelves' recent games: the same records, read once and kept, and
@@ -1021,6 +1026,16 @@ fn run(
             app.cheevos =
                 settings.state.value(Id::Cheevos) == "1" && !settings.state.cheevos.user.is_empty();
             app.mangohud = settings.state.mangohud_supported;
+        }
+        if npu
+            .as_ref()
+            .is_some_and(std::thread::JoinHandle::is_finished)
+        {
+            if let Some(Ok(systems)) = npu.take().map(std::thread::JoinHandle::join) {
+                settings.state.npu_systems.clone_from(&systems);
+                app.npu_systems = systems;
+                dirty = true;
+            }
         }
         if let Some((system, game)) = app.scan.take() {
             if let Some(game) = library.progress_game(&system, game) {

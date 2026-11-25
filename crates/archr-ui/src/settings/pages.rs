@@ -66,6 +66,11 @@ pub const GAMES: &[Row] = &[
     row(Id::MangohudGame, "settings.mangohud", Kind::Value),
     row(Id::GraphicsBackend, "settings.renderer", Kind::Value),
     described(
+        Id::NpuUpscale,
+        "settings.npu_upscale",
+        "settings.npu_upscale_detail",
+    ),
+    described(
         Id::PreviewVideo,
         "settings.preview_video",
         "settings.preview_video_detail",

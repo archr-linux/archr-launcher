@@ -58,7 +58,7 @@ impl Backend {
                         saved.insert(id, value);
                     }
                 }
-                for id in [Id::MangohudGame, Id::GraphicsBackend] {
+                for id in [Id::MangohudGame, Id::GraphicsBackend, Id::NpuUpscale] {
                     if let Some(value) = cfg.get_local(name, None, id.key()) {
                         saved.insert(id, value);
                     }
@@ -134,7 +134,7 @@ impl Backend {
                 }
                 vec![(key(id), value)]
             }
-            _ if (matches!(id, Id::MangohudGame | Id::GraphicsBackend)
+            _ if (matches!(id, Id::MangohudGame | Id::GraphicsBackend | Id::NpuUpscale)
                 || OPTIONS.iter().any(|(o, _)| *o == id))
                 && id.choices().contains(&value) =>
             {
@@ -328,6 +328,21 @@ mod tests {
         );
         assert_eq!(saved(&backend), "snes.graphics_backend=\n");
         assert_eq!(games(&backend)[0].saved[&Id::GraphicsBackend], "");
+    }
+    #[test]
+    fn npu_upscaling_is_saved_per_system_under_the_key_npu_upscale_reads() {
+        let (_root, backend) = fixture("", None);
+        assert!(!games(&backend)[0].saved.contains_key(&Id::NpuUpscale));
+        assert_eq!(
+            backend.apply_game("snes", Id::NpuUpscale, "x3"),
+            Ok("x3".into())
+        );
+        assert_eq!(saved(&backend), "snes.npu_upscale=x3\n");
+        assert_eq!(games(&backend)[0].saved[&Id::NpuUpscale], "x3");
+        for value in ["", "x4", "x2\nsnes.core=snes9x"] {
+            assert!(backend.apply_game("snes", Id::NpuUpscale, value).is_err());
+        }
+        assert_eq!(saved(&backend), "snes.npu_upscale=x3\n");
     }
     #[test]
     fn vulkan_is_offered_only_with_panfrost_bound() {

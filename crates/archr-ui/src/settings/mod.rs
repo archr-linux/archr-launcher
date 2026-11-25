@@ -396,6 +396,9 @@ pub enum Id {
     MangohudGame,
     /// Per-system renderer on the Games page: GLES or Vulkan (PanVK).
     GraphicsBackend,
+    /// AI upscaling on the NPU, per system on the Games page and per game
+    /// in its menu; only for the systems `npu-upscale systems` lists.
+    NpuUpscale,
     Mangohud,
     MangohudShow,
     MangohudLayout,
@@ -654,6 +657,8 @@ impl Id {
             // `<system>.graphics_backend`, read by setsettings.sh and the
             // standalone start scripts; libmali turns vulkan into GL.
             Self::GraphicsBackend => ("graphics_backend", ""),
+            // `<system>.npu_upscale`, read by npu-upscale at launch.
+            Self::NpuUpscale => ("npu_upscale", "auto"),
             Self::Mangohud => ("archr.mangohud.enabled", "0"),
             Self::MangohudShow => ("archr.mangohud.state", "0"),
             Self::MangohudLayout => ("archr.mangohud.layout", "compact"),
@@ -931,6 +936,7 @@ impl Id {
             Self::UpdateChannel => &["stable"],
             Self::MangohudGame => &["", "1", "0"],
             Self::GraphicsBackend => &["", "opengl", "vulkan"],
+            Self::NpuUpscale => &NPU_UPSCALE,
             Self::Filter | Self::StateSlot => &["", "0", "1"],
             Self::MangohudLayout => &mangohud::LAYOUTS,
             Self::MangohudPosition => &mangohud::POSITIONS,
@@ -1025,6 +1031,17 @@ impl Row {
     }
     const fn kind(self, kind: Kind) -> Self {
         Self { kind, ..self }
+    }
+}
+/// The NPU upscaling choices, in the order L/R steps them.
+pub const NPU_UPSCALE: [&str; 4] = ["off", "auto", "x2", "x3"];
+/// The catalog key naming an NPU upscaling value.
+pub fn npu_label(value: &str) -> &'static str {
+    match value {
+        "off" => "settings.off",
+        "x2" => "settings.npu_x2",
+        "x3" => "settings.npu_x3",
+        _ => "settings.npu_auto",
     }
 }
 const fn row(id: Id, label: &'static str, kind: Kind) -> Row {
@@ -1345,6 +1362,8 @@ pub struct Settings {
     /// `archr-rumble supported` and `archr-stick-leds supported` succeeded.
     pub rumble_supported: bool,
     pub leds_supported: bool,
+    /// Systems `npu-upscale systems` lists, asked once; empty without the NPU.
+    pub npu_systems: Vec<String>,
     /// Layout and items when the items page opened, to save or restore.
     pub mangohud_saved: (String, String),
     /// The clock being set on the Date and time page.
@@ -1430,6 +1449,7 @@ impl Default for Settings {
             vulkan_supported: false,
             rumble_supported: false,
             leds_supported: false,
+            npu_systems: Vec::new(),
             mangohud_saved: Default::default(),
             clock_draft: None,
             capture: None,
@@ -1696,6 +1716,7 @@ impl Settings {
             (Id::GraphicsBackend, "opengl") => return "GLES".into(),
             (Id::GraphicsBackend, "vulkan") => return "Vulkan".into(),
             (Id::GraphicsBackend, _) => "settings.renderer_default",
+            (Id::NpuUpscale, v) => npu_label(v),
             (
                 Id::MangohudLayout
                 | Id::MangohudItems

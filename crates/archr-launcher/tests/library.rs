@@ -159,6 +159,38 @@ fn mangohud_per_game_is_saved_under_the_rom_and_removed_to_follow_the_system() {
 }
 
 #[test]
+fn npu_upscaling_per_game_is_saved_under_the_rom_over_the_systems_choice() {
+    let (_dir, paths) = fixture();
+    let mut library = ready(&paths, Some("nes"));
+    // Unsaved anywhere: the system's default, auto.
+    assert_eq!(library.npu("nes", 0), (String::new(), "auto".into()));
+    fs::write(&paths.config, "nes.npu_upscale=off\n").unwrap();
+    let mut library = ready(&paths, Some("nes"));
+    assert_eq!(library.npu("nes", 0), (String::new(), "off".into()));
+    for (value, line) in [("x2", Some("nes[\"A.nes\"].npu_upscale=x2")), ("", None)] {
+        library
+            .handle(
+                Outcome::SetNpu {
+                    system: "nes".into(),
+                    game: 0,
+                    value: value.into(),
+                },
+                "",
+            )
+            .unwrap();
+        assert_eq!(library.npu("nes", 0).0, value);
+        wait(&mut library, |library| library.pending_writes == 0);
+        assert!(!library.write_failed);
+        let saved = fs::read_to_string(&paths.config).unwrap();
+        assert_eq!(saved.contains("nes[\"A.nes\"]"), line.is_some(), "{saved}");
+        if let Some(line) = line {
+            assert!(saved.contains(line), "{saved}");
+        }
+        assert!(saved.contains("nes.npu_upscale=off"), "{saved}");
+    }
+}
+
+#[test]
 fn launch_requires_final_store_flush_before_publishing_next() {
     let (_dir, paths) = fixture();
     let mut library = ready(&paths, Some("nes"));

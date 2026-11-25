@@ -1109,6 +1109,50 @@ fn mangohud_row_steps_through_the_systems_choices_for_this_game() {
     assert_eq!(app.handle(Button::A, &data), Outcome::None);
 }
 
+#[test]
+fn npu_row_shows_only_for_listed_systems_and_steps_this_games_choice() {
+    let data = FakeData::library();
+    let mut app = in_games("snes", 7);
+    app.npu_systems = vec!["psp".into()];
+    app.handle(Button::Y, &data);
+    assert!(!app.quick_menu_items(&data).contains(&QuickItem::Npu));
+    app.handle(Button::B, &data);
+    app.npu_systems = vec!["psp".into(), "snes".into()];
+    app.handle(Button::Y, &data);
+    assert_eq!(
+        app.quick_menu_items(&data),
+        [
+            QuickItem::Core,
+            QuickItem::Details,
+            QuickItem::Npu,
+            QuickItem::Search,
+            QuickItem::Folders,
+            QuickItem::FavoritesFirst
+        ]
+    );
+    assert_eq!(app.selected_npu(), ("", "auto"));
+    app.handle(Button::Down, &data);
+    app.handle(Button::Down, &data);
+    for (button, value) in [
+        (Button::R, "off"),
+        (Button::R, "auto"),
+        (Button::R, "x2"),
+        (Button::R, "x3"),
+        (Button::R, ""),
+        (Button::L, "x3"),
+    ] {
+        assert_eq!(
+            app.handle(button, &data),
+            Outcome::SetNpu {
+                system: "snes".into(),
+                game: 7,
+                value: value.into()
+            }
+        );
+        assert_eq!(app.selected_npu().0, value);
+    }
+}
+
 mod progress {
     use super::*;
     use archr_ui::saves::{Blocked, Kind, Progress, Save, Shot};

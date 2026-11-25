@@ -253,6 +253,7 @@ pub(super) fn quick_key(item: &QuickItem) -> &'static str {
         QuickItem::Netplay => "netplay.menu",
         QuickItem::Core => "menu.core",
         QuickItem::Mangohud => "menu.mangohud",
+        QuickItem::Npu => "menu.npu",
         QuickItem::Move => "menu.move",
         QuickItem::RestoreOrder => "menu.restore_order",
         QuickItem::Hide => "menu.hide",
@@ -2715,7 +2716,10 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         // Rows with a value are taller: the core's, and MangoHud's subtitle.
         let extra = |item: &QuickItem| match item {
             QuickItem::Core => 4.,
-            QuickItem::Mangohud | QuickItem::Folders | QuickItem::FavoritesFirst => 6.,
+            QuickItem::Mangohud
+            | QuickItem::Npu
+            | QuickItem::Folders
+            | QuickItem::FavoritesFirst => 6.,
             _ => 0.,
         };
         let has_core = matches!(items.first(), Some(QuickItem::Core));
@@ -2732,6 +2736,11 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             + if has_divider { 10. } else { 0. }
             + if has_core { 2. } else { 0. }
             + if items.contains(&QuickItem::Mangohud) {
+                6.
+            } else {
+                0.
+            }
+            + if items.contains(&QuickItem::Npu) {
                 6.
             } else {
                 0.
@@ -2926,6 +2935,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             let value = match item {
                 QuickItem::Core => Some(app.selected_core().1),
                 QuickItem::Mangohud => Some(app.selected_mangohud().0),
+                QuickItem::Npu => Some(app.selected_npu().0),
                 _ => None,
             };
             let Some(value) = value else {
@@ -2938,18 +2948,21 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             };
             let value = match (item, value) {
                 (QuickItem::Core, _) => app.core_label(&self.catalog),
-                (QuickItem::Mangohud, "") => self.catalog.text("menu.as_system"),
+                (QuickItem::Mangohud | QuickItem::Npu, "") => self.catalog.text("menu.as_system"),
+                (QuickItem::Npu, value) => self.catalog.text(crate::settings::npu_label(value)),
                 (QuickItem::Mangohud, "1") => self.catalog.text("settings.on"),
                 (QuickItem::Mangohud, _) => self.catalog.text("settings.off"),
                 (_, value) => value.to_owned(),
             };
-            // MangoHud says whose choice this is: the game's, over the system's.
-            let detail = (*item == QuickItem::Mangohud).then(|| {
-                let system = if app.selected_mangohud().1 == "1" {
-                    "settings.on"
-                } else {
-                    "settings.off"
-                };
+            // MangoHud and NPU upscaling say whose choice this is: the
+            // game's, over the system's.
+            let system = match item {
+                QuickItem::Mangohud if app.selected_mangohud().1 == "1" => Some("settings.on"),
+                QuickItem::Mangohud => Some("settings.off"),
+                QuickItem::Npu => Some(crate::settings::npu_label(app.selected_npu().1)),
+                _ => None,
+            };
+            let detail = system.map(|system| {
                 let system = self.catalog.text(system);
                 self.catalog
                     .format("menu.mangohud_detail", &[("system", &system)])

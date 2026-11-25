@@ -732,6 +732,27 @@ fn vibration_and_stick_leds_show_only_where_their_tools_say_supported() {
 }
 
 #[test]
+fn npu_upscaling_is_offered_only_where_npu_upscale_says_supported() {
+    use archr_launcher::settings::npu_systems;
+    let (dir, _backend) = fixture();
+    let paths = Paths::new(Some(dir.path().to_owned()));
+    // No tool (R36S, PC), or a board without the NPU stack: no systems.
+    assert!(npu_systems(&paths).is_empty());
+    script(
+        &dir,
+        "npu-upscale",
+        "[ \"$1\" = supported ] && exit 1; echo psp",
+    );
+    assert!(npu_systems(&paths).is_empty());
+    script(
+        &dir,
+        "npu-upscale",
+        "[ \"$1\" = systems ] && printf 'psp\\n\\n snes \\n'; exit 0",
+    );
+    assert_eq!(npu_systems(&paths), ["psp", "snes"]);
+}
+
+#[test]
 fn vibration_and_stick_leds_save_then_apply_and_test() {
     let (dir, backend) = fixture();
     let log = dir.path().join("hw.log");

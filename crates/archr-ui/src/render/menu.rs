@@ -28,6 +28,7 @@ fn glyph(item: &QuickItem) -> Glyph {
         QuickItem::Netplay => Glyph::Globe,
         QuickItem::Core => Glyph::Cpu,
         QuickItem::Mangohud => Glyph::Gpu,
+        QuickItem::Npu => Glyph::Image,
         QuickItem::Move => Glyph::ArrowUpDown,
         QuickItem::RestoreOrder => Glyph::List,
         QuickItem::Hide => Glyph::EyeOff,
@@ -376,6 +377,10 @@ impl Ui<'_, '_> {
                     "" => "menu.as_system",
                     "1" => "settings.on",
                     _ => "settings.off",
+                })),
+                QuickItem::Npu => Some(self.catalog.text(match app.selected_npu().0 {
+                    "" => "menu.as_system",
+                    value => crate::settings::npu_label(value),
                 })),
                 _ => None,
             };

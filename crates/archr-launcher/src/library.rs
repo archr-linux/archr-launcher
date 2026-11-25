@@ -39,6 +39,8 @@ pub struct Library {
     overrides: HashMap<(String, String), (String, String)>,
     /// MangoHud chosen per game, until system.cfg is read back.
     mangohud: HashMap<(String, String), String>,
+    /// NPU upscaling chosen per game, likewise.
+    npu: HashMap<(String, String), String>,
     store: Store,
     store_writer: Option<StoreWriter>,
     worker: Option<Worker>,
@@ -114,6 +116,7 @@ impl Library {
             config: None,
             overrides: HashMap::new(),
             mangohud: HashMap::new(),
+            npu: HashMap::new(),
             store,
             store_writer: None,
             worker: None,
@@ -412,6 +415,7 @@ impl Library {
                             let key = (system, rom);
                             self.overrides.remove(&key);
                             self.mangohud.remove(&key);
+                            self.npu.remove(&key);
                             log::warn!("Cannot save the game's setting: {error}");
                             self.banner = Some(Message::new(banner));
                             self.write_failed = true;
@@ -501,6 +505,17 @@ impl Library {
                     .insert((system.clone(), rom.clone()), value.clone());
                 let entries = vec![(MANGOHUD, value)];
                 self.save_game(system, rom, entries, "error.mangohud_save")?;
+            }
+            Outcome::SetNpu {
+                system,
+                game,
+                value,
+            } => {
+                let rom = self.rom_name(&system, game)?;
+                self.npu
+                    .insert((system.clone(), rom.clone()), value.clone());
+                let entries = vec![(NPU, value)];
+                self.save_game(system, rom, entries, "error.npu_save")?;
             }
             Outcome::MoonlightStream(stream) => {
                 let command = crate::moonlight::stream_command(&self.paths, &stream)?;
@@ -785,6 +800,8 @@ impl Library {
 }
 /// The key runemu.sh reads, per game first (`get_setting` with the ROM).
 const MANGOHUD: &str = "archr.mangohud.enabled";
+/// `<system>["<rom>"].npu_upscale`, then `<system>.npu_upscale`.
+const NPU: &str = "npu_upscale";
 impl DataSource for Library {
     fn systems(&self) -> &[SystemEntry] {
         &self.overview.systems
@@ -897,5 +914,19 @@ impl DataSource for Library {
         let on = config.and_then(|cfg| cfg.get_setting(MANGOHUD, Some(system), None));
         let system = if on.as_deref() == Some("1") { "1" } else { "0" };
         (own, system.to_owned())
+    }
+    fn npu(&self, system: &str, game: usize) -> (String, String) {
+        let rom = self.rom_name(system, game).unwrap_or_default();
+        let config = self.config.as_ref();
+        let own = self
+            .npu
+            .get(&(system.to_owned(), rom.clone()))
+            .cloned()
+            .or_else(|| config.and_then(|cfg| cfg.get_game(system, &rom, NPU)))
+            .unwrap_or_default();
+        let shared = config
+            .and_then(|cfg| cfg.get_local(system, None, NPU))
+            .unwrap_or_else(|| archr_ui::settings::Id::NpuUpscale.default_value().into());
+        (own, shared)
     }
 }
