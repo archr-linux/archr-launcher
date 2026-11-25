@@ -207,7 +207,8 @@ impl<'a> CoverCache<'a> {
     }
     /// With `pixel`, pictures are scaled without smoothing (pixel art); the
     /// caller gives such a cache its own `dir`. A (0, 0) size keeps every
-    /// picture as it is (theme images), and the cache holds 64 of them.
+    /// picture as it is (theme images), and the cache holds 64 of them; any
+    /// cache grows to hold the most asked for at once.
     pub fn scaled(
         creator: &'a TextureCreator<WindowContext>,
         dir: PathBuf,
@@ -261,17 +262,24 @@ impl<'a> CoverCache<'a> {
         self.queue(paths.iter().map(Vec::as_slice));
     }
 
+    /// What is asked for now is the newest and always fits: the oldest
+    /// entries make room, never one still on screen.
     fn queue<'p>(&mut self, paths: impl Iterator<Item = &'p [PathBuf]>) {
-        let missing: Vec<_> = paths
-            .filter(|paths| {
-                paths.first().is_some_and(|key| {
-                    !self.pending.contains(key)
-                        && !self.textures.iter().any(|(cached, _)| cached == key)
-                })
-            })
-            .take(5)
-            .map(<[PathBuf]>::to_vec)
-            .collect();
+        let mut asked = 0;
+        let mut missing = Vec::new();
+        for paths in paths {
+            let Some(key) = paths.first() else {
+                continue;
+            };
+            asked += 1;
+            if let Some(index) = self.textures.iter().position(|(cached, _)| cached == key) {
+                let entry = self.textures.remove(index).expect("located cover");
+                self.textures.push_back(entry);
+            } else if missing.len() < 5 && !self.pending.contains(key) {
+                missing.push(paths.to_vec());
+            }
+        }
+        self.capacity = self.capacity.max(asked);
         if !missing.is_empty() && self.requests.try_send(missing.clone()).is_ok() {
             self.pending.extend(
                 missing
@@ -450,6 +458,58 @@ mod tests {
             (255, 0, 0),
             "hard edges"
         );
+    }
+    /// A grid asks for the selection and twelve covers on each side; the
+    /// Tools of a console with many emulators list more than the cache
+    /// used to hold, and every move reloaded the covers on screen.
+    #[test]
+    fn a_window_wider_than_the_cache_loads_once_and_moves_load_only_the_new() {
+        let _sdl = crate::SDL_TEST_LOCK.lock().unwrap();
+        std::env::set_var("SDL_VIDEODRIVER", "offscreen");
+        let ui = crate::render::Ui::new(640, 480, true).unwrap();
+        let creator = ui.canvas.texture_creator();
+        let dir = tempfile::tempdir().unwrap();
+        let paths: Vec<PathBuf> = (0..40)
+            .map(|n| {
+                let path = dir.path().join(format!("{n}.png"));
+                image::RgbaImage::new(4, 4).save(&path).unwrap();
+                path
+            })
+            .collect();
+        let mut covers = CoverCache::new(&creator, dir.path().join("thumbs"), 8, 8);
+        // The selection first, then its neighbours, as the launcher asks.
+        let window = |cursor: usize| -> Vec<PathBuf> {
+            std::iter::once(cursor)
+                .chain(cursor.saturating_sub(12)..=cursor + 12)
+                .map(|n| paths[n].clone())
+                .collect()
+        };
+        let mut loads = |covers: &mut CoverCache, cursor: usize| {
+            let wanted = window(cursor);
+            let mut loads = 0;
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            for _ in 0..200 {
+                covers.request(&wanted);
+                loads += usize::from(covers.poll());
+                assert!(std::time::Instant::now() < deadline, "never settled");
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            assert!(
+                wanted.iter().all(|path| covers.has(path)),
+                "every cover asked for is kept"
+            );
+            loads
+        };
+        assert!(loads(&mut covers, 12) > 0, "the first window loads");
+        assert_eq!(loads(&mut covers, 12), 0, "a still window loads nothing");
+        for cursor in 13..20 {
+            assert_eq!(
+                loads(&mut covers, cursor),
+                1,
+                "only the new one at {cursor}"
+            );
+            assert_eq!(loads(&mut covers, cursor), 0, "settled at {cursor}");
+        }
     }
     #[test]
     fn theme_pictures_stay_small_and_within_the_budget() {
