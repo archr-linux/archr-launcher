@@ -393,6 +393,10 @@ const CONFIG_KEYS: &[&str] = &[
     "game.memory_guard",
     "memory.zram",
     "memory.ramplus",
+    // Stick LEDs (Controls).
+    "leds.sticks.brightness",
+    "leds.sticks.color",
+    "leds.sticks.mode",
     // Module protocol methods and events, store hosts and file names.
     "action.invoke",
     "config.get",
