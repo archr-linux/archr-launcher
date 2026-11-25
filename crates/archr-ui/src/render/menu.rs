@@ -29,6 +29,7 @@ fn glyph(item: &QuickItem) -> Glyph {
         QuickItem::Core => Glyph::Cpu,
         QuickItem::Mangohud => Glyph::Gpu,
         QuickItem::Npu => Glyph::Image,
+        QuickItem::Compat => Glyph::Puzzle,
         QuickItem::Move => Glyph::ArrowUpDown,
         QuickItem::RestoreOrder => Glyph::List,
         QuickItem::Hide => Glyph::EyeOff,
@@ -382,6 +383,7 @@ impl Ui<'_, '_> {
                     "" => "menu.as_system",
                     value => crate::settings::npu_label(value),
                 })),
+                QuickItem::Compat => Some(self.catalog.text(super::compat_texts(app).0)),
                 _ => None,
             };
             let tx = icon.right() + px(self, 12.);

@@ -256,6 +256,7 @@ fn run(
         let paths = paths.clone();
         std::thread::spawn(move || archr_launcher::settings::npu_systems(&paths))
     });
+    app.compat = archr_launcher::settings::compat_supported(&paths);
     // The switcher waits for the records; the resume for its game's system.
     let mut records = None;
     // The shelves' recent games: the same records, read once and kept, and

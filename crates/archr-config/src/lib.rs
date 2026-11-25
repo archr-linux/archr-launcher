@@ -96,6 +96,14 @@ impl SystemCfg {
         })
     }
 
+    /// Every `key=value` line, in file order (comments and blanks skipped).
+    pub fn entries(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.lines.iter().filter_map(|line| {
+            let line = split_line_ending(line).0;
+            (!line.trim_start().starts_with('#')).then(|| line.split_once('='))?
+        })
+    }
+
     fn entry(&self, key: &str) -> Option<&str> {
         self.lines.iter().find_map(|line| entry_value(line, key))
     }

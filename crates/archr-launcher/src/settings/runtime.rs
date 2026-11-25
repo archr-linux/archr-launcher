@@ -419,6 +419,7 @@ impl Runtime {
             Effect::SendReport(name) => self.send(Work::SendReport(name)),
             Effect::BiosInstall(free) => self.send(Work::BiosInstall(free)),
             Effect::SaveSync(action) => self.send(Work::SaveSync(action)),
+            Effect::Compat(action) => self.send(Work::Compat(action)),
             Effect::Module(request) => return Outcome::Module(request),
             Effect::Reboot => return Outcome::Action(SessionAction::Reboot),
             Effect::Launcher(action) => return Outcome::Launcher(action),
@@ -521,6 +522,11 @@ impl Runtime {
         {
             self.state.raimport.scanning = true;
             self.send(Work::RaScan);
+            dirty = true;
+        }
+        if self.active && !self.closing && self.state.compat_wants_look() {
+            self.state.compat.looking = true;
+            self.send(Work::Compat(archr_ui::settings::compat::Action::Look));
             dirty = true;
         }
         if self.active && !self.closing && self.state.diag_wants_scan() {

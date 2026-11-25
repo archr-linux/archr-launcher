@@ -8,6 +8,7 @@ use std::time::Instant;
 pub mod bios;
 pub mod bluetooth;
 pub mod cheevos;
+pub mod compat;
 mod controls;
 pub mod datetime;
 pub use controls::Capture;
@@ -28,11 +29,11 @@ pub(crate) mod pages;
 pub mod picker;
 use bluetooth::{Action, Device};
 pub use pages::MEDIA;
+pub(crate) mod ingame;
 pub mod modules;
 pub mod raimport;
 pub mod reports;
 pub(crate) mod resume;
-pub(crate) mod ingame;
 pub mod roms;
 pub mod savesync;
 pub mod shortcuts;
@@ -128,6 +129,8 @@ pub enum Page {
     /// Settings › Launcher (Config-launcher), and its log viewer.
     Launcher,
     LauncherLog,
+    /// System › Port compatibility (Compat-ports).
+    Compat,
     Soon(&'static str),
 }
 impl Page {
@@ -186,6 +189,7 @@ impl Page {
             Self::PadCalibrate => "pad.calibrate",
             Self::Launcher => "launcher.title",
             Self::LauncherLog => "launcher.log_title",
+            Self::Compat => "compat.title",
             Self::Soon(key) => key,
         }
     }
@@ -205,6 +209,7 @@ impl Page {
             | Self::ModuleStore
             | Self::RaImport
             | Self::Diagnostics
+            | Self::Compat
             | Self::ErrorReports => &["settings.system"],
             Self::PadTest | Self::Rumble | Self::StickLeds => &["settings.controls"],
             Self::ReportText => &["settings.system", "reports.title"],
@@ -217,9 +222,7 @@ impl Page {
             Self::LauncherControls | Self::Hotkeys => &["settings.controls"],
             Self::DateTime => &["settings.region"],
             Self::ScraperMedia => &["settings.games", "settings.scraper_short"],
-            Self::Updates | Self::Power | Self::InGame | Self::Performance => {
-                &["settings.system"]
-            }
+            Self::Updates | Self::Power | Self::InGame | Self::Performance => &["settings.system"],
             Self::Image => &["settings.sound"],
             Self::SaveSync => &["settings.system"],
             Self::SaveSyncTarget | Self::SaveSyncConflict => &["settings.system", "savesync.title"],
@@ -265,6 +268,7 @@ impl Page {
             Self::SaveSync => savesync::SAVESYNC,
             Self::SaveSyncTarget => savesync::TARGET,
             Self::SaveSyncConflict => &[],
+            Self::Compat => compat::ROWS,
             _ => &[],
         }
     }
@@ -572,6 +576,19 @@ pub enum Id {
     ConsoleId,
     ReportsLatest,
     ReportsView,
+    /// System link to the port compatibility page, and its rows: the
+    /// global switch (`ports.compat`), text-mode tools in a terminal
+    /// (`ports.terminal`), the runtime's readings and actions, and the
+    /// ports runemu.sh sends to Debian.
+    CompatLink,
+    Compat,
+    CompatTerminal,
+    CompatRuntime,
+    CompatDownload,
+    CompatLayer,
+    CompatReset,
+    CompatNone,
+    CompatPort(u8),
 }
 impl Id {
     fn metadata(self) -> (&'static str, &'static str) {
@@ -833,6 +850,17 @@ impl Id {
             | Self::ConsoleId
             | Self::ReportsLatest
             | Self::ReportsView => ("", ""),
+            // runemu.sh reads `ports.compat` under each port's own value;
+            // the host writes "off" or "auto", never "1" (forced Debian).
+            Self::Compat => ("ports.compat", "1"),
+            Self::CompatTerminal => ("ports.terminal", "1"),
+            Self::CompatLink
+            | Self::CompatRuntime
+            | Self::CompatDownload
+            | Self::CompatLayer
+            | Self::CompatReset
+            | Self::CompatNone
+            | Self::CompatPort(_) => ("", ""),
             Self::PadTestLink
             | Self::DiagLink
             | Self::Crashes
@@ -844,6 +872,21 @@ impl Id {
     }
     pub fn key(self) -> &'static str {
         self.metadata().0
+    }
+    /// A row of the port compatibility page, or the System link to it.
+    pub fn compat(self) -> bool {
+        matches!(
+            self,
+            Self::CompatLink
+                | Self::Compat
+                | Self::CompatTerminal
+                | Self::CompatRuntime
+                | Self::CompatDownload
+                | Self::CompatLayer
+                | Self::CompatReset
+                | Self::CompatNone
+                | Self::CompatPort(_)
+        )
     }
     /// A row of ROMs on the PC, or the Storage link to it.
     pub fn roms(self) -> bool {
@@ -929,7 +972,9 @@ impl Id {
             | Self::ToastsUpdates
             | Self::ToastsNetwork
             | Self::ToastsStorage
-            | Self::ToastsErrors => &["0", "1"],
+            | Self::ToastsErrors
+            | Self::Compat
+            | Self::CompatTerminal => &["0", "1"],
             Self::ToastsPosition => &["right", "left"],
             Self::ToastsDuration => &["3", "4", "6", "8"],
             // Only published channels (archr-update reads the rest as stable).
@@ -1099,6 +1144,7 @@ const SYSTEM: &[Row] = &[
     row(Id::ModulesLink, "settings.modules", Kind::Action),
     row(Id::SaveSyncLink, "savesync.title", Kind::Action),
     row(Id::RaImportLink, "raimport.title", Kind::Action),
+    described(Id::CompatLink, "compat.title", "compat.link_detail").kind(Kind::Action),
     row(Id::DiagLink, "diag.title", Kind::Action),
     row(Id::ReportsLink, "reports.title", Kind::Action),
 ];
@@ -1205,6 +1251,8 @@ pub enum Effect {
     BiosInstall(String),
     /// Settings › Launcher: the host reads or acts.
     Launcher(launcher::Action),
+    /// System › Port compatibility: the host reads or acts.
+    Compat(compat::Action),
 }
 /// A level slider held on L/R: a press starts the hold (up?), its repeats
 /// renew it, and the host releases it when the button comes up.
@@ -1256,6 +1304,7 @@ impl std::fmt::Debug for Effect {
             Self::SendReport(name) => write!(f, "SendReport({name:?})"),
             Self::BiosInstall(free) => write!(f, "BiosInstall({free:?})"),
             Self::Launcher(action) => write!(f, "Launcher({action:?})"),
+            Self::Compat(action) => write!(f, "Compat({action:?})"),
         }
     }
 }
@@ -1364,6 +1413,9 @@ pub struct Settings {
     pub leds_supported: bool,
     /// Systems `npu-upscale systems` lists, asked once; empty without the NPU.
     pub npu_systems: Vec<String>,
+    /// archr-compat-debian is installed: the port compatibility page and
+    /// the ports' switch in the game menu show.
+    pub compat_supported: bool,
     /// Layout and items when the items page opened, to save or restore.
     pub mangohud_saved: (String, String),
     /// The clock being set on the Date and time page.
@@ -1387,6 +1439,7 @@ pub struct Settings {
     pub converting: bool,
     pub diag: diag::Diag,
     pub launcher: launcher::LauncherPage,
+    pub compat: compat::CompatPage,
     pub reports: reports::Reports,
     pub bios: bios::Bios,
     pub shortcuts: shortcuts::Shortcuts,
@@ -1450,6 +1503,7 @@ impl Default for Settings {
             rumble_supported: false,
             leds_supported: false,
             npu_systems: Vec::new(),
+            compat_supported: false,
             mangohud_saved: Default::default(),
             clock_draft: None,
             capture: None,
@@ -1466,6 +1520,7 @@ impl Default for Settings {
             converting: false,
             diag: diag::Diag::default(),
             launcher: launcher::LauncherPage::default(),
+            compat: compat::CompatPage::default(),
             reports: reports::Reports::default(),
             bios: bios::Bios::default(),
             shortcuts: shortcuts::Shortcuts::default(),
@@ -1490,6 +1545,14 @@ impl Settings {
             let value = information::value(catalog, &self.launcher_value(id));
             // An action with something to act on reads as one (Config-launcher).
             return if self.launcher_arrow(id) {
+                format!("{value} ›")
+            } else {
+                value
+            };
+        }
+        if id.compat() && !matches!(id, Id::Compat | Id::CompatTerminal) {
+            let value = information::value(catalog, &self.compat_value(id));
+            return if self.compat_arrow(id) {
                 format!("{value} ›")
             } else {
                 value
@@ -1774,6 +1837,9 @@ impl Settings {
         if savesync::IDS.contains(&row.id) {
             return self.savesync_subtitle(row).filter(|s| !s.is_empty());
         }
+        if row.id.compat() {
+            return self.compat_subtitle(row).filter(|s| !s.is_empty());
+        }
         let ip = &self.access_ip;
         Some(match row.id {
             Id::Ssh if !ip.is_empty() => format!("settings.ssh_at|ip={ip}"),
@@ -1846,6 +1912,7 @@ impl Settings {
                 return self.module_label(row.id).unwrap_or_default()
             }
             id if id.roms() => return self.roms_label(id).unwrap_or(row.label).into(),
+            Id::CompatPort(_) => return self.compat_label(row.id).unwrap_or_default(),
             Id::ReportsLatest => {
                 return self
                     .reports_last()
@@ -1863,6 +1930,9 @@ impl Settings {
         }
         if self.page() == Page::Shortcuts {
             return self.shortcut_rows();
+        }
+        if self.page() == Page::Compat {
+            return self.compat_rows();
         }
         self.page()
             .rows()
@@ -1896,6 +1966,7 @@ impl Settings {
                 id if savesync::IDS.contains(&id) => self.savesync_visible(id),
                 Id::RumbleLink => self.rumble_supported,
                 Id::LedsLink => self.leds_supported,
+                Id::CompatLink => self.compat_supported,
                 _ => true,
             })
             .copied()
@@ -1918,6 +1989,7 @@ impl Settings {
             Id::RomsNow | Id::RomsCard | Id::RomsPower | Id::RomsLeft => true,
             Id::Crashes | Id::ReportLast => true,
             Id::LauncherVersion => true,
+            id if id.compat() => self.compat_fixed(id),
             Id::ReportsQueue | Id::ReportsToday | Id::ConsoleId | Id::ReportsLatest => true,
             Id::ModuleRow(_) | Id::ModuleItem(..) => self.module_fixed(id),
             _ => false,
@@ -1927,6 +1999,7 @@ impl Settings {
     pub fn disabled(&self, id: Id) -> bool {
         match id {
             id if launcher::IDS.contains(&id) => self.launcher_disabled(id),
+            id if id.compat() => self.compat_disabled(id),
             Id::ReportNow => self.diag.running,
             Id::ReportSend => self.diag_send_disabled(),
             Id::UpdateInstall => self.updates.count() == 0 || self.updates.checking,
@@ -2005,6 +2078,9 @@ impl Settings {
         }
         if self.launcher.confirm.is_some() {
             return launcher::CONFIRM_HINTS;
+        }
+        if self.compat.confirm {
+            return compat::CONFIRM_HINTS;
         }
         if let Some(hints) = self.modules_hints() {
             return hints;

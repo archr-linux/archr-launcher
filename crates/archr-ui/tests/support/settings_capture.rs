@@ -4650,3 +4650,221 @@ fn ellegance_groups_follow_the_rows_scrolled_under_the_title() {
         }
     }
 }
+
+/// A ports list for the game menu captures, with a compatibility mark.
+struct Ports {
+    systems: Vec<archr_index::cache::SystemEntry>,
+    games: Vec<archr_index::Game>,
+    compat: (String, String),
+}
+impl crate::state::DataSource for Ports {
+    fn systems(&self) -> &[archr_index::cache::SystemEntry] {
+        &self.systems
+    }
+    fn games(&self, system: &str) -> &[archr_index::Game] {
+        if system == "ports" {
+            &self.games
+        } else {
+            &[]
+        }
+    }
+    fn origin(&self, system: &str, game: usize) -> Option<(String, usize)> {
+        Some((system.into(), game))
+    }
+    fn cores(&self, _: &str) -> Vec<(String, String)> {
+        Vec::new()
+    }
+    fn current_core(&self, _: &str, _: usize) -> Option<(String, String)> {
+        None
+    }
+    fn compat(&self, _: &str, _: usize) -> (String, String) {
+        self.compat.clone()
+    }
+}
+
+/// System › Port compatibility, the ports' switch in the game menu and
+/// the toasts runemu.sh sends (Compat-ports), in the default theme and
+/// Ellegance at 640x480 and 1024x768: `ARCHR_COMPAT_CAPTURE_DIR`.
+#[test]
+#[ignore = "manual capture, ARCHR_COMPAT_CAPTURE_DIR required"]
+fn capture_compat() {
+    use crate::settings::compat::{Facts, Mark, Port};
+    use crate::toast::{Category, Kind, Toast};
+    let _sdl = crate::SDL_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    std::env::set_var("SDL_VIDEODRIVER", "offscreen");
+    let output = std::path::PathBuf::from(
+        std::env::var_os("ARCHR_COMPAT_CAPTURE_DIR").expect("capture directory"),
+    );
+    let themes = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../themes");
+    let default = Theme::load(&themes.join("default"));
+    let manifest = "VERSION=20261125\nSIZE=65671168\n";
+    let link = |state: &Settings| {
+        state
+            .visible_rows()
+            .iter()
+            .position(|r| r.id == Id::CompatLink)
+            .unwrap()
+    };
+    let port = |script: &str, mark| Port {
+        script: script.into(),
+        mark,
+    };
+    let ports = vec![
+        port("Terminal-Launcher.sh", Mark::Learned),
+        port("Halo.sh", Mark::Chosen),
+        port("Cuphead.sh", Mark::Refused),
+    ];
+    let page = |facts: Facts| {
+        let mut state = ready();
+        state.compat_supported = true;
+        state.open(Page::System);
+        state.cursor = link(&state);
+        state.handle(Button::A);
+        state.compat_done(Ok(None), facts);
+        state
+    };
+    let missing = page(Facts::parse(manifest, "installed: no\n", Vec::new()));
+    let mut downloading = missing.clone();
+    downloading.cursor = 3;
+    downloading.handle(Button::A);
+    let mut ready_page = page(Facts::parse(
+        manifest,
+        "installed: /storage/.cache/compat-debian/x.squashfs\nlayer: 643M\t/x\n",
+        ports.clone(),
+    ));
+    ready_page.cursor = 4;
+    let mut question = ready_page.clone();
+    question.handle(Button::A);
+    let mut ports_end = ready_page.clone();
+    ports_end.cursor = ports_end.visible_rows().len() - 1;
+    let mut off = missing.clone();
+    off.values.insert(Id::Compat, "0".into());
+    let mut system = ready();
+    system.compat_supported = true;
+    system.open(Page::System);
+    system.cursor = link(&system);
+    let states = [
+        ("sistema", &system),
+        ("pagina", &missing),
+        ("pagina-desligado", &off),
+        ("baixando", &downloading),
+        ("pronto", &ready_page),
+        ("pronto-fim", &ports_end),
+        ("liberar", &question),
+    ];
+    let entry = |name: &str| archr_index::cache::SystemEntry {
+        name: name.into(),
+        fullname: "Ports".into(),
+        game_count: 3,
+        dir_mtime: 0,
+        source_fingerprint: 0,
+    };
+    let game = |name: &str| archr_index::Game {
+        path: format!("{name}.sh").into(),
+        name: name.into(),
+        image: None,
+        video: None,
+        favorite: false,
+        last_played: None,
+        year: None,
+        players: None,
+        details: Default::default(),
+    };
+    let mut data = Ports {
+        systems: vec![entry("ports")],
+        games: ["Cuphead", "Halo", "Terminal-Launcher"].map(game).to_vec(),
+        compat: Default::default(),
+    };
+    let ttf = sdl2::ttf::init().unwrap();
+    let languages =
+        std::env::var("ARCHR_SETTINGS_CAPTURE_LANGUAGES").unwrap_or_else(|_| "pt_BR".into());
+    for (w, h) in [(640, 480), (1024, 768)] {
+        for folder in ["default", "ellegance"] {
+            let creator;
+            let mut ui = Ui::new(w, h, true).unwrap();
+            creator = ui.canvas.texture_creator();
+            let theme = Theme::load_over(&themes.join(folder), &default).fitted(w, h);
+            ui.theme_dir = Some(themes.join(folder));
+            ui.default_theme_dir = Some(themes.join("default"));
+            ui.set_motion(crate::motion::Motion::Off);
+            ui.configure(&ttf, &creator, &theme, None).unwrap();
+            let mut status = crate::status::Status::new(None, Instant::now());
+            status.clock = "14:32".into();
+            ui.status = Some(status);
+            let fresh = || {
+                let mut app = crate::state::App::new(10);
+                app.set_view(&theme.view(&theme.active_view));
+                app.compat = true;
+                app.screen = crate::state::Screen::games("ports");
+                app.cursor = 2;
+                app
+            };
+            let mut app = fresh();
+            for language in languages.split(',') {
+                ui.catalog = I18n::load(std::path::Path::new("/nonexistent"), Some(language), None);
+                let shot = |ui: &mut Ui,
+                            app: &crate::state::App,
+                            data: &Ports,
+                            settings: Option<&Settings>,
+                            name: &str| {
+                    for _ in 0..2 {
+                        ui.snap_animations();
+                        ui.draw_with_settings(app, data, &theme, Default::default(), settings)
+                            .unwrap();
+                    }
+                    let pixels = ui
+                        .canvas
+                        .read_pixels(None, sdl2::pixels::PixelFormatEnum::RGBA32)
+                        .unwrap();
+                    image::save_buffer(
+                        output.join(format!("{folder}-{name}-{language}-{w}x{h}.png")),
+                        &pixels,
+                        w,
+                        h,
+                        image::ColorType::Rgba8,
+                    )
+                    .unwrap();
+                };
+                ui.toasts = Default::default();
+                app.screen = crate::state::Screen::Systems;
+                for (name, state) in states {
+                    ui.switches.clear();
+                    shot(&mut ui, &app, &data, Some(state), name);
+                }
+                // The game menu of a port, its switch selected, in each state.
+                for (name, value, mark) in [
+                    ("menu-auto", "", ""),
+                    ("menu-auto-marcado", "", "wanted"),
+                    ("menu-debian", "debian", ""),
+                    ("menu-nativo", "native", ""),
+                ] {
+                    data.compat = (value.into(), mark.into());
+                    app = fresh();
+                    app.handle(Button::Y, &data);
+                    let items = app.quick_menu_items(&data);
+                    app.cursor = items
+                        .iter()
+                        .position(|i| *i == crate::state::QuickItem::Compat)
+                        .unwrap();
+                    shot(&mut ui, &app, &data, None, name);
+                }
+                // runemu.sh's toasts: the port's name as the title, what
+                // happened under it (the port marked, the runtime missing).
+                app = fresh();
+                let marked = Toast::new(Kind::Info, Category::Errors, "Terminal-Launcher")
+                    .detail("Na próxima vez abre com as bibliotecas do Debian");
+                let offline = Toast::new(Kind::Error, Category::Network, "Terminal-Launcher")
+                    .detail("Precisa baixar o Debian: conecte à internet (63 MB)");
+                for (name, toast) in [("toast-marcado", marked), ("toast-sem-rede", offline)] {
+                    ui.toasts = Default::default();
+                    ui.toasts.prefs.show = [true; 4];
+                    ui.toasts.push(toast, Instant::now());
+                    shot(&mut ui, &app, &data, None, name);
+                }
+                ui.toasts = Default::default();
+            }
+        }
+    }
+}

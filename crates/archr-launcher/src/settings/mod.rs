@@ -1,7 +1,9 @@
 //! Serial settings worker. No process, config lock or sysfs access on SDL's thread.
 mod bluetooth;
 mod cheevos;
+mod compat;
 pub use cheevos::{TOKEN as CHEEVOS_TOKEN, USER as CHEEVOS_USER};
+pub use compat::{supported as compat_supported, STATE as COMPAT_STATE};
 mod controls;
 mod diag;
 mod games;
@@ -215,6 +217,7 @@ impl Backend {
         self.load_cheevos(&cfg, &mut state);
         self.load_controls(&cfg, &mut state);
         self.load_hardware(&mut state);
+        self.load_compat(&cfg, &mut state);
         state.values.insert(
             Id::DebugMode,
             diag::debug_value(cfg.get_setting("system.loglevel", None, None)),
@@ -326,6 +329,7 @@ impl Backend {
             .or_else(|| self.apply_cheevos(id, value))
             .or_else(|| self.apply_controls(id, value))
             .or_else(|| self.apply_hardware(id, value))
+            .or_else(|| self.apply_compat(id, value))
         {
             return result;
         }
@@ -502,6 +506,8 @@ pub(super) enum Work {
     Bios,
     BiosInstall(String),
     SaveSync(archr_ui::settings::savesync::Action),
+    /// System › Port compatibility: its lane is the slow one.
+    Compat(archr_ui::settings::compat::Action),
     /// The controller tester's lane (`joypad::lane`).
     Joypad(archr_ui::settings::joypad::Command),
 }
@@ -562,6 +568,11 @@ enum Reply {
     BiosInstall(Result<(), String>),
     /// What archr-savesync printed for this action, or why it did not run.
     SaveSync(Box<(archr_ui::settings::savesync::Action, Result<String, String>)>),
+    /// What to say after a compatibility action, and the page's readings.
+    Compat(
+        Result<Option<&'static str>, &'static str>,
+        Box<archr_ui::settings::compat::Facts>,
+    ),
     /// The driver's axes; None without calibration.
     JoypadOpened(Option<Box<archr_ui::settings::joypad::Axes>>),
     JoypadRead(Box<archr_ui::settings::joypad::Axes>, std::time::Instant),
@@ -762,6 +773,7 @@ impl Worker {
                         | Work::Bios
                         | Work::BiosInstall(_)
                         | Work::SaveSync(_)
+                        | Work::Compat(_)
                         | Work::Joypad(_) => {
                             unreachable!("these have their own lanes")
                         }
@@ -874,6 +886,7 @@ impl Worker {
             Work::Bios => Some(diag::Slow::Bios),
             Work::BiosInstall(ref free) => Some(diag::Slow::BiosInstall(free.clone())),
             Work::SaveSync(ref action) => Some(diag::Slow::SaveSync(action.clone())),
+            Work::Compat(action) => Some(diag::Slow::Compat(action)),
             _ => None,
         };
         if let Some(slow) = slow {
@@ -1012,6 +1025,7 @@ impl Worker {
                     state.vulkan_supported = loaded.vulkan_supported;
                     state.rumble_supported = loaded.rumble_supported;
                     state.leds_supported = loaded.leds_supported;
+                    state.compat_supported = loaded.compat_supported;
                     state.games.replace(loaded.games.systems);
                     state.sync_games();
                     state.values_loaded();
@@ -1160,6 +1174,7 @@ impl Worker {
                     let (action, result) = *reply;
                     state.savesync_done(&action, result);
                 }
+                Reply::Compat(said, facts) => state.compat_done(said, *facts),
                 Reply::JoypadOpened(axes) => state.joypad_opened(axes.map(|a| *a)),
                 Reply::JoypadRead(axes, at) => state.joypad_read(*axes, at),
                 Reply::JoypadDone(command, result) => state.joypad_done(&command, result),

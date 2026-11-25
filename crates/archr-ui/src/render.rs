@@ -240,6 +240,17 @@ fn status_text(
     )
 }
 
+/// A port's compatibility in the game menu: its value and the line under
+/// it, which says what automatic decided when an earlier run left a mark.
+pub(super) fn compat_texts(app: &App) -> (&'static str, &'static str) {
+    match app.selected_compat() {
+        ("debian", _) => ("menu.compat_debian", "menu.compat_debian_detail"),
+        ("native", _) => ("menu.compat_native", "menu.compat_native_detail"),
+        (_, "wanted") => ("menu.compat_auto", "menu.compat_auto_wanted"),
+        (_, "no") => ("menu.compat_auto", "menu.compat_auto_no"),
+        _ => ("menu.compat_auto", "menu.compat_auto_detail"),
+    }
+}
 /// The catalog key of a quick menu item's name (a module's has its own).
 pub(super) fn quick_key(item: &QuickItem) -> &'static str {
     match item {
@@ -254,6 +265,7 @@ pub(super) fn quick_key(item: &QuickItem) -> &'static str {
         QuickItem::Core => "menu.core",
         QuickItem::Mangohud => "menu.mangohud",
         QuickItem::Npu => "menu.npu",
+        QuickItem::Compat => "menu.compat",
         QuickItem::Move => "menu.move",
         QuickItem::RestoreOrder => "menu.restore_order",
         QuickItem::Hide => "menu.hide",
@@ -2718,6 +2730,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             QuickItem::Core => 4.,
             QuickItem::Mangohud
             | QuickItem::Npu
+            | QuickItem::Compat
             | QuickItem::Folders
             | QuickItem::FavoritesFirst => 6.,
             _ => 0.,
@@ -2741,6 +2754,11 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 0.
             }
             + if items.contains(&QuickItem::Npu) {
+                6.
+            } else {
+                0.
+            }
+            + if items.contains(&QuickItem::Compat) {
                 6.
             } else {
                 0.
@@ -2936,6 +2954,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 QuickItem::Core => Some(app.selected_core().1),
                 QuickItem::Mangohud => Some(app.selected_mangohud().0),
                 QuickItem::Npu => Some(app.selected_npu().0),
+                QuickItem::Compat => Some(app.selected_compat().0),
                 _ => None,
             };
             let Some(value) = value else {
@@ -2952,6 +2971,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 (QuickItem::Npu, value) => self.catalog.text(crate::settings::npu_label(value)),
                 (QuickItem::Mangohud, "1") => self.catalog.text("settings.on"),
                 (QuickItem::Mangohud, _) => self.catalog.text("settings.off"),
+                (QuickItem::Compat, _) => self.catalog.text(compat_texts(app).0),
                 (_, value) => value.to_owned(),
             };
             // MangoHud and NPU upscaling say whose choice this is: the
@@ -2966,6 +2986,9 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 let system = self.catalog.text(system);
                 self.catalog
                     .format("menu.mangohud_detail", &[("system", &system)])
+            })
+            .or_else(|| {
+                (*item == QuickItem::Compat).then(|| self.catalog.text(compat_texts(app).1))
             });
             // ‹ value ›, as the left and right buttons step it; beside both
             // lines, or on the first when the detail needs the whole row.

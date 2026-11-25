@@ -18,6 +18,7 @@ const SYNC_TIME: Duration = Duration::from_secs(600);
 const INSTALL_TIME: Duration = Duration::from_secs(300);
 
 pub(super) enum Slow {
+    Compat(archr_ui::settings::compat::Action),
     Diag,
     Report,
     /// Send this zip of REPORTS, by name.
@@ -30,6 +31,7 @@ pub(super) enum Slow {
 impl Backend {
     pub(super) fn slow(&self, work: Slow) -> Reply {
         match work {
+            Slow::Compat(action) => self.compat(action),
             Slow::Diag => Reply::Diag(Box::new(self.diag_facts())),
             Slow::Report => Reply::Report(self.report()),
             Slow::Send(name) => Reply::ReportSent(self.send_report(&name)),

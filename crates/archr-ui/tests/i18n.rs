@@ -393,6 +393,9 @@ const CONFIG_KEYS: &[&str] = &[
     "game.memory_guard",
     "memory.zram",
     "memory.ramplus",
+    // Port compatibility (runemu.sh reads them per port first).
+    "ports.compat",
+    "ports.terminal",
     // Stick LEDs (Controls).
     "leds.sticks.brightness",
     "leds.sticks.color",

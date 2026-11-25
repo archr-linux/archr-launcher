@@ -1153,6 +1153,43 @@ fn npu_row_shows_only_for_listed_systems_and_steps_this_games_choice() {
     }
 }
 
+#[test]
+fn compat_row_shows_for_ports_only_where_the_tool_is() {
+    let mut data = FakeData::library();
+    data.games.insert("ports".into(), games(2));
+    for system in ["ports", "nes"] {
+        let mut app = in_games(system, 1);
+        app.compat = system == "nes";
+        app.handle(Button::Y, &data);
+        assert!(!app.quick_menu_items(&data).contains(&QuickItem::Compat));
+    }
+    let mut app = in_games("ports", 1);
+    app.compat = true;
+    app.handle(Button::Y, &data);
+    let items = app.quick_menu_items(&data);
+    let at = items.iter().position(|i| *i == QuickItem::Compat).unwrap();
+    for _ in 0..at {
+        app.handle(Button::Down, &data);
+    }
+    for (button, value) in [
+        (Button::R, "debian"),
+        (Button::R, "native"),
+        (Button::R, ""),
+        (Button::L, "native"),
+    ] {
+        assert_eq!(
+            app.handle(button, &data),
+            Outcome::SetCompat {
+                system: "ports".into(),
+                game: 1,
+                value: value.into()
+            }
+        );
+        assert_eq!(app.selected_compat().0, value);
+    }
+    assert_eq!(app.handle(Button::A, &data), Outcome::None);
+}
+
 mod progress {
     use super::*;
     use archr_ui::saves::{Blocked, Kind, Progress, Save, Shot};

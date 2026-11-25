@@ -33,12 +33,16 @@ mod modules;
 mod network;
 #[path = "render/picker.rs"]
 mod picker;
+#[path = "render/picture.rs"]
+mod picture;
 #[path = "render/raimport.rs"]
 mod raimport;
 #[path = "render/reports.rs"]
 mod reports;
 #[path = "render/roms.rs"]
 mod roms;
+#[path = "render/savesync.rs"]
+mod savesync;
 #[path = "render/shortcuts.rs"]
 mod shortcuts;
 #[path = "render/store.rs"]
@@ -47,10 +51,6 @@ mod store;
 mod updates;
 #[path = "render/usb.rs"]
 mod usb;
-#[path = "render/picture.rs"]
-mod picture;
-#[path = "render/savesync.rs"]
-mod savesync;
 const VIEW_TOP: f32 = 50.;
 const VIEW_BOTTOM: f32 = 428.;
 const FOOTER: f32 = 432.;
@@ -648,7 +648,8 @@ impl View<'_, '_, '_> {
                     let mut carried = String::new();
                     let last = line.chars().last();
                     if line.chars().count() > 1
-                        && (CJK_CLOSING.contains(ch) || last.is_some_and(|c| CJK_OPENING.contains(c)))
+                        && (CJK_CLOSING.contains(ch)
+                            || last.is_some_and(|c| CJK_OPENING.contains(c)))
                     {
                         carried.push(line.pop().expect("a character"));
                     }
@@ -914,9 +915,7 @@ impl View<'_, '_, '_> {
     /// (pages laid out to the footer keep the title beside the capsule).
     fn title_below(&self, state: &Settings) -> bool {
         let look = self.look();
-        look.sidebar
-            && look.title_below
-            && !matches!(state.page(), Page::Root | Page::Keyboard)
+        look.sidebar && look.title_below && !matches!(state.page(), Page::Root | Page::Keyboard)
     }
     /// "‹ Parent" in its capsule, and the page's title large on the line
     /// under it, aligned with the rows' text.
@@ -1261,6 +1260,12 @@ impl View<'_, '_, '_> {
                     crate::settings::information::value(&self.ui.catalog, &question),
                     Some(self.tr(detail)),
                     Some(crate::settings::launcher::CONFIRM_HINTS),
+                ))
+            } else if let Some((question, detail)) = state.compat_question() {
+                Some((
+                    crate::settings::information::value(&self.ui.catalog, &question),
+                    Some(self.tr(detail)),
+                    Some(crate::settings::compat::CONFIRM_HINTS),
                 ))
             } else if let Some((title, detail)) = state.hotkey_prompt() {
                 Some((

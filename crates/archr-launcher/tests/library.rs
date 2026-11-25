@@ -191,6 +191,43 @@ fn npu_upscaling_per_game_is_saved_under_the_rom_over_the_systems_choice() {
 }
 
 #[test]
+fn compat_is_saved_under_the_script_and_the_marks_are_read() {
+    let (_dir, paths) = fixture();
+    let mut library = ready(&paths, Some("nes"));
+    assert_eq!(library.compat("nes", 0), (String::new(), String::new()));
+    let marks = paths
+        .at(archr_launcher::settings::COMPAT_STATE)
+        .join("wanted");
+    fs::create_dir_all(&marks).unwrap();
+    fs::write(marks.join("A.nes"), []).unwrap();
+    assert_eq!(library.compat("nes", 0).1, "wanted");
+    for (value, line) in [
+        ("debian", Some("nes[\"A.nes\"].compat=debian")),
+        ("native", Some("nes[\"A.nes\"].compat=native")),
+        ("", None),
+    ] {
+        library
+            .handle(
+                Outcome::SetCompat {
+                    system: "nes".into(),
+                    game: 0,
+                    value: value.into(),
+                },
+                "",
+            )
+            .unwrap();
+        assert_eq!(library.compat("nes", 0).0, value);
+        wait(&mut library, |library| library.pending_writes == 0);
+        assert!(!library.write_failed);
+        let saved = fs::read_to_string(&paths.config).unwrap();
+        assert_eq!(saved.contains("].compat="), line.is_some(), "{saved}");
+        if let Some(line) = line {
+            assert!(saved.contains(line), "{saved}");
+        }
+    }
+}
+
+#[test]
 fn launch_requires_final_store_flush_before_publishing_next() {
     let (_dir, paths) = fixture();
     let mut library = ready(&paths, Some("nes"));

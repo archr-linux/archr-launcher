@@ -306,6 +306,7 @@ impl Settings {
             Page::SaveSyncConflict => self.savesync_conflict_input(button),
             Page::Diagnostics => self.diag_input(button),
             Page::Launcher => self.launcher_input(button),
+            Page::Compat => self.compat_input(button),
             Page::LauncherLog => self.launcher_log_input(button),
             Page::Shortcuts => self.shortcuts_input(button),
             Page::Modules
@@ -597,6 +598,9 @@ impl Settings {
                 self.open(Page::Bios);
             }
             id @ (Id::DiagLink | Id::ReportNow | Id::ReportSend) => return self.diag_activate(id),
+            id @ (Id::CompatLink | Id::CompatDownload | Id::CompatReset) => {
+                return self.compat_activate(id)
+            }
             id @ (Id::ReportsLink | Id::ReportsView) => return self.reports_activate(id),
             id @ (Id::Resync
             | Id::PruneMissing

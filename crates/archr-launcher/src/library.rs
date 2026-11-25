@@ -37,10 +37,12 @@ pub struct Library {
     requested: HashMap<String, bool>,
     config: Option<SystemCfg>,
     overrides: HashMap<(String, String), (String, String)>,
-    /// MangoHud chosen per game, until system.cfg is read back.
+    /// MangoHud and a port's compatibility chosen per game, until
+    /// system.cfg is read back.
     mangohud: HashMap<(String, String), String>,
     /// NPU upscaling chosen per game, likewise.
     npu: HashMap<(String, String), String>,
+    compat: HashMap<(String, String), String>,
     store: Store,
     store_writer: Option<StoreWriter>,
     worker: Option<Worker>,
@@ -117,6 +119,7 @@ impl Library {
             overrides: HashMap::new(),
             mangohud: HashMap::new(),
             npu: HashMap::new(),
+            compat: HashMap::new(),
             store,
             store_writer: None,
             worker: None,
@@ -416,6 +419,7 @@ impl Library {
                             self.overrides.remove(&key);
                             self.mangohud.remove(&key);
                             self.npu.remove(&key);
+                            self.compat.remove(&key);
                             log::warn!("Cannot save the game's setting: {error}");
                             self.banner = Some(Message::new(banner));
                             self.write_failed = true;
@@ -516,6 +520,16 @@ impl Library {
                     .insert((system.clone(), rom.clone()), value.clone());
                 let entries = vec![(NPU, value)];
                 self.save_game(system, rom, entries, "error.npu_save")?;
+            }
+            Outcome::SetCompat {
+                system,
+                game,
+                value,
+            } => {
+                let rom = self.rom_name(&system, game)?;
+                self.compat
+                    .insert((system.clone(), rom.clone()), value.clone());
+                self.save_game(system, rom, vec![(COMPAT, value)], "error.compat_save")?;
             }
             Outcome::MoonlightStream(stream) => {
                 let command = crate::moonlight::stream_command(&self.paths, &stream)?;
@@ -802,6 +816,8 @@ impl Library {
 const MANGOHUD: &str = "archr.mangohud.enabled";
 /// `<system>["<rom>"].npu_upscale`, then `<system>.npu_upscale`.
 const NPU: &str = "npu_upscale";
+/// runemu.sh's `get_setting compat ports "<script>"`.
+const COMPAT: &str = "compat";
 impl DataSource for Library {
     fn systems(&self) -> &[SystemEntry] {
         &self.overview.systems
@@ -928,5 +944,20 @@ impl DataSource for Library {
             .and_then(|cfg| cfg.get_local(system, None, NPU))
             .unwrap_or_else(|| archr_ui::settings::Id::NpuUpscale.default_value().into());
         (own, shared)
+    }
+    fn compat(&self, system: &str, game: usize) -> (String, String) {
+        let rom = self.rom_name(system, game).unwrap_or_default();
+        let own = self
+            .compat
+            .get(&(system.to_owned(), rom.clone()))
+            .cloned()
+            .or_else(|| self.config.as_ref()?.get_game(system, &rom, COMPAT))
+            .unwrap_or_default();
+        let state = self.paths.at(crate::settings::COMPAT_STATE);
+        let mark = ["wanted", "no"]
+            .into_iter()
+            .find(|dir| !rom.is_empty() && state.join(dir).join(&rom).exists())
+            .unwrap_or_default();
+        (own, mark.to_owned())
     }
 }

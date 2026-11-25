@@ -223,6 +223,12 @@ pub enum Outcome {
         game: usize,
         value: String,
     },
+    /// A port's compatibility: "debian", "native", or "" (auto).
+    SetCompat {
+        system: String,
+        game: usize,
+        value: String,
+    },
     Action(SessionAction),
     /// Replaces the saved system order; empty restores the default order.
     SetOrder(Vec<String>),
@@ -274,6 +280,8 @@ pub enum QuickItem {
     Mangohud,
     /// This game's AI upscaling on the NPU, over the system's choice.
     Npu,
+    /// A port's compatibility, where archr-compat-debian is.
+    Compat,
     Move,
     RestoreOrder,
     /// Take the system the menu was opened on off the systems screen.
@@ -294,6 +302,9 @@ pub enum QuickItem {
     /// A module's item: an index into `View::quick` for this menu.
     Module(u8),
 }
+
+/// A port's compatibility choices in the game menu: automatic, Debian, Arch R.
+pub const COMPAT: [&str; 3] = ["", "debian", "native"];
 
 pub trait DataSource {
     fn systems(&self) -> &[SystemEntry];
@@ -344,6 +355,12 @@ pub trait DataSource {
             String::new(),
             crate::settings::Id::NpuUpscale.default_value().into(),
         )
+    }
+    /// A port's own compatibility value ("" when automatic), and what an
+    /// earlier run left: "wanted" (a failure asked for Debian), "no"
+    /// (Debian did not help either) or "".
+    fn compat(&self, _system: &str, _game: usize) -> (String, String) {
+        (String::new(), String::new())
     }
     /// `system/relative/path.rom`, the key favorites and modules use.
     fn game_key(&self, _system: &str, _game: usize) -> Option<String> {
@@ -446,6 +463,8 @@ pub struct App {
     pub mangohud: bool,
     /// Systems with AI upscaling on the NPU: the game menu offers it per game.
     pub npu_systems: Vec<String>,
+    /// archr-compat-debian is installed: a port's menu offers its mode.
+    pub compat: bool,
     /// The achievements screen's list, filled by the host.
     pub sheet: crate::cheevos::Sheet,
     /// Achievements per page, reported by the renderer (theme layout).
@@ -521,6 +540,7 @@ pub struct App {
     selected_mangohud: (String, String),
     /// The open game menu's NPU upscaling: the game's value, the system's.
     selected_npu: (String, String),
+    selected_compat: (String, String),
 }
 
 /// A game's NPU upscaling: as the system (""), then the system's choices.
@@ -590,6 +610,7 @@ impl App {
             cheevos: false,
             mangohud: false,
             npu_systems: Vec::new(),
+            compat: false,
             sheet: crate::cheevos::Sheet::default(),
             sheet_page: 1,
             updates: 0,
@@ -605,6 +626,7 @@ impl App {
             cores_mixed: false,
             selected_mangohud: Default::default(),
             selected_npu: Default::default(),
+            selected_compat: Default::default(),
             modules: std::sync::Arc::default(),
             hub_widget: 0,
             progress: Progress::default(),
@@ -710,6 +732,9 @@ impl App {
         if self.npu_systems.iter().any(|name| name == system) {
             items.push(Npu);
         }
+        if self.compat && system == "ports" {
+            items.push(Compat);
+        }
         if self.on_recent_list() {
             items.push(ForgetRecent);
         }
@@ -814,6 +839,10 @@ impl App {
     /// The game menu's NPU upscaling row: the game's value and the system's.
     pub fn selected_npu(&self) -> (&str, &str) {
         (&self.selected_npu.0, &self.selected_npu.1)
+    }
+    /// The game menu's compatibility row: the port's value and its mark.
+    pub fn selected_compat(&self) -> (&str, &str) {
+        (&self.selected_compat.0, &self.selected_compat.1)
     }
     /// The game menu's core as the player reads it: "Default", the core's
     /// name, and in a system with both kinds "ppsspp (RetroArch)" or
@@ -1192,6 +1221,17 @@ impl App {
                             let value = stepped(&NPU_GAME, &self.selected_npu.0, b);
                             self.selected_npu.0.clone_from(&value);
                             return Outcome::SetNpu {
+                            system,
+                            game,
+                            value,
+                        };
+                    }
+                }
+                    (Button::L | Button::R, Some(QuickItem::Compat)) => {
+                        if let Some((system, game)) = game {
+                            let value = stepped(&COMPAT, &self.selected_compat.0, b);
+                            self.selected_compat.0.clone_from(&value);
+                            return Outcome::SetCompat {
                                 system,
                                 game,
                                 value,
@@ -1293,6 +1333,7 @@ impl App {
             && cores.iter().any(|(e, _)| e != "retroarch");
         self.selected_mangohud = data.mangohud(&system, game);
         self.selected_npu = data.npu(&system, game);
+        self.selected_compat = data.compat(&system, game);
         self.enter(Screen::QuickMenu {
             game: Some((system, game)),
         });
