@@ -484,7 +484,7 @@ mod tests {
                 .map(|n| paths[n].clone())
                 .collect()
         };
-        let mut loads = |covers: &mut CoverCache, cursor: usize| {
+        let loads = |covers: &mut CoverCache, cursor: usize| {
             let wanted = window(cursor);
             let mut loads = 0;
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
