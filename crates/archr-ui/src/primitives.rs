@@ -701,7 +701,9 @@ impl<'a> Shadow<'a> {
     ) -> Result<(), String> {
         let fit = rect.width().min(rect.height()) as f32 / 24.;
         let k = (radius / 12.).max(scale).min(fit);
-        let corner = (12. * k).round() as i32;
+        // Corners meet at most halfway: on an odd side, rounding up would
+        // overlap them in a darker line through the box.
+        let corner = ((12. * k).round() as i32).min(rect.width().min(rect.height()) as i32 / 2);
         let shift = look.offset.map_or(8. * k, |px| px).round() as i32;
         let ink = look.color.unwrap_or(Rgba {
             r: 0,
@@ -787,6 +789,9 @@ mod tests {
     /// The RGBA pixels of a white 120×120 screen with a soft shadow drawn
     /// under the box (40, 40, 40, 40).
     fn shadowed(look: SoftLook) -> Vec<u8> {
+        shadow_under(Rect::new(40, 40, 40, 40), 1., 0., look)
+    }
+    fn shadow_under(rect: Rect, scale: f32, radius: f32, look: SoftLook) -> Vec<u8> {
         let _sdl = crate::SDL_TEST_LOCK.lock().unwrap();
         std::env::set_var("SDL_VIDEODRIVER", "dummy");
         let sdl = sdl2::init().unwrap();
@@ -801,10 +806,43 @@ mod tests {
         canvas.set_draw_color(Color::WHITE);
         canvas.clear();
         let mut shadow = Shadow::new(&creator).unwrap();
-        shadow
-            .draw(&mut canvas, Rect::new(40, 40, 40, 40), 1., 0., look)
-            .unwrap();
+        shadow.draw(&mut canvas, rect, scale, radius, look).unwrap();
         canvas.read_pixels(None, PixelFormatEnum::RGBA32).unwrap()
+    }
+    /// A round button of odd side at a fractional scale (46 px at 1.6 on a
+    /// 1024x768 screen): its corners are half a side each, and the two
+    /// halves must meet, not overlap in a darker cross through its center.
+    #[test]
+    fn the_shadow_of_an_odd_round_button_has_no_seam() {
+        let red = |pixels: &[u8], x: usize, y: usize| pixels[(y * 120 + x) * 4];
+        for look in [
+            SoftLook::default(),
+            SoftLook {
+                blur: Some(36.),
+                ..SoftLook::default()
+            },
+        ] {
+            for side in [73, 74] {
+                let pixels =
+                    shadow_under(Rect::new(20, 20, side, side), 1.6, side as f32 / 2., look);
+                // Left of the box, down the middle; and below it, across.
+                let mid = 20 + side as usize / 2;
+                for (a, b, c) in [
+                    ((10, mid - 1), (10, mid), (10, mid + 1)),
+                    ((mid - 1, 105), (mid, 105), (mid + 1, 105)),
+                ] {
+                    let (a, b, c) = (
+                        red(&pixels, a.0, a.1),
+                        red(&pixels, b.0, b.1),
+                        red(&pixels, c.0, c.1),
+                    );
+                    assert!(
+                        b + 2 >= a.min(c),
+                        "{side} px, {look:?}: a dark seam ({a} {b} {c})"
+                    );
+                }
+            }
+        }
     }
     #[test]
     fn a_theme_tints_spreads_and_moves_the_soft_shadow() {
