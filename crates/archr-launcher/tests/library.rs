@@ -161,7 +161,7 @@ fn mangohud_per_game_is_saved_under_the_rom_and_removed_to_follow_the_system() {
 #[test]
 fn npu_upscaling_per_game_is_saved_under_the_rom_over_the_systems_choice() {
     let (_dir, paths) = fixture();
-    let mut library = ready(&paths, Some("nes"));
+    let library = ready(&paths, Some("nes"));
     // Unsaved anywhere: the system's default, auto.
     assert_eq!(library.npu("nes", 0), (String::new(), "auto".into()));
     fs::write(&paths.config, "nes.npu_upscale=off\n").unwrap();
