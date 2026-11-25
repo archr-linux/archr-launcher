@@ -154,6 +154,17 @@ impl Shop {
     fn download(owner: &str, repo: &str, tag: &str, name: &str) -> String {
         format!("https://github.com/{owner}/{repo}/releases/download/{tag}/{name}")
     }
+    /// Drops the saved answers about the latest release of `owner/repo`
+    /// (its assets and its module.toml), so the next look asks GitHub.
+    fn forget_release(&self, owner: &str, repo: &str) {
+        if !owner_ok(owner) || !name_ok(repo) {
+            return;
+        }
+        let dir = self.github.cache.join(format!("{owner}-{repo}"));
+        for name in ["release.json", "latest-module.toml"] {
+            let _ = fs::remove_file(dir.join(name));
+        }
+    }
     /// The latest release's tag and assets (saved for an hour).
     fn release(
         &self,
@@ -255,6 +266,14 @@ impl Shop {
             };
         }
         let (repos, problem, _) = self.github.search(TOPIC, "stars", refresh);
+        // Refresh asks GitHub again for each release too: one that gained
+        // its module.toml (or a new version) within the hour shows at once.
+        // Only when GitHub answered: offline, the saved answers stay.
+        if refresh && problem.is_none() {
+            for r in repos.iter().flatten() {
+                self.forget_release(&r.owner, &r.repo);
+            }
+        }
         let (reviewed, unsigned) = match self.reviewed() {
             Ok(list) => (list, None),
             Err(key) => (Vec::new(), Some(key)),

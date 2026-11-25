@@ -1072,3 +1072,36 @@ fn the_start_menu_counts_module_updates_and_remembers_them_after_a_restart() {
     );
     until_outdated(&modules, 1);
 }
+
+/// A release that gained its module.toml within the hour: the saved answer
+/// still lacks it, and a refresh of the list asks GitHub again.
+#[test]
+fn refreshing_the_list_reads_a_fixed_release_again() {
+    let root = tempfile::tempdir().unwrap();
+    let fake = Fake::default();
+    let tarball = Tarball::module(MANIFEST).bytes();
+    publish(&fake, MANIFEST, &tarball, &sha(&tarball), &sha(&tarball));
+    // Published first with the package only.
+    fake.answer(
+        &format!("{API}/kaio-dev/archr-bateria/releases/latest"),
+        format!(
+            r#"{{"tag_name":"v1.0.0","assets":[
+            {{"name":"bateria-1.0.0.tar.gz","size":{},"digest":"sha256:{}"}}]}}"#,
+            tarball.len(),
+            sha(&tarball)
+        ),
+    );
+    let store = shop(root.path(), &fake);
+    let _ = store.list(Tab::All, false);
+    assert_eq!(store.offer(&card()).err(), Some("modules.no_package"));
+    // The author adds module.toml to the same release.
+    publish(&fake, MANIFEST, &tarball, &sha(&tarball), &sha(&tarball));
+    let _ = store.list(Tab::All, false);
+    assert_eq!(
+        store.offer(&card()).err(),
+        Some("modules.no_package"),
+        "kept for the hour"
+    );
+    let _ = store.list(Tab::All, true);
+    assert!(store.offer(&card()).is_ok(), "a refresh reads it again");
+}
