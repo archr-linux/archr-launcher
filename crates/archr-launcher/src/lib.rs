@@ -16,6 +16,7 @@ mod panfrost;
 pub mod paths;
 pub mod preview;
 pub mod raimport;
+pub mod remove;
 pub mod reports;
 pub mod rescrape;
 pub mod resume;

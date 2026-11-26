@@ -42,6 +42,7 @@ fn glyph(item: &QuickItem) -> Glyph {
         QuickItem::Reboot => Glyph::Restart,
         QuickItem::Shutdown => Glyph::Power,
         QuickItem::Module(_) => Glyph::Puzzle,
+        QuickItem::Delete(_) => Glyph::Trash,
     }
 }
 /// Rows that open another screen: an arrow at their right.
@@ -309,7 +310,10 @@ impl Ui<'_, '_> {
             if focused {
                 self.rounded(band, px(self, 12.) as f32, alpha(theme.text, 0x24), None)?;
             }
-            let danger = matches!(item, QuickItem::Shutdown | QuickItem::ForgetRecent);
+            let danger = matches!(
+                item,
+                QuickItem::Shutdown | QuickItem::ForgetRecent | QuickItem::Delete(_)
+            );
             let ink = if danger { theme.danger } else { theme.text };
             let side = px(self, 17.);
             let icon = Rect::new(left, y + (row - side) / 2, side as u32, side as u32);

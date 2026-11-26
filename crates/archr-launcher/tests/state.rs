@@ -382,7 +382,11 @@ fn quick_menu_collection_uses_real_game_and_restores_collection_cursor() {
     );
     assert_eq!(
         app.quick_menu_items(&data),
-        [QuickItem::Core, QuickItem::Details]
+        [
+            QuickItem::Core,
+            QuickItem::Details,
+            QuickItem::Delete(false)
+        ]
     );
     app.handle(Button::B, &data);
     assert_eq!(app.screen, Screen::games("@favorites"));
@@ -402,10 +406,10 @@ fn quick_menu_tools_and_ports_hide_core_and_power_lives_in_the_system_menu() {
     for system in ["snes", "tools", "ports"] {
         let mut app = in_games(system, 0);
         app.handle(Button::Y, &data);
-        // Game menus open the details, then the list's search, folders and
-        // favorites first; only snes has a core choice.
+        // Game menus open the details, then the list's search, folders,
+        // favorites first and Delete; only snes has a core choice.
         let items = app.quick_menu_items(&data);
-        assert_eq!(items.len(), 4 + usize::from(system == "snes"), "{system}");
+        assert_eq!(items.len(), 5 + usize::from(system == "snes"), "{system}");
         assert!(!items.contains(&QuickItem::Suspend), "{system}");
         assert!(!items.contains(&QuickItem::Reboot), "{system}");
         assert!(!items.contains(&QuickItem::Shutdown), "{system}");
@@ -436,7 +440,7 @@ fn quick_menu_up_down_clamp() {
     for _ in 0..10 {
         app.handle(Button::Down, &data);
     }
-    assert_eq!(app.cursor, 4);
+    assert_eq!(app.cursor, 5);
 }
 
 fn open_details(data: &FakeData, system: &str, game: usize) -> App {
@@ -1023,7 +1027,8 @@ fn achievements_open_from_the_game_menu_only_when_signed_in_and_page_with_l_r() 
             QuickItem::Achievements,
             QuickItem::Search,
             QuickItem::Folders,
-            QuickItem::FavoritesFirst
+            QuickItem::FavoritesFirst,
+            QuickItem::Delete(false)
         ]
     );
     app.cursor = 1;
@@ -1085,7 +1090,8 @@ fn mangohud_row_steps_through_the_systems_choices_for_this_game() {
             QuickItem::Mangohud,
             QuickItem::Search,
             QuickItem::Folders,
-            QuickItem::FavoritesFirst
+            QuickItem::FavoritesFirst,
+            QuickItem::Delete(false)
         ]
     );
     app.handle(Button::Down, &data);
@@ -1127,7 +1133,8 @@ fn npu_row_shows_only_for_listed_systems_and_steps_this_games_choice() {
             QuickItem::Npu,
             QuickItem::Search,
             QuickItem::Folders,
-            QuickItem::FavoritesFirst
+            QuickItem::FavoritesFirst,
+            QuickItem::Delete(false)
         ]
     );
     assert_eq!(app.selected_npu(), ("", "auto"));
@@ -1188,6 +1195,81 @@ fn compat_row_shows_for_ports_only_where_the_tool_is() {
         assert_eq!(app.selected_compat().0, value);
     }
     assert_eq!(app.handle(Button::A, &data), Outcome::None);
+}
+
+#[test]
+fn the_last_row_of_a_game_menu_asks_with_cancel_first() {
+    use archr_launcher::state::Removal;
+    let mut data = FakeData::library();
+    data.games.insert("ports".into(), games(2));
+    for (system, port) in [("snes", false), ("ports", true)] {
+        let mut app = in_games(system, 1);
+        app.handle(Button::Y, &data);
+        let items = app.quick_menu_items(&data);
+        assert_eq!(items.last(), Some(&QuickItem::Delete(port)), "{system}");
+        for _ in 1..items.len() {
+            app.handle(Button::Down, &data);
+        }
+        assert_eq!(
+            app.handle(Button::A, &data),
+            Outcome::AskRemove {
+                system: system.into(),
+                game: 1
+            }
+        );
+        assert_eq!((&app.screen, app.cursor), (&Screen::games(system), 1));
+    }
+    // The host's answer: A on Cancel, B, then A on Delete.
+    let mut app = in_games("snes", 1);
+    let removal = Removal {
+        system: "snes".into(),
+        rom: "game-1.zip".into(),
+        ..Removal::default()
+    };
+    app.removal = Some(removal.clone());
+    assert_eq!(app.handle(Button::A, &data), Outcome::None);
+    assert!(app.removal.is_none());
+    app.removal = Some(removal.clone());
+    assert_eq!(app.handle(Button::B, &data), Outcome::None);
+    assert!(app.removal.is_none() && app.screen == Screen::games("snes"));
+    app.removal = Some(removal.clone());
+    app.handle(Button::Right, &data);
+    let asked = Removal {
+        on_action: true,
+        ..removal
+    };
+    assert_eq!(
+        app.handle(Button::A, &data),
+        Outcome::Remove(Box::new(asked))
+    );
+    // Gone from the list: the cursor on the next game, or the last one.
+    data.games.get_mut("snes").unwrap().truncate(1);
+    app.removed(&data);
+    assert_eq!(app.cursor, 0);
+}
+
+#[test]
+fn no_delete_row_for_portmaster_nor_from_the_details() {
+    let mut data = FakeData::library();
+    let mut ports = games(1);
+    ports[0].path = "/roms/ports/PortMaster.sh".into();
+    data.games.insert("ports".into(), ports);
+    let mut app = in_games("ports", 0);
+    app.handle(Button::Y, &data);
+    assert!(!app
+        .quick_menu_items(&data)
+        .iter()
+        .any(|i| matches!(i, QuickItem::Delete(_))));
+    let mut app = in_games("snes", 2);
+    app.screen = Screen::Details {
+        system: "snes".into(),
+        game: 2,
+    };
+    app.handle(Button::Y, &data);
+    assert!(!app
+        .quick_menu_items(&data)
+        .iter()
+        .any(|i| matches!(i, QuickItem::Delete(_))));
 }
 
 mod progress {

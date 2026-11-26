@@ -1977,3 +1977,16 @@
 "menu.compat_debian_detail" = "Always with Debian's libraries"
 "menu.compat_native_detail" = "Always with the Arch R system"
 "error.compat_save" = "Could not save this port's compatibility.\nCheck the space and permissions."
+"menu.delete_game" = "Delete game"
+"menu.delete_port" = "Delete port"
+"remove.question" = "Delete {name}?"
+"remove.more" = { one = "and {count} more file", other = "and {count} more files" }
+"remove.media" = { one = "and {count} scraped file (cover, video, manual)", other = "and {count} scraped files (cover, video, manual)" }
+"remove.script_only" = "No folder of this port was found: only the script is deleted."
+"remove.game_detail" = "This cannot be undone. The saves stay."
+"remove.port_detail" = "This cannot be undone. What the port kept in its folder goes with it."
+"toast.removed" = "Deleted: {name}"
+"toast.remove_failed" = "Could not delete {name}"
+"remove.read_only" = "The card is read-only."
+"remove.gone" = "The card or the file is no longer there."
+"remove.failed" = "Check the card and try again."

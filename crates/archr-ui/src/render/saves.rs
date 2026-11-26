@@ -858,11 +858,83 @@ impl Ui<'_, '_> {
             _ => return Ok(()),
         };
         let play = confirm.action == Action::Play;
+        let texture = picture.and_then(|path| art.thumbs.and_then(|cache| cache.peek(path)));
+        let name = data.games(system).get(game).map_or("", |g| g.name.as_str());
+        let when = self.when(taken, "saves.date");
+        self.question_card(
+            theme,
+            (&question, &detail),
+            (texture, name, &when),
+            (play, confirm.on_action),
+        )
+    }
+
+    /// Delete a game or a port (Apagar-jogo): its cover and name, what
+    /// goes, that it cannot be undone, Cancel and Delete.
+    pub(super) fn removal_question(
+        &mut self,
+        removal: &crate::state::Removal,
+        data: &dyn DataSource,
+        theme: &Theme,
+        art: Art<'_, '_>,
+    ) -> Result<(), String> {
+        const LISTED: usize = 4;
+        let question = self
+            .catalog
+            .format("remove.question", &[("name", &removal.name)]);
+        let mut lines: Vec<String> = removal.shown.iter().take(LISTED).cloned().collect();
+        let more = removal.shown.len().saturating_sub(LISTED);
+        if more > 0 {
+            let count = more.to_string();
+            let text = self
+                .catalog
+                .plural("remove.more", more as f64, &[("count", &count)]);
+            lines.push(text);
+        }
+        if removal.media > 0 {
+            let (n, count) = (removal.media as f64, removal.media.to_string());
+            lines.push(self.catalog.plural("remove.media", n, &[("count", &count)]));
+        }
+        let folder = removal.shown.iter().any(|s| s.ends_with('/'));
+        if removal.port && !folder {
+            lines.push(self.catalog.text("remove.script_only"));
+        }
+        lines.push(self.catalog.text(if removal.port && folder {
+            "remove.port_detail"
+        } else {
+            "remove.game_detail"
+        }));
+        let system = super::system_title(&removal.system, data, &self.catalog);
+        let texture = data
+            .games(&removal.system)
+            .iter()
+            .find(|g| g.path == removal.rom)
+            .and_then(|g| g.image.as_ref())
+            .and_then(|path| art.covers.and_then(|cache| cache.peek(path)))
+            .or(art.cover);
+        self.question_card(
+            theme,
+            (&question, &lines.join("\n")),
+            (texture, &removal.name, &system),
+            (false, removal.on_action),
+        )
+    }
+
+    /// A question over the dimmed screen: the item (its picture, a name and
+    /// a second line), what happens, Cancel and the action, Play or Delete;
+    /// as the theme's `[dialog]` draws it when it has one.
+    fn question_card(
+        &mut self,
+        theme: &Theme,
+        (question, detail): (&str, &str),
+        (texture, name, second): (Option<&Texture<'_>>, &str, &str),
+        (play, on_action): (bool, bool),
+    ) -> Result<(), String> {
         let Frame { width, height, .. } = self.frame;
         let footer = self.frame.size(theme.footer_height).round().max(1.) as u32;
         self.scrim(theme, 1.2)?;
         if theme.screens.dialog != crate::screens::DialogStyle::default() {
-            self.progress_alert((&question, &detail), (play, confirm.on_action), theme)?;
+            self.progress_alert((question, detail), (play, on_action), theme)?;
             return self.question_footer(theme);
         }
         let w = self.question_width(theme, 360.);
@@ -872,12 +944,12 @@ impl Ui<'_, '_> {
         let title_room = (inner as i32 - badge - self.px(12.)).max(1) as u32;
         // The question shrinks a little before it wraps.
         let title_size = self
-            .shrink(&question, Face::Semibold, 17., 15., title_room)?
+            .shrink(question, Face::Semibold, 17., 15., title_room)?
             .unwrap_or(17.);
-        let titles = self.wrap(&question, Face::Semibold, title_size, title_room)?;
+        let titles = self.wrap(question, Face::Semibold, title_size, title_room)?;
         let title_step = self.px(22.);
         let title_h = (title_step * titles.len() as i32).max(badge);
-        let body = self.wrap(&detail, Face::Regular, 13., inner)?;
+        let body = self.wrap(detail, Face::Regular, 13., inner)?;
         let body_step = self.px(19.);
         let gap = self.px(14.);
         let item_h = self.px(70.);
@@ -948,11 +1020,9 @@ impl Ui<'_, '_> {
             self.px(64.) as u32,
             self.px(48.) as u32,
         );
-        let texture = picture.and_then(|path| art.thumbs.and_then(|cache| cache.peek(path)));
         self.filled(texture, thumb, 5., theme)?;
         let tx = thumb.right() + self.px(12.);
         let tw = (item.right() - self.px(10.) - tx).max(1) as u32;
-        let name = data.games(system).get(game).map_or("", |g| g.name.as_str());
         let middle = item.y() + item_h / 2;
         self.label(
             name,
@@ -960,7 +1030,7 @@ impl Ui<'_, '_> {
             Rect::new(tx, middle - self.px(19.), tw, self.px(19.) as u32),
         )?;
         self.label(
-            &self.when(taken, "saves.date"),
+            second,
             (Face::Mono, 12., theme.muted),
             Rect::new(tx, middle + self.px(2.), tw, self.px(16.) as u32),
         )?;
@@ -986,7 +1056,7 @@ impl Ui<'_, '_> {
                 half,
                 button_h as u32,
             );
-            let focused = (n == 1) == confirm.on_action;
+            let focused = (n == 1) == on_action;
             let (fill, border, ink, face) = match (focused, n) {
                 (true, 0) => (
                     theme.highlight_bg,

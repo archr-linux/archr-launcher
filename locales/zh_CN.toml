@@ -1984,3 +1984,16 @@
 "menu.compat_debian_detail" = "始终使用 Debian 的库"
 "menu.compat_native_detail" = "始终使用 Arch R 系统"
 "error.compat_save" = "无法保存此移植的兼容设置。\n请检查空间和权限。"
+"menu.delete_game" = "删除游戏"
+"menu.delete_port" = "删除移植游戏"
+"remove.question" = "删除 {name}？"
+"remove.more" = { other = "另外还有 {count} 个文件" }
+"remove.media" = { other = "以及 {count} 个刮削文件（封面、视频、说明书）" }
+"remove.script_only" = "未找到该移植游戏的文件夹：只删除 .sh 文件。"
+"remove.game_detail" = "无法撤销。存档会保留。"
+"remove.port_detail" = "无法撤销。移植游戏在其文件夹中保存的内容会一并删除。"
+"toast.removed" = "已删除：{name}"
+"toast.remove_failed" = "无法删除 {name}"
+"remove.read_only" = "存储卡为只读。"
+"remove.gone" = "存储卡或文件已不在。"
+"remove.failed" = "请检查存储卡后重试。"

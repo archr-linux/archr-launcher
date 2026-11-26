@@ -252,6 +252,15 @@ pub enum Outcome {
     HideSystem(String),
     /// Bring every hidden row back.
     ShowSystems,
+    /// The game menu's Delete: the host finds what goes and asks
+    /// (`App::removal`).
+    AskRemove {
+        system: String,
+        game: usize,
+    },
+    /// The question was answered Delete: the files go and the game leaves
+    /// the list.
+    Remove(Box<Removal>),
     /// List this system by folder, or not.
     ShowFolders {
         system: String,
@@ -301,6 +310,26 @@ pub enum QuickItem {
     Shutdown,
     /// A module's item: an index into `View::quick` for this menu.
     Module(u8),
+    /// Delete the game (false) or the port (true), after a question.
+    Delete(bool),
+}
+
+/// What deleting a game or a port takes, as the host found it, and the
+/// question's focus (Cancel first).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Removal {
+    pub system: String,
+    /// The game's file: the list may move before the answer.
+    pub rom: PathBuf,
+    pub name: String,
+    pub port: bool,
+    /// What goes, relative to the card's roms folder; a folder ends in "/".
+    pub shown: Vec<String>,
+    /// Scraped pictures, videos and manuals of the game that go too.
+    pub media: usize,
+    /// Every file and folder to delete, the game's own first.
+    pub paths: Vec<PathBuf>,
+    pub on_action: bool,
 }
 
 /// A port's compatibility choices in the game menu: automatic, Debian, Arch R.
@@ -495,6 +524,8 @@ pub struct App {
     /// A port that runs only on another GPU driver, by its title and that
     /// driver, asked instead of launched (Ports-panfrost, Ports-libmali).
     pub gpu_offer: Option<(String, GpuDriver)>,
+    /// The question before a game or a port is deleted.
+    pub removal: Option<Removal>,
     /// States per page and the screenshot grid, reported by the renderer.
     pub saves_page: usize,
     pub shots_columns: usize,
@@ -635,6 +666,7 @@ impl App {
             convert: None,
             reports_notice: None,
             gpu_offer: None,
+            removal: None,
             saves_page: 1,
             shots_columns: 1,
             shots_page: 1,
@@ -742,7 +774,26 @@ impl App {
             items.extend([Search, Folders, FavoritesFirst]);
         }
         items.extend(self.module_items(Context::Game, system));
+        if !from_details && Self::deletable(data, system, game) {
+            items.push(Delete(system == "ports"));
+        }
         items
+    }
+
+    /// A game or a port on the cards; never a tool, a row of the launcher's
+    /// own (modules, Moonlight) nor PortMaster itself.
+    fn deletable(data: &dyn DataSource, system: &str, game: usize) -> bool {
+        let Some(found) = data.games(system).get(game) else {
+            return false;
+        };
+        let stem = found
+            .path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("");
+        !system.starts_with('@')
+            && !data.is_tools(system)
+            && !(system == "ports" && stem.eq_ignore_ascii_case("portmaster"))
     }
 
     /// How many quick actions open the game menu, side by side (none
@@ -892,6 +943,22 @@ impl App {
                 }
                 None => Outcome::None,
             };
+        }
+        if let Some(removal) = &mut self.removal {
+            match b {
+                Button::L | Button::R | Button::Up | Button::Down => {
+                    removal.on_action = !removal.on_action
+                }
+                Button::B => self.removal = None,
+                Button::A => {
+                    let removal = self.removal.take().expect("open question");
+                    if removal.on_action {
+                        return Outcome::Remove(Box::new(removal));
+                    }
+                }
+                _ => {}
+            }
+            return Outcome::None;
         }
         if let Some((_, driver)) = self.gpu_offer {
             return match b {
@@ -1169,6 +1236,12 @@ impl App {
                             return Outcome::ForgetRecent { system, game };
                         }
                     }
+                    (Button::A, Some(QuickItem::Delete(_))) => {
+                        self.back();
+                        if let Some((system, game)) = game {
+                            return Outcome::AskRemove { system, game };
+                        }
+                    }
                     (Button::A, Some(QuickItem::Suspend)) => {
                         return Outcome::Action(SessionAction::Suspend);
                     }
@@ -1243,6 +1316,16 @@ impl App {
             }
         }
         Outcome::None
+    }
+
+    /// A game left the list under the cursor: the cursor stays, now on the
+    /// next one (on the one before when it was the last).
+    pub fn removed(&mut self, data: &dyn DataSource) {
+        if let Screen::Games { system, folder } = &self.screen {
+            let len = Self::list_len(data, system, folder);
+            self.cursor = self.cursor.min(len.saturating_sub(1));
+        }
+        self.progress = Progress::default();
     }
 
     /// The details game moved (its system was re-read and re-sorted): follow

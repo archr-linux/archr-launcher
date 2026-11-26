@@ -1977,3 +1977,16 @@
 "menu.compat_debian_detail" = "Siempre con las bibliotecas de Debian"
 "menu.compat_native_detail" = "Siempre con el sistema de Arch R"
 "error.compat_save" = "No se pudo guardar la compatibilidad de este port.\nRevisa el espacio y los permisos."
+"menu.delete_game" = "Borrar juego"
+"menu.delete_port" = "Borrar port"
+"remove.question" = "¿Borrar {name}?"
+"remove.more" = { one = "y {count} archivo más", other = "y {count} archivos más" }
+"remove.media" = { one = "y {count} archivo del scraper (portada, vídeo, manual)", other = "y {count} archivos del scraper (portada, vídeo, manual)" }
+"remove.script_only" = "No se encontró ninguna carpeta de este port: solo se borra el script."
+"remove.game_detail" = "No se puede deshacer. Las partidas guardadas se quedan."
+"remove.port_detail" = "No se puede deshacer. Lo que el port guardó en su carpeta se va con él."
+"toast.removed" = "Borrado: {name}"
+"toast.remove_failed" = "No se pudo borrar {name}"
+"remove.read_only" = "La tarjeta es de solo lectura."
+"remove.gone" = "La tarjeta o el archivo ya no está."
+"remove.failed" = "Revisa la tarjeta e inténtalo de nuevo."

@@ -1559,6 +1559,30 @@ fn run(
                     settings.switch_gpu(driver.key());
                     Outcome::None
                 }
+                Outcome::AskRemove { system, game } => {
+                    app.removal = library.removal(&system, game);
+                    Outcome::None
+                }
+                Outcome::Remove(removal) => {
+                    let name = [("name", removal.name.as_str())];
+                    let toast = match library.remove(&removal) {
+                        Ok(()) => Toast::new(
+                            Kind::Done,
+                            Category::Storage,
+                            ui.catalog.format("toast.removed", &name),
+                        ),
+                        Err(key) => Toast::new(
+                            Kind::Error,
+                            Category::Errors,
+                            ui.catalog.format("toast.remove_failed", &name),
+                        )
+                        .detail(ui.catalog.text(key)),
+                    };
+                    ui.toasts.push(toast, Instant::now());
+                    app.removed(&library);
+                    recent_due = true;
+                    Outcome::None
+                }
                 requested => requested,
             };
             let requested = if requested == Outcome::OpenNetplay {

@@ -278,6 +278,8 @@ pub(super) fn quick_key(item: &QuickItem) -> &'static str {
         QuickItem::Reboot => "menu.reboot",
         QuickItem::Shutdown => "menu.shutdown",
         QuickItem::Module(_) => "",
+        QuickItem::Delete(false) => "menu.delete_game",
+        QuickItem::Delete(true) => "menu.delete_port",
     }
 }
 
@@ -1351,6 +1353,8 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             }
             if let Some(offer) = &app.convert {
                 self.convert_question(offer, theme)?;
+            } else if let Some(removal) = &app.removal {
+                self.removal_question(removal, data, theme, art)?;
             } else if let Some((title, driver)) = &app.gpu_offer {
                 self.gpu_notice(title, *driver, theme)?;
             } else if let Some(notice) = app.reports_notice.as_ref().filter(|_| app.notice_shown())

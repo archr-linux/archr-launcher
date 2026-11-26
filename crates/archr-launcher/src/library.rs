@@ -380,30 +380,7 @@ impl Library {
                     self.counts_known = true;
                     self.overview_seq += 1;
                 }
-                Update::Games(system, mut games) => {
-                    // A rescan may hold other games (a card came or left).
-                    self.members.retain(|_, origin| origin.0 != system);
-                    if let Some(definition) = self.definitions.iter().find(|sys| sys.name == system)
-                    {
-                        if self.store.import_games(definition, &games) {
-                            self.queue_store();
-                        }
-                        for (index, game) in games.iter_mut().enumerate() {
-                            if let Some(key) = game_key(definition, &game.path) {
-                                game.favorite = self.store.is_favorite(&key);
-                                self.members.insert(key, (system.clone(), index));
-                            }
-                        }
-                    }
-                    let replaced = self.games.insert(system, games).is_some();
-                    for name in ["@favorites", "@recent"] {
-                        // A rescan moves indices: rebuild instead of reusing payloads.
-                        if replaced && self.origins.get_mut(name).map(Vec::clear).is_some() {
-                            self.games.remove(name);
-                        }
-                        self.refresh_collection(name);
-                    }
-                }
+                Update::Games(system, games) => self.put_games(system, games),
                 // A failed read keeps the last good snapshot.
                 Update::Config(config) => {
                     if config.is_some() {
@@ -617,6 +594,8 @@ impl Library {
             | Outcome::Convert(_)
             | Outcome::ReportsNotice(_)
             | Outcome::SwitchGpu(_)
+            | Outcome::AskRemove { .. }
+            | Outcome::Remove(_)
             | Outcome::Launcher(_) => return Err("error.operation".to_owned()),
         }
         Ok(false)
@@ -754,6 +733,104 @@ impl Library {
             self.definition(system)?,
             &self.games(system).get(index)?.path,
         )
+    }
+    /// A system's list, new or read again; favorites and recents follow.
+    fn put_games(&mut self, system: String, mut games: Vec<Game>) {
+        // A rescan may hold other games (a card came or left).
+        self.members.retain(|_, origin| origin.0 != system);
+        if let Some(definition) = self.definitions.iter().find(|sys| sys.name == system) {
+            if self.store.import_games(definition, &games) {
+                self.queue_store();
+            }
+            for (index, game) in games.iter_mut().enumerate() {
+                if let Some(key) = game_key(definition, &game.path) {
+                    game.favorite = self.store.is_favorite(&key);
+                    self.members.insert(key, (system.clone(), index));
+                }
+            }
+        }
+        let replaced = self.games.insert(system, games).is_some();
+        for name in ["@favorites", "@recent"] {
+            // A rescan moves indices: rebuild instead of reusing payloads.
+            if replaced && self.origins.get_mut(name).map(Vec::clear).is_some() {
+                self.games.remove(name);
+            }
+            self.refresh_collection(name);
+        }
+    }
+    /// The card folder `rom` of `system` is in.
+    fn root(&self, system: &str, rom: &std::path::Path) -> Option<std::path::PathBuf> {
+        self.definition(system)?
+            .roots()
+            .map(|root| self.paths.remap(root))
+            .find(|root| rom.starts_with(root))
+    }
+    /// The game menu's Delete: what would go with this game, for the question.
+    pub fn removal(&self, system: &str, index: usize) -> Option<archr_ui::state::Removal> {
+        let game = self.games(system).get(index)?;
+        let root = self.root(system, &game.path)?;
+        let port = system == "ports";
+        let plan = crate::remove::plan(&root, game, port);
+        Some(archr_ui::state::Removal {
+            system: system.to_owned(),
+            rom: game.path.clone(),
+            name: game.name.clone(),
+            port,
+            shown: plan.shown(root.parent().unwrap_or(&root)),
+            media: plan.media,
+            paths: plan.paths,
+            on_action: false,
+        })
+    }
+    /// Deletes what the question showed. Once the game's file is gone it
+    /// leaves its list, its gamelist, the favorites and the recent games at
+    /// once; the list is read again behind. Err: the toast's detail.
+    pub fn remove(&mut self, removal: &archr_ui::state::Removal) -> Result<(), &'static str> {
+        let system = &removal.system;
+        // A card taken out: nothing to do, nothing forgotten.
+        let root = self
+            .root(system, &removal.rom)
+            .filter(|root| root.is_dir())
+            .ok_or("remove.gone")?;
+        if !removal
+            .paths
+            .iter()
+            .all(|p| crate::remove::inside(&root, p))
+        {
+            return Err("remove.failed");
+        }
+        let result = crate::remove::delete(&removal.paths);
+        if !matches!(result, Err((false, _))) {
+            let rom = std::slice::from_ref(&removal.rom);
+            if let Err(error) = archr_index::remove_games(&root, rom) {
+                log::warn!(
+                    "Cannot take {} off the gamelist: {error}",
+                    removal.rom.display()
+                );
+            }
+            self.forget_game(system, &removal.rom);
+        }
+        result.map_err(|(_, error)| match error.raw_os_error() {
+            Some(libc::EROFS | libc::EACCES | libc::EPERM) => "remove.read_only",
+            Some(libc::ENOENT | libc::ENODEV | libc::EIO) => "remove.gone",
+            _ => "remove.failed",
+        })
+    }
+    fn forget_game(&mut self, system: &str, rom: &std::path::Path) {
+        let Some(at) = self.games(system).iter().position(|g| g.path == rom) else {
+            return;
+        };
+        if let Some(key) = self.game_key(system, at) {
+            self.store.forget(&[key]);
+            self.queue_store();
+        }
+        let mut games = self.games(system).to_vec();
+        games.remove(at);
+        self.put_games(system.to_owned(), games);
+        if let Some(entry) = self.overview.systems.iter_mut().find(|s| s.name == system) {
+            entry.game_count = entry.game_count.saturating_sub(1);
+        }
+        self.installed(system);
     }
     fn refresh_collection(&mut self, name: &str) {
         if !self.origins.contains_key(name) {

@@ -1977,3 +1977,16 @@
 "menu.compat_debian_detail" = "Immer mit den Debian-Bibliotheken"
 "menu.compat_native_detail" = "Immer mit dem Arch-R-System"
 "error.compat_save" = "Die Kompatibilität dieses Ports wurde nicht gespeichert.\nSpeicher und Rechte prüfen."
+"menu.delete_game" = "Spiel löschen"
+"menu.delete_port" = "Port löschen"
+"remove.question" = "{name} löschen?"
+"remove.more" = { one = "und {count} weitere Datei", other = "und {count} weitere Dateien" }
+"remove.media" = { one = "und {count} Scraper-Datei (Cover, Video, Handbuch)", other = "und {count} Scraper-Dateien (Cover, Video, Handbuch)" }
+"remove.script_only" = "Kein Ordner dieses Ports gefunden: nur das Skript wird gelöscht."
+"remove.game_detail" = "Das lässt sich nicht rückgängig machen. Die Spielstände bleiben."
+"remove.port_detail" = "Das lässt sich nicht rückgängig machen. Was der Port in seinem Ordner gespeichert hat, wird mitgelöscht."
+"toast.removed" = "Gelöscht: {name}"
+"toast.remove_failed" = "{name} konnte nicht gelöscht werden"
+"remove.read_only" = "Die Karte ist schreibgeschützt."
+"remove.gone" = "Die Karte oder die Datei ist nicht mehr da."
+"remove.failed" = "Prüfe die Karte und versuche es erneut."
