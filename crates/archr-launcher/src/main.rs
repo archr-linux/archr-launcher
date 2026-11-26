@@ -1424,10 +1424,32 @@ fn run(
                 .iter()
                 .any(|b| repeat.is_held(*b)),
         );
+        // A repeat only with nothing left to read: after a frame longer than
+        // the repeat's 300 ms, the press's twin (SDL sends a pad's button as
+        // a joystick and a controller event) and its release still wait in
+        // the queue, and a repeat polled before them stepped twice on one
+        // press. The release is read first; a button really held repeats on
+        // the next pass.
+        let queued = |events: &mut sdl2::EventPump| {
+            events.pump_events();
+            // SAFETY: SDL is initialised (the pump exists); this only reads the queue.
+            unsafe {
+                sdl2::sys::SDL_HasEvents(
+                    sdl2::sys::SDL_EventType::SDL_FIRSTEVENT as u32,
+                    sdl2::sys::SDL_EventType::SDL_LASTEVENT as u32,
+                ) == sdl2::sys::SDL_bool::SDL_TRUE
+            }
+        };
         if close_requested {
             deferred = None;
             repeat.clear();
-        } else if let Some(button) = button.or_else(|| repeat.poll(Instant::now())) {
+        } else if let Some(button) = button.or_else(|| {
+            if repeat.holding() && queued(&mut events) {
+                None
+            } else {
+                repeat.poll(Instant::now())
+            }
+        }) {
             notice::dismiss(&mut ui.banner);
             ui.snap_animations();
             audio.wake();

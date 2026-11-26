@@ -4,7 +4,10 @@ use std::{
     collections::{HashSet, VecDeque},
     fs, io,
     path::{Path, PathBuf},
-    sync::mpsc::{self, Receiver, SyncSender},
+    sync::{
+        mpsc::{self, Receiver},
+        Arc, Condvar, Mutex,
+    },
     time::UNIX_EPOCH,
 };
 
@@ -192,9 +195,24 @@ fn cleanup_thumbnails(dir: &Path) {
 
 type Loaded = (PathBuf, io::Result<Option<Thumbnail>>);
 
+/// Asks the screen made, the newest last; each one's pictures in order.
+#[derive(Default)]
+struct Jobs {
+    batches: Vec<Vec<Vec<PathBuf>>>,
+    closed: bool,
+}
+/// Asks older than the newest few are dropped: the screen moved on, and
+/// decoding them first kept what it shows now waiting (seconds on the
+/// RK3326 when the systems scrolled by).
+const KEPT_ASKS: usize = 4;
+/// Pictures turned into textures per poll: each is an upload on the render
+/// thread (a 1536x1152 one takes tens of ms on the RK3326), and many at
+/// once made one frame long enough to stutter and to fake a held button.
+const UPLOADS_PER_POLL: usize = 2;
+
 pub struct CoverCache<'a> {
     creator: &'a TextureCreator<WindowContext>,
-    requests: SyncSender<Vec<Vec<PathBuf>>>,
+    jobs: Arc<(Mutex<Jobs>, Condvar)>,
     ready: Receiver<Loaded>,
     pending: HashSet<PathBuf>,
     /// Requests issued before `clear`; their results may predate the new art.
@@ -203,6 +221,15 @@ pub struct CoverCache<'a> {
     pixel: bool,
     capacity: usize,
     budget: u64,
+}
+
+impl Drop for CoverCache<'_> {
+    /// The loader ends with its cache.
+    fn drop(&mut self) {
+        let (lock, signal) = &*self.jobs;
+        lock.lock().unwrap_or_else(|e| e.into_inner()).closed = true;
+        signal.notify_all();
+    }
 }
 
 impl<'a> CoverCache<'a> {
@@ -242,29 +269,46 @@ impl<'a> CoverCache<'a> {
         (width, height): (u32, u32),
         (pixel, enlarge): (bool, bool),
     ) -> Self {
-        let (requests, jobs) = mpsc::sync_channel::<Vec<Vec<PathBuf>>>(1);
+        let jobs = Arc::new((Mutex::new(Jobs::default()), Condvar::new()));
         let (done, ready) = mpsc::sync_channel(16);
+        let shared = Arc::clone(&jobs);
         std::thread::spawn(move || {
             cleanup_thumbnails(&dir);
-            while let Ok(paths) = jobs.recv() {
-                for candidates in paths {
-                    let Some(key) = candidates.first() else {
-                        continue;
-                    };
-                    let result = candidates
-                        .iter()
-                        .find(|path| path.is_file())
-                        .map(|path| thumbnail(&dir, path, (width, height), (pixel, enlarge)))
-                        .transpose();
-                    if done.send((key.clone(), result)).is_err() {
-                        return;
+            let (lock, signal) = &*shared;
+            loop {
+                // The newest ask first, one picture at a time: a newer ask
+                // that comes meanwhile goes before the rest of this one.
+                let candidates = {
+                    let mut jobs = lock.lock().unwrap_or_else(|e| e.into_inner());
+                    loop {
+                        if jobs.closed {
+                            return;
+                        }
+                        match jobs.batches.last_mut() {
+                            Some(batch) if batch.is_empty() => {
+                                jobs.batches.pop();
+                            }
+                            Some(batch) => break batch.remove(0),
+                            None => jobs = signal.wait(jobs).unwrap_or_else(|e| e.into_inner()),
+                        }
                     }
+                };
+                let Some(key) = candidates.first() else {
+                    continue;
+                };
+                let result = candidates
+                    .iter()
+                    .find(|path| path.is_file())
+                    .map(|path| thumbnail(&dir, path, (width, height), (pixel, enlarge)))
+                    .transpose();
+                if done.send((key.clone(), result)).is_err() {
+                    return;
                 }
             }
         });
         Self {
             creator,
-            requests,
+            jobs,
             ready,
             pending: HashSet::new(),
             stale: HashSet::new(),
@@ -307,23 +351,55 @@ impl<'a> CoverCache<'a> {
             if let Some(index) = self.textures.iter().position(|(cached, _)| cached == key) {
                 let entry = self.textures.remove(index).expect("located cover");
                 self.textures.push_back(entry);
-            } else if missing.len() < 5 && !self.pending.contains(key) {
+            } else if missing.len() < 5 {
                 missing.push(paths.to_vec());
             }
         }
         self.capacity = self.capacity.max(asked);
-        if !missing.is_empty() && self.requests.try_send(missing.clone()).is_ok() {
-            self.pending.extend(
-                missing
-                    .into_iter()
-                    .filter_map(|paths| paths.into_iter().next()),
-            );
+        if missing.is_empty() {
+            return;
         }
+        let (lock, signal) = &*self.jobs;
+        let mut jobs = lock.lock().unwrap_or_else(|e| e.into_inner());
+        // A picture still waiting in an older ask joins this one; one being
+        // decoded now is left to arrive.
+        let mut batch = Vec::new();
+        for paths in missing {
+            let key = &paths[0];
+            let waiting = jobs.batches.iter_mut().any(|older| {
+                older
+                    .iter()
+                    .position(|p| p.first() == Some(key))
+                    .map(|at| older.remove(at))
+                    .is_some()
+            });
+            if waiting || !self.pending.contains(key) {
+                self.pending.insert(key.clone());
+                batch.push(paths);
+            }
+        }
+        if batch.is_empty() {
+            return;
+        }
+        jobs.batches.retain(|older| !older.is_empty());
+        jobs.batches.push(batch);
+        while jobs.batches.len() > KEPT_ASKS {
+            for paths in jobs.batches.remove(0) {
+                if let Some(key) = paths.first() {
+                    self.pending.remove(key);
+                }
+            }
+        }
+        drop(jobs);
+        signal.notify_one();
     }
 
     pub fn poll(&mut self) -> bool {
         let mut changed = false;
-        while let Ok((path, result)) = self.ready.try_recv() {
+        for _ in 0..UPLOADS_PER_POLL {
+            let Ok((path, result)) = self.ready.try_recv() else {
+                break;
+            };
             self.pending.remove(&path);
             if self.stale.remove(&path) {
                 continue;
@@ -385,7 +461,19 @@ impl<'a> CoverCache<'a> {
     }
     pub fn clear(&mut self) {
         self.textures.clear();
-        self.stale.extend(self.pending.drain());
+        // What is still waiting never starts; only what is being decoded
+        // now comes back, to be ignored.
+        let (lock, _) = &*self.jobs;
+        let mut jobs = lock.lock().unwrap_or_else(|e| e.into_inner());
+        let waiting: HashSet<PathBuf> = jobs
+            .batches
+            .drain(..)
+            .flatten()
+            .filter_map(|paths| paths.into_iter().next())
+            .collect();
+        drop(jobs);
+        let decoding = self.pending.drain().filter(|key| !waiting.contains(key));
+        self.stale.extend(decoding);
     }
     /// A decoded texture without touching the recency order, so several can
     /// be borrowed for one frame.
