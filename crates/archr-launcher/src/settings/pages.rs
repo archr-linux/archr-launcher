@@ -658,7 +658,10 @@ mod tests {
         let (_root, paths) = fixture("");
         let backend = Backend::new(paths.clone());
         assert_eq!(backend.apply_page(Id::ShowEmpty, "1"), Some(Ok("1".into())));
-        assert_eq!(backend.apply_page(Id::OpenAt, "game"), Some(Ok("game".into())));
+        assert_eq!(
+            backend.apply_page(Id::OpenAt, "game"),
+            Some(Ok("game".into()))
+        );
         assert!(backend.apply_page(Id::OpenAt, "nowhere").unwrap().is_err());
         let state = backend.load().unwrap();
         assert_eq!(state.value(Id::ShowEmpty), "1");

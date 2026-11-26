@@ -558,7 +558,11 @@ impl Ui<'_, '_> {
         };
         let code = !qr.code.is_empty();
         let side = if code { 176. } else { 200. };
-        let h = 18. + 22. + 10. + side + 10.
+        let h = 18.
+            + 22.
+            + 10.
+            + side
+            + 10.
             + if code { 34. } else { 0. }
             + text.len() as f32 * 19.
             + 18.
@@ -571,10 +575,20 @@ impl Ui<'_, '_> {
             self.px(width) as u32,
             self.px(h) as u32,
         );
-        self.rounded(panel, self.px(12.) as f32, theme.surface, Some(theme.border))?;
+        self.rounded(
+            panel,
+            self.px(12.) as f32,
+            theme.surface,
+            Some(theme.border),
+        )?;
         let mut y = top + 18.;
         let line = |ui: &Self, y: f32, h: f32| {
-            Rect::new(ui.px(left + 20.), ui.px(y), ui.px(inner) as u32, ui.px(h) as u32)
+            Rect::new(
+                ui.px(left + 20.),
+                ui.px(y),
+                ui.px(inner) as u32,
+                ui.px(h) as u32,
+            )
         };
         if !qr.title.is_empty() {
             let at = line(self, y, 22.);
@@ -590,7 +604,12 @@ impl Ui<'_, '_> {
             let x0 = self.px(320.) - drawn / 2;
             let y0 = self.px(y) + (box_px - drawn) / 2;
             let paper = Rect::new(x0, y0, drawn as u32, drawn as u32);
-            let white = Rgba { r: 255, g: 255, b: 255, a: 255 };
+            let white = Rgba {
+                r: 255,
+                g: 255,
+                b: 255,
+                a: 255,
+            };
             self.rounded(paper, self.px(8.) as f32, white, None)?;
             let dark: Vec<Rect> = (0..n)
                 .flat_map(|my| (0..n).map(move |mx| (mx, my)))
@@ -604,13 +623,19 @@ impl Ui<'_, '_> {
                     )
                 })
                 .collect();
-            self.canvas.set_draw_color(sdl2::pixels::Color::RGB(0, 0, 0));
+            self.canvas
+                .set_draw_color(sdl2::pixels::Color::RGB(0, 0, 0));
             self.canvas.fill_rects(&dark)?;
         }
         y += side + 10.;
         if code {
             let at = line(self, y, 30.);
-            self.label_aligned(&qr.code, (Face::Semibold, 24., theme.text), at, Align::Center)?;
+            self.label_aligned(
+                &qr.code,
+                (Face::Semibold, 24., theme.text),
+                at,
+                Align::Center,
+            )?;
             y += 34.;
         }
         for l in &text {

@@ -1294,12 +1294,12 @@ impl App {
                             let value = stepped(&NPU_GAME, &self.selected_npu.0, b);
                             self.selected_npu.0.clone_from(&value);
                             return Outcome::SetNpu {
-                            system,
-                            game,
-                            value,
-                        };
+                                system,
+                                game,
+                                value,
+                            };
+                        }
                     }
-                }
                     (Button::L | Button::R, Some(QuickItem::Compat)) => {
                         if let Some((system, game)) = game {
                             let value = stepped(&COMPAT, &self.selected_compat.0, b);

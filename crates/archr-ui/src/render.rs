@@ -2986,14 +2986,15 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 QuickItem::Npu => Some(crate::settings::npu_label(app.selected_npu().1)),
                 _ => None,
             };
-            let detail = system.map(|system| {
-                let system = self.catalog.text(system);
-                self.catalog
-                    .format("menu.mangohud_detail", &[("system", &system)])
-            })
-            .or_else(|| {
-                (*item == QuickItem::Compat).then(|| self.catalog.text(compat_texts(app).1))
-            });
+            let detail = system
+                .map(|system| {
+                    let system = self.catalog.text(system);
+                    self.catalog
+                        .format("menu.mangohud_detail", &[("system", &system)])
+                })
+                .or_else(|| {
+                    (*item == QuickItem::Compat).then(|| self.catalog.text(compat_texts(app).1))
+                });
             // ‹ value ›, as the left and right buttons step it; beside both
             // lines, or on the first when the detail needs the whole row.
             let space = self.px(8.);

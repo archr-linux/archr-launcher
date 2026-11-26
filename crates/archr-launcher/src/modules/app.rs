@@ -698,7 +698,10 @@ impl Copy {
             }
             None => publish(root, &name, &ext, copy).map_err(|_| (-32000, "cannot write"))?,
         };
-        let kept = replace.as_ref().and_then(|old| old.cover.clone()).filter(|_| cover.is_none());
+        let kept = replace
+            .as_ref()
+            .and_then(|old| old.cover.clone())
+            .filter(|_| cover.is_none());
         let cover = cover.and_then(|bytes| {
             let images = root.join("media/images");
             let stem = rom.file_stem()?.to_str()?;
@@ -1302,12 +1305,18 @@ mod tests {
             .collect();
         assert!(leftovers.is_empty());
         // The record of the first copy no longer matches the file.
-        assert_eq!(check(&second, Some(old.clone())).err().unwrap().1, "the file changed since it was installed");
+        assert_eq!(
+            check(&second, Some(old.clone())).err().unwrap().1,
+            "the file changed since it was installed"
+        );
         // Another kind of file, or a game changed by the user, is refused.
         let nes = json!({"system": "gb", "file": "downloads/v2.nes"});
         assert!(check(&nes, Some(new.clone())).is_err());
         fs::write(&new.rom, b"edited by the user").unwrap();
-        assert_eq!(check(&second, Some(new.clone())).err().unwrap().1, "the file changed since it was installed");
+        assert_eq!(
+            check(&second, Some(new.clone())).err().unwrap().1,
+            "the file changed since it was installed"
+        );
         assert_eq!(fs::read(&new.rom).unwrap(), b"edited by the user");
     }
 

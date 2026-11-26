@@ -789,7 +789,12 @@ impl View<'_, '_, '_> {
             )?;
             return self.asks(state, &asks, &added, &kept, "modules.asks_more");
         }
-        let picture = (x, below + 8., w, ((self.view_bottom() - BUTTON_ABOVE) + 36. - below - 8.).min(118.));
+        let picture = (
+            x,
+            below + 8.,
+            w,
+            ((self.view_bottom() - BUTTON_ABOVE) + 36. - below - 8.).min(118.),
+        );
         if picture.3 > 40. {
             self.ui.rounded(
                 self.rect(picture),
@@ -937,7 +942,12 @@ impl View<'_, '_, '_> {
         let gap = 8.;
         let each = (w - gap * (buttons.len() as f32 - 1.)) / buttons.len() as f32;
         for (n, key) in buttons.iter().enumerate() {
-            let rect = (x + n as f32 * (each + gap), (self.view_bottom() - BUTTON_ABOVE), each, 36.);
+            let rect = (
+                x + n as f32 * (each + gap),
+                (self.view_bottom() - BUTTON_ABOVE),
+                each,
+                36.,
+            );
             let focus = n == state.modules.button.min(buttons.len() - 1);
             let (fill, edge, ink) = if focus {
                 (theme.highlight_bg, None, theme.highlight_text)

@@ -437,7 +437,12 @@ impl View<'_, '_, '_> {
             (14., theme.muted),
         )?;
         if let Some(action) = store.action() {
-            let button = (x, (self.view_bottom() - BUTTONS_ABOVE), pill_x - 8. - x, 36.);
+            let button = (
+                x,
+                (self.view_bottom() - BUTTONS_ABOVE),
+                pill_x - 8. - x,
+                36.,
+            );
             self.ui.rounded(
                 self.rect(button),
                 self.ui.px(10.) as f32,

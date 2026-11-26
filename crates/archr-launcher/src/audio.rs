@@ -538,8 +538,14 @@ mod tests {
             Some(Event::Move),
             "a step along a shelf is a move, not an open"
         );
-        assert_eq!(cue(Button::Down, (&second, 0), (&below, 0), &none), Some(Event::Move));
-        assert_eq!(cue(Button::R, (&first, 0), (&library, 0), &none), Some(Event::Page));
+        assert_eq!(
+            cue(Button::Down, (&second, 0), (&below, 0), &none),
+            Some(Event::Move)
+        );
+        assert_eq!(
+            cue(Button::R, (&first, 0), (&library, 0), &none),
+            Some(Event::Page)
+        );
         assert_eq!(cue(Button::Left, (&first, 0), (&first, 0), &none), None);
         assert_eq!(
             cue(Button::A, (&systems, 0), (&snes, 0), &none),
