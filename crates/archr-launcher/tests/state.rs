@@ -1246,6 +1246,10 @@ fn the_last_row_of_a_game_menu_asks_with_cancel_first() {
     data.games.get_mut("snes").unwrap().truncate(1);
     app.removed(&data);
     assert_eq!(app.cursor, 0);
+    // The system's last game: its list is gone, back where it was opened.
+    data.games.get_mut("snes").unwrap().clear();
+    app.removed(&data);
+    assert_eq!(app.screen, Screen::Systems);
 }
 
 #[test]

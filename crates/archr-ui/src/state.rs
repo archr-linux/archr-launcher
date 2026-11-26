@@ -1420,11 +1420,20 @@ impl App {
     }
 
     /// A game left the list under the cursor: the cursor stays, now on the
-    /// next one (on the one before when it was the last).
+    /// next one (on the one before when it was the last). The list's last
+    /// game takes the list with it: back where it was opened, as B does.
     pub fn removed(&mut self, data: &dyn DataSource) {
         if let Screen::Games { system, folder } = &self.screen {
-            let len = Self::list_len(data, system, folder);
-            self.cursor = self.cursor.min(len.saturating_sub(1));
+            match Self::list_len(data, system, folder) {
+                0 => {
+                    self.back();
+                    if self.screen == Screen::Systems {
+                        let rows = Self::system_rows(data).len();
+                        self.cursor = self.cursor.min(rows.saturating_sub(1));
+                    }
+                }
+                len => self.cursor = self.cursor.min(len - 1),
+            }
         }
         self.progress = Progress::default();
     }
