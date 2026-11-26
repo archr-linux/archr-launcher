@@ -1122,7 +1122,10 @@ mod tests {
         // Running attempts: B kills each, and the next one starts at once.
         for round in 1..=3 {
             switch(&mut runtime, "1");
-            wait(&mut runtime, "rejoin not started", |r| r.state.rejoining);
+            // The state turns first; the script writes its call a moment later.
+            wait(&mut runtime, "rejoin not started", |r| {
+                r.state.rejoining && calls(&dir, "connect Casa") >= round
+            });
             assert_eq!(calls(&dir, "connect Casa"), round);
             let effect = runtime.state.handle(archr_ui::state::Button::B);
             runtime.apply(effect);
