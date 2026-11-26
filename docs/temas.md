@@ -698,8 +698,8 @@ teste `crates/archr-ui/tests/themes/prateleiras/` liga tudo isso.
 
 ## Telas livres
 
-As telas de sistemas e de jogos de uma visualização também podem ser
-descritas como uma **lista de elementos**, cada um no seu retângulo, em
+As telas de sistemas, de jogos e de detalhes de uma visualização também
+podem ser descritas como uma **lista de elementos**, cada um no seu retângulo, em
 vez dos lugares fixos da tabela acima (`list`, `panel`, `art`, `info`...).
 É o jeito de fazer temas como os do EmulationStation: arte de tela cheia por
 sistema, molduras recortadas por cima do conteúdo, texto girado, vários
@@ -707,7 +707,7 @@ textos e imagens com dados do sistema e do jogo.
 
 Uma tela é livre quando a sua tabela tem elementos `el`. Sem `el`, nada
 muda: os temas de hoje desenham exatamente como antes, e as outras telas
-(detalhes, Menu Start, menus, Configurações) seguem as suas tabelas.
+(Menu Start, menus, Configurações) seguem as suas tabelas.
 
 ```toml
 [view.solo]
@@ -788,6 +788,7 @@ para todo texto, como no resto do launcher.
 | `rating` | a nota do jogo em cinco estrelas | veja [Estrelas](#estrelas-rating) |
 | `fields` | uma ficha de rótulo e valor | veja [Ficha](#ficha-fields) |
 | `video` | o vídeo do jogo ou do sistema em foco, sem som | veja [Vídeo](#vídeo-video) |
+| `actions` | os botões da tela de detalhes (Jogar, Favorito, Coletar de novo); só nela | veja [Tela de detalhes](#tela-de-detalhes) |
 
 Campo desconhecido, valor de tipo errado ou fora da faixa gera aviso no log e
 fica de fora (ou é limitado); um elemento sem o essencial (um `kind` que não
@@ -889,6 +890,7 @@ wrap = true                               # quebra linha; a última que cabe ter
 | `wrap` | `true`/`false` | `false`: uma linha, com "…" se não couber |
 | `fit_text` | `ellipsis`, `shrink` | `ellipsis`; `shrink`: a linha que não cabe diminui até 60 % do `size` antes do "…" |
 | `line` | 0,8 a 3 | `1.25`: altura da linha, vezes o tamanho da letra |
+| `long_text` | `ellipsis`, `scroll` | `ellipsis`: o texto que não cabe termina em "…"; `scroll`: rola com ↑/↓ (só na tela de detalhes, com `wrap = true`) |
 
 Um texto vazio (um jogo sem descrição) não desenha nada. Até 16 arquivos de
 fonte por tela; um arquivo que não existe usa a fonte regular do tema.
@@ -908,7 +910,7 @@ vale.
 | `${system.maker}`, `${system.year}` | fabricante e ano, do catálogo de sistemas |
 | `${system.count}`, `${system.games}` | quantos jogos: "213" e "213 jogos" (no idioma) |
 | `${system.favorites}` | quantos favoritos |
-| `${game.name}`, `${game.description}`, `${game.genre}`, `${game.developer}`, `${game.publisher}` | do jogo em foco (tela de jogos) |
+| `${game.name}`, `${game.description}`, `${game.genre}`, `${game.developer}`, `${game.publisher}` | do jogo em foco (tela de jogos) ou aberto (tela de detalhes) |
 | `${game.year}`, `${game.players}` | ano e jogadores ("1 a 2 jogadores") |
 | `${game.rating}` | a nota de 0 a 5, com uma casa ("4,5") |
 | `${game.last_played}` | quando foi jogado ("há 2 dias") |
@@ -1417,7 +1419,7 @@ loop = false                              # toca uma vez e volta à imagem
 | `loop` | `true`, `false` | `true` | recomeça no fim; com `false`, toca uma vez e volta ao `fallback` |
 | `mute` | `true` | `true` | o vídeo é sempre sem som, como nos detalhes; `false` gera aviso e fica mudo |
 
-- Um vídeo por tela, na tela de sistemas ou de jogos; um segundo `video`
+- Um vídeo por tela, na tela de sistemas, de jogos ou de detalhes; um segundo `video`
   gera aviso e fica de fora.
 - Toca com o mesmo tocador da prévia dos detalhes (o ffmpeg num processo à
   parte, uma linha de decodificação, 25 quadros por segundo) e segue a opção
@@ -1435,7 +1437,7 @@ loop = false                              # toca uma vez e volta à imagem
 ### Animações: `enter` e `select`
 
 Qualquer elemento pode entrar em movimento: `enter` toca quando a tela
-abre (ao abrir a tela de sistemas ou de jogos, ao voltar de um jogo, das
+abre (ao abrir a tela de sistemas, de jogos ou de detalhes, ao voltar de um jogo, das
 Configurações ou de outra tela), e `select` toca a cada troca do item em
 foco, para os elementos que mostram dados dele (imagem e vídeo do jogo ou
 do sistema, nome, descrição, nota, ficha).
@@ -1497,6 +1499,113 @@ select = { scale = 0.9, duration = 0.2 }                       # cresce um pouco
   imagens, caixas e vídeo só mudam de retângulo. Na lista vale a
   posição do `rect` dela.
 
+### Tela de detalhes
+
+A tela de detalhes do jogo (Y › Detalhes) também pode ser livre, com os
+mesmos elementos e dados das outras: `[[view.<id>.details.el]]`. Os dados
+`game.*` são os do jogo aberto e `${list.index}` é a posição dele entre os
+jogos do sistema. Sem `details`, a visualização usa a tela de detalhes de
+sempre (as chaves `details_*` e `[details]`).
+
+```toml
+[[view.solo.details.el]]
+id = "capa"
+kind = "image"
+src = ["game.cover", "game.screenshot"]
+rect = { x = 0.04, y = 0.17, w = 0.42, h = 0.37 }
+fit = "contain"
+
+[[view.solo.details.el]]
+id = "ficha"
+kind = "fields"
+rows = [
+  { label = "@genre",       value = "${game.genre}" },
+  { label = "@players",     value = "${game.players}" },
+  { label = "@last_played", value = "${game.last_played}" },
+  { label = "@rating",      rating = "game.rating" },
+]
+rect = { x = 0.04, y = 0.556, w = 0.42, h = 0.29 }
+row = 0.058
+size = 0.029
+
+[[view.solo.details.el]]
+id = "descricao"
+kind = "text"
+text = "${game.description}"
+rect = { x = 0.52, y = 0.69, w = 0.44, h = 0.14 }
+size = 0.029
+wrap = true
+long_text = "scroll"                       # ↑/↓ rolam o texto que não cabe
+
+[[view.solo.details.el]]
+id = "botoes"
+kind = "actions"                           # Jogar, Favorito, Coletar de novo
+rect = { x = 0.52, y = 0.845, w = 0.44, h = 0.07 }
+
+[[view.solo.details.el]]
+id = "dicas"
+kind = "hints"
+rect = { x = 0.4, y = 0.94, w = 0.575, h = 0.05 }
+```
+
+Para a tela de detalhes ser a tela de jogos com outra coisa no lugar da
+lista, ela herda os elementos da tela de jogos da mesma visualização:
+
+```toml
+[[view.albedo.games.el]]
+id = "lista"
+kind = "list"
+rect = { x = 0, y = 0.15, w = 0.433, h = 0.775 }
+
+[[view.albedo.games.el]]
+id = "descricao"
+kind = "text"
+text = "${game.description}"
+rect = { x = 0.4667, y = 0.765, w = 0.5, h = 0.16 }
+wrap = true
+
+[[view.albedo.games.el]]
+id = "dicas"
+kind = "hints"
+rect = { x = 0.4, y = 0.925, w = 0.575, h = 0.075 }
+
+[view.albedo.details]
+base = "games"                             # todos os elementos da tela de jogos...
+remove = ["lista"]                         # ...menos a lista
+
+[[view.albedo.details.el]]
+id = "descricao"                           # o mesmo id: troca só este campo
+long_text = "scroll"
+
+[[view.albedo.details.el]]
+id = "capa"                                # id novo: um elemento a mais
+kind = "image"
+src = "game.cover"
+rect = { x = 0.03, y = 0.175, w = 0.373, h = 0.43 }
+```
+
+- `base = "games"` é o único valor; `remove` e os elementos com o mesmo
+  `id` funcionam como em [Herdar uma visualização](#herdar-uma-visualização-base-e-remove).
+  Um elemento herdado com `base = "<id>"` continua apontando para a tela de
+  jogos. A visualização que herda outra (`base` no topo) herda também a
+  tela de detalhes dela.
+- A tela de detalhes não tem lista, carrossel nem grade (geram aviso e
+  ficam de fora). Os botões continuam os de sempre: A faz a ação em foco
+  (Jogar, Favorito ou Coletar de novo), L1/R1 trocam o foco, ↑/↓ rolam a
+  descrição, Y abre as opções do jogo e B volta. As `hints` mostram esses
+  botões, com ↕ só quando há texto para rolar.
+- `actions` desenha os três botões no retângulo, o que está em foco aceso,
+  na aparência dos botões do tema. Sem ele, a ação em foco aparece só na
+  dica do A.
+- `long_text = "scroll"`: o texto com `wrap = true` que passa do retângulo
+  rola uma linha por toque em ↑/↓; enquanto há mais embaixo, a última linha
+  aparece esmaecida. Um texto por tela rola; um segundo, ou `long_text` nas
+  telas de sistemas e jogos, gera aviso e termina em "…".
+- O `video` da tela de detalhes toca no lugar da prévia de sempre, com o
+  mesmo tocador e a mesma opção Vídeo de prévia. As animações `enter`
+  tocam ao abrir os detalhes, e as opções do tema (`[options]`, variáveis)
+  valem como nas outras telas.
+
 ### O que as opções da Aparência fazem numa tela livre
 
 Capa do jogo, Largura e Cantos da capa e Fundo por sistema não mexem numa
@@ -1508,7 +1617,8 @@ elemento não dá a sua cor.
 
 As telas livres chegam por partes. Ainda não há: vídeo com som, vídeo
 aleatório de um jogo do sistema na tela de sistemas, `include` dentro de uma
-escolha de opção e a tela de detalhes como cena. Chaves dessas partes geram
+escolha de opção e texto que rola sozinho (`long_text` só rola com ↑/↓, na
+tela de detalhes). Chaves dessas partes geram
 aviso e ficam de fora.
 
 ### Testar
@@ -1518,7 +1628,10 @@ das maquetes aprovadas: Solo e Albedo, e as coleções delas, Carrossel
 (coluna de logos e grade 3×3) e Roda (a roda de sistemas e uma fila de
 capas com reflexo, no arquivo incluído `parts/roda.toml`). "Solo escuro"
 herda a Solo, e duas opções ("Tom do tema" e "Arte") trocam a cor e a
-arte de fundo. A Albedo tem animações de entrada e de troca. As capturas
+arte de fundo. A Albedo tem animações de entrada e de troca. A Solo e a
+Albedo têm também a tela de detalhes (a da Albedo herda a tela de jogos), e
+o Solo escuro põe os botões nela; as capturas `*-detalhes-*` mostram a
+descrição longa no começo, rolada e no fim. As capturas
 saem em 640×480, 720×720 e 1024×768, com um quadro no meio do deslize e
 outro no meio das animações, com Animações Ligadas, Reduzidas e
 Desligadas:
@@ -2036,6 +2149,10 @@ em `font_bold` e a posição ("4 de 213") à direita, no lugar da linha do
 cabeçalho.
 
 ## Detalhes do jogo
+
+Uma visualização com `[[view.<id>.details.el]]` troca esta tela por uma
+tela livre (veja [Tela de detalhes](#tela-de-detalhes)); o que segue vale
+para as outras.
 
 A tela de detalhes (Y › Detalhes, na lista de jogos) põe cada bloco num
 retângulo do `theme.toml`. Um tema pode mover, redimensionar ou trocar os

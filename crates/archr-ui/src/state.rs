@@ -628,6 +628,9 @@ pub struct App {
     /// The games screen is a free screen (docs/temas.md, Telas livres): its
     /// pictures are its own, only its list's covers come from outside.
     games_free: bool,
+    /// The details screen is a free screen: the same, and it asks for its
+    /// own clip.
+    details_free: bool,
     /// A game's menu opens with Play, Favorite and Details side by side
     /// (the theme's `[menu]` `style = "context"`).
     menu_quick: bool,
@@ -757,6 +760,7 @@ impl App {
             home_hero: None,
             games_grid: None,
             games_free: false,
+            details_free: false,
             menu_quick: false,
         }
     }
@@ -776,6 +780,7 @@ impl App {
             && collection.is_none())
         .then_some(view.games.list.columns.max(1));
         self.games_free = view.games.scene.is_some();
+        self.details_free = view.details.is_some();
         self.menu_quick = view.menu_quick;
         let had = self.home.is_some();
         self.home.clone_from(&view.home);

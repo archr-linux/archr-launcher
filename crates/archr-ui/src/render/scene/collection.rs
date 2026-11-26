@@ -34,6 +34,7 @@ fn items(backdrop: &Screen, rows: &[String], data: &dyn DataSource) -> usize {
 pub(super) fn key(backdrop: &Screen) -> String {
     match backdrop {
         Screen::Games { system, folder } => format!("@scene:{system}/{folder}"),
+        Screen::Details { system, game } => format!("@scene:details:{system}/{game}"),
         _ => "@scene:systems".to_owned(),
     }
 }

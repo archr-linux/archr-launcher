@@ -1,7 +1,7 @@
-//! Free screens (docs/temas.md, Telas livres): the elements of a systems or
-//! games screen drawn in their order, each in its box. Pictures load on a
-//! worker at most one and a half times the screen's size (never enlarged);
-//! until one arrives the element is simply not there.
+//! Free screens (docs/temas.md, Telas livres): the elements of a systems,
+//! games or details screen drawn in their order, each in its box. Pictures
+//! load on a worker at most one and a half times the screen's size (never
+//! enlarged); until one arrives the element is simply not there.
 use super::*;
 use crate::{
     covers::CoverCache,
@@ -145,6 +145,9 @@ impl Facts<'_> {
     }
 }
 
+/// A text wrapped: the text, the width, the size and the font.
+type Wrapping = (String, u32, u16, Font);
+
 /// What a free screen keeps between frames.
 #[derive(Default)]
 pub(super) struct SceneCache<'t> {
@@ -166,6 +169,9 @@ pub(super) struct SceneCache<'t> {
     focus: Option<(String, usize, Tween)>,
     /// The screen's entrance and its focus's arrival (`enter`, `select`).
     show: Show,
+    /// The details' scrolling text, wrapped: the text, width, size and
+    /// font it was wrapped for.
+    scroll: Option<(Wrapping, Vec<String>)>,
 }
 
 /// When the screen came in and its focus last moved, for the elements'
@@ -297,6 +303,20 @@ impl<'t> Ui<'_, 't> {
             .iter()
             .filter(|e| visible(e, &facts))
             .collect();
+        // The details' scrolling text: how far it reaches below its box,
+        // known before the hints (↕) and the host (↑/↓) need it.
+        if matches!(backdrop, Screen::Details { .. }) {
+            self.details_overflow = 0;
+            for e in &shown {
+                if let Kind::Text(t) = &e.kind {
+                    if t.scroll {
+                        let text = t.text.fill(|d| facts.value(d), |k| self.phrase(k));
+                        let (lines, _, room) = self.laid(&text, t, self.area(e.rect))?;
+                        self.details_overflow = lines.len().saturating_sub(room);
+                    }
+                }
+            }
+        }
         let poses = self.poses(scene, &shown, backdrop, (rows, cursor));
         let placed: Vec<Placed> = shown
             .iter()
@@ -381,7 +401,10 @@ impl<'t> Ui<'_, 't> {
             });
             self.layered_moved(outer, turn, moved, |ui| match &element.kind {
                 Kind::Image(image) => ui.scene_image(image, rect, inner, &facts, theme),
-                Kind::Text(text) => ui.scene_text(text, rect, inner, &facts, theme),
+                Kind::Text(text) => {
+                    let first = text.scroll.then_some(app.details_scroll);
+                    ui.scene_text(text, (rect, first), inner, &facts, theme)
+                }
                 Kind::Rating(stars) => match facts.stars {
                     Some(rating) => ui.stars(stars, rating, rect, inner, &facts, theme),
                     None => Ok(()),
@@ -402,6 +425,13 @@ impl<'t> Ui<'_, 't> {
                 Kind::Video(video) => ui.scene_video(video, (rect, inner), &facts, theme, art),
                 Kind::Hints(hints) => ui.scene_hints(app, data, theme, layout, (hints, rect)),
                 Kind::Status(plain) => ui.status_pill(theme, Some(rect), *plain).map(|_| ()),
+                Kind::Actions => match facts.game {
+                    Some(game) => {
+                        let buttons = ui.details_buttons(app, game);
+                        ui.details_actions((&buttons, app.details_focus), rect, theme)
+                    }
+                    None => Ok(()),
+                },
                 Kind::Panel(panel) => {
                     let panel = crate::layout::Panel {
                         rect: rect01,
@@ -486,6 +516,7 @@ impl<'t> Ui<'_, 't> {
                 | Kind::Collection(_)
                 | Kind::Hints(_)
                 | Kind::Status(_)
+                | Kind::Actions
         );
         // The list is placed by the layout, not by its box.
         let through = pose.moved()
@@ -601,6 +632,16 @@ impl<'t> Ui<'_, 't> {
                 };
                 (system.clone(), game, index.min(total), total, item)
             }
+            // Its place among the system's games.
+            Screen::Details { system, game: at } => {
+                let games = data.games(system);
+                let game = games.get(*at);
+                let item = game
+                    .and_then(|g| g.path.file_stem())
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                (system.clone(), game, at + 1, games.len(), item)
+            }
             _ => {
                 let system = rows.get(cursor).cloned().unwrap_or_default();
                 (system.clone(), None, cursor + 1, rows.len(), system)
@@ -620,6 +661,7 @@ impl<'t> Ui<'_, 't> {
                 .and_then(|l| l.folder(cursor).map(str::to_owned))
                 .or_else(|| game.map(|g| g.name.clone()))
                 .unwrap_or_default(),
+            Screen::Details { .. } => game.map(|g| g.name.clone()).unwrap_or_default(),
             _ => system_title(&system, data, catalog),
         };
         Facts {
@@ -803,7 +845,7 @@ impl<'t> Ui<'_, 't> {
             return drawn;
         }
         match &image.fallback {
-            Some(text) if missing => self.scene_text(text, rect, opacity, facts, theme),
+            Some(text) if missing => self.scene_text(text, (rect, None), opacity, facts, theme),
             _ => Ok(()),
         }
     }
@@ -846,34 +888,36 @@ impl<'t> Ui<'_, 't> {
         }
     }
 
+    /// `first`: the line a scrolling text starts at (`long_text`).
     fn scene_text(
         &mut self,
         t: &Text,
-        rect: Rect,
+        (rect, first): (Rect, Option<usize>),
         opacity: f32,
         facts: &Facts<'_>,
         theme: &Theme,
     ) -> Result<(), String> {
         let text = t.text.fill(|d| facts.value(d), |k| self.phrase(k));
-        self.scene_words(&text, t, rect, (t.color.unwrap_or(theme.text), opacity))
+        let ink = (t.color.unwrap_or(theme.text), opacity);
+        match first {
+            Some(first) => self.scene_scroll(&text, t, rect, ink, first),
+            None => self.scene_words(&text, t, rect, ink),
+        }
     }
 
-    /// `text` written as `t` says, in `ink`.
-    fn scene_words(
+    /// `text` as `t` lays it in `rect`: its lines, its size and how many
+    /// lines the box holds. A scrolling text's lines are kept.
+    fn laid(
         &mut self,
         text: &str,
         t: &Text,
         rect: Rect,
-        (ink, opacity): (Rgba, f32),
-    ) -> Result<(), String> {
+    ) -> Result<(Vec<String>, f32, usize), String> {
         let text = if t.upper {
             text.to_uppercase()
         } else {
             text.to_owned()
         };
-        if text.trim().is_empty() {
-            return Ok(());
-        }
         let face = face(t.font);
         let mut size = t.size * self.frame.reference().1;
         if t.shrink && !t.wrap {
@@ -884,24 +928,89 @@ impl<'t> Ui<'_, 't> {
         }
         let px = self.frame.font_size(size);
         let line = (f32::from(px) * t.line).round().max(1.) as i32;
-        let mut lines = if t.wrap {
-            self.wrap(&text, face, size, rect.width())?
-        } else {
-            vec![text]
-        };
         let room = if t.wrap {
             (rect.height() as i32 / line).max(1) as usize
         } else {
             1
         };
+        let key = (text, rect.width(), px, t.font);
+        if let Some((_, lines)) = self
+            .scene_cache
+            .scroll
+            .as_ref()
+            .filter(|(k, _)| t.scroll && *k == key)
+        {
+            return Ok((lines.clone(), size, room));
+        }
+        let lines = if t.wrap {
+            self.wrap(&key.0, face, size, rect.width())?
+        } else {
+            vec![key.0.clone()]
+        };
+        if t.scroll {
+            self.scene_cache.scroll = Some((key, lines.clone()));
+        }
+        Ok((lines, size, room))
+    }
+
+    /// A text longer than its box from line `first` on (never past its
+    /// last page); with more below, its last line fades.
+    fn scene_scroll(
+        &mut self,
+        text: &str,
+        t: &Text,
+        rect: Rect,
+        (ink, opacity): (Rgba, f32),
+        first: usize,
+    ) -> Result<(), String> {
+        let (lines, size, room) = self.laid(text, t, rect)?;
+        let first = first.min(lines.len().saturating_sub(room));
+        let shown: Vec<String> = lines.iter().skip(first).take(room).cloned().collect();
+        let more = first + room < lines.len();
+        let fade = |k: f32| (ink, opacity * k);
+        for (n, line) in shown.iter().enumerate() {
+            let last = more && n + 1 == shown.len();
+            let one = vec![line.clone()];
+            self.scene_lines(one, (t, size, n), rect, fade(if last { 0.45 } else { 1. }))?;
+        }
+        Ok(())
+    }
+
+    /// `text` written as `t` says, in `ink`.
+    fn scene_words(
+        &mut self,
+        text: &str,
+        t: &Text,
+        rect: Rect,
+        (ink, opacity): (Rgba, f32),
+    ) -> Result<(), String> {
+        if text.trim().is_empty() {
+            return Ok(());
+        }
+        let (mut lines, size, room) = self.laid(text, t, rect)?;
         if lines.len() > room {
             lines.truncate(room);
             if let Some(last) = lines.last_mut() {
                 last.push('…');
             }
         }
+        self.scene_lines(lines, (t, size, 0), rect, (ink, opacity))
+    }
+
+    /// `lines` of `t` at `size`, the first in the box's line `at`.
+    fn scene_lines(
+        &mut self,
+        lines: Vec<String>,
+        (t, size, at): (&Text, f32, usize),
+        rect: Rect,
+        (ink, opacity): (Rgba, f32),
+    ) -> Result<(), String> {
+        let face = face(t.font);
+        let px = self.frame.font_size(size);
+        let line = (f32::from(px) * t.line).round().max(1.) as i32;
         let block = line * lines.len() as i32;
         let top = match t.valign {
+            _ if t.scroll => rect.y() + line * at as i32,
             VAlign::Top => rect.y(),
             VAlign::Middle => rect.y() + (rect.height() as i32 - block) / 2,
             VAlign::Bottom => rect.bottom() - block,

@@ -1176,7 +1176,7 @@ fn included(table: &mut toml::Table, dir: &Path, open: &mut Vec<PathBuf>) {
 /// A view's own table over the one it inherits (`Theme::view_tables`).
 fn inherit(view: &mut toml::Table, own: &toml::Table, at: &str) {
     for (key, value) in own {
-        let screen = matches!(key.as_str(), "systems" | "games");
+        let screen = matches!(key.as_str(), "systems" | "games" | "details");
         match (view.get_mut(key), value) {
             (Some(toml::Value::Table(base)), toml::Value::Table(over)) if screen => {
                 inherit_screen(base, over, &format!("{at}.{key}"));
@@ -1193,7 +1193,10 @@ fn inherit(view: &mut toml::Table, own: &toml::Table, at: &str) {
         }
     }
 }
-fn inherit_screen(screen: &mut toml::Table, own: &toml::Table, at: &str) {
+/// A screen's own table over the one it inherits: `remove` takes elements
+/// away, an element with an inherited id changes only the fields it
+/// writes, a new id is one more.
+pub(crate) fn inherit_screen(screen: &mut toml::Table, own: &toml::Table, at: &str) {
     let id = |e: &toml::Value| e.get("id").and_then(toml::Value::as_str).map(str::to_owned);
     let mut elements = match screen.remove("el") {
         Some(toml::Value::Array(elements)) => elements,

@@ -1214,9 +1214,13 @@ fn run(
         let videos =
             !settings.active && ui.app.is_none() && settings.state.value(Id::PreviewVideo) == "1";
         // A free screen's clip is the one its last frame asked for.
-        let free = matches!(app.screen, Screen::Systems | Screen::Games { .. });
+        let free = match app.screen {
+            Screen::Systems | Screen::Games { .. } => true,
+            Screen::Details { .. } => app.details_free(),
+            _ => false,
+        };
         let video = match &app.screen {
-            Screen::Details { system, game } if videos => {
+            Screen::Details { system, game } if videos && !free => {
                 let path = library
                     .games(system)
                     .get(*game)
@@ -1894,6 +1898,10 @@ fn details_art(app: &App, data: &dyn DataSource) -> (Option<PathBuf>, Option<Pat
     let Screen::Details { system, game } = app.backdrop().0 else {
         return (None, None);
     };
+    // A free details screen loads the pictures it shows itself.
+    if app.details_free() {
+        return (None, None);
+    }
     data.games(system).get(*game).map_or((None, None), |game| {
         (game.details.screenshot.clone(), game.details.logo.clone())
     })
@@ -1933,6 +1941,9 @@ const HOME_RECENT: usize = 12;
 fn cover_paths(app: &App, data: &dyn DataSource) -> (Option<PathBuf>, Vec<PathBuf>) {
     let (screen, cursor) = app.backdrop();
     if let Screen::Details { system, game } = screen {
+        if app.details_free() {
+            return (None, Vec::new());
+        }
         let image = data.games(system).get(*game).and_then(|g| g.image.clone());
         return (image.clone(), image.into_iter().collect());
     }

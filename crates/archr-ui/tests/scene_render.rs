@@ -1427,6 +1427,22 @@ fn the_video_element_asks_for_its_clip_and_shows_its_frame_or_still() {
         app.handle(Button::Up, &data);
         frame(&mut ui, &app, none, "jogos-de-volta");
         assert_eq!(ui.scene_clip.as_ref().map(|c| &c.file), Some(&aladdin));
+        // Its details inherit the games screen's clip, and play it.
+        app.screen = Screen::Details {
+            system: "megadrive".into(),
+            game: 0,
+        };
+        frame(&mut ui, &app, none, "detalhes");
+        let clip = ui.scene_clip.clone().expect("the details' clip");
+        assert_eq!(clip.file, aladdin);
+        let frame_of = fake(clip.size);
+        let art = archr_ui::render::Art {
+            video: Some((&frame_of, 0.5)),
+            video_file: Some(&aladdin),
+            ..none
+        };
+        let playing = frame(&mut ui, &app, art, "detalhes-video");
+        assert!(share(&playing, game_box) > 0.9);
     }
 }
 
@@ -2022,5 +2038,381 @@ fn elements_enter_and_follow_the_focus_by_the_animations_setting() {
     }
     for (name, took) in &timings {
         eprintln!("frame {name}: {took:?}");
+    }
+}
+
+/// The details screen as a free screen: Solo's own elements, Albedo's
+/// inherited from its games screen less the list, and "solo-escuro"
+/// inheriting the Solo's with the details' buttons; a bad value is a
+/// warning and the rest still reads.
+#[test]
+fn details_screens_read_inherit_and_warn() {
+    let dir = tempfile::tempdir().unwrap();
+    theme_folder(dir.path());
+    let theme = load(dir.path(), "solo");
+    let ids = |view: &View| -> Vec<String> {
+        let scene = view.details.as_ref().expect("a free details screen");
+        scene.elements.iter().map(|e| e.id.clone()).collect()
+    };
+    for (w, h) in SIZES {
+        let fitted = theme.fitted(w, h);
+        for id in ["solo", "albedo", "solo-escuro"] {
+            let mut view = View::lista(&fitted);
+            let said = warnings(|| view = fitted.view(id));
+            assert!(said.is_empty(), "{id} {w}x{h}: {said:#?}");
+        }
+        let solo = fitted.view("solo");
+        let found = ids(&solo);
+        for id in [
+            "arte",
+            "logo-sistema",
+            "capa",
+            "ficha",
+            "video",
+            "descricao",
+            "dicas",
+        ] {
+            assert!(found.iter().any(|f| f == id), "{id}: {found:?}");
+        }
+        let albedo = fitted.view("albedo");
+        let found = ids(&albedo);
+        // The games screen's elements, less the list and the position.
+        assert!(!found.iter().any(|f| f == "lista" || f == "posicao"));
+        for id in [
+            "fundo",
+            "moldura",
+            "titulo",
+            "captura",
+            "video",
+            "logo-jogo",
+            "ficha",
+        ] {
+            assert!(found.iter().any(|f| f == id), "{id}: {found:?}");
+        }
+        let scene = albedo.details.as_ref().unwrap();
+        let element = |id: &str| scene.elements.iter().find(|e| e.id == id).unwrap();
+        // The cover moved, its other fields kept; the description scrolls.
+        let capa = element("capa");
+        assert!((capa.rect.x - 0.03).abs() < 1e-4 && (capa.rect.y - 0.175).abs() < 1e-4);
+        assert!(matches!(&capa.kind, Kind::Image(_)));
+        assert!(matches!(&element("descricao").kind, Kind::Text(t) if t.scroll));
+        assert!(matches!(&element("status").kind, Kind::Status(_)));
+        // The games screen keeps its list and its own cover.
+        let games = albedo.games.scene.as_ref().unwrap();
+        assert!(games.elements.iter().any(|e| e.id == "lista"));
+        let cover = games.elements.iter().find(|e| e.id == "capa").unwrap();
+        assert!((cover.rect.x - 0.48).abs() < 1e-4);
+        // Inherited with the view, with the buttons added.
+        let dark = fitted.view("solo-escuro");
+        let scene = dark.details.as_ref().unwrap();
+        assert!(scene
+            .elements
+            .iter()
+            .any(|e| matches!(e.kind, Kind::Actions)));
+        let text = scene.elements.iter().find(|e| e.id == "descricao").unwrap();
+        assert!(
+            (text.rect.h - 0.14).abs() < 1e-4 && matches!(&text.kind, Kind::Text(t) if t.scroll)
+        );
+    }
+    // Views without `details` keep the details of the `details_*` keys.
+    assert!(theme.view("carrossel").details.is_none());
+    assert!(theme.view("lista").details.is_none());
+
+    let source = r##"
+[[view.v.systems.el]]
+kind = "list"
+
+[[view.v.systems.el]]
+kind = "actions"
+
+[[view.v.games.el]]
+id = "texto"
+kind = "text"
+text = "${game.description}"
+wrap = true
+long_text = "scroll"
+
+[view.v.details]
+base = "systems"
+remove = ["nada"]
+foo = 1
+
+[[view.v.details.el]]
+kind = "list"
+
+[[view.v.details.el]]
+kind = "text"
+text = "${game.description}"
+wrap = true
+long_text = "scroll"
+
+[[view.v.details.el]]
+kind = "text"
+text = "${game.name}"
+wrap = true
+long_text = "scroll"
+
+[[view.v.details.el]]
+kind = "text"
+text = "${game.genre}"
+long_text = "rolar"
+
+[[view.v.details.el]]
+kind = "text"
+text = "${game.year}"
+long_text = "scroll"
+
+[[view.v.details.el]]
+kind = "actions"
+size = 2
+
+[view.w.details]
+base = "games"
+
+[[view.w.details.el]]
+kind = "rating"
+"##;
+    let table: toml::Table = toml::from_str(source).unwrap();
+    let theme = Theme::parse(&table);
+    let mut view = View::lista(&theme);
+    let said = warnings(|| view = theme.view("v"));
+    let expect = [
+        "actions belong to the details screen",
+        "only the details screen scrolls text",
+        "details.foo",
+        "base must be \"games\"",
+        "no inherited element \"nada\"",
+        "details screen has no list",
+        "one text scrolls per screen",
+        "long_text",
+        "only wrapped text",
+        "details.el[5].size",
+    ];
+    for words in expect {
+        assert!(said.iter().any(|w| w.contains(words)), "{words}: {said:#?}");
+    }
+    // What was right still reads: the scrolling text and the buttons.
+    let scene = view.details.as_ref().expect("the rest of the details");
+    let scrolls = scene
+        .elements
+        .iter()
+        .filter(|e| matches!(&e.kind, Kind::Text(t) if t.scroll))
+        .count();
+    assert_eq!(scrolls, 1);
+    assert!(scene
+        .elements
+        .iter()
+        .any(|e| matches!(e.kind, Kind::Actions)));
+    // A games screen without elements: only the details' own.
+    let said = warnings(|| view = theme.view("w"));
+    assert!(
+        said.iter()
+            .any(|w| w.contains("games screen has no elements")),
+        "{said:#?}"
+    );
+    assert_eq!(view.details.as_ref().unwrap().elements.len(), 1);
+}
+
+/// The details screens drawn at three sizes: the game's pictures, facts
+/// and text where the theme put them, a long description scrolled with ↓,
+/// the buttons of the details with their focus, and the classic details
+/// untouched in a view without them.
+#[test]
+fn details_screens_draw_and_scroll_at_every_size() {
+    let _sdl = SDL.lock().unwrap_or_else(|e| e.into_inner());
+    std::env::set_var("SDL_VIDEODRIVER", "offscreen");
+    let out = std::env::var_os("ARCHR_SCENE_CAPTURE_DIR").map(PathBuf::from);
+    if let Some(out) = &out {
+        std::fs::create_dir_all(out).unwrap();
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let folder = dir.path().join("cena");
+    std::fs::create_dir_all(&folder).unwrap();
+    theme_folder(&folder);
+    let pictures = dir.path().join("pictures");
+    std::fs::create_dir_all(&pictures).unwrap();
+    let mut data = library(&pictures);
+    // Streets of Rage 2: a description far longer than any box.
+    let long = (1..=24)
+        .map(|n| format!("Parágrafo {n} da história, com socos, chutes e fases na cidade."))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let rage = &mut data.games.get_mut("megadrive").unwrap()[8];
+    rage.details.description = long;
+    rage.details.genre = "Briga de rua".into();
+    rage.last_played = Some(1_794_916_800 - 3 * 86_400);
+    let accent = [0xF9, 0xC4, 0x40];
+    for view_id in ["solo", "albedo", "solo-escuro", "lista"] {
+        let theme = load(&folder, view_id);
+        for size in SIZES {
+            let theme = theme.fitted(size.0, size.1);
+            let view = theme.view(&theme.active_view);
+            let root = tempfile::tempdir().unwrap();
+            let (ttf, creator);
+            let mut ui = Ui::new(size.0, size.1, true).unwrap();
+            ttf = sdl2::ttf::init().unwrap();
+            creator = ui.canvas.texture_creator();
+            ui.theme_dir = Some(folder.clone());
+            ui.default_theme_dir = Some(shipped("default"));
+            ui.set_motion(archr_ui::motion::Motion::Off);
+            ui.configure(&ttf, &creator, &theme, Some(root.path()))
+                .unwrap();
+            ui.set_status(archr_ui::status::Status::frozen("14:32"));
+            ui.catalog = archr_ui::i18n::I18n::load(
+                &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../locales"),
+                Some("pt_BR"),
+                None,
+            );
+            ui.pin_clock(std::time::Instant::now(), 1_794_916_800);
+            let mut app = App::new(10);
+            app.set_view(&view);
+            assert_eq!(app.details_free(), view_id != "lista");
+            let frame = |ui: &mut Ui, app: &mut App, name: &str| -> Vec<u8> {
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+                let mut round = 0;
+                loop {
+                    ui.tick();
+                    ui.snap_animations();
+                    let art = archr_ui::render::Art::default();
+                    ui.draw_with_settings(app, &data, &theme, art, None)
+                        .unwrap();
+                    // As the host does after each frame.
+                    app.details_overflow = ui.details_overflow;
+                    if ui.pictures_idle() && round >= 3 {
+                        break;
+                    }
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "pictures never loaded"
+                    );
+                    round += 1;
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                let pixels = ui
+                    .canvas
+                    .read_pixels(None, sdl2::pixels::PixelFormatEnum::RGBA32)
+                    .unwrap();
+                if let Some(out) = &out {
+                    let file = out.join(format!("{view_id}-{name}-{}x{}.png", size.0, size.1));
+                    image::save_buffer(file, &pixels, size.0, size.1, image::ColorType::Rgba8)
+                        .unwrap();
+                }
+                pixels
+            };
+            let share = |pixels: &[u8], (x0, y0, x1, y1): (f32, f32, f32, f32), rgb: [u8; 3]| {
+                let (mut hit, mut all) = (0, 0);
+                for y in (y0 * size.1 as f32) as usize..(y1 * size.1 as f32) as usize {
+                    for x in (x0 * size.0 as f32) as usize..(x1 * size.0 as f32) as usize {
+                        let at = (y * size.0 as usize + x) * 4;
+                        all += 1;
+                        if (0..3).all(|k| pixels[at + k].abs_diff(rgb[k]) < 12) {
+                            hit += 1;
+                        }
+                    }
+                }
+                hit as f32 / all.max(1) as f32
+            };
+            // How many pixels of a region differ between two frames.
+            let changed = |a: &[u8], b: &[u8], (x0, y0, x1, y1): (f32, f32, f32, f32)| {
+                let (mut hit, mut all) = (0, 0);
+                for y in (y0 * size.1 as f32) as usize..(y1 * size.1 as f32) as usize {
+                    for x in (x0 * size.0 as f32) as usize..(x1 * size.0 as f32) as usize {
+                        let at = (y * size.0 as usize + x) * 4;
+                        all += 1;
+                        if (0..3).any(|k| a[at + k].abs_diff(b[k + at]) > 24) {
+                            hit += 1;
+                        }
+                    }
+                }
+                hit as f32 / all.max(1) as f32
+            };
+            let details = |game: usize| Screen::Details {
+                system: "megadrive".into(),
+                game,
+            };
+            // Sonic: no logo (its name instead), four and a half stars.
+            app.screen = details(7);
+            let sonic = frame(&mut ui, &mut app, "detalhes");
+            // Aladdin: its logo, no rating.
+            app.screen = details(0);
+            frame(&mut ui, &mut app, "detalhes-logo");
+            // Streets of Rage 2: ↓ scrolls its description, never past the end.
+            app.screen = details(8);
+            app.details_scroll = 0;
+            let top = frame(&mut ui, &mut app, "detalhes-longo");
+            if view_id == "lista" {
+                // The classic details scroll the same way.
+                assert!(app.details_overflow > 0);
+                continue;
+            }
+            let overflow = app.details_overflow;
+            assert!(overflow > 0, "{view_id} {size:?}");
+            app.handle(Button::Down, &data);
+            app.handle(Button::Down, &data);
+            assert_eq!(app.details_scroll, 2);
+            let scrolled = frame(&mut ui, &mut app, "detalhes-rolado");
+            for _ in 0..overflow + 3 {
+                app.handle(Button::Down, &data);
+            }
+            assert_eq!(app.details_scroll, overflow);
+            let end = frame(&mut ui, &mut app, "detalhes-fim");
+            let (text, still) = if view_id == "albedo" {
+                ((0.4667, 0.77, 0.9667, 0.92), (0.03, 0.18, 0.40, 0.6))
+            } else {
+                ((0.52, 0.70, 0.96, 0.82), (0.04, 0.18, 0.46, 0.54))
+            };
+            assert!(changed(&top, &scrolled, text) > 0.01, "{view_id} {size:?}");
+            assert!(changed(&scrolled, &end, text) > 0.01, "{view_id} {size:?}");
+            // Nothing else moves: the cover stays.
+            assert!(changed(&top, &end, still) < 0.001, "{view_id} {size:?}");
+            app.handle(Button::Up, &data);
+            assert_eq!(app.details_scroll, overflow - 1);
+            match view_id {
+                "solo" => {
+                    // The stars on the facts' fourth line (no genre).
+                    let stars = share(&sonic, (0.2, 0.735, 0.46, 0.785), [255, 255, 255]);
+                    assert!(stars > 0.03, "{stars}");
+                }
+                "albedo" => {
+                    // No list: no row in the accent on the left.
+                    assert!(share(&sonic, (0.005, 0.15, 0.028, 0.925), accent) < 0.01);
+                    // The theme's star, in the accent, inherited.
+                    assert!(share(&sonic, (0.7667, 0.65, 0.9667, 0.675), accent) > 0.1);
+                    // From the games screen, the details come in (`enter`).
+                    ui.set_motion(archr_ui::motion::Motion::On);
+                    app.screen = Screen::Games {
+                        system: "megadrive".into(),
+                        folder: String::new(),
+                    };
+                    let art = archr_ui::render::Art::default();
+                    ui.tick();
+                    ui.draw_with_settings(&app, &data, &theme, art, None)
+                        .unwrap();
+                    ui.snap_animations();
+                    ui.tick();
+                    ui.draw_with_settings(&app, &data, &theme, art, None)
+                        .unwrap();
+                    assert!(!ui.animating());
+                    app.screen = details(7);
+                    ui.tick();
+                    ui.draw_with_settings(&app, &data, &theme, art, None)
+                        .unwrap();
+                    assert!(ui.animating());
+                }
+                _ => {
+                    // The buttons, Play lit in the accent; R1 lights Favorite.
+                    let row = (0.52, 0.845, 0.96, 0.915);
+                    let play = share(&sonic, row, accent);
+                    assert!(play > 0.05, "{play}");
+                    app.screen = details(7);
+                    app.details_scroll = 0;
+                    app.handle(Button::R, &data);
+                    assert_eq!(app.details_focus, 1);
+                    let favorite = frame(&mut ui, &mut app, "detalhes-favorito");
+                    assert!(changed(&sonic, &favorite, row) > 0.05);
+                    app.details_focus = 0;
+                }
+            }
+        }
     }
 }

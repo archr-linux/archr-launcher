@@ -179,6 +179,11 @@ impl App {
     pub fn games_free(&self) -> bool {
         self.games_free
     }
+    /// Whether the details screen is a free screen, which loads its own
+    /// pictures and asks for its own clip.
+    pub fn details_free(&self) -> bool {
+        self.details_free
+    }
     /// Columns of the Library tab's grid.
     fn library_columns(&self) -> usize {
         self.home.as_ref().map_or(3, |h| h.library.columns.max(1))

@@ -361,20 +361,7 @@ impl Ui<'_, '_> {
         if let Some(played) = game.last_played {
             subtitle.push(self.catalog.relative_time(played, self.frame.unix));
         }
-        let buttons = DETAILS_ACTIONS
-            .iter()
-            .enumerate()
-            .map(|(n, key)| Button {
-                label: self.catalog.text(key),
-                icon: (n == 1).then_some(Icon::Star(game.favorite)),
-                // Sized for both of its states (resting, and dots with
-                // "Scraping…"), so a running job never moves the row.
-                busy: (n == 2).then(|| self.catalog.text("details.rescraping")),
-                working: n == 2 && app.rescraping,
-                disabled: n == 2 && (!app.can_rescrape || app.rescraping),
-                progress: None,
-            })
-            .collect();
+        let buttons = self.details_buttons(app, game);
         let sheet = Sheet {
             title: &game.name,
             subtitle,
@@ -387,6 +374,28 @@ impl Ui<'_, '_> {
             scroll: app.details_scroll,
         };
         self.sheet(&sheet, theme, art)
+    }
+
+    /// The details' buttons for `game`: Play, Favorite and Scrape again.
+    pub(super) fn details_buttons(
+        &self,
+        app: &App,
+        game: &archr_index::Game,
+    ) -> Vec<Button<'static>> {
+        DETAILS_ACTIONS
+            .iter()
+            .enumerate()
+            .map(|(n, key)| Button {
+                label: self.catalog.text(key),
+                icon: (n == 1).then_some(Icon::Star(game.favorite)),
+                // Sized for both of its states (resting, and dots with
+                // "Scraping…"), so a running job never moves the row.
+                busy: (n == 2).then(|| self.catalog.text("details.rescraping")),
+                working: n == 2 && app.rescraping,
+                disabled: n == 2 && (!app.can_rescrape || app.rescraping),
+                progress: None,
+            })
+            .collect()
     }
 
     /// The details layout over any content: a game's, or an app's (API 4).
@@ -573,7 +582,8 @@ impl Ui<'_, '_> {
         }
 
         self.details_text(sheet.text, sheet.scroll, rect(theme.details_text), theme)?;
-        self.details_actions(sheet, rect(theme.details_actions), theme)
+        let area = rect(theme.details_actions);
+        self.details_actions((&sheet.buttons, sheet.focus), area, theme)
     }
 
     fn details_text(
@@ -642,13 +652,13 @@ impl Ui<'_, '_> {
         Ok(())
     }
 
-    fn details_actions(
+    /// A row of buttons in `area`, `focus` lit.
+    pub(super) fn details_actions(
         &mut self,
-        sheet: &Sheet<'_>,
+        (buttons, focus): (&[Button<'_>], usize),
         area: Rect,
         theme: &Theme,
     ) -> Result<(), String> {
-        let buttons = &sheet.buttons;
         let labels: Vec<&String> = buttons.iter().map(|b| &b.label).collect();
         // Shrink text and padding together until the buttons fit.
         let icon = |n: usize| buttons[n].icon.is_some();
@@ -691,7 +701,7 @@ impl Ui<'_, '_> {
             let mut least = Vec::new();
             for (n, label) in labels.iter().enumerate() {
                 // In the face it is drawn with: semibold only when focused.
-                let face = if n == sheet.focus {
+                let face = if n == focus {
                     Face::Semibold
                 } else {
                     Face::Regular
@@ -713,7 +723,7 @@ impl Ui<'_, '_> {
         }
         let mut x = area.x();
         for (n, (label, button)) in labels.iter().zip(buttons).enumerate() {
-            let focused = n == sheet.focus;
+            let focused = n == focus;
             let rect = Rect::new(x, area.y(), widths[n] as u32, area.height());
             if focused {
                 if !self.framed("button_selected", rect)? {

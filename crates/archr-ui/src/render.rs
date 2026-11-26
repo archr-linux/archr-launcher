@@ -1242,11 +1242,12 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             self.begin_page(games, picture, theme)?;
             // A free screen: the scene, in place of the header, list,
             // panels and footer (not under the Start menu).
-            let free = layout
-                .scene
-                .as_ref()
-                .filter(|_| matches!(backdrop, Screen::Systems | Screen::Games { .. }))
-                .filter(|_| !matches!(app.screen, Screen::StartHub { .. }));
+            let free = match backdrop {
+                Screen::Systems | Screen::Games { .. } => layout.scene.as_ref(),
+                Screen::Details { .. } => view.details.as_ref(),
+                _ => None,
+            }
+            .filter(|_| !matches!(app.screen, Screen::StartHub { .. }));
             let system = match backdrop {
                 Screen::Games { system, .. } | Screen::Details { system, .. }
                     if !system.starts_with('@') && free.is_none() =>
@@ -1268,7 +1269,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                         | Screen::Search { .. }
                 );
             let decor = match shelves {
-                _ if bare => &[][..],
+                _ if bare || free.is_some() => &[][..],
                 Some((_, home)) => &home.decor[..],
                 None => &layout.decor[..],
             };
@@ -1289,6 +1290,17 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                     .get(*game)
                     .map_or("", |g| g.name.as_str());
                 self.achievements(app, name, theme, art)?;
+            } else if let (Screen::Details { .. }, Some(scene)) = (backdrop, free) {
+                self.scene(
+                    app,
+                    backdrop,
+                    (&rows, cursor),
+                    data,
+                    theme,
+                    art,
+                    layout,
+                    scene,
+                )?;
             } else if let Screen::Details { system, game } = backdrop {
                 let name = data
                     .games(system)
@@ -2691,7 +2703,9 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                         badge.y() + (badge.height() as i32 - self.px(14.)) / 2,
                         14.,
                     );
-                    self.icon(Glyph::ArrowUpDown, icon, theme.text)?;
+                    // A free screen's disc: the arrow in its letter's color.
+                    let ink = own.map_or(theme.text, |own| own.letter.unwrap_or(theme.background));
+                    self.icon(Glyph::ArrowUpDown, icon, ink)?;
                 }
             }
             right -= self.px(16.);

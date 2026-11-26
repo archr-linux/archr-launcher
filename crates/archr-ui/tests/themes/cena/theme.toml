@@ -3,8 +3,10 @@
 # its own. tests/scene_render.rs copies this file to a folder, draws the
 # pictures it names there (arts/, logos/, systems/, frames/, icons/) and
 # copies two of the shipped fonts as fonts/Titulo.ttf and fonts/Corpo.ttf.
-# The wheel view lives in parts/roda.toml (include); "solo-escuro" inherits
-# the Solo view (base); two options change the accent and the art.
+# Solo and Albedo have a details screen too (the Albedo's inherits its
+# games screen). The wheel view lives in parts/roda.toml (include);
+# "solo-escuro" inherits the Solo view (base) and puts the details' buttons
+# in; two options change the accent and the art.
 # Not shipped.
 name = { en = "Scene (test)", pt_BR = "Cena (teste)" }
 
@@ -235,6 +237,103 @@ id = "dicas"
 base = "systems.dicas"
 rect = { x = 0.02, y = 0.94, w = 0.6, h = 0.05 }
 align = "left"
+
+# The Solo's details (maquetes/solo-detalhes-*): the cover and the facts on
+# the left, the game's logo, screen shot or clip and the scrolling
+# description on the right.
+[[view.solo.details.el]]
+id = "arte"
+base = "systems.arte"
+
+[[view.solo.details.el]]
+id = "filtro"
+kind = "rect"
+fill = "#101011CC"
+z = 5
+
+[[view.solo.details.el]]
+id = "logo-sistema"
+base = "games.logo-sistema"
+
+[[view.solo.details.el]]
+id = "capa"
+kind = "image"
+src = ["game.cover", "game.screenshot"]
+fallback = "icons/cartucho.png"
+rect = { x = 0.04, y = 0.17, w = 0.42, h = 0.37 }
+fit = "contain"
+radius = 0.008
+z = 10
+
+[[view.solo.details.el]]
+id = "ficha"
+kind = "fields"
+rows = [
+  { label = "@genre",     value = "${game.genre}" },
+  { label = "@players",   value = "${game.players}" },
+  { label = "@released",  value = "${game.year}" },
+  { label = "@developer", value = "${game.developer}" },
+  { label = "@rating",    rating = "game.rating" },
+]
+rect = { x = 0.04, y = 0.556, w = 0.42, h = 0.29 }
+row = 0.058
+size = 0.029
+label_color = "#A0A0B0"
+color = "#FFFFFF"
+divider = "#FFFFFF28"
+z = 10
+
+[[view.solo.details.el]]
+id = "logo-jogo"
+kind = "image"
+src = "game.logo"
+fallback_text = { text = "${game.name}", font = "$titulo", size = 0.06, align = "center", fit_text = "shrink" }
+rect = { x = 0.52, y = 0.15, w = 0.44, h = 0.19 }
+fit = "contain"
+z = 10
+
+[[view.solo.details.el]]
+id = "captura"
+kind = "image"
+src = "game.screenshot"
+rect = { x = 0.52, y = 0.37, w = 0.44, h = 0.29 }
+fit = "contain"
+radius = 0.006
+z = 10
+
+[[view.solo.details.el]]
+id = "video"
+kind = "video"
+src = "game.video"
+fallback = "game.screenshot"
+rect = { x = 0.52, y = 0.37, w = 0.44, h = 0.29 }
+fit = "contain"
+when = { has = "game.video" }
+z = 11
+
+[[view.solo.details.el]]
+id = "descricao"                                 # ↑/↓ scroll it when it is longer than its box
+kind = "text"
+text = "${game.description}"
+rect = { x = 0.52, y = 0.69, w = 0.44, h = 0.22 }
+size = 0.029
+line = 1.3
+color = "#E4E4EC"
+wrap = true
+long_text = "scroll"
+z = 10
+
+[[view.solo.details.el]]
+id = "status"
+base = "systems.status"
+
+[[view.solo.details.el]]
+id = "barra"
+base = "systems.barra"
+
+[[view.solo.details.el]]
+id = "dicas"
+base = "systems.dicas"
 
 # ------------------------------------------------------------ ALBEDO
 # Frames cut per screen shape over the content, a list on the left, the
@@ -501,6 +600,45 @@ base = "systems.status"
 id = "dicas"
 base = "systems.dicas"
 
+# The Albedo's details (maquetes/albedo-detalhes-*): the games screen less
+# its list, the cover and the facts in its place.
+[view.albedo.details]
+base = "games"
+remove = ["lista", "posicao"]
+
+[[view.albedo.details.el]]
+id = "capa"                                      # the games screen's, moved
+rect = { x = 0.03, y = 0.175, w = 0.373, h = 0.43 }
+anchor = "top-left"
+align = "center"
+radius = 0.012
+enter = { from = "left", distance = 0.03, duration = 0.3 }
+z = 10
+
+[[view.albedo.details.el]]
+id = "ficha"
+kind = "fields"
+rows = [
+  { label = "@genre",       value = "${game.genre}" },
+  { label = "@players",     value = "${game.players}" },
+  { label = "@developer",   value = "${game.developer}" },
+  { label = "@last_played", value = "${game.last_played}" },
+]
+upper_labels = true
+rect = { x = 0.04, y = 0.633, w = 0.365, h = 0.26 }
+row = 0.064
+label_font = "$titulo"
+label_size = 0.029
+label_color = "$acento_alt"
+font = "$corpo"
+size = 0.0333
+color = "#FFFFFF"
+z = 10
+
+[[view.albedo.details.el]]
+id = "descricao"                                 # the games screen's, scrolling
+long_text = "scroll"
+
 # ------------------------------------------------------------ CARROSSEL
 # The Solo mockup's collections: a column of system logos on the right, the
 # focused one larger; a 3x3 grid of covers with a frame on the focus.
@@ -630,3 +768,13 @@ size = 0.04
 color = "$acento"
 z = 30
 
+# Its details too, with the details' buttons over the description.
+[[view.solo-escuro.details.el]]
+id = "descricao"
+rect = { x = 0.52, y = 0.69, w = 0.44, h = 0.14 }
+
+[[view.solo-escuro.details.el]]
+id = "botoes"
+kind = "actions"
+rect = { x = 0.52, y = 0.845, w = 0.44, h = 0.07 }
+z = 20

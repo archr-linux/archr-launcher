@@ -184,6 +184,9 @@ pub struct View {
     pub screen: (u32, u32),
     /// A game's menu has its quick actions (the theme's `[menu]`).
     pub menu_quick: bool,
+    /// The details screen as a free screen (`[[view.<id>.details.el]]`);
+    /// None: the details screen of the theme's `details_*` keys.
+    pub details: Option<Scene>,
 }
 
 /// A display name, the same everywhere or per language (`en`, `pt_BR`, ...).
@@ -332,6 +335,7 @@ impl View {
             home: None,
             screen: t.shape.screen,
             menu_quick: t.screens.menu.context,
+            details: None,
             systems: Layout {
                 panel: Some(Panel {
                     rect: panel,
@@ -383,7 +387,7 @@ impl View {
     }
     /// Lays the `[view.<id>]` table over this view.
     pub(crate) fn overlay(&mut self, table: &Table, at: &str) {
-        known(table, at, &["name", "systems", "games", "home"]);
+        known(table, at, &["name", "systems", "games", "home", "details"]);
         if let Some(value) = table.get("home") {
             Home::overlay(&mut self.home, value, &format!("{at}.home"));
         }
@@ -409,6 +413,17 @@ impl View {
                     }
                 }
             }
+        }
+        if let Some(table) = sub(table, at, "details") {
+            let at = format!("{at}.details");
+            let place = scene::Place {
+                view,
+                screen: "details",
+                at: &at,
+                aspect,
+                tall,
+            };
+            self.details = Scene::details(table, &place, &mut self.games.list.clone());
         }
     }
 }

@@ -1,10 +1,11 @@
-//! Free screens (docs/temas.md, Telas livres): a systems or games screen
-//! described as a list of elements (`[[view.<id>.<screen>.el]]`) drawn in
-//! the order of their `z`, instead of the view's fixed places.
+//! Free screens (docs/temas.md, Telas livres): a systems, games or details
+//! screen described as a list of elements (`[[view.<id>.<screen>.el]]`)
+//! drawn in the order of their `z`, instead of the view's fixed places.
 //!
 //! The elements are few on purpose: pictures (`image`, `frame`), text
 //! (`text`, `fields`), boxes (`rect`, `panel`), the game's stars (`rating`)
-//! and the launcher's own pieces (`list`, `hints`, `status`), and one
+//! and the launcher's own pieces (`list`, `hints`, `status`, the details'
+//! `actions`), and one
 //! clip (`video`). Every value is read once, when the view is laid
 //! out; data (`${system}`, `${game.name}`...) is filled in as each frame is
 //! drawn. A bad value is logged and left out, never fatal.
@@ -107,6 +108,9 @@ pub enum Kind {
     Collection(Box<Collection>),
     /// The focused game's or system's clip, after a rest on it.
     Video(Video),
+    /// The details screen's buttons (Play, Favorite, Scrape again), the
+    /// focused one lit; L1 and R1 move the focus, as on the details.
+    Actions,
 }
 
 /// A muted clip played in the box (the host's preview player), its still
@@ -307,6 +311,9 @@ pub struct Text {
     pub shrink: bool,
     /// Line height, times the font size.
     pub line: f32,
+    /// Wrapped text longer than its box scrolls with ↑ and ↓ instead of
+    /// ending in "…" (`long_text = "scroll"`, one per details screen).
+    pub scroll: bool,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VAlign {
@@ -581,7 +588,7 @@ pub(super) struct Place<'a> {
 
 const KINDS: &[&str] = &[
     "image", "text", "rect", "frame", "list", "hints", "status", "panel", "rating", "fields",
-    "carousel", "grid", "video",
+    "carousel", "grid", "video", "actions",
 ];
 /// The kinds that take the d-pad: a screen has one of them.
 const COLLECTIONS: &[&str] = &["list", "carousel", "grid"];
@@ -612,7 +619,8 @@ impl Scene {
             return None;
         };
         let mut scene = Self::default();
-        let (mut lists, mut videos) = (0, 0);
+        let details = place.screen == "details";
+        let (mut lists, mut videos, mut scrolls) = (0, 0, 0);
         for (n, item) in items.iter().enumerate() {
             let at = format!("{at}[{n}]");
             let Some(table) = resolve(item, place, &at, 0) else {
@@ -621,6 +629,14 @@ impl Scene {
             // One list, carousel or grid: a second one is turned away
             // before it moves the first.
             let kind = table.get("kind").and_then(Value::as_str).unwrap_or("");
+            if details && COLLECTIONS.contains(&kind) {
+                log::warn!("Theme {at}: the details screen has no list, carousel or grid; ignored");
+                continue;
+            }
+            if !details && kind == "actions" {
+                log::warn!("Theme {at}: actions belong to the details screen; ignored");
+                continue;
+            }
             if COLLECTIONS.contains(&kind) && lists > 0 {
                 log::warn!("Theme {at}: a screen has one list, carousel or grid; ignored");
                 continue;
@@ -629,9 +645,19 @@ impl Scene {
                 log::warn!("Theme {at}: a screen plays one video; ignored");
                 continue;
             }
-            if let Some(element) = scene.element(&table, place, &at, list) {
+            if let Some(mut element) = scene.element(&table, place, &at, list) {
                 if matches!(element.kind, Kind::List(_) | Kind::Collection(_)) {
                     lists += 1;
+                }
+                if let Kind::Text(text) = &mut element.kind {
+                    if text.scroll && !details {
+                        log::warn!("Theme {at}.long_text: only the details screen scrolls text (↑/↓); it ends in \"…\"");
+                        text.scroll = false;
+                    } else if text.scroll && scrolls > 0 {
+                        log::warn!("Theme {at}.long_text: one text scrolls per screen; this one ends in \"…\"");
+                        text.scroll = false;
+                    }
+                    scrolls += usize::from(text.scroll);
                 }
                 if matches!(element.kind, Kind::Video(_)) {
                     videos += 1;
@@ -646,7 +672,7 @@ impl Scene {
             );
             return None;
         }
-        if lists == 0 {
+        if lists == 0 && !details {
             log::info!(
                 "Theme {}: no list, carousel or grid; the d-pad still moves through an unseen list",
                 place.at
@@ -655,6 +681,54 @@ impl Scene {
         // Stable: equal z keep the file's order.
         scene.elements.sort_by_key(|e| e.z);
         Some(scene)
+    }
+
+    /// The details screen (`[view.<id>.details]`): its own `el`, or with
+    /// `base = "games"` the view's games screen less `remove`, its own
+    /// elements laid over by id. None: the details of the `details_*` keys.
+    pub(super) fn details(table: &Table, place: &Place<'_>, list: &mut List) -> Option<Self> {
+        known(table, place.at, &["base", "remove", "el"]);
+        let mut screen = Table::new();
+        match table.get("base") {
+            None => {}
+            Some(Value::String(base)) if base == "games" => {
+                let games = place
+                    .view
+                    .get("games")
+                    .and_then(|g| g.get("el"))
+                    .and_then(Value::as_array);
+                match games {
+                    // Their `base = "<id>"` still means the games screen's.
+                    Some(elements) => {
+                        let elements = elements.iter().cloned().map(|mut e| {
+                            if let Some(Value::String(base)) =
+                                e.as_table_mut().and_then(|t| t.get_mut("base"))
+                            {
+                                if !base.contains('.') {
+                                    *base = format!("games.{base}");
+                                }
+                            }
+                            e
+                        });
+                        screen.insert("el".into(), Value::Array(elements.collect()));
+                    }
+                    None => log::warn!(
+                        "Theme {}.base: the view's games screen has no elements; only the details' own",
+                        place.at
+                    ),
+                }
+            }
+            Some(_) => log::warn!("Theme {}.base must be \"games\"; ignored", place.at),
+        }
+        crate::theme::inherit_screen(&mut screen, table, place.at);
+        let items = screen.get("el")?;
+        let mut view = place.view.clone();
+        view.insert("details".into(), Value::Table(screen.clone()));
+        let place = Place {
+            view: &view,
+            ..*place
+        };
+        Self::parse(items, &place, list)
     }
 
     /// The carousel or grid that takes the d-pad, when the screen has one.
@@ -792,6 +866,10 @@ impl Scene {
             }
             "fields" => Kind::Fields(self.fields(&r)?),
             "video" => Kind::Video(video(&r)?),
+            "actions" => {
+                r.known_with(&[]);
+                Kind::Actions
+            }
             _ => {
                 r.known_with(&["radius", "style", "gradient"]);
                 Kind::Panel(Panel {
@@ -933,8 +1011,18 @@ impl Scene {
     /// A text element's fields; `only` limits them (a fallback table).
     fn text(&mut self, r: &Reader, only: &[&str]) -> Option<Text> {
         let keys = [
-            "text", "font", "size", "color", "align", "valign", "upper", "shadow", "wrap", "line",
+            "text",
+            "font",
+            "size",
+            "color",
+            "align",
+            "valign",
+            "upper",
+            "shadow",
+            "wrap",
+            "line",
             "fit_text",
+            "long_text",
         ];
         if only.is_empty() {
             r.known_with(&keys);
@@ -946,6 +1034,13 @@ impl Scene {
             return None;
         };
         let wrap = r.flag("wrap", false);
+        let scroll = r.pick("long_text", false, &[("ellipsis", false), ("scroll", true)]);
+        if scroll && !wrap {
+            log::warn!(
+                "Theme {}.long_text: only wrapped text (wrap = true) scrolls; it ends in \"…\"",
+                r.at
+            );
+        }
         let shadow = match r.table.get("shadow") {
             None => None,
             Some(Value::Table(t)) => {
@@ -988,6 +1083,7 @@ impl Scene {
             wrap,
             shrink: r.pick("fit_text", false, &[("ellipsis", false), ("shrink", true)]),
             line: r.number("line", 1.25, 0.8, 3.),
+            scroll: scroll && wrap,
         })
     }
 
@@ -1103,6 +1199,7 @@ impl Scene {
             wrap: false,
             shrink: true,
             line: 1.25,
+            scroll: false,
         };
         let label = Text {
             font: self.font(r, "label_font"),
