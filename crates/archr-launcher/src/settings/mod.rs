@@ -487,7 +487,8 @@ pub(super) enum Work {
     CheevosProfile,
     Scrape,
     Theme(String),
-    Appearance(Vec<(Id, String)>),
+    /// The Appearance choices as system.cfg entries, the theme's options too.
+    Appearance(Vec<(String, String)>),
     Storage(archr_ui::settings::storage::Action),
     Store(archr_ui::settings::store::Action),
     /// Import from RetroArch: look at the folder, or import (backup first?).

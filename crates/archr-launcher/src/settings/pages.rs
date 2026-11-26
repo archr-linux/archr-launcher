@@ -328,10 +328,10 @@ impl Backend {
         state.options.insert(Id::Theme, themes);
     }
     /// One locked, atomic publish for all the page's choices.
-    pub(super) fn save_appearance(&self, choices: &[(Id, String)]) -> Result<(), String> {
+    pub(super) fn save_appearance(&self, choices: &[(String, String)]) -> Result<(), String> {
         let entries: Vec<_> = choices
             .iter()
-            .map(|(id, v)| (id.key(), v.as_str()))
+            .map(|(key, v)| (key.as_str(), v.as_str()))
             .collect();
         SystemCfg::set_many_and_save(&self.paths.config, &self.paths.lock, &entries)
             .map_err(|e| e.to_string())
@@ -958,9 +958,9 @@ mod tests {
         fs::write(night.join("theme.toml"), "accent = \"#FF0000\"\n").unwrap();
         backend
             .save_appearance(&[
-                (Id::Theme, "night".into()),
-                (Id::Accent, "teal".into()),
-                (Id::Animations, "0".into()),
+                (Id::Theme.key().into(), "night".into()),
+                (Id::Accent.key().into(), "teal".into()),
+                (Id::Animations.key().into(), "0".into()),
             ])
             .unwrap();
         let cfg = SystemCfg::load(&paths.config).unwrap();
@@ -978,6 +978,32 @@ mod tests {
         assert_eq!(theme.highlight_bg.r, 255);
         // A theme that vanished falls back to the builtin one.
         assert_eq!(crate::appearance::load_theme(&paths, "gone").1, None);
+    }
+    #[test]
+    fn each_theme_brings_back_the_choices_made_for_its_options() {
+        let (_root, paths) = fixture("");
+        let backend = Backend::new(paths.clone());
+        let options = "accent = \"$c\"\n[vars]\nc = \"#FF0000\"\n[options.cor]\n\
+            choices.vermelho = {}\nchoices.azul = { vars = { c = \"#0000FF\" } }\n";
+        for name in ["dia", "noite"] {
+            let dir = paths.at(&format!("/storage/.config/archr-launcher/themes/{name}"));
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(dir.join("theme.toml"), options).unwrap();
+        }
+        let key = |theme| archr_ui::appearance::option_key(theme, "cor").unwrap();
+        backend
+            .save_appearance(&[
+                (Id::Theme.key().into(), "noite".into()),
+                (key("noite"), "vermelho".into()),
+                (key("dia"), "azul".into()),
+            ])
+            .unwrap();
+        let (dia, _) = crate::appearance::load_theme(&paths, "dia");
+        assert_eq!(dia.choice("cor"), Some("azul"));
+        assert_eq!(dia.highlight_bg.b, 0xFF);
+        let (noite, _) = crate::appearance::load_theme(&paths, "noite");
+        assert_eq!(noite.choice("cor"), Some("vermelho"));
+        assert_eq!(noite.highlight_bg.r, 0xFF);
     }
     #[test]
     fn the_scraper_login_survives_a_reboot_and_failed_checks() {

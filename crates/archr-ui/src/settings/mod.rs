@@ -116,6 +116,8 @@ pub enum Page {
     Shortcuts,
     /// Appearance › Notifications (Avisos): the toasts.
     Toasts,
+    /// Appearance › Theme options, when the theme has more than fit there.
+    ThemeOptions,
     /// System › Error reports (Relatorios-ajustes), and the last report's
     /// text (Relatorios-ver).
     ErrorReports,
@@ -183,6 +185,7 @@ impl Page {
             Self::SaveSyncConflict => "savesync.conflict",
             Self::Shortcuts => "shortcuts.title",
             Self::Toasts => "settings.toasts",
+            Self::ThemeOptions => "settings.theme_options",
             Self::ErrorReports => "reports.title",
             Self::ReportText => "reports.view_title",
             Self::PadTest => "pad.title",
@@ -201,9 +204,11 @@ impl Page {
             }
             Self::Netplay | Self::Scraper | Self::Mangohud | Self::Resume => &["settings.games"],
             Self::MangohudItems => &["settings.games", "settings.mangohud_page"],
-            Self::AccentColor | Self::Store | Self::Shortcuts | Self::Toasts => {
-                &["settings.appearance"]
-            }
+            Self::AccentColor
+            | Self::Store
+            | Self::Shortcuts
+            | Self::Toasts
+            | Self::ThemeOptions => &["settings.appearance"],
             Self::StoreTheme => &["settings.appearance", "settings.theme_store"],
             Self::Modules
             | Self::ModuleStore
@@ -246,6 +251,7 @@ impl Page {
             Self::ScraperMedia => pages::SCRAPER_MEDIA,
             Self::Appearance => pages::APPEARANCE,
             Self::Toasts => pages::TOASTS,
+            Self::ThemeOptions => pages::THEME_OPTIONS,
             Self::Storage => storage::STORAGE,
             Self::Mangohud => mangohud::MANGOHUD,
             Self::Achievements => cheevos::CHEEVOS,
@@ -361,6 +367,11 @@ pub enum Id {
     /// Appearance link to the theme store.
     ThemeStore,
     View,
+    /// One of the theme's own options (`[options.<id>]`): an index into
+    /// `Theme::options`; saved per theme, not under a key of its own.
+    ThemeOption(u8),
+    /// Appearance link to the theme's options, when there are many.
+    ThemeOptionsLink,
     Accent,
     Background,
     Font,
@@ -818,7 +829,9 @@ impl Id {
             | Self::SaveSyncTest
             | Self::ShortcutsLink
             | Self::Shortcut(_)
-            | Self::ToastsLink => ("", ""),
+            | Self::ToastsLink
+            | Self::ThemeOption(_)
+            | Self::ThemeOptionsLink => ("", ""),
             Self::Toasts => ("launcher.toasts", "1"),
             Self::ToastsPosition => ("launcher.toasts.position", "right"),
             Self::ToastsDuration => ("launcher.toasts.duration", "4"),
@@ -1653,6 +1666,7 @@ impl Settings {
                     .unwrap_or(folder)
                     .to_owned();
             }
+            (Id::ThemeOption(n), choice) => return self.choice_name(n, choice, catalog.language()),
             (Id::View, view) => {
                 let views = self.base_theme.views();
                 let (id, names) = views.iter().find(|(id, _)| id == view).unwrap_or(&views[0]);
@@ -1919,6 +1933,7 @@ impl Settings {
                     .map(|last| last.title())
                     .unwrap_or_default()
             }
+            Id::ThemeOption(n) => return self.option_name(n).unwrap_or_default(),
             _ => &None,
         };
         card.as_ref()
@@ -1964,6 +1979,8 @@ impl Settings {
                 | Id::CheevosWebKeyRemove
                 | Id::CheevosLogout) => self.cheevos_visible(id),
                 id if savesync::IDS.contains(&id) => self.savesync_visible(id),
+                Id::ThemeOption(n) => self.option_shown(n),
+                Id::ThemeOptionsLink => self.base_theme.options().len() > pages::OPTION_ROWS,
                 Id::RumbleLink => self.rumble_supported,
                 Id::LedsLink => self.leds_supported,
                 Id::CompatLink => self.compat_supported,
@@ -2336,6 +2353,9 @@ impl Settings {
         Effect::None
     }
     pub fn value(&self, id: Id) -> &str {
+        if let Id::ThemeOption(n) = id {
+            return self.theme_option(n).map_or("", |(_, choice)| choice);
+        }
         self.values
             .get(&id)
             .map_or(id.default_value(), String::as_str)
@@ -2575,15 +2595,20 @@ impl Settings {
             None if id == Id::Accent => self.accent_choices(),
             None if Self::is_colour(id) => self.colour_choices(id),
             None if id == Id::View => self.base_theme.views().into_iter().map(|v| v.0).collect(),
+            None if matches!(id, Id::ThemeOption(_)) => self.theme_choices(id),
             None => id.choices().iter().map(|v| (*v).into()).collect(),
         }
     }
     /// The one write path of a row's new value, stepped or picked from a list.
     fn write(&mut self, row: Row, next: String) -> Effect {
-        if self.page() == Page::Appearance {
+        if matches!(self.page(), Page::Appearance | Page::ThemeOptions) {
             // A draft: shown in the preview now, saved on leaving.
             if row.id == Id::Theme {
                 return self.choose_theme(next);
+            }
+            if let Id::ThemeOption(n) = row.id {
+                self.choose_option(n, next);
+                return Effect::None;
             }
             self.values.insert(row.id, next);
             return Effect::None;

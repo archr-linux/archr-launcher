@@ -45,6 +45,21 @@ pub struct Appearance {
     pub secondary_color: String,
     pub text_hints: String,
     pub system_background: String,
+    /// The theme's own options (option id, choice id); empty keeps the
+    /// choices the theme was loaded with.
+    pub options: Vec<(String, String)>,
+}
+
+/// The system.cfg key holding the choice of the option `option` of the
+/// theme in the folder `theme`; None for a folder name a key cannot hold.
+pub fn option_key(theme: &str, option: &str) -> Option<String> {
+    let plain = |name: &str| {
+        !name.is_empty()
+            && name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || "_-.".contains(c))
+    };
+    (plain(theme) && plain(option)).then(|| format!("launcher.theme_option.{theme}.{option}"))
 }
 
 pub(crate) fn rgb(hex: u32) -> Rgba {
@@ -179,7 +194,11 @@ impl Appearance {
     }
     /// `theme` with the chosen accent, background and font laid over it.
     pub fn apply(&self, theme: &Theme) -> Theme {
-        let mut theme = theme.clone();
+        let mut theme = if self.options.is_empty() {
+            theme.clone()
+        } else {
+            theme.with_options(&self.options)
+        };
         if !self.view.is_empty() {
             theme.active_view.clone_from(&self.view);
         }

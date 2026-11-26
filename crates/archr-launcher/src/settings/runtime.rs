@@ -389,12 +389,17 @@ impl Runtime {
             Effect::Theme(name) => self.send(Work::Theme(name)),
             Effect::Appearance => {
                 let state = &self.state;
-                self.send(Work::Appearance(
-                    archr_ui::appearance::Appearance::IDS
-                        .into_iter()
-                        .map(|id| (id, id.normalize(state.value(id))))
-                        .collect(),
-                ))
+                let theme = state.value(Id::Theme);
+                let mut entries: Vec<(String, String)> = archr_ui::appearance::Appearance::IDS
+                    .into_iter()
+                    .map(|id| (id.key().to_owned(), id.normalize(state.value(id))))
+                    .collect();
+                entries.extend(state.appearance().options.into_iter().filter_map(
+                    |(option, choice)| {
+                        Some((archr_ui::appearance::option_key(theme, &option)?, choice))
+                    },
+                ));
+                self.send(Work::Appearance(entries))
             }
             Effect::Storage(action) => self.send(Work::Storage(action)),
             Effect::Store(action) => self.send(Work::Store(action)),

@@ -1,0 +1,104 @@
+# Included by ../theme.toml: its keys read as if written there.
+# ------------------------------------------------------------ RODA
+# The Albedo mockup's wheel of system logos on the left, each position turned
+# 5 degrees about a far pivot; the games in one row of covers, the focus
+# larger with its reflection.
+[view.roda]
+name = { en = "Wheel", pt_BR = "Roda" }
+
+[[view.roda.systems.el]]
+id = "capa-sistema"
+kind = "image"
+src = ["systems/${system}.png"]
+rect = { x = 0.7167, y = 0.5, w = 0.5, h = 0.8 }
+anchor = "center"
+z = -10
+
+[[view.roda.systems.el]]
+id = "moldura"
+kind = "image"
+src = "frames/${aspect}/carousel-bg.png"
+fit = "stretch"
+z = 5
+
+[[view.roda.systems.el]]
+id = "roda"
+kind = "carousel"
+of = "systems"
+axis = "vertical"
+visible = 5
+wheel = { angle = 5, pivot = [-10, 0.5] }
+item = { image = "system.logo", text = "${item.name}", font = "$titulo", size = 0.04, color = "$acento_alt", w = 0.22, h = 0.11 }
+rect = { x = 0, y = 0, w = 0.3333, h = 1 }
+opacity = 0.5
+selected = { scale = 1.375, opacity = 1 }
+loop = true
+z = 8
+
+[[view.roda.systems.el]]
+id = "nome-sistema"
+kind = "text"
+text = "${system.name}"
+upper = true
+rect = { x = 0.355, y = 0.075, w = 0.86, h = 0.065 }
+rotate = 90
+pivot = [0, 0.5]
+font = "$titulo"
+size = "$t_h1"
+z = 10
+
+[[view.roda.systems.el]]
+id = "status"
+kind = "status"
+rect = { x = 0.70, y = 0.0, w = 0.275, h = 0.08 }
+color = "$acento_claro"
+z = 92
+
+[[view.roda.systems.el]]
+id = "dicas"
+kind = "hints"
+rect = { x = 0.40, y = 0.925, w = 0.575, h = 0.075 }
+style = "filled"
+color = "$acento_claro"
+letter_color = "$acento_escuro"
+z = 92
+
+[[view.roda.games.el]]
+id = "fundo"
+kind = "image"
+src = ["systems/${system}.png"]
+fit = "cover"
+opacity = "$fundo_lista"
+z = -5
+
+[[view.roda.games.el]]
+id = "fila"                                      # ←/→ one, L1/R1 a page
+kind = "carousel"
+of = "games"
+axis = "horizontal"
+visible = 5
+item = { image = ["game.cover", "game.screenshot"], text = "${item.name}", size = 0.03 }
+rect = { x = 0, y = 0.2, w = 1, h = 0.42 }
+spacing = 0.19
+opacity = 0.6
+selected = { scale = 1.45, opacity = 1 }
+reflection = 0.3
+loop = true
+z = 10
+
+[[view.roda.games.el]]
+id = "nome"
+kind = "text"
+text = "${game.name}"
+upper = true
+rect = { x = 0.1, y = 0.76, w = 0.8, h = 0.08 }
+align = "center"
+font = "$titulo"
+size = 0.055
+color = "$acento"
+fit_text = "shrink"
+z = 12
+
+[[view.roda.games.el]]
+id = "dicas"
+base = "systems.dicas"

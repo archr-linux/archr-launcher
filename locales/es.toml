@@ -844,6 +844,7 @@
 
 # Theme store (Loja-temas, Loja-tema)
 "settings.theme_store" = "Tienda de temas"
+"settings.theme_options" = "Opciones del tema"
 "store.popular" = "Populares"
 "store.recent" = "Recientes"
 "store.installed" = "Instalados"

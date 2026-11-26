@@ -87,6 +87,11 @@ pub const APPEARANCE: &[Row] = &[
     row(Id::Theme, "settings.theme", Kind::Value),
     row(Id::ThemeStore, "settings.theme_store", Kind::Action),
     row(Id::View, "settings.view", Kind::Value),
+    // The theme's own options: up to OPTION_ROWS here, else on their page.
+    row(Id::ThemeOption(0), "", Kind::Value),
+    row(Id::ThemeOption(1), "", Kind::Value),
+    row(Id::ThemeOption(2), "", Kind::Value),
+    row(Id::ThemeOptionsLink, "settings.theme_options", Kind::Action),
     row(Id::Accent, "settings.accent", Kind::Value),
     row(Id::Background, "settings.background", Kind::Value),
     row(Id::TextColor, "settings.text_color", Kind::Value),
@@ -119,6 +124,18 @@ pub const APPEARANCE: &[Row] = &[
     ),
     row(Id::Restore, "settings.restore", Kind::Action),
 ];
+/// Theme options shown on the Appearance page itself; more get a page.
+pub const OPTION_ROWS: usize = 3;
+/// Appearance › Theme options: one row per option of the theme.
+pub const THEME_OPTIONS: &[Row] = &{
+    let mut rows = [row(Id::ThemeOption(0), "", Kind::Value); crate::theme::MAX_OPTIONS];
+    let mut n = 0;
+    while n < rows.len() {
+        rows[n] = row(Id::ThemeOption(n as u8), "", Kind::Value);
+        n += 1;
+    }
+    rows
+};
 /// Appearance › Notifications (Avisos).
 pub const TOASTS: &[Row] = &[
     row(Id::Toasts, "settings.toasts_on", Kind::Toggle),
@@ -451,13 +468,58 @@ impl Settings {
             secondary_color: text(Id::SecondaryColor),
             text_hints: text(Id::TextHints),
             system_background: text(Id::SystemBackground),
+            options: self
+                .base_theme
+                .options()
+                .iter()
+                .filter_map(|o| Some((o.id.clone(), self.base_theme.choice(&o.id)?.to_owned())))
+                .collect(),
         }
+    }
+    /// The option behind `Id::ThemeOption(n)`, with the choice in effect.
+    pub(super) fn theme_option(&self, n: u8) -> Option<(&crate::theme::ThemeOption, &str)> {
+        let option = self.base_theme.options().get(usize::from(n))?;
+        Some((option, self.base_theme.choice(&option.id)?))
+    }
+    pub(super) fn theme_choices(&self, id: Id) -> Vec<String> {
+        let Id::ThemeOption(n) = id else {
+            return Vec::new();
+        };
+        self.theme_option(n)
+            .map(|(o, _)| o.choices.iter().map(|c| c.id.clone()).collect())
+            .unwrap_or_default()
+    }
+    /// The option's row: on Appearance while they are few, else on their page.
+    pub(super) fn option_shown(&self, n: u8) -> bool {
+        let count = self.base_theme.options().len();
+        usize::from(n) < count && (self.page() == Page::ThemeOptions || count <= OPTION_ROWS)
+    }
+    /// The option's name in the interface language (its row's title).
+    pub(super) fn option_name(&self, n: u8) -> Option<String> {
+        let (option, _) = self.theme_option(n)?;
+        option.name.get(self.value(Id::Language)).map(str::to_owned)
+    }
+    pub(super) fn choice_name(&self, n: u8, choice: &str, language: &str) -> String {
+        self.theme_option(n)
+            .and_then(|(o, _)| o.choices.iter().find(|c| c.id == choice))
+            .and_then(|c| c.name.get(language))
+            .unwrap_or(choice)
+            .to_owned()
+    }
+    /// A draft choice of an option: the preview takes it at once.
+    pub(super) fn choose_option(&mut self, n: u8, choice: String) {
+        let mut options = self.appearance().options;
+        if let Some(slot) = options.get_mut(usize::from(n)) {
+            slot.1 = choice;
+        }
+        self.base_theme = self.base_theme.with_options(&options);
     }
     /// Every Appearance choice but the theme back to what the theme says.
     pub(super) fn restore_look(&mut self) {
         for id in Appearance::IDS.into_iter().filter(|id| *id != Id::Theme) {
             self.values.insert(id, id.default_value().into());
         }
+        self.base_theme = self.base_theme.with_options(&[]);
     }
     /// Another theme, as a draft shown at once: it comes whole, as its
     /// author made it, the choices made over the last one dropped (as
@@ -488,6 +550,7 @@ impl Settings {
             Id::ModulesLink => self.open(Page::Modules),
             Id::ShortcutsLink => self.open(Page::Shortcuts),
             Id::ToastsLink => self.open(Page::Toasts),
+            Id::ThemeOptionsLink => self.open(Page::ThemeOptions),
             // Every visit looks at the folder again.
             Id::RaImportLink => {
                 self.raimport.found = None;

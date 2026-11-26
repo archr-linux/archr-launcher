@@ -844,6 +844,7 @@
 
 # Theme store (Loja-temas, Loja-tema)
 "settings.theme_store" = "Магазин тем"
+"settings.theme_options" = "Параметры темы"
 "store.popular" = "Популярные"
 "store.recent" = "Новые"
 "store.installed" = "Установленные"

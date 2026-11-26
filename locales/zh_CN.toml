@@ -843,6 +843,7 @@
 
 # 主题商店
 "settings.theme_store" = "主题商店"
+"settings.theme_options" = "主题选项"
 "store.popular" = "热门"
 "store.recent" = "最新"
 "store.installed" = "已安装"

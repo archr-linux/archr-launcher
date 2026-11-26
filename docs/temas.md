@@ -1074,6 +1074,127 @@ align = "left"                             # ...com estes campos trocados
 `base = "<tela>.<id>"` (ou só `"<id>"`, na mesma tela) copia um elemento
 da mesma visualização; os campos escritos substituem os dele.
 
+### Herdar uma visualização: `base` e `remove`
+
+```toml
+[view.solo]
+name = { en = "Solo", pt_BR = "Solo" }
+
+[[view.solo.systems.el]]
+id = "faixa"
+kind = "rect"
+rect = { x = 0.56, y = 0, w = 0.44, h = 1 }
+fill = "#000000A0"
+
+[[view.solo.systems.el]]
+id = "lista"
+kind = "list"
+rect = { x = 0.6, y = 0.15, w = 0.36, h = 0.68 }
+align = "right"
+z = 10
+
+[view.solo-esquerda]
+name = { en = "Solo, left", pt_BR = "Solo à esquerda" }
+base = "solo"                              # tudo o que a Solo tem...
+
+[view.solo-esquerda.systems]
+remove = ["faixa"]                         # ...menos a faixa
+
+[[view.solo-esquerda.systems.el]]
+id = "lista"                               # o mesmo id: troca só estes campos
+rect = { x = 0.04, y = 0.15, w = 0.36, h = 0.68 }
+align = "left"
+
+[[view.solo-esquerda.systems.el]]
+id = "rodape"                              # id novo: um elemento a mais
+kind = "text"
+text = "${system.name}"
+rect = { x = 0.04, y = 0.86, w = 0.5, h = 0.06 }
+```
+
+`base = "<outra visualização>"` no topo de `[view.<id>]` copia as duas telas
+da outra visualização. Um elemento com o mesmo `id` de um herdado troca só os
+campos que escreve; um `id` novo entra a mais; `remove = ["id", ...]` na
+tabela da tela (`[view.<id>.systems]` ou `.games`) tira elementos herdados.
+As outras chaves da tela (como `list`) se juntam às herdadas, e a
+visualização herdada pode ela mesma herdar de outra (até 4 níveis). O nome
+não é herdado: dê um `name` à nova. `base` que não existe, ou que aponta
+para a própria visualização, gera aviso e a visualização fica só com o que
+ela mesma escreve.
+
+### Opções do tema: `[options]`
+
+```toml
+accent = "$acento"                         # a opção muda a cor do tema inteiro
+
+[vars]
+acento = "#F9C440"
+arte = "arts"
+
+[options.cor]
+name = { en = "Accent color", pt_BR = "Cor de destaque" }
+default = "amarelo"
+choices.amarelo = { name = { en = "Yellow", pt_BR = "Amarelo" } }
+choices.roxo = { name = { en = "Purple", pt_BR = "Roxo" }, vars = { acento = "#A56DE2" } }
+
+[options.fundo]
+name = { en = "Background", pt_BR = "Fundo" }
+default = "claro"
+choices.claro = { name = { en = "Light", pt_BR = "Claro" } }
+choices.escuro = { name = { en = "Dark", pt_BR = "Escuro" }, vars = { arte = "arts2" } }
+
+[[view.opcoes.systems.el]]
+kind = "image"
+src = ["${arte}/${system}.png", "${arte}/default.png"]
+rect = { x = 0, y = 0, w = 1, h = 1 }
+fit = "cover"
+```
+
+Cada `[options.<id>]` vira uma linha em Configurações › Aparência, logo
+abaixo de Visualização, com o `name` traduzido como os outros textos do
+tema; ← e → passam pelas escolhas (`choices.<id>`, cada uma com seu `name`).
+Com mais de 3 opções, Aparência mostra uma linha "Opções do tema" que abre
+uma página com todas. A escolha aparece na pré-visualização na hora e vale
+para o launcher inteiro ao sair de Aparência, sem reiniciar.
+
+As `vars` da escolha valem por cima do `[vars]` do tema, em qualquer lugar
+onde a variável é usada: nas telas livres e nas chaves do topo (`accent`,
+`background`...). Uma escolha sem `vars` deixa o tema como está. `default`
+é a escolha de quem nunca escolheu; sem ele, ou se ele não for uma das
+escolhas, vale a primeira. Opções e escolhas aparecem na ordem alfabética
+do id (como as visualizações); ids só com letras, números, `_` e `-`. Um
+tema tem até 12 opções, e cada opção de 2 a 24 escolhas.
+
+A escolha fica guardada por tema no `system.cfg`, em
+`launcher.theme_option.<pasta do tema>.<opção>=<escolha>`, e volta quando o
+tema é escolhido de novo. "Restaurar padrão" volta as opções ao `default`.
+Uma opção pode trocar também as fontes (`font = "$fonte"`), que o launcher
+carrega de novo ao sair de Aparência.
+
+### Vários arquivos: `include`
+
+```toml
+include = ["partes/cores.toml", "partes/roda.toml"]
+```
+
+`include` fica no topo do `theme.toml` (antes de qualquer `[tabela]`). Cada
+arquivo da lista é lido como se as chaves dele estivessem escritas no
+`theme.toml`, que vence quando os dois dizem a mesma chave; entre dois
+arquivos incluídos, vence o último da lista. Tabelas se juntam chave a chave;
+listas (como os `[[...el]]` de uma tela) são trocadas inteiras. Um arquivo
+incluído pode ter o seu `include` (até 4 níveis); um arquivo que inclui a si
+mesmo, direta ou indiretamente, gera aviso e fica de fora. Os caminhos são
+relativos à pasta do tema, sempre dentro dela: `..`, caminho absoluto ou
+arquivo que não existe geram aviso. Imagens e fontes citadas num arquivo
+incluído também são procuradas a partir da pasta do tema. Um arquivo
+incluído, por exemplo `partes/cores.toml`:
+
+```toml
+[vars]
+acento = "#F9C440"
+acento_escuro = "#32270D"
+```
+
 ### A lista
 
 O elemento `list` é a lista de hoje (`list` da tabela acima) posta onde a
@@ -1319,17 +1440,18 @@ elemento não dá a sua cor.
 ### O que ainda não existe
 
 As telas livres chegam por partes. Ainda não há: vídeo com som, vídeo
-aleatório de um jogo do sistema na tela de sistemas, opções do tema em
-Aparência, `include`, animações por elemento (`enter`, `select`, cor
-animada no foco) e a tela de detalhes como cena. Chaves dessas partes geram
-aviso e ficam de fora.
+aleatório de um jogo do sistema na tela de sistemas, `include` dentro de uma
+escolha de opção, animações por elemento (`enter`, `select`, cor animada no
+foco) e a tela de detalhes como cena. Chaves dessas partes geram aviso e
+ficam de fora.
 
 ### Testar
 
 O tema de teste `crates/archr-ui/tests/themes/cena/` tem as visualizações
 das maquetes aprovadas: Solo e Albedo, e as coleções delas, Carrossel
 (coluna de logos e grade 3×3) e Roda (a roda de sistemas e uma fila de
-capas com reflexo). As capturas saem em 640×480, 720×720 e 1024×768, com
+capas com reflexo, no arquivo incluído `parts/roda.toml`). "Solo escuro"
+herda a Solo, e duas opções trocam a cor de destaque e a arte de fundo. As capturas saem em 640×480, 720×720 e 1024×768, com
 um quadro no meio do deslize:
 
 ```sh

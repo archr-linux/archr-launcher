@@ -324,12 +324,41 @@ pub struct Theme {
     app: Vec<toml::Table>,
     /// The screen this theme is laid out for.
     pub shape: Shape,
+    /// `[options.<id>]`: what the user may choose in Appearance, the
+    /// inherited ones first.
+    options: Vec<ThemeOption>,
+    /// The user's choices that are not the option's default, already
+    /// written into `vars`.
+    chosen: Vec<(String, String)>,
     /// The user's Appearance choices that reshape the theme's screens.
     pub user: UserLook,
     /// Each theme.toml this one is built from, builtin first, with its
     /// folder: `fitted` lays them out again for another screen.
     sources: Sources,
 }
+
+/// `[options.<id>]`: one choice of the theme's, made in Appearance.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ThemeOption {
+    pub id: String,
+    pub name: Names,
+    /// The choice in effect until the user makes one.
+    pub default: String,
+    pub choices: Vec<ThemeChoice>,
+}
+/// `choices.<id> = { name, vars }`: its vars go over the theme's `[vars]`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ThemeChoice {
+    pub id: String,
+    pub name: Names,
+    vars: toml::Table,
+}
+/// A theme offers at most this many options.
+pub const MAX_OPTIONS: usize = 12;
+/// Choices one option offers at most.
+const MAX_CHOICES: usize = 24;
+/// Included files nest at most this deep (theme.toml is 0).
+const MAX_INCLUDE_DEPTH: u8 = 4;
 
 /// Appearance choices laid over every theme (none is a theme.toml key).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -382,7 +411,7 @@ impl Theme {
             .get_or_init(|| {
                 let table = toml::from_str(include_str!("../../../themes/default/theme.toml"))
                     .expect("bundled theme must be valid TOML");
-                Self::from_table(&table, None, None, Shape::CLASSIC)
+                Self::from_table(&table, None, None, Shape::CLASSIC, &[])
             })
             .clone()
     }
@@ -397,20 +426,12 @@ impl Theme {
     pub fn load_over(dir: &Path, base: &Self) -> Self {
         let theme = base.clone();
         let path = dir.join("theme.toml");
-        let table = match read_utf8(&path, MAX_THEME_BYTES, Follow)
-            .map_err(|e| e.to_string())
-            .and_then(|source| toml::from_str(&source).map_err(|e| e.to_string()))
-        {
-            Ok(table) => table,
-            Err(error) => {
-                log::warn!(
-                    "Cannot load theme {}: {error}; using the default",
-                    path.display()
-                );
-                return theme;
-            }
+        let Some(mut table) = read_table(&path) else {
+            return theme;
         };
-        let mut theme = Self::from_table(&table, Some(dir), Some(&theme), theme.shape);
+        let mut open = vec![path.canonicalize().unwrap_or(path)];
+        included(&mut table, dir, &mut open);
+        let mut theme = Self::from_table(&table, Some(dir), Some(&theme), theme.shape, &[]);
         if theme.name.get("en").is_none() {
             let folder = dir.file_name().unwrap_or_default().to_string_lossy();
             theme.name = Names::plain(&folder);
@@ -419,7 +440,7 @@ impl Theme {
     }
     /// A theme.toml's table over the builtin, without its folder (fonts unresolved).
     pub fn parse(table: &toml::Table) -> Self {
-        Self::from_table(table, None, Some(&Self::builtin()), Shape::CLASSIC)
+        Self::from_table(table, None, Some(&Self::builtin()), Shape::CLASSIC, &[])
     }
     /// This theme laid out for a `width`×`height` screen: every theme.toml
     /// it is built from again, each with its `[aspect.<shape>]` table over
@@ -429,36 +450,92 @@ impl Theme {
         if shape == self.shape {
             return self.clone();
         }
-        let mut fitted: Option<Self> = None;
-        for (table, dir) in &self.sources.0 {
-            fitted = Some(Self::from_table(
-                table,
-                dir.as_deref(),
-                fitted.as_ref(),
-                shape,
-            ));
-        }
-        let mut fitted = fitted.unwrap_or_else(|| self.clone());
+        let mut fitted = self.rebuilt(shape, &self.chosen);
         fitted.font.clone_from(&self.font);
         fitted.font_semibold.clone_from(&self.font_semibold);
         fitted.font_bold.clone_from(&self.font_bold);
         fitted.font_mono.clone_from(&self.font_mono);
         fitted.font_mono_medium.clone_from(&self.font_mono_medium);
-        fitted.name = self.name.clone();
-        fitted.active_view.clone_from(&self.active_view);
-        fitted.user = self.user;
         fitted
+    }
+    /// The theme with the user's choices of its options (option id, choice
+    /// id); an option left out keeps its default, an unknown one is
+    /// ignored. Fonts the choices leave alone stay as they are.
+    pub fn with_options(&self, chosen: &[(String, String)]) -> Self {
+        let chosen: Vec<(String, String)> = self
+            .options
+            .iter()
+            .filter_map(|option| {
+                let (_, choice) = chosen.iter().find(|(id, _)| *id == option.id)?;
+                (*choice != option.default && option.choices.iter().any(|c| c.id == *choice))
+                    .then(|| (option.id.clone(), choice.clone()))
+            })
+            .collect();
+        if chosen == self.chosen {
+            return self.clone();
+        }
+        let mut next = self.rebuilt(self.shape, &chosen);
+        // Fonts come from the folder again: those the choices did not
+        // change keep the ones in use (a remapped root, a user's face).
+        let same = self.rebuilt(self.shape, &self.chosen);
+        macro_rules! keep {
+            ($($font:ident),*) => {$(
+                if next.$font == same.$font {
+                    next.$font.clone_from(&self.$font);
+                }
+            )*};
+        }
+        keep!(font, font_semibold, font_bold, font_mono, font_mono_medium);
+        next
+    }
+    /// The options the theme offers, in the order Appearance shows them.
+    pub fn options(&self) -> &[ThemeOption] {
+        &self.options
+    }
+    /// The choice in effect for the option `id` (its default until chosen).
+    pub fn choice(&self, id: &str) -> Option<&str> {
+        let option = self.options.iter().find(|o| o.id == id)?;
+        Some(
+            self.chosen
+                .iter()
+                .find(|(o, _)| o == id)
+                .map_or(option.default.as_str(), |(_, c)| c.as_str()),
+        )
+    }
+    /// Every theme.toml it is built from again, for `shape` and with
+    /// `chosen`; name, view and the user's look stay.
+    fn rebuilt(&self, shape: Shape, chosen: &[(String, String)]) -> Self {
+        let mut rebuilt: Option<Self> = None;
+        for (table, dir) in &self.sources.0 {
+            rebuilt = Some(Self::from_table(
+                table,
+                dir.as_deref(),
+                rebuilt.as_ref(),
+                shape,
+                chosen,
+            ));
+        }
+        let mut rebuilt = rebuilt.unwrap_or_else(|| self.clone());
+        rebuilt.name = self.name.clone();
+        rebuilt.active_view.clone_from(&self.active_view);
+        rebuilt.user = self.user;
+        rebuilt
     }
     fn from_table(
         source: &toml::Table,
         dir: Option<&Path>,
         defaults: Option<&Self>,
         shape: Shape,
+        chosen: &[(String, String)],
     ) -> Self {
         let mut sources = defaults.map_or_else(Sources::default, |d| d.sources.clone());
         sources.0.push((source.clone(), dir.map(Path::to_path_buf)));
         let mut merged = for_aspect(source, shape.aspect);
-        let vars = vars(&merged, defaults);
+        if merged.remove("include").is_some() {
+            log::warn!("Theme include needs the theme folder; ignored");
+        }
+        let options = options(&merged, defaults);
+        let vars = vars(&merged, defaults, &options, chosen);
         crate::layout::substitute(&mut merged, &vars);
         crate::screens::flatten(&mut merged);
         let table = &merged;
@@ -647,12 +724,14 @@ impl Theme {
             vars,
             app: app_tables(table, defaults),
             shape,
+            options,
+            chosen: chosen.to_vec(),
             sources,
         }
     }
     /// The layout `id` describes, or the classic one when the theme has no such view.
     pub fn view(&self, id: &str) -> View {
-        let (id, tables) = self
+        let (id, _) = self
             .views
             .iter()
             .find(|(view, _)| view == id)
@@ -660,12 +739,53 @@ impl Theme {
         let mut view = View::lista(self);
         let classic = view.games.clone();
         view.id = id.clone();
-        for table in tables {
+        for table in &self.view_tables(id, 0) {
             view.overlay(table, &format!("view.{id}"));
         }
         view.games.fit_art(&self.user);
         view.app = crate::layout::app_layout(classic, &self.app);
         view
+    }
+    /// The tables of the view `id` in the order they apply. A view with
+    /// `base = "<other>"` is the other one's tables made one, with its own
+    /// laid over: an element with an id the other has changes only the
+    /// fields it writes, `remove = [...]` in a screen takes inherited
+    /// elements away.
+    fn view_tables(&self, id: &str, depth: u8) -> Vec<toml::Table> {
+        let tables = self
+            .views
+            .iter()
+            .find(|(view, _)| view == id)
+            .map_or(&[][..], |(_, tables)| tables.as_slice());
+        let Some(base) = tables.iter().rev().find_map(|t| t.get("base")) else {
+            return tables.to_vec();
+        };
+        let at = format!("view.{id}.base");
+        let own = tables.iter().map(|t| {
+            let mut t = t.clone();
+            t.remove("base");
+            t
+        });
+        let base = base.as_str().filter(|base| {
+            let known = *base != id && self.views.iter().any(|(v, _)| v == base);
+            if !known {
+                log::warn!("Theme {at} names no other view of this theme; ignored");
+            } else if depth >= MAX_INCLUDE_DEPTH {
+                log::warn!("Theme {at}: views inherit at most {MAX_INCLUDE_DEPTH} deep; ignored");
+            }
+            known && depth < MAX_INCLUDE_DEPTH
+        });
+        let Some(base) = base else {
+            return own.collect();
+        };
+        let mut view = toml::Table::new();
+        for table in self.view_tables(base, depth + 1) {
+            merge(&mut view, &table);
+        }
+        for table in own {
+            inherit(&mut view, &table, &format!("view.{id}"));
+        }
+        vec![view]
     }
     /// The theme's glass, or a light one for a panel of glass in a theme
     /// that describes none.
@@ -802,6 +922,8 @@ pub const KNOWN_KEYS: &[&str] = &[
     "frames",
     "aspect",
     "vars",
+    "options",
+    "include",
     // Store metadata (docs/temas.md, Publicar na Loja de temas).
     "description",
     "author",
@@ -844,23 +966,290 @@ fn merge(base: &mut toml::Table, over: &toml::Table) {
     }
 }
 
-/// The inherited `[vars]` with this theme's own over them.
-fn vars(table: &toml::Table, defaults: Option<&Theme>) -> toml::Table {
+/// The inherited `[vars]` with this theme's own over them, then the vars
+/// of each option's choice in effect over both.
+fn vars(
+    table: &toml::Table,
+    defaults: Option<&Theme>,
+    options: &[ThemeOption],
+    chosen: &[(String, String)],
+) -> toml::Table {
     let mut vars = defaults.map_or_else(toml::Table::new, |d| d.vars.clone());
     match table.get("vars") {
         None => {}
-        Some(toml::Value::Table(own)) => {
-            for (name, value) in own {
-                if matches!(value, toml::Value::Table(_) | toml::Value::Array(_)) {
-                    log::warn!("Theme vars.{name} must be text, a number or true/false; ignored");
-                } else {
-                    vars.insert(name.clone(), value.clone());
+        Some(toml::Value::Table(own)) => vars.extend(scalars(own, "vars")),
+        Some(_) => log::warn!("Theme key vars must be a table; ignored"),
+    }
+    for option in options {
+        let id = chosen
+            .iter()
+            .find(|(o, _)| *o == option.id)
+            .map_or(&option.default, |(_, c)| c);
+        if let Some(choice) = option.choices.iter().find(|c| c.id == *id) {
+            vars.extend(choice.vars.clone());
+        }
+    }
+    vars
+}
+/// The text, number and true/false values of `table`; others are logged.
+fn scalars(table: &toml::Table, at: &str) -> toml::Table {
+    table
+        .iter()
+        .filter(|(name, value)| {
+            let scalar = !matches!(value, toml::Value::Table(_) | toml::Value::Array(_));
+            if !scalar {
+                log::warn!("Theme {at}.{name} must be text, a number or true/false; ignored");
+            }
+            scalar
+        })
+        .map(|(name, value)| (name.clone(), value.clone()))
+        .collect()
+}
+
+/// The inherited `[options]` with this theme's own over them, by id.
+fn options(table: &toml::Table, defaults: Option<&Theme>) -> Vec<ThemeOption> {
+    let mut options = defaults.map_or_else(Vec::new, |d| d.options.clone());
+    let own = match table.get("options") {
+        None => return options,
+        Some(toml::Value::Table(own)) => own,
+        Some(_) => {
+            log::warn!("Theme key options must hold [options.<id>] tables; ignored");
+            return options;
+        }
+    };
+    for (id, value) in own {
+        let Some(option) = theme_option(id, value) else {
+            continue;
+        };
+        match options.iter().position(|o| o.id == *id) {
+            Some(old) => options[old] = option,
+            None if options.len() < MAX_OPTIONS => options.push(option),
+            None => {
+                log::warn!("Theme options.{id}: a theme has at most {MAX_OPTIONS} options; ignored")
+            }
+        }
+    }
+    options
+}
+fn theme_option(id: &str, value: &toml::Value) -> Option<ThemeOption> {
+    let at = format!("options.{id}");
+    let key_shaped = |id: &str| {
+        !id.is_empty()
+            && id
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    };
+    if !key_shaped(id) {
+        log::warn!("Theme {at}: an option id has only letters, digits, _ and -; ignored");
+        return None;
+    }
+    let Some(table) = value.as_table() else {
+        log::warn!("Theme {at} must be a table; ignored");
+        return None;
+    };
+    for key in table.keys() {
+        if !["name", "default", "choices"].contains(&key.as_str()) {
+            log::warn!("Unknown theme key {at}.{key}; ignored");
+        }
+    }
+    let Some(listed) = table.get("choices").and_then(toml::Value::as_table) else {
+        log::warn!("Theme {at} needs a choices table; ignored");
+        return None;
+    };
+    let mut choices = Vec::new();
+    for (choice, value) in listed {
+        let at = format!("{at}.choices.{choice}");
+        let Some(value) = value.as_table().filter(|_| key_shaped(choice)) else {
+            log::warn!("Theme {at} must be a table under a plain id; ignored");
+            continue;
+        };
+        if choices.len() == MAX_CHOICES {
+            log::warn!("Theme {at}: an option has at most {MAX_CHOICES} choices; ignored");
+            break;
+        }
+        for key in value.keys() {
+            if !["name", "vars"].contains(&key.as_str()) {
+                log::warn!("Unknown theme key {at}.{key}; ignored");
+            }
+        }
+        let vars = match value.get("vars") {
+            None => toml::Table::new(),
+            Some(toml::Value::Table(vars)) => scalars(vars, &format!("{at}.vars")),
+            Some(_) => {
+                log::warn!("Theme {at}.vars must be a table; ignored");
+                toml::Table::new()
+            }
+        };
+        let mut name = Names::parse(value.get("name"), &at).truncated(40);
+        if name.get("en").is_none() {
+            name = Names::plain(choice);
+        }
+        choices.push(ThemeChoice {
+            id: choice.clone(),
+            name,
+            vars,
+        });
+    }
+    if choices.len() < 2 {
+        log::warn!("Theme {at} needs at least two choices; ignored");
+        return None;
+    }
+    let default = match table.get("default").and_then(toml::Value::as_str) {
+        Some(default) if choices.iter().any(|c| c.id == default) => default.to_owned(),
+        found => {
+            if found.is_some() || table.contains_key("default") {
+                log::warn!("Theme {at}.default names no choice; the first one");
+            }
+            choices[0].id.clone()
+        }
+    };
+    let mut name = Names::parse(table.get("name"), &at).truncated(40);
+    if name.get("en").is_none() {
+        name = Names::plain(id);
+    }
+    Some(ThemeOption {
+        id: id.to_owned(),
+        name,
+        default,
+        choices,
+    })
+}
+
+/// A theme.toml (or a file it includes) as a table; None with a warning.
+fn read_table(path: &Path) -> Option<toml::Table> {
+    match read_utf8(path, MAX_THEME_BYTES, Follow)
+        .map_err(|e| e.to_string())
+        .and_then(|source| toml::from_str(&source).map_err(|e| e.to_string()))
+    {
+        Ok(table) => Some(table),
+        Err(error) => {
+            log::warn!(
+                "Cannot load theme {}: {error}; using the default",
+                path.display()
+            );
+            None
+        }
+    }
+}
+/// `include = [...]`: each file (inside the theme folder) under `table`,
+/// as if its keys were written there; `table` wins, and of two included
+/// files the later one. `open` holds the files being read, theme.toml
+/// first: one that includes itself again is turned away.
+fn included(table: &mut toml::Table, dir: &Path, open: &mut Vec<PathBuf>) {
+    let Some(listed) = table.remove("include") else {
+        return;
+    };
+    let names: Vec<&str> = match &listed {
+        toml::Value::String(one) => vec![one.as_str()],
+        toml::Value::Array(many) => many.iter().filter_map(toml::Value::as_str).collect(),
+        _ => Vec::new(),
+    };
+    if names.is_empty() {
+        log::warn!("Theme include must name files (\"parts/a.toml\" or a list); ignored");
+        return;
+    }
+    let mut under = toml::Table::new();
+    for name in names {
+        let Some(path) = resolve_file(dir, name) else {
+            continue;
+        };
+        if open.contains(&path) {
+            log::warn!("Theme include {name:?} includes itself again; ignored");
+            continue;
+        }
+        if open.len() > usize::from(MAX_INCLUDE_DEPTH) {
+            log::warn!("Theme include {name:?}: files include others at most {MAX_INCLUDE_DEPTH} deep; ignored");
+            continue;
+        }
+        let Some(mut part) = read_table(&path) else {
+            continue;
+        };
+        open.push(path);
+        included(&mut part, dir, open);
+        open.pop();
+        merge(&mut under, &part);
+    }
+    merge(&mut under, table);
+    *table = under;
+}
+
+/// A view's own table over the one it inherits (`Theme::view_tables`).
+fn inherit(view: &mut toml::Table, own: &toml::Table, at: &str) {
+    for (key, value) in own {
+        let screen = matches!(key.as_str(), "systems" | "games");
+        match (view.get_mut(key), value) {
+            (Some(toml::Value::Table(base)), toml::Value::Table(over)) if screen => {
+                inherit_screen(base, over, &format!("{at}.{key}"));
+            }
+            (None, toml::Value::Table(over)) if screen => {
+                let mut base = toml::Table::new();
+                inherit_screen(&mut base, over, &format!("{at}.{key}"));
+                view.insert(key.clone(), toml::Value::Table(base));
+            }
+            (Some(toml::Value::Table(base)), toml::Value::Table(over)) => merge(base, over),
+            _ => {
+                view.insert(key.clone(), value.clone());
+            }
+        }
+    }
+}
+fn inherit_screen(screen: &mut toml::Table, own: &toml::Table, at: &str) {
+    let id = |e: &toml::Value| e.get("id").and_then(toml::Value::as_str).map(str::to_owned);
+    let mut elements = match screen.remove("el") {
+        Some(toml::Value::Array(elements)) => elements,
+        _ => Vec::new(),
+    };
+    if let Some(remove) = own.get("remove") {
+        let names: Vec<&str> = remove
+            .as_array()
+            .map(|names| names.iter().filter_map(toml::Value::as_str).collect())
+            .unwrap_or_default();
+        if names.is_empty() {
+            log::warn!("Theme {at}.remove must list element ids; ignored");
+        }
+        for name in names {
+            let before = elements.len();
+            elements.retain(|e| id(e).as_deref() != Some(name));
+            if elements.len() == before {
+                log::warn!("Theme {at}.remove: no inherited element {name:?}");
+            }
+        }
+    }
+    match own.get("el") {
+        None => {}
+        Some(toml::Value::Array(over)) => {
+            for element in over {
+                let same = id(element).and_then(|wanted| {
+                    elements
+                        .iter_mut()
+                        .find(|e| id(e).as_deref() == Some(&wanted))
+                });
+                match (same, element) {
+                    (Some(toml::Value::Table(base)), toml::Value::Table(fields)) => {
+                        base.extend(fields.clone());
+                    }
+                    _ => elements.push(element.clone()),
                 }
             }
         }
-        Some(_) => log::warn!("Theme key vars must be a table; ignored"),
+        // Not a list: the screen's own reading says so.
+        Some(other) => {
+            screen.insert("el".into(), other.clone());
+            elements.clear();
+        }
     }
-    vars
+    for (key, value) in own {
+        match (key.as_str(), screen.get_mut(key), value) {
+            ("el" | "remove", ..) => {}
+            (_, Some(toml::Value::Table(base)), toml::Value::Table(over)) => merge(base, over),
+            _ => {
+                screen.insert(key.clone(), value.clone());
+            }
+        }
+    }
+    if !elements.is_empty() {
+        screen.insert("el".into(), toml::Value::Array(elements));
+    }
 }
 
 /// The inherited `[app]` tables, with this theme's own after them.

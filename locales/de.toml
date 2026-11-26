@@ -844,6 +844,7 @@
 
 # Theme-Store
 "settings.theme_store" = "Theme-Store"
+"settings.theme_options" = "Theme-Optionen"
 "store.popular" = "Beliebt"
 "store.recent" = "Neu"
 "store.installed" = "Installiert"

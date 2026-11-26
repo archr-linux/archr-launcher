@@ -3,6 +3,8 @@
 # its own. tests/scene_render.rs copies this file to a folder, draws the
 # pictures it names there (arts/, logos/, systems/, frames/, icons/) and
 # copies two of the shipped fonts as fonts/Titulo.ttf and fonts/Corpo.ttf.
+# The wheel view lives in parts/roda.toml (include); "solo-escuro" inherits
+# the Solo view (base); two options change the accent and the art.
 # Not shipped.
 name = { en = "Scene (test)", pt_BR = "Cena (teste)" }
 
@@ -12,6 +14,7 @@ text_secondary = "#D8D8E0"
 muted = "#A0A0B0"
 accent = "$acento"
 accent_text = "$acento_escuro"
+include = ["parts/roda.toml"]
 
 [vars]
 acento = "#F9C440"
@@ -24,6 +27,19 @@ t_h1 = 0.05
 t_lista = 0.0375
 t_corpo = 0.0292
 fundo_lista = 0.4
+arte = "arts"
+
+[options.cor]
+name = { en = "Accent color", pt_BR = "Cor de destaque" }
+default = "amarelo"
+choices.amarelo = { name = { en = "Yellow", pt_BR = "Amarelo" } }
+choices.roxo = { name = { en = "Purple", pt_BR = "Roxo" }, vars = { acento = "#A56DE2", acento_escuro = "#261F2F" } }
+
+[options.fundo]
+name = { en = "Background", pt_BR = "Fundo" }
+default = "claro"
+choices.claro = { name = { en = "Light", pt_BR = "Claro" } }
+choices.escuro = { name = { en = "Dark", pt_BR = "Escuro" }, vars = { arte = "arts2" } }
 
 # ------------------------------------------------------------ SOLO
 # Full-screen art per system, the list on the right, the count under it.
@@ -33,7 +49,7 @@ name = { en = "Solo", pt_BR = "Solo" }
 [[view.solo.systems.el]]
 id = "arte"
 kind = "image"
-src = ["arts/${system}.png", "arts/default.png"]
+src = ["${arte}/${system}.png", "${arte}/default.png"]
 fit = "cover"
 z = 0
 
@@ -575,106 +591,27 @@ style = "outline"
 color = "#FFFFFF"
 z = 50
 
-# ------------------------------------------------------------ RODA
-# The Albedo mockup's wheel of system logos on the left, each position turned
-# 5 degrees about a far pivot; the games in one row of covers, the focus
-# larger with its reflection.
-[view.roda]
-name = { en = "Wheel", pt_BR = "Roda" }
+# ------------------------------------------------------------ SOLO ESCURO
+# The Solo view inherited: the list moved left, the band taken away and a
+# line of text added.
+[view.solo-escuro]
+name = { en = "Dark Solo", pt_BR = "Solo escuro" }
+base = "solo"
 
-[[view.roda.systems.el]]
-id = "capa-sistema"
-kind = "image"
-src = ["systems/${system}.png"]
-rect = { x = 0.7167, y = 0.5, w = 0.5, h = 0.8 }
-anchor = "center"
-z = -10
+[view.solo-escuro.systems]
+remove = ["faixa"]
 
-[[view.roda.systems.el]]
-id = "moldura"
-kind = "image"
-src = "frames/${aspect}/carousel-bg.png"
-fit = "stretch"
-z = 5
+[[view.solo-escuro.systems.el]]
+id = "lista"
+rect = { x = 0.04, y = 0.15, w = 0.36, h = 0.68 }
+align = "left"
 
-[[view.roda.systems.el]]
-id = "roda"
-kind = "carousel"
-of = "systems"
-axis = "vertical"
-visible = 5
-wheel = { angle = 5, pivot = [-10, 0.5] }
-item = { image = "system.logo", text = "${item.name}", font = "$titulo", size = 0.04, color = "$acento_alt", w = 0.22, h = 0.11 }
-rect = { x = 0, y = 0, w = 0.3333, h = 1 }
-opacity = 0.5
-selected = { scale = 1.375, opacity = 1 }
-loop = true
-z = 8
-
-[[view.roda.systems.el]]
-id = "nome-sistema"
+[[view.solo-escuro.systems.el]]
+id = "herdado"
 kind = "text"
 text = "${system.name}"
-upper = true
-rect = { x = 0.355, y = 0.075, w = 0.86, h = 0.065 }
-rotate = 90
-pivot = [0, 0.5]
-font = "$titulo"
-size = "$t_h1"
-z = 10
-
-[[view.roda.systems.el]]
-id = "status"
-kind = "status"
-rect = { x = 0.70, y = 0.0, w = 0.275, h = 0.08 }
-color = "$acento_claro"
-z = 92
-
-[[view.roda.systems.el]]
-id = "dicas"
-kind = "hints"
-rect = { x = 0.40, y = 0.925, w = 0.575, h = 0.075 }
-style = "filled"
-color = "$acento_claro"
-letter_color = "$acento_escuro"
-z = 92
-
-[[view.roda.games.el]]
-id = "fundo"
-kind = "image"
-src = ["systems/${system}.png"]
-fit = "cover"
-opacity = "$fundo_lista"
-z = -5
-
-[[view.roda.games.el]]
-id = "fila"                                      # ←/→ one, L1/R1 a page
-kind = "carousel"
-of = "games"
-axis = "horizontal"
-visible = 5
-item = { image = ["game.cover", "game.screenshot"], text = "${item.name}", size = 0.03 }
-rect = { x = 0, y = 0.2, w = 1, h = 0.42 }
-spacing = 0.19
-opacity = 0.6
-selected = { scale = 1.45, opacity = 1 }
-reflection = 0.3
-loop = true
-z = 10
-
-[[view.roda.games.el]]
-id = "nome"
-kind = "text"
-text = "${game.name}"
-upper = true
-rect = { x = 0.1, y = 0.76, w = 0.8, h = 0.08 }
-align = "center"
-font = "$titulo"
-size = 0.055
+rect = { x = 0.04, y = 0.86, w = 0.5, h = 0.06 }
+size = 0.04
 color = "$acento"
-fit_text = "shrink"
-z = 12
+z = 30
 
-[[view.roda.games.el]]
-id = "dicas"
-base = "systems.dicas"

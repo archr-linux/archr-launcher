@@ -58,10 +58,14 @@ fn shipped(name: &str) -> PathBuf {
 
 /// The test theme in `dir`, with its pictures and fonts.
 fn theme_folder(dir: &Path) {
-    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/themes/cena/theme.toml");
-    std::fs::copy(source, dir.join("theme.toml")).unwrap();
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/themes/cena");
+    std::fs::create_dir_all(dir.join("parts")).unwrap();
+    for file in ["theme.toml", "parts/roda.toml"] {
+        std::fs::copy(source.join(file), dir.join(file)).unwrap();
+    }
     for sub in [
         "arts",
+        "arts2",
         "logos",
         "systems",
         "icons",
@@ -82,9 +86,16 @@ fn theme_folder(dir: &Path) {
         ("n64", [40, 150, 90]),
     ] {
         art(&dir.join(format!("arts/{system}.png")), (960, 720), hue);
+        // The "Dark" background option's art.
+        art(
+            &dir.join(format!("arts2/{system}.png")),
+            (960, 720),
+            hue.map(|c| c / 4),
+        );
         console(&dir.join(format!("systems/{system}.png")), hue);
     }
     art(&dir.join("arts/default.png"), (960, 720), [80, 80, 90]);
+    art(&dir.join("arts2/default.png"), (960, 720), [20, 20, 24]);
     // Logos for three systems, the Mega Drive's under the name it shares
     // and drawn: the Nintendo 64 falls back to its name or picture.
     logo(&dir.join("logos/snes.png"), [230, 60, 60]);
@@ -629,7 +640,11 @@ fn every_example_of_the_docs_chapter_reads_without_warnings() {
             }
         }
         // A theme file that is not in the docs folder is no warning here.
-        said.retain(|w| !w.contains("outside the theme directory"));
+        // Nor is an include, which only a theme folder can resolve.
+        said.retain(|w| {
+            !w.contains("outside the theme directory")
+                && !w.contains("include needs the theme folder")
+        });
         assert!(said.is_empty(), "{block}\n{said:#?}");
     }
     assert!(blocks >= 4, "{blocks} examples");
@@ -1413,4 +1428,276 @@ fn the_video_element_asks_for_its_clip_and_shows_its_frame_or_still() {
         frame(&mut ui, &app, none, "jogos-de-volta");
         assert_eq!(ui.scene_clip.as_ref().map(|c| &c.file), Some(&aladdin));
     }
+}
+
+/// The test theme's options, include and inherited view: the wheel comes
+/// from parts/roda.toml, "solo-escuro" is Solo with its own changes, and the
+/// options reach the top-level accent and the art the scene asks for.
+#[test]
+fn options_includes_and_inherited_views_read_without_warnings() {
+    let dir = tempfile::tempdir().unwrap();
+    theme_folder(dir.path());
+    let mut theme = Theme::builtin();
+    let said = warnings(|| theme = load(dir.path(), "solo-escuro"));
+    assert!(said.is_empty(), "{said:#?}");
+    let ids: Vec<String> = theme.views().into_iter().map(|v| v.0).collect();
+    for id in ["roda", "solo-escuro"] {
+        assert!(ids.iter().any(|v| v == id), "{id}: {ids:?}");
+    }
+    let options: Vec<&str> = theme.options().iter().map(|o| o.id.as_str()).collect();
+    assert_eq!(options, ["cor", "fundo"]);
+    assert_eq!(
+        theme.options()[0].name.get("pt_BR"),
+        Some("Cor de destaque")
+    );
+    assert_eq!(theme.choice("cor"), Some("amarelo"));
+    let rgb = |t: &Theme| (t.highlight_bg.r, t.highlight_bg.g, t.highlight_bg.b);
+    assert_eq!(rgb(&theme), (0xF9, 0xC4, 0x40));
+    // The included wheel reads as the theme.toml's own.
+    let roda = theme.view("roda");
+    assert!(roda.systems.scene.as_ref().unwrap().collection().is_some());
+    // Solo inherited: the band removed, the list moved, a line added, the
+    // rest as Solo has it.
+    let element_ids = |view: &View| -> Vec<String> {
+        let scene = view.systems.scene.as_ref().unwrap();
+        scene.elements.iter().map(|e| e.id.clone()).collect()
+    };
+    let (solo, dark) = (theme.view("solo"), theme.view("solo-escuro"));
+    let (mine, base) = (element_ids(&dark), element_ids(&solo));
+    assert!(base.contains(&"faixa".to_owned()) && !mine.contains(&"faixa".to_owned()));
+    assert!(mine.contains(&"herdado".to_owned()) && mine.contains(&"arte".to_owned()));
+    assert_eq!(mine.len(), base.len());
+    assert!((dark.systems.list.rect.x - 0.04).abs() < 1e-4);
+    assert!((solo.systems.list.rect.x - 0.6).abs() < 1e-4);
+    assert_eq!(dark.games, solo.games, "the screen it does not touch");
+    // The choices: the accent at the top level, the art in the scene; the
+    // other shapes keep them, an unknown one changes nothing.
+    let chosen = |pairs: &[(&str, &str)]| -> Vec<(String, String)> {
+        pairs
+            .iter()
+            .map(|(o, c)| ((*o).to_owned(), (*c).to_owned()))
+            .collect()
+    };
+    let mut purple = theme.clone();
+    let said =
+        warnings(|| purple = theme.with_options(&chosen(&[("cor", "roxo"), ("fundo", "escuro")])));
+    assert!(said.is_empty(), "{said:#?}");
+    assert_eq!(rgb(&purple), (0xA5, 0x6D, 0xE2));
+    assert_eq!(purple.choice("fundo"), Some("escuro"));
+    assert_eq!(purple.font, theme.font);
+    let art = |t: &Theme| {
+        let view = t.view("solo");
+        let scene = view.systems.scene.unwrap();
+        let element = scene.elements.into_iter().find(|e| e.id == "arte").unwrap();
+        format!("{:?}", element.kind)
+    };
+    assert!(art(&purple).contains("arts2/") && !art(&theme).contains("arts2/"));
+    assert_eq!(rgb(&purple.fitted(720, 720)), (0xA5, 0x6D, 0xE2));
+    assert_eq!(purple.fitted(720, 720).choice("cor"), Some("roxo"));
+    assert_eq!(
+        theme.with_options(&chosen(&[("cor", "verde"), ("x", "y")])),
+        theme
+    );
+    assert_eq!(purple.with_options(&[]), theme);
+}
+
+/// Choosing the dark background redraws the Solo systems screen with the
+/// other art, and the purple accent reaches the inherited view's line.
+#[test]
+fn a_chosen_option_draws_its_art_and_color() {
+    let _sdl = SDL.lock().unwrap_or_else(|e| e.into_inner());
+    std::env::set_var("SDL_VIDEODRIVER", "offscreen");
+    let dir = tempfile::tempdir().unwrap();
+    let folder = dir.path().join("cena");
+    std::fs::create_dir_all(&folder).unwrap();
+    theme_folder(&folder);
+    let pictures = dir.path().join("pictures");
+    std::fs::create_dir_all(&pictures).unwrap();
+    let data = library(&pictures);
+    let size = (640, 480);
+    let root = tempfile::tempdir().unwrap();
+    let (ttf, creator);
+    let mut ui = Ui::new(size.0, size.1, true).unwrap();
+    ttf = sdl2::ttf::init().unwrap();
+    creator = ui.canvas.texture_creator();
+    ui.theme_dir = Some(folder.clone());
+    ui.default_theme_dir = Some(shipped("default"));
+    ui.set_motion(archr_ui::motion::Motion::Off);
+    ui.set_status(archr_ui::status::Status::frozen("14:32"));
+    let mut draw = |theme: &Theme, name: &str| -> Vec<u8> {
+        ui.configure(&ttf, &creator, theme, Some(root.path()))
+            .unwrap();
+        let mut app = App::new(10);
+        app.set_view(&theme.view(&theme.active_view));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        let mut round = 0;
+        loop {
+            ui.tick();
+            ui.snap_animations();
+            ui.draw_with_settings(&app, &data, theme, Default::default(), None)
+                .unwrap();
+            if ui.pictures_idle() && round >= 3 {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "pictures never loaded"
+            );
+            round += 1;
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let pixels = ui
+            .canvas
+            .read_pixels(None, sdl2::pixels::PixelFormatEnum::RGBA32)
+            .unwrap();
+        if let Some(out) = std::env::var_os("ARCHR_SCENE_CAPTURE_DIR").map(PathBuf::from) {
+            std::fs::create_dir_all(&out).unwrap();
+            let file = out.join(format!("opcoes-{name}-640x480.png"));
+            image::save_buffer(file, &pixels, size.0, size.1, image::ColorType::Rgba8).unwrap();
+        }
+        pixels
+    };
+    let px = |pixels: &[u8], x: f32, y: f32| {
+        let at = ((y * 480.) as usize * 640 + (x * 640.) as usize) * 4;
+        [pixels[at], pixels[at + 1], pixels[at + 2]]
+    };
+    let near = |pixels: &[u8], rgb: [u8; 3]| {
+        let mut hit = 0;
+        for y in (0.86 * 480.) as usize..(0.92 * 480.) as usize {
+            for x in (0.04 * 640.) as usize..(0.54 * 640.) as usize {
+                let at = (y * 640 + x) * 4;
+                if (0..3).all(|k| pixels[at + k].abs_diff(rgb[k]) < 24) {
+                    hit += 1;
+                }
+            }
+        }
+        hit
+    };
+    let theme = load(&folder, "solo");
+    let pairs = |c: &str, f: &str| {
+        vec![
+            ("cor".to_owned(), c.to_owned()),
+            ("fundo".to_owned(), f.to_owned()),
+        ]
+    };
+    let light = draw(&theme, "claro");
+    let dark = draw(&theme.with_options(&pairs("amarelo", "escuro")), "escuro");
+    // The art's light half beside the sun: the Super Nintendo's violet,
+    // a quarter as bright in the dark art.
+    let (a, b) = (px(&light, 0.1, 0.5), px(&dark, 0.1, 0.5));
+    assert!(a[2] > 180 && b[2] < 80, "{a:?} {b:?}");
+    let mut inherited = load(&folder, "solo-escuro");
+    let yellow = draw(&inherited, "herdado-amarelo");
+    inherited = inherited.with_options(&pairs("roxo", "claro"));
+    let purple = draw(&inherited, "herdado-roxo");
+    let (y, p) = ([0xF9, 0xC4, 0x40], [0xA5, 0x6D, 0xE2]);
+    let counts = [
+        near(&yellow, y),
+        near(&yellow, p),
+        near(&purple, p),
+        near(&purple, y),
+    ];
+    assert!(counts[0] > 100 && counts[1] < 10, "{counts:?}");
+    assert!(counts[2] > 100 && counts[3] < 10, "{counts:?}");
+}
+
+/// Bad options, includes and inherited views are warnings; the rest of the
+/// theme reads as it would without them.
+#[test]
+fn bad_options_includes_and_bases_are_warnings() {
+    let dir = tempfile::tempdir().unwrap();
+    let folder = dir.path().join("tema");
+    std::fs::create_dir_all(folder.join("parts")).unwrap();
+    std::fs::write(dir.path().join("fora.toml"), "text = \"#000000\"\n").unwrap();
+    std::fs::write(folder.join("parts/a.toml"), "include = \"parts/b.toml\"\nbackground = \"#010203\"\n[vars]\ncor = \"#00FF00\"\ntinta = \"#00FF00\"\n").unwrap();
+    std::fs::write(
+        folder.join("parts/b.toml"),
+        "include = [\"parts/a.toml\"]\nbackground = \"#0A0B0C\"\nborder = \"#112233\"\n",
+    )
+    .unwrap();
+    std::fs::write(folder.join("parts/ruim.toml"), "não é toml =\n").unwrap();
+    std::fs::write(
+        folder.join("theme.toml"),
+        r##"
+include = ["parts/a.toml", "../fora.toml", "/etc/passwd", "parts/falta.toml", "parts/ruim.toml"]
+background = "#202020"
+accent = "$cor"
+text = "$tinta"
+
+[options.sem_escolhas]
+name = "Nada"
+
+[options.uma]
+choices.so = { name = "Só" }
+
+[options.ruim]
+default = "nenhuma"
+extra = 1
+choices.a = { name = "A", vars = { cor = "#FF0000", lista = [1] } }
+choices.b = { name = "B", outro = 2 }
+
+[options."com espaço"]
+choices.a = {}
+choices.b = {}
+
+[view.filho]
+base = "nenhuma"
+
+[view.ciclo]
+base = "ciclo"
+
+[view.neto]
+base = "filho"
+
+[view.neto.systems]
+remove = ["nada", 3]
+
+[[view.neto.systems.el]]
+id = "x"
+kind = "rect"
+fill = "#FFFFFF"
+"##,
+    )
+    .unwrap();
+    let default = Theme::load(&shipped("default"));
+    let mut theme = Theme::builtin();
+    let mut said = warnings(|| theme = Theme::load_over(&folder, &default));
+    for id in ["filho", "ciclo", "neto"] {
+        said.extend(warnings(|| drop(theme.view(id))));
+    }
+    // The include under the theme.toml: its own colour loses, the one it
+    // alone gives (through b.toml, which cannot include a.toml again) stays.
+    assert_eq!(theme.background.r, 0x20);
+    assert_eq!((theme.border.r, theme.border.g), (0x11, 0x22));
+    assert_eq!(theme.text.g, 0xFF, "a.toml's var reaches the theme");
+    // One option is left: "ruim", defaulting to its first choice.
+    let options: Vec<&str> = theme.options().iter().map(|o| o.id.as_str()).collect();
+    assert_eq!(options, ["ruim"]);
+    assert_eq!(theme.choice("ruim"), Some("a"));
+    assert_eq!(theme.highlight_bg.r, 0xFF, "the default choice's var");
+    for word in [
+        "includes itself again",
+        "\"../fora.toml\"",
+        "\"/etc/passwd\"",
+        "falta.toml",
+        "ruim.toml",
+        "options.sem_escolhas needs a choices table",
+        "options.uma needs at least two choices",
+        "options.ruim.default names no choice",
+        "options.ruim.extra",
+        "options.ruim.choices.a.vars.lista",
+        "options.ruim.choices.b.outro",
+        "only letters, digits",
+        "view.filho.base names no other view",
+        "view.ciclo.base names no other view",
+        "no inherited element \"nada\"",
+    ] {
+        assert!(
+            said.iter().any(|w| w.contains(word)),
+            "no warning about {word}: {said:#?}"
+        );
+    }
+    // The views still draw: "neto" is "filho" (the classic list) and its rect.
+    let neto = theme.view("neto");
+    assert_eq!(neto.systems.scene.as_ref().unwrap().elements.len(), 1);
 }

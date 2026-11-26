@@ -22,6 +22,20 @@ pub fn load_theme(paths: &Paths, name: &str) -> (Theme, Option<PathBuf>) {
         _ => base,
     };
     theme.font = theme.font.as_deref().map(|font| paths.remap(font));
+    // The choices made for this theme's options come back with it.
+    if !theme.options().is_empty() {
+        if let Ok(cfg) = SystemCfg::load(&paths.config) {
+            let chosen: Vec<(String, String)> = theme
+                .options()
+                .iter()
+                .filter_map(|o| {
+                    let key = archr_ui::appearance::option_key(name, &o.id)?;
+                    Some((o.id.clone(), cfg.get_setting(&key, None, None)?))
+                })
+                .collect();
+            theme = theme.with_options(&chosen);
+        }
+    }
     (theme, dir)
 }
 
@@ -70,6 +84,8 @@ pub fn saved(cfg: Option<&SystemCfg>) -> Appearance {
         secondary_color: get(Id::SecondaryColor),
         text_hints: get(Id::TextHints),
         system_background: get(Id::SystemBackground),
+        // load_theme brings the theme's options back with it.
+        options: Vec::new(),
     }
 }
 
