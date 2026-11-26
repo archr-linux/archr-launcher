@@ -454,6 +454,29 @@ fn the_stop_before_a_game_ends_every_module_and_the_return_reports_the_game() {
     assert!(seen.contains("snes/Chrono.sfc"));
     assert!(!base.join("run/last-launch.json").exists());
     drop(probe);
+    // The second launcher started teimoso again, and it ignores TERM:
+    // without this it outlives the test (and holds whatever the test
+    // runner held, a build lock included).
+    let script = base.join("modules/teimoso/main.sh");
+    let script = script.to_string_lossy();
+    for _ in 0..20 {
+        let mut left = false;
+        for entry in fs::read_dir("/proc").unwrap().flatten() {
+            let Ok(pid) = entry.file_name().to_string_lossy().parse::<i32>() else {
+                continue;
+            };
+            let cmdline = fs::read(entry.path().join("cmdline")).unwrap_or_default();
+            if String::from_utf8_lossy(&cmdline).contains(script.as_ref()) {
+                left = true;
+                // SAFETY: a process running this test's own module script.
+                unsafe { libc::kill(pid, libc::SIGKILL) };
+            }
+        }
+        if !left {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
 }
 
 #[test]
