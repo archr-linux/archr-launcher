@@ -752,6 +752,9 @@
 "details.developer" = "开发商"
 "details.publisher" = "发行商"
 "details.rating" = "评分"
+# Free screens (theme `@description`, `@last_played`).
+"scene.description" = "简介"
+"scene.last_played" = "上次游玩"
 "details.decimal" = "."
 "details.no_description" = "暂无简介。重新刮削可获取简介。"
 "details.updated" = "游戏资料已更新"

@@ -753,6 +753,9 @@
 "details.developer" = "Developer"
 "details.publisher" = "Publisher"
 "details.rating" = "Rating"
+# Free screens (theme `@description`, `@last_played`).
+"scene.description" = "Description"
+"scene.last_played" = "Last played"
 "details.decimal" = "."
 "details.no_description" = "No description yet. Scrape again to fetch one."
 "details.updated" = "Game data updated"

@@ -273,7 +273,17 @@ impl<'t> Ui<'_, 't> {
         opacity: f32,
         draw: impl FnOnce(&mut Self) -> Result<T, String>,
     ) -> Result<T, String> {
-        if opacity >= 1. {
+        self.layered(opacity, None, draw)
+    }
+    /// `faded`, and turned `degrees` clockwise about `pivot` (a point of
+    /// the stage being drawn) when it says.
+    pub(super) fn layered<T>(
+        &mut self,
+        opacity: f32,
+        turn: Option<(f64, (i32, i32))>,
+        draw: impl FnOnce(&mut Self) -> Result<T, String>,
+    ) -> Result<T, String> {
+        if opacity >= 1. && turn.is_none() {
             return draw(self);
         }
         let Frame { width, height, .. } = self.frame;
@@ -309,7 +319,14 @@ impl<'t> Ui<'_, 't> {
         layer.set_alpha_mod((opacity.clamp(0., 1.) * 255.).round() as u8);
         self.canvas.set_viewport(None);
         self.canvas.set_clip_rect(None);
-        let copied = self.canvas.copy(&layer, None, None);
+        let copied = match turn {
+            None => self.canvas.copy(&layer, None, None),
+            Some((degrees, (x, y))) => {
+                let at = sdl2::rect::Point::new(x + saved.viewport.x(), y + saved.viewport.y());
+                self.canvas
+                    .copy_ex(&layer, None, None, degrees, at, false, false)
+            }
+        };
         self.canvas.set_viewport(saved.viewport);
         self.canvas.set_clip_rect(saved.clip);
         self.materials.layer = Some(layer);

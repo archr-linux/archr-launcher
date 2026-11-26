@@ -1,0 +1,430 @@
+# A test theme for free screens (docs/temas.md, Telas livres): the
+# structure of the approved mockups (.work/temas-livres/fase0) with art of
+# its own. tests/scene_render.rs copies this file to a folder, draws the
+# pictures it names there (arts/, logos/, systems/, frames/, icons/) and
+# copies two of the shipped fonts as fonts/Titulo.ttf and fonts/Corpo.ttf.
+# Not shipped.
+name = { en = "Scene (test)", pt_BR = "Cena (teste)" }
+
+background = "#101011"
+text = "#FFFFFF"
+text_secondary = "#D8D8E0"
+muted = "#A0A0B0"
+accent = "$acento"
+accent_text = "$acento_escuro"
+
+[vars]
+acento = "#F9C440"
+acento_claro = "#FFFDEB"
+acento_escuro = "#32270D"
+acento_alt = "#FBD679"
+titulo = "fonts/Titulo.ttf"
+corpo = "fonts/Corpo.ttf"
+t_h1 = 0.05
+t_lista = 0.0375
+t_corpo = 0.0292
+fundo_lista = 0.4
+
+# ------------------------------------------------------------ SOLO
+# Full-screen art per system, the list on the right, the count under it.
+[view.solo]
+name = { en = "Solo", pt_BR = "Solo" }
+
+[[view.solo.systems.el]]
+id = "arte"
+kind = "image"
+src = ["arts/${system}.png", "arts/default.png"]
+fit = "cover"
+z = 0
+
+[[view.solo.systems.el]]
+id = "faixa"
+kind = "rect"
+rect = { x = 0.56, y = 0, w = 0.44, h = 1 }
+gradient = { from = "#00000000", to = "#000000B0", angle = 0 }
+z = 2
+
+[[view.solo.systems.el]]
+id = "lista"
+kind = "list"
+rect = { x = 0.6, y = 0.15, w = 0.36, h = 0.68 }
+row = 0.075
+size = 0.04
+mark = "bar"
+scroll = "center"
+color = "#FFFFFFA0"
+selected = { fill = "#FFFFFF", color = "#FFFFFF" }
+z = 10
+
+[[view.solo.systems.el]]
+id = "logo"
+kind = "image"
+src = ["logos/${system}.png"]
+fallback_text = { text = "${system.name}", font = "$titulo", size = 0.07, upper = true, shadow = { color = "#000000C0", x = 0.003, y = 0.003 } }
+rect = { x = 0.04, y = 0.74, w = 0.46, h = 0.16 }
+fit = "contain"
+align = "left"
+z = 10
+
+[[view.solo.systems.el]]
+id = "contagem"
+kind = "text"
+text = "${system.games}"
+rect = { x = 0.50, y = 0.868, w = 0.448, h = 0.05 }
+align = "right"
+font = "$titulo"
+size = 0.032
+color = "#FFFFFF"
+shadow = { color = "#000000A0", x = 0.002, y = 0.002 }
+z = 20
+
+[[view.solo.systems.el]]
+id = "barra"
+kind = "rect"
+fill = "#FFFFFF"
+rect = { x = 0.565, y = 0.929, w = 0.435, h = 0.0021 }
+z = 42
+
+[[view.solo.systems.el]]
+id = "dicas"
+kind = "hints"
+rect = { x = 0.565, y = 0.94, w = 0.41, h = 0.05 }
+align = "right"
+style = "outline"
+color = "#FFFFFF"
+z = 50
+
+[[view.solo.systems.el]]
+id = "status"
+kind = "status"
+rect = { x = 0.60, y = 0.0, w = 0.375, h = 0.08 }
+color = "#FFFFFF"
+z = 50
+
+[[view.solo.systems.el]]
+id = "selo-16bit"                                # only on the Mega Drive
+kind = "text"
+text = "16-BIT"
+rect = { x = 0.04, y = 0.06, w = 0.2, h = 0.06 }
+font = "$titulo"
+size = 0.04
+color = "#E8343B"
+when = { system = "megadrive" }
+z = 20
+
+[[view.solo.games.el]]
+id = "arte"
+base = "systems.arte"
+
+[[view.solo.games.el]]
+id = "filtro"
+kind = "rect"
+fill = "#101011C7"
+z = 5
+
+[[view.solo.games.el]]
+id = "logo-sistema"
+kind = "image"
+src = ["logos/${system}.png"]
+fallback_text = { text = "${system.name}", font = "$titulo", size = 0.05, upper = true }
+rect = { x = 0.02, y = 0.02, w = 0.30, h = 0.12 }
+fit = "contain"
+align = "left"
+z = 10
+
+[[view.solo.games.el]]
+id = "posicao"
+kind = "text"
+text = "${list.index} / ${list.total}"
+rect = { x = 0.60, y = 0.09, w = 0.375, h = 0.05 }
+align = "right"
+size = 0.028
+color = "#D0D0D8"
+z = 10
+
+[[view.solo.games.el]]
+id = "grade"
+kind = "list"
+rect = { x = 0.02, y = 0.17, w = 0.62, h = 0.75 }
+mark = "grid"
+columns = 3
+row = 0.2
+gap = 0.02
+z = 10
+
+[[view.solo.games.el]]
+id = "painel"
+kind = "panel"
+rect = { x = 0.66, y = 0.16, w = 0.32, h = 0.774 }
+style = "glass"
+radius = 0.02
+z = 12
+
+[[view.solo.games.el]]
+id = "nome"
+kind = "text"
+text = "${game.name}"
+rect = { x = 0.68, y = 0.18, w = 0.28, h = 0.06 }
+align = "center"
+font = "$titulo"
+size = 0.042
+z = 14
+
+[[view.solo.games.el]]
+id = "captura"
+kind = "image"
+src = ["game.screenshot", "game.cover"]
+rect = { x = 0.68, y = 0.26, w = 0.28, h = 0.3 }
+fit = "contain"
+radius = 0.01
+z = 14
+
+[[view.solo.games.el]]
+id = "descricao"
+kind = "text"
+text = "${game.description}"
+rect = { x = 0.68, y = 0.58, w = 0.28, h = 0.25 }
+size = 0.025
+line = 1.3
+color = "#C8C8D4"
+wrap = true
+z = 14
+
+[[view.solo.games.el]]
+id = "dev"
+kind = "text"
+text = "${game.developer} · ${game.year}"
+rect = { x = 0.68, y = 0.86, w = 0.28, h = 0.05 }
+size = 0.025
+color = "#EFEFFF"
+when = { has = "game.developer" }
+z = 14
+
+[[view.solo.games.el]]
+id = "status"
+base = "systems.status"
+
+[[view.solo.games.el]]
+id = "dicas"
+base = "systems.dicas"
+rect = { x = 0.02, y = 0.94, w = 0.6, h = 0.05 }
+align = "left"
+
+# ------------------------------------------------------------ ALBEDO
+# Frames cut per screen shape over the content, a list on the left, the
+# system's name turned on its side.
+[view.albedo]
+name = { en = "Albedo", pt_BR = "Albedo" }
+
+[[view.albedo.systems.el]]
+id = "capa-sistema"
+kind = "image"
+src = ["systems/${system}.png"]
+rect = { x = 0.7167, y = 0.5, w = 0.5, h = 0.8 }
+anchor = "center"
+fit = "contain"
+z = -10
+
+[[view.albedo.systems.el]]
+id = "moldura"
+kind = "image"
+src = "frames/${aspect}/carousel-bg.png"
+fit = "stretch"
+z = 5
+
+[[view.albedo.systems.el]]
+id = "lista"
+kind = "list"
+rect = { x = 0.0, y = 0.12, w = 0.3333, h = 0.76 }
+row = 0.08
+size = "$t_lista"
+scroll = "center"
+color = "#FFFFFFCC"
+selected = { fill = "$acento", color = "$acento_escuro" }
+z = 8
+
+[[view.albedo.systems.el]]
+id = "nome-sistema"
+kind = "text"
+text = "${system.name}"
+upper = true
+rect = { x = 0.355, y = 0.075, w = 0.86, h = 0.065 }
+rotate = 90
+pivot = [0, 0.5]
+font = "$titulo"
+size = "$t_h1"
+z = 10
+
+[[view.albedo.systems.el]]
+id = "contagem"
+kind = "text"
+text = "${system.games}"
+upper = true
+rect = { x = 0.392, y = 0.075, w = 0.86, h = 0.05 }
+rotate = 90
+pivot = [0, 0.5]
+font = "$corpo"
+size = 0.0375
+color = "#FFFFFFCC"
+z = 10
+
+[[view.albedo.systems.el]]
+id = "bordas"
+kind = "frame"
+image = "frames/borda.png"
+slice = 8
+scale = 1
+z = 90
+
+[[view.albedo.systems.el]]
+id = "status"
+kind = "status"
+rect = { x = 0.70, y = 0.0, w = 0.275, h = 0.08 }
+color = "$acento_claro"
+z = 92
+
+[[view.albedo.systems.el]]
+id = "dicas"
+kind = "hints"
+rect = { x = 0.40, y = 0.925, w = 0.575, h = 0.075 }
+align = "right"
+style = "filled"
+color = "$acento_claro"
+letter_color = "$acento_escuro"
+z = 92
+
+[[view.albedo.games.el]]
+id = "fundo"
+kind = "image"
+src = ["systems/${system}.png"]
+fit = "cover"
+opacity = "$fundo_lista"
+z = -5
+
+[[view.albedo.games.el]]
+id = "moldura"
+kind = "image"
+src = "frames/${aspect}/gamelist-bg.png"
+fit = "stretch"
+z = 5
+
+[[view.albedo.games.el]]
+id = "titulo"
+kind = "text"
+text = "${system.name}"
+upper = true
+rect = { x = 0.025, y = 0.01, w = 0.65, h = 0.1 }
+font = "$titulo"
+size = 0.055
+shadow = { color = "#000000DC", x = 0, y = 0.004 }
+z = 10
+
+[[view.albedo.games.el]]
+id = "lista"
+kind = "list"
+rect = { x = 0, y = 0.15, w = 0.433, h = 0.775 }
+row = 0.0775
+size = "$t_lista"
+color = "#FFFFFF"
+selected = { fill = "$acento", color = "$acento_escuro" }
+z = 10
+
+[[view.albedo.games.el]]
+id = "captura"
+kind = "image"
+src = ["game.screenshot", "game.cover"]
+fallback = "icons/cartucho.png"
+rect = { x = 0.717, y = 0.425, w = 0.5, h = 0.5 }
+anchor = "center"
+fit = "contain"
+radius = 0.02
+z = 6
+
+[[view.albedo.games.el]]
+id = "logo-jogo"
+kind = "image"
+src = "game.logo"
+fallback_text = { text = "${game.name}", upper = true, font = "$titulo", size = 0.06, align = "center", fit_text = "shrink", shadow = { color = "#000000E6", x = 0, y = 0.004 } }
+rect = { x = 0.717, y = 0.2125, w = 0.433, h = 0.175 }
+anchor = "center"
+fit = "contain"
+z = 8
+
+[[view.albedo.games.el]]
+id = "nota"
+kind = "text"
+text = "${game.rating} / 5"
+rect = { x = 0.8167, y = 0.6625, w = 0.15, h = 0.04 }
+anchor = "left"
+align = "right"
+font = "$titulo"
+size = 0.032
+color = "$acento"
+when = { has = "game.rating" }
+z = 9
+
+[[view.albedo.games.el]]
+id = "rotulo-descricao"
+kind = "text"
+text = "@description"
+upper = true
+rect = { x = 0.4667, y = 0.7375, w = 0.3, h = 0.04 }
+anchor = "left"
+font = "$titulo"
+size = 0.029
+color = "$acento_alt"
+z = 9
+
+[[view.albedo.games.el]]
+id = "icone-data"
+kind = "image"
+src = "icons/calendario.png"
+tint = "$acento"
+rect = { x = 0.8, y = 0.7375, w = 0.033, h = 0.033 }
+anchor = "left"
+when = { has = "game.year" }
+z = 9
+
+[[view.albedo.games.el]]
+id = "data"
+kind = "text"
+text = "${game.year}"
+rect = { x = 0.8417, y = 0.7375, w = 0.14, h = 0.04 }
+anchor = "left"
+size = 0.031
+color = "$acento_claro"
+z = 9
+
+[[view.albedo.games.el]]
+id = "descricao"
+kind = "text"
+text = "${game.description}"
+rect = { x = 0.4667, y = 0.765, w = 0.5, h = 0.16 }
+font = "$corpo"
+size = "$t_corpo"
+line = 1.22
+color = "#FFFFFFE6"
+wrap = true
+z = 9
+
+[[view.albedo.games.el]]
+id = "posicao"                                   # a square screen has room for it
+kind = "text"
+text = "${list.index} / ${list.total}"
+rect = { x = 0.025, y = 0.93, w = 0.3, h = 0.05 }
+size = 0.025
+color = "#FFFFFFAA"
+when = { aspect = "square" }
+z = 10
+
+[[view.albedo.games.el]]
+id = "bordas"
+base = "systems.bordas"
+
+[[view.albedo.games.el]]
+id = "status"
+base = "systems.status"
+
+[[view.albedo.games.el]]
+id = "dicas"
+base = "systems.dicas"

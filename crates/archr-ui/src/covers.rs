@@ -252,6 +252,11 @@ impl<'a> CoverCache<'a> {
         }
     }
 
+    /// At most `bytes` of decoded pictures kept (the newest always stays).
+    pub fn with_budget(mut self, bytes: u64) -> Self {
+        self.budget = bytes;
+        self
+    }
     /// Request only the visible selection neighbourhood, never an entire system.
     pub fn request(&mut self, paths: &[PathBuf]) {
         self.queue(paths.iter().map(std::slice::from_ref));
