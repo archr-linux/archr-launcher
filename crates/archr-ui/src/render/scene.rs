@@ -172,7 +172,14 @@ pub(super) struct SceneCache<'t> {
     /// The details' scrolling text, wrapped: the text, width, size and
     /// font it was wrapped for.
     scroll: Option<(Wrapping, Vec<String>)>,
+    /// Tiled pictures made once at their box's size: picture, box, scale
+    /// and slices. Drawn tile by tile, a 4x4 pattern over the screen was
+    /// 19 200 copies a frame (Albedo's scanlines), most of the frame's time.
+    tiled: Vec<(TileKey, Texture<'t>)>,
 }
+type TileKey = (PathBuf, (u32, u32), u32, [u32; 4]);
+/// Tiled pictures kept: a screen has one or two (a pattern, a background).
+const TILED_KEPT: usize = 4;
 
 /// When the screen came in and its focus last moved, for the elements'
 /// `enter` and `select`.
@@ -1291,6 +1298,9 @@ impl<'t> Ui<'_, 't> {
         rect: Rect,
     ) -> Result<(), String> {
         let k = (slices.scale * self.frame.scale).round().max(1.) as u32;
+        if slices.tile && self.tiled(path, slices, rect, k)? {
+            return Ok(());
+        }
         let Some((texture, canvas)) = self.picture(path) else {
             return Ok(());
         };
@@ -1305,6 +1315,68 @@ impl<'t> Ui<'_, 't> {
             canvas.copy(texture, src, to)?;
         }
         Ok(())
+    }
+
+    /// A tiled picture over `rect` in one copy: its tiles are laid once in
+    /// a texture of the box's size, kept while the box and the picture stay.
+    /// False when no texture can be drawn into (the caller tiles as before).
+    fn tiled(&mut self, path: &Path, slices: &Slices, rect: Rect, k: u32) -> Result<bool, String> {
+        let key: TileKey = (
+            path.to_path_buf(),
+            (rect.width(), rect.height()),
+            k,
+            slices.slice,
+        );
+        if let Some(at) = self
+            .scene_cache
+            .tiled
+            .iter()
+            .position(|(kept, _)| *kept == key)
+        {
+            let entry = self.scene_cache.tiled.remove(at);
+            self.canvas.copy(&entry.1, None, rect)?;
+            self.scene_cache.tiled.push(entry);
+            return Ok(true);
+        }
+        let Some(mut laid) = self.target_texture((rect.width(), rect.height())) else {
+            return Ok(false);
+        };
+        let Some((texture, canvas)) = self.picture(path) else {
+            // Not loaded yet: nothing drawn, as when tiled by hand.
+            return Ok(true);
+        };
+        let size = texture.query();
+        // SAFETY: the renderer is alive; the target now drawn into (the page
+        // texture, or the window when null) is put back below.
+        let before = unsafe { sdl2::sys::SDL_GetRenderTarget(canvas.raw()) };
+        if !super::effects::target(Some(&laid), canvas) {
+            return Ok(false);
+        }
+        let ink = canvas.draw_color();
+        canvas.set_draw_color(sdl2::pixels::Color::RGBA(0, 0, 0, 0));
+        canvas.clear();
+        canvas.set_draw_color(ink);
+        // The tiles' own pixels, alpha included, not blended over the clear.
+        texture.set_blend_mode(sdl2::render::BlendMode::None);
+        let local = Rect::new(0, 0, rect.width(), rect.height());
+        let mut laid_out = Ok(());
+        for (src, to) in nine_slice((size.width, size.height), slices.slice, k, local, true) {
+            laid_out = canvas.copy(texture, src, to);
+            if laid_out.is_err() {
+                break;
+            }
+        }
+        texture.set_blend_mode(sdl2::render::BlendMode::Blend);
+        // SAFETY: as above; `before` came from this renderer.
+        unsafe { sdl2::sys::SDL_SetRenderTarget(canvas.raw(), before) };
+        laid_out?;
+        laid.set_blend_mode(sdl2::render::BlendMode::Blend);
+        self.canvas.copy(&laid, None, rect)?;
+        self.scene_cache.tiled.push((key, laid));
+        if self.scene_cache.tiled.len() > TILED_KEPT {
+            self.scene_cache.tiled.remove(0);
+        }
+        Ok(true)
     }
 
     /// The screen's list where the scene puts it, in its colors.
