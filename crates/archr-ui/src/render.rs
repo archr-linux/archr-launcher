@@ -15,6 +15,7 @@ use crate::{
     HintButton,
 };
 pub use details::Art;
+pub use scene::Clip;
 mod apps;
 mod cheevos;
 mod control;
@@ -473,6 +474,9 @@ pub struct Ui<'font, 'texture> {
     details_wrap: details::Wrapped,
     /// Description lines below the details view, for the host's scroll limit.
     pub details_overflow: usize,
+    /// The clip a free screen's `video` element asks for, for the host's
+    /// player: set by each frame that draws one.
+    pub scene_clip: Option<Clip>,
     /// Achievements that fit one page of the list, for the host's paging.
     pub achievements_page: usize,
     /// States per page of the Saves list, and the Screenshots grid's
@@ -626,6 +630,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             cover_fade: Tween::new(0., CROSSFADE),
             details_wrap: details::Wrapped::default(),
             details_overflow: 0,
+            scene_clip: None,
             achievements_page: 1,
             saves_page: 1,
             shots_grid: (1, 1),
@@ -1125,6 +1130,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         self.canvas.set_draw_color(color(theme.background));
         self.canvas.clear();
         self.store_wanted.clear();
+        self.scene_clip = None;
         self.finish(
             theme,
             settings.is_some() && !theme.screens.settings.themed(),

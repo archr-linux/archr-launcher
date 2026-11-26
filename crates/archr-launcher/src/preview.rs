@@ -1,7 +1,9 @@
-//! The details screen's muted preview video. ffmpeg (already in the image)
-//! decodes, scales, crops and paces the clip in its own process; a reader
-//! thread keeps only the newest frame, and the draw thread uploads it.
+//! The muted preview video of the details screen and of a free screen's
+//! `video` element. ffmpeg (already in the image) decodes, scales, crops
+//! and paces the clip in its own process; a reader thread keeps only the
+//! newest frame, and the draw thread uploads it.
 use crate::process;
+use archr_ui::layout::ImageFit;
 use sdl2::{
     pixels::PixelFormatEnum,
     render::{Texture, TextureCreator},
@@ -20,12 +22,51 @@ use std::{
     time::{Duration, Instant},
 };
 
-/// Resting on the game this long starts the video.
-const DELAY: Duration = Duration::from_secs(1);
+/// Resting on the game this long starts the details' video.
+pub const DELAY: Duration = Duration::from_secs(1);
 const FPS: u32 = 25;
 
-/// The clip and the box it fills, in pixels.
-pub type Want = (PathBuf, (u32, u32));
+/// What should play: the clip, the frame size, how it fills the frame,
+/// the rest before it starts and whether it starts again at its end.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Want {
+    pub path: PathBuf,
+    pub size: (u32, u32),
+    pub fit: ImageFit,
+    pub delay: Duration,
+    pub repeat: bool,
+}
+impl Want {
+    /// The details' preview: filling the box, after a second, in a loop.
+    pub fn details(path: PathBuf, size: (u32, u32)) -> Self {
+        Self {
+            path,
+            size,
+            fit: ImageFit::Cover,
+            delay: DELAY,
+            repeat: true,
+        }
+    }
+    /// A free screen's clip, while videos are on and the screen is shown.
+    pub fn scene(clip: Option<&archr_ui::render::Clip>, on: bool) -> Option<Self> {
+        let clip = clip.filter(|_| on)?;
+        Some(Self {
+            path: clip.file.clone(),
+            size: clip.size,
+            fit: clip.fit,
+            delay: clip.delay,
+            repeat: clip.repeat,
+        })
+    }
+    /// Bytes a pixel: a contained clip has clear bars around it.
+    fn depth(&self) -> usize {
+        if self.fit == ImageFit::Contain {
+            4
+        } else {
+            3
+        }
+    }
+}
 
 #[derive(Default)]
 struct Slot {
@@ -50,7 +91,7 @@ struct Player {
     group: Group,
 }
 impl Player {
-    fn start(path: PathBuf, size: (u32, u32)) -> Self {
+    fn start(want: Want) -> Self {
         let slot = Arc::new(Mutex::new(Slot::default()));
         let stop = Arc::new(AtomicBool::new(false));
         let group = Group::default();
@@ -61,10 +102,10 @@ impl Player {
                 let frames = || shared.lock().unwrap_or_else(|e| e.into_inner()).seq;
                 loop {
                     let before = frames();
-                    let Err(error) = play(&path, size, &shared, &cancel, &pgid) else {
+                    let Err(error) = play(&want, &shared, &cancel, &pgid) else {
                         break;
                     };
-                    log::warn!("Preview {}: {error}", path.display());
+                    log::warn!("Preview {}: {error}", want.path.display());
                     // ffmpeg died after a second or more of video: play the
                     // clip again after the usual pause. A clip that fails
                     // sooner is given up, so a broken one never loops.
@@ -127,15 +168,23 @@ fn duration(stderr: impl Read, found: &Mutex<Option<f32>>) {
 }
 
 fn play(
-    path: &Path,
-    (w, h): (u32, u32),
+    want: &Want,
     slot: &Mutex<Slot>,
     stop: &AtomicBool,
     group: &Mutex<i32>,
 ) -> Result<(), String> {
-    let filter = format!(
-        "fps={FPS},scale={w}:{h}:force_original_aspect_ratio=increase:flags=bilinear,crop={w}:{h}"
-    );
+    let (path, (w, h)) = (&want.path, want.size);
+    let filter = match want.fit {
+        ImageFit::Cover => format!(
+            "fps={FPS},scale={w}:{h}:force_original_aspect_ratio=increase:flags=bilinear,crop={w}:{h}"
+        ),
+        ImageFit::Contain => format!(
+            "fps={FPS},scale={w}:{h}:force_original_aspect_ratio=decrease:flags=bilinear,format=rgba,pad={w}:{h}:-1:-1:color=0x00000000"
+        ),
+        ImageFit::Stretch => format!("fps={FPS},scale={w}:{h}:flags=bilinear"),
+    };
+    let format = if want.depth() == 4 { "rgba" } else { "rgb24" };
+    let repeat = if want.repeat { "-1" } else { "0" };
     let mut command = Command::new("ffmpeg");
     die_with_parent(&mut command);
     command
@@ -143,11 +192,11 @@ fn play(
         .args(["-nostdin", "-hide_banner", "-nostats", "-loglevel", "info"])
         // Only a local MP4 file: no network or other protocol, no demuxer guessing.
         .args(["-protocol_whitelist", "file", "-f", "mp4"])
-        // Real time, in a loop, one decoding thread: the menus stay first.
-        .args(["-re", "-stream_loop", "-1", "-threads", "1", "-i"])
+        // Real time, in a loop or once, one decoding thread: the menus stay first.
+        .args(["-re", "-stream_loop", repeat, "-threads", "1", "-i"])
         .arg(path)
         .args(["-an", "-sn", "-dn", "-vf", &filter])
-        .args(["-pix_fmt", "rgb24", "-f", "rawvideo", "pipe:1"])
+        .args(["-pix_fmt", format, "-f", "rawvideo", "pipe:1"])
         .process_group(0)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -178,7 +227,7 @@ fn play(
             .name("preview-log".into())
             .spawn(move || duration(stderr, &found));
     }
-    let mut frame = vec![0; w as usize * h as usize * 3];
+    let mut frame = vec![0; w as usize * h as usize * want.depth()];
     // Frames of this run; the slot counts every run's.
     let mut seq = 0u64;
     while !stop.load(Ordering::Relaxed) {
@@ -200,10 +249,12 @@ fn play(
                 );
             }
             drop(clear);
-            return Err(match child.0.wait() {
-                Ok(status) => format!("ffmpeg ended after {seq} frames ({status})"),
-                Err(_) => format!("ffmpeg: {error}"),
-            });
+            return match child.0.wait() {
+                // A clip played once came to its end.
+                Ok(status) if status.success() && !want.repeat && seq > 0 => Ok(()),
+                Ok(status) => Err(format!("ffmpeg ended after {seq} frames ({status})")),
+                Err(_) => Err(format!("ffmpeg: {error}")),
+            };
         }
         seq += 1;
         let at = seq as f32 / FPS as f32;
@@ -232,6 +283,8 @@ pub struct Preview<'t> {
     progress: f32,
     /// A clip ffmpeg could not play: its still stays, it is not retried.
     failed: Option<PathBuf>,
+    /// The clip asked for, played once, came to its end.
+    over: bool,
 }
 impl<'t> Preview<'t> {
     pub fn new(creator: &'t TextureCreator<WindowContext>) -> Self {
@@ -244,6 +297,7 @@ impl<'t> Preview<'t> {
             seen: 0,
             progress: 0.,
             failed: None,
+            over: false,
         }
     }
     /// Follow what should play now; true when the picture changed.
@@ -255,15 +309,17 @@ impl<'t> Preview<'t> {
             self.seen = 0;
             self.want = want;
             self.since = now;
+            self.over = false;
         }
-        let Some((path, (w, h))) = &self.want else {
+        let Some(want) = &self.want else {
             return changed;
         };
+        let (path, (w, h)) = (&want.path, &want.size);
         if self.player.is_none() {
-            if self.failed.as_ref() == Some(path) || now < self.since + DELAY {
+            if self.waiting() || now < self.since + want.delay {
                 return changed;
             }
-            self.player = Some(Player::start(path.clone(), (*w, *h)));
+            self.player = Some(Player::start(want.clone()));
         }
         let Some(player) = &self.player else {
             return changed;
@@ -271,28 +327,41 @@ impl<'t> Preview<'t> {
         let slot = player.slot.lock().unwrap_or_else(|e| e.into_inner());
         if slot.done {
             drop(slot);
-            self.failed = Some(path.clone());
+            if want.repeat {
+                self.failed = Some(path.clone());
+            } else {
+                self.over = true;
+            }
             self.player = None;
             return std::mem::take(&mut self.seen) > 0 || changed;
         }
         if slot.seq == self.seen {
             return changed;
         }
+        let format = if want.depth() == 4 {
+            PixelFormatEnum::RGBA32
+        } else {
+            PixelFormatEnum::RGB24
+        };
         let fits = self.texture.as_ref().is_some_and(|t| {
             let q = t.query();
-            (q.width, q.height) == (*w, *h)
+            (q.width, q.height, q.format) == (*w, *h, format)
         });
         if !fits {
             self.texture = self
                 .creator
-                .create_texture_streaming(PixelFormatEnum::RGB24, *w, *h)
+                .create_texture_streaming(format, *w, *h)
                 .map_err(|e| log::warn!("Preview texture: {e}"))
                 .ok();
+            if let Some(texture) = &mut self.texture {
+                // Clear bars, and a theme's opacity.
+                texture.set_blend_mode(sdl2::render::BlendMode::Blend);
+            }
         }
         let Some(texture) = self.texture.as_mut() else {
             return changed;
         };
-        if let Err(error) = texture.update(None, &slot.frame, *w as usize * 3) {
+        if let Err(error) = texture.update(None, &slot.frame, *w as usize * want.depth()) {
             log::warn!("Preview frame: {error}");
             return changed;
         }
@@ -311,12 +380,25 @@ impl<'t> Preview<'t> {
             .flatten()
             .map(|t| (t, self.progress))
     }
+    /// The clip the frame is of.
+    pub fn file(&self) -> Option<&Path> {
+        self.frame()?;
+        self.want.as_ref().map(|w| w.path.as_path())
+    }
+    /// The clip asked for will not start again: it failed, or played once.
+    fn waiting(&self) -> bool {
+        self.over || self.failed.as_ref() == self.want.as_ref().map(|w| &w.path)
+    }
+    /// ffmpeg runs: decoding, or about to.
+    pub fn playing(&self) -> bool {
+        self.player.is_some()
+    }
     /// How long the loop may sleep before the preview needs it again.
     pub fn wait_ms(&self, now: Instant) -> u32 {
         match (&self.want, &self.player) {
             (Some(_), Some(_)) => 1000 / FPS / 2,
-            (Some((path, _)), None) if self.failed.as_ref() != Some(path) => {
-                (self.since + DELAY)
+            (Some(want), None) if !self.waiting() => {
+                (self.since + want.delay)
                     .saturating_duration_since(now)
                     .as_millis() as u32
                     + 1
@@ -342,6 +424,137 @@ mod tests {
         made.then_some(path)
     }
 
+    fn scene(path: PathBuf, fit: ImageFit, delay: u64, repeat: bool) -> Want {
+        Want {
+            path,
+            size: (80, 30),
+            fit,
+            delay: Duration::from_millis(delay),
+            repeat,
+        }
+    }
+
+    #[test]
+    fn a_free_screens_clip_plays_only_with_videos_on() {
+        let clip = archr_ui::render::Clip {
+            file: "/c.mp4".into(),
+            size: (320, 240),
+            fit: ImageFit::Stretch,
+            delay: Duration::from_millis(1500),
+            repeat: false,
+        };
+        assert_eq!(Want::scene(Some(&clip), false), None);
+        assert_eq!(Want::scene(None, true), None);
+        let want = Want::scene(Some(&clip), true).unwrap();
+        assert_eq!(
+            want,
+            Want {
+                path: "/c.mp4".into(),
+                size: (320, 240),
+                fit: ImageFit::Stretch,
+                delay: Duration::from_millis(1500),
+                repeat: false,
+            }
+        );
+    }
+
+    #[test]
+    fn a_contained_clip_comes_with_clear_bars() {
+        let dir = tempfile::tempdir().unwrap();
+        let Some(path) = clip(dir.path()) else {
+            eprintln!("ffmpeg missing: preview test skipped");
+            return;
+        };
+        // 4:3 in a 8:3 box: bars on the left and right.
+        let player = Player::start(scene(path, ImageFit::Contain, 0, true));
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let frame = loop {
+            let slot = player.slot.lock().unwrap();
+            assert!(!slot.done, "ffmpeg stopped before a frame");
+            if slot.seq >= 1 {
+                break slot.frame.clone();
+            }
+            drop(slot);
+            assert!(Instant::now() < deadline, "no frames");
+            thread::sleep(Duration::from_millis(20));
+        };
+        assert_eq!(frame.len(), 80 * 30 * 4);
+        let alpha = |x: usize, y: usize| frame[(y * 80 + x) * 4 + 3];
+        assert_eq!(alpha(2, 15), 0);
+        assert_eq!(alpha(77, 15), 0);
+        assert_eq!(alpha(40, 15), 255);
+    }
+
+    /// The preview on a hidden SDL window: the rest before a clip starts,
+    /// a new item stopping the old clip at once, a clip played once
+    /// ending in its still, and stop.
+    #[test]
+    fn the_preview_waits_follows_the_item_and_ends_a_clip_played_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let Some(path) = clip(dir.path()) else {
+            eprintln!("ffmpeg missing: preview test skipped");
+            return;
+        };
+        // SDL is one per process: the audio tests' turn.
+        let _sdl = crate::audio::tests::mixer_lock();
+        std::env::set_var("SDL_VIDEODRIVER", "offscreen");
+        let sdl = sdl2::init().unwrap();
+        let window = sdl
+            .video()
+            .unwrap()
+            .window("t", 64, 64)
+            .hidden()
+            .build()
+            .unwrap();
+        let canvas = window.into_canvas().software().build().unwrap();
+        let creator = canvas.texture_creator();
+        let mut preview = Preview::new(&creator);
+        let start = Instant::now();
+        let want = scene(path.clone(), ImageFit::Cover, 400, true);
+        preview.poll(Some(want.clone()), start);
+        preview.poll(Some(want.clone()), start + Duration::from_millis(200));
+        assert!(!preview.playing(), "started before its rest");
+        let wait = preview.wait_ms(start + Duration::from_millis(200));
+        assert!((190..=210).contains(&wait), "{wait}");
+        // Frames come, from this clip.
+        let first = |preview: &mut Preview, want: &Want| {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while preview.frame().is_none() {
+                assert!(Instant::now() < deadline, "no frames");
+                preview.poll(Some(want.clone()), Instant::now() + Duration::from_secs(1));
+                thread::sleep(Duration::from_millis(10));
+            }
+        };
+        first(&mut preview, &want);
+        assert!(preview.playing());
+        assert_eq!(preview.file(), Some(path.as_path()));
+        // Another item: the frame goes and ffmpeg with it, before its rest.
+        let other = dir.path().join("Other.mp4");
+        std::fs::copy(&path, &other).unwrap();
+        let next = scene(other.clone(), ImageFit::Cover, 400, false);
+        assert!(preview.poll(Some(next.clone()), Instant::now()));
+        assert!(preview.frame().is_none() && !preview.playing());
+        assert_eq!(preview.file(), None);
+        // Played once (one second), it ends in the still, and stays there.
+        first(&mut preview, &next);
+        assert_eq!(preview.file(), Some(other.as_path()));
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while preview.frame().is_some() {
+            assert!(Instant::now() < deadline, "the clip never ended");
+            preview.poll(Some(next.clone()), Instant::now());
+            thread::sleep(Duration::from_millis(20));
+        }
+        preview.poll(Some(next.clone()), Instant::now() + Duration::from_secs(5));
+        assert!(!preview.playing(), "a clip played once started again");
+        assert_eq!(preview.wait_ms(Instant::now()), u32::MAX);
+        // Coming back to it plays it again; leaving stops it.
+        preview.poll(Some(want.clone()), Instant::now());
+        preview.poll(Some(next.clone()), Instant::now());
+        first(&mut preview, &next);
+        preview.stop();
+        assert!(preview.frame().is_none() && !preview.playing());
+    }
+
     #[test]
     fn frames_arrive_at_the_box_size_with_progress_and_stop_on_drop() {
         let dir = tempfile::tempdir().unwrap();
@@ -349,7 +562,7 @@ mod tests {
             eprintln!("ffmpeg missing: preview test skipped");
             return;
         };
-        let player = Player::start(path, (40, 30));
+        let player = Player::start(Want::details(path, (40, 30)));
         let deadline = Instant::now() + Duration::from_secs(10);
         let (frame, progress) = loop {
             let slot = player.slot.lock().unwrap();
@@ -378,7 +591,7 @@ mod tests {
         let slot = Arc::new(Mutex::new(Slot::default()));
         let (stop, group) = (Arc::new(AtomicBool::new(false)), Group::default());
         let (s, st, g) = (slot.clone(), stop.clone(), group.clone());
-        let reader = thread::spawn(move || play(&clip, (40, 30), &s, &st, &g));
+        let reader = thread::spawn(move || play(&Want::details(clip, (40, 30)), &s, &st, &g));
         let deadline = Instant::now() + Duration::from_secs(10);
         while slot.lock().unwrap().seq < 3 {
             assert!(Instant::now() < deadline, "no frames");
@@ -424,7 +637,7 @@ mod tests {
             eprintln!("ffmpeg missing: preview test skipped");
             return;
         };
-        let player = Player::start(path, (40, 30));
+        let player = Player::start(Want::details(path, (40, 30)));
         let wait = |what: &str, done: &dyn Fn(&Slot, i32) -> bool| {
             let deadline = Instant::now() + Duration::from_secs(10);
             loop {
@@ -460,7 +673,7 @@ mod tests {
         // SAFETY: a valid NUL-terminated path.
         assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
         // No writer ever comes: ffmpeg waits in open(), no frame arrives.
-        let player = Player::start(fifo, (40, 30));
+        let player = Player::start(Want::details(fifo, (40, 30)));
         let deadline = Instant::now() + Duration::from_secs(10);
         let pid = loop {
             let pid = *player.group.lock().unwrap();
@@ -498,7 +711,7 @@ mod tests {
     fn check_no_frames(dir: &Path, name: &str, bytes: &[u8]) {
         let path = dir.join(name);
         std::fs::write(&path, bytes).unwrap();
-        let player = Player::start(path, (40, 30));
+        let player = Player::start(Want::details(path, (40, 30)));
         let deadline = Instant::now() + Duration::from_secs(10);
         while !player.slot.lock().unwrap().done {
             assert!(Instant::now() < deadline, "reader kept running");

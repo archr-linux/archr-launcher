@@ -289,6 +289,19 @@ impl Ui<'_, '_> {
             .collect()
     }
 
+    /// `name`'s clip in the theme's `videos/` folder, or the shared name's.
+    pub(super) fn clip_files(&self, name: &str) -> Vec<PathBuf> {
+        let Some(dir) = self.theme_dir.as_ref().map(|d| d.join("videos")) else {
+            return Vec::new();
+        };
+        let name = name.trim_start_matches('@');
+        [Some(name), lookup(IMAGE_ALIASES, name)]
+            .into_iter()
+            .flatten()
+            .map(|key| dir.join(format!("{key}.mp4")))
+            .collect()
+    }
+
     pub(super) fn ensure_art(&mut self) {
         let Some(creator) = self.creator else { return };
         let base = self.root.clone().unwrap_or_else(|| PathBuf::from("/"));

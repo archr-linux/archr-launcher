@@ -552,7 +552,7 @@
 "appearance.weight_bold" = "Жирный"
 "appearance.curtain_off" = "Фон темы"
 "settings.preview_video" = "Видеопревью"
-"settings.preview_video_detail" = "Играет без звука в сведениях об игре вместо скриншота"
+"settings.preview_video_detail" = "Играет без звука в сведениях об игре и в темах с видео"
 "settings.restore" = "Сбросить настройки"
 "appearance.preview" = "Предпросмотр"
 "appearance.preview_note" = "Изменения видны здесь сразу и сохраняются при выходе."

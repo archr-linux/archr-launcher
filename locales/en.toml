@@ -552,7 +552,7 @@
 "appearance.weight_bold" = "Bold"
 "appearance.curtain_off" = "Theme background"
 "settings.preview_video" = "Preview video"
-"settings.preview_video_detail" = "Plays muted in game details, in place of the screenshot"
+"settings.preview_video_detail" = "Plays muted in game details and in themes with video"
 "settings.restore" = "Restore defaults"
 "appearance.preview" = "Preview"
 "appearance.preview_note" = "Changes show here at once and are saved when you leave."

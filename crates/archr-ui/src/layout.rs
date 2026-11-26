@@ -15,7 +15,7 @@ pub(crate) use scene::{safe_path, substitute};
 pub use scene::{
     Badge, Collection, Data, Element, Field, Fields, Fill, Focus, Font, HintStyle, Hints, Image,
     ImageFit, Item, Kind, ListInk, ListStyle, Piece, Ring, Scene, Shadow, Shape, Slices, Stars,
-    Template, Text, VAlign, Wheel,
+    Template, Text, VAlign, Video, Wheel,
 };
 
 /// Id of the classic list layout, which every theme offers.

@@ -26,6 +26,8 @@ pub struct Art<'a, 't> {
     /// The playing preview video's frame, already the shot box's size, and
     /// how far through the clip it is (0..1).
     pub video: Option<(&'a Texture<'t>, f32)>,
+    /// The clip that frame is of.
+    pub video_file: Option<&'a Path>,
     /// Achievement badges decoded so far, by file.
     pub badges: Option<&'a crate::covers::CoverCache<'t>>,
     /// The covers decoded so far, by file: a folder's mosaic.

@@ -1182,3 +1182,235 @@ fn collections_draw_and_glide_at_every_size() {
         eprintln!("{name}: {took:?} a frame");
     }
 }
+
+#[test]
+fn bad_video_values_are_warnings() {
+    let source = r##"
+[view.x]
+[[view.x.games.el]]
+kind = "video"
+src = ["/abs.mp4", "game.screenshot", "../x.mp4"]
+[[view.x.games.el]]
+kind = "video"
+src = "game.video"
+fallback = "game.screenshot"
+mute = false
+delay = 99
+loop = "sim"
+fit = "zoom"
+volume = 1
+[[view.x.games.el]]
+kind = "video"
+src = "videos/b.mp4"
+"##;
+    let table: toml::Table = toml::from_str(source).unwrap();
+    let theme = Theme::parse(&table);
+    let mut view = View::lista(&theme);
+    let said = warnings(|| view = theme.view("x"));
+    let scene = view.games.scene.as_ref().unwrap();
+    // The one with a clip stays, its values limited or as they were.
+    let videos: Vec<_> = scene
+        .elements
+        .iter()
+        .filter_map(|e| match &e.kind {
+            Kind::Video(v) => Some(v),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(videos.len(), 1, "one video a screen");
+    let video = videos[0];
+    assert_eq!(video.delay, 10.);
+    assert!(video.repeat);
+    assert_eq!(video.fit, archr_ui::layout::ImageFit::Cover);
+    assert!(video.still.is_some());
+    for word in [
+        "/abs.mp4",
+        "game.screenshot",
+        "../x.mp4",
+        "names no video",
+        "mute",
+        "delay",
+        "loop",
+        "fit",
+        "volume",
+        "one video",
+    ] {
+        assert!(
+            said.iter().any(|w| w.contains(word)),
+            "no warning about {word}: {said:#?}"
+        );
+    }
+}
+
+/// The `video` element at three sizes: the clip it asks the host for (the
+/// game's, or the system's under the name it shares), its still until the
+/// host plays that clip, the frame in its box once it does, and never an
+/// old clip's frame over a new item. A fake frame stands in for the
+/// player: it is drawn the same way. With ARCHR_SCENE_CAPTURE_DIR set, the
+/// frames are saved there.
+#[test]
+fn the_video_element_asks_for_its_clip_and_shows_its_frame_or_still() {
+    let _sdl = SDL.lock().unwrap_or_else(|e| e.into_inner());
+    std::env::set_var("SDL_VIDEODRIVER", "offscreen");
+    let out = std::env::var_os("ARCHR_SCENE_CAPTURE_DIR").map(PathBuf::from);
+    if let Some(out) = &out {
+        std::fs::create_dir_all(out).unwrap();
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let folder = dir.path().join("cena");
+    std::fs::create_dir_all(folder.join("videos")).unwrap();
+    theme_folder(&folder);
+    // The Mega Drive's clip under the name it shares; only a file to find.
+    let genesis = folder.join("videos/genesis.mp4");
+    std::fs::write(&genesis, b"clip").unwrap();
+    let pictures = dir.path().join("pictures");
+    std::fs::create_dir_all(&pictures).unwrap();
+    let mut data = library(&pictures);
+    let aladdin = pictures.join("aladdin.mp4");
+    std::fs::write(&aladdin, b"clip").unwrap();
+    data.games.get_mut("megadrive").unwrap()[0].video = Some(aladdin.clone());
+    let magenta = [255, 0, 255];
+    for size in SIZES {
+        let theme = load(&folder, "albedo").fitted(size.0, size.1);
+        let view = theme.view(&theme.active_view);
+        let root = tempfile::tempdir().unwrap();
+        let (ttf, creator);
+        let mut ui = Ui::new(size.0, size.1, true).unwrap();
+        ttf = sdl2::ttf::init().unwrap();
+        creator = ui.canvas.texture_creator();
+        ui.theme_dir = Some(folder.clone());
+        ui.default_theme_dir = Some(shipped("default"));
+        ui.set_motion(archr_ui::motion::Motion::Off);
+        ui.configure(&ttf, &creator, &theme, Some(root.path()))
+            .unwrap();
+        ui.set_status(archr_ui::status::Status::frozen("14:32"));
+        ui.pin_clock(std::time::Instant::now(), 1_794_916_800);
+        // The player's frame: magenta, the size the element asked for.
+        let fake = |(w, h): (u32, u32)| {
+            let mut t = creator
+                .create_texture_streaming(sdl2::pixels::PixelFormatEnum::RGB24, w, h)
+                .unwrap();
+            let bytes: Vec<u8> = magenta.repeat((w * h) as usize);
+            t.update(None, &bytes, w as usize * 3).unwrap();
+            t.set_blend_mode(sdl2::render::BlendMode::Blend);
+            t
+        };
+        let mut app = App::new(10);
+        app.set_view(&view);
+        let frame = |ui: &mut Ui, app: &App, art: archr_ui::render::Art, name: &str| {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+            let mut round = 0;
+            loop {
+                ui.tick();
+                ui.snap_animations();
+                ui.draw_with_settings(app, &data, &theme, art, None)
+                    .unwrap();
+                if ui.pictures_idle() && round >= 3 {
+                    break;
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "pictures never loaded"
+                );
+                round += 1;
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            let pixels = ui
+                .canvas
+                .read_pixels(None, sdl2::pixels::PixelFormatEnum::RGBA32)
+                .unwrap();
+            if let Some(out) = &out {
+                let file = out.join(format!("video-{name}-{}x{}.png", size.0, size.1));
+                image::save_buffer(file, &pixels, size.0, size.1, image::ColorType::Rgba8).unwrap();
+            }
+            pixels
+        };
+        let share = |pixels: &[u8], (x0, y0, x1, y1): (f32, f32, f32, f32)| {
+            let (mut hit, mut all) = (0, 0);
+            for y in (y0 * size.1 as f32) as usize..(y1 * size.1 as f32) as usize {
+                for x in (x0 * size.0 as f32) as usize..(x1 * size.0 as f32) as usize {
+                    let at = (y * size.0 as usize + x) * 4;
+                    all += 1;
+                    if (0..3).all(|k| pixels[at + k].abs_diff(magenta[k]) < 12) {
+                        hit += 1;
+                    }
+                }
+            }
+            hit as f32 / all.max(1) as f32
+        };
+        let none = archr_ui::render::Art::default();
+        // The SNES has no clip in the theme: nothing is asked for.
+        frame(&mut ui, &app, none, "sistemas");
+        assert_eq!(ui.scene_clip, None);
+        // The Mega Drive's is found under the name it shares, in the box's
+        // shape (0.5 x 0.8 of the screen), at most 640x480's pixels.
+        app.handle(Button::Down, &data);
+        frame(&mut ui, &app, none, "sistemas-megadrive");
+        let clip = ui.scene_clip.clone().expect("the system's clip");
+        assert_eq!(clip.file, genesis);
+        assert_eq!(clip.fit, archr_ui::layout::ImageFit::Contain);
+        let (w, h) = clip.size;
+        assert!(w * h <= 640 * 480 + 1000, "{w}x{h}");
+        let shape = (w as f32 / h as f32) / (0.5 * size.0 as f32 / (0.8 * size.1 as f32));
+        assert!((shape - 1.).abs() < 0.02, "{w}x{h}");
+        let system_box = (0.4667, 0.1, 0.9667, 0.9);
+        let frame_of = fake(clip.size);
+        let playing = archr_ui::render::Art {
+            video: Some((&frame_of, 0.)),
+            video_file: Some(&genesis),
+            ..none
+        };
+        let shown = frame(&mut ui, &app, playing, "sistemas-video");
+        assert!(share(&shown, system_box) > 0.6);
+        // Into the games: Aladdin's clip, asked with its delay; its still
+        // (the screen shot) until its frame comes.
+        app.handle(Button::A, &data);
+        let still = frame(&mut ui, &app, none, "jogos-antes");
+        let clip = ui.scene_clip.clone().expect("the game's clip");
+        assert_eq!(clip.file, aladdin);
+        assert_eq!(clip.delay, std::time::Duration::from_secs(1));
+        assert!(clip.repeat);
+        // Below the logo and right of the cover, both drawn over it.
+        let game_box = (0.62, 0.42, 0.95, 0.64);
+        assert!(share(&still, game_box) < 0.01);
+        let frame_of = fake(clip.size);
+        let art = |file| archr_ui::render::Art {
+            video: Some((&frame_of, 0.5)),
+            video_file: Some(file),
+            ..none
+        };
+        let playing = frame(&mut ui, &app, art(&aladdin), "jogos-video");
+        assert!(share(&playing, game_box) > 0.9);
+        // What a frame takes with the clip and with its still (until the
+        // GPU has drawn it: one pixel read back), printed.
+        let mut time = |art: archr_ui::render::Art| {
+            let began = std::time::Instant::now();
+            for _ in 0..20 {
+                ui.draw_with_settings(&app, &data, &theme, art, None)
+                    .unwrap();
+                let one = sdl2::rect::Rect::new(0, 0, 1, 1);
+                ui.canvas
+                    .read_pixels(one, sdl2::pixels::PixelFormatEnum::RGBA32)
+                    .unwrap();
+            }
+            began.elapsed() / 20
+        };
+        let (with, without) = (time(art(&aladdin)), time(none));
+        eprintln!(
+            "video {}x{}: {with:?} a frame playing, {without:?} with the still",
+            size.0, size.1
+        );
+        // Another clip's frame (the last item's) is never drawn here.
+        let stale = frame(&mut ui, &app, art(&genesis), "jogos-outro");
+        assert!(share(&stale, game_box) < 0.01);
+        // A game without a clip asks for none; its screen shot shows.
+        app.handle(Button::Down, &data);
+        let other = frame(&mut ui, &app, art(&aladdin), "jogos-sem-video");
+        assert_eq!(ui.scene_clip, None);
+        assert!(share(&other, game_box) < 0.01);
+        // Back on Aladdin, the clip is asked for again.
+        app.handle(Button::Up, &data);
+        frame(&mut ui, &app, none, "jogos-de-volta");
+        assert_eq!(ui.scene_clip.as_ref().map(|c| &c.file), Some(&aladdin));
+    }
+}

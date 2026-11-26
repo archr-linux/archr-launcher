@@ -4,7 +4,8 @@
 //!
 //! The elements are few on purpose: pictures (`image`, `frame`), text
 //! (`text`, `fields`), boxes (`rect`, `panel`), the game's stars (`rating`)
-//! and the launcher's own pieces (`list`, `hints`, `status`). Every value is read once, when the view is laid
+//! and the launcher's own pieces (`list`, `hints`, `status`), and one
+//! clip (`video`). Every value is read once, when the view is laid
 //! out; data (`${system}`, `${game.name}`...) is filled in as each frame is
 //! drawn. A bad value is logged and left out, never fatal.
 use super::{known, Align, List, Panel, PanelStyle, Reader};
@@ -63,6 +64,24 @@ pub enum Kind {
     /// The screen's items in a row, a column or a wheel, or in a grid: it
     /// takes the d-pad instead of the list.
     Collection(Box<Collection>),
+    /// The focused game's or system's clip, after a rest on it.
+    Video(Video),
+}
+
+/// A muted clip played in the box (the host's preview player), its still
+/// picture until it starts, once it ends and when there is none.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Video {
+    /// The first clip that exists.
+    pub src: Vec<Template>,
+    pub fit: ImageFit,
+    /// Corner radius, a fraction of the screen height.
+    pub radius: f32,
+    /// Seconds resting on an item before it plays.
+    pub delay: f32,
+    /// Plays again from the start; else once, then the still.
+    pub repeat: bool,
+    pub still: Option<Image>,
 }
 
 /// A carousel or a grid of the screen's own items (systems or games), each
@@ -349,6 +368,11 @@ pub enum Data {
     GameScreenshot,
     /// The scraper's wheel (marquee) picture.
     GameLogo,
+    /// The scraper's clip of the game.
+    GameVideo,
+    /// The theme's clip of the system: `videos/<system>.mp4`, its own name
+    /// or the one it shares.
+    SystemVideo,
     /// The system's logo in the theme's `logos/` folder, any picture type,
     /// its own name or the one it shares (`megadrive` → `genesis`).
     SystemLogo,
@@ -379,6 +403,7 @@ impl Data {
             ("system", "favorites") => Self::SystemFavorites,
             ("system", "logo") => Self::SystemLogo,
             ("system", "image") => Self::SystemImage,
+            ("system", "video") => Self::SystemVideo,
             ("game", "name") => Self::GameName,
             ("game", "description") => Self::GameDescription,
             ("game", "genre") => Self::GameGenre,
@@ -391,6 +416,7 @@ impl Data {
             ("game", "cover") => Self::GameCover,
             ("game", "screenshot") => Self::GameScreenshot,
             ("game", "logo" | "wheel" | "marquee") => Self::GameLogo,
+            ("game", "video") => Self::GameVideo,
             ("list", "index") => Self::ListIndex,
             ("list", "total") => Self::ListTotal,
             ("item", "") => Self::Item,
@@ -409,6 +435,14 @@ impl Data {
                 | Self::SystemLogo
                 | Self::SystemImage
         )
+    }
+    /// A clip rather than text.
+    pub fn clip(self) -> bool {
+        matches!(self, Self::GameVideo | Self::SystemVideo)
+    }
+    /// A file of the item's (a picture or a clip) rather than text.
+    pub fn file(self) -> bool {
+        self.picture() || self.clip()
     }
 }
 
@@ -503,7 +537,7 @@ pub(super) struct Place<'a> {
 
 const KINDS: &[&str] = &[
     "image", "text", "rect", "frame", "list", "hints", "status", "panel", "rating", "fields",
-    "carousel", "grid",
+    "carousel", "grid", "video",
 ];
 /// The kinds that take the d-pad: a screen has one of them.
 const COLLECTIONS: &[&str] = &["list", "carousel", "grid"];
@@ -533,7 +567,7 @@ impl Scene {
             return None;
         };
         let mut scene = Self::default();
-        let mut lists = 0;
+        let (mut lists, mut videos) = (0, 0);
         for (n, item) in items.iter().enumerate() {
             let at = format!("{at}[{n}]");
             let Some(table) = resolve(item, place, &at, 0) else {
@@ -546,9 +580,16 @@ impl Scene {
                 log::warn!("Theme {at}: a screen has one list, carousel or grid; ignored");
                 continue;
             }
+            if kind == "video" && videos > 0 {
+                log::warn!("Theme {at}: a screen plays one video; ignored");
+                continue;
+            }
             if let Some(element) = scene.element(&table, place, &at, list) {
                 if matches!(element.kind, Kind::List(_) | Kind::Collection(_)) {
                     lists += 1;
+                }
+                if matches!(element.kind, Kind::Video(_)) {
+                    videos += 1;
                 }
                 scene.elements.push(element);
             }
@@ -705,6 +746,7 @@ impl Scene {
                 Kind::Rating(stars)
             }
             "fields" => Kind::Fields(self.fields(&r)?),
+            "video" => Kind::Video(video(&r)?),
             _ => {
                 r.known_with(&["radius", "style", "gradient"]);
                 Kind::Panel(Panel {
@@ -1283,6 +1325,64 @@ impl Scene {
 }
 
 /// The stars' pictures, colors and room, as `rating` and `fields` give them.
+/// `kind = "video"`: its clips and its still; None (with a warning)
+/// without either.
+fn video(r: &Reader) -> Option<Video> {
+    r.known_with(&["src", "fit", "radius", "delay", "mute", "loop", "fallback"]);
+    let list = |key: &str, each: fn(&str, &str) -> Template| -> Vec<Template> {
+        let at = format!("{}.{key}", r.at);
+        let texts = match r.table.get(key) {
+            None => Vec::new(),
+            Some(Value::String(one)) => vec![one.as_str()],
+            Some(Value::Array(many)) => many.iter().filter_map(Value::as_str).collect(),
+            Some(_) => {
+                log::warn!("Theme {at} must be a source or a list of them; ignored");
+                Vec::new()
+            }
+        };
+        let mut found: Vec<Template> = texts.into_iter().map(|t| each(t, &at)).collect();
+        found.retain(|t| !t.0.is_empty());
+        found
+    };
+    let src = list("src", clip_source);
+    let still = list("fallback", source);
+    if src.is_empty() && still.is_empty() {
+        log::warn!("Theme {}.src names no video; element ignored", r.at);
+        return None;
+    }
+    if !r.flag("mute", true) {
+        log::warn!(
+            "Theme {}.mute = false: videos play without sound for now; muted",
+            r.at
+        );
+    }
+    let fit = r.pick(
+        "fit",
+        ImageFit::Cover,
+        &[
+            ("contain", ImageFit::Contain),
+            ("cover", ImageFit::Cover),
+            ("stretch", ImageFit::Stretch),
+        ],
+    );
+    let radius = r.number("radius", 0., 0., 0.5);
+    Some(Video {
+        src,
+        fit,
+        radius,
+        delay: r.number("delay", 1., 0., 10.),
+        repeat: r.flag("loop", true),
+        still: (!still.is_empty()).then_some(Image {
+            src: still,
+            fit,
+            align: Align::Center,
+            tint: None,
+            radius,
+            fallback: None,
+        }),
+    })
+}
+
 fn stars(r: &Reader, align: Align) -> Stars {
     let full = r.path("star");
     let empty_color = r.color("empty");
@@ -1479,6 +1579,24 @@ fn source(text: &str, at: &str) -> Template {
     }
     if !safe_path(text) {
         log::warn!("Theme {at}.src {text:?} must be a path inside the theme; ignored");
+        return Template::default();
+    }
+    Template::parse(text, at)
+}
+/// A clip's source: `game.video`, `system.video` or a path in the theme.
+fn clip_source(text: &str, at: &str) -> Template {
+    match Data::parse(text) {
+        Some(data) if data.clip() => return Template(vec![Piece::Data(data)]),
+        Some(_) => {
+            log::warn!(
+                "Theme {at} {text:?} is no clip (game.video, system.video or a file); ignored"
+            );
+            return Template::default();
+        }
+        None => {}
+    }
+    if !safe_path(text) {
+        log::warn!("Theme {at} {text:?} must be a path inside the theme; ignored");
         return Template::default();
     }
     Template::parse(text, at)

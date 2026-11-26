@@ -7,7 +7,7 @@ use crate::{
     covers::CoverCache,
     layout::{
         Collection, Data, Element, Fields, Fill, Font, Hints, Image, ImageFit, Kind, ListInk, Ring,
-        Scene, Shape, Slices, Stars, Template, Text, VAlign,
+        Scene, Shape, Slices, Stars, Template, Text, VAlign, Video,
     },
     motion::{Tween, SELECT},
     primitives::nine_slice,
@@ -21,6 +21,31 @@ const SCENE_BUDGET: u64 = 48 << 20;
 
 /// The launcher's star: Lucide's (ISC), filled.
 const STAR_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#fff" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"><path d="M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.123 2.123 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.123 2.123 0 0 0-.611 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.122 2.122 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.122 2.122 0 0 0-.611-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a2.122 2.122 0 0 0 1.597-1.16z"/></svg>"##;
+
+/// Most pixels a clip is decoded at (a 640x480 clip's): a larger box is
+/// filled by the GPU, so the cost on the RK3326 stays the details' one.
+const CLIP_PIXELS: f32 = 640. * 480.;
+
+/// The clip a free screen's `video` element wants played, for the host:
+/// decoded at `size` (the box's shape) and drawn over the box.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Clip {
+    pub file: PathBuf,
+    pub size: (u32, u32),
+    pub fit: ImageFit,
+    pub delay: Duration,
+    pub repeat: bool,
+}
+
+/// The box's size, made smaller to at most `CLIP_PIXELS`.
+fn clip_size(rect: Rect) -> (u32, u32) {
+    let (w, h) = (rect.width() as f32, rect.height() as f32);
+    let k = (CLIP_PIXELS / (w * h)).sqrt().min(1.);
+    (
+        (w * k).round().max(1.) as u32,
+        (h * k).round().max(1.) as u32,
+    )
+}
 
 /// What the screen knows this frame, for the elements' data.
 struct Facts<'a> {
@@ -40,9 +65,10 @@ struct Facts<'a> {
     item: String,
     item_name: String,
     aspect: &'static str,
-    /// The system's logo and picture files, when it has them.
+    /// The system's logo, picture and clip files, when it has them.
     logo: Option<PathBuf>,
     image: Option<PathBuf>,
+    clip: Option<PathBuf>,
     /// The game's rating, 0 to 100.
     stars: Option<u8>,
 }
@@ -69,8 +95,10 @@ impl Facts<'_> {
             Data::GameCover
             | Data::GameScreenshot
             | Data::GameLogo
+            | Data::GameVideo
             | Data::SystemLogo
-            | Data::SystemImage => String::new(),
+            | Data::SystemImage
+            | Data::SystemVideo => String::new(),
             Data::ListIndex => self.index.to_string(),
             Data::ListTotal => self.total.to_string(),
             Data::Item => self.item.clone(),
@@ -78,11 +106,13 @@ impl Facts<'_> {
             Data::Aspect => self.aspect.to_owned(),
         }
     }
-    /// The file of one of the system's or the game's pictures.
+    /// The file of one of the system's or the game's pictures or clips.
     fn picture(&self, data: Data) -> Option<PathBuf> {
         match data {
             Data::SystemLogo => self.logo.clone(),
             Data::SystemImage => self.image.clone(),
+            Data::SystemVideo => self.clip.clone(),
+            Data::GameVideo => self.game?.video.clone(),
             Data::GameCover => self.game?.image.clone(),
             Data::GameScreenshot => self.game?.details.screenshot.clone(),
             Data::GameLogo => self.game?.details.logo.clone(),
@@ -90,7 +120,7 @@ impl Facts<'_> {
         }
     }
     fn has(&self, data: Data) -> bool {
-        if data.picture() {
+        if data.file() {
             self.picture(data).is_some()
         } else {
             !self.value(data).is_empty()
@@ -108,8 +138,8 @@ pub(super) struct SceneCache<'t> {
     fonts: (Vec<String>, Option<PathBuf>, Vec<PathBuf>),
     /// The theme with the list element's colors over it.
     pub list: Option<(ListInk, Theme)>,
-    /// Each system's logo and picture files, found once per theme.
-    pub systems: HashMap<String, [Option<PathBuf>; 2]>,
+    /// Each system's logo, picture and clip files, found once per theme.
+    pub systems: HashMap<String, [Option<PathBuf>; 3]>,
     /// The launcher's star, drawn at a few sizes.
     stars: Vec<(u32, Texture<'t>)>,
     /// A carousel's place: its list, the cursor it last saw and where it
@@ -225,6 +255,7 @@ impl<'t> Ui<'_, 't> {
                     | Kind::Rating(_)
                     | Kind::Fields(_)
                     | Kind::Collection(_)
+                    | Kind::Video(_)
                     | Kind::Fill(Fill { gradient: None, .. })
             );
             let (outer, inner) = if simple && turn.is_none() {
@@ -252,6 +283,7 @@ impl<'t> Ui<'_, 't> {
                     layout,
                 ),
                 Kind::Collection(c) => ui.collection(c, &spots, rect, theme),
+                Kind::Video(video) => ui.scene_video(video, (rect, inner), &facts, theme, art),
                 Kind::Hints(hints) => ui.scene_hints(app, data, theme, layout, (hints, rect)),
                 Kind::Status(plain) => ui.status_pill(theme, Some(rect), *plain).map(|_| ()),
                 Kind::Panel(panel) => {
@@ -275,14 +307,17 @@ impl<'t> Ui<'_, 't> {
         shown
             .filter_map(|e| match &e.kind {
                 Kind::Image(image) => Some(self.sources(image, facts)),
+                Kind::Video(Video {
+                    still: Some(image), ..
+                }) => Some(self.sources(image, facts)),
                 _ => None,
             })
             .filter(|paths| !paths.is_empty())
             .collect()
     }
 
-    /// `system`'s logo in the theme and picture, as files that exist.
-    fn system_pictures(&mut self, system: &str) -> [Option<PathBuf>; 2] {
+    /// `system`'s logo in the theme, picture and clip, as files that exist.
+    fn system_pictures(&mut self, system: &str) -> [Option<PathBuf>; 3] {
         if let Some(found) = self.scene_cache.systems.get(system) {
             return found.clone();
         }
@@ -290,6 +325,7 @@ impl<'t> Ui<'_, 't> {
         let found = [
             first(self.logo_files(system)),
             first(self.system_files(system)),
+            first(self.clip_files(system)),
         ];
         self.scene_cache
             .systems
@@ -328,7 +364,7 @@ impl<'t> Ui<'_, 't> {
                 (system.clone(), None, cursor + 1, rows.len(), system)
             }
         };
-        let [logo, image] = self.system_pictures(&system);
+        let [logo, image, clip] = self.system_pictures(&system);
         let catalog = &self.catalog;
         let (maker, year) = data.manufacturer(&system).unwrap_or_default();
         let count = system_count(&system, data);
@@ -368,6 +404,7 @@ impl<'t> Ui<'_, 't> {
             stars: game.and_then(|g| g.details.rating),
             logo,
             image,
+            clip,
             game,
             index,
             total,
@@ -449,7 +486,7 @@ impl<'t> Ui<'_, 't> {
     fn files(&self, src: &[Template], facts: &Facts<'_>) -> Vec<PathBuf> {
         src.iter()
             .filter_map(|template| match template.0.as_slice() {
-                [crate::layout::Piece::Data(data)] if data.picture() => facts.picture(*data),
+                [crate::layout::Piece::Data(data)] if data.file() => facts.picture(*data),
                 _ => self.theme_file(&template.fill(|d| facts.value(d), |k| self.phrase(k))),
             })
             .collect()
@@ -526,6 +563,44 @@ impl<'t> Ui<'_, 't> {
         match &image.fallback {
             Some(text) if missing => self.scene_text(text, rect, opacity, facts, theme),
             _ => Ok(()),
+        }
+    }
+
+    /// The clip the host plays for this element, once it is the one
+    /// asked for; its still until then (and without a clip, or with
+    /// videos off). The clip asked for is left in `scene_clip`.
+    fn scene_video(
+        &mut self,
+        video: &Video,
+        (rect, opacity): (Rect, f32),
+        facts: &Facts<'_>,
+        theme: &Theme,
+        art: Art<'_, '_>,
+    ) -> Result<(), String> {
+        let file = self
+            .files(&video.src, facts)
+            .into_iter()
+            .find(|f| f.is_file());
+        if let Some(file) = file {
+            let playing = art.video.filter(|_| art.video_file == Some(file.as_path()));
+            self.scene_clip = Some(Clip {
+                file,
+                size: clip_size(rect),
+                fit: video.fit,
+                delay: Duration::from_secs_f32(video.delay),
+                repeat: video.repeat,
+            });
+            if let Some((frame, _)) = playing {
+                let radius = video.radius * self.frame.height as f32;
+                let alpha = (opacity * 255.).round() as u8;
+                return self
+                    .geometry
+                    .cover(&mut self.canvas, frame, rect, radius, alpha, WHOLE);
+            }
+        }
+        match &video.still {
+            Some(still) => self.scene_image(still, rect, opacity, facts, theme),
+            None => Ok(()),
         }
     }
 

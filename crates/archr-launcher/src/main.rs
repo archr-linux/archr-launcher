@@ -13,7 +13,7 @@ use archr_launcher::{
     netplay,
     notice::{self, Severity},
     paths::Paths,
-    preview::Preview,
+    preview::{Preview, Want},
     rescrape::Rescrape,
     resume::{self, Records, Start},
     saves::{Entry, Task},
@@ -1209,10 +1209,14 @@ fn run(
             | pictures.poll()
             | app_covers.poll()
             | app_shots.poll();
+        // Videos play on the screen in front, never under a menu, the
+        // settings or an app, and only while the user keeps them on.
+        let videos =
+            !settings.active && ui.app.is_none() && settings.state.value(Id::PreviewVideo) == "1";
+        // A free screen's clip is the one its last frame asked for.
+        let free = matches!(app.screen, Screen::Systems | Screen::Games { .. });
         let video = match &app.screen {
-            Screen::Details { system, game }
-                if !settings.active && settings.state.value(Id::PreviewVideo) == "1" =>
-            {
+            Screen::Details { system, game } if videos => {
                 let path = library
                     .games(system)
                     .get(*game)
@@ -1220,12 +1224,13 @@ fn run(
                 // The art box inside its 1px frame.
                 let (w, h) = sized(theme.details_shot);
                 path.map(|path| {
-                    (
+                    Want::details(
                         path,
                         (w.saturating_sub(2).max(1), h.saturating_sub(2).max(1)),
                     )
                 })
             }
+            _ if free => Want::scene(ui.scene_clip.as_ref(), videos),
             _ => None,
         };
         dirty |= preview.poll(video, Instant::now());
@@ -1246,6 +1251,7 @@ fn run(
                 },
                 logo: logo.as_ref().and_then(|path| logos.get(path)),
                 video: preview.frame(),
+                video_file: preview.file(),
                 badges: Some(&badges),
                 thumbs: Some(&thumbs),
                 picture: large.first().and_then(|path| pictures.peek(path)),
@@ -1267,6 +1273,11 @@ fn run(
             (app.shots_columns, app.shots_page) = ui.shots_grid;
             app.shots_split = ui.shots_split;
             dirty = false;
+            // The frame just drawn may ask for another clip (a new item):
+            // the old one stops now, and the new one's rest starts.
+            if free {
+                dirty |= preview.poll(Want::scene(ui.scene_clip.as_ref(), videos), Instant::now());
+            }
         }
         #[cfg(test)]
         observe(&app, &library, deferred.as_ref());

@@ -551,7 +551,7 @@
 "appearance.weight_bold" = "粗体"
 "appearance.curtain_off" = "主题背景"
 "settings.preview_video" = "预览视频"
-"settings.preview_video_detail" = "在游戏详情中静音播放，替代截图"
+"settings.preview_video_detail" = "在游戏详情和带视频的主题中静音播放"
 "settings.restore" = "恢复默认"
 "appearance.preview" = "预览"
 "appearance.preview_note" = "更改立即显示在此处，离开时保存。"

@@ -236,6 +236,15 @@ fit = "contain"
 z = -10
 
 [[view.albedo.systems.el]]
+id = "video-sistema"                             # the theme's clip of the system, over its picture
+kind = "video"
+src = "system.video"
+rect = { x = 0.7167, y = 0.5, w = 0.5, h = 0.8 }
+anchor = "center"
+fit = "contain"
+z = -9
+
+[[view.albedo.systems.el]]
 id = "moldura"
 kind = "image"
 src = "frames/${aspect}/carousel-bg.png"
@@ -348,6 +357,19 @@ rect = { x = 0.717, y = 0.425, w = 0.5, h = 0.5 }
 anchor = "center"
 fit = "contain"
 radius = 0.02
+z = 6
+
+[[view.albedo.games.el]]
+id = "video"                                     # the game's clip over the screen shot, after a second
+kind = "video"
+src = "game.video"
+fallback = "game.screenshot"
+rect = { x = 0.717, y = 0.425, w = 0.5, h = 0.5 }
+anchor = "center"
+fit = "contain"
+radius = 0.02
+delay = 1
+when = { has = "game.video" }
 z = 6
 
 [[view.albedo.games.el]]

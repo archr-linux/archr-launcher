@@ -507,7 +507,7 @@ pub fn by_button(button: Button) -> Option<Event> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     fn screen(system: &str) -> Screen {
@@ -651,8 +651,9 @@ mod tests {
         dir
     }
 
-    /// The mixer is one per process; its tests take turns.
-    fn mixer_lock() -> std::sync::MutexGuard<'static, ()> {
+    /// The mixer is one per process; its tests (and any other test that
+    /// starts SDL) take turns.
+    pub(crate) fn mixer_lock() -> std::sync::MutexGuard<'static, ()> {
         static MIXER: std::sync::Mutex<()> = std::sync::Mutex::new(());
         std::env::set_var("SDL_AUDIODRIVER", "dummy");
         MIXER

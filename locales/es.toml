@@ -552,7 +552,7 @@
 "appearance.weight_bold" = "Negrita"
 "appearance.curtain_off" = "Fondo del tema"
 "settings.preview_video" = "Video de vista previa"
-"settings.preview_video_detail" = "Se reproduce sin sonido en los detalles del juego, en lugar de la captura"
+"settings.preview_video_detail" = "Se reproduce sin sonido en los detalles del juego y en los temas con video"
 "settings.restore" = "Restaurar valores"
 "appearance.preview" = "Vista previa"
 "appearance.preview_note" = "Los cambios se ven aquí al instante y se guardan al salir."

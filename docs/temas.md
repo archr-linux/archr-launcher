@@ -787,6 +787,7 @@ para todo texto, como no resto do launcher.
 | `status` | relógio, bateria e rádios | `color` |
 | `rating` | a nota do jogo em cinco estrelas | veja [Estrelas](#estrelas-rating) |
 | `fields` | uma ficha de rótulo e valor | veja [Ficha](#ficha-fields) |
+| `video` | o vídeo do jogo ou do sistema em foco, sem som | veja [Vídeo](#vídeo-video) |
 
 Campo desconhecido, valor de tipo errado ou fora da faixa gera aviso no log e
 fica de fora (ou é limitado); um elemento sem o essencial (um `kind` que não
@@ -918,7 +919,8 @@ vale.
 Na tela de sistemas não há jogo em foco: os dados `game.*` ficam vazios.
 Um nome que não existe fica escrito como está, com aviso no log. As imagens
 (`game.cover`, `game.screenshot`, `game.logo`, `system.logo`,
-`system.image`) não são texto: valem em `src` e em `when.has`.
+`system.image`) e os vídeos (`game.video`, `system.video`) não são texto:
+valem em `src` e em `when.has`.
 
 ### Estrelas: `rating`
 
@@ -1258,6 +1260,55 @@ valendo.
 retângulo, centrada na altura dele. Com `color`, os ícones e o texto vão
 direto sobre a tela, nessa cor, sem a pílula.
 
+### Vídeo: `video`
+
+```toml
+[[view.lado.games.el]]
+kind = "video"
+src = "game.video"                        # o vídeo do jogo em foco
+fallback = ["game.screenshot", "game.cover"]   # até o vídeo começar, e sem vídeo
+rect = { x = 0.717, y = 0.425, w = 0.5, h = 0.5 }
+anchor = "center"
+fit = "cover"
+radius = 0.02
+delay = 1                                 # segundos parado no jogo antes de tocar
+z = 6
+
+[[view.lado.systems.el]]
+kind = "video"
+src = "system.video"                      # videos/<sistema>.mp4 da pasta do tema
+fallback = "system.image"
+rect = { x = 0.72, y = 0.5, w = 0.5, h = 0.8 }
+anchor = "center"
+fit = "contain"
+loop = false                              # toca uma vez e volta à imagem
+```
+
+| campo | valores | padrão | o que faz |
+|---|---|---|---|
+| `src` | um vídeo ou uma lista | | vale o primeiro que existe: `game.video` (o vídeo do scraper do jogo em foco), `system.video` (`videos/<sistema>.mp4` na pasta do tema, ou com o nome que ele divide: `megadrive` acha `genesis.mp4`) ou um caminho `.mp4` do tema, que pode ter dados (`videos/${system}.mp4`) |
+| `fallback` | uma imagem ou uma lista | | a imagem no lugar do vídeo, com as fontes de `src` da [imagem](#imagens): antes de ele começar, depois que ele acaba (`loop = false`), sem vídeo e com a opção de vídeo desligada |
+| `fit` | `cover`, `contain`, `stretch` | `cover` | como na imagem; em `contain`, as faixas em volta ficam transparentes. Vale também para o `fallback` |
+| `radius` | fração da altura da tela | `0` | cantos arredondados, do vídeo e do `fallback` |
+| `delay` | segundos, 0 a 10 | `1` | quanto tempo parado no item antes de tocar; o mesmo segundo dos detalhes |
+| `loop` | `true`, `false` | `true` | recomeça no fim; com `false`, toca uma vez e volta ao `fallback` |
+| `mute` | `true` | `true` | o vídeo é sempre sem som, como nos detalhes; `false` gera aviso e fica mudo |
+
+- Um vídeo por tela, na tela de sistemas ou de jogos; um segundo `video`
+  gera aviso e fica de fora.
+- Toca com o mesmo tocador da prévia dos detalhes (o ffmpeg num processo à
+  parte, uma linha de decodificação, 25 quadros por segundo) e segue a opção
+  **Vídeo de prévia** das Configurações: desligada, só aparece o
+  `fallback`.
+- Para ao trocar de item (o próximo espera o seu `delay`), ao sair da
+  tela, ao abrir um menu, as Configurações ou um app por cima, e ao abrir
+  um jogo. Fora da tela, nada é decodificado.
+- O vídeo é decodificado no formato do retângulo e com no máximo os pixels
+  de um 640×480; um retângulo maior é preenchido pela GPU. Assim o custo
+  no RK3326 é o mesmo da prévia dos detalhes, em qualquer tamanho de tela.
+- `opacity`, `rotate` e `when` valem como nos outros elementos
+  (`when = { has = "game.video" }` desenha o elemento só com vídeo).
+
 ### O que as opções da Aparência fazem numa tela livre
 
 Capa do jogo, Largura e Cantos da capa e Fundo por sistema não mexem numa
@@ -1267,7 +1318,8 @@ elemento não dá a sua cor.
 
 ### O que ainda não existe
 
-As telas livres chegam por partes. Ainda não há: vídeo, opções do tema em
+As telas livres chegam por partes. Ainda não há: vídeo com som, vídeo
+aleatório de um jogo do sistema na tela de sistemas, opções do tema em
 Aparência, `include`, animações por elemento (`enter`, `select`, cor
 animada no foco) e a tela de detalhes como cena. Chaves dessas partes geram
 aviso e ficam de fora.

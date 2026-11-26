@@ -552,7 +552,7 @@
 "appearance.weight_bold" = "Fett"
 "appearance.curtain_off" = "Theme-Hintergrund"
 "settings.preview_video" = "Vorschauvideo"
-"settings.preview_video_detail" = "Läuft stumm in den Spieldetails statt des Screenshots"
+"settings.preview_video_detail" = "Läuft stumm in den Spieldetails und in Themes mit Video"
 "settings.restore" = "Standard wiederherstellen"
 "appearance.preview" = "Vorschau"
 "appearance.preview_note" = "Änderungen sind hier sofort sichtbar und werden beim Verlassen gespeichert."
