@@ -13,8 +13,8 @@ mod scene;
 pub use home::{Grid, Hero, Home, ShelfKind, ShelfStyle, Tab};
 pub(crate) use scene::{safe_path, substitute};
 pub use scene::{
-    Data, Element, Fill, Font, HintStyle, Hints, Image, ImageFit, Kind, ListInk, Piece, Scene,
-    Shadow, Slices, Template, Text, VAlign,
+    Data, Element, Field, Fields, Fill, Font, HintStyle, Hints, Image, ImageFit, Kind, ListInk,
+    Piece, Scene, Shadow, Slices, Stars, Template, Text, VAlign,
 };
 
 /// Id of the classic list layout, which every theme offers.

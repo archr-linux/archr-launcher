@@ -67,16 +67,17 @@ pub fn load_thumbnail(
     width: u32,
     height: u32,
 ) -> io::Result<Thumbnail> {
-    thumbnail(cache, source, (width.max(1), height.max(1)), false)
+    thumbnail(cache, source, (width.max(1), height.max(1)), (false, true))
 }
 
 /// Pixel art keeps hard edges: it grows by whole multiples and shrinks
-/// without smoothing.
+/// without smoothing. Without `enlarge`, a picture smaller than the box
+/// stays as it is (the screen scales it), and is not cached.
 fn thumbnail(
     cache: &Path,
     source: &Path,
     (width, height): (u32, u32),
-    pixel: bool,
+    (pixel, enlarge): (bool, bool),
 ) -> io::Result<Thumbnail> {
     if (width, height) == (0, 0) {
         // Theme images: drawn at their own size, never resized nor cached.
@@ -93,6 +94,14 @@ fn thumbnail(
         Some(image) => image,
         None => {
             let image = decode(source, 16384, 16384)?;
+            if !enlarge && image.width() <= width && image.height() <= height {
+                let image = image.to_rgba8();
+                return Ok(Thumbnail {
+                    width: image.width(),
+                    height: image.height(),
+                    rgba: image.into_raw(),
+                });
+            }
             let image = if pixel {
                 let (w, h) = (image.width().max(1), image.height().max(1));
                 let k = (width / w).min(height / h);
@@ -212,8 +221,26 @@ impl<'a> CoverCache<'a> {
     pub fn scaled(
         creator: &'a TextureCreator<WindowContext>,
         dir: PathBuf,
-        (width, height): (u32, u32),
+        size: (u32, u32),
         pixel: bool,
+    ) -> Self {
+        Self::spawn(creator, dir, size, (pixel, true))
+    }
+    /// Pictures fitted inside the box, never enlarged: a smaller one keeps
+    /// its size and the screen scales it as it draws.
+    pub fn within(
+        creator: &'a TextureCreator<WindowContext>,
+        dir: PathBuf,
+        size: (u32, u32),
+        pixel: bool,
+    ) -> Self {
+        Self::spawn(creator, dir, size, (pixel, false))
+    }
+    fn spawn(
+        creator: &'a TextureCreator<WindowContext>,
+        dir: PathBuf,
+        (width, height): (u32, u32),
+        (pixel, enlarge): (bool, bool),
     ) -> Self {
         let (requests, jobs) = mpsc::sync_channel::<Vec<Vec<PathBuf>>>(1);
         let (done, ready) = mpsc::sync_channel(16);
@@ -227,7 +254,7 @@ impl<'a> CoverCache<'a> {
                     let result = candidates
                         .iter()
                         .find(|path| path.is_file())
-                        .map(|path| thumbnail(&dir, path, (width, height), pixel))
+                        .map(|path| thumbnail(&dir, path, (width, height), (pixel, enlarge)))
                         .transpose();
                     if done.send((key.clone(), result)).is_err() {
                         return;
@@ -372,6 +399,15 @@ impl<'a> CoverCache<'a> {
     pub fn has(&self, path: &Path) -> bool {
         self.textures.iter().any(|(cached, _)| cached == path)
     }
+    /// The decoded bytes `path` holds: 0 when it was found missing, None
+    /// while it is not loaded.
+    pub fn bytes(&self, path: &Path) -> Option<u64> {
+        let (_, texture) = self.textures.iter().find(|(cached, _)| cached == path)?;
+        Some(texture.as_ref().map_or(0, |t| {
+            let q = t.query();
+            u64::from(q.width) * u64::from(q.height) * 4
+        }))
+    }
     pub fn get(&mut self, path: &PathBuf) -> Option<&Texture<'a>> {
         self.get_mut(path).map(|texture| &*texture)
     }
@@ -451,7 +487,7 @@ mod tests {
         let mut art = image::RgbaImage::from_pixel(4, 3, image::Rgba([0, 0, 0, 255]));
         art.put_pixel(0, 0, image::Rgba([255, 255, 255, 255]));
         art.save(&source).unwrap();
-        let thumb = thumbnail(&dir.path().join("cache"), &source, (30, 30), true).unwrap();
+        let thumb = thumbnail(&dir.path().join("cache"), &source, (30, 30), (true, true)).unwrap();
         assert_eq!(
             (thumb.width, thumb.height),
             (28, 21),
@@ -463,6 +499,20 @@ mod tests {
             (255, 0, 0),
             "hard edges"
         );
+    }
+
+    #[test]
+    fn a_picture_within_its_box_is_never_enlarged() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("small").with_extension("png");
+        image::RgbaImage::new(20, 10).save(&source).unwrap();
+        let cache = dir.path().join("cache");
+        let kept = thumbnail(&cache, &source, (100, 100), (false, false)).unwrap();
+        assert_eq!((kept.width, kept.height), (20, 10));
+        let grown = thumbnail(&cache, &source, (100, 100), (false, true)).unwrap();
+        assert_eq!((grown.width, grown.height), (100, 50));
+        let shrunk = thumbnail(&cache, &source, (10, 10), (false, false)).unwrap();
+        assert_eq!((shrunk.width, shrunk.height), (10, 5));
     }
     /// A grid asks for the selection and twelve covers on each side; the
     /// Tools of a console with many emulators list more than the cache
@@ -524,12 +574,12 @@ mod tests {
             .save(&huge)
             .unwrap();
         assert!(
-            thumbnail(dir.path(), &huge, (0, 0), true).is_err(),
+            thumbnail(dir.path(), &huge, (0, 0), (true, true)).is_err(),
             "refused"
         );
         let fine = dir.path().join("fine").with_extension("png");
         image::RgbaImage::new(64, 32).save(&fine).unwrap();
-        let kept = thumbnail(dir.path(), &fine, (0, 0), true).unwrap();
+        let kept = thumbnail(dir.path(), &fine, (0, 0), (true, true)).unwrap();
         assert_eq!((kept.width, kept.height), (64, 32), "drawn as it is");
         assert_eq!(overflow(&[10, 10, 10], 64, 100), 0);
         assert_eq!(overflow(&[10, 10, 10], 2, 100), 1, "capacity");

@@ -83,9 +83,11 @@ fn theme_folder(dir: &Path) {
         console(&dir.join(format!("systems/{system}.png")), hue);
     }
     art(&dir.join("arts/default.png"), (960, 720), [80, 80, 90]);
-    // Logos only for two systems: the others fall back to their names.
+    // Logos for three systems, the Mega Drive's under the name it shares
+    // and drawn: the Nintendo 64 falls back to its name or picture.
     logo(&dir.join("logos/snes.png"), [230, 60, 60]);
     logo(&dir.join("logos/gba.png"), [90, 110, 240]);
+    std::fs::write(dir.join("logos/genesis.svg"), GENESIS).unwrap();
     for (shape, size) in [
         ("classic", (640, 480)),
         ("square", (640, 640)),
@@ -103,9 +105,13 @@ fn theme_folder(dir: &Path) {
         );
     }
     border(&dir.join("frames/borda.png"));
+    star(&dir.join("icons/estrela.png"));
     calendar(&dir.join("icons/calendario.png"));
     console(&dir.join("icons/cartucho.png"), [120, 120, 130]);
 }
+
+/// The Mega Drive's logo, as a theme's SVG.
+const GENESIS: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 100"><rect x="4" y="14" width="292" height="72" rx="36" fill="#2E9BE6"/><circle cx="60" cy="50" r="24" fill="#FFFFFF"/></svg>"##;
 
 fn save(img: image::RgbaImage, path: &Path) {
     img.save(path).unwrap();
@@ -207,6 +213,34 @@ fn border(path: &Path) {
     }
     save(img, path);
 }
+/// A white five-pointed star, tinted by the theme.
+fn star(path: &Path) {
+    let side = 64;
+    let points: Vec<(f32, f32)> = (0..10)
+        .map(|n| {
+            let angle = std::f32::consts::PI * (n as f32 / 5. - 0.5);
+            let r = if n % 2 == 0 { 0.5 } else { 0.2 };
+            (0.5 + r * angle.cos(), 0.52 + r * angle.sin())
+        })
+        .collect();
+    let mut img = image::RgbaImage::new(side, side);
+    for (x, y, px) in img.enumerate_pixels_mut() {
+        let (fx, fy) = (
+            (x as f32 + 0.5) / side as f32,
+            (y as f32 + 0.5) / side as f32,
+        );
+        // Even-odd crossings of a ray to the right.
+        let mut inside = false;
+        for k in 0..points.len() {
+            let ((x0, y0), (x1, y1)) = (points[k], points[(k + 1) % points.len()]);
+            if (y0 > fy) != (y1 > fy) && fx < x0 + (fy - y0) / (y1 - y0) * (x1 - x0) {
+                inside = !inside;
+            }
+        }
+        *px = image::Rgba([255, 255, 255, if inside { 255 } else { 0 }]);
+    }
+    save(img, path);
+}
 /// A white calendar glyph, tinted by the theme.
 fn calendar(path: &Path) {
     let mut img = image::RgbaImage::new(32, 32);
@@ -304,6 +338,8 @@ fn library(pictures: &Path) -> FakeData {
     }
     let sonic = &mut data.games.get_mut("megadrive").unwrap()[7];
     sonic.details.logo = None;
+    // Four and a half stars.
+    sonic.details.rating = Some(85);
     let aladdin = &mut data.games.get_mut("megadrive").unwrap()[0];
     let mark = pictures.join("aladdin-logo.png");
     logo(&mark, [240, 180, 40]);
@@ -373,6 +409,26 @@ fn the_test_theme_reads_without_warnings_and_places_its_list() {
     let solo = theme.view("solo");
     assert_eq!(solo.games.list.mark, Mark::Grid);
     assert_eq!(solo.games.list.columns, 3);
+    // The stars and the facts, with their own pictures and lines.
+    let kind = |view: &View, id: &str| {
+        let scene = view.games.scene.as_ref().unwrap();
+        scene
+            .elements
+            .iter()
+            .find(|e| e.id == id)
+            .unwrap()
+            .kind
+            .clone()
+    };
+    let Kind::Fields(fields) = kind(&solo, "ficha") else {
+        panic!("fields")
+    };
+    assert_eq!(fields.rows.len(), 5);
+    assert!(fields.rows[4].value.is_none() && fields.hide_empty);
+    let Kind::Rating(stars) = kind(&theme.view("albedo"), "nota") else {
+        panic!("rating")
+    };
+    assert!(stars.full.is_some() && stars.empty_color.is_some());
 }
 
 #[test]
@@ -429,6 +485,20 @@ slice = "lots"
 kind = "text"
 text = "ok"
 color = "$cor"
+[[view.x.systems.el]]
+kind = "rating"
+value = "game.name"
+star = "/abs.png"
+size = "big"
+empty_opacity = 3
+[[view.x.systems.el]]
+kind = "fields"
+rows = "none"
+[[view.x.systems.el]]
+kind = "fields"
+rows = [5, { label = "a" }, { label = "b", rating = "game.year" }, { label = "c", value = "${game.genre}", extra = 1 }]
+divider = "nope"
+row = -1
 [view.y.games]
 el = "not a list"
 [view.z.games]
@@ -458,6 +528,22 @@ el = []
         .collect();
     assert_eq!(kinds.iter().filter(|k| **k == "list").count(), 1);
     assert!(kinds.contains(&"text") && kinds.contains(&"rect"));
+    // The rating stays with the launcher's star; the second fields keeps
+    // its two good lines.
+    let fields: Vec<_> = scene
+        .elements
+        .iter()
+        .filter_map(|e| match &e.kind {
+            archr_ui::layout::Kind::Fields(f) => Some(f),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(fields.len(), 1);
+    assert_eq!(fields[0].rows.len(), 2);
+    assert!(scene
+        .elements
+        .iter()
+        .any(|e| matches!(&e.kind, archr_ui::layout::Kind::Rating(s) if s.full.is_none())));
     let ok = scene
         .elements
         .iter()
@@ -500,6 +586,15 @@ el = []
         "base",
         "slice",
         "el must be",
+        "only game.rating",
+        "star",
+        "size",
+        "empty_opacity",
+        "rows must be",
+        "needs a value",
+        "extra",
+        "divider",
+        "row = -1",
     ] {
         assert!(
             said.iter().any(|w| w.contains(word)),
@@ -588,7 +683,11 @@ fn free_screens_draw_at_every_size() {
                 .collect();
             let mut app = App::new(10);
             app.set_view(&view);
-            let mut shot = |ui: &mut Ui, name: &str, app: &App| -> Vec<u8> {
+            // The free games screen loads its own pictures.
+            assert!(app.games_free());
+            // `settle`: until every picture asked for has come; else the
+            // first frame alone.
+            let mut frame = |ui: &mut Ui, name: &str, app: &App, settle: bool| -> Vec<u8> {
                 let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
                 let mut round = 0;
                 loop {
@@ -606,6 +705,9 @@ fn free_screens_draw_at_every_size() {
                     ui.draw_with_settings(app, &data, &theme, art, None)
                         .unwrap();
                     let took = began.elapsed();
+                    if !settle {
+                        break;
+                    }
                     if covers.idle() && ui.pictures_idle() && round >= 3 {
                         timings.push((format!("{view_id}-{name}-{}x{}", size.0, size.1), took));
                         break;
@@ -647,15 +749,26 @@ fn free_screens_draw_at_every_size() {
                 }
                 hit as f32 / all.max(1) as f32
             };
+            let mut shot = |ui: &mut Ui, name: &str, app: &App| frame(ui, name, app, true);
             assert!(matches!(app.screen, Screen::Systems));
             let systems = shot(&mut ui, "sistemas", &app);
             app.handle(Button::Down, &data);
-            let megadrive = shot(&mut ui, "sistemas-megadrive", &app);
+            // The next system's art was loaded with this one's: it shows on
+            // the first frame.
+            let first = frame(&mut ui, "sistemas-primeiro-quadro", &app, false);
+            let megadrive = frame(&mut ui, "sistemas-megadrive", &app, true);
             app.handle(Button::A, &data);
             assert!(matches!(app.screen, Screen::Games { .. }));
-            let games = shot(&mut ui, "jogos", &app);
+            let games = frame(&mut ui, "jogos", &app, true);
             app.cursor = 7;
-            let sonic = shot(&mut ui, "jogos-sem-logo", &app);
+            let sonic = frame(&mut ui, "jogos-sem-logo", &app, true);
+            // The Nintendo 64: no logo in the theme, the launcher's picture.
+            app.handle(Button::B, &data);
+            app.handle(Button::Down, &data);
+            app.handle(Button::Down, &data);
+            app.handle(Button::A, &data);
+            assert!(matches!(&app.screen, Screen::Games { system, .. } if system == "n64"));
+            let n64 = frame(&mut ui, "jogos-n64", &app, true);
             let red = [0xE8, 0x34, 0x3B];
             if view_id == "solo" {
                 // The art fills the screen: its sun at the top left.
@@ -665,14 +778,32 @@ fn free_screens_draw_at_every_size() {
                 assert!(share(&megadrive, (0.04, 0.06, 0.24, 0.12), red) > 0.02);
                 assert!(share(&systems, (0.04, 0.06, 0.24, 0.12), red) < 0.001);
                 // The dark filter over the art on the games screen.
-                let filtered = px(&games, 0.28, 0.06);
+                let filtered = px(&games, 0.45, 0.06);
                 assert!(filtered.iter().all(|c| *c < 140), "{filtered:?}");
+                // The Mega Drive's art, already there on the first frame.
+                let art = px(&first, 0.3, 0.55);
+                assert!(art[2] > 180 && art[0] < 80, "{art:?}");
+                // Its logo is the SVG of the name it shares, on both screens.
+                let blue = [0x2E, 0x9B, 0xE6];
+                assert!(share(&megadrive, (0.04, 0.74, 0.5, 0.9), blue) > 0.05);
+                assert!(share(&games, (0.02, 0.02, 0.32, 0.14), blue) > 0.05);
+                // The facts: a fourth line with the stars for Sonic (rated),
+                // none for Aladdin (not rated); the empty genre left out.
+                let row = (0.84, 0.81, 0.96, 0.86);
+                assert!(share(&sonic, row, [255, 255, 255]) > 0.05);
+                assert!(share(&games, row, [255, 255, 255]) < 0.01);
+                let console = [100, 210, 150];
+                assert!(share(&n64, (0.02, 0.02, 0.32, 0.14), console) > 0.05);
             } else {
                 let accent = [0xF9, 0xC4, 0x40];
                 // The selected row in the accent, in the list's box only.
                 assert!(share(&games, (0.0, 0.15, 0.433, 0.925), accent) > 0.03);
                 assert!(share(&sonic, (0.0, 0.15, 0.433, 0.925), accent) > 0.03);
                 assert!(share(&systems, (0.0, 0.12, 0.333, 0.88), accent) > 0.03);
+                // The theme's star in the accent, only for a rated game.
+                let stars = (0.7667, 0.65, 0.9667, 0.675);
+                assert!(share(&sonic, stars, accent) > 0.1);
+                assert!(share(&games, stars, accent) < 0.01);
                 // The nine-slice border runs around the screen.
                 let edge = px(&systems, 0.5, 0.0);
                 assert!(edge[0] > 230 && edge[2] < 100, "{edge:?}");

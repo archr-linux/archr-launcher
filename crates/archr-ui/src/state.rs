@@ -553,6 +553,9 @@ pub struct App {
     pub home_hero: Option<usize>,
     /// Columns of the games screen when it is a grid.
     games_grid: Option<usize>,
+    /// The games screen is a free screen (docs/temas.md, Telas livres): its
+    /// pictures are its own, only its list's covers come from outside.
+    games_free: bool,
     /// A game's menu opens with Play, Favorite and Details side by side
     /// (the theme's `[menu]` `style = "context"`).
     menu_quick: bool,
@@ -681,6 +684,7 @@ impl App {
             recent_menu: false,
             home_hero: None,
             games_grid: None,
+            games_free: false,
             menu_quick: false,
         }
     }
@@ -692,6 +696,7 @@ impl App {
         self.app_nav = Nav::of(&view.app, view.screen);
         self.games_grid = (view.games.list.mark == crate::layout::Mark::Grid)
             .then_some(view.games.list.columns.max(1));
+        self.games_free = view.games.scene.is_some();
         self.menu_quick = view.menu_quick;
         let had = self.home.is_some();
         self.home.clone_from(&view.home);

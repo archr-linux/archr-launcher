@@ -241,14 +241,15 @@ fn nearby(rows: &[String], cursor: usize, reach: usize) -> Vec<&str> {
 }
 
 impl Ui<'_, '_> {
-    pub(super) fn ensure_art(&mut self) {
-        let Some(creator) = self.creator else { return };
+    /// Where system pictures are looked for: the user's folder, the
+    /// theme's, then the default theme's (a theme without pictures shows
+    /// those).
+    fn art_dirs(&self) -> Vec<PathBuf> {
         let base = self.root.clone().unwrap_or_else(|| PathBuf::from("/"));
         let default = self
             .default_theme_dir
             .clone()
             .unwrap_or_else(|| base.join(crate::theme::DEFAULT_THEME_DIR.trim_start_matches('/')));
-        // A theme without pictures shows the default theme's.
         let mut dirs: Vec<PathBuf> = [
             Some(base.join("storage/.config/archr-launcher/systems")),
             self.theme_dir.as_ref().map(|dir| dir.join("systems")),
@@ -258,6 +259,40 @@ impl Ui<'_, '_> {
         .flatten()
         .collect();
         dirs.dedup();
+        dirs
+    }
+    /// The files `name`'s picture may be, in the order the launcher looks.
+    pub(super) fn system_files(&self, name: &str) -> Vec<PathBuf> {
+        if !has_picture(name) {
+            return Vec::new();
+        }
+        let dirs = self.art_dirs();
+        let dirs: Vec<_> = dirs.iter().map(PathBuf::as_path).collect();
+        let apps = self.art.as_ref().map_or(&[][..], |art| &art.apps[..]);
+        candidates(&dirs, name, apps)
+    }
+    /// The files `name`'s logo may be in the theme's `logos/` folder.
+    pub(super) fn logo_files(&self, name: &str) -> Vec<PathBuf> {
+        let Some(dir) = self.theme_dir.as_ref().map(|d| d.join("logos")) else {
+            return Vec::new();
+        };
+        let name = name.trim_start_matches('@');
+        [Some(name), lookup(IMAGE_ALIASES, name)]
+            .into_iter()
+            .flatten()
+            .flat_map(|key| {
+                ["svg", "png", "webp", "jpg"]
+                    .iter()
+                    .map(move |ext| format!("{key}.{ext}"))
+            })
+            .map(|file| dir.join(file))
+            .collect()
+    }
+
+    pub(super) fn ensure_art(&mut self) {
+        let Some(creator) = self.creator else { return };
+        let base = self.root.clone().unwrap_or_else(|| PathBuf::from("/"));
+        let dirs = self.art_dirs();
         // Decoded at the largest box the active view shows them in, so a
         // picture is only ever reduced on screen, never enlarged and blurred.
         let mut size = (self.px(IMAGE_BOX.0) as u32, self.px(IMAGE_BOX.1) as u32);

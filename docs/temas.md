@@ -783,6 +783,8 @@ para todo texto, como no resto do launcher.
 | `list` | a lista da tela, que recebe o d-pad | veja [A lista](#a-lista) |
 | `hints` | as dicas de botões da tela | `align`, `style`, `color`, `badge`, `letter_color` |
 | `status` | relógio, bateria e rádios | `color` |
+| `rating` | a nota do jogo em cinco estrelas | veja [Estrelas](#estrelas-rating) |
+| `fields` | uma ficha de rótulo e valor | veja [Ficha](#ficha-fields) |
 
 Campo desconhecido, valor de tipo errado ou fora da faixa gera aviso no log e
 fica de fora (ou é limitado); um elemento sem o essencial (um `kind` que não
@@ -818,9 +820,20 @@ when = { has = "game.year" }
 
 - `src`: um caminho ou uma lista; vale a primeira que existe. Um caminho é
   relativo à pasta do tema (sem `..`) e pode ter dados: `arts/${system}.jpg`,
-  `frames/${aspect}/moldura.png`. `game.cover`, `game.screenshot` e
-  `game.logo` são a capa, a captura e o logo do jogo em foco (do
-  `gamelist.xml`). `fallback` é mais um caminho do tema, no fim da lista.
+  `frames/${aspect}/moldura.png`. `fallback` é mais um caminho do tema, no
+  fim da lista. Além de caminhos, `src` aceita as imagens que o launcher
+  conhece:
+
+  | fonte | o que é |
+  |---|---|
+  | `game.cover` | a capa do jogo em foco (`<thumbnail>`, ou `<image>` sem ela) |
+  | `game.screenshot` | a captura (`<image>` quando há capa, ou `media/screenshots`) |
+  | `game.logo` | o logo do jogo (`<marquee>` ou `media/wheel`); `game.wheel` e `game.marquee` são o mesmo |
+  | `system.logo` | o logo do sistema na pasta `logos/` do tema: `logos/<sistema>.svg`, `.png`, `.webp` ou `.jpg`, ou com o nome que ele divide (`megadrive` acha `genesis`) |
+  | `system.image` | a imagem do sistema que o launcher mostra: a do usuário, a da pasta `systems/` do tema ou a que vem com o launcher |
+
+  `src = ["system.logo", "system.image"]` com `fallback_text` mostra o logo
+  do tema, senão a imagem embutida, senão o nome.
 - `fit`: `contain` (inteira, dentro do retângulo; o padrão), `cover` (cobre o
   retângulo, cortada no centro) ou `stretch` (esticada).
 - `align`: `left`, `center` ou `right`, para a imagem `contain` mais estreita
@@ -829,8 +842,12 @@ when = { has = "game.year" }
 - `fallback_text`: quando nenhuma fonte existe, este texto no lugar. Um texto
   simples, ou uma tabela com os campos de `text`.
 - As imagens carregam fora da thread de desenho, reduzidas a no máximo 1,5
-  vez o tamanho da tela (cache em `thumbs/scene`); até chegar, o elemento
-  não aparece. Formatos: PNG, JPG, WebP e SVG.
+  vez o tamanho da tela e nunca aumentadas (a tela escala as menores; cache
+  em `thumbs/scene`); até chegar, o elemento não aparece. Na tela de
+  sistemas, as imagens dos dois sistemas vizinhos carregam logo depois das
+  do sistema em foco: uma arte de tela cheia leva de 0,3 a 1 s na primeira
+  vez num RK3326, e assim já está pronta quando o d-pad chega nela.
+  Formatos: PNG, JPG, WebP e SVG.
 
 ### Textos
 
@@ -897,7 +914,81 @@ vale.
 | `${aspect}` | o formato da tela: `classic`, `square` ou `wide` |
 
 Na tela de sistemas não há jogo em foco: os dados `game.*` ficam vazios.
-Um nome que não existe fica escrito como está, com aviso no log.
+Um nome que não existe fica escrito como está, com aviso no log. As imagens
+(`game.cover`, `game.screenshot`, `game.logo`, `system.logo`,
+`system.image`) não são texto: valem em `src` e em `when.has`.
+
+### Estrelas: `rating`
+
+```toml
+[[view.nota.games.el]]
+kind = "rating"                            # a nota do jogo, em meias estrelas
+rect = { x = 0.7667, y = 0.6625, w = 0.2, h = 0.036 }
+anchor = "left"
+align = "right"
+color = "#F9C440"
+
+[[view.nota.games.el]]
+kind = "rating"
+star = "icons/estrela.png"                 # a estrela do tema, cheia
+star_half = "icons/estrela-meia.png"       # opcional
+star_empty = "icons/estrela-vazia.png"     # opcional
+size = 0.03
+spacing = 0.004
+rect = { x = 0.04, y = 0.88, w = 0.3, h = 0.04 }
+```
+
+Cinco estrelas para `game.rating` (o único dado com estrelas; `value` pode
+dizê-lo), arredondadas a meia estrela. Sem nota, nada aparece.
+
+| campo | valores | padrão |
+|---|---|---|
+| `star` | imagem do tema: a estrela cheia | a estrela do launcher (cheia, desenhada no tamanho) |
+| `star_half`, `star_empty` | imagens do tema: a meia e a vazia | a meia é a cheia cortada ao meio sobre uma vazia; a vazia é a cheia em `empty` |
+| `color` | cor que multiplica a estrela cheia | o `text` do tema na estrela do launcher; nenhuma numa imagem do tema |
+| `empty` | cor da estrela vazia feita da cheia | `color` |
+| `empty_opacity` | 0 a 1 | `0.35`; `1` quando há `empty` ou `star_empty` |
+| `size` | o lado de uma estrela, fração da altura da tela | a altura do retângulo |
+| `spacing` | o espaço entre duas, fração da altura da tela (até 0,2) | um quinto da estrela |
+| `align` | `left`, `center`, `right` | `left` |
+
+### Ficha: `fields`
+
+```toml
+[[view.ficha.games.el]]
+kind = "fields"
+rows = [
+  { label = "@genre",     value = "${game.genre}" },
+  { label = "@players",   value = "${game.players}" },
+  { label = "@released",  value = "${game.year}" },
+  { label = "Estúdio",    value = "${game.developer}" },
+  { label = "@rating",    rating = "game.rating" },
+]
+rect = { x = 0.04, y = 0.556, w = 0.42, h = 0.29 }
+row = 0.058
+size = 0.029
+color = "#FFFFFF"
+label_color = "#C8C8D4"
+upper_labels = true
+divider = "#FFFFFF28"
+```
+
+Uma linha por item de `rows`, de cima para baixo: o rótulo à esquerda, o
+valor à direita no espaço que sobra (diminui até 60 % e termina em "…" se
+não couber). Uma linha sem valor some e as de baixo sobem; a linha com
+`rating = "game.rating"` mostra as estrelas no lugar do valor, e some quando
+o jogo não tem nota. As linhas que não cabem no retângulo ficam de fora.
+
+| campo | o que é | padrão |
+|---|---|---|
+| `rows` | `{ label, value }` ou `{ label, rating = "game.rating" }`; os dois aceitam `${dado}` e `@frase` | obrigatório |
+| `hide_empty` | `false` mostra também as linhas sem valor | `true` |
+| `row` | a altura de uma linha, fração da altura da tela | o retângulo dividido pelas linhas |
+| `font`, `size`, `color` | a letra dos valores | `regular`, `0.03`, o `text` do tema |
+| `label_font`, `label_size`, `label_color` | a letra dos rótulos | a dos valores, na cor `muted` do tema |
+| `upper_labels` | rótulos em maiúsculas | `false` |
+| `divider` | a cor de uma linha fina sob cada linha | nenhuma |
+| `star`, `star_half`, `star_empty`, `empty`, `empty_opacity`, `spacing`, `star_size` | as estrelas da linha da nota, como em `rating` (`star_size` é o `size` de lá; a cor é `color`) | o tamanho da letra dos valores |
 
 ### Variáveis
 
@@ -1022,8 +1113,8 @@ elemento não dá a sua cor.
 
 As telas livres chegam por partes. Ainda não há: carrossel e roda de
 sistemas, grade com modelo de item (logo por cima, selo de favorito), vídeo,
-estrelas de nota com imagem do tema, opções do tema em Aparência, `include`,
-animações por elemento e a tela de detalhes como cena. Chaves dessas partes
+opções do tema em Aparência, `include`, animações por elemento e a tela de
+detalhes como cena. Chaves dessas partes
 geram aviso e ficam de fora.
 
 ### Testar

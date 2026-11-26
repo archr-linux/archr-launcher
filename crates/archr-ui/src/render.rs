@@ -879,6 +879,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         if self.view.as_ref().is_none_or(|(seen, _)| seen != theme) {
             self.view = Some((theme.clone(), theme.view(&theme.active_view)));
             self.scene_cache.list = None;
+            self.scene_cache.systems.clear();
         }
         self.view.as_ref().expect("resolved view").1.clone()
     }

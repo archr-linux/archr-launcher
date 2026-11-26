@@ -3,8 +3,8 @@
 //! the order of their `z`, instead of the view's fixed places.
 //!
 //! The elements are few on purpose: pictures (`image`, `frame`), text
-//! (`text`), boxes (`rect`, `panel`) and the launcher's own pieces (`list`,
-//! `hints`, `status`). Every value is read once, when the view is laid
+//! (`text`, `fields`), boxes (`rect`, `panel`), the game's stars (`rating`)
+//! and the launcher's own pieces (`list`, `hints`, `status`). Every value is read once, when the view is laid
 //! out; data (`${system}`, `${game.name}`...) is filled in as each frame is
 //! drawn. A bad value is logged and left out, never fatal.
 use super::{known, Align, List, Panel, PanelStyle, Reader};
@@ -53,6 +53,54 @@ pub enum Kind {
     /// Clock, battery and radios: the launcher's pill, or plain in `color`.
     Status(Option<Rgba>),
     Panel(Panel),
+    /// The game's rating as five stars, in halves.
+    Rating(Stars),
+    /// A label and value per line; a line without a value is left out.
+    Fields(Fields),
+}
+
+/// Five stars: the theme's pictures (`star`, and `star_half`,
+/// `star_empty` if it has them) or the launcher's star.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Stars {
+    pub full: Option<Template>,
+    pub half: Option<Template>,
+    pub empty: Option<Template>,
+    /// Tint of the full stars; the theme's text for the launcher's star.
+    pub color: Option<Rgba>,
+    /// Tint of an empty star drawn from the full one; `color` when None.
+    pub empty_color: Option<Rgba>,
+    /// Opacity of an empty star drawn from the full one.
+    pub empty_opacity: f32,
+    /// A star's side and the room between two, fractions of the screen
+    /// height; None: the box's height, a fifth of the star.
+    pub size: Option<f32>,
+    pub spacing: Option<f32>,
+    pub align: Align,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Fields {
+    pub rows: Vec<Field>,
+    /// Lines without a value are left out and the next ones move up.
+    pub hide_empty: bool,
+    /// A line's height, a fraction of the screen height; None: the box
+    /// shared by the lines.
+    pub row: Option<f32>,
+    /// How labels and values are written (their `text` unused). A label
+    /// without `label_color` is the theme's `muted`.
+    pub label: Text,
+    pub value: Text,
+    /// A thin line under each line.
+    pub divider: Option<Rgba>,
+    /// For the lines that show the rating.
+    pub stars: Stars,
+}
+#[derive(Clone, Debug, PartialEq)]
+pub struct Field {
+    pub label: Template,
+    /// None: the game's rating, as stars.
+    pub value: Option<Template>,
 }
 
 /// What a picture shows: the first source that exists.
@@ -190,7 +238,14 @@ pub enum Data {
     /// The game's pictures: in `src`, the files; in text, nothing.
     GameCover,
     GameScreenshot,
+    /// The scraper's wheel (marquee) picture.
     GameLogo,
+    /// The system's logo in the theme's `logos/` folder, any picture type,
+    /// its own name or the one it shares (`megadrive` → `genesis`).
+    SystemLogo,
+    /// The system's picture the launcher shows: the user's, the theme's
+    /// `systems/`, then the one shipped with the launcher.
+    SystemImage,
     /// Position of the focused item, from 1, and how many there are.
     ListIndex,
     ListTotal,
@@ -211,6 +266,8 @@ impl Data {
             ("system", "count") => Self::SystemCount,
             ("system", "games") => Self::SystemGames,
             ("system", "favorites") => Self::SystemFavorites,
+            ("system", "logo") => Self::SystemLogo,
+            ("system", "image") => Self::SystemImage,
             ("game", "name") => Self::GameName,
             ("game", "description") => Self::GameDescription,
             ("game", "genre") => Self::GameGenre,
@@ -222,7 +279,7 @@ impl Data {
             ("game", "last_played") => Self::GameLastPlayed,
             ("game", "cover") => Self::GameCover,
             ("game", "screenshot") => Self::GameScreenshot,
-            ("game", "logo") => Self::GameLogo,
+            ("game", "logo" | "wheel" | "marquee") => Self::GameLogo,
             ("list", "index") => Self::ListIndex,
             ("list", "total") => Self::ListTotal,
             ("item", "") => Self::Item,
@@ -230,11 +287,15 @@ impl Data {
             _ => return None,
         })
     }
-    /// A picture of the game rather than text.
+    /// A picture rather than text.
     pub fn picture(self) -> bool {
         matches!(
             self,
-            Self::GameCover | Self::GameScreenshot | Self::GameLogo
+            Self::GameCover
+                | Self::GameScreenshot
+                | Self::GameLogo
+                | Self::SystemLogo
+                | Self::SystemImage
         )
     }
 }
@@ -329,7 +390,18 @@ pub(super) struct Place<'a> {
 }
 
 const KINDS: &[&str] = &[
-    "image", "text", "rect", "frame", "list", "hints", "status", "panel",
+    "image", "text", "rect", "frame", "list", "hints", "status", "panel", "rating", "fields",
+];
+/// A rating's own keys, also read by `fields` for its stars.
+const STARS: &[&str] = &[
+    "star",
+    "star_half",
+    "star_empty",
+    "color",
+    "empty",
+    "empty_opacity",
+    "spacing",
+    "align",
 ];
 const COMMON: &[&str] = &[
     "id", "kind", "base", "rect", "anchor", "z", "opacity", "rotate", "pivot", "when",
@@ -499,6 +571,19 @@ impl Scene {
                 r.known_with(&["color"]);
                 Kind::Status(r.color("color"))
             }
+            "rating" => {
+                r.known_with(&[STARS, &["value", "size"]].concat());
+                if let Some(value) = r
+                    .text("value")
+                    .filter(|v| Data::parse(v) != Some(Data::GameRating))
+                {
+                    log::warn!("Theme {at}.value {value:?}: only game.rating has stars; using it");
+                }
+                let mut stars = stars(&r, Align::Left);
+                stars.size = r.number_opt_in("size", 0.005, 0.3);
+                Kind::Rating(stars)
+            }
+            "fields" => Kind::Fields(self.fields(&r)?),
             _ => {
                 r.known_with(&["radius", "style", "gradient"]);
                 Kind::Panel(Panel {
@@ -675,7 +760,7 @@ impl Scene {
         };
         Some(Text {
             text: Template::parse(&text, r.at),
-            font: self.font(r),
+            font: self.font(r, "font"),
             size: r.number("size", 0.035, 0.01, 0.3),
             color: r.color("color"),
             align: r.align("align", Align::Left),
@@ -696,9 +781,9 @@ impl Scene {
         })
     }
 
-    /// `font`: a face of the theme by name, or a file in its folder.
-    fn font(&mut self, r: &Reader) -> Font {
-        let Some(name) = r.text("font") else {
+    /// `key`: a face of the theme by name, or a file in its folder.
+    fn font(&mut self, r: &Reader, key: &str) -> Font {
+        let Some(name) = r.text(key) else {
             return Font::Regular;
         };
         match name.as_str() {
@@ -718,19 +803,141 @@ impl Scene {
                 match u8::try_from(index) {
                     Ok(n) if n < 16 => Font::File(n),
                     _ => {
-                        log::warn!("Theme {}.font: at most 16 font files; regular face", r.at);
+                        log::warn!("Theme {}.{key}: at most 16 font files; regular face", r.at);
                         Font::Regular
                     }
                 }
             }
             _ => {
                 log::warn!(
-                    "Theme {}.font must be regular, semibold, bold, mono or a file inside the theme; regular face",
+                    "Theme {}.{key} must be regular, semibold, bold, mono or a file inside the theme; regular face",
                     r.at
                 );
                 Font::Regular
             }
         }
+    }
+}
+
+impl Scene {
+    /// `rows = [{ label, value }, { label, rating = "game.rating" }]` and
+    /// how labels and values are written.
+    fn fields(&mut self, r: &Reader) -> Option<Fields> {
+        r.known_with(
+            &[
+                STARS,
+                &[
+                    "rows",
+                    "hide_empty",
+                    "upper_labels",
+                    "row",
+                    "font",
+                    "size",
+                    "label_font",
+                    "label_size",
+                    "label_color",
+                    "divider",
+                    "star_size",
+                ],
+            ]
+            .concat(),
+        );
+        let Some(items) = r.table.get("rows").and_then(Value::as_array) else {
+            log::warn!(
+                "Theme {}.rows must be a list of {{ label, value }}; element ignored",
+                r.at
+            );
+            return None;
+        };
+        let mut rows = Vec::new();
+        for (n, item) in items.iter().enumerate() {
+            let at = format!("{}.rows[{n}]", r.at);
+            let Some(t) = item.as_table() else {
+                log::warn!("Theme {at} must be {{ label, value }}; ignored");
+                continue;
+            };
+            let row = Reader { table: t, at: &at };
+            row.known(&["label", "value", "rating"]);
+            let label = Template::parse(&row.text("label").unwrap_or_default(), &at);
+            let value = match (row.text("value"), row.text("rating")) {
+                (Some(value), _) => Some(Template::parse(&value, &at)),
+                (None, Some(rating)) => {
+                    if Data::parse(&rating) != Some(Data::GameRating) {
+                        log::warn!(
+                            "Theme {at}.rating {rating:?}: only game.rating has stars; using it"
+                        );
+                    }
+                    None
+                }
+                (None, None) => {
+                    log::warn!("Theme {at} needs a value or a rating; ignored");
+                    continue;
+                }
+            };
+            rows.push(Field { label, value });
+        }
+        if rows.is_empty() {
+            log::warn!("Theme {}.rows has no line; element ignored", r.at);
+            return None;
+        }
+        let size = r.number("size", 0.03, 0.01, 0.3);
+        let value = Text {
+            text: Template::default(),
+            font: self.font(r, "font"),
+            size,
+            color: r.color("color"),
+            align: Align::Right,
+            valign: VAlign::Middle,
+            upper: false,
+            shadow: None,
+            wrap: false,
+            shrink: true,
+            line: 1.25,
+        };
+        let label = Text {
+            font: self.font(r, "label_font"),
+            size: r.number("label_size", size, 0.01, 0.3),
+            color: r.color("label_color"),
+            align: Align::Left,
+            upper: r.flag("upper_labels", false),
+            shrink: false,
+            ..value.clone()
+        };
+        let mut stars = stars(r, Align::Right);
+        stars.size = r.number_opt_in("star_size", 0.005, 0.3).or(Some(size));
+        Some(Fields {
+            rows,
+            hide_empty: r.flag("hide_empty", true),
+            row: r.number_opt_in("row", 0.01, 1.),
+            label,
+            value,
+            divider: r.color("divider"),
+            stars,
+        })
+    }
+}
+
+/// The stars' pictures, colors and room, as `rating` and `fields` give them.
+fn stars(r: &Reader, align: Align) -> Stars {
+    let full = r.path("star");
+    let empty_color = r.color("empty");
+    let empty = r.path("star_empty");
+    // A plain empty star is a faded full one, unless the theme colors it.
+    let faded = if empty_color.is_some() || empty.is_some() {
+        1.
+    } else {
+        0.35
+    };
+    Stars {
+        half: r.path("star_half"),
+        color: r.color("color"),
+        empty_opacity: r.number("empty_opacity", faded, 0., 1.),
+        size: None,
+        spacing: r.number_opt_in("spacing", 0., 0.2),
+        align: r.align("align", align),
+        full,
+        empty,
+        empty_color,
     }
 }
 
@@ -927,8 +1134,13 @@ impl Reader<'_> {
         }
     }
     fn number_opt(&self, key: &str) -> Option<f32> {
+        self.number_opt_in(key, 0., 1.)
+    }
+    /// A number within `min..=max` when given; a bad one is left out.
+    fn number_opt_in(&self, key: &str, min: f32, max: f32) -> Option<f32> {
         self.table.get(key)?;
-        Some(self.number(key, 0., 0., 1.))
+        let n = self.number(key, f32::NAN, min, max);
+        (!n.is_nan()).then_some(n)
     }
     fn color(&self, key: &str) -> Option<Rgba> {
         let text = self.text(key)?;

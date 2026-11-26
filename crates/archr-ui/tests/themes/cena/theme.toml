@@ -57,9 +57,9 @@ selected = { fill = "#FFFFFF", color = "#FFFFFF" }
 z = 10
 
 [[view.solo.systems.el]]
-id = "logo"
+id = "logo"                                      # logos/<system or the one it shares>.svg/png/webp/jpg
 kind = "image"
-src = ["logos/${system}.png"]
+src = "system.logo"
 fallback_text = { text = "${system.name}", font = "$titulo", size = 0.07, upper = true, shadow = { color = "#000000C0", x = 0.003, y = 0.003 } }
 rect = { x = 0.04, y = 0.74, w = 0.46, h = 0.16 }
 fit = "contain"
@@ -123,9 +123,9 @@ fill = "#101011C7"
 z = 5
 
 [[view.solo.games.el]]
-id = "logo-sistema"
+id = "logo-sistema"                              # the theme's logo, else the launcher's picture
 kind = "image"
-src = ["logos/${system}.png"]
+src = ["system.logo", "system.image"]
 fallback_text = { text = "${system.name}", font = "$titulo", size = 0.05, upper = true }
 rect = { x = 0.02, y = 0.02, w = 0.30, h = 0.12 }
 fit = "contain"
@@ -174,7 +174,7 @@ z = 14
 id = "captura"
 kind = "image"
 src = ["game.screenshot", "game.cover"]
-rect = { x = 0.68, y = 0.26, w = 0.28, h = 0.3 }
+rect = { x = 0.68, y = 0.25, w = 0.28, h = 0.22 }
 fit = "contain"
 radius = 0.01
 z = 14
@@ -183,7 +183,7 @@ z = 14
 id = "descricao"
 kind = "text"
 text = "${game.description}"
-rect = { x = 0.68, y = 0.58, w = 0.28, h = 0.25 }
+rect = { x = 0.68, y = 0.49, w = 0.28, h = 0.13 }
 size = 0.025
 line = 1.3
 color = "#C8C8D4"
@@ -191,13 +191,22 @@ wrap = true
 z = 14
 
 [[view.solo.games.el]]
-id = "dev"
-kind = "text"
-text = "${game.developer} · ${game.year}"
-rect = { x = 0.68, y = 0.86, w = 0.28, h = 0.05 }
+id = "ficha"                                     # the genre is empty: its line is left out
+kind = "fields"
+rows = [
+  { label = "@genre",     value = "${game.genre}" },
+  { label = "@developer", value = "${game.developer}" },
+  { label = "@released",  value = "${game.year}" },
+  { label = "@players",   value = "${game.players}" },
+  { label = "@rating",    rating = "game.rating" },
+]
+rect = { x = 0.68, y = 0.64, w = 0.28, h = 0.28 }
+row = 0.056
 size = 0.025
-color = "#EFEFFF"
-when = { has = "game.developer" }
+label_color = "#A0A0B0"
+color = "#FFFFFF"
+divider = "#FFFFFF28"
+star_size = 0.022
 z = 14
 
 [[view.solo.games.el]]
@@ -351,16 +360,25 @@ fit = "contain"
 z = 8
 
 [[view.albedo.games.el]]
-id = "nota"
-kind = "text"
-text = "${game.rating} / 5"
-rect = { x = 0.8167, y = 0.6625, w = 0.15, h = 0.04 }
+id = "capa"                                      # the box over the screen shot's corner
+kind = "image"
+src = "game.cover"
+rect = { x = 0.48, y = 0.66, w = 0.11, h = 0.2 }
+anchor = "bottom-left"
+fit = "contain"
+align = "left"
+z = 7
+
+[[view.albedo.games.el]]
+id = "nota"                                      # the theme's star, tinted
+kind = "rating"
+star = "icons/estrela.png"
+color = "$acento"
+empty = "$acento_alt"
+empty_opacity = 0.33
+rect = { x = 0.7667, y = 0.6625, w = 0.2, h = 0.036 }
 anchor = "left"
 align = "right"
-font = "$titulo"
-size = 0.032
-color = "$acento"
-when = { has = "game.rating" }
 z = 9
 
 [[view.albedo.games.el]]

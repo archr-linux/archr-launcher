@@ -1928,6 +1928,11 @@ fn cover_paths(app: &App, data: &dyn DataSource) -> (Option<PathBuf>, Vec<PathBu
     let Screen::Games { system, folder } = screen else {
         return (None, Vec::new());
     };
+    // A free screen loads the pictures it shows itself; only a grid of
+    // covers in it takes them from here.
+    if app.games_free() && app.games_grid().is_none() {
+        return (None, Vec::new());
+    }
     let games = data.games(system);
     let game = |row: usize| {
         let game = App::list_game(data, system, folder, row)?;
