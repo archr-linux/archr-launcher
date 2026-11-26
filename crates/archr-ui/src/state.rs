@@ -425,18 +425,71 @@ pub trait DataSource {
 /// same L/R: a vertical list jumps a page; a horizontal one (the carousel)
 /// steps one entry, so ← and → reach the neighbours. ↑/↓ step one entry in
 /// both.
+///
+/// A free screen's list, carousel or grid follows one rule instead
+/// (`free`, docs/temas.md, Telas livres, Navegação): along a column ↑/↓
+/// step one item, ←/→ and L1/R1 a page; along a row ←/→ and ↑/↓ step one,
+/// L1/R1 a page; in a grid ←/→ step one, ↑/↓ a row, L1/R1 a page. With
+/// `wrap`, one step past an end comes round to the other.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Nav {
     pub axis: Axis,
     /// Entries the list shows at once.
     pub page: usize,
+    /// A grid's columns; 1 for a list or a carousel.
+    pub columns: usize,
+    pub wrap: bool,
+    pub free: bool,
 }
 impl Nav {
     pub fn vertical(page: usize) -> Self {
         Self {
             axis: Axis::Vertical,
             page,
+            columns: 1,
+            wrap: false,
+            free: false,
         }
+    }
+    /// Where `cursor` goes on `raw` in a free screen's `len` items; None
+    /// leaves the press to the screen (A, B, X, Y...).
+    pub fn free_step(self, raw: Button, cursor: usize, len: usize) -> Option<usize> {
+        let last = len.saturating_sub(1);
+        let cursor = cursor.min(last);
+        let one = |forward: bool| match (forward, cursor) {
+            (true, c) if c < last => c + 1,
+            (false, c) if c > 0 => c - 1,
+            _ if self.wrap && len > 1 => {
+                if forward {
+                    0
+                } else {
+                    last
+                }
+            }
+            (_, c) => c,
+        };
+        let page = |forward: bool| {
+            if forward {
+                cursor.saturating_add(self.page.max(1)).min(last)
+            } else {
+                cursor.saturating_sub(self.page.max(1))
+            }
+        };
+        let column = self.columns <= 1 && self.axis == Axis::Vertical;
+        Some(match raw {
+            Button::L => page(false),
+            Button::R => page(true),
+            Button::Up | Button::Down if self.columns > 1 => {
+                grid_step(cursor, self.columns, None, last, raw == Button::Down)
+            }
+            Button::Up => one(false),
+            Button::Down => one(true),
+            Button::Left if column => page(false),
+            Button::Right if column => page(true),
+            Button::Left => one(false),
+            Button::Right => one(true),
+            _ => return None,
+        })
     }
     /// From the screen's layout in a view laid out for a `screen` (pixels):
     /// the rows its list draws at once, spaced in whole pixels as drawn. A
@@ -453,9 +506,28 @@ impl Nav {
             crate::layout::Scroll::Center => 0.,
         };
         let page = ((area - taller) / pitch).floor().max(1.) as usize;
+        let scene = layout.scene.as_ref();
+        if let Some(c) = scene.and_then(crate::layout::Scene::collection) {
+            let (axis, page, columns) = match c.shape {
+                crate::layout::Shape::Carousel { axis, visible, .. } => (axis, visible, 1),
+                crate::layout::Shape::Grid { columns, rows } => {
+                    (Axis::Vertical, columns * rows, columns)
+                }
+            };
+            return Self {
+                axis,
+                page,
+                columns,
+                wrap: c.wrap,
+                free: true,
+            };
+        }
         Self {
             axis: list.axis,
             page,
+            columns: 1,
+            wrap: scene.is_some_and(|s| s.wrap),
+            free: scene.is_some_and(|s| s.wrap),
         }
     }
     /// How far L or R moves the cursor.
@@ -694,8 +766,15 @@ impl App {
         self.systems_nav = Nav::of(&view.systems, view.screen);
         self.games_nav = Nav::of(&view.games, view.screen);
         self.app_nav = Nav::of(&view.app, view.screen);
-        self.games_grid = (view.games.list.mark == crate::layout::Mark::Grid)
-            .then_some(view.games.list.columns.max(1));
+        // A free screen's own grid or carousel takes the d-pad instead.
+        let collection = view
+            .games
+            .scene
+            .as_ref()
+            .and_then(crate::layout::Scene::collection);
+        self.games_grid = (view.games.list.mark == crate::layout::Mark::Grid
+            && collection.is_none())
+        .then_some(view.games.list.columns.max(1));
         self.games_free = view.games.scene.is_some();
         self.menu_quick = view.menu_quick;
         let had = self.home.is_some();
@@ -1047,6 +1126,18 @@ impl App {
         };
         let last = len.saturating_sub(1);
         self.cursor = self.cursor.min(last);
+        let nav = match self.screen {
+            Screen::Systems => Some(self.systems_nav),
+            Screen::Games { .. } => Some(self.games_nav),
+            _ => None,
+        };
+        if let Some(next) = nav
+            .filter(|n| n.free)
+            .and_then(|n| n.free_step(raw, self.cursor, len))
+        {
+            self.cursor = next;
+            return Outcome::None;
+        }
 
         // The quick actions side by side: across with the arrows; down to
         // the first row under them and back.

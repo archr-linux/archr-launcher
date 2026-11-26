@@ -781,6 +781,8 @@ para todo texto, como no resto do launcher.
 | `frame` | uma imagem do tema em 9-slice sobre o retângulo | `image`, `slice`, `scale`, `tile` |
 | `panel` | o cartão do launcher (superfície ou vidro) | `radius`, `style` (`plain`, `glass`), `gradient` |
 | `list` | a lista da tela, que recebe o d-pad | veja [A lista](#a-lista) |
+| `carousel` | os itens da tela numa fila, numa coluna ou numa roda, que recebe o d-pad | veja [Coleções](#coleções-carrossel-e-grade) |
+| `grid` | os itens da tela numa grade, que recebe o d-pad | veja [Coleções](#coleções-carrossel-e-grade) |
 | `hints` | as dicas de botões da tela | `align`, `style`, `color`, `badge`, `letter_color` |
 | `status` | relógio, bateria e rádios | `color` |
 | `rating` | a nota do jogo em cinco estrelas | veja [Estrelas](#estrelas-rating) |
@@ -1074,19 +1076,173 @@ da mesma visualização; os campos escritos substituem os dele.
 
 O elemento `list` é a lista de hoje (`list` da tabela acima) posta onde a
 cena diz: o d-pad, L1/R1, o cursor e a rolagem funcionam do mesmo jeito.
-Cada tela tem uma só; sem ela, a navegação continua numa lista que não
-aparece.
+Cada tela tem um só elemento que recebe o d-pad (`list`, `carousel` ou
+`grid`); um segundo gera aviso e fica de fora. Sem nenhum, a navegação
+continua numa lista que não aparece.
+
+```toml
+[[view.lista.games.el]]
+kind = "list"
+rect = { x = 0, y = 0.15, w = 0.433, h = 0.775 }
+row = 0.0775
+size = 0.0375
+font = "fonts/FiraSansCondensed-Medium.ttf"
+align = "right"
+color = "#FFFFFFCC"
+selected = { fill = "#F9C440", color = "#32270D", frame = { image = "frames/selecao.png", slice = 8 } }
+loop = true
+```
 
 | campo | o que é |
 |---|---|
 | `row`, `gap`, `radius` | altura da linha, espaço entre linhas e cantos (frações da altura da tela) |
 | `selected` | a altura da linha escolhida, ou `{ height, fill, color }`: altura, a cor da faixa e a do texto escolhido |
 | `size`, `selected_size` | tamanho da letra das linhas e da escolhida (a escolhida, sem `selected_size`, fica 1 px maior) |
+| `selected.frame` | `{ image, slice, scale, tile }`: uma imagem do tema em 9-slice por cima da faixa da linha escolhida (com `fill = "#00000000"`, só a imagem) |
 | `color` | a cor das outras linhas |
+| `font` | a letra dos nomes: `regular`, `semibold`, `bold`, `mono` ou um arquivo `.ttf` do tema |
+| `align` | `left`, `center` ou `right`: onde o nome fica na linha |
+| `loop` | `true`: do último item, um passo adiante volta ao primeiro, e vice-versa |
 | `mark`, `scroll`, `cursor`, `axis`, `columns` | como na tabela `list` acima (`tile` só em sistemas, `grid` só em jogos) |
 
 Com `row` e sem `selected`, a linha escolhida tem a mesma altura das outras.
-A letra da lista é a do tema (`font`, `font_semibold`).
+Sem `font`, a letra da lista é a do tema (`font`, `font_semibold`).
+
+### Coleções: carrossel e grade
+
+`carousel` e `grid` mostram os **itens da tela**: os sistemas na tela de
+sistemas, os jogos (e as pastas) na tela de jogos. Cada item é desenhado
+pelo modelo `item`; o item em foco fica como `selected` diz, e os outros na
+`opacity` do elemento. Um deles recebe o d-pad no lugar da lista.
+
+```toml
+[[view.solo.systems.el]]
+id = "logos"                               # coluna de logos à direita, estilo Solo
+kind = "carousel"
+of = "systems"
+axis = "vertical"
+visible = 3
+item = { image = "system.logo", text = "${item.name}", w = 0.2, h = 0.1 }
+rect = { x = 0.5, y = 0.05, w = 0.46, h = 0.8 }
+spacing = 0.26                             # entre os meios de dois logos, fração da altura
+align = "right"
+opacity = 0.5                              # os itens fora de foco
+selected = { scale = 2, opacity = 1 }
+loop = true
+z = 10
+```
+
+```toml
+[[view.albedo.systems.el]]
+id = "roda"                                # a roda do Albedo
+kind = "carousel"
+of = "systems"
+axis = "vertical"
+visible = 5
+wheel = { angle = 5, pivot = [-10, 0.5] }  # cada posição gira 5° em torno de um ponto à esquerda
+item = { image = "system.logo", text = "${item.name}", color = "#FBD679", w = 0.22, h = 0.11 }
+rect = { x = 0, y = 0, w = 0.3333, h = 1 }
+opacity = 0.5
+selected = { scale = 1.375, opacity = 1 }
+loop = true
+```
+
+```toml
+[[view.fila.games.el]]
+id = "fila"                                # uma fila de capas com reflexo
+kind = "carousel"
+of = "games"
+axis = "horizontal"
+visible = 5
+item = { image = ["game.cover", "game.screenshot"], text = "${item.name}", size = 0.03 }
+rect = { x = 0, y = 0.2, w = 1, h = 0.42 }
+spacing = 0.19                             # fração da largura numa fila
+opacity = 0.6
+selected = { scale = 1.45, opacity = 1 }
+reflection = 0.3
+loop = true
+
+[[view.fila.games.el]]
+kind = "text"
+text = "${game.name}"
+rect = { x = 0.1, y = 0.76, w = 0.8, h = 0.08 }
+align = "center"
+size = 0.055
+```
+
+```toml
+[[view.grade.games.el]]
+id = "capas"                               # grade 3x3 de capas, estilo Solo
+kind = "grid"
+of = "games"
+columns = 3
+rows = 3
+rect = { x = 0.02, y = 0.17, w = 0.62, h = 0.75 }
+spacing = 0.02                             # o espaço entre as células, fração da altura
+item = { image = ["game.cover", "game.screenshot"], logo = "game.logo", radius = 0.008 }
+opacity = 0.7
+selected = { scale = 1.08, opacity = 1, frame = { color = "#FFFFFF", width = 0.005, radius = 0.012 } }
+favorite = { corner = "top-right", size = 0.2 }
+```
+
+| campo | valores | padrão | o que faz |
+|---|---|---|---|
+| `of` | `systems`, `games` | os itens da tela | só para ler o tema: a tela de sistemas mostra sistemas e a de jogos, jogos |
+| `axis` | `horizontal`, `vertical` | `horizontal` | carrossel: fila ou coluna |
+| `visible` | 1 a 15 | `3` | carrossel: quantos itens aparecem inteiros; o de cada ponta some aos poucos. É também a página de L1/R1 |
+| `spacing` | 0 a 1 | o retângulo dividido por `visible` | carrossel: a distância entre os meios de dois itens (fração da altura numa coluna, da largura numa fila); grade: o espaço entre células (fração da altura), `0.02` |
+| `align` | `left`, `center`, `right` | `center` | carrossel em coluna: o lado do retângulo em que os itens ficam |
+| `wheel` | `{ angle, pivot }` | nenhuma | roda: todos os itens no meio, cada posição girada `angle` graus (no sentido do relógio) em torno de `pivot`, em tamanhos de item a partir do canto de cima à esquerda do item (`[-3, 0.5]`) |
+| `columns`, `rows` | 1 a 8 | `3`, `3` | grade: colunas e linhas à vista; as linhas rolam uma a uma |
+| `opacity` | 0 a 1 | `1` | a dos itens fora de foco |
+| `selected` | `{ scale, opacity, tint, frame }` | `scale = 1`, `opacity = 1` | o item em foco: tamanho (0,25 a 4 vezes), opacidade, cor que multiplica a imagem e moldura |
+| `selected.frame` | `{ color, width, radius }` ou `{ image, slice, scale, tile }` | nenhuma | uma linha em volta da imagem (por trás dela) ou uma imagem do tema em 9-slice por cima |
+| `loop` | `true`/`false` | `false` | do último item, um passo adiante volta ao primeiro |
+| `reflection` | 0 a 1 | `0` | carrossel: a metade de baixo da imagem de novo, de cabeça para baixo, sumindo |
+| `favorite` | `true`, `false` ou `{ image, corner, size, tint }` | a estrela do launcher no canto de cima à direita, nos jogos | o selo do jogo favorito: imagem do tema, canto (`top-left`, `top-right`, `bottom-left`, `bottom-right`), lado em fração da altura da imagem |
+
+**O modelo `item`**:
+
+| campo | o que é | padrão |
+|---|---|---|
+| `image` | fonte da imagem, ou lista delas (a primeira que existe), com os dados **do item**: `game.cover`, `game.screenshot`, `game.logo`, `system.logo`, `system.image` ou um caminho do tema (`logos/${item}.png`) | `system.logo` nos sistemas, `game.cover` nos jogos |
+| `logo` | outra imagem por cima da primeira, menor e no meio (o logo do jogo sobre a capa) | nenhuma |
+| `text` | o texto no lugar da imagem que não existe | `${item.name}` |
+| `font`, `size`, `color` | a letra desse texto | como em `text` |
+| `w`, `h` | o tamanho do item parado no carrossel, frações da tela | o passo ao longo e o retângulo dividido pelo `scale` do foco através |
+| `fit`, `radius` | como numa imagem | `contain`, `0` |
+| `fill` | uma caixa de cor por trás de cada item | nenhuma |
+
+Dentro do modelo, `${item}` é o id do item (o sistema, ou o nome do arquivo
+do jogo), `${item.name}` o nome dele, e os dados `system.*` e `game.*` são os
+do item, não os do item em foco.
+
+O carrossel desliza para o próximo item no tempo das listas do launcher; a
+grade rola as linhas e o item em foco cresce. Com Animações Reduzidas ou
+Desligadas, tudo muda de uma vez. O texto de um item é desenhado uma vez,
+no tamanho do foco, e só escalado e girado ao deslizar.
+
+As imagens dos itens carregam como as dos outros elementos (fora da
+thread de desenho, sem aumentar), as do item em foco primeiro.
+
+### Navegação
+
+Uma tela livre com `carousel`, `grid` ou `list` com `loop` segue a mesma
+regra em todos os temas:
+
+| elemento | ↑ / ↓ | ← / → | L1 / R1 |
+|---|---|---|---|
+| lista ou carrossel em coluna (e roda) | um item | uma página | uma página |
+| carrossel em fila | um item | um item | uma página |
+| grade | uma linha | um item | uma página |
+
+- Página: `visible` no carrossel, `columns × rows` na grade, as linhas à
+  vista na lista. Uma página para no primeiro ou no último item.
+- Com `loop = true`, o passo de um item passa do último ao primeiro e do
+  primeiro ao último. Na grade, ↑/↓ param na primeira e na última linha.
+- A, B, X, Y, Start e Select fazem o mesmo de sempre.
+- Uma lista sem `loop` (e a lista com `mark = "grid"`, em que L1/R1 trocam
+  de sistema) continua como nas telas de sempre.
 
 ### Dicas e status
 
@@ -1111,17 +1267,18 @@ elemento não dá a sua cor.
 
 ### O que ainda não existe
 
-As telas livres chegam por partes. Ainda não há: carrossel e roda de
-sistemas, grade com modelo de item (logo por cima, selo de favorito), vídeo,
-opções do tema em Aparência, `include`, animações por elemento e a tela de
-detalhes como cena. Chaves dessas partes
-geram aviso e ficam de fora.
+As telas livres chegam por partes. Ainda não há: vídeo, opções do tema em
+Aparência, `include`, animações por elemento (`enter`, `select`, cor
+animada no foco) e a tela de detalhes como cena. Chaves dessas partes geram
+aviso e ficam de fora.
 
 ### Testar
 
-O tema de teste `crates/archr-ui/tests/themes/cena/` tem as duas
-visualizações das maquetes aprovadas (Solo e Albedo). As capturas saem em
-640×480, 720×720 e 1024×768:
+O tema de teste `crates/archr-ui/tests/themes/cena/` tem as visualizações
+das maquetes aprovadas: Solo e Albedo, e as coleções delas, Carrossel
+(coluna de logos e grade 3×3) e Roda (a roda de sistemas e uma fila de
+capas com reflexo). As capturas saem em 640×480, 720×720 e 1024×768, com
+um quadro no meio do deslize:
 
 ```sh
 ARCHR_SCENE_CAPTURE_DIR=/tmp/cena cargo test -p archr-ui --test scene_render

@@ -18,6 +18,9 @@ pub struct Scene {
     /// Font files the elements name (`font = "fonts/x.ttf"`), inside the
     /// theme folder; `Font::File(n)` is the n-th.
     pub fonts: Vec<String>,
+    /// The list element's `loop`: one step past its last row comes to the
+    /// first, and back.
+    pub wrap: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -57,6 +60,105 @@ pub enum Kind {
     Rating(Stars),
     /// A label and value per line; a line without a value is left out.
     Fields(Fields),
+    /// The screen's items in a row, a column or a wheel, or in a grid: it
+    /// takes the d-pad instead of the list.
+    Collection(Box<Collection>),
+}
+
+/// A carousel or a grid of the screen's own items (systems or games), each
+/// drawn from `item`; the one in focus as `selected` says, the others at the
+/// element's opacity.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Collection {
+    pub shape: Shape,
+    pub item: Item,
+    pub selected: Focus,
+    /// Carousel: room between two items' middles, a fraction of the screen
+    /// along the axis (None: the box shared by `visible`). Grid: the gap
+    /// between cells, a fraction of the screen height.
+    pub spacing: Option<f32>,
+    /// One step past the last item comes to the first, and back.
+    pub wrap: bool,
+    /// The picture again upside down under it, at this opacity (0: none).
+    pub reflection: f32,
+    /// A game's mark when it is a favorite.
+    pub favorite: Option<Badge>,
+}
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Shape {
+    /// `visible` items along `axis`, the focused one in the middle; with a
+    /// wheel, all in the middle, each turned about the wheel's pivot.
+    Carousel {
+        axis: super::Axis,
+        visible: usize,
+        /// Across the axis, where items sit in the box.
+        align: Align,
+        wheel: Option<Wheel>,
+    },
+    /// `columns` by `rows` cells; the rows scroll to keep the focus in view.
+    Grid { columns: usize, rows: usize },
+}
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Wheel {
+    /// Degrees each position away from the focus turns, clockwise.
+    pub angle: f32,
+    /// The wheel's middle, in item sizes from the item's top left corner.
+    pub pivot: (f32, f32),
+}
+/// One item of a collection: its picture (the first source that exists,
+/// with the item's data), a logo over it, and its name when it has none.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Item {
+    pub image: Vec<Template>,
+    pub logo: Vec<Template>,
+    pub text: Text,
+    /// A carousel item's box, fractions of the screen; None: from the box
+    /// and the spacing. A grid's items fill their cells.
+    pub w: Option<f32>,
+    pub h: Option<f32>,
+    pub fit: ImageFit,
+    pub radius: f32,
+    /// A box behind every item.
+    pub fill: Option<Rgba>,
+}
+/// How the focused item stands out: larger, brighter, tinted, framed.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Focus {
+    pub scale: f32,
+    pub opacity: f32,
+    pub tint: Option<Rgba>,
+    pub frame: Option<Ring>,
+}
+/// A frame around the focused picture: a colored line, or a theme picture
+/// in nine slices.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Ring {
+    Line {
+        color: Rgba,
+        width: f32,
+        radius: f32,
+    },
+    Slices(Slices),
+}
+/// A favorite's mark in a corner of its picture: the theme's picture, or
+/// the launcher's star.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Badge {
+    pub image: Option<Template>,
+    /// (right, bottom): the corner it sits in.
+    pub corner: (bool, bool),
+    /// Its side, a fraction of the picture's height.
+    pub size: f32,
+    pub tint: Option<Rgba>,
+}
+
+/// The list element's style beyond its colors: the face, where the text
+/// sits and a picture for the selected row.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ListStyle {
+    pub font: Option<Font>,
+    pub align: Option<Align>,
+    pub frame: Option<Slices>,
 }
 
 /// Five stars: the theme's pictures (`star`, and `star_half`,
@@ -186,12 +288,19 @@ pub struct Slices {
 }
 
 /// The list's own colors, over the theme's: rows, the selected row's fill
-/// and its text.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+/// and its text; and its style.
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct ListInk {
     pub color: Option<Rgba>,
     pub fill: Option<Rgba>,
     pub selected: Option<Rgba>,
+    pub style: ListStyle,
+}
+impl ListInk {
+    /// Only colors: what the theme copy for the list needs.
+    pub fn colors(&self) -> [Option<Rgba>; 3] {
+        [self.color, self.fill, self.selected]
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -251,6 +360,8 @@ pub enum Data {
     ListTotal,
     /// The focused item's id: the system, or the game's file name.
     Item,
+    /// Its name: the system's, the game's or the folder's.
+    ItemName,
     /// `classic`, `square` or `wide`.
     Aspect,
 }
@@ -283,6 +394,7 @@ impl Data {
             ("list", "index") => Self::ListIndex,
             ("list", "total") => Self::ListTotal,
             ("item", "") => Self::Item,
+            ("item", "name") => Self::ItemName,
             ("aspect", "") => Self::Aspect,
             _ => return None,
         })
@@ -391,7 +503,10 @@ pub(super) struct Place<'a> {
 
 const KINDS: &[&str] = &[
     "image", "text", "rect", "frame", "list", "hints", "status", "panel", "rating", "fields",
+    "carousel", "grid",
 ];
+/// The kinds that take the d-pad: a screen has one of them.
+const COLLECTIONS: &[&str] = &["list", "carousel", "grid"];
 /// A rating's own keys, also read by `fields` for its stars.
 const STARS: &[&str] = &[
     "star",
@@ -424,13 +539,15 @@ impl Scene {
             let Some(table) = resolve(item, place, &at, 0) else {
                 continue;
             };
-            // One list: a second one is turned away before it moves the first.
-            if table.get("kind").and_then(Value::as_str) == Some("list") && lists > 0 {
-                log::warn!("Theme {at}: a screen has one list; ignored");
+            // One list, carousel or grid: a second one is turned away
+            // before it moves the first.
+            let kind = table.get("kind").and_then(Value::as_str).unwrap_or("");
+            if COLLECTIONS.contains(&kind) && lists > 0 {
+                log::warn!("Theme {at}: a screen has one list, carousel or grid; ignored");
                 continue;
             }
             if let Some(element) = scene.element(&table, place, &at, list) {
-                if matches!(element.kind, Kind::List(_)) {
+                if matches!(element.kind, Kind::List(_) | Kind::Collection(_)) {
                     lists += 1;
                 }
                 scene.elements.push(element);
@@ -445,13 +562,21 @@ impl Scene {
         }
         if lists == 0 {
             log::info!(
-                "Theme {}: no list element; the d-pad still moves through an unseen list",
+                "Theme {}: no list, carousel or grid; the d-pad still moves through an unseen list",
                 place.at
             );
         }
         // Stable: equal z keep the file's order.
         scene.elements.sort_by_key(|e| e.z);
         Some(scene)
+    }
+
+    /// The carousel or grid that takes the d-pad, when the screen has one.
+    pub fn collection(&self) -> Option<&Collection> {
+        self.elements.iter().find_map(|e| match &e.kind {
+            Kind::Collection(c) => Some(&**c),
+            _ => None,
+        })
     }
 
     fn element(
@@ -531,24 +656,20 @@ impl Scene {
             }
             "frame" => {
                 r.known_with(&["image", "slice", "scale", "tile"]);
-                let image = r.path("image")?;
-                let slice = match crate::theme::sides(t.get("slice"), 256.) {
-                    Some(slice) => slice.map(|n| n as u32),
-                    None => {
-                        log::warn!(
-                            "Theme {at}.slice must be a number or [l, t, r, b]; element ignored"
-                        );
-                        return None;
-                    }
-                };
-                Kind::Frame(Slices {
-                    image,
-                    slice,
-                    scale: r.number("scale", 1., 0.25, 8.),
-                    tile: r.flag("tile", false),
-                })
+                Kind::Frame(nine(&r)?)
             }
-            "list" => Kind::List(list_element(&r, rect, place, list)),
+            "list" => {
+                let mut ink = list_element(&r, rect, place, list);
+                ink.style.font = t.contains_key("font").then(|| self.font(&r, "font"));
+                ink.style.align = t
+                    .contains_key("align")
+                    .then(|| r.align("align", Align::Left));
+                self.wrap = r.flag("loop", false);
+                Kind::List(ink)
+            }
+            "carousel" | "grid" => {
+                Kind::Collection(Box::new(self.carousel_or_grid(&r, kind, place)?))
+            }
             "hints" => {
                 r.known_with(&["align", "style", "color", "badge", "letter_color"]);
                 Kind::Hints(Hints {
@@ -917,6 +1038,250 @@ impl Scene {
     }
 }
 
+impl Scene {
+    /// `kind = "carousel"` or `"grid"`: the screen's items, from `item`.
+    fn carousel_or_grid(
+        &mut self,
+        r: &Reader,
+        kind: &str,
+        place: &Place<'_>,
+    ) -> Option<Collection> {
+        let carousel = kind == "carousel";
+        let own: &[&str] = if carousel {
+            &["axis", "visible", "align", "wheel", "reflection"]
+        } else {
+            &["columns", "rows"]
+        };
+        r.known_with(
+            &[
+                own,
+                &["of", "item", "selected", "spacing", "loop", "favorite"],
+            ]
+            .concat(),
+        );
+        let screen = if place.screen == "games" {
+            "games"
+        } else {
+            "systems"
+        };
+        if let Some(of) = r.text("of").filter(|of| of != screen) {
+            log::warn!(
+                "Theme {}.of = {of:?}: this screen's items are its {screen}; using them",
+                r.at
+            );
+        }
+        let shape = if carousel {
+            let wheel = match r.table.get("wheel") {
+                None => None,
+                Some(Value::Table(w)) => {
+                    let at = format!("{}.wheel", r.at);
+                    let w = Reader { table: w, at: &at };
+                    w.known(&["angle", "pivot"]);
+                    let pivot = match w.table.get("pivot") {
+                        None => (-3., 0.5),
+                        Some(value) => pair(value, -50., 50.).unwrap_or_else(|| {
+                            log::warn!("Theme {at}.pivot must be [x, y]; using [-3, 0.5]");
+                            (-3., 0.5)
+                        }),
+                    };
+                    Some(Wheel {
+                        angle: w.number("angle", 5., -90., 90.),
+                        pivot,
+                    })
+                }
+                Some(_) => {
+                    log::warn!("Theme {}.wheel must be {{ angle, pivot }}; ignored", r.at);
+                    None
+                }
+            };
+            Shape::Carousel {
+                axis: r.pick(
+                    "axis",
+                    super::Axis::Horizontal,
+                    &[
+                        ("horizontal", super::Axis::Horizontal),
+                        ("vertical", super::Axis::Vertical),
+                    ],
+                ),
+                visible: r.number("visible", 3., 1., 15.).round() as usize,
+                align: r.align("align", Align::Center),
+                wheel,
+            }
+        } else {
+            Shape::Grid {
+                columns: r.number("columns", 3., 1., 8.).round() as usize,
+                rows: r.number("rows", 3., 1., 8.).round() as usize,
+            }
+        };
+        let games = screen == "games";
+        let item = self.item(r, games)?;
+        let selected = match r.table.get("selected") {
+            None => Table::new(),
+            Some(Value::Table(t)) => t.clone(),
+            Some(_) => {
+                log::warn!("Theme {}.selected must be a table; ignored", r.at);
+                Table::new()
+            }
+        };
+        let at = format!("{}.selected", r.at);
+        let s = Reader {
+            table: &selected,
+            at: &at,
+        };
+        s.known(&["scale", "opacity", "tint", "frame"]);
+        let frame = match s.table.get("frame") {
+            None => None,
+            Some(Value::Table(f)) if f.contains_key("image") => {
+                slices(&Value::Table(f.clone()), &format!("{at}.frame")).map(Ring::Slices)
+            }
+            Some(Value::Table(f)) => {
+                let at = format!("{at}.frame");
+                let f = Reader { table: f, at: &at };
+                f.known(&["color", "width", "radius"]);
+                Some(Ring::Line {
+                    color: f.color("color").unwrap_or(Rgba {
+                        r: 255,
+                        g: 255,
+                        b: 255,
+                        a: 255,
+                    }),
+                    width: f.number("width", 0.005, 0.001, 0.05),
+                    radius: f.number("radius", 0., 0., 0.5),
+                })
+            }
+            Some(_) => {
+                log::warn!("Theme {at}.frame must be a table; ignored");
+                None
+            }
+        };
+        let favorite = match r.table.get("favorite") {
+            Some(Value::Boolean(false)) => None,
+            None | Some(Value::Boolean(true)) => games.then_some(Badge {
+                image: None,
+                corner: (true, false),
+                size: 0.2,
+                tint: None,
+            }),
+            Some(Value::Table(f)) => {
+                let at = format!("{}.favorite", r.at);
+                let f = Reader { table: f, at: &at };
+                f.known(&["image", "corner", "size", "tint"]);
+                Some(Badge {
+                    image: f.path("image"),
+                    corner: f.pick(
+                        "corner",
+                        (true, false),
+                        &[
+                            ("top-left", (false, false)),
+                            ("top-right", (true, false)),
+                            ("bottom-left", (false, true)),
+                            ("bottom-right", (true, true)),
+                        ],
+                    ),
+                    size: f.number("size", 0.2, 0.05, 1.),
+                    tint: f.color("tint"),
+                })
+            }
+            Some(_) => {
+                log::warn!(
+                    "Theme {}.favorite must be true, false or a table; ignored",
+                    r.at
+                );
+                None
+            }
+        };
+        Some(Collection {
+            shape,
+            item,
+            selected: Focus {
+                scale: s.number("scale", 1., 0.25, 4.),
+                opacity: s.number("opacity", 1., 0., 1.),
+                tint: s.color("tint"),
+                frame,
+            },
+            spacing: r.number_opt_in("spacing", 0., 1.),
+            wrap: r.flag("loop", false),
+            reflection: if carousel {
+                r.number("reflection", 0., 0., 1.)
+            } else {
+                0.
+            },
+            favorite,
+        })
+    }
+
+    /// `item = { image, logo, text, font, size, color, w, h, fit, radius,
+    /// fill }`: a game's cover or a system's logo unless the theme says.
+    fn item(&mut self, r: &Reader, games: bool) -> Option<Item> {
+        let empty = Table::new();
+        let table = match r.table.get("item") {
+            None => &empty,
+            Some(Value::Table(t)) => t,
+            Some(_) => {
+                log::warn!("Theme {}.item must be a table; the screen's pictures", r.at);
+                &empty
+            }
+        };
+        let at = format!("{}.item", r.at);
+        let i = Reader { table, at: &at };
+        i.known(&[
+            "image", "logo", "text", "font", "size", "color", "w", "h", "fit", "radius", "fill",
+        ]);
+        let sources = |key: &str| match i.table.get(key) {
+            None => None,
+            Some(Value::String(one)) => Some(vec![source(one, &format!("{at}.{key}"))]),
+            Some(Value::Array(many)) => Some(
+                many.iter()
+                    .filter_map(|v| v.as_str().map(|one| source(one, &format!("{at}.{key}"))))
+                    .filter(|t| !t.0.is_empty())
+                    .collect(),
+            ),
+            Some(_) => {
+                log::warn!("Theme {at}.{key} must be a source or a list of them; ignored");
+                None
+            }
+        };
+        let picture = if games {
+            Data::GameCover
+        } else {
+            Data::SystemLogo
+        };
+        let image = sources("image").unwrap_or_else(|| vec![Template(vec![Piece::Data(picture)])]);
+        let logo = sources("logo").unwrap_or_default();
+        let mut text = table.clone();
+        text.retain(|k, _| ["text", "font", "size", "color"].contains(&k));
+        text.entry("text")
+            .or_insert_with(|| Value::String("${item.name}".into()));
+        text.insert("align".into(), Value::String("center".into()));
+        text.insert("fit_text".into(), Value::String("shrink".into()));
+        let text = self.text(
+            &Reader {
+                table: &text,
+                at: &at,
+            },
+            &["text"],
+        )?;
+        Some(Item {
+            image,
+            logo,
+            text,
+            w: i.number_opt_in("w", 0.01, 1.),
+            h: i.number_opt_in("h", 0.01, 1.),
+            fit: i.pick(
+                "fit",
+                ImageFit::Contain,
+                &[
+                    ("contain", ImageFit::Contain),
+                    ("cover", ImageFit::Cover),
+                    ("stretch", ImageFit::Stretch),
+                ],
+            ),
+            radius: i.number("radius", 0., 0., 0.5),
+            fill: i.color("fill"),
+        })
+    }
+}
+
 /// The stars' pictures, colors and room, as `rating` and `fields` give them.
 fn stars(r: &Reader, align: Align) -> Stars {
     let full = r.path("star");
@@ -958,6 +1323,9 @@ fn list_element(r: &Reader, rect: Rect01, place: &Place<'_>, list: &mut List) ->
         "cursor",
         "columns",
         "color",
+        "font",
+        "align",
+        "loop",
     ]);
     let k = place.tall / 480.;
     let mut t = Table::new();
@@ -996,7 +1364,11 @@ fn list_element(r: &Reader, rect: Rect01, place: &Place<'_>, list: &mut List) ->
         Some(Value::Table(s)) => {
             let at = format!("{}.selected", r.at);
             let s = Reader { table: s, at: &at };
-            s.known(&["height", "fill", "color"]);
+            s.known(&["height", "fill", "color", "frame"]);
+            ink.style.frame = s
+                .table
+                .get("frame")
+                .and_then(|f| slices(f, &format!("{at}.frame")));
             ink.fill = s.color("fill");
             ink.selected = s.color("color");
             if let Some(height) = s.number_opt("height") {
@@ -1036,6 +1408,35 @@ fn list_element(r: &Reader, rect: Rect01, place: &Place<'_>, list: &mut List) ->
     list.overlay(&t, r.at);
     list.opacity = 1.;
     ink
+}
+
+/// `image`, `slice`, `scale` and `tile` of a nine-slice picture; None
+/// (with a warning) without a picture or slices.
+fn nine(r: &Reader) -> Option<Slices> {
+    let image = r.path("image")?;
+    let Some(slice) = crate::theme::sides(r.table.get("slice"), 256.) else {
+        log::warn!(
+            "Theme {}.slice must be a number or [l, t, r, b]; ignored",
+            r.at
+        );
+        return None;
+    };
+    Some(Slices {
+        image,
+        slice: slice.map(|n| n as u32),
+        scale: r.number("scale", 1., 0.25, 8.),
+        tile: r.flag("tile", false),
+    })
+}
+/// A `frame = { image, slice, scale, tile }` table.
+fn slices(value: &Value, at: &str) -> Option<Slices> {
+    let Some(table) = value.as_table() else {
+        log::warn!("Theme {at} must be {{ image, slice }}; ignored");
+        return None;
+    };
+    let r = Reader { table, at };
+    r.known(&["image", "slice", "scale", "tile"]);
+    nine(&r)
 }
 
 /// The element's table, with the element it names in `base` under it.

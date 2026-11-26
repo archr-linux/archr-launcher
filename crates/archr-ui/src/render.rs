@@ -497,6 +497,8 @@ pub struct Ui<'font, 'texture> {
     /// A free screen's hints element, while its hints are drawn: their
     /// colors and style over the theme's.
     hint_ink: Option<crate::layout::Hints>,
+    /// A free screen's list: its face, alignment and selected picture.
+    list_look: Option<scene::ListLook>,
     motion: Motion,
     /// The theme's shadow under panels and its console picture scaling.
     shadow_style: ShadowStyle,
@@ -635,6 +637,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             text_scale: 1.,
             face_letters: ['A', 'B', 'X', 'Y'],
             hint_ink: None,
+            list_look: None,
             motion: Motion::On,
             shadow_style: ShadowStyle::Soft,
             soft: Default::default(),
@@ -758,6 +761,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
     }
     /// Called before applying input: finish old targets, never queue gestures.
     pub fn snap_animations(&mut self) {
+        self.scene_cache.snap();
         self.list.scroll.snap();
         self.list.pill.snap();
         self.list.swap.snap();
@@ -1391,6 +1395,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             }
             self.animating = self.list.scroll.active(now)
                 || self.list.pill.active(now)
+                || self.scene_cache.active(now)
                 || self.list.swap.active(now)
                 || self.menu_pill.active(now)
                 || self.cover_fade.active(now)
@@ -1837,7 +1842,12 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 .dashed(&mut self.canvas, pill, radius, theme.highlight_bg)?;
         } else if len > 0 && pill {
             let pill = Rect::new(margin, mark_y, list_width, selected.max(1.) as u32);
-            if !self.framed("selected", pill)? {
+            let own = self.list_look.as_ref().and_then(|l| l.frame.clone());
+            if let Some((path, slices)) = own {
+                // The scene's picture over the band.
+                self.rounded(pill, radius, theme.highlight_bg, None)?;
+                self.slices(&path, &slices, pill)?;
+            } else if !self.framed("selected", pill)? {
                 self.rounded(pill, radius, theme.highlight_bg, None)?;
             }
         } else if len > 0 {
@@ -1873,6 +1883,11 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             }
             let selected = i == cursor;
             let (face, size, c) = row_style(theme, l, i, collections, cursor);
+            let look = self.list_look.as_ref();
+            let (face, align) = (
+                look.and_then(|l| l.face).unwrap_or(face),
+                look.and_then(|l| l.align),
+            );
             let accent_ink = selected && on_pill;
             let mut x = margin + inset + if selected && !pill { self.px(14.) } else { 0 };
             let mut right = margin + list_width as i32 - inset;
@@ -2010,7 +2025,10 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             let step = rh as i32 / lines.len() as i32;
             for (n, line) in lines.iter().enumerate() {
                 let at = Rect::new(x, y + step * n as i32, width, step.max(1) as u32);
-                self.label(line, (face, size, c), at)?;
+                match align {
+                    Some(align) => self.label_aligned(line, (face, size, c), at, align)?,
+                    None => self.label(line, (face, size, c), at)?,
+                }
             }
         }
         if len == 0 {

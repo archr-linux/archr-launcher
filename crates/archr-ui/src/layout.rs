@@ -13,8 +13,9 @@ mod scene;
 pub use home::{Grid, Hero, Home, ShelfKind, ShelfStyle, Tab};
 pub(crate) use scene::{safe_path, substitute};
 pub use scene::{
-    Data, Element, Field, Fields, Fill, Font, HintStyle, Hints, Image, ImageFit, Kind, ListInk,
-    Piece, Scene, Shadow, Slices, Stars, Template, Text, VAlign,
+    Badge, Collection, Data, Element, Field, Fields, Fill, Focus, Font, HintStyle, Hints, Image,
+    ImageFit, Item, Kind, ListInk, ListStyle, Piece, Ring, Scene, Shadow, Shape, Slices, Stars,
+    Template, Text, VAlign, Wheel,
 };
 
 /// Id of the classic list layout, which every theme offers.
@@ -604,8 +605,7 @@ pub(crate) fn app_layout(mut app: Layout, tables: &[Table]) -> Layout {
     for table in tables {
         app.overlay(table, "app");
     }
-    if app.list.mark != Mark::Pill && app.list.mark != Mark::Bar
-        || app.list.axis != Axis::Vertical
+    if app.list.mark != Mark::Pill && app.list.mark != Mark::Bar || app.list.axis != Axis::Vertical
     {
         log::warn!("Theme app.list must be a vertical list (pill or bar); drawn as one");
         app.list.mark = Mark::Pill;

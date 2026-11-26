@@ -792,6 +792,19 @@ impl<'font, 'texture> TextCache<'font, 'texture> {
         panel: Rect,
         align: Align,
     ) -> Result<(), String> {
+        self.draw_ex(canvas, text, style, panel, (align, 1., 0., 1.))
+    }
+    /// `draw`, the text then made `scale` times its size about the
+    /// middle of where it would be, turned `degrees` about it and drawn
+    /// at `opacity` (the same texture whatever the three).
+    pub fn draw_ex(
+        &mut self,
+        canvas: &mut Canvas<Window>,
+        text: &str,
+        style: Style,
+        panel: Rect,
+        (align, scale, degrees, opacity): (Align, f32, f64, f32),
+    ) -> Result<(), String> {
         // SDL's software renderer reports zero for an unspecified maximum,
         // not a one-pixel texture limit.
         let maximum = canvas.info().max_texture_width;
@@ -843,11 +856,33 @@ impl<'font, 'texture> TextCache<'font, 'texture> {
             _ => (panel.width() as i32 - w as i32) / 2,
         };
         let dy = (panel.height() as i32 - h as i32) / 2;
-        canvas.copy(
-            &entry.texture,
-            None,
-            Rect::new(panel.x() + dx, panel.y() + dy, w, h),
-        )?;
+        let at = Rect::new(panel.x() + dx, panel.y() + dy, w, h);
+        let mut entry = entry;
+        let faded = opacity < 1.;
+        if faded {
+            entry
+                .texture
+                .set_alpha_mod((opacity.clamp(0., 1.) * 255.).round() as u8);
+        }
+        if scale == 1. && degrees == 0. {
+            canvas.copy(&entry.texture, None, at)?;
+        } else {
+            let (sw, sh) = (
+                (w as f32 * scale).round().max(1.),
+                (h as f32 * scale).round().max(1.),
+            );
+            let middle = at.center();
+            let to = Rect::new(
+                middle.x() - (sw / 2.) as i32,
+                middle.y() - (sh / 2.) as i32,
+                sw as u32,
+                sh as u32,
+            );
+            canvas.copy_ex(&entry.texture, None, to, degrees, None, false, false)?;
+        }
+        if faded {
+            entry.texture.set_alpha_mod(255);
+        }
         self.entries.push_back(entry);
         while self.entries.len() > 128 {
             self.entries.pop_front();

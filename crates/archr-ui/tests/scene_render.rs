@@ -21,6 +21,8 @@ use std::{
 };
 
 const SIZES: [(u32, u32); 3] = [(640, 480), (720, 720), (1024, 768)];
+/// SDL is set up by one test at a time.
+static SDL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 thread_local! { static WARNINGS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) }; }
 struct Capture;
@@ -638,6 +640,7 @@ fn every_example_of_the_docs_chapter_reads_without_warnings() {
 /// its art, the list in its place and the colors the theme gave it.
 #[test]
 fn free_screens_draw_at_every_size() {
+    let _sdl = SDL.lock().unwrap_or_else(|e| e.into_inner());
     std::env::set_var("SDL_VIDEODRIVER", "offscreen");
     let out = std::env::var_os("ARCHR_SCENE_CAPTURE_DIR").map(PathBuf::from);
     if let Some(out) = &out {
@@ -815,5 +818,367 @@ fn free_screens_draw_at_every_size() {
     }
     for (name, took) in &timings {
         eprintln!("{name}: {took:?}");
+    }
+}
+
+/// The two collection views read without a warning at every size, each
+/// screen with its carousel or grid taking the d-pad by the one rule.
+#[test]
+fn collections_read_and_take_the_dpad_by_one_rule() {
+    use archr_ui::layout::{Axis, Shape};
+    let dir = tempfile::tempdir().unwrap();
+    theme_folder(dir.path());
+    let pictures = tempfile::tempdir().unwrap();
+    let data = library(pictures.path());
+    for (w, h) in SIZES {
+        for id in ["carrossel", "roda"] {
+            let theme = load(dir.path(), id).fitted(w, h);
+            let mut view = View::lista(&theme);
+            let said = warnings(|| view = theme.view(id));
+            assert!(said.is_empty(), "{id} {w}x{h}: {said:#?}");
+            let systems = view.systems.scene.as_ref().unwrap().collection().unwrap();
+            assert!(matches!(
+                systems.shape,
+                Shape::Carousel {
+                    axis: Axis::Vertical,
+                    ..
+                }
+            ));
+            assert!(systems.wrap);
+            let games = view.games.scene.as_ref().unwrap().collection().unwrap();
+            match (id, games.shape) {
+                ("carrossel", Shape::Grid { columns, rows }) => assert_eq!((columns, rows), (3, 3)),
+                ("roda", Shape::Carousel { axis, visible, .. }) => {
+                    assert_eq!((axis, visible), (Axis::Horizontal, 5));
+                    assert!(games.reflection > 0.);
+                }
+                other => panic!("{other:?}"),
+            }
+            let mut app = App::new(10);
+            app.set_view(&view);
+            // The grid is the scene's: no cover strip, no system change on L1/R1.
+            assert!(app.games_grid().is_none());
+            let press = |app: &mut App, b: Button, n: usize| {
+                for _ in 0..n {
+                    app.handle(b, &data);
+                }
+            };
+            // Systems: a column of 4 that loops; ↑ from the first is the last.
+            assert!(matches!(app.screen, Screen::Systems));
+            press(&mut app, Button::Down, 3);
+            assert_eq!(app.cursor, 3);
+            press(&mut app, Button::Down, 1);
+            assert_eq!(app.cursor, 0, "the loop comes round");
+            press(&mut app, Button::Up, 1);
+            assert_eq!(app.cursor, 3);
+            // ←/→ and L1/R1 jump a page (the visible items), never round.
+            press(&mut app, Button::L, 1);
+            let page = if id == "roda" { 5 } else { 3 };
+            assert_eq!(app.cursor, 3usize.saturating_sub(page));
+            press(&mut app, Button::Right, 1);
+            assert_eq!(app.cursor, 3);
+            // The Mega Drive: 9 games.
+            app.cursor = 1;
+            press(&mut app, Button::A, 1);
+            assert!(matches!(&app.screen, Screen::Games { system, .. } if system == "megadrive"));
+            if id == "carrossel" {
+                // ←/→ one, ↑/↓ a row, L1/R1 a page of nine; no loop here.
+                press(&mut app, Button::Right, 2);
+                assert_eq!(app.cursor, 2);
+                press(&mut app, Button::Right, 1);
+                assert_eq!(app.cursor, 3, "the next row's first");
+                press(&mut app, Button::Down, 2);
+                assert_eq!(app.cursor, 6, "the bottom row stops ↓");
+                press(&mut app, Button::Up, 1);
+                assert_eq!(app.cursor, 3);
+                press(&mut app, Button::Left, 4);
+                assert_eq!(app.cursor, 0, "no loop: the first stays");
+                press(&mut app, Button::R, 1);
+                assert_eq!(app.cursor, 8, "a page, as far as the last");
+                press(&mut app, Button::L, 1);
+                assert_eq!(app.cursor, 0);
+            } else {
+                // A row: ←/→ and ↑/↓ one, round the loop; L1/R1 five.
+                press(&mut app, Button::Left, 1);
+                assert_eq!(app.cursor, 8, "the loop comes round");
+                press(&mut app, Button::Up, 2);
+                assert_eq!(app.cursor, 6);
+                press(&mut app, Button::Right, 3);
+                assert_eq!(app.cursor, 0);
+                press(&mut app, Button::R, 1);
+                assert_eq!(app.cursor, 5);
+                press(&mut app, Button::R, 1);
+                assert_eq!(app.cursor, 8, "a page stops at the end");
+            }
+            // A, B, X and Y as always: B goes back to the systems.
+            press(&mut app, Button::B, 1);
+            assert!(matches!(app.screen, Screen::Systems));
+            assert_eq!(app.cursor, 1);
+        }
+    }
+}
+
+#[test]
+fn bad_collection_values_are_warnings() {
+    let source = r##"
+[view.x]
+[[view.x.systems.el]]
+kind = "carousel"
+of = "apps"
+axis = "diagonal"
+visible = 99
+wheel = 3
+selected = "big"
+item = 5
+reflection = 4
+columns = 2
+[[view.x.systems.el]]
+kind = "grid"
+[[view.x.games.el]]
+kind = "grid"
+columns = 20
+favorite = 7
+selected = { frame = { image = "../x.png", slice = 8 }, glow = 1 }
+item = { image = ["game.cover", "/abs.png"], logo = 3, size = "big" }
+[[view.x.games.el]]
+kind = "list"
+"##;
+    let table: toml::Table = toml::from_str(source).unwrap();
+    let theme = Theme::parse(&table);
+    let mut view = View::lista(&theme);
+    let said = warnings(|| view = theme.view("x"));
+    let systems = view.systems.scene.as_ref().unwrap().collection().unwrap();
+    // The carousel stays, with its values limited or left as they were.
+    match systems.shape {
+        archr_ui::layout::Shape::Carousel { visible, wheel, .. } => {
+            assert_eq!(visible, 15);
+            assert!(wheel.is_none());
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(systems.selected.scale, 1.);
+    assert_eq!(systems.reflection, 1.);
+    let games = view.games.scene.as_ref().unwrap();
+    let grid = games.collection().unwrap();
+    assert!(matches!(
+        grid.shape,
+        archr_ui::layout::Shape::Grid {
+            columns: 8,
+            rows: 3
+        }
+    ));
+    assert_eq!(grid.item.image.len(), 1, "the unsafe path is left out");
+    assert!(grid.selected.frame.is_none());
+    assert!(
+        !games
+            .elements
+            .iter()
+            .any(|e| matches!(e.kind, Kind::List(_))),
+        "one collection a screen"
+    );
+    for word in [
+        "of = \"apps\"",
+        "axis",
+        "visible",
+        "wheel",
+        "selected must be",
+        "item must be",
+        "reflection",
+        "columns",
+        "favorite",
+        "../x.png",
+        "glow",
+        "/abs.png",
+        "logo",
+        "one list, carousel or grid",
+    ] {
+        assert!(
+            said.iter().any(|w| w.contains(word)),
+            "no warning about {word}: {said:#?}"
+        );
+    }
+}
+
+/// The collections drawn at three sizes: settled, halfway through a glide
+/// and settled again; the focused logo larger than the others, the grid's
+/// frame on its focus, the wheel's items turned. With
+/// ARCHR_SCENE_CAPTURE_DIR set, the frames are saved there; the time a
+/// frame takes while the carousel glides is printed.
+#[test]
+fn collections_draw_and_glide_at_every_size() {
+    let _sdl = SDL.lock().unwrap_or_else(|e| e.into_inner());
+    std::env::set_var("SDL_VIDEODRIVER", "offscreen");
+    let out = std::env::var_os("ARCHR_SCENE_CAPTURE_DIR").map(PathBuf::from);
+    if let Some(out) = &out {
+        std::fs::create_dir_all(out).unwrap();
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let folder = dir.path().join("cena");
+    std::fs::create_dir_all(&folder).unwrap();
+    theme_folder(&folder);
+    let pictures = dir.path().join("pictures");
+    std::fs::create_dir_all(&pictures).unwrap();
+    let mut data = library(&pictures);
+    let megadrive = data.games.get_mut("megadrive").unwrap();
+    megadrive[2].favorite = true;
+    // Six more, for a grid that scrolls.
+    for n in 0..6 {
+        let mut more = megadrive[n].clone();
+        more.name = format!("{} II", more.name);
+        more.path = format!("more-{n}.rom").into();
+        megadrive.push(more);
+    }
+    let mut timings = Vec::new();
+    for view_id in ["carrossel", "roda"] {
+        let theme = load(&folder, view_id);
+        for size in SIZES {
+            let theme = theme.fitted(size.0, size.1);
+            let view = theme.view(&theme.active_view);
+            let root = tempfile::tempdir().unwrap();
+            let (ttf, creator);
+            let mut ui = Ui::new(size.0, size.1, true).unwrap();
+            ttf = sdl2::ttf::init().unwrap();
+            creator = ui.canvas.texture_creator();
+            ui.theme_dir = Some(folder.clone());
+            ui.default_theme_dir = Some(shipped("default"));
+            ui.set_motion(archr_ui::motion::Motion::On);
+            ui.configure(&ttf, &creator, &theme, Some(root.path()))
+                .unwrap();
+            ui.set_status(archr_ui::status::Status::frozen("14:32"));
+            ui.catalog = archr_ui::i18n::I18n::load(
+                &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../locales"),
+                Some("pt_BR"),
+                None,
+            );
+            let mut app = App::new(10);
+            app.set_view(&view);
+            let mut clock = std::time::Instant::now();
+            let unix = 1_794_916_800;
+            // Draws at `clock`; `settle`: again until every picture is in,
+            // then once more when the motion is over (2 s on). A frame's
+            // time counts until the GPU has drawn it (one pixel read back).
+            let frame = |ui: &mut Ui, name: &str, app: &App, clock, settle: bool| {
+                ui.pin_clock(clock, unix);
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+                let mut round = 0;
+                let mut took;
+                loop {
+                    ui.tick();
+                    let began = std::time::Instant::now();
+                    ui.draw_with_settings(app, &data, &theme, Default::default(), None)
+                        .unwrap();
+                    let one = sdl2::rect::Rect::new(0, 0, 1, 1);
+                    ui.canvas
+                        .read_pixels(one, sdl2::pixels::PixelFormatEnum::RGBA32)
+                        .unwrap();
+                    took = began.elapsed();
+                    if !settle || ui.pictures_idle() && round >= 3 {
+                        if settle {
+                            ui.pin_clock(clock + std::time::Duration::from_secs(2), unix);
+                            ui.draw_with_settings(app, &data, &theme, Default::default(), None)
+                                .unwrap();
+                        }
+                        break;
+                    }
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "pictures never loaded"
+                    );
+                    round += 1;
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                let pixels = ui
+                    .canvas
+                    .read_pixels(None, sdl2::pixels::PixelFormatEnum::RGBA32)
+                    .unwrap();
+                if let Some(out) = &out {
+                    let file = out.join(format!("{view_id}-{name}-{}x{}.png", size.0, size.1));
+                    image::save_buffer(file, &pixels, size.0, size.1, image::ColorType::Rgba8)
+                        .unwrap();
+                }
+                (pixels, took)
+            };
+            let bright = |pixels: &[u8], (x0, y0, x1, y1): (f32, f32, f32, f32)| {
+                let mut hit = 0;
+                for y in (y0 * size.1 as f32) as usize..(y1 * size.1 as f32) as usize {
+                    for x in (x0 * size.0 as f32) as usize..(x1 * size.0 as f32) as usize {
+                        let at = (y * size.0 as usize + x) * 4;
+                        if pixels[at..at + 3].iter().all(|c| *c > 235) {
+                            hit += 1;
+                        }
+                    }
+                }
+                hit
+            };
+            let step = std::time::Duration::from_millis(1);
+            let (systems, _) = frame(&mut ui, "sistemas", &app, clock, true);
+            // A step down: the glide starts now and is halfway at 60 ms
+            // (ease-out), then settles. Every frame of it is timed.
+            app.handle(Button::Down, &data);
+            clock += step;
+            frame(&mut ui, "sistemas-inicio", &app, clock, false);
+            let mut glide = Vec::new();
+            for ms in [15, 30, 45, 60] {
+                let (pixels, took) = frame(
+                    &mut ui,
+                    "sistemas-meio",
+                    &app,
+                    clock + std::time::Duration::from_millis(ms),
+                    false,
+                );
+                glide.push(took);
+                if ms == 60 {
+                    // Halfway: neither where it was nor where it goes.
+                    assert_ne!(pixels, systems);
+                }
+            }
+            clock += std::time::Duration::from_secs(5);
+            let (megadrive, _) = frame(&mut ui, "sistemas-megadrive", &app, clock, true);
+            let mean = glide.iter().sum::<std::time::Duration>() / glide.len() as u32;
+            timings.push((format!("{view_id}-glide-{}x{}", size.0, size.1), mean));
+            if view_id == "carrossel" {
+                // The focused logo (twice as large) is in the middle of the
+                // column, on the right; the white of the SNES pill there
+                // first, then the Mega Drive's name text (an SVG pill).
+                let middle = (0.62, 0.36, 0.96, 0.54);
+                assert!(bright(&systems, middle) > bright(&systems, (0.62, 0.1, 0.96, 0.2)));
+                assert_ne!(bright(&megadrive, middle), bright(&systems, middle));
+            } else {
+                // The wheel's turned items lie in the left third only.
+                assert!(bright(&systems, (0.0, 0.0, 0.34, 1.0)) > 0);
+            }
+            // The games: the grid's focus framed white, the row's focus
+            // larger; three steps on (the third game is a favorite).
+            // The screen slides in first.
+            app.handle(Button::A, &data);
+            clock += step;
+            frame(&mut ui, "jogos-entrando", &app, clock, false);
+            clock += std::time::Duration::from_secs(5);
+            let (games, _) = frame(&mut ui, "jogos", &app, clock, true);
+            for _ in 0..2 {
+                app.handle(Button::Right, &data);
+            }
+            clock += std::time::Duration::from_secs(5);
+            let (favorite, _) = frame(&mut ui, "jogos-favorito", &app, clock, true);
+            if view_id == "carrossel" {
+                // The white frame around the first cover.
+                assert!(bright(&games, (0.0, 0.03, 0.24, 0.35)) > 20);
+                // Three rows down: the grid scrolled a row, halfway first.
+                for _ in 0..3 {
+                    app.handle(Button::Down, &data);
+                }
+                clock += step;
+                frame(&mut ui, "jogos-rolando-inicio", &app, clock, false);
+                let half = clock + std::time::Duration::from_millis(40);
+                frame(&mut ui, "jogos-rolando", &app, half, false);
+                clock += std::time::Duration::from_secs(5);
+                let (scrolled, _) = frame(&mut ui, "jogos-rolou", &app, clock, true);
+                assert_ne!(scrolled, favorite);
+            }
+            assert_ne!(games, favorite);
+        }
+    }
+    for (name, took) in &timings {
+        eprintln!("{name}: {took:?} a frame");
     }
 }

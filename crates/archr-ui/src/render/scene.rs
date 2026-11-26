@@ -6,12 +6,14 @@ use super::*;
 use crate::{
     covers::CoverCache,
     layout::{
-        Data, Element, Fields, Fill, Font, Hints, Image, ImageFit, Kind, ListInk, Scene, Slices,
-        Stars, Template, Text, VAlign,
+        Collection, Data, Element, Fields, Fill, Font, Hints, Image, ImageFit, Kind, ListInk, Ring,
+        Scene, Shape, Slices, Stars, Template, Text, VAlign,
     },
+    motion::{Tween, SELECT},
     primitives::nine_slice,
 };
 use std::collections::HashMap;
+mod collection;
 
 /// Decoded pictures a free screen keeps: the full-screen pictures of a
 /// 1024x768 screen's system and its two neighbours, and the game's.
@@ -36,6 +38,7 @@ struct Facts<'a> {
     index: usize,
     total: usize,
     item: String,
+    item_name: String,
     aspect: &'static str,
     /// The system's logo and picture files, when it has them.
     logo: Option<PathBuf>,
@@ -71,6 +74,7 @@ impl Facts<'_> {
             Data::ListIndex => self.index.to_string(),
             Data::ListTotal => self.total.to_string(),
             Data::Item => self.item.clone(),
+            Data::ItemName => self.item_name.clone(),
             Data::Aspect => self.aspect.to_owned(),
         }
     }
@@ -108,6 +112,11 @@ pub(super) struct SceneCache<'t> {
     pub systems: HashMap<String, [Option<PathBuf>; 2]>,
     /// The launcher's star, drawn at a few sizes.
     stars: Vec<(u32, Texture<'t>)>,
+    /// A carousel's place: its list, the cursor it last saw and where it
+    /// stands counting every turn (a loop keeps going the same way).
+    glide: Option<(String, usize, f32)>,
+    /// A grid's focus growing in: its list, the item and how far.
+    focus: Option<(String, usize, Tween)>,
 }
 impl SceneCache<'_> {
     pub fn poll(&mut self) -> bool {
@@ -115,6 +124,16 @@ impl SceneCache<'_> {
     }
     pub fn idle(&self) -> bool {
         self.pictures.as_ref().is_none_or(|(_, _, c)| c.idle())
+    }
+    /// A grid's focus grown at once.
+    pub fn snap(&mut self) {
+        if let Some((_, _, tween)) = &mut self.focus {
+            tween.snap();
+        }
+    }
+    /// A grid's focus is still growing.
+    pub fn active(&self, now: Instant) -> bool {
+        self.focus.as_ref().is_some_and(|(_, _, t)| t.active(now))
     }
 }
 
@@ -141,7 +160,26 @@ impl<'t> Ui<'_, 't> {
             .collect();
         // Every picture shown, asked for at once: neighbours never evict
         // what is on screen.
-        let wanted = self.wanted(shown.iter().copied(), &facts);
+        // A collection's items, placed for this frame, each with its data;
+        // their pictures are asked for first, the focus's before the rest.
+        let mut spots = Vec::new();
+        for e in &shown {
+            if let Kind::Collection(c) = &e.kind {
+                let area = self.area(e.rect);
+                spots = self.spots(c, (area, e.opacity), backdrop, (rows, cursor), data, theme);
+            }
+        }
+        let mut wanted: Vec<Vec<PathBuf>> = Vec::new();
+        for (_, facts) in spots.iter().rev() {
+            if let Some(c) = scene.collection() {
+                for paths in [&c.item.image, &c.item.logo].map(|src| self.files(src, facts)) {
+                    if !paths.is_empty() && !wanted.contains(&paths) {
+                        wanted.push(paths);
+                    }
+                }
+            }
+        }
+        wanted.extend(self.wanted(shown.iter().copied(), &facts));
         // A large picture takes 0.3 s or more to load the first time on
         // the RK3326: the systems on either side are asked for once this
         // one's pictures are in, when three systems' worth fit the budget
@@ -186,6 +224,7 @@ impl<'t> Ui<'_, 't> {
                     | Kind::Text(_)
                     | Kind::Rating(_)
                     | Kind::Fields(_)
+                    | Kind::Collection(_)
                     | Kind::Fill(Fill { gradient: None, .. })
             );
             let (outer, inner) = if simple && turn.is_none() {
@@ -208,10 +247,11 @@ impl<'t> Ui<'_, 't> {
                     backdrop,
                     (rows, cursor),
                     data,
-                    (theme, *ink),
+                    (theme, ink, &facts),
                     art,
                     layout,
                 ),
+                Kind::Collection(c) => ui.collection(c, &spots, rect, theme),
                 Kind::Hints(hints) => ui.scene_hints(app, data, theme, layout, (hints, rect)),
                 Kind::Status(plain) => ui.status_pill(theme, Some(rect), *plain).map(|_| ()),
                 Kind::Panel(panel) => {
@@ -297,7 +337,15 @@ impl<'t> Ui<'_, 't> {
             .map_or_else(String::new, |r| {
                 format!("{:.1}", f32::from(r) / 20.).replace('.', &catalog.text("details.decimal"))
             });
+        let item_name = match backdrop {
+            Screen::Games { system, folder } => App::level(data, system, folder)
+                .and_then(|l| l.folder(cursor).map(str::to_owned))
+                .or_else(|| game.map(|g| g.name.clone()))
+                .unwrap_or_default(),
+            _ => system_title(&system, data, catalog),
+        };
         Facts {
+            item_name,
             name: system_title(&system, data, catalog),
             maker: maker.to_owned(),
             year: year.to_owned(),
@@ -395,9 +443,11 @@ impl<'t> Ui<'_, 't> {
 
     /// The files a picture may come from, in order.
     fn sources(&self, image: &Image, facts: &Facts<'_>) -> Vec<PathBuf> {
-        image
-            .src
-            .iter()
+        self.files(&image.src, facts)
+    }
+    /// The files `src` names for what `facts` hold, in order.
+    fn files(&self, src: &[Template], facts: &Facts<'_>) -> Vec<PathBuf> {
+        src.iter()
             .filter_map(|template| match template.0.as_slice() {
                 [crate::layout::Piece::Data(data)] if data.picture() => facts.picture(*data),
                 _ => self.theme_file(&template.fill(|d| facts.value(d), |k| self.phrase(k))),
@@ -802,11 +852,20 @@ impl<'t> Ui<'_, 't> {
         facts: &Facts<'_>,
     ) -> Result<(), String> {
         let path = slices.image.fill(|d| facts.value(d), |k| self.phrase(k));
-        let Some(path) = self.theme_file(&path) else {
-            return Ok(());
-        };
+        match self.theme_file(&path) {
+            Some(path) => self.slices(&path, slices, rect),
+            None => Ok(()),
+        }
+    }
+    /// The theme picture at `path` in nine slices over `rect`.
+    pub(super) fn slices(
+        &mut self,
+        path: &Path,
+        slices: &Slices,
+        rect: Rect,
+    ) -> Result<(), String> {
         let k = (slices.scale * self.frame.scale).round().max(1.) as u32;
-        let Some((texture, canvas)) = self.picture(&path) else {
+        let Some((texture, canvas)) = self.picture(path) else {
             return Ok(());
         };
         let size = texture.query();
@@ -830,19 +889,19 @@ impl<'t> Ui<'_, 't> {
         backdrop: &Screen,
         (rows, cursor): (&[String], usize),
         data: &dyn DataSource,
-        (theme, ink): (&Theme, ListInk),
+        (theme, ink, facts): (&Theme, &ListInk, &Facts<'_>),
         art: Art<'_, '_>,
         layout: &Layout,
     ) -> Result<(), String> {
         let inked;
-        let theme = if ink == ListInk::default() {
+        let theme = if ink.colors() == [None; 3] {
             theme
         } else {
             if self
                 .scene_cache
                 .list
                 .as_ref()
-                .is_none_or(|(i, _)| *i != ink)
+                .is_none_or(|(i, _)| i.colors() != ink.colors())
             {
                 let mut own = theme.clone();
                 if let Some(c) = ink.color {
@@ -856,7 +915,7 @@ impl<'t> Ui<'_, 't> {
                     own.highlight_text = c;
                     own.accent_text_secondary = c;
                 }
-                self.scene_cache.list = Some((ink, own));
+                self.scene_cache.list = Some((ink.clone(), own));
             }
             inked = self
                 .scene_cache
@@ -868,12 +927,24 @@ impl<'t> Ui<'_, 't> {
             &inked
         };
         let lifted = app.moving().is_some();
-        match backdrop {
+        let style = &ink.style;
+        let frame = style.frame.as_ref().and_then(|slices| {
+            let path = slices.image.fill(|d| facts.value(d), |k| self.phrase(k));
+            Some((self.theme_file(&path)?, slices.clone()))
+        });
+        self.list_look = Some(ListLook {
+            face: style.font.map(face),
+            align: style.align,
+            frame,
+        });
+        let drawn = match backdrop {
             Screen::Games { system, folder } if layout.list.mark == Mark::Grid => {
                 self.games_grid((system, folder), cursor, (data, None), theme, art, layout)
             }
             _ => self.list(backdrop, (rows, lifted), cursor, data, theme, layout),
-        }
+        };
+        self.list_look = None;
+        drawn
     }
 
     /// The footer's hints in the box, packed to its side, in the element's
@@ -905,6 +976,14 @@ impl<'t> Ui<'_, 't> {
         self.hint_ink = None;
         drawn
     }
+}
+
+/// A free screen's list beyond its colors: the face, where the names sit
+/// and the selected row's picture, as `list` draws them.
+pub(super) struct ListLook {
+    pub face: Option<Face>,
+    pub align: Option<Align>,
+    pub frame: Option<(PathBuf, Slices)>,
 }
 
 fn face(font: Font) -> Face {

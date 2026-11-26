@@ -50,10 +50,11 @@ kind = "list"
 rect = { x = 0.6, y = 0.15, w = 0.36, h = 0.68 }
 row = 0.075
 size = 0.04
-mark = "bar"
+font = "$titulo"                                 # the list's own face, names to the right
+align = "right"
 scroll = "center"
 color = "#FFFFFFA0"
-selected = { fill = "#FFFFFF", color = "#FFFFFF" }
+selected = { fill = "#FFFFFF24", color = "#FFFFFF", frame = { image = "frames/borda.png", slice = 8 } }
 z = 10
 
 [[view.solo.systems.el]]
@@ -444,5 +445,214 @@ id = "status"
 base = "systems.status"
 
 [[view.albedo.games.el]]
+id = "dicas"
+base = "systems.dicas"
+
+# ------------------------------------------------------------ CARROSSEL
+# The Solo mockup's collections: a column of system logos on the right, the
+# focused one larger; a 3x3 grid of covers with a frame on the focus.
+[view.carrossel]
+name = { en = "Carousel", pt_BR = "Carrossel" }
+
+[[view.carrossel.systems.el]]
+id = "arte"
+kind = "image"
+src = ["arts/${system}.png", "arts/default.png"]
+fit = "cover"
+
+[[view.carrossel.systems.el]]
+id = "faixa"
+kind = "rect"
+rect = { x = 0.5, y = 0, w = 0.5, h = 1 }
+gradient = { from = "#00000000", to = "#000000C0", angle = 0 }
+z = 2
+
+[[view.carrossel.systems.el]]
+id = "logos"                                     # takes the d-pad: ↑/↓ one, L1/R1 a page
+kind = "carousel"
+of = "systems"
+axis = "vertical"
+visible = 3
+item = { image = "system.logo", text = "${item.name}", font = "$titulo", size = 0.045, w = 0.2, h = 0.1 }
+rect = { x = 0.5, y = 0.05, w = 0.46, h = 0.8 }
+spacing = 0.26
+align = "right"
+opacity = 0.5
+selected = { scale = 2, opacity = 1 }
+loop = true
+z = 10
+
+[[view.carrossel.systems.el]]
+id = "contagem"
+kind = "text"
+text = "${system.games}"
+rect = { x = 0.50, y = 0.868, w = 0.448, h = 0.05 }
+align = "right"
+font = "$titulo"
+size = 0.032
+shadow = { color = "#000000A0", x = 0.002, y = 0.002 }
+z = 20
+
+[[view.carrossel.systems.el]]
+id = "dicas"
+kind = "hints"
+rect = { x = 0.565, y = 0.94, w = 0.41, h = 0.05 }
+style = "outline"
+color = "#FFFFFF"
+z = 50
+
+[[view.carrossel.games.el]]
+id = "arte"
+kind = "image"
+src = ["arts/${system}.png", "arts/default.png"]
+fit = "cover"
+
+[[view.carrossel.games.el]]
+id = "filtro"
+kind = "rect"
+fill = "#101011C7"
+z = 5
+
+[[view.carrossel.games.el]]
+id = "capas"                                     # ←/→ one, ↑/↓ a row, L1/R1 a page
+kind = "grid"
+of = "games"
+columns = 3
+rows = 3
+rect = { x = 0.02, y = 0.05, w = 0.62, h = 0.87 }
+spacing = 0.02
+item = { image = ["game.cover", "game.screenshot"], logo = "game.logo", radius = 0.008 }
+opacity = 0.7
+selected = { scale = 1.08, opacity = 1, frame = { color = "#FFFFFF", width = 0.005, radius = 0.012 } }
+z = 10
+
+[[view.carrossel.games.el]]
+id = "nome"
+kind = "text"
+text = "${game.name}"
+rect = { x = 0.66, y = 0.08, w = 0.32, h = 0.06 }
+align = "center"
+font = "$titulo"
+size = 0.04
+fit_text = "shrink"
+z = 14
+
+[[view.carrossel.games.el]]
+id = "captura"
+kind = "image"
+src = "game.screenshot"
+rect = { x = 0.66, y = 0.16, w = 0.32, h = 0.3 }
+radius = 0.01
+z = 14
+
+[[view.carrossel.games.el]]
+id = "dicas"
+kind = "hints"
+rect = { x = 0.66, y = 0.94, w = 0.32, h = 0.05 }
+style = "outline"
+color = "#FFFFFF"
+z = 50
+
+# ------------------------------------------------------------ RODA
+# The Albedo mockup's wheel of system logos on the left, each position turned
+# 5 degrees about a far pivot; the games in one row of covers, the focus
+# larger with its reflection.
+[view.roda]
+name = { en = "Wheel", pt_BR = "Roda" }
+
+[[view.roda.systems.el]]
+id = "capa-sistema"
+kind = "image"
+src = ["systems/${system}.png"]
+rect = { x = 0.7167, y = 0.5, w = 0.5, h = 0.8 }
+anchor = "center"
+z = -10
+
+[[view.roda.systems.el]]
+id = "moldura"
+kind = "image"
+src = "frames/${aspect}/carousel-bg.png"
+fit = "stretch"
+z = 5
+
+[[view.roda.systems.el]]
+id = "roda"
+kind = "carousel"
+of = "systems"
+axis = "vertical"
+visible = 5
+wheel = { angle = 5, pivot = [-10, 0.5] }
+item = { image = "system.logo", text = "${item.name}", font = "$titulo", size = 0.04, color = "$acento_alt", w = 0.22, h = 0.11 }
+rect = { x = 0, y = 0, w = 0.3333, h = 1 }
+opacity = 0.5
+selected = { scale = 1.375, opacity = 1 }
+loop = true
+z = 8
+
+[[view.roda.systems.el]]
+id = "nome-sistema"
+kind = "text"
+text = "${system.name}"
+upper = true
+rect = { x = 0.355, y = 0.075, w = 0.86, h = 0.065 }
+rotate = 90
+pivot = [0, 0.5]
+font = "$titulo"
+size = "$t_h1"
+z = 10
+
+[[view.roda.systems.el]]
+id = "status"
+kind = "status"
+rect = { x = 0.70, y = 0.0, w = 0.275, h = 0.08 }
+color = "$acento_claro"
+z = 92
+
+[[view.roda.systems.el]]
+id = "dicas"
+kind = "hints"
+rect = { x = 0.40, y = 0.925, w = 0.575, h = 0.075 }
+style = "filled"
+color = "$acento_claro"
+letter_color = "$acento_escuro"
+z = 92
+
+[[view.roda.games.el]]
+id = "fundo"
+kind = "image"
+src = ["systems/${system}.png"]
+fit = "cover"
+opacity = "$fundo_lista"
+z = -5
+
+[[view.roda.games.el]]
+id = "fila"                                      # ←/→ one, L1/R1 a page
+kind = "carousel"
+of = "games"
+axis = "horizontal"
+visible = 5
+item = { image = ["game.cover", "game.screenshot"], text = "${item.name}", size = 0.03 }
+rect = { x = 0, y = 0.2, w = 1, h = 0.42 }
+spacing = 0.19
+opacity = 0.6
+selected = { scale = 1.45, opacity = 1 }
+reflection = 0.3
+loop = true
+z = 10
+
+[[view.roda.games.el]]
+id = "nome"
+kind = "text"
+text = "${game.name}"
+upper = true
+rect = { x = 0.1, y = 0.76, w = 0.8, h = 0.08 }
+align = "center"
+font = "$titulo"
+size = 0.055
+color = "$acento"
+fit_text = "shrink"
+z = 12
+
+[[view.roda.games.el]]
 id = "dicas"
 base = "systems.dicas"
