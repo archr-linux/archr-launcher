@@ -1643,6 +1643,98 @@ ARCHR_SCENE_CAPTURE_DIR=/tmp/cena cargo test -p archr-ui --test scene_render
 O mesmo teste confere que cada exemplo deste capítulo é lido sem nenhum
 aviso.
 
+## Converter um tema do EmulationStation
+
+O `archr-es2theme` converte um tema do EmulationStation no formato do
+Batocera/ArkOS (`theme.xml`, `formatVersion 7`, subsets, `customView`) num
+tema de telas livres. Ele roda no PC; o launcher nunca lê XML. Temas do
+ES-DE (`capabilities.xml`, `variant`, `colorScheme`, `aspectRatio`) são lidos
+pelo mesmo caminho, com menos cobertura.
+
+```sh
+cargo run --release -p archr-es2theme -- \
+  ~/temas-es/es-theme-albedo ~/temas-arch/albedo --lang pt --name "Albedo"
+```
+
+`--lang` escolhe os textos do tema original (`en`, `pt`, `es`...); os nomes
+das opções saem em inglês e português quando o tema tem os dois. A pasta de
+saída fica pronta para copiar para
+`/storage/.config/archr-launcher/themes/` ou para publicar na Loja:
+
+| arquivo | o que é |
+|---|---|
+| `theme.toml` | nome, licença, cores do topo e o `include` das partes |
+| `parts/vars.toml` | as variáveis e o que muda em cada formato de tela (`[aspect.<formato>.vars]`) |
+| `parts/options.toml` | as opções do tema, uma por subset que muda algo |
+| `parts/view-<id>.toml` | uma visualização por view do ES (`detailed`, `grid`, cada `customView`) |
+| `assets/`, `_inc/`... | as imagens e fontes que o tema usa, nos mesmos caminhos do original |
+| `logos/` | os logos de sistema, para o `system.logo` achar também o nome que o sistema divide |
+| `original/` | LICENSE, README e créditos do tema original |
+| `CONVERSAO.md` | o relatório: o que virou o quê, o que ficou de fora e os avisos do launcher |
+
+O conversor termina lendo o resultado com o leitor de temas do launcher, em
+640×480, 720×720, 1024×768 e 854×480, com cada escolha de cada opção; os
+avisos vão para o relatório e para a saída (código 2 quando há algum).
+
+**Como ele lê o tema**: segue os `include` (com `lang`), as variáveis
+(`${nome}`), os subsets e as condições (`ifSubset`; `ifHelpPrompts` vale
+como verdadeiro, porque o launcher mostra as dicas; `ifArch` como falso),
+e junta os elementos pelo nome, como o ES. O tema é lido uma vez por formato
+de tela (o subset de proporção, quando há, na escolha mais próxima: 4:3 no
+`classic`, 1:1 no `square`, 16:9 no `wide`) e uma vez por escolha de cada
+outro subset. O que muda entre as leituras vira variável: por formato em
+`[aspect.<formato>.vars]`, por escolha em `[options.<id>]`. Um elemento que
+muda com o formato e com uma opção ao mesmo tempo é escrito uma vez por
+formato (`when.aspect`).
+
+| ES | tema do launcher |
+|---|---|
+| `pos`, `size`, `maxSize`, `minSize`, `origin` | `rect`, `anchor`, `fit` (`contain`, `cover`, `stretch`) |
+| `zIndex`, `rotation`, `rotationOrigin`, `opacity`, `visible` | `z`, `rotate`, `pivot`, `opacity`; invisível fica de fora |
+| `image` (extra), com `${system.theme}` | `image` com `src` em lista, `${system}` no caminho |
+| `image` com `tile` | `frame` com `slice = 0` e `tile = true` |
+| `text`, `datetime`, `md_*` | `text` com `${game.*}`, `${system.*}` ou `@frase` |
+| `textlist` | `list` (cor, letra, seleção, alinhamento) |
+| `imagegrid` / `gridtile` | `grid`, ou `carousel` quando é uma linha ou uma coluna (zoom, reflexo, favorito, logo por cima) |
+| `carousel` (horizontal, vertical, `vertical_wheel`) | `carousel` de sistemas (`wheel` na roda) |
+| `md_image`, `md_marquee`, `md_video`, `md_rating` | `image` (`game.screenshot`...), `video`, `rating` |
+| `helpsystem`; `clock` e `batteryIndicator` | `hints`; `status` |
+| `storyboard` (x, y, opacity, scale) | `enter` |
+| `ninepatch` | `frame` |
+
+A tela de detalhes de cada visualização é a de jogos com a capa, a ficha
+e os botões no lugar da lista, e a descrição rolando com ↑/↓.
+
+**O que fica de fora** (e está no relatório): sons e música de fundo, a
+tela `menu` do ES, `splash`, vídeo ou imagem aleatória (`{random}`),
+arquivos fora do tema (`~/roms/...`, `:/...`), vídeo dentro da grade, os
+estados `:selected`/`:videoplaying` do cartão e `animateColor`, o nome
+embaixo de cada cartão da grade, `controllerActivity`, contagem de partidas.
+A data de lançamento vira só o ano; as dicas de botões usam a letra do
+launcher. Um elemento que o ES desenha sem o tema citá-lo não é criado.
+
+**Revise antes de publicar**: o resultado é um ponto de partida. As medidas
+são as do ES, mas a letra, a altura da linha da lista e as imagens com
+`${system}` (os nomes de sistema do tema original) podem pedir ajuste à mão.
+Veja as capturas com o teste de renderização:
+
+```sh
+ARCHR_ES2THEME_RENDER=~/temas-arch/albedo \
+ARCHR_ES2THEME_SHOTS=/tmp/capturas-es \
+cargo test -p archr-es2theme --test render
+```
+
+Ele desenha as telas de sistemas, de jogos e de detalhes de cada
+visualização em 640×480, 720×720 e 1024×768;
+`ARCHR_ES2THEME_CHOICES=opcao=escolha,...` escolhe opções do tema.
+
+**Licença**: o conversor não traz arte nenhuma. Ele copia a arte, as fontes
+e os logos do tema original para a pasta de saída e guarda a licença e os
+créditos em `original/`; a `license` do `theme.toml` diz a do original. Um
+tema com licença não comercial (CC BY-NC, CC BY-NC-SA) não pode ir nas
+imagens do Arch R nem na Loja sem autorização por escrito do autor; o
+relatório avisa. Logos de sistemas são marcas dos fabricantes.
+
 ## Uma tabela por tela
 
 Desde a 3.1 cada tela pode ter uma tabela no topo do `theme.toml`, fora de

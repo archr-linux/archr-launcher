@@ -1,0 +1,18 @@
+[package]
+name = "archr-es2theme"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Converts an EmulationStation theme (Batocera/ArkOS XML) into an archr-launcher theme folder"
+
+[dependencies]
+archr-ui = { path = "../archr-ui" }
+quick-xml = "0.37"
+toml = "0.8"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
+log = "0.4"
+
+[dev-dependencies]
+archr-index = { path = "../archr-index" }
+sdl2 = { version = "0.38", features = ["ttf", "image"] }
+tempfile = "3"

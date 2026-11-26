@@ -47,6 +47,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "archr-es2theme"
+version = "0.1.0"
+dependencies = [
+ "archr-index",
+ "archr-ui",
+ "image",
+ "log",
+ "quick-xml 0.37.5",
+ "sdl2",
+ "tempfile",
+ "toml",
+]
+
+[[package]]
 name = "archr-index"
 version = "0.1.0"
 dependencies = [
