@@ -160,10 +160,9 @@ impl Shop {
         if !owner_ok(owner) || !name_ok(repo) {
             return;
         }
-        let dir = self.github.cache.join(format!("{owner}-{repo}"));
-        for name in ["release.json", "latest-module.toml"] {
-            let _ = fs::remove_file(dir.join(name));
-        }
+        let cache = &self.github.cache;
+        let _ = fs::remove_file(cache.join(format!("{owner}-{repo}/release.json")));
+        let _ = fs::remove_file(cache.join(format!("{owner}-{repo}/latest-module.toml")));
     }
     /// The latest release's tag and assets (saved for an hour).
     fn release(
