@@ -112,6 +112,21 @@ pub(crate) enum Face {
     Fallback,
     /// The theme's `font_bold`, else its semibold face made bold.
     Bold,
+    /// A font file a free screen names (`Fonts::extra`), else the regular face.
+    File(u8),
+}
+impl Face {
+    /// Its list in `FacePaths` (a file falls back to the regular face's).
+    fn slot(self) -> usize {
+        match self {
+            Self::Regular | Self::File(_) => 0,
+            Self::Semibold => 1,
+            Self::Mono => 2,
+            Self::MonoMedium => 3,
+            Self::Fallback => 4,
+            Self::Bold => 5,
+        }
+    }
 }
 /// One list of font files per `Face`, in its order.
 pub(crate) type FacePaths = [Vec<PathBuf>; 6];
@@ -155,6 +170,8 @@ struct Fonts<'font> {
     startup: StartupTrace,
     ttf: &'font Sdl2TtfContext,
     paths: FacePaths,
+    /// Font files of a free screen, for `Face::File`.
+    extra: Vec<PathBuf>,
     fonts: Vec<FontFace<'font>>,
     resolved: HashMap<Face, usize>,
     measurements: VecDeque<(String, Face, u16, i16, u32)>,
@@ -168,6 +185,7 @@ impl<'font> Fonts<'font> {
             startup: StartupTrace::default(),
             ttf,
             paths,
+            extra: Vec::new(),
             fonts: Vec::new(),
             resolved: HashMap::new(),
             measurements: VecDeque::new(),
@@ -393,7 +411,11 @@ impl<'font> Fonts<'font> {
     fn font(&mut self, face: Face, size: u16) -> Result<&Font<'font, 'static>, String> {
         let key = face;
         if !self.resolved.contains_key(&key) {
-            for path in &self.paths[face as usize] {
+            let own = match face {
+                Face::File(n) => self.extra.get(usize::from(n)).cloned(),
+                _ => None,
+            };
+            for path in own.iter().chain(&self.paths[face.slot()]) {
                 let path = path.canonicalize().unwrap_or_else(|_| path.clone());
                 if let Some(index) = self.fonts.iter().position(|loaded| loaded.path == path) {
                     self.resolved.insert(key, index);
@@ -618,6 +640,21 @@ impl<'font, 'texture> TextCache<'font, 'texture> {
         if self.smooth != smooth {
             self.smooth = smooth;
             self.entries.clear();
+        }
+    }
+    /// The font files a free screen names (`Face::File`): texts drawn in
+    /// other ones are made again.
+    pub(crate) fn set_files(&mut self, files: &[PathBuf]) {
+        if self.fonts.extra != files {
+            self.fonts.extra = files.to_vec();
+            self.fonts
+                .resolved
+                .retain(|face, _| !matches!(face, Face::File(_)));
+            self.fonts
+                .measurements
+                .retain(|(_, face, ..)| !matches!(face, Face::File(_)));
+            self.entries
+                .retain(|e| !matches!(e.style.face, Face::File(_)));
         }
     }
     /// The theme's `font_hinting`: texts drawn under another one are made again.

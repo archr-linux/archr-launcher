@@ -9,7 +9,13 @@ pub use crate::text::Align;
 use crate::theme::{Gradient, Rect01, Theme};
 use toml::{Table, Value};
 mod home;
+mod scene;
 pub use home::{Grid, Hero, Home, ShelfKind, ShelfStyle, Tab};
+pub(crate) use scene::{safe_path, substitute};
+pub use scene::{
+    Data, Element, Fill, Font, HintStyle, Hints, Image, ImageFit, Kind, ListInk, Piece, Scene,
+    Shadow, Slices, Template, Text, VAlign,
+};
 
 /// Id of the classic list layout, which every theme offers.
 pub const LISTA: &str = "lista";
@@ -157,6 +163,10 @@ pub struct Layout {
     /// The row of systems above a games grid, switched with L1 and R1.
     pub strip: Option<Rect01>,
     pub decor: Vec<Decor>,
+    /// A free screen (`[[...el]]`): its elements are drawn instead of the
+    /// fixed places above, which are cleared; the list keeps its place in
+    /// `list`.
+    pub scene: Option<Scene>,
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct View {
@@ -284,6 +294,7 @@ impl View {
             dots: None,
             strip: None,
             decor: Vec::new(),
+            scene: None,
         };
         let cover = t.cover;
         let games = Layout {
@@ -375,15 +386,44 @@ impl View {
         if let Some(value) = table.get("home") {
             Home::overlay(&mut self.home, value, &format!("{at}.home"));
         }
+        let (width, height) = self.screen;
+        let aspect = crate::theme::Aspect::of(width, height);
+        let tall = crate::theme::Shape::of(width, height).reference.1;
+        let view = table;
         for (key, layout) in [("systems", &mut self.systems), ("games", &mut self.games)] {
             if let Some(table) = sub(table, at, key) {
-                layout.overlay(table, &format!("{at}.{key}"));
+                let at = format!("{at}.{key}");
+                layout.overlay(table, &at);
+                if let Some(items) = table.get("el") {
+                    let place = scene::Place {
+                        view,
+                        screen: key,
+                        at: &at,
+                        aspect,
+                        tall,
+                    };
+                    layout.scene = Scene::parse(items, &place, &mut layout.list);
+                    if layout.scene.is_some() {
+                        layout.free();
+                    }
+                }
             }
         }
     }
 }
 
 impl Layout {
+    /// A free screen draws its own elements: the fixed places go.
+    fn free(&mut self) {
+        self.panel = None;
+        self.art = None;
+        self.backdrop = None;
+        self.info = None;
+        self.meta = None;
+        self.dots = None;
+        self.strip = None;
+        self.decor.clear();
+    }
     /// The user's box art choices (`UserLook`) over this games layout. The
     /// art keeps its outer edge (the one away from the list) and the list
     /// beside it keeps its gap: it grows into the room the art leaves, or
@@ -457,7 +497,7 @@ impl Layout {
             at,
             &[
                 "header", "title", "status", "divider", "summary", "list", "panel", "art", "strip",
-                "backdrop", "info", "meta", "dots", "decor",
+                "backdrop", "info", "meta", "dots", "decor", "el",
             ],
         );
         let r = Reader { table: t, at };

@@ -135,6 +135,10 @@ impl Aspect {
             Self::Classic
         }
     }
+    /// `square`, `classic` or `wide`, as the theme names it.
+    pub fn name(self) -> &'static str {
+        self.key()
+    }
     fn key(self) -> &'static str {
         match self {
             Self::Square => "square",
@@ -312,6 +316,9 @@ pub struct Theme {
     /// `[view.<id>]` tables in the order they apply: the builtin's, then the
     /// theme's own. "lista" always comes first.
     views: Vec<(String, Vec<toml::Table>)>,
+    /// `[vars]`: the builtin's, then the theme's own, already written into
+    /// every value that names one.
+    vars: toml::Table,
     /// `[app]` tables in the order they apply (the builtin's, then the
     /// theme's own): an app's screens (API 4), whatever the view.
     app: Vec<toml::Table>,
@@ -451,6 +458,8 @@ impl Theme {
         let mut sources = defaults.map_or_else(Sources::default, |d| d.sources.clone());
         sources.0.push((source.clone(), dir.map(Path::to_path_buf)));
         let mut merged = for_aspect(source, shape.aspect);
+        let vars = vars(&merged, defaults);
+        crate::layout::substitute(&mut merged, &vars);
         crate::screens::flatten(&mut merged);
         let table = &merged;
         // One field list serves both the embedded theme and user overrides.
@@ -635,6 +644,7 @@ impl Theme {
             active_view: LISTA.into(),
             user: UserLook::default(),
             views: view_tables(table, defaults),
+            vars,
             app: app_tables(table, defaults),
             shape,
             sources,
@@ -791,6 +801,7 @@ pub const KNOWN_KEYS: &[&str] = &[
     "background_image",
     "frames",
     "aspect",
+    "vars",
     // Store metadata (docs/temas.md, Publicar na Loja de temas).
     "description",
     "author",
@@ -831,6 +842,25 @@ fn merge(base: &mut toml::Table, over: &toml::Table) {
             }
         }
     }
+}
+
+/// The inherited `[vars]` with this theme's own over them.
+fn vars(table: &toml::Table, defaults: Option<&Theme>) -> toml::Table {
+    let mut vars = defaults.map_or_else(toml::Table::new, |d| d.vars.clone());
+    match table.get("vars") {
+        None => {}
+        Some(toml::Value::Table(own)) => {
+            for (name, value) in own {
+                if matches!(value, toml::Value::Table(_) | toml::Value::Array(_)) {
+                    log::warn!("Theme vars.{name} must be text, a number or true/false; ignored");
+                } else {
+                    vars.insert(name.clone(), value.clone());
+                }
+            }
+        }
+        Some(_) => log::warn!("Theme key vars must be a table; ignored"),
+    }
+    vars
 }
 
 /// The inherited `[app]` tables, with this theme's own after them.
@@ -1147,7 +1177,7 @@ fn number(value: &toml::Value) -> Option<f32> {
         .filter(|n| n.is_finite())
 }
 /// One number for all four sides, or `[left, top, right, bottom]`.
-fn sides(value: Option<&toml::Value>, max: f32) -> Option<[f32; 4]> {
+pub(crate) fn sides(value: Option<&toml::Value>, max: f32) -> Option<[f32; 4]> {
     let all = match value {
         None => return Some([0.; 4]),
         Some(toml::Value::Array(list)) if list.len() == 4 => {

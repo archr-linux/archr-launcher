@@ -696,6 +696,349 @@ lista de jogos em grade com a faixa de sistemas, use `list.mark = "grid"` e
 `strip` em `[view.<id>.games]` (veja [Visualizações](#visualizações)). O tema de
 teste `crates/archr-ui/tests/themes/prateleiras/` liga tudo isso.
 
+## Telas livres
+
+As telas de sistemas e de jogos de uma visualização também podem ser
+descritas como uma **lista de elementos**, cada um no seu retângulo, em
+vez dos lugares fixos da tabela acima (`list`, `panel`, `art`, `info`...).
+É o jeito de fazer temas como os do EmulationStation: arte de tela cheia por
+sistema, molduras recortadas por cima do conteúdo, texto girado, vários
+textos e imagens com dados do sistema e do jogo.
+
+Uma tela é livre quando a sua tabela tem elementos `el`. Sem `el`, nada
+muda: os temas de hoje desenham exatamente como antes, e as outras telas
+(detalhes, Menu Start, menus, Configurações) seguem as suas tabelas.
+
+```toml
+[view.solo]
+name = { en = "Solo", pt_BR = "Solo" }
+
+[[view.solo.systems.el]]
+id = "arte"                           # a arte do sistema na tela inteira
+kind = "image"
+src = ["arts/${system}.jpg", "arts/default.jpg"]
+fit = "cover"
+
+[[view.solo.systems.el]]
+id = "lista"                          # a lista de sempre, que recebe o d-pad
+kind = "list"
+rect = { x = 0.6, y = 0.15, w = 0.36, h = 0.68 }
+row = 0.075
+size = 0.04
+mark = "bar"
+scroll = "center"
+z = 10
+
+[[view.solo.systems.el]]
+id = "contagem"
+kind = "text"
+text = "${system.games}"              # "213 jogos", no idioma do usuário
+rect = { x = 0.5, y = 0.868, w = 0.448, h = 0.05 }
+align = "right"
+size = 0.032
+shadow = { color = "#000000A0", x = 0.002, y = 0.002 }
+z = 20
+
+[[view.solo.systems.el]]
+id = "dicas"
+kind = "hints"
+rect = { x = 0.565, y = 0.94, w = 0.41, h = 0.05 }
+style = "outline"
+color = "#FFFFFF"
+z = 50
+```
+
+Os elementos são desenhados do menor `z` para o maior; com o mesmo `z`, na
+ordem do arquivo. A tela não desenha mais nada sozinha: cabeçalho, rodapé,
+relógio e dicas só aparecem se forem elementos. As listas `el` de cada tela
+não se misturam entre arquivos: a do seu tema substitui a herdada inteira, e
+`el = []` volta a tela aos lugares fixos.
+
+### Medidas
+
+| campo | valores | padrão | o que faz |
+|---|---|---|---|
+| `rect` | `{ x, y, w, h }` | a tela inteira | o retângulo, em frações da tela (`x`, `w` da largura; `y`, `h` da altura). Pode passar da tela: o que sobra não aparece |
+| `anchor` | `top-left`, `top`, `top-right`, `left`, `center`, `right`, `bottom-left`, `bottom`, `bottom-right` ou `[x, y]` | `top-left` | o ponto do retângulo que fica em `x`, `y` (`center` põe o meio dele lá, como o `origin 0.5 0.5` do ES) |
+| `z` | inteiro, -1000 a 1000 | `0` | a camada |
+| `opacity` | 0 a 1 | `1` | transparência do elemento inteiro |
+| `rotate` | graus, -360 a 360 | `0` | giro no sentido do relógio |
+| `pivot` | `[x, y]`, frações do retângulo | `[0.5, 0.5]` | o centro do giro (`[0, 0.5]` é o meio da borda esquerda) |
+| `id` | texto | | o nome, para `base` e para ler o tema |
+
+Todo **tamanho** dentro de um elemento (`size` do texto, `row` da lista,
+`radius`, sombra) é uma fração da **altura da tela**: `0.035` é 17 px numa
+tela de 480 de altura e 25 px numa de 720. O piso de 10 px de tela vale
+para todo texto, como no resto do launcher.
+
+### Tipos de elemento
+
+| `kind` | o que é | campos próprios |
+|---|---|---|
+| `image` | uma imagem | `src`, `fit`, `align`, `tint`, `radius`, `fallback`, `fallback_text` |
+| `text` | um texto, com dados | `text`, `font`, `size`, `color`, `align`, `valign`, `upper`, `shadow`, `wrap`, `line` |
+| `rect` | uma caixa de cor | `fill`, `border`, `radius`, `gradient` |
+| `frame` | uma imagem do tema em 9-slice sobre o retângulo | `image`, `slice`, `scale`, `tile` |
+| `panel` | o cartão do launcher (superfície ou vidro) | `radius`, `style` (`plain`, `glass`), `gradient` |
+| `list` | a lista da tela, que recebe o d-pad | veja [A lista](#a-lista) |
+| `hints` | as dicas de botões da tela | `align`, `style`, `color`, `badge`, `letter_color` |
+| `status` | relógio, bateria e rádios | `color` |
+
+Campo desconhecido, valor de tipo errado ou fora da faixa gera aviso no log e
+fica de fora (ou é limitado); um elemento sem o essencial (um `kind` que não
+existe, uma imagem sem fonte) é ignorado. Nada disso derruba o launcher.
+
+### Imagens
+
+```toml
+[[view.lado.games.el]]
+kind = "image"
+src = ["game.screenshot", "game.cover"]   # a primeira que existir
+fallback = "icons/cartucho.png"           # do tema, se o jogo não tem nenhuma
+rect = { x = 0.717, y = 0.425, w = 0.5, h = 0.5 }
+anchor = "center"
+fit = "contain"
+radius = 0.02
+
+[[view.lado.games.el]]
+kind = "image"
+src = "game.logo"
+fallback_text = { text = "${game.name}", size = 0.06, upper = true, align = "center" }
+rect = { x = 0.717, y = 0.2125, w = 0.433, h = 0.175 }
+anchor = "center"
+
+[[view.lado.games.el]]
+kind = "image"
+src = "icons/calendario.png"
+tint = "#F9C440"                          # multiplica as cores da imagem
+rect = { x = 0.8, y = 0.7375, w = 0.033, h = 0.033 }
+anchor = "left"
+when = { has = "game.year" }
+```
+
+- `src`: um caminho ou uma lista; vale a primeira que existe. Um caminho é
+  relativo à pasta do tema (sem `..`) e pode ter dados: `arts/${system}.jpg`,
+  `frames/${aspect}/moldura.png`. `game.cover`, `game.screenshot` e
+  `game.logo` são a capa, a captura e o logo do jogo em foco (do
+  `gamelist.xml`). `fallback` é mais um caminho do tema, no fim da lista.
+- `fit`: `contain` (inteira, dentro do retângulo; o padrão), `cover` (cobre o
+  retângulo, cortada no centro) ou `stretch` (esticada).
+- `align`: `left`, `center` ou `right`, para a imagem `contain` mais estreita
+  que o retângulo.
+- `radius`: cantos arredondados (fração da altura da tela).
+- `fallback_text`: quando nenhuma fonte existe, este texto no lugar. Um texto
+  simples, ou uma tabela com os campos de `text`.
+- As imagens carregam fora da thread de desenho, reduzidas a no máximo 1,5
+  vez o tamanho da tela (cache em `thumbs/scene`); até chegar, o elemento
+  não aparece. Formatos: PNG, JPG, WebP e SVG.
+
+### Textos
+
+```toml
+[[view.lado.games.el]]
+kind = "text"
+text = "@description"                     # a frase do launcher: "DESCRIÇÃO"
+upper = true
+rect = { x = 0.4667, y = 0.7375, w = 0.3, h = 0.04 }
+anchor = "left"
+font = "bold"
+size = 0.029
+color = "#FBD679"
+
+[[view.lado.games.el]]
+kind = "text"
+text = "${game.description}"
+rect = { x = 0.4667, y = 0.765, w = 0.5, h = 0.16 }
+font = "fonts/FiraSansCondensed-Regular.ttf"
+size = 0.0292
+line = 1.22
+color = "#FFFFFFE6"
+wrap = true                               # quebra linha; a última que cabe termina em "…"
+```
+
+| campo | valores | padrão |
+|---|---|---|
+| `text` | texto com `${dado}`, ou `@frase` | obrigatório |
+| `font` | `regular`, `semibold`, `bold`, `mono` (as faces do tema) ou um arquivo `.ttf` da pasta do tema | `regular` |
+| `size` | 0,01 a 0,3 da altura da tela | `0.035` |
+| `color` | cor | o `text` do tema |
+| `align` | `left`, `center`, `right` | `left` |
+| `valign` | `top`, `middle`, `bottom` | `middle` (`top` com `wrap`) |
+| `upper` | `true`/`false` | `false`: em maiúsculas |
+| `shadow` | `{ color, x, y }` (deslocamento em frações da altura) | nenhuma |
+| `wrap` | `true`/`false` | `false`: uma linha, com "…" se não couber |
+| `fit_text` | `ellipsis`, `shrink` | `ellipsis`; `shrink`: a linha que não cabe diminui até 60 % do `size` antes do "…" |
+| `line` | 0,8 a 3 | `1.25`: altura da linha, vezes o tamanho da letra |
+
+Um texto vazio (um jogo sem descrição) não desenha nada. Até 16 arquivos de
+fonte por tela; um arquivo que não existe usa a fonte regular do tema.
+
+**Frases**: um `text` que é só `@chave` vira a frase do launcher no idioma do
+usuário. `@description` e `@last_played` são próprias das telas livres;
+`@genre`, `@players`, `@released`, `@developer`, `@publisher` e `@rating` são
+as dos Detalhes do jogo; qualquer chave do catálogo (`@hint.play`) também
+vale.
+
+### Dados
+
+| dado | o que é |
+|---|---|
+| `${system}` | o id do sistema em foco (`snes`; uma coleção sem o `@`: `favorites`) |
+| `${system.name}` | o nome dele ("Super Nintendo") |
+| `${system.maker}`, `${system.year}` | fabricante e ano, do catálogo de sistemas |
+| `${system.count}`, `${system.games}` | quantos jogos: "213" e "213 jogos" (no idioma) |
+| `${system.favorites}` | quantos favoritos |
+| `${game.name}`, `${game.description}`, `${game.genre}`, `${game.developer}`, `${game.publisher}` | do jogo em foco (tela de jogos) |
+| `${game.year}`, `${game.players}` | ano e jogadores ("1 a 2 jogadores") |
+| `${game.rating}` | a nota de 0 a 5, com uma casa ("4,5") |
+| `${game.last_played}` | quando foi jogado ("há 2 dias") |
+| `${list.index}`, `${list.total}` | a posição do item em foco, a partir de 1, e quantos há |
+| `${item}` | o id do item em foco: o sistema, ou o nome do arquivo do jogo |
+| `${aspect}` | o formato da tela: `classic`, `square` ou `wide` |
+
+Na tela de sistemas não há jogo em foco: os dados `game.*` ficam vazios.
+Um nome que não existe fica escrito como está, com aviso no log.
+
+### Variáveis
+
+```toml
+accent = "$acento"                        # vale também nas chaves do topo
+
+[vars]
+acento = "#F9C440"
+acento_escuro = "#32270D"
+titulo = "fonts/Teko-SemiBold.ttf"
+fundo = 0.4
+
+[[view.var.games.el]]
+kind = "rect"
+fill = "$acento"
+opacity = "$fundo"                        # o valor inteiro: continua número
+rect = { x = 0, y = 0.9, w = 1, h = 0.1 }
+
+[[view.var.games.el]]
+kind = "text"
+text = "${system.name}"
+font = "$titulo"
+color = "$acento_escuro"
+rect = { x = 0.02, y = 0.9, w = 0.96, h = 0.1 }
+z = 1
+```
+
+Um valor que é só `"$nome"` vira a variável inteira, com o tipo dela (cor,
+número, caminho). `${nome}` dentro de um texto ou caminho vira o texto da
+variável. Os nomes dos dados (`system`, `game.*`, `list.*`, `item`,
+`aspect`) nunca são variáveis. As variáveis valem em todo o `theme.toml`,
+inclusive nas chaves do topo, e uma tabela `[aspect.square.vars]` troca
+variáveis só nesse formato de tela. Variável que não existe gera aviso e o
+valor fica como está.
+
+### Condições: `when`
+
+```toml
+[[view.cond.systems.el]]
+kind = "text"
+text = "16-BIT"
+rect = { x = 0.04, y = 0.06, w = 0.2, h = 0.06 }
+when = { system = ["megadrive", "snes"] }  # só nesses sistemas
+
+[[view.cond.games.el]]
+kind = "text"
+text = "${list.index} / ${list.total}"
+rect = { x = 0.025, y = 0.93, w = 0.3, h = 0.05 }
+when = { aspect = "square" }               # só numa tela quadrada
+
+[[view.cond.games.el]]
+kind = "text"
+text = "${game.developer}"
+rect = { x = 0.68, y = 0.86, w = 0.28, h = 0.05 }
+when = { has = "game.developer" }          # só quando o jogo tem o dado
+```
+
+Uma tabela simples, sem expressões. `system`, `aspect` e `has` aceitam um
+nome ou uma lista; com mais de uma chave, todas precisam valer. O elemento
+que não vale não é desenhado nem pede imagem. Prefira `when.aspect` a uma
+tabela `[aspect.<formato>]`: lá, um `el` substitui a lista inteira da tela.
+
+### Reaproveitar: `base`
+
+```toml
+[[view.base.systems.el]]
+id = "dicas"
+kind = "hints"
+rect = { x = 0.565, y = 0.94, w = 0.41, h = 0.05 }
+style = "outline"
+
+[[view.base.games.el]]
+id = "dicas"
+base = "systems.dicas"                     # o elemento da tela de sistemas...
+rect = { x = 0.02, y = 0.94, w = 0.6, h = 0.05 }
+align = "left"                             # ...com estes campos trocados
+```
+
+`base = "<tela>.<id>"` (ou só `"<id>"`, na mesma tela) copia um elemento
+da mesma visualização; os campos escritos substituem os dele.
+
+### A lista
+
+O elemento `list` é a lista de hoje (`list` da tabela acima) posta onde a
+cena diz: o d-pad, L1/R1, o cursor e a rolagem funcionam do mesmo jeito.
+Cada tela tem uma só; sem ela, a navegação continua numa lista que não
+aparece.
+
+| campo | o que é |
+|---|---|
+| `row`, `gap`, `radius` | altura da linha, espaço entre linhas e cantos (frações da altura da tela) |
+| `selected` | a altura da linha escolhida, ou `{ height, fill, color }`: altura, a cor da faixa e a do texto escolhido |
+| `size`, `selected_size` | tamanho da letra das linhas e da escolhida (a escolhida, sem `selected_size`, fica 1 px maior) |
+| `color` | a cor das outras linhas |
+| `mark`, `scroll`, `cursor`, `axis`, `columns` | como na tabela `list` acima (`tile` só em sistemas, `grid` só em jogos) |
+
+Com `row` e sem `selected`, a linha escolhida tem a mesma altura das outras.
+A letra da lista é a do tema (`font`, `font_semibold`).
+
+### Dicas e status
+
+`hints` desenha as dicas de botões da tela (as mesmas do rodapé), juntas no
+lado `align` (`left`, `center`, `right`) do retângulo, centradas na altura
+dele. `style`: `filled` (a letra num círculo cheio, o padrão), `outline` (a
+letra num anel) ou `text` (só a letra). `color` pinta os textos e o círculo
+ou o anel; `badge` troca só a cor do círculo ou do anel; `letter_color`, a da
+letra num círculo cheio. A opção Dicas só com texto da Aparência continua
+valendo.
+
+`status` desenha a pílula de relógio, bateria e rádios na borda direita do
+retângulo, centrada na altura dele. Com `color`, os ícones e o texto vão
+direto sobre a tela, nessa cor, sem a pílula.
+
+### O que as opções da Aparência fazem numa tela livre
+
+Capa do jogo, Largura e Cantos da capa e Fundo por sistema não mexem numa
+tela livre: quem decide as imagens é o tema. Cor de destaque, cores do texto,
+Fundo e Dicas só com texto valem para a lista, as dicas e o status quando o
+elemento não dá a sua cor.
+
+### O que ainda não existe
+
+As telas livres chegam por partes. Ainda não há: carrossel e roda de
+sistemas, grade com modelo de item (logo por cima, selo de favorito), vídeo,
+estrelas de nota com imagem do tema, opções do tema em Aparência, `include`,
+animações por elemento e a tela de detalhes como cena. Chaves dessas partes
+geram aviso e ficam de fora.
+
+### Testar
+
+O tema de teste `crates/archr-ui/tests/themes/cena/` tem as duas
+visualizações das maquetes aprovadas (Solo e Albedo). As capturas saem em
+640×480, 720×720 e 1024×768:
+
+```sh
+ARCHR_SCENE_CAPTURE_DIR=/tmp/cena cargo test -p archr-ui --test scene_render
+```
+
+O mesmo teste confere que cada exemplo deste capítulo é lido sem nenhum
+aviso.
+
 ## Uma tabela por tela
 
 Desde a 3.1 cada tela pode ter uma tabela no topo do `theme.toml`, fora de

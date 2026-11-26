@@ -753,6 +753,9 @@
 "details.developer" = "Desarrolladora"
 "details.publisher" = "Editora"
 "details.rating" = "Nota"
+# Free screens (theme `@description`, `@last_played`).
+"scene.description" = "Descripción"
+"scene.last_played" = "Última vez"
 "details.decimal" = ","
 "details.no_description" = "Sin descripción todavía. Usa Volver a descargar para obtenerla."
 "details.updated" = "Datos del juego actualizados"

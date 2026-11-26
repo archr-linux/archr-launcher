@@ -116,7 +116,10 @@ impl<'t> Ui<'_, 't> {
         due || loaded || backgrounds
     }
     /// The theme picture at `path`, asking the loader for it the first time.
-    fn picture(&mut self, path: &Path) -> Option<(&mut Texture<'t>, &mut Canvas<Window>)> {
+    pub(super) fn picture(
+        &mut self,
+        path: &Path,
+    ) -> Option<(&mut Texture<'t>, &mut Canvas<Window>)> {
         let (_, _, cache) = self.look.images.as_mut()?;
         let path = path.to_path_buf();
         cache.request(std::slice::from_ref(&path));

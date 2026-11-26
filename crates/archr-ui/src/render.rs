@@ -34,6 +34,7 @@ mod netplay;
 mod roms_move;
 pub use roms_move::{MoveStage, RomsMove, DOT_STEP};
 mod saves;
+mod scene;
 mod search;
 mod toast;
 mod usb;
@@ -491,6 +492,9 @@ pub struct Ui<'font, 'texture> {
     pub text_scale: f32,
     /// The letter on the control of the A, B, X and Y actions, for hints.
     pub face_letters: [char; 4],
+    /// A free screen's hints element, while its hints are drawn: their
+    /// colors and style over the theme's.
+    hint_ink: Option<crate::layout::Hints>,
     motion: Motion,
     /// The theme's shadow under panels and its console picture scaling.
     shadow_style: ShadowStyle,
@@ -507,6 +511,7 @@ pub struct Ui<'font, 'texture> {
     blink: Option<bool>,
     effects: effects::Effects<'texture>,
     look: look::Look<'texture>,
+    scene_cache: scene::SceneCache<'texture>,
     materials: material::Materials<'texture>,
     has_presented: bool,
     frame: Frame,
@@ -627,6 +632,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             born: Instant::now(),
             text_scale: 1.,
             face_letters: ['A', 'B', 'X', 'Y'],
+            hint_ink: None,
             motion: Motion::On,
             shadow_style: ShadowStyle::Soft,
             soft: Default::default(),
@@ -637,6 +643,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             blink: None,
             effects: effects::Effects::default(),
             look: look::Look::default(),
+            scene_cache: scene::SceneCache::default(),
             materials: material::Materials::default(),
             has_presented: false,
             frame: Frame::new(width, height),
@@ -712,7 +719,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
     /// The console pictures the screens asked for have all loaded: a
     /// capture taken now shows them. For captures and tests.
     pub fn pictures_idle(&self) -> bool {
-        self.art.as_ref().is_none_or(SystemArt::idle)
+        self.art.as_ref().is_none_or(SystemArt::idle) && self.scene_cache.idle()
     }
     /// The time this frame is drawn at: now, or the pinned clock.
     fn now(&self) -> Instant {
@@ -804,8 +811,9 @@ impl<'font, 'texture> Ui<'font, 'texture> {
         }
         let blink = self.blink.is_some_and(|on| on != self.blink_on(now));
         let look = self.look_tick();
+        let scene = self.scene_cache.poll();
         let toasts = self.toasts.tick(now);
-        created || art || store || status || blink || look || toasts
+        created || art || store || status || blink || look || scene || toasts
     }
     /// Loads what the theme store page asked for, sized for its largest box.
     fn store_tick(&mut self) -> bool {
@@ -868,6 +876,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
     fn view(&mut self, theme: &Theme) -> View {
         if self.view.as_ref().is_none_or(|(seen, _)| seen != theme) {
             self.view = Some((theme.clone(), theme.view(&theme.active_view)));
+            self.scene_cache.list = None;
         }
         self.view.as_ref().expect("resolved view").1.clone()
     }
@@ -1217,9 +1226,16 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             }
             self.hub_behind = control;
             self.begin_page(games, picture, theme)?;
+            // A free screen: the scene, in place of the header, list,
+            // panels and footer (not under the Start menu).
+            let free = layout
+                .scene
+                .as_ref()
+                .filter(|_| matches!(backdrop, Screen::Systems | Screen::Games { .. }))
+                .filter(|_| !matches!(app.screen, Screen::StartHub { .. }));
             let system = match backdrop {
                 Screen::Games { system, .. } | Screen::Details { system, .. }
-                    if !system.starts_with('@') =>
+                    if !system.starts_with('@') && free.is_none() =>
                 {
                     Some(system.as_str())
                 }
@@ -1271,6 +1287,17 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                     self.details(app, (system, *game), data, theme, art)?;
                 }
                 self.footer(app, data, theme, layout)?;
+            } else if let Some(scene) = free {
+                self.scene(
+                    app,
+                    backdrop,
+                    (&rows, cursor),
+                    data,
+                    theme,
+                    art,
+                    layout,
+                    scene,
+                )?;
             } else {
                 if let (Screen::Games { .. }, Some(wash)) = (backdrop, layout.backdrop) {
                     self.backdrop(art.cover, wash, theme)?;
@@ -1465,6 +1492,17 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             .map_err(|e| e.to_string())
     }
     fn status_header(&mut self, theme: &Theme) -> Result<i32, String> {
+        let area = theme.screens.status.rect.map(|r| self.area(r));
+        self.status_pill(theme, area, None)
+    }
+    /// The status pill at the right of `area` (the header when None), or
+    /// its icons and text alone in `plain`.
+    fn status_pill(
+        &mut self,
+        theme: &Theme,
+        area: Option<Rect>,
+        plain: Option<Rgba>,
+    ) -> Result<i32, String> {
         let Frame { width, .. } = self.frame;
         let h = self.frame.size(theme.header_height).round() as u32;
         let pad = self.px(24.);
@@ -1474,7 +1512,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             .map(|s| (s.clock.clone(), s.battery, s.wifi, s.bluetooth));
         let look = theme.screens.status;
         // A theme's box: the pill's right edge at its right, centered on it.
-        let (mut right, h, top) = match look.rect.map(|r| self.area(r)) {
+        let (mut right, h, top) = match area {
             Some(area) => (area.right(), area.height(), area.y()),
             None => (width as i32 - pad, h, 0),
         };
@@ -1505,7 +1543,9 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 ),
             );
             let layout = layout.moved(top);
-            if look.glass {
+            if plain.is_some() {
+                // Straight over the screen: no pill.
+            } else if look.glass {
                 let radius = layout.pill.height() as f32 / 2.;
                 self.glass(layout.pill, radius, &theme.glass_or_default())?;
             } else {
@@ -1522,29 +1562,41 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                 (Glyph::Bluetooth, bluetooth, layout.bluetooth),
             ] {
                 if let Some(icon) = icon {
-                    let ink = if radio == crate::status::Radio::Connected {
-                        theme.highlight_bg
-                    } else {
-                        theme.muted
+                    let ink = match plain {
+                        Some(ink) => Rgba {
+                            a: if radio == crate::status::Radio::Connected {
+                                ink.a
+                            } else {
+                                ink.a / 2
+                            },
+                            ..ink
+                        },
+                        None if radio == crate::status::Radio::Connected => theme.highlight_bg,
+                        None => theme.muted,
                     };
                     self.icon(glyph, icon, ink)?;
                 }
             }
-            let ink = if look.mono { theme.muted } else { theme.text };
+            let ink = match plain {
+                Some(ink) => ink,
+                None if look.mono => theme.muted,
+                None => theme.text,
+            };
             self.label(&clock, (clock_face, 13., ink), layout.clock)?;
             if let (Some(b), Some(icon)) = (battery, layout.battery) {
                 if let (Some(panel), Some(text)) = (layout.percent, percent) {
-                    self.label(&text, (Face::Mono, 13., theme.muted), panel)?;
+                    self.label(
+                        &text,
+                        (Face::Mono, 13., plain.unwrap_or(theme.muted)),
+                        panel,
+                    )?;
                 }
-                self.icon(
-                    battery_glyph(b),
-                    icon,
-                    if b.charging {
-                        theme.highlight_bg
-                    } else {
-                        theme.muted
-                    },
-                )?;
+                let ink = match plain {
+                    Some(ink) => ink,
+                    None if b.charging => theme.highlight_bg,
+                    None => theme.muted,
+                };
+                self.icon(battery_glyph(b), icon, ink)?;
             }
             right = layout.pill.x() - self.px(20.);
         }
@@ -2201,59 +2253,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             self.divider(0, y, width, theme.border)?;
         }
         let moving = app.moving();
-        let details: Vec<(char, &str)>;
-        let hint_keys: &[(char, &str)] = match app.screen {
-            Screen::Details { .. } => {
-                let action = crate::state::DETAILS_ACTIONS[app.details_focus.min(2)];
-                details = [
-                    ('A', action),
-                    ('↕', "details.scroll"),
-                    ('Y', "details.options"),
-                    ('B', "hint.back"),
-                ]
-                .into_iter()
-                .filter(|(button, _)| *button != '↕' || self.details_overflow > 0)
-                .collect();
-                &details
-            }
-            Screen::Systems if moving.is_some() => &[
-                ('↕', "hint.move"),
-                ('A', "hint.confirm"),
-                ('B', "hint.cancel"),
-            ],
-            Screen::Systems => &[('A', "hint.open"), ('Y', "hint.menu")],
-            // A module row opens; Y shows its details. The grid's hints put
-            // Back last, as the shelves' footer does.
-            Screen::Games { ref system, .. }
-                if system == crate::modules::SYSTEM && layout.list.mark == Mark::Grid =>
-            {
-                &[
-                    ('A', "hint.open"),
-                    ('Y', "menu.details"),
-                    ('B', "hint.back"),
-                ]
-            }
-            Screen::Games { ref system, .. } if system == crate::modules::SYSTEM => &[
-                ('A', "hint.open"),
-                ('B', "hint.back"),
-                ('Y', "menu.details"),
-            ],
-            Screen::Games {
-                ref system,
-                ref folder,
-            } if App::level(data, system, folder)
-                .is_some_and(|l| l.folder(app.cursor).is_some()) =>
-            {
-                &[('A', "hint.open"), ('B', "hint.back"), ('Y', "hint.menu")]
-            }
-            Screen::Games { .. } => &[
-                ('A', "hint.play"),
-                ('B', "hint.back"),
-                ('X', "hint.favorite"),
-                ('Y', "hint.menu"),
-            ],
-            _ => &[('A', "hint.choose"), ('B', "hint.close")],
-        };
+        let hint_keys = &self.hint_keys(app, data, layout)[..];
         let left = self.placed_hints(hint_keys, theme, (width, y, h))?;
         // A ROMs partition that cannot be written stays in sight on both
         // lists until it is fixed (Storage tells more).
@@ -2312,6 +2312,68 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             )?;
         }
         Ok(())
+    }
+    /// The buttons and actions the footer offers on `app`'s screen.
+    fn hint_keys(
+        &self,
+        app: &App,
+        data: &dyn DataSource,
+        layout: &Layout,
+    ) -> Vec<(char, &'static str)> {
+        let details: Vec<(char, &'static str)>;
+        let keys: &[(char, &'static str)] = match app.screen {
+            Screen::Details { .. } => {
+                let action = crate::state::DETAILS_ACTIONS[app.details_focus.min(2)];
+                details = [
+                    ('A', action),
+                    ('↕', "details.scroll"),
+                    ('Y', "details.options"),
+                    ('B', "hint.back"),
+                ]
+                .into_iter()
+                .filter(|(button, _)| *button != '↕' || self.details_overflow > 0)
+                .collect();
+                &details
+            }
+            Screen::Systems if app.moving().is_some() => &[
+                ('↕', "hint.move"),
+                ('A', "hint.confirm"),
+                ('B', "hint.cancel"),
+            ],
+            Screen::Systems => &[('A', "hint.open"), ('Y', "hint.menu")],
+            // A module row opens; Y shows its details. The grid's hints put
+            // Back last, as the shelves' footer does.
+            Screen::Games { ref system, .. }
+                if system == crate::modules::SYSTEM && layout.list.mark == Mark::Grid =>
+            {
+                &[
+                    ('A', "hint.open"),
+                    ('Y', "menu.details"),
+                    ('B', "hint.back"),
+                ]
+            }
+            Screen::Games { ref system, .. } if system == crate::modules::SYSTEM => &[
+                ('A', "hint.open"),
+                ('B', "hint.back"),
+                ('Y', "menu.details"),
+            ],
+            Screen::Games {
+                ref system,
+                ref folder,
+            } if App::level(data, system, folder)
+                .is_some_and(|l| l.folder(app.cursor).is_some()) =>
+            {
+                &[('A', "hint.open"), ('B', "hint.back"), ('Y', "hint.menu")]
+            }
+            Screen::Games { .. } => &[
+                ('A', "hint.play"),
+                ('B', "hint.back"),
+                ('X', "hint.favorite"),
+                ('Y', "hint.menu"),
+            ],
+            _ => &[('A', "hint.choose"), ('B', "hint.close")],
+        };
+        keys.to_vec()
     }
     /// A warning icon and text left of the hints: one line, smaller if it
     /// must, else two; never cut.
@@ -2468,10 +2530,11 @@ impl<'font, 'texture> Ui<'font, 'texture> {
             // `[hints] lit`: A's in the text colour, the others secondary.
             let lit = theme.screens.hints.lit;
             let primary = lit && button == HintButton::Key('A');
-            let ink = match (lit, primary) {
-                (_, true) => theme.text,
-                (true, false) => theme.text_secondary,
-                (false, _) => theme.muted,
+            let ink = match (lit, primary, self.hint_ink) {
+                (_, _, Some(own)) => own.color.unwrap_or(theme.text),
+                (_, true, _) => theme.text,
+                (true, false, _) => theme.text_secondary,
+                (false, _, _) => theme.muted,
             };
             right = self.packed_label(
                 label,
@@ -2511,20 +2574,36 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                     y + (h as i32 - self.px(20.)) / 2,
                     20.,
                 );
-                // Appearance: the letter alone, in the text colour.
-                if theme.user.text_hints {
+                // Appearance: the letter alone, in the text colour; a
+                // free screen's hints: in their own colors and style.
+                let own = self.hint_ink;
+                let letter_ink = own.and_then(|h| h.color).unwrap_or(theme.text);
+                if let Some(own) = own.filter(|h| h.style == crate::layout::HintStyle::Outline) {
+                    let ring = own.badge.or(own.color).unwrap_or(theme.text);
+                    let width = (1.5 * self.frame.scale).max(1.);
+                    self.geometry.ring(
+                        &mut self.canvas,
+                        badge,
+                        badge.height() as f32 / 2.,
+                        width,
+                        ring,
+                    )?;
+                }
+                let plain = own.is_some_and(|h| h.style != crate::layout::HintStyle::Filled);
+                let ringed = own.is_some_and(|h| h.style == crate::layout::HintStyle::Outline);
+                if theme.user.text_hints || plain {
                     if button == '↕' {
                         let icon = self.frame.square(
                             badge.x() + (badge.width() as i32 - self.px(14.)) / 2,
                             badge.y() + (badge.height() as i32 - self.px(14.)) / 2,
                             14.,
                         );
-                        self.icon(Glyph::ArrowUpDown, icon, theme.text)?;
+                        self.icon(Glyph::ArrowUpDown, icon, letter_ink)?;
                     } else {
                         let outlining = std::mem::replace(&mut self.look.outlining, false);
                         self.label_aligned(
                             &button.to_string(),
-                            (Face::Semibold, 14., theme.text),
+                            (Face::Semibold, if ringed { 11. } else { 14. }, letter_ink),
                             badge,
                             Align::Center,
                         )?;
@@ -2532,7 +2611,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                     }
                     continue;
                 }
-                if self.framed("badge", badge)? {
+                if own.is_none() && self.framed("badge", badge)? {
                     if button == '↕' {
                         let icon = self.frame.square(
                             badge.x() + (badge.width() as i32 - self.px(14.)) / 2,
@@ -2560,18 +2639,19 @@ impl<'font, 'texture> Ui<'font, 'texture> {
                         &mut self.canvas,
                         if button == '↕' { ' ' } else { button },
                         size,
-                        match (lit, primary) {
-                            (_, true) => theme.text,
-                            (true, false) => Rgba {
+                        match (lit, primary, own) {
+                            (_, _, Some(own)) => own.badge.or(own.color).unwrap_or(theme.badge),
+                            (_, true, _) => theme.text,
+                            (true, false, _) => Rgba {
                                 a: 51,
                                 ..theme.text
                             },
-                            (false, _) => theme.badge,
+                            (false, _, _) => theme.badge,
                         },
-                        if primary {
-                            theme.background
-                        } else {
-                            theme.text
+                        match own {
+                            Some(own) => own.letter.unwrap_or(theme.background),
+                            None if primary => theme.background,
+                            None => theme.text,
                         },
                         badge,
                     )?;
