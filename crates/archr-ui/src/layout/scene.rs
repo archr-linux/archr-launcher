@@ -355,6 +355,8 @@ pub struct Slices {
     /// Reference pixels (480 high) per image pixel.
     pub scale: f32,
     pub tile: bool,
+    /// Multiplies the picture's colours (a white pattern takes this one).
+    pub tint: Option<Rgba>,
 }
 
 /// The list's own colors, over the theme's: rows, the selected row's fill
@@ -815,7 +817,7 @@ impl Scene {
                 })
             }
             "frame" => {
-                r.known_with(&["image", "slice", "scale", "tile"]);
+                r.known_with(&["image", "slice", "scale", "tile", "tint"]);
                 Kind::Frame(nine(&r)?)
             }
             "list" => {
@@ -1727,6 +1729,7 @@ fn nine(r: &Reader) -> Option<Slices> {
         slice: slice.map(|n| n as u32),
         scale: r.number("scale", 1., 0.25, 8.),
         tile: r.flag("tile", false),
+        tint: r.color("tint"),
     })
 }
 /// A `frame = { image, slice, scale, tile }` table.
@@ -1736,7 +1739,7 @@ fn slices(value: &Value, at: &str) -> Option<Slices> {
         return None;
     };
     let r = Reader { table, at };
-    r.known(&["image", "slice", "scale", "tile"]);
+    r.known(&["image", "slice", "scale", "tile", "tint"]);
     nine(&r)
 }
 

@@ -636,7 +636,8 @@ impl Mapper<'_> {
             t.insert("slice".into(), Value::Integer(0));
             t.insert("tile".into(), Value::Boolean(true));
             if !tint.starts_with("#FFFFFF") {
-                self.note("imagem em mosaico (`tile`) com `color` fica sem a cor: o launcher não tinge molduras");
+                t.insert("tint".into(), s(tint.clone()));
+                self.mapped("image com tile e color", "frame (slice 0, tile, tint)");
             }
             self.mapped("image com tile", "frame (slice 0, tile)");
         } else {

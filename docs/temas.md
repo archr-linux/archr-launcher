@@ -778,7 +778,7 @@ para todo texto, como no resto do launcher.
 | `image` | uma imagem | `src`, `fit`, `align`, `tint`, `radius`, `fallback`, `fallback_text` |
 | `text` | um texto, com dados | `text`, `font`, `size`, `color`, `align`, `valign`, `upper`, `shadow`, `wrap`, `line` |
 | `rect` | uma caixa de cor | `fill`, `border`, `radius`, `gradient` |
-| `frame` | uma imagem do tema em 9-slice sobre o retângulo | `image`, `slice`, `scale`, `tile` |
+| `frame` | uma imagem do tema em 9-slice sobre o retângulo | `image`, `slice`, `scale`, `tile`, `tint` (cor que multiplica a imagem: um padrão branco vira dessa cor) |
 | `panel` | o cartão do launcher (superfície ou vidro) | `radius`, `style` (`plain`, `glass`), `gradient` |
 | `list` | a lista da tela, que recebe o d-pad | veja [A lista](#a-lista) |
 | `carousel` | os itens da tela numa fila, numa coluna ou numa roda, que recebe o d-pad | veja [Coleções](#coleções-carrossel-e-grade) |
@@ -1692,7 +1692,7 @@ formato (`when.aspect`).
 | `pos`, `size`, `maxSize`, `minSize`, `origin` | `rect`, `anchor`, `fit` (`contain`, `cover`, `stretch`) |
 | `zIndex`, `rotation`, `rotationOrigin`, `opacity`, `visible` | `z`, `rotate`, `pivot`, `opacity`; invisível fica de fora |
 | `image` (extra), com `${system.theme}` | `image` com `src` em lista, `${system}` no caminho |
-| `image` com `tile` | `frame` com `slice = 0` e `tile = true` |
+| `image` com `tile` | `frame` com `slice = 0` e `tile = true` (o `color` vira `tint`) |
 | `text`, `datetime`, `md_*` | `text` com `${game.*}`, `${system.*}` ou `@frase` |
 | `textlist` | `list` (cor, letra, seleção, alinhamento) |
 | `imagegrid` / `gridtile` | `grid`, ou `carousel` quando é uma linha ou uma coluna (zoom, reflexo, favorito, logo por cima) |

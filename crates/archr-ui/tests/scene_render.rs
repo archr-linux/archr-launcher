@@ -2417,7 +2417,7 @@ fn details_screens_draw_and_scroll_at_every_size() {
     }
 }
 
-/// A tiled frame over the screen (Albedo's scanlines: a 4x4 pattern) is
+/// A tiled frame over the screen (Albedo's scanlines: a 4x4 pattern), tinted, is
 /// laid once in a texture and drawn in one copy; the pattern comes out the
 /// same, tile after tile, with its transparent pixels still transparent.
 #[test]
@@ -2443,7 +2443,7 @@ fn a_tiled_frame_keeps_its_pattern_in_one_copy() {
          [[view.xadrez.systems.el]]\nid = \"fill\"\nkind = \"fill\"\ncolor = \"#FF0000\"\n\
          rect = { h = 1.0, w = 1.0, x = 0.0, y = 0.0 }\nz = 0\n\
          [[view.xadrez.systems.el]]\nid = \"xadrez\"\nkind = \"frame\"\nimage = \"xadrez.png\"\n\
-         rect = { h = 1.0, w = 1.0, x = 0.0, y = 0.0 }\nslice = 0\ntile = true\nz = 1\n",
+         rect = { h = 1.0, w = 1.0, x = 0.0, y = 0.0 }\nslice = 0\ntile = true\ntint = \"#808080FF\"\nz = 1\n",
     )
     .unwrap();
     let theme = load(&folder, "xadrez").fitted(640, 480);
@@ -2474,10 +2474,7 @@ fn a_tiled_frame_keeps_its_pattern_in_one_copy() {
             .read_pixels(None, sdl2::pixels::PixelFormatEnum::RGBA32)
             .unwrap();
         // Twice: the second frame draws from the kept texture.
-        if ui.pictures_idle()
-            && pixels[(300 * 640 + 300) * 4] == 255
-            && pixels[(300 * 640 + 300) * 4 + 1] == 255
-        {
+        if ui.pictures_idle() && (0..8).any(|d| pixels[(300 * 640 + 300 + d) * 4 + 1] == 128) {
             ui.draw_with_settings(&app, &data, &theme, archr_ui::render::Art::default(), None)
                 .unwrap();
             break ui
@@ -2496,13 +2493,13 @@ fn a_tiled_frame_keeps_its_pattern_in_one_copy() {
     let k = (1..=8).find(|&k| px(300, 300) != px(300 + k, 300)).unwrap();
     for (x, y) in [(300, 300), (20, 40), (600, 420), (k * 5, k * 7)] {
         let (x, y) = (x - x % (2 * k), y - y % (2 * k));
-        assert_eq!(px(x, y), [255, 255, 255], "white at {x},{y}");
+        assert_eq!(px(x, y), [128, 128, 128], "white tinted grey at {x},{y}");
         assert_eq!(px(x + k, y), [255, 0, 0], "see-through at {},{y}", x + k);
         assert_eq!(px(x, y + k), [255, 0, 0], "see-through at {x},{}", y + k);
         assert_eq!(
             px(x + k, y + k),
-            [255, 255, 255],
-            "white at {},{}",
+            [128, 128, 128],
+            "white tinted grey at {},{}",
             x + k,
             y + k
         );

@@ -218,6 +218,13 @@ impl<'a> SystemArt<'a> {
     }
 }
 
+/// The name a row's pictures go by in a theme: without the `@`, and an
+/// app's by its module id (`@app:itchio` is `itchio`: a file name with a
+/// colon cannot be unpacked on Windows).
+pub(crate) fn art_key(name: &str) -> &str {
+    let name = name.trim_start_matches('@');
+    name.strip_prefix("app:").unwrap_or(name)
+}
 fn has_picture(name: &str) -> bool {
     !name.starts_with('@')
         || crate::modules::system_row(name)
@@ -276,7 +283,7 @@ impl Ui<'_, '_> {
         let Some(dir) = self.theme_dir.as_ref().map(|d| d.join("logos")) else {
             return Vec::new();
         };
-        let name = name.trim_start_matches('@');
+        let name = art_key(name);
         [Some(name), lookup(IMAGE_ALIASES, name)]
             .into_iter()
             .flatten()

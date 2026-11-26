@@ -178,6 +178,22 @@ pub(super) struct SceneCache<'t> {
     tiled: Vec<(TileKey, Texture<'t>)>,
 }
 type TileKey = (PathBuf, (u32, u32), u32, [u32; 4]);
+/// Copies `texture` from `src` to `dst`, its colours times `tint`.
+fn tinted(
+    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+    texture: &mut Texture<'_>,
+    tint: Option<Rgba>,
+    (src, dst): (Option<Rect>, Rect),
+) -> Result<(), String> {
+    if let Some(t) = tint {
+        texture.set_color_mod(t.r, t.g, t.b);
+        texture.set_alpha_mod(t.a);
+    }
+    let drawn = canvas.copy(texture, src, dst);
+    texture.set_color_mod(255, 255, 255);
+    texture.set_alpha_mod(255);
+    drawn
+}
 /// Tiled pictures kept: a screen has one or two (a pattern, a background).
 const TILED_KEPT: usize = 4;
 
@@ -700,7 +716,7 @@ impl<'t> Ui<'_, 't> {
             index,
             total,
             item: item.trim_start_matches('@').to_owned(),
-            system: system.trim_start_matches('@').to_owned(),
+            system: super::system_art::art_key(&system).to_owned(),
             aspect: theme.shape.aspect.name(),
         }
     }
@@ -1312,7 +1328,7 @@ impl<'t> Ui<'_, 't> {
             rect,
             slices.tile,
         ) {
-            canvas.copy(texture, src, to)?;
+            tinted(canvas, texture, slices.tint, (Some(src), to))?;
         }
         Ok(())
     }
@@ -1342,10 +1358,16 @@ impl<'t> Ui<'_, 't> {
             .iter()
             .position(|(kept, _)| fits(kept))
         {
-            let entry = self.scene_cache.tiled.remove(at);
+            let mut entry = self.scene_cache.tiled.remove(at);
             let part = Rect::new(0, 0, rect.width(), rect.height());
-            self.canvas.copy(&entry.1, part, rect)?;
+            let drawn = tinted(
+                &mut self.canvas,
+                &mut entry.1,
+                slices.tint,
+                (Some(part), rect),
+            );
             self.scene_cache.tiled.push(entry);
+            drawn?;
             return Ok(true);
         }
         // Made a little larger than asked when plain, so a box growing a
@@ -1398,7 +1420,7 @@ impl<'t> Ui<'_, 't> {
         laid_out?;
         laid.set_blend_mode(sdl2::render::BlendMode::Blend);
         let part = Rect::new(0, 0, rect.width(), rect.height());
-        self.canvas.copy(&laid, part, rect)?;
+        tinted(&mut self.canvas, &mut laid, slices.tint, (Some(part), rect))?;
         self.scene_cache.tiled.push((key, laid));
         if self.scene_cache.tiled.len() > TILED_KEPT {
             self.scene_cache.tiled.remove(0);
