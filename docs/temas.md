@@ -191,6 +191,8 @@ O launcher roda em 640×480 (4:3: R36S e a maioria dos portáteis RK3326),
 720×720 (1:1, R36 Plus) e 480×320 (3:2: Odroid Go Advance, RGB10, RG351M;
 o painel é retrato e o Sway o gira, então o launcher já recebe a tela
 deitada). Uma tela 16:9 (854×480, 1280×720) cai no mesmo formato da de 3:2.
+Os testes de layout também desenham cada tema em 1024×768 (4:3), 1024×600 e
+1280×720 (as telas dos portáteis RK3562, RG43V PRO e RG52 MINI).
 
 O desenho de 640×480 é ampliado ou reduzido até caber inteiro: a escala é a
 menor entre largura/640 e altura/480, e o texto fica do mesmo tamanho
@@ -202,6 +204,8 @@ px de referência:
 | 640×480 | 1 | 640×480 | `classic` |
 | 720×720 | 1,125 | 640×640 | `square` |
 | 480×320 | 0,667 | 720×480 | `wide` |
+| 1024×768 | 1,6 | 640×480 | `classic` |
+| 1024×600 | 1,25 | 819×480 | `wide` |
 | 1280×720 | 1,5 | 853×480 | `wide` |
 
 O que isso faz com cada número do tema:
@@ -212,7 +216,10 @@ O que isso faz com cada número do tema:
   vez de 10 no Grafite); L/R viram a página pelas linhas que a lista mostra.
 - **Retângulos** (`cover`, `details_*`, `switcher_*`, `x y w h` das
   visualizações) são frações da tela e esticam com ela. Uma capa que é
-  retrato em 640×480 fica mais alta e estreita em 720×720.
+  retrato em 640×480 fica mais alta e estreita em 720×720. A exceção são as
+  imagens de jogo do Alternador (`switcher_card`, `switcher_side`) e da
+  retomada (`resume_shot`): a imagem fica sempre 4:3, centrada no retângulo
+  (estreitada ou encurtada), para não esticar numa tela 16:9.
 - A geometria embutida da `lista` (painel do sistema com 250 px de largura,
   margens, folgas sob o cabeçalho) é calculada em px de referência para a
   tela de verdade; ela não estica.
@@ -225,8 +232,8 @@ formato sai da razão largura/altura da tela:
 | formato | razão | telas |
 |---|---|---|
 | `square` | menor que 1,2 (6:5) | 720×720 |
-| `classic` | de 1,2 a 1,45 (29:20), inclusive | 640×480, 800×600 |
-| `wide` | maior que 1,45 | 480×320 (3:2), 854×480 e 1280×720 (16:9) |
+| `classic` | de 1,2 a 1,45 (29:20), inclusive | 640×480, 800×600, 1024×768 |
+| `wide` | maior que 1,45 | 480×320 (3:2), 1024×600, 854×480 e 1280×720 (16:9) |
 
 Outro nome (`[aspect.tall]`) é ignorado com aviso no log.
 
@@ -1593,8 +1600,15 @@ description = { en = "Neon pink over deep purple.", pt_BR = "Rosa neon sobre rox
 author = "kaio-dev"          # sem autor, aparece o dono do repositório
 version = "1.2.0"            # sem versão, aparece a tag da release
 license = "CC BY 4.0"        # texto curto; o arquivo LICENSE também é instalado
-min_launcher = "0.2"         # versão mínima do launcher; abaixo dela não instala
+min_launcher = "0.1.0"       # versão mínima do launcher; abaixo dela não instala
 ```
+
+`min_launcher` compara com a versão do **pacote** do launcher (hoje `0.1.0`),
+não com a versão do sistema que as Configurações mostram (`v3.1.0 · …`) nem
+com o número da API de temas (3.1). Um valor acima da versão do launcher
+instalado faz a Loja recusar o tema ("Este tema pede uma versão mais nova do
+launcher."): use `0.1.0`
+ou deixe a chave de fora.
 
 `description` aceita texto ou tabela por idioma, como `name`, até 200
 caracteres. "Inclui" nos detalhes é calculado pelos arquivos: cores sempre;
@@ -1702,7 +1716,8 @@ Qualquer tamanho vale (`854x480` para 16:9). As outras capturas manuais do
 `archr-ui` (Configurações, conquistas, retomada, barra de status) leem a
 mesma variável.
 
-O teste `resolutions` confere, em 640×480, 720×720 e 480×320, cada tema com
+O teste `resolutions` confere, em 640×480, 720×720, 480×320, 1024×768,
+1024×600 e 1280×720, cada tema com
 `theme.toml` em `themes/` e cada visualização dele: lista abaixo do
 cabeçalho, nada fora da tela, painel, imagem, texto e pontos sem cobrir a
 lista, e os retângulos dos detalhes, saves, Alternador e retomada sem se

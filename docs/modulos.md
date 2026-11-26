@@ -20,7 +20,8 @@ Exemplos completos e funcionando: `examples/modules/bateria-detalhada`
 (daemon) e `examples/modules/perfil-cpu` (oneshot), publicados na Loja como
 `archr-linux/archr-module-bateria-detalhada` e
 `archr-linux/archr-module-perfil-cpu`; `examples/modules/ajuste-cpu`
-(API 3, o módulo oficial de ajuste automático de CPU, ainda não publicado); e
+(API 3, o módulo oficial de ajuste automático de CPU, publicado como
+`archr-linux/archr-module-ajuste-cpu`); e
 `examples/modules/catalogo-demo` (API 4, um app com telas próprias, sem rede).
 
 ## 1. Pacote
@@ -51,7 +52,7 @@ tipos errados) aparecem mas não impedem.
 id = "bateria-detalhada"        # [a-z0-9-]{3,40}, único no aparelho
 version = "1.0.0"               # x.y.z
 api_version = 4                 # de 1 a 4
-min_launcher = "0.1.0"          # opcional
+min_launcher = "0.1.0"          # opcional; versão do pacote do launcher (hoje 0.1.0), não a do sistema
 name = "@name"                  # texto, "@chave" do locales/, ou tabela por idioma
 description = "@description"
 author = "Fulano <fulano@exemplo.org>"
@@ -653,6 +654,44 @@ gh repo edit --add-topic archr-launcher-module
 
 Gere o pacote fora da pasta do módulo: um `.tar.gz` dentro dela acaba no
 próprio pacote. Os dois módulos de exemplo foram publicados assim.
+
+**Confira os assets antes de anunciar.** `gh release create` só sobe o que
+está na linha de comando: esquecer o `module.toml` é o erro mais comum (o
+Desempenho e chip 0.4.0 saiu assim). A release precisa listar os três:
+
+```
+gh release view v1.0.0 --json assets -q '.assets[].name'
+# bateria-detalhada-1.0.0.tar.gz
+# module.toml
+# preview.png
+```
+
+Faltou um? Suba na mesma release, sem criar outra tag:
+`gh release upload v1.0.0 module.toml preview.png`. O que a Loja mostra
+quando algo não bate:
+
+| problema na release | o que a Loja diz |
+|---|---|
+| sem `module.toml` avulso, ou sem `<id>-<version>.tar.gz` com esse nome exato | "The release does not carry the module package." (`modules.no_package`); sem o `module.toml` o cartão nem mostra nome e versão |
+| tag diferente de `v<version>` | "The release tag does not match the module version." (`modules.bad_tag`) |
+| `module.toml` avulso diferente do que está no pacote | "The package holds another module.toml than the one shown." (`modules.manifest_mismatch`) |
+| asset sem digest no GitHub | "GitHub does not publish the package checksum; it was not installed." (`modules.no_digest`) |
+| pacote maior que 8 MB | "The module is larger than the store accepts." (`modules.too_big`) |
+| `api_version` ou `min_launcher` acima do launcher | "This module needs a newer launcher." (`modules.incompatible`) |
+| sem `preview.png` | nenhum erro, mas a tela de permissões fica sem imagem |
+
+A Loja guarda a release e o `module.toml` de cada repositório por uma hora.
+**Atualizar (Y)** na Loja busca a lista de novo e, quando o GitHub responde,
+esquece a release e o `module.toml` guardados de cada módulo listado: uma
+release que ganhou o asset que faltava (ou uma versão nova) aparece na hora.
+Sem rede, as respostas guardadas continuam valendo.
+
+**Pedir o selo Revisado pelo ArchR.** Abra uma issue em
+[`archr-linux/archr-modules`](https://github.com/archr-linux/archr-modules)
+com o link da release. O mantenedor lê o pacote, confere o digest e publica
+uma lista nova (passos acima). O selo vale por pacote: cada versão nova
+precisa de revisão nova, e até lá o módulo aparece só em **Todos**, sem selo
+e sem atualização automática.
 
 A Loja confere o SHA-256 que o GitHub publica para o asset, exige o
 `module.toml` idêntico e valida o pacote antes de colocá-lo em `modules/<id>`.
