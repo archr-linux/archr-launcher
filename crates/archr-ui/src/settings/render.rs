@@ -1990,8 +1990,26 @@ impl View<'_, '_, '_> {
         let rect = self.rect(bounds);
         self.ui.rounded(rect, rect.height() as f32 / 2., ink, None)
     }
-    fn bar(&mut self, (x, y, w, h): Bounds, value: u8, ink: Rgba) -> Result<(), String> {
-        self.capsule((x, y, w, h), self.theme.badge)?;
+    /// A slider's bar: `ink` up to `value`, over its track. On the selected
+    /// row the track is `ink` faint, not the theme's badge: the badge (dark)
+    /// and the selected row's ink (dark over the accent) looked the same,
+    /// and the value could not be read.
+    fn bar(
+        &mut self,
+        (x, y, w, h): Bounds,
+        value: u8,
+        ink: Rgba,
+        selected: bool,
+    ) -> Result<(), String> {
+        let track = if selected {
+            Rgba {
+                a: (u16::from(ink.a) * 30 / 100) as u8,
+                ..ink
+            }
+        } else {
+            self.theme.badge
+        };
+        self.capsule((x, y, w, h), track)?;
         if value > 0 {
             self.capsule(
                 (x, y, (w * f32::from(value.min(100)) / 100.).max(1.), h),
@@ -2061,7 +2079,7 @@ impl View<'_, '_, '_> {
                     .normalize(state.value(id))
                     .parse::<u8>()
                     .expect("normalized");
-                self.bar((x, y + h / 2. - 3., w - 80., 6.), v, ink)?;
+                self.bar((x, y + h / 2. - 3., w - 80., 6.), v, ink, selected)?;
                 self.text(
                     (x + w - 70., y, 70., h),
                     &format!("{v}%"),
@@ -2330,6 +2348,10 @@ impl View<'_, '_, '_> {
         if self.look().sidebar {
             return self.sidebar_root(state);
         }
+        // The rows end above the footer: 39 apart while they fit, closer
+        // when they do not (ten categories took the last one past it).
+        let room = self.view_bottom() - 50. - 36.;
+        let pitch = (room / (CATEGORIES.len().max(2) - 1) as f32).min(39.);
         for (n, (page, _, glyph)) in CATEGORIES.iter().enumerate() {
             let key = page.title();
             let key = if *page == Page::Wifi {
@@ -2337,7 +2359,7 @@ impl View<'_, '_, '_> {
             } else {
                 key
             };
-            let y = 50. + n as f32 * 39.;
+            let y = 50. + n as f32 * pitch;
             let selected = n == state.cursor;
             let ink = self.ink(selected);
             self.row_panel((16., y, 358., 36.), selected)?;

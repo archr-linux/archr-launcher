@@ -178,6 +178,7 @@ impl View<'_, '_, '_> {
                     (30., y + 30., RIGHT - 60., 6.),
                     progress,
                     theme.highlight_bg,
+                    false,
                 )
             },
         )?;
@@ -481,6 +482,7 @@ impl View<'_, '_, '_> {
             (x + 72., y + 4., w - 122., 8.),
             bar.progress.unwrap_or(0),
             fill,
+            false,
         )?;
         let ink = if bar.tone == Tone::Bad {
             theme.danger

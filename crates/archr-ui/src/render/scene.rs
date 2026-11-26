@@ -1321,31 +1321,57 @@ impl<'t> Ui<'_, 't> {
     /// a texture of the box's size, kept while the box and the picture stay.
     /// False when no texture can be drawn into (the caller tiles as before).
     fn tiled(&mut self, path: &Path, slices: &Slices, rect: Rect, k: u32) -> Result<bool, String> {
-        let key: TileKey = (
-            path.to_path_buf(),
-            (rect.width(), rect.height()),
-            k,
-            slices.slice,
-        );
+        // A plain pattern (no edges) is the same tiled into any box from its
+        // corner: one texture per picture, at the largest box asked, of which
+        // each frame copies its box's part. A box that grows or shrinks (an
+        // entrance that scales) then makes no new texture every frame.
+        let plain = slices.slice == [0; 4];
+        let fits = |kept: &TileKey| {
+            kept.0 == path
+                && kept.2 == k
+                && kept.3 == slices.slice
+                && if plain {
+                    kept.1 .0 >= rect.width() && kept.1 .1 >= rect.height()
+                } else {
+                    kept.1 == (rect.width(), rect.height())
+                }
+        };
         if let Some(at) = self
             .scene_cache
             .tiled
             .iter()
-            .position(|(kept, _)| *kept == key)
+            .position(|(kept, _)| fits(kept))
         {
             let entry = self.scene_cache.tiled.remove(at);
-            self.canvas.copy(&entry.1, None, rect)?;
+            let part = Rect::new(0, 0, rect.width(), rect.height());
+            self.canvas.copy(&entry.1, part, rect)?;
             self.scene_cache.tiled.push(entry);
             return Ok(true);
         }
-        let Some(mut laid) = self.target_texture((rect.width(), rect.height())) else {
+        // Made a little larger than asked when plain, so a box growing a
+        // few pixels at a time does not make one each frame.
+        let size = if plain {
+            let (w, h) = (
+                self.frame.width.max(rect.width()),
+                self.frame.height.max(rect.height()),
+            );
+            (w + w / 8, h + h / 8)
+        } else {
+            (rect.width(), rect.height())
+        };
+        // The older one of this picture goes: this one covers it.
+        self.scene_cache.tiled.retain(|(kept, _)| {
+            !(plain && kept.0 == path && kept.2 == k && kept.3 == slices.slice)
+        });
+        let key: TileKey = (path.to_path_buf(), size, k, slices.slice);
+        let Some(mut laid) = self.target_texture(size) else {
             return Ok(false);
         };
         let Some((texture, canvas)) = self.picture(path) else {
             // Not loaded yet: nothing drawn, as when tiled by hand.
             return Ok(true);
         };
-        let size = texture.query();
+        let tile = texture.query();
         // SAFETY: the renderer is alive; the target now drawn into (the page
         // texture, or the window when null) is put back below.
         let before = unsafe { sdl2::sys::SDL_GetRenderTarget(canvas.raw()) };
@@ -1358,9 +1384,9 @@ impl<'t> Ui<'_, 't> {
         canvas.set_draw_color(ink);
         // The tiles' own pixels, alpha included, not blended over the clear.
         texture.set_blend_mode(sdl2::render::BlendMode::None);
-        let local = Rect::new(0, 0, rect.width(), rect.height());
+        let local = Rect::new(0, 0, size.0, size.1);
         let mut laid_out = Ok(());
-        for (src, to) in nine_slice((size.width, size.height), slices.slice, k, local, true) {
+        for (src, to) in nine_slice((tile.width, tile.height), slices.slice, k, local, true) {
             laid_out = canvas.copy(texture, src, to);
             if laid_out.is_err() {
                 break;
@@ -1371,7 +1397,8 @@ impl<'t> Ui<'_, 't> {
         unsafe { sdl2::sys::SDL_SetRenderTarget(canvas.raw(), before) };
         laid_out?;
         laid.set_blend_mode(sdl2::render::BlendMode::Blend);
-        self.canvas.copy(&laid, None, rect)?;
+        let part = Rect::new(0, 0, rect.width(), rect.height());
+        self.canvas.copy(&laid, part, rect)?;
         self.scene_cache.tiled.push((key, laid));
         if self.scene_cache.tiled.len() > TILED_KEPT {
             self.scene_cache.tiled.remove(0);

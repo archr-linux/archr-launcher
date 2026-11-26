@@ -558,6 +558,7 @@ impl View<'_, '_, '_> {
                 (inner.0, y, inner.1, 6.),
                 percent as u8,
                 self.theme.highlight_bg,
+                false,
             )?;
             let found = self.ui.catalog.format(
                 "settings.scrape_found",

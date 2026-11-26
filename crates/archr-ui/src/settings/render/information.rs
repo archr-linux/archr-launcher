@@ -94,7 +94,12 @@ impl View<'_, '_, '_> {
             )?;
             let secondary = card.lines.get(1).map(|s| self.tr(s)).unwrap_or_default();
             if let Some(value) = card.percent {
-                self.bar((x + 14., y + 64., 264., 6.), value, self.theme.highlight_bg)?;
+                self.bar(
+                    (x + 14., y + 64., 264., 6.),
+                    value,
+                    self.theme.highlight_bg,
+                    false,
+                )?;
                 self.text_face(
                     (x + 14., y + 73., 264., 20.),
                     &secondary,
@@ -180,6 +185,7 @@ impl View<'_, '_, '_> {
                     (x + 14., y + 60., width - 28., 6.),
                     value,
                     self.theme.highlight_bg,
+                    false,
                 )?;
                 self.text_face(
                     (x + 14., y + 68., width - 28., 20.),
@@ -245,7 +251,12 @@ impl View<'_, '_, '_> {
                 self.label((38., y, 564., 18.), &meter.label, 13.)?;
                 self.note((38., y + 20., 564., 18.), &self.tr(&meter.value), 12.)?;
                 if let Some(value) = meter.percent {
-                    self.bar((38., y + 43., 564., 6.), value, self.theme.highlight_bg)?;
+                    self.bar(
+                        (38., y + 43., 564., 6.),
+                        value,
+                        self.theme.highlight_bg,
+                        false,
+                    )?;
                 }
             }
             if card.detail.meters.is_empty() {
@@ -353,7 +364,12 @@ impl View<'_, '_, '_> {
                 12.,
             )?;
             if let Some(value) = meter.percent {
-                self.bar((416., y + 34., 186., 6.), value, self.theme.highlight_bg)?;
+                self.bar(
+                    (416., y + 34., 186., 6.),
+                    value,
+                    self.theme.highlight_bg,
+                    false,
+                )?;
             }
             let value = if meter.value.is_empty() {
                 self.tr("settings.unavailable")
