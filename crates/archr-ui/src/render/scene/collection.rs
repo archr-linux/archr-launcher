@@ -31,7 +31,7 @@ fn items(backdrop: &Screen, rows: &[String], data: &dyn DataSource) -> usize {
     }
 }
 /// The list a collection walks, for its motion.
-fn key(backdrop: &Screen) -> String {
+pub(super) fn key(backdrop: &Screen) -> String {
     match backdrop {
         Screen::Games { system, folder } => format!("@scene:{system}/{folder}"),
         _ => "@scene:systems".to_owned(),
@@ -264,10 +264,21 @@ impl<'t> Ui<'_, 't> {
                     .is_some_and(|(_, _, p)| p.has(k) && p.peek(k).is_none())
             });
             if missing {
+                // The name turns to the focus's color as the focus comes.
                 let ink = c.item.text.color.unwrap_or(theme.text);
-                let ink = match c.selected.tint {
-                    Some(tint) if spot.focus > 0.5 => tint,
-                    _ => ink,
+                let ink = match c.selected.color.or(c.selected.tint) {
+                    Some(to) => {
+                        let k = spot.focus.clamp(0., 1.);
+                        let channel =
+                            |a: u8, b: u8| mix(f32::from(a), f32::from(b), k).round() as u8;
+                        Rgba {
+                            r: channel(ink.r, to.r),
+                            g: channel(ink.g, to.g),
+                            b: channel(ink.b, to.b),
+                            a: channel(ink.a, to.a),
+                        }
+                    }
+                    None => ink,
                 };
                 self.item_name(&c.item.text, facts, spot, c.selected.scale.max(1.), ink)?;
             }

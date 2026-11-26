@@ -30,13 +30,13 @@ fundo_lista = 0.4
 arte = "arts"
 
 [options.cor]
-name = { en = "Accent color", pt_BR = "Cor de destaque" }
+name = { en = "Theme tone", pt_BR = "Tom do tema" }
 default = "amarelo"
 choices.amarelo = { name = { en = "Yellow", pt_BR = "Amarelo" } }
 choices.roxo = { name = { en = "Purple", pt_BR = "Roxo" }, vars = { acento = "#A56DE2", acento_escuro = "#261F2F" } }
 
 [options.fundo]
-name = { en = "Background", pt_BR = "Fundo" }
+name = { en = "Art", pt_BR = "Arte" }
 default = "claro"
 choices.claro = { name = { en = "Light", pt_BR = "Claro" } }
 choices.escuro = { name = { en = "Dark", pt_BR = "Escuro" }, vars = { arte = "arts2" } }
@@ -245,6 +245,8 @@ name = { en = "Albedo", pt_BR = "Albedo" }
 [[view.albedo.systems.el]]
 id = "capa-sistema"
 kind = "image"
+enter = { from = "left", distance = 0.035, duration = 0.5 }   # slides in as the screen opens
+select = { from = "right", distance = 0.025, duration = 0.2 }  # and at each system
 src = ["systems/${system}.png"]
 rect = { x = 0.7167, y = 0.5, w = 0.5, h = 0.8 }
 anchor = "center"
@@ -254,6 +256,8 @@ z = -10
 [[view.albedo.systems.el]]
 id = "video-sistema"                             # the theme's clip of the system, over its picture
 kind = "video"
+enter = { from = "left", distance = 0.035, duration = 0.5 }
+select = { from = "right", distance = 0.025, duration = 0.2 }
 src = "system.video"
 rect = { x = 0.7167, y = 0.5, w = 0.5, h = 0.8 }
 anchor = "center"
@@ -270,6 +274,7 @@ z = 5
 [[view.albedo.systems.el]]
 id = "lista"
 kind = "list"
+enter = { from = "left", duration = 0.3 }
 rect = { x = 0.0, y = 0.12, w = 0.3333, h = 0.76 }
 row = 0.08
 size = "$t_lista"
@@ -281,6 +286,8 @@ z = 8
 [[view.albedo.systems.el]]
 id = "nome-sistema"
 kind = "text"
+enter = { from = "left", distance = 0.02, duration = 0.3, delay = 0.1 }
+select = { duration = 0.15 }
 text = "${system.name}"
 upper = true
 rect = { x = 0.355, y = 0.075, w = 0.86, h = 0.065 }
@@ -293,6 +300,7 @@ z = 10
 [[view.albedo.systems.el]]
 id = "contagem"
 kind = "text"
+enter = { duration = 0.4, delay = 0.2, ease = "linear" }
 text = "${system.games}"
 upper = true
 rect = { x = 0.392, y = 0.075, w = 0.86, h = 0.05 }
@@ -346,6 +354,7 @@ z = 5
 [[view.albedo.games.el]]
 id = "titulo"
 kind = "text"
+enter = { from = "top", distance = 0.03, duration = 0.3 }
 text = "${system.name}"
 upper = true
 rect = { x = 0.025, y = 0.01, w = 0.65, h = 0.1 }
@@ -357,6 +366,7 @@ z = 10
 [[view.albedo.games.el]]
 id = "lista"
 kind = "list"
+enter = { from = "bottom", distance = 0.025, duration = 0.3 }
 rect = { x = 0, y = 0.15, w = 0.433, h = 0.775 }
 row = 0.0775
 size = "$t_lista"
@@ -367,6 +377,7 @@ z = 10
 [[view.albedo.games.el]]
 id = "captura"
 kind = "image"
+select = { from = "right", distance = 0.025, duration = 0.2 }   # at each game
 src = ["game.screenshot", "game.cover"]
 fallback = "icons/cartucho.png"
 rect = { x = 0.717, y = 0.425, w = 0.5, h = 0.5 }
@@ -391,6 +402,8 @@ z = 6
 [[view.albedo.games.el]]
 id = "logo-jogo"
 kind = "image"
+enter = { scale = 0.85, duration = 0.35, delay = 0.1, ease = "in-out" }
+select = { scale = 0.9, duration = 0.2 }
 src = "game.logo"
 fallback_text = { text = "${game.name}", upper = true, font = "$titulo", size = 0.06, align = "center", fit_text = "shrink", shadow = { color = "#000000E6", x = 0, y = 0.004 } }
 rect = { x = 0.717, y = 0.2125, w = 0.433, h = 0.175 }
@@ -411,6 +424,7 @@ z = 7
 [[view.albedo.games.el]]
 id = "nota"                                      # the theme's star, tinted
 kind = "rating"
+select = { scale = 0.6, fade = false, duration = 0.25 }
 star = "icons/estrela.png"
 color = "$acento"
 empty = "$acento_alt"
@@ -455,6 +469,7 @@ z = 9
 [[view.albedo.games.el]]
 id = "descricao"
 kind = "text"
+select = { from = "bottom", distance = 0.01 }
 text = "${game.description}"
 rect = { x = 0.4667, y = 0.765, w = 0.5, h = 0.16 }
 font = "$corpo"

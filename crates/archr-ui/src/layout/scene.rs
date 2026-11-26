@@ -39,7 +39,48 @@ pub struct Element {
     pub systems: Vec<String>,
     /// Drawn only when every one of these has a value (`when.has`).
     pub has: Vec<Data>,
+    /// How it comes in when the screen opens (`enter`), and again each
+    /// time the focus moves to another item (`select`).
+    pub enter: Option<Anim>,
+    pub select: Option<Anim>,
     pub kind: Kind,
+}
+
+/// The longest an element's motion takes, its delay included: a screen
+/// is still within the next press.
+pub const ANIM_MAX: f32 = 0.6;
+
+/// An element arriving: from a little way off, transparent, smaller, or
+/// all three, to where the theme put it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Anim {
+    /// Where it starts, fractions of the screen from its place.
+    pub from: (f32, f32),
+    pub fade: bool,
+    /// Its size as it starts, 1 for its own.
+    pub scale: f32,
+    /// Seconds; `delay` + `duration` stays within `ANIM_MAX`.
+    pub duration: f32,
+    pub delay: f32,
+    pub ease: Ease,
+}
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Ease {
+    Out,
+    InOut,
+    Linear,
+}
+impl Ease {
+    /// How far along at time fraction `t` (0 to 1).
+    pub fn at(self, t: f32) -> f32 {
+        let t = t.clamp(0., 1.);
+        match self {
+            Self::Out => crate::motion::ease(t),
+            Self::InOut if t < 0.5 => 4. * t * t * t,
+            Self::InOut => 1. - (2. - 2. * t).powi(3) / 2.,
+            Self::Linear => t,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -146,6 +187,9 @@ pub struct Focus {
     pub scale: f32,
     pub opacity: f32,
     pub tint: Option<Rgba>,
+    /// The focused item's name, when it shows (else `tint`); it turns to
+    /// it as the focus comes, like the tint.
+    pub color: Option<Rgba>,
     pub frame: Option<Ring>,
 }
 /// A frame around the focused picture: a colored line, or a theme picture
@@ -553,7 +597,8 @@ const STARS: &[&str] = &[
     "align",
 ];
 const COMMON: &[&str] = &[
-    "id", "kind", "base", "rect", "anchor", "z", "opacity", "rotate", "pivot", "when",
+    "id", "kind", "base", "rect", "anchor", "z", "opacity", "rotate", "pivot", "when", "enter",
+    "select",
 ];
 
 impl Scene {
@@ -773,6 +818,8 @@ impl Scene {
             pivot,
             systems: names(when.get("system"), &format!("{at}.when.system")),
             has,
+            enter: anim(&r, "enter", 0.3),
+            select: anim(&r, "select", crate::motion::SELECT.as_secs_f32()),
             kind,
         })
     }
@@ -1170,7 +1217,7 @@ impl Scene {
             table: &selected,
             at: &at,
         };
-        s.known(&["scale", "opacity", "tint", "frame"]);
+        s.known(&["scale", "opacity", "tint", "color", "frame"]);
         let frame = match s.table.get("frame") {
             None => None,
             Some(Value::Table(f)) if f.contains_key("image") => {
@@ -1239,6 +1286,7 @@ impl Scene {
                 scale: s.number("scale", 1., 0.25, 4.),
                 opacity: s.number("opacity", 1., 0., 1.),
                 tint: s.color("tint"),
+                color: s.color("color"),
                 frame,
             },
             spacing: r.number_opt_in("spacing", 0., 1.),
@@ -1325,6 +1373,62 @@ impl Scene {
 }
 
 /// The stars' pictures, colors and room, as `rating` and `fields` give them.
+/// `enter` or `select = { from, distance, fade, scale, duration, delay,
+/// ease }`; None (with a warning when it is wrong) when left out.
+fn anim(r: &Reader, key: &str, duration: f32) -> Option<Anim> {
+    let at = format!("{}.{key}", r.at);
+    let t = match r.table.get(key)? {
+        Value::Table(t) => t,
+        _ => {
+            log::warn!("Theme {at} must be a table; ignored");
+            return None;
+        }
+    };
+    let a = Reader { table: t, at: &at };
+    a.known(&[
+        "from", "distance", "fade", "scale", "duration", "delay", "ease",
+    ]);
+    let side = a.pick(
+        "from",
+        (0., 0.),
+        &[
+            ("none", (0., 0.)),
+            ("left", (-1., 0.)),
+            ("right", (1., 0.)),
+            ("top", (0., -1.)),
+            ("bottom", (0., 1.)),
+        ],
+    );
+    let distance = a.number("distance", 0.04, 0., 1.);
+    let duration = a.number("duration", duration, 0.05, ANIM_MAX);
+    let mut delay = a.number("delay", 0., 0., ANIM_MAX);
+    if delay + duration > ANIM_MAX + 1e-4 {
+        delay = ANIM_MAX - duration;
+        log::warn!("Theme {at}: delay + duration past {ANIM_MAX} s; delay {delay:.2} s");
+    }
+    let anim = Anim {
+        from: (side.0 * distance, side.1 * distance),
+        fade: a.flag("fade", true),
+        scale: a.number("scale", 1., 0.1, 4.),
+        duration,
+        delay,
+        ease: a.pick(
+            "ease",
+            Ease::Out,
+            &[
+                ("out", Ease::Out),
+                ("in-out", Ease::InOut),
+                ("linear", Ease::Linear),
+            ],
+        ),
+    };
+    if anim.from == (0., 0.) && !anim.fade && anim.scale == 1. {
+        log::warn!("Theme {at} neither moves, fades nor grows; ignored");
+        return None;
+    }
+    Some(anim)
+}
+
 /// `kind = "video"`: its clips and its still; None (with a warning)
 /// without either.
 fn video(r: &Reader) -> Option<Video> {

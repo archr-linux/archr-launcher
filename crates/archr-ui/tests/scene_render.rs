@@ -1446,10 +1446,7 @@ fn options_includes_and_inherited_views_read_without_warnings() {
     }
     let options: Vec<&str> = theme.options().iter().map(|o| o.id.as_str()).collect();
     assert_eq!(options, ["cor", "fundo"]);
-    assert_eq!(
-        theme.options()[0].name.get("pt_BR"),
-        Some("Cor de destaque")
-    );
+    assert_eq!(theme.options()[0].name.get("pt_BR"), Some("Tom do tema"));
     assert_eq!(theme.choice("cor"), Some("amarelo"));
     let rgb = |t: &Theme| (t.highlight_bg.r, t.highlight_bg.g, t.highlight_bg.b);
     assert_eq!(rgb(&theme), (0xF9, 0xC4, 0x40));
@@ -1700,4 +1697,330 @@ fill = "#FFFFFF"
     // The views still draw: "neto" is "filho" (the classic list) and its rect.
     let neto = theme.view("neto");
     assert_eq!(neto.systems.scene.as_ref().unwrap().elements.len(), 1);
+}
+
+#[test]
+fn animations_read_and_bad_ones_are_warnings() {
+    use archr_ui::layout::{Anim, Ease};
+    let source = r##"
+[view.x]
+[[view.x.systems.el]]
+id = "a"
+kind = "text"
+text = "${system.name}"
+enter = { from = "left", distance = 0.1, fade = false, scale = 0.5, duration = 0.4, delay = 0.1, ease = "in-out" }
+select = { from = "bottom" }
+[[view.x.systems.el]]
+id = "b"
+kind = "image"
+src = "x.png"
+enter = { from = "diagonal", ease = "bounce", duration = 2, delay = 0.5, speed = 3 }
+select = 5
+[[view.x.systems.el]]
+id = "c"
+kind = "rect"
+enter = { fade = false }
+[[view.x.systems.el]]
+kind = "list"
+"##;
+    let table: toml::Table = toml::from_str(source).unwrap();
+    let theme = Theme::parse(&table);
+    let mut view = View::lista(&theme);
+    let said = warnings(|| view = theme.view("x"));
+    let scene = view.systems.scene.as_ref().unwrap();
+    let by = |id: &str| scene.elements.iter().find(|e| e.id == id).unwrap();
+    assert_eq!(
+        by("a").enter,
+        Some(Anim {
+            from: (-0.1, 0.),
+            fade: false,
+            scale: 0.5,
+            duration: 0.4,
+            delay: 0.1,
+            ease: Ease::InOut,
+        })
+    );
+    // `select` takes the list's time, fades and comes a little way.
+    let select = by("a").select.unwrap();
+    assert_eq!((select.from, select.fade), ((0., 0.04), true));
+    assert!((select.duration - 0.18).abs() < 1e-6);
+    // Too long is cut to 0.6 s in all; the wrong words keep the defaults.
+    let b = by("b").enter.unwrap();
+    assert_eq!(
+        (b.from, b.ease, b.duration, b.delay),
+        ((0., 0.), Ease::Out, 0.6, 0.)
+    );
+    assert!(by("b").select.is_none());
+    assert!(by("c").enter.is_none(), "nothing to animate");
+    for word in [
+        "from must be",
+        "ease must be",
+        "duration",
+        "delay + duration",
+        "speed",
+        "select must be a table",
+        "neither moves",
+    ] {
+        assert!(
+            said.iter().any(|w| w.contains(word)),
+            "no warning about {word}: {said:#?}"
+        );
+    }
+}
+
+/// The Albedo view's animations at three sizes, with Animations on,
+/// reduced and off: a frame partway through the screen's entrance differs
+/// from the settled one and the settled one is the screen without motion;
+/// a step down plays `select`, a second step right after shows at once
+/// (the d-pad held); coming back from the games or Settings plays the
+/// entrance again. With ARCHR_SCENE_CAPTURE_DIR set the frames are saved
+/// there; the time a frame takes while elements move is printed.
+#[test]
+fn elements_enter_and_follow_the_focus_by_the_animations_setting() {
+    use archr_ui::motion::Motion;
+    use std::time::Duration;
+    let _sdl = SDL.lock().unwrap_or_else(|e| e.into_inner());
+    std::env::set_var("SDL_VIDEODRIVER", "offscreen");
+    let out = std::env::var_os("ARCHR_SCENE_CAPTURE_DIR").map(PathBuf::from);
+    if let Some(out) = &out {
+        std::fs::create_dir_all(out).unwrap();
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let folder = dir.path().join("cena");
+    std::fs::create_dir_all(&folder).unwrap();
+    theme_folder(&folder);
+    let pictures = dir.path().join("pictures");
+    std::fs::create_dir_all(&pictures).unwrap();
+    let data = library(&pictures);
+    let ms = Duration::from_millis;
+    let mut timings = Vec::new();
+    let theme = load(&folder, "albedo");
+    for size in SIZES {
+        let theme = theme.fitted(size.0, size.1);
+        let view = theme.view(&theme.active_view);
+        for motion in [Motion::On, Motion::Reduced, Motion::Off] {
+            let root = tempfile::tempdir().unwrap();
+            let (ttf, creator);
+            let mut ui = Ui::new(size.0, size.1, true).unwrap();
+            ttf = sdl2::ttf::init().unwrap();
+            creator = ui.canvas.texture_creator();
+            ui.theme_dir = Some(folder.clone());
+            ui.default_theme_dir = Some(shipped("default"));
+            ui.set_motion(motion);
+            ui.configure(&ttf, &creator, &theme, Some(root.path()))
+                .unwrap();
+            ui.set_status(archr_ui::status::Status::frozen("14:32"));
+            ui.catalog = archr_ui::i18n::I18n::load(
+                &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../locales"),
+                Some("pt_BR"),
+                None,
+            );
+            let mut app = App::new(10);
+            app.set_view(&view);
+            let unix = 1_794_916_800;
+            let t0 = std::time::Instant::now();
+            let tag = format!("{}-{}x{}", motion.code(), size.0, size.1);
+            // Draws at `clock`, again until every picture asked for is in
+            // (the clock stands still meanwhile); the pixels, and the time
+            // the first frame took until the GPU had drawn it.
+            let frame = |ui: &mut Ui, name: &str, app: &App, clock| {
+                ui.pin_clock(clock, unix);
+                let deadline = std::time::Instant::now() + Duration::from_secs(60);
+                let mut round = 0;
+                let mut took = None;
+                loop {
+                    ui.tick();
+                    let began = std::time::Instant::now();
+                    ui.draw_with_settings(app, &data, &theme, Default::default(), None)
+                        .unwrap();
+                    let one = sdl2::rect::Rect::new(0, 0, 1, 1);
+                    ui.canvas
+                        .read_pixels(one, sdl2::pixels::PixelFormatEnum::RGBA32)
+                        .unwrap();
+                    took.get_or_insert(began.elapsed());
+                    if ui.pictures_idle() && round >= 3 {
+                        break;
+                    }
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "pictures never loaded"
+                    );
+                    round += 1;
+                    std::thread::sleep(ms(5));
+                }
+                let pixels = ui
+                    .canvas
+                    .read_pixels(None, sdl2::pixels::PixelFormatEnum::RGBA32)
+                    .unwrap();
+                if let Some(out) = &out {
+                    let file = out.join(format!("animacao-{tag}-{name}.png"));
+                    image::save_buffer(file, &pixels, size.0, size.1, image::ColorType::Rgba8)
+                        .unwrap();
+                }
+                (pixels, took.unwrap())
+            };
+            // Right of the list (which glides and scrolls long names on
+            // its own): the pictures, names and text that move here.
+            let right = |pixels: &[u8]| -> Vec<u8> {
+                let (w, h) = (size.0 as usize, size.1 as usize);
+                (h / 10..h * 9 / 10)
+                    .flat_map(|y| {
+                        let row = &pixels[(y * w + w * 45 / 100) * 4..(y * w + w) * 4];
+                        row.to_vec()
+                    })
+                    .collect()
+            };
+            // The screen opens: partway in, then settled.
+            let mid = if motion == Motion::Reduced { 60 } else { 150 };
+            let (opening, _) = frame(&mut ui, "sistemas-inicio", &app, t0);
+            let (partway, took) = frame(&mut ui, "sistemas-entrada", &app, t0 + ms(mid));
+            let (settled, _) = frame(&mut ui, "sistemas", &app, t0 + ms(700));
+            if motion == Motion::On {
+                timings.push((format!("entrada-{tag}"), took));
+            }
+            match motion {
+                Motion::Off => {
+                    assert!(
+                        right(&opening) == right(&settled),
+                        "{tag}: off, nothing moves"
+                    );
+                    assert!(right(&partway) == right(&settled));
+                }
+                _ => assert!(
+                    right(&partway) != right(&settled),
+                    "{tag}: the entrance shows"
+                ),
+            }
+            if motion == Motion::Reduced {
+                // A short fade only: done by 0.13 s.
+                let (done, _) = frame(&mut ui, "sistemas-reduzida", &app, t0 + ms(130));
+                assert!(
+                    right(&done) == right(&settled),
+                    "{tag}: reduced is a short fade"
+                );
+            }
+            // A step down, at rest: the system's picture comes in.
+            let t1 = t0 + ms(2000);
+            app.handle(Button::Down, &data);
+            frame(&mut ui, "sistemas-troca-inicio", &app, t1);
+            let (partway, took) = frame(&mut ui, "sistemas-troca", &app, t1 + ms(80));
+            let (settled, _) = frame(&mut ui, "sistemas-2", &app, t1 + ms(700));
+            if motion == Motion::On {
+                timings.push((format!("troca-{tag}"), took));
+            }
+            assert_eq!(
+                right(&partway) != right(&settled),
+                motion != Motion::Off,
+                "{tag}: select plays with motion"
+            );
+            // Held: the next step 80 ms later shows at once.
+            let t2 = t1 + ms(2000);
+            app.handle(Button::Down, &data);
+            frame(&mut ui, "sistemas-seguro-1", &app, t2);
+            app.handle(Button::Down, &data);
+            let (quick, _) = frame(&mut ui, "sistemas-seguro-2", &app, t2 + ms(80));
+            let (rest, _) = frame(&mut ui, "sistemas-4", &app, t2 + ms(700));
+            assert!(
+                right(&quick) == right(&rest),
+                "{tag}: a held d-pad shows each item at once"
+            );
+            // The games, and back: the systems come in again.
+            let t3 = t2 + ms(2000);
+            // The Mega Drive, with nine games.
+            app.cursor = 1;
+            frame(&mut ui, "sistemas-megadrive", &app, t3 - ms(1000));
+            app.handle(Button::A, &data);
+            frame(&mut ui, "jogos-inicio", &app, t3);
+            let (partway, took) = frame(&mut ui, "jogos-entrada", &app, t3 + ms(mid));
+            let (settled, _) = frame(&mut ui, "jogos", &app, t3 + ms(1000));
+            assert_eq!(
+                right(&partway) != right(&settled),
+                motion != Motion::Off,
+                "{tag}: games enter"
+            );
+            // The next game: its picture, logo, stars and text come in.
+            app.handle(Button::Down, &data);
+            frame(&mut ui, "jogos-troca-inicio", &app, t3 + ms(1100));
+            let (partway, took2) = frame(&mut ui, "jogos-troca", &app, t3 + ms(1180));
+            let (settled, _) = frame(&mut ui, "jogos-2", &app, t3 + ms(1900));
+            assert_eq!(
+                right(&partway) != right(&settled),
+                motion != Motion::Off,
+                "{tag}: the next game comes in"
+            );
+            if motion == Motion::On {
+                timings.push((format!("jogos-entrada-{tag}"), took));
+                timings.push((format!("jogos-troca-{tag}"), took2));
+                // Eight more games: frames while they come in against
+                // frames at rest, each until the GPU has drawn it.
+                let timed = |ui: &mut Ui, app: &App, clock| {
+                    ui.pin_clock(clock, unix);
+                    let began = std::time::Instant::now();
+                    ui.draw_with_settings(app, &data, &theme, Default::default(), None)
+                        .unwrap();
+                    let one = sdl2::rect::Rect::new(0, 0, 1, 1);
+                    ui.canvas
+                        .read_pixels(one, sdl2::pixels::PixelFormatEnum::RGBA32)
+                        .unwrap();
+                    began.elapsed()
+                };
+                let (mut moving, mut still) = (Vec::new(), Vec::new());
+                for k in 0..8u64 {
+                    let at = t3 + ms(2100 + 400 * k);
+                    app.handle(Button::Down, &data);
+                    frame(&mut ui, "jogos-medida", &app, at);
+                    moving.push(timed(&mut ui, &app, at + ms(60)));
+                    moving.push(timed(&mut ui, &app, at + ms(120)));
+                    still.push(timed(&mut ui, &app, at + ms(350)));
+                    still.push(timed(&mut ui, &app, at + ms(360)));
+                }
+                let median = |v: &mut Vec<Duration>| {
+                    v.sort();
+                    v[v.len() / 2]
+                };
+                timings.push((format!("jogos-troca-mediana-{tag}"), median(&mut moving)));
+                timings.push((format!("jogos-parado-mediana-{tag}"), median(&mut still)));
+                app.cursor = 0;
+            }
+            let t4 = t3 + ms(2000);
+            app.handle(Button::B, &data);
+            frame(&mut ui, "volta-inicio", &app, t4);
+            let (partway, _) = frame(&mut ui, "volta-entrada", &app, t4 + ms(mid));
+            let (settled, _) = frame(&mut ui, "volta", &app, t4 + ms(1000));
+            assert_eq!(
+                right(&partway) != right(&settled),
+                motion != Motion::Off,
+                "{tag}: back, again"
+            );
+            // Settings over it, then the screen again: it comes in anew.
+            let t5 = t4 + ms(2000);
+            let settings = archr_ui::settings::Settings::default();
+            ui.pin_clock(t5, unix);
+            ui.draw_with_settings(&app, &data, &theme, Default::default(), Some(&settings))
+                .unwrap();
+            frame(&mut ui, "volta-config-inicio", &app, t5 + ms(1));
+            let (partway, _) = frame(&mut ui, "volta-config", &app, t5 + ms(mid));
+            let (settled, _) = frame(&mut ui, "volta-config-fim", &app, t5 + ms(1000));
+            assert_eq!(
+                right(&partway) != right(&settled),
+                motion != Motion::Off,
+                "{tag}: after Settings"
+            );
+            // A press finishes every motion at once.
+            let t6 = t5 + ms(2000);
+            app.handle(Button::B, &data);
+            app.handle(Button::A, &data);
+            frame(&mut ui, "jogos-de-novo", &app, t6);
+            ui.snap_animations();
+            let (snapped, _) = frame(&mut ui, "jogos-pronto", &app, t6 + ms(10));
+            let (settled, _) = frame(&mut ui, "jogos-fim", &app, t6 + ms(1000));
+            assert!(
+                right(&snapped) == right(&settled),
+                "{tag}: a press snaps the entrance"
+            );
+        }
+    }
+    for (name, took) in &timings {
+        eprintln!("frame {name}: {took:?}");
+    }
 }

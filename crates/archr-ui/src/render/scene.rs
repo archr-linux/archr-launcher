@@ -6,10 +6,10 @@ use super::*;
 use crate::{
     covers::CoverCache,
     layout::{
-        Collection, Data, Element, Fields, Fill, Font, Hints, Image, ImageFit, Kind, ListInk, Ring,
-        Scene, Shape, Slices, Stars, Template, Text, VAlign, Video,
+        Anim, Collection, Data, Element, Fields, Fill, Font, Hints, Image, ImageFit, Kind, ListInk,
+        Ring, Scene, Shape, Slices, Stars, Template, Text, VAlign, Video,
     },
-    motion::{Tween, SELECT},
+    motion::{Motion, Tween, SELECT},
     primitives::nine_slice,
 };
 use std::collections::HashMap;
@@ -18,6 +18,10 @@ mod collection;
 /// Decoded pictures a free screen keeps: the full-screen pictures of a
 /// 1024x768 screen's system and its two neighbours, and the game's.
 const SCENE_BUDGET: u64 = 48 << 20;
+
+/// A focus that moves again sooner than this after the last move (the
+/// d-pad held: it repeats every 80 ms) shows the new item at once.
+const DEBOUNCE: Duration = Duration::from_millis(150);
 
 /// The launcher's star: Lucide's (ISC), filled.
 const STAR_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#fff" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"><path d="M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.123 2.123 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.123 2.123 0 0 0-.611 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.122 2.122 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.122 2.122 0 0 0-.611-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a2.122 2.122 0 0 0 1.597-1.16z"/></svg>"##;
@@ -45,6 +49,19 @@ fn clip_size(rect: Rect) -> (u32, u32) {
         (w * k).round().max(1.) as u32,
         (h * k).round().max(1.) as u32,
     )
+}
+
+/// An element's box this frame, its opacity (`outer` through a layer,
+/// `inner` as it draws), and the layer's move: offset in pixels, size
+/// and the point it grows about.
+struct Placed {
+    rect: Rect,
+    rect01: crate::theme::Rect01,
+    outer: f32,
+    inner: f32,
+    moved: Option<(f32, f32, f32, (i32, i32))>,
+    /// Not in yet: transparent.
+    hidden: bool,
 }
 
 /// What the screen knows this frame, for the elements' data.
@@ -147,6 +164,86 @@ pub(super) struct SceneCache<'t> {
     glide: Option<(String, usize, f32)>,
     /// A grid's focus growing in: its list, the item and how far.
     focus: Option<(String, usize, Tween)>,
+    /// The screen's entrance and its focus's arrival (`enter`, `select`).
+    show: Show,
+}
+
+/// When the screen came in and its focus last moved, for the elements'
+/// `enter` and `select`.
+#[derive(Default)]
+struct Show {
+    /// A free screen was drawn this frame, and the frame before.
+    drawn: bool,
+    before: bool,
+    /// The screen and its item in focus, as last drawn.
+    key: String,
+    item: String,
+    /// When the screen came in and the focus came to its item; None at
+    /// rest, or when the move came too soon after the last to play.
+    entered: Option<Instant>,
+    selected: Option<Instant>,
+    moved: Option<Instant>,
+    /// How long this screen's entrances and arrivals take.
+    spans: (Duration, Duration),
+}
+
+/// An element on its way in: off its place (pixels), smaller, see-through.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Pose {
+    dx: f32,
+    dy: f32,
+    scale: f32,
+    alpha: f32,
+}
+impl Pose {
+    const REST: Self = Self {
+        dx: 0.,
+        dy: 0.,
+        scale: 1.,
+        alpha: 1.,
+    };
+    fn moved(self) -> bool {
+        self.dx.abs() >= 0.5 || self.dy.abs() >= 0.5 || (self.scale - 1.).abs() > 1e-3
+    }
+    fn then(self, other: Self) -> Self {
+        Self {
+            dx: self.dx + other.dx,
+            dy: self.dy + other.dy,
+            scale: self.scale * other.scale,
+            alpha: self.alpha * other.alpha,
+        }
+    }
+}
+/// How long `anim` takes with `motion`, its delay included: reduced
+/// motion only fades, briefly and at once; off, nothing moves.
+fn span(anim: &Anim, motion: Motion) -> Duration {
+    let duration = Duration::from_secs_f32(anim.duration);
+    match motion {
+        Motion::On => duration + Duration::from_secs_f32(anim.delay),
+        _ => motion.fade(duration),
+    }
+}
+/// Where `anim` has the element `secs` in, on a `screen` (w, h) in pixels.
+fn pose(anim: &Anim, secs: f32, motion: Motion, (w, h): (f32, f32)) -> Pose {
+    match motion {
+        Motion::Off => Pose::REST,
+        Motion::Reduced => {
+            let fade = span(anim, motion).as_secs_f32().max(1e-3);
+            Pose {
+                alpha: (secs / fade).clamp(0., 1.),
+                ..Pose::REST
+            }
+        }
+        Motion::On => {
+            let p = anim.ease.at((secs - anim.delay) / anim.duration);
+            Pose {
+                dx: anim.from.0 * w * (1. - p),
+                dy: anim.from.1 * h * (1. - p),
+                scale: anim.scale + (1. - anim.scale) * p,
+                alpha: if anim.fade { p } else { 1. },
+            }
+        }
+    }
 }
 impl SceneCache<'_> {
     pub fn poll(&mut self) -> bool {
@@ -155,15 +252,27 @@ impl SceneCache<'_> {
     pub fn idle(&self) -> bool {
         self.pictures.as_ref().is_none_or(|(_, _, c)| c.idle())
     }
-    /// A grid's focus grown at once.
+    /// A grid's focus grown at once, and every element in its place.
     pub fn snap(&mut self) {
         if let Some((_, _, tween)) = &mut self.focus {
             tween.snap();
         }
+        (self.show.entered, self.show.selected) = (None, None);
     }
-    /// A grid's focus is still growing.
+    /// A grid's focus is still growing, or an element still coming in.
     pub fn active(&self, now: Instant) -> bool {
+        let show = &self.show;
+        let within = |at: Option<Instant>, span: Duration| {
+            at.is_some_and(|at| now.saturating_duration_since(at) < span)
+        };
         self.focus.as_ref().is_some_and(|(_, _, t)| t.active(now))
+            || within(show.entered, show.spans.0)
+            || within(show.selected, show.spans.1)
+    }
+    /// A new frame: a free screen not drawn in the last one comes in
+    /// anew when it is (back from Settings, a game, another screen).
+    pub fn begin_frame(&mut self) {
+        self.show.before = std::mem::take(&mut self.show.drawn);
     }
 }
 
@@ -188,15 +297,27 @@ impl<'t> Ui<'_, 't> {
             .iter()
             .filter(|e| visible(e, &facts))
             .collect();
+        let poses = self.poses(scene, &shown, backdrop, (rows, cursor));
+        let placed: Vec<Placed> = shown
+            .iter()
+            .zip(&poses)
+            .map(|(e, pose)| self.placed(e, *pose))
+            .collect();
         // Every picture shown, asked for at once: neighbours never evict
         // what is on screen.
         // A collection's items, placed for this frame, each with its data;
         // their pictures are asked for first, the focus's before the rest.
         let mut spots = Vec::new();
-        for e in &shown {
+        for (e, at) in shown.iter().zip(&placed) {
             if let Kind::Collection(c) = &e.kind {
-                let area = self.area(e.rect);
-                spots = self.spots(c, (area, e.opacity), backdrop, (rows, cursor), data, theme);
+                spots = self.spots(
+                    c,
+                    (at.rect, e.opacity),
+                    backdrop,
+                    (rows, cursor),
+                    data,
+                    theme,
+                );
             }
         }
         let mut wanted: Vec<Vec<PathBuf>> = Vec::new();
@@ -234,8 +355,20 @@ impl<'t> Ui<'_, 't> {
             // What is on screen stays the newest, the last to make room.
             pictures.request_candidates(&wanted);
         }
-        for element in shown {
-            let rect = self.area(element.rect);
+        for (element, at) in shown.into_iter().zip(placed) {
+            let Placed {
+                rect,
+                rect01,
+                outer,
+                inner,
+                moved,
+                hidden,
+            } = at;
+            // Not in yet: nothing to draw (the list and the clip keep
+            // their state, so they always draw).
+            if hidden && !matches!(element.kind, Kind::List(_) | Kind::Video(_)) {
+                continue;
+            }
             let turn = (element.rotate != 0.).then(|| {
                 let (x, y) = element.pivot;
                 (
@@ -246,24 +379,7 @@ impl<'t> Ui<'_, 't> {
                     ),
                 )
             });
-            // Pictures, text and boxes take an opacity as they draw; the
-            // rest, and anything turned, through a layer.
-            let simple = matches!(
-                element.kind,
-                Kind::Image(_)
-                    | Kind::Text(_)
-                    | Kind::Rating(_)
-                    | Kind::Fields(_)
-                    | Kind::Collection(_)
-                    | Kind::Video(_)
-                    | Kind::Fill(Fill { gradient: None, .. })
-            );
-            let (outer, inner) = if simple && turn.is_none() {
-                (1., element.opacity)
-            } else {
-                (element.opacity, 1.)
-            };
-            self.layered(outer, turn, |ui| match &element.kind {
+            self.layered_moved(outer, turn, moved, |ui| match &element.kind {
                 Kind::Image(image) => ui.scene_image(image, rect, inner, &facts, theme),
                 Kind::Text(text) => ui.scene_text(text, rect, inner, &facts, theme),
                 Kind::Rating(stars) => match facts.stars {
@@ -288,7 +404,7 @@ impl<'t> Ui<'_, 't> {
                 Kind::Status(plain) => ui.status_pill(theme, Some(rect), *plain).map(|_| ()),
                 Kind::Panel(panel) => {
                     let panel = crate::layout::Panel {
-                        rect: element.rect,
+                        rect: rect01,
                         ..*panel
                     };
                     ui.layout_panel("panel", &panel, theme).map(|_| ())
@@ -296,6 +412,132 @@ impl<'t> Ui<'_, 't> {
             })?;
         }
         Ok(())
+    }
+
+    /// Each shown element's pose this frame: the screen comes in when it
+    /// was not drawn the frame before or is another screen (`enter`); the
+    /// focus's item comes in when it moves, unless it moved again too soon
+    /// after the last (`select`).
+    fn poses(
+        &mut self,
+        scene: &Scene,
+        shown: &[&Element],
+        backdrop: &Screen,
+        (rows, cursor): (&[String], usize),
+    ) -> Vec<Pose> {
+        let (now, motion) = (self.frame.now, self.motion);
+        let key = collection::key(backdrop);
+        let item = format!("{cursor}:{}", rows.get(cursor).map_or("", String::as_str));
+        let longest = |pick: fn(&Element) -> Option<Anim>| {
+            scene
+                .elements
+                .iter()
+                .filter_map(pick)
+                .map(|a| span(&a, motion))
+                .max()
+                .unwrap_or_default()
+        };
+        let spans = (longest(|e| e.enter), longest(|e| e.select));
+        let show = &mut self.scene_cache.show;
+        show.spans = spans;
+        let animated = motion != Motion::Off;
+        if !show.before || show.key != key {
+            show.key = key;
+            show.item = item;
+            show.entered = (animated && !spans.0.is_zero()).then_some(now);
+            (show.selected, show.moved) = (None, Some(now));
+        } else if show.item != item {
+            show.item = item;
+            let soon = show
+                .moved
+                .is_some_and(|at| now.saturating_duration_since(at) < DEBOUNCE);
+            show.selected = (animated && !soon && !spans.1.is_zero()).then_some(now);
+            show.moved = Some(now);
+        }
+        show.drawn = true;
+        let screen = (self.frame.width as f32, self.frame.height as f32);
+        let secs =
+            |at: Option<Instant>| at.map(|at| now.saturating_duration_since(at).as_secs_f32());
+        let (entered, selected) = (secs(show.entered), secs(show.selected));
+        shown
+            .iter()
+            .map(|e| {
+                let mut at = Pose::REST;
+                if let (Some(anim), Some(secs)) = (&e.enter, entered) {
+                    at = at.then(pose(anim, secs, motion, screen));
+                }
+                if let (Some(anim), Some(secs)) = (&e.select, selected) {
+                    at = at.then(pose(anim, secs, motion, screen));
+                }
+                at
+            })
+            .collect()
+    }
+
+    /// Where `element` draws in `pose`: its box moved and grown when it
+    /// draws to fit any box, else through a layer that is.
+    fn placed(&self, element: &Element, pose: Pose) -> Placed {
+        // Text and the launcher's pieces keep their size in a larger box.
+        let fixed = matches!(
+            element.kind,
+            Kind::Text(_)
+                | Kind::Fields(_)
+                | Kind::Rating(_)
+                | Kind::Collection(_)
+                | Kind::Hints(_)
+                | Kind::Status(_)
+        );
+        // The list is placed by the layout, not by its box.
+        let through = pose.moved()
+            && (matches!(element.kind, Kind::List(_)) || fixed && (pose.scale - 1.).abs() > 1e-3);
+        let (rect01, moved) = if through {
+            let rect = self.area(element.rect);
+            let middle = (rect.center().x(), rect.center().y());
+            (element.rect, Some((pose.dx, pose.dy, pose.scale, middle)))
+        } else {
+            let r = element.rect;
+            let (w, h) = (r.w * pose.scale, r.h * pose.scale);
+            let rect01 = crate::theme::Rect01 {
+                x: r.x + (r.w - w) / 2. + pose.dx / self.frame.width as f32,
+                y: r.y + (r.h - h) / 2. + pose.dy / self.frame.height as f32,
+                w,
+                h,
+            };
+            (rect01, None)
+        };
+        // Pictures, text and boxes take an opacity as they draw; the
+        // rest, and anything turned or moved whole, through a layer.
+        let simple = matches!(
+            element.kind,
+            Kind::Image(_)
+                | Kind::Text(_)
+                | Kind::Rating(_)
+                | Kind::Fields(_)
+                | Kind::Collection(_)
+                | Kind::Video(_)
+                | Kind::Fill(Fill { gradient: None, .. })
+        );
+        let direct = simple && element.rotate == 0. && moved.is_none();
+        let (mut outer, mut inner) = if direct {
+            (1., element.opacity)
+        } else {
+            (element.opacity, 1.)
+        };
+        // A collection's opacity is its items' out of focus: it fades in
+        // whole through the layer.
+        if direct && !matches!(element.kind, Kind::Collection(_)) {
+            inner *= pose.alpha;
+        } else {
+            outer *= pose.alpha;
+        }
+        Placed {
+            rect: self.area(rect01),
+            rect01,
+            outer,
+            inner,
+            moved,
+            hidden: pose.alpha < 0.004,
+        }
     }
 
     /// The pictures of `shown` elements, each one's sources in order.

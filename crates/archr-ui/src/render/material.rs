@@ -283,7 +283,18 @@ impl<'t> Ui<'_, 't> {
         turn: Option<(f64, (i32, i32))>,
         draw: impl FnOnce(&mut Self) -> Result<T, String>,
     ) -> Result<T, String> {
-        if opacity >= 1. && turn.is_none() {
+        self.layered_moved(opacity, turn, None, draw)
+    }
+    /// `layered`, and the layer laid `moved` = (dx, dy) pixels off and
+    /// grown `scale` times about a point of the stage.
+    pub(super) fn layered_moved<T>(
+        &mut self,
+        opacity: f32,
+        turn: Option<(f64, (i32, i32))>,
+        moved: Option<(f32, f32, f32, (i32, i32))>,
+        draw: impl FnOnce(&mut Self) -> Result<T, String>,
+    ) -> Result<T, String> {
+        if opacity >= 1. && turn.is_none() && moved.is_none() {
             return draw(self);
         }
         let Frame { width, height, .. } = self.frame;
@@ -319,12 +330,31 @@ impl<'t> Ui<'_, 't> {
         layer.set_alpha_mod((opacity.clamp(0., 1.) * 255.).round() as u8);
         self.canvas.set_viewport(None);
         self.canvas.set_clip_rect(None);
-        let copied = match turn {
-            None => self.canvas.copy(&layer, None, None),
-            Some((degrees, (x, y))) => {
+        let (vx, vy) = (saved.viewport.x() as f32, saved.viewport.y() as f32);
+        let (dx, dy, scale, (cx, cy)) = moved.unwrap_or((0., 0., 1., (0, 0)));
+        let (cx, cy) = (cx as f32 + vx, cy as f32 + vy);
+        // A point of the stage where the move takes it.
+        let to = |x: f32, y: f32| (cx + (x - cx) * scale + dx, cy + (y - cy) * scale + dy);
+        let (x0, y0) = to(0., 0.);
+        let dst = Rect::new(
+            x0.round() as i32,
+            y0.round() as i32,
+            (width as f32 * scale).round().max(1.) as u32,
+            (height as f32 * scale).round().max(1.) as u32,
+        );
+        let copied = match (turn, moved) {
+            (None, None) => self.canvas.copy(&layer, None, None),
+            (Some((degrees, (x, y))), None) => {
                 let at = sdl2::rect::Point::new(x + saved.viewport.x(), y + saved.viewport.y());
                 self.canvas
                     .copy_ex(&layer, None, None, degrees, at, false, false)
+            }
+            (None, Some(_)) => self.canvas.copy(&layer, None, dst),
+            (Some((degrees, (x, y))), Some(_)) => {
+                let (px, py) = to(x as f32 + vx, y as f32 + vy);
+                let at = sdl2::rect::Point::new((px - x0).round() as i32, (py - y0).round() as i32);
+                self.canvas
+                    .copy_ex(&layer, None, dst, degrees, at, false, false)
             }
         };
         self.canvas.set_viewport(saved.viewport);

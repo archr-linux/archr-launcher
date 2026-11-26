@@ -1125,6 +1125,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
     ) -> Result<(), String> {
         self.frame = self.fresh_frame()?;
         self.frame.text = self.text_scale;
+        self.scene_cache.begin_frame();
         self.modules = app.modules.clone();
         let now = self.frame.now;
         self.canvas.set_draw_color(color(theme.background));

@@ -1132,13 +1132,13 @@ acento = "#F9C440"
 arte = "arts"
 
 [options.cor]
-name = { en = "Accent color", pt_BR = "Cor de destaque" }
+name = { en = "Theme tone", pt_BR = "Tom do tema" }
 default = "amarelo"
 choices.amarelo = { name = { en = "Yellow", pt_BR = "Amarelo" } }
 choices.roxo = { name = { en = "Purple", pt_BR = "Roxo" }, vars = { acento = "#A56DE2" } }
 
 [options.fundo]
-name = { en = "Background", pt_BR = "Fundo" }
+name = { en = "Art", pt_BR = "Arte" }
 default = "claro"
 choices.claro = { name = { en = "Light", pt_BR = "Claro" } }
 choices.escuro = { name = { en = "Dark", pt_BR = "Escuro" }, vars = { arte = "arts2" } }
@@ -1318,7 +1318,7 @@ favorite = { corner = "top-right", size = 0.2 }
 | `wheel` | `{ angle, pivot }` | nenhuma | roda: todos os itens no meio, cada posição girada `angle` graus (no sentido do relógio) em torno de `pivot`, em tamanhos de item a partir do canto de cima à esquerda do item (`[-3, 0.5]`) |
 | `columns`, `rows` | 1 a 8 | `3`, `3` | grade: colunas e linhas à vista; as linhas rolam uma a uma |
 | `opacity` | 0 a 1 | `1` | a dos itens fora de foco |
-| `selected` | `{ scale, opacity, tint, frame }` | `scale = 1`, `opacity = 1` | o item em foco: tamanho (0,25 a 4 vezes), opacidade, cor que multiplica a imagem e moldura |
+| `selected` | `{ scale, opacity, tint, color, frame }` | `scale = 1`, `opacity = 1` | o item em foco: tamanho (0,25 a 4 vezes), opacidade, cor que multiplica a imagem, cor do nome do item sem imagem (`color`, senão `tint`) e moldura |
 | `selected.frame` | `{ color, width, radius }` ou `{ image, slice, scale, tile }` | nenhuma | uma linha em volta da imagem (por trás dela) ou uma imagem do tema em 9-slice por cima |
 | `loop` | `true`/`false` | `false` | do último item, um passo adiante volta ao primeiro |
 | `reflection` | 0 a 1 | `0` | carrossel: a metade de baixo da imagem de novo, de cabeça para baixo, sumindo |
@@ -1341,8 +1341,10 @@ do jogo), `${item.name}` o nome dele, e os dados `system.*` e `game.*` são os
 do item, não os do item em foco.
 
 O carrossel desliza para o próximo item no tempo das listas do launcher; a
-grade rola as linhas e o item em foco cresce. Com Animações Reduzidas ou
-Desligadas, tudo muda de uma vez. O texto de um item é desenhado uma vez,
+grade rola as linhas e o item em foco cresce. A cor de `selected` (`tint`
+na imagem, `color` no nome) chega junto, aos poucos, e sai do item que
+perde o foco do mesmo jeito. Com Animações Reduzidas ou Desligadas, tudo
+muda de uma vez. O texto de um item é desenhado uma vez,
 no tamanho do foco, e só escalado e girado ao deslizar.
 
 As imagens dos itens carregam como as dos outros elementos (fora da
@@ -1430,6 +1432,71 @@ loop = false                              # toca uma vez e volta à imagem
 - `opacity`, `rotate` e `when` valem como nos outros elementos
   (`when = { has = "game.video" }` desenha o elemento só com vídeo).
 
+### Animações: `enter` e `select`
+
+Qualquer elemento pode entrar em movimento: `enter` toca quando a tela
+abre (ao abrir a tela de sistemas ou de jogos, ao voltar de um jogo, das
+Configurações ou de outra tela), e `select` toca a cada troca do item em
+foco, para os elementos que mostram dados dele (imagem e vídeo do jogo ou
+do sistema, nome, descrição, nota, ficha).
+
+```toml
+[[view.albedo.systems.el]]
+id = "capa-sistema"
+kind = "image"
+src = ["systems/${system}.png"]
+rect = { x = 0.7167, y = 0.5, w = 0.5, h = 0.8 }
+anchor = "center"
+fit = "contain"
+enter = { from = "left", distance = 0.035, duration = 0.5 }    # desliza um pouco ao abrir
+select = { from = "right", distance = 0.025, duration = 0.2 }  # e a cada sistema
+
+[[view.albedo.systems.el]]
+id = "contagem"
+kind = "text"
+text = "${system.games}"
+rect = { x = 0.392, y = 0.075, w = 0.86, h = 0.05 }
+rotate = 90
+pivot = [0, 0.5]
+enter = { duration = 0.4, delay = 0.2, ease = "linear" }       # só aparece, depois dos outros
+
+[[view.albedo.games.el]]
+id = "logo-jogo"
+kind = "image"
+src = "game.logo"
+rect = { x = 0.717, y = 0.2125, w = 0.433, h = 0.175 }
+anchor = "center"
+fit = "contain"
+select = { scale = 0.9, duration = 0.2 }                       # cresce um pouco ao trocar de jogo
+```
+
+| campo | valores | padrão | o que faz |
+|---|---|---|---|
+| `from` | `left`, `right`, `top`, `bottom`, `none` | `none` | de que lado o elemento chega |
+| `distance` | 0 a 1, fração da tela | `0.04` | de quão longe ele chega (`1` vem de fora da tela) |
+| `fade` | `true`, `false` | `true` | chega transparente e aparece |
+| `scale` | 0,1 a 4 | `1` | o tamanho com que chega (`0.9` cresce até o seu, `1.2` encolhe) |
+| `duration` | segundos, 0,05 a 0,6 | `0.3` no `enter`, `0.18` no `select` | quanto tempo leva |
+| `delay` | segundos, 0 a 0,6 | `0` | espera antes de começar, para os elementos chegarem um depois do outro |
+| `ease` | `out`, `in-out`, `linear` | `out` | a curva: `out` começa rápido e assenta devagar |
+
+- Nada passa de 0,6 s: `delay` + `duration` maior que isso gera aviso e o
+  `delay` é cortado. Um `enter` ou `select` que não move, não aparece nem
+  cresce gera aviso e fica de fora.
+- O elemento está no seu lugar (`rect`, `opacity`) quando a animação acaba;
+  ela só diz de onde ele vem. Com `enter` e `select`, os dois se somam.
+- Na entrada da tela, `select` não toca; ele toca a cada troca de item. Com
+  o d-pad seguro (ou trocas a menos de 0,15 s uma da outra), o item novo
+  aparece de uma vez, sem animação, para a lista não engasgar.
+- Qualquer botão termina as animações em curso na hora: nada espera a
+  animação para responder.
+- **Animações Reduzidas**: só um esmaecer curto (até 0,12 s), sem
+  deslizar, crescer nem esperar o `delay`. **Desligadas**: nada se mexe.
+- Textos, notas, fichas, coleções, dicas e status que crescem, e a lista
+  que desliza, são desenhados numa camada da tela durante a animação;
+  imagens, caixas e vídeo só mudam de retângulo. Na lista vale a
+  posição do `rect` dela.
+
 ### O que as opções da Aparência fazem numa tela livre
 
 Capa do jogo, Largura e Cantos da capa e Fundo por sistema não mexem numa
@@ -1441,9 +1508,8 @@ elemento não dá a sua cor.
 
 As telas livres chegam por partes. Ainda não há: vídeo com som, vídeo
 aleatório de um jogo do sistema na tela de sistemas, `include` dentro de uma
-escolha de opção, animações por elemento (`enter`, `select`, cor animada no
-foco) e a tela de detalhes como cena. Chaves dessas partes geram aviso e
-ficam de fora.
+escolha de opção e a tela de detalhes como cena. Chaves dessas partes geram
+aviso e ficam de fora.
 
 ### Testar
 
@@ -1451,8 +1517,11 @@ O tema de teste `crates/archr-ui/tests/themes/cena/` tem as visualizações
 das maquetes aprovadas: Solo e Albedo, e as coleções delas, Carrossel
 (coluna de logos e grade 3×3) e Roda (a roda de sistemas e uma fila de
 capas com reflexo, no arquivo incluído `parts/roda.toml`). "Solo escuro"
-herda a Solo, e duas opções trocam a cor de destaque e a arte de fundo. As capturas saem em 640×480, 720×720 e 1024×768, com
-um quadro no meio do deslize:
+herda a Solo, e duas opções ("Tom do tema" e "Arte") trocam a cor e a
+arte de fundo. A Albedo tem animações de entrada e de troca. As capturas
+saem em 640×480, 720×720 e 1024×768, com um quadro no meio do deslize e
+outro no meio das animações, com Animações Ligadas, Reduzidas e
+Desligadas:
 
 ```sh
 ARCHR_SCENE_CAPTURE_DIR=/tmp/cena cargo test -p archr-ui --test scene_render
