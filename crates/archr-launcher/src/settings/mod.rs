@@ -1017,6 +1017,7 @@ impl Worker {
                     state.notes = loaded.notes;
                     state.theme_names = loaded.theme_names;
                     state.access_ip = loaded.access_ip;
+                    state.host = loaded.host;
                     state.usb_busy = loaded.usb_busy;
                     state.usb = loaded.usb;
                     state.info = loaded.info;

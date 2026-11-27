@@ -181,6 +181,7 @@
 "settings.ssh_detail" = "Удалённый доступ"
 "settings.samba" = "Общий доступ (Samba)"
 "settings.samba_detail" = "\\\\archr в локальной сети"
+"settings.samba_at" = "\\\\{host} в локальной сети"
 "settings.http" = "Простой HTTP-сервер"
 "settings.http_detail" = "Доступ через браузер"
 "settings.netplay" = "Netplay"

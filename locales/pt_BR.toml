@@ -181,6 +181,7 @@
 "settings.ssh_detail" = "Acesso remoto"
 "settings.samba" = "Compartilhamento (Samba)"
 "settings.samba_detail" = "\\\\archr na rede local"
+"settings.samba_at" = "\\\\{host} na rede local"
 "settings.http" = "Servidor HTTP simples"
 "settings.http_detail" = "Acesso pelo navegador"
 "settings.netplay" = "Netplay"

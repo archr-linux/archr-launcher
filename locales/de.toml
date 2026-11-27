@@ -181,6 +181,7 @@
 "settings.ssh_detail" = "Fernzugriff"
 "settings.samba" = "Dateifreigabe (Samba)"
 "settings.samba_detail" = "\\\\archr im lokalen Netzwerk"
+"settings.samba_at" = "\\\\{host} im lokalen Netzwerk"
 "settings.http" = "Einfacher HTTP-Server"
 "settings.http_detail" = "Zugriff im Browser"
 "settings.netplay" = "Netplay"

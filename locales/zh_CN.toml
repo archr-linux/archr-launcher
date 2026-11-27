@@ -181,6 +181,7 @@
 "settings.ssh_detail" = "远程访问"
 "settings.samba" = "文件共享（Samba）"
 "settings.samba_detail" = "局域网中的 \\\\archr"
+"settings.samba_at" = "局域网中的 \\\\{host}"
 "settings.http" = "简易 HTTP 服务器"
 "settings.http_detail" = "通过浏览器访问"
 "settings.netplay" = "网络联机"

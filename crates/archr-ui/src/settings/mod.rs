@@ -1394,6 +1394,8 @@ pub struct Settings {
     pub wifi_ssid: String,
     pub wifi_hidden: bool,
     pub access_ip: String,
+    /// The console's network name (`archr-a70d`): the Samba share is `\\\\<host>`.
+    pub host: String,
     /// The single USB port hosts a device, so gadget mode is refused.
     pub usb_busy: bool,
     pub usb: network::Usb,
@@ -1497,6 +1499,7 @@ impl Default for Settings {
             wifi_ssid: String::new(),
             wifi_hidden: false,
             access_ip: String::new(),
+            host: String::new(),
             usb_busy: false,
             usb: network::Usb::default(),
             scrape: Scrape::default(),
@@ -1859,6 +1862,8 @@ impl Settings {
         Some(match row.id {
             Id::Ssh if !ip.is_empty() => format!("settings.ssh_at|ip={ip}"),
             Id::Http if !ip.is_empty() => format!("settings.http_at|ip={ip}"),
+            // Each console has its own name: the share is \\<host>, never \\archr.
+            Id::Samba if !self.host.is_empty() => format!("settings.samba_at|host={}", self.host),
             Id::UsbMode if self.usb_busy => "settings.usb_in_use".into(),
             // A lease from the PC, or the console's own fixed address.
             Id::UsbAddress
@@ -2838,6 +2843,31 @@ mod appearance_tests {
         assert_eq!(state.value(Id::View), "grid");
         state.theme_loaded(crate::Theme::builtin(), None);
         assert_eq!(state.value(Id::View), "lista");
+    }
+    /// The Samba row names this console's share (each console has its own
+    /// name), and says nothing it cannot know before the name is read.
+    #[test]
+    fn the_samba_row_names_the_consoles_own_share() {
+        let mut state = page();
+        let row = described(Id::Samba, "settings.samba", "settings.samba_detail");
+        assert_eq!(
+            state.subtitle(&row).as_deref(),
+            Some("settings.samba_detail")
+        );
+        state.host = "archr-a70d".into();
+        assert_eq!(
+            state.subtitle(&row).as_deref(),
+            Some("settings.samba_at|host=archr-a70d")
+        );
+        let catalog = crate::i18n::I18n::load(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../locales"),
+            Some("pt_BR"),
+            None,
+        );
+        assert_eq!(
+            catalog.format("settings.samba_at", &[("host", "archr-a70d")]),
+            "\\\\archr-a70d na rede local"
+        );
     }
     /// "Theme options" opens its page: a chevron, as the store's row.
     #[test]

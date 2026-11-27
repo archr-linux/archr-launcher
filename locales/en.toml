@@ -181,6 +181,7 @@
 "settings.ssh_detail" = "Remote access"
 "settings.samba" = "File sharing (Samba)"
 "settings.samba_detail" = "\\\\archr on local network"
+"settings.samba_at" = "\\\\{host} on the local network"
 "settings.http" = "Simple HTTP server"
 "settings.http_detail" = "Browser access"
 "settings.netplay" = "Netplay"

@@ -290,6 +290,9 @@ impl Backend {
         state.values.insert(Id::UsbCompat, compat.into());
         state.usb_busy = self.usb_busy();
         state.access_ip = self.address();
+        state.host = fs::read_to_string(self.paths.at("/proc/sys/kernel/hostname"))
+            .map(|h| h.trim().to_owned())
+            .unwrap_or_default();
         keyboard_choices(
             state,
             Id::KeyboardLayout,
