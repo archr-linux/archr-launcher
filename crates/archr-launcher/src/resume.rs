@@ -15,6 +15,11 @@ use std::{
 
 const RECORDS: &str = "/storage/.config/archr/resume.tsv";
 const LAST: &str = "/storage/.config/archr/resume-last";
+/// The last game's line while the power-on resume runs it. It goes back to
+/// `LAST` when the game comes back to the launcher; found at the next power
+/// on with no new `LAST`, that game froze or reset the console, and opening
+/// it again would do the same, power on after power on.
+const TRYING: &str = "/storage/.config/archr/resume-last.resuming";
 /// Left by "save and exit" from the switcher shortcut: open the switcher.
 const SWITCHER: &str = "/run/archr/switcher";
 /// The PID of a "save and exit" still writing its record.
@@ -92,14 +97,29 @@ pub fn start(paths: &Paths, config: Option<&SystemCfg>) -> Start {
             .and_then(|cfg| cfg.get_setting(key, None, None))
             .unwrap_or_else(|| default.into())
     };
+    let booted = paths.run.join(BOOTED);
+    let (last, trying) = (paths.at(LAST), paths.at(TRYING));
+    if booted.exists() {
+        // Back from a game this power on: a resumed one returns its line,
+        // unless "save and exit" wrote a newer one.
+        if trying.exists() && (last.exists() || fs::rename(&trying, &last).is_err()) {
+            let _ = fs::remove_file(&trying);
+        }
+    }
     if fs::remove_file(paths.at(SWITCHER)).is_ok() {
         return Start::Switcher;
     }
-    let booted = paths.run.join(BOOTED);
     if booted.exists() {
         return Start::Plain;
     }
     let _ = fs::create_dir_all(&paths.run).and_then(|()| fs::write(&booted, ""));
+    if trying.exists() {
+        let _ = fs::remove_file(&trying);
+        if !last.exists() {
+            log::warn!("The game resumed at the last power on never came back: not resumed again");
+            return Start::Boot;
+        }
+    }
     if setting("launcher.resume", "last") == "off" {
         return Start::Boot;
     }
@@ -117,6 +137,9 @@ pub fn start(paths: &Paths, config: Option<&SystemCfg>) -> Start {
         Some(r)
             if r.state.is_some() || setting("launcher.resume.standalone", "start") != "skip" =>
         {
+            if fs::rename(&last, &trying).is_err() {
+                return Start::Boot;
+            }
             Start::Resume(r)
         }
         _ => Start::Boot,
@@ -149,9 +172,10 @@ pub fn entry(library: &Library, game: &Recent) -> Option<crate::saves::Entry> {
 
 /// The resume refused: it is not offered at the next power on.
 pub fn skip(paths: &Paths) {
-    let last = paths.at(LAST);
+    let (last, trying) = (paths.at(LAST), paths.at(TRYING));
     thread::spawn(move || {
         let _ = fs::remove_file(last);
+        let _ = fs::remove_file(trying);
     });
 }
 
@@ -334,6 +358,7 @@ mod tests {
         assert_eq!(start(&paths, None), Start::Switcher);
         assert!(matches!(start(&paths, None), Start::Resume(r) if r.rom == rom));
         assert_eq!(start(&paths, None), Start::Plain, "only the first start");
+        assert!(paths.at(LAST).exists(), "the game came back: its line too");
         fs::remove_file(paths.run.join(BOOTED)).unwrap();
         let cfg = |text: &str| {
             let file = root.path().join("system.cfg");
@@ -372,6 +397,37 @@ mod tests {
             fs::remove_file(paths.run.join(BOOTED)).unwrap();
             let got = matches!(start(&paths, None), Start::Resume(_));
             assert_eq!(got, resumed, "{status} {level}%");
+            // The game comes back to the launcher.
+            start(&paths, None);
         }
+    }
+
+    #[test]
+    fn a_resumed_game_that_never_came_back_is_not_opened_again() {
+        let root = tempfile::tempdir().unwrap();
+        let paths = Paths::new(Some(root.path().into()));
+        let rom = paths.at("/storage/roms/snes/A.sfc");
+        fs::create_dir_all(rom.parent().unwrap()).unwrap();
+        fs::write(&rom, "rom").unwrap();
+        fs::create_dir_all(paths.at(LAST).parent().unwrap()).unwrap();
+        fs::write(paths.at(LAST), line("", "/storage/roms/snes/A.sfc")).unwrap();
+        let power_on = || {
+            let _ = fs::remove_file(paths.run.join(BOOTED));
+            start(&paths, None)
+        };
+        assert!(matches!(power_on(), Start::Resume(_)));
+        // It froze the console: no return, no "save and exit".
+        assert_eq!(power_on(), Start::Boot, "the menu, not the same freeze");
+        assert!(!paths.at(LAST).exists() && !paths.at(TRYING).exists());
+        assert_eq!(power_on(), Start::Boot);
+        // "Save and exit" at power off wrote a newer line: that one resumes.
+        fs::write(paths.at(LAST), line("", "/storage/roms/snes/A.sfc")).unwrap();
+        assert!(matches!(power_on(), Start::Resume(_)));
+        fs::write(paths.at(LAST), line("", "/storage/roms/snes/A.sfc")).unwrap();
+        assert!(matches!(power_on(), Start::Resume(_)));
+        // Refused before it opened: nothing is offered again.
+        skip(&paths);
+        std::thread::sleep(Duration::from_millis(200));
+        assert_eq!(power_on(), Start::Boot);
     }
 }

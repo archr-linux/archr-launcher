@@ -2472,7 +2472,7 @@ mod banner_tests {
         for key in [
             "compat.downloaded",
             "compat.download_cancelled",
-            "savesync.done",
+            "savesync.title",
             "controls.apply_failed",
             "store.cancelled",
         ] {

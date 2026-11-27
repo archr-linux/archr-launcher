@@ -52,7 +52,7 @@ tipos errados) aparecem mas não impedem.
 id = "bateria-detalhada"        # [a-z0-9-]{3,40}, único no aparelho
 version = "1.0.0"               # x.y.z
 api_version = 4                 # de 1 a 4
-min_launcher = "0.1.0"          # opcional; versão do pacote do launcher (hoje 0.3.0), não a do sistema
+min_launcher = "0.1.0"          # opcional; versão do pacote do launcher (hoje 0.3.1), não a do sistema
 name = "@name"                  # texto, "@chave" do locales/, ou tabela por idioma
 description = "@description"
 author = "Fulano <fulano@exemplo.org>"

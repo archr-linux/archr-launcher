@@ -2648,7 +2648,7 @@ license = "CC BY 4.0"        # texto curto; o arquivo LICENSE também é instala
 min_launcher = "0.2.0"       # versão mínima do launcher; abaixo dela não instala
 ```
 
-`min_launcher` compara com a versão do **pacote** do launcher (hoje `0.3.0`),
+`min_launcher` compara com a versão do **pacote** do launcher (hoje `0.3.1`),
 não com a versão do sistema que as Configurações mostram (`v3.1.0 · …`) nem
 com o número da API de temas (3.1). Um valor acima da versão do launcher
 instalado faz a Loja recusar o tema ("Este tema pede uma versão mais nova do
