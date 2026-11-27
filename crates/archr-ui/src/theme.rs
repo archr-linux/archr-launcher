@@ -313,6 +313,10 @@ pub struct Theme {
     pub name: Names,
     /// Id of the view the screens are drawn with (an Appearance choice).
     pub active_view: String,
+    /// The view the theme opens with: `default_view` when it names one,
+    /// else the first of the theme's own views (by id), else its base's.
+    /// Choosing the theme in Appearance switches to it.
+    pub default_view: String,
     /// `[view.<id>]` tables in the order they apply: the builtin's, then the
     /// theme's own. "lista" always comes first.
     views: Vec<(String, Vec<toml::Table>)>,
@@ -579,6 +583,7 @@ impl Theme {
             font,
             defaults.map(|d| [d.font_mono.clone(), d.font_mono_medium.clone()]),
         );
+        let views = view_tables(table, defaults);
         Self {
             background: token!(background, color),
             text: token!(text, color),
@@ -720,7 +725,8 @@ impl Theme {
             name: Names::parse(table.get("name"), "name"),
             active_view: LISTA.into(),
             user: UserLook::default(),
-            views: view_tables(table, defaults),
+            default_view: default_view(table, &views, defaults),
+            views,
             vars,
             app: app_tables(table, defaults),
             shape,
@@ -858,6 +864,7 @@ pub const KNOWN_KEYS: &[&str] = &[
     "font_mono_medium",
     "name",
     "view",
+    "default_view",
     "app",
     "sounds",
     "details_shot",
@@ -1268,6 +1275,32 @@ fn app_tables(table: &toml::Table, defaults: Option<&Theme>) -> Vec<toml::Table>
         Some(_) => log::warn!("Theme key app must be a table; ignored"),
     }
     tables
+}
+
+/// The view a theme opens with (see `Theme::default_view`).
+fn default_view(
+    table: &toml::Table,
+    views: &[(String, Vec<toml::Table>)],
+    defaults: Option<&Theme>,
+) -> String {
+    let named = field::<String>(table, "default_view");
+    if let Some(id) = &named {
+        if views.iter().any(|(view, _)| view == id) {
+            return id.clone();
+        }
+        log::warn!("Theme default_view {id:?} names no view; ignored");
+    }
+    let own = table
+        .get("view")
+        .and_then(toml::Value::as_table)
+        .and_then(|declared| {
+            declared
+                .keys()
+                .find(|id| views.iter().any(|(v, _)| v == *id))
+        });
+    own.cloned()
+        .or_else(|| defaults.map(|d| d.default_view.clone()))
+        .unwrap_or_else(|| LISTA.into())
 }
 
 /// The inherited views, with this theme's tables laid over them.

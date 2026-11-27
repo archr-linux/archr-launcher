@@ -315,6 +315,20 @@ fn write_toml(b: &Built, name: &str, src: &Path, license: &str) -> Vec<(String, 
         let _ = writeln!(top, "include = {}", inline(&Value::Array(includes)));
     }
     let _ = writeln!(top, "name = {}", inline(&Value::String(name.into())));
+    // The view the theme opens with: EmulationStation's gamelist default,
+    // "detailed", when the theme has it; else the first one converted.
+    let opens = b
+        .views
+        .iter()
+        .find(|v| v.id == "detailed")
+        .or_else(|| b.views.first());
+    if let Some(v) = opens {
+        let _ = writeln!(
+            top,
+            "default_view = {}",
+            inline(&Value::String(v.id.clone()))
+        );
+    }
     let _ = writeln!(
         top,
         "description = {}",

@@ -2822,6 +2822,22 @@ mod appearance_tests {
         state.open(Page::Appearance);
         state
     }
+    /// Another theme opens with its own view; the same one loaded again
+    /// (its look saved) keeps the view chosen.
+    #[test]
+    fn another_theme_opens_with_its_default_view() {
+        let mut state = page();
+        state.values.insert(Id::View, "lista".into());
+        let mut albedo = crate::Theme::builtin();
+        albedo.default_view = "detailed".into();
+        state.theme_loaded(albedo.clone(), Some("/themes/albedo".into()));
+        assert_eq!(state.value(Id::View), "detailed");
+        state.values.insert(Id::View, "grid".into());
+        state.theme_loaded(albedo, Some("/themes/albedo".into()));
+        assert_eq!(state.value(Id::View), "grid");
+        state.theme_loaded(crate::Theme::builtin(), None);
+        assert_eq!(state.value(Id::View), "lista");
+    }
     #[test]
     fn choices_are_a_draft_until_the_page_is_left() {
         let mut state = page();

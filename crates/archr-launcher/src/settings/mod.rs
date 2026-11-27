@@ -1138,7 +1138,10 @@ impl Worker {
                 }
                 Reply::Usb(usb) => state.usb = usb,
                 Reply::Store(reply) => state.store_reply(reply),
-                Reply::Theme(loaded) => (state.base_theme, state.base_dir) = *loaded,
+                Reply::Theme(loaded) => {
+                    let (theme, dir) = *loaded;
+                    state.theme_loaded(theme, dir);
+                }
                 Reply::RaScan(found) => {
                     state.raimport.scanning = false;
                     state.raimport.found = Some(found);

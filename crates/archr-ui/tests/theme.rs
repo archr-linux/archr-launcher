@@ -788,3 +788,32 @@ fn style_primitives_are_optional_and_inherit() {
     );
     assert_eq!(wrong.margin, 0.2);
 }
+
+/// The view a theme opens with: its `default_view`, else the first of its
+/// own views by id, else its base's ("lista" for the builtin).
+#[test]
+fn the_default_view_is_the_themes_own() {
+    let views = "[view.zebra]\nname = 'Z'\n[view.bravo]\nname = 'B'\n";
+    assert_eq!(load(views).default_view, "bravo");
+    assert_eq!(
+        load(&format!("default_view = 'zebra'\n{views}")).default_view,
+        "zebra"
+    );
+    // A name that is no view: the rule above, as if there were none.
+    assert_eq!(
+        load(&format!("default_view = 'nada'\n{views}")).default_view,
+        "bravo"
+    );
+    // An inherited view can be the default too.
+    assert_eq!(load("default_view = 'lista'\n").default_view, "lista");
+    assert_eq!(load("margin = 0.2").default_view, "lista");
+    // The shipped themes open on their "lista" (Ellegance's shelves).
+    let shipped = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../themes");
+    for theme in ["default", "ellegance", "praia"] {
+        assert_eq!(
+            Theme::load(&shipped.join(theme)).default_view,
+            "lista",
+            "{theme}"
+        );
+    }
+}

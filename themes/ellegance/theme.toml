@@ -4,6 +4,8 @@
 # per screen, Settings in a sidebar and the capsule OSD. Inter 4.1 (SIL OFL
 # 1.1, fonts/Inter-OFL.txt) in Regular, SemiBold and Bold.
 name = "Ellegance"
+# The shelves (its "lista") open first; the classic list is "classica".
+default_view = "lista"
 description = { en = "Deep black and glass: shelves, large corners, a focus that lifts and spring motion.", pt_BR = "Preto profundo e vidro: prateleiras, cantos grandes, foco que levanta e movimento de mola.", es = "Negro profundo y vidrio: estantes, esquinas grandes, un foco que se eleva y movimiento de resorte.", ru = "Глубокий чёрный и стекло: полки, большие скругления, приподнятый фокус и пружинная анимация." }
 author = "Arch R"
 version = "1.0.0"

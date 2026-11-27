@@ -521,6 +521,8 @@ Visualização (`launcher.view`). Toda visualização parte da `lista` e muda s�
 que escreve; o tema herda as visualizações do padrão (hoje `lista` e `vitrine`)
 e pode alterá-las ou criar novas.
 
+A visualização com que o tema abre é a dele: `default_view = "<id>"` no `theme.toml` (uma visualização que existe, própria ou herdada); sem ela, a primeira das visualizações que o tema declara (pela ordem dos ids); sem nenhuma, a do tema base (`lista`). Ao escolher o tema em Aparência, a Visualização passa a ser essa; o usuário ainda pode trocar depois.
+
 ```toml
 [view.lado]
 name = { en = "Side", pt_BR = "Lado" }

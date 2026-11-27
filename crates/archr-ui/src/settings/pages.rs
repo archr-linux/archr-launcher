@@ -524,6 +524,17 @@ impl Settings {
     /// Another theme, as a draft shown at once: it comes whole, as its
     /// author made it, the choices made over the last one dropped (as
     /// Restore does); the view is the theme's first.
+    /// The host loaded the theme the page shows. Another theme than before
+    /// opens with its own view: its `default_view` becomes the choice.
+    pub fn theme_loaded(&mut self, theme: crate::Theme, dir: Option<std::path::PathBuf>) {
+        let another = self.base_dir != dir;
+        self.base_theme = theme;
+        self.base_dir = dir;
+        if another {
+            let view = self.base_theme.default_view.clone();
+            self.values.insert(Id::View, view);
+        }
+    }
     pub(super) fn choose_theme(&mut self, folder: String) -> Effect {
         if self.value(Id::Theme) != folder {
             self.restore_look();

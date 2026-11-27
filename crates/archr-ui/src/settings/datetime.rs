@@ -144,7 +144,13 @@ mod tests {
     use super::*;
 
     fn draft(year: i32, month: i32, day: i32) -> Draft {
-        Draft { year, month, day, hour: 23, minute: 59 }
+        Draft {
+            year,
+            month,
+            day,
+            hour: 23,
+            minute: 59,
+        }
     }
 
     #[test]
@@ -200,7 +206,10 @@ mod tests {
             .position(|r| r.id == Id::DateTime)
             .unwrap();
         state.handle(Button::A);
-        assert_ne!(state.handle(Button::B), Effect::Set(Id::DateTime, after.text()));
+        assert_ne!(
+            state.handle(Button::B),
+            Effect::Set(Id::DateTime, after.text())
+        );
         assert_eq!(state.page(), Page::Region);
         assert!(state.clock_draft.is_none());
     }
