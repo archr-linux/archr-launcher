@@ -87,6 +87,35 @@ fn load_parses_comma_timezones_and_includes_current_suspend_mode() {
 }
 
 #[test]
+fn kernel_sleep_states_are_left_out_where_the_quirk_says_they_hang() {
+    let (dir, backend) = fixture();
+    // Elsewhere the kernel's states are offered.
+    let state = backend.load().unwrap();
+    assert_eq!(
+        state.options[&Id::Suspend],
+        ["default", "freeze", "mem", "off"].map(String::from)
+    );
+    // The RK3326 quirk: only the alternative sleep, even with mem saved.
+    let profile = dir.path().join("storage/.config/profile.d");
+    fs::create_dir_all(&profile).unwrap();
+    fs::write(
+        profile.join("030-suspend-kernel"),
+        "DEVICE_SUSPEND_KERNEL=\"false\"\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("storage/.config/system/configs/system.cfg"),
+        "system.suspendmode=mem\n",
+    )
+    .unwrap();
+    let state = backend.load().unwrap();
+    assert_eq!(
+        state.options[&Id::Suspend],
+        ["default", "off"].map(String::from)
+    );
+}
+
+#[test]
 fn inactivity_keys_store_minutes_and_default_to_never() {
     let (_dir, backend) = fixture();
     let state = backend.load().unwrap();

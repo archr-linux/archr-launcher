@@ -287,13 +287,27 @@ impl Backend {
             None => state.values.remove(&Id::Audio),
         };
         let current = state.value(Id::Suspend).to_owned();
-        let mut modes: Vec<String> = self
-            .read("/sys/power/state")
-            .split_whitespace()
-            .filter(|v| *v != "disk")
-            .map(str::to_owned)
-            .collect();
-        modes.extend(["default".into(), "off".into(), current]);
+        // The kernel's own sleep states, unless the platform quirk found
+        // they never wake (the RK3326 hangs in all of them): then only
+        // the system's alternative sleep is offered, and a kernel state
+        // left from before is not listed (the quirk turns it off).
+        let kernel_sleep = !self
+            .read(SUSPEND_SUPPORT)
+            .lines()
+            .any(|line| line.trim() == "DEVICE_SUSPEND_KERNEL=\"false\"");
+        let mut modes: Vec<String> = if kernel_sleep {
+            self.read("/sys/power/state")
+                .split_whitespace()
+                .filter(|v| *v != "disk")
+                .map(str::to_owned)
+                .collect()
+        } else {
+            Vec::new()
+        };
+        modes.extend(["default".into(), "off".into()]);
+        if kernel_sleep || matches!(current.as_str(), "default" | "off") {
+            modes.push(current);
+        }
         modes.sort();
         modes.dedup();
         state.options.insert(Id::Suspend, modes);
@@ -582,6 +596,8 @@ enum Reply {
 /// A radio scan takes ~20 s on the R36S: it runs on its own lane so it never
 /// delays the Wi-Fi switch or any other action.
 const SCAN_TIMEOUT: Duration = Duration::from_secs(45);
+/// Written at boot by the platform quirk (030-suspend_mode).
+const SUSPEND_SUPPORT: &str = "/storage/.config/profile.d/030-suspend-kernel";
 pub struct Worker {
     tx: mpsc::Sender<Work>,
     /// Joins and forgets, one at a time: never two wifictl connects at once,
