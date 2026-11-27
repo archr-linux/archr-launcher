@@ -1223,6 +1223,23 @@ impl View<'_, '_, '_> {
                 state.store.cancelling,
             );
         }
+        // So does a module install.
+        if let (true, Some(progress), Some(offer)) = (
+            state.modules.working,
+            state.modules.progress.as_ref(),
+            state.modules.offer.as_ref(),
+        ) {
+            let title = self
+                .ui
+                .catalog
+                .format("store.installing", &[("name", offer.card.title())]);
+            return self.progress_window(
+                &title,
+                &crate::settings::store::INSTALL_STEPS,
+                progress,
+                false,
+            );
+        }
         use crate::HintButton::Key;
         type Hints = &'static [(crate::HintButton, &'static str)];
         // Question, explanation, and the answers (none while the host works).

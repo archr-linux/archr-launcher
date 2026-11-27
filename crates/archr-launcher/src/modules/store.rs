@@ -507,6 +507,16 @@ impl Shop {
     /// holds the very module.toml shown, and swaps it in; the version it
     /// replaces waits in `.previous-<id>` for the new one's first good run.
     pub fn install(&self, offer: &Offer) -> Result<Installed, &'static str> {
+        self.install_watched(offer, &mut |_| {})
+    }
+    /// As `install`, telling `report` where it is: the download with its
+    /// bytes against the package's size, then checking, then installing.
+    pub fn install_watched(
+        &self,
+        offer: &Offer,
+        report: &mut dyn FnMut(archr_ui::progress::Progress),
+    ) -> Result<Installed, &'static str> {
+        use archr_ui::progress::{Meter, Progress};
         if let Some(blocked) = offer.blocked {
             return Err(blocked);
         }
@@ -531,11 +541,25 @@ impl Shop {
         if package.size > TARBALL_LIMIT {
             return Err("modules.too_big");
         }
-        let tarball = match self.github.get(&package.url, TARBALL_LIMIT) {
+        let mut meter = Meter::new(package.size);
+        report(Progress {
+            step: 0,
+            transfer: Some(meter.read(0)),
+        });
+        let tarball = match self.github.get_watched(&package.url, TARBALL_LIMIT, &mut |bytes| {
+            report(Progress {
+                step: 0,
+                transfer: Some(meter.read(bytes)),
+            })
+        }) {
             Ok(Some(body)) => body,
             Err("store.offline") => return Err("modules.download_failed"),
             _ => return Err("store.failed"),
         };
+        report(Progress {
+            step: 1,
+            transfer: None,
+        });
         let digest: String = Sha256::digest(&tarball)
             .iter()
             .map(|b| format!("{b:02x}"))
@@ -543,6 +567,10 @@ impl Shop {
         if digest != expected {
             return Err("modules.digest_mismatch");
         }
+        report(Progress {
+            step: 2,
+            transfer: None,
+        });
         let fail = |_: std::io::Error| "store.failed";
         let modules = &self.dirs.modules;
         fs::create_dir_all(modules).map_err(fail)?;
@@ -627,6 +655,7 @@ impl Shop {
         &self,
         action: StoreAction,
         queue: &mut VecDeque<Card>,
+        report: &mut dyn FnMut(archr_ui::progress::Progress),
     ) -> (StoreReply, Option<Installed>) {
         match action {
             StoreAction::List(tab, refresh) => {
@@ -643,7 +672,7 @@ impl Shop {
                 None,
             ),
             StoreAction::Auto(_) | StoreAction::Check(_) => (StoreReply::Done(Ok("")), None),
-            StoreAction::Install(offer) => match self.install(&offer) {
+            StoreAction::Install(offer) => match self.install_watched(&offer, report) {
                 Ok(installed) => (
                     StoreReply::Done(Ok("modules.installed_ok")),
                     Some(installed),
@@ -885,7 +914,10 @@ pub(super) fn lane(
             continue;
         }
         let (reply, installed) = match action {
-            Some(action) => shop.handle(action, &mut queue),
+            Some(action) => shop.handle(action, &mut queue, &mut |progress| {
+                let answer = (StoreReply::Progress(progress), None);
+                let _ = results.send(Input::Store(Box::new(answer)));
+            }),
             None => match queue.pop_front().and_then(|card| shop.decorate(&card)) {
                 Some(card) => (StoreReply::Card(card), None),
                 None => continue,

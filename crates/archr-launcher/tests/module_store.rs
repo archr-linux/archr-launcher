@@ -232,6 +232,26 @@ fn reviewed_modules_come_first_and_the_badge_follows_the_digest() {
 }
 
 #[test]
+fn an_install_reports_download_then_check_then_install() {
+    let root = tempfile::tempdir().unwrap();
+    let fake = Fake::default();
+    let good = Tarball::module(MANIFEST).bytes();
+    publish(&fake, MANIFEST, &good, &sha(&good), "");
+    let store = shop(root.path(), &fake);
+    let offer = store.offer(&card()).unwrap();
+    let mut seen = Vec::new();
+    store
+        .install_watched(&offer, &mut |progress| seen.push(progress))
+        .unwrap();
+    let steps: Vec<usize> = seen.iter().map(|p| p.step).collect();
+    assert_eq!(steps, [0, 1, 2], "{seen:?}");
+    // The download starts at zero against the package's own size.
+    let first = seen[0].transfer.unwrap();
+    assert_eq!(first.done, 0);
+    assert!(first.total > 0);
+}
+
+#[test]
 fn an_install_checks_digest_manifest_and_paths_before_anything_lands() {
     let root = tempfile::tempdir().unwrap();
     let fake = Fake::default();

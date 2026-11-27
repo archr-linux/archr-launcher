@@ -600,6 +600,8 @@ pub enum StoreReply {
     },
     Card(Card),
     Offer(String, Result<Box<Offer>, &'static str>),
+    /// Where a running install is (step, bytes).
+    Progress(crate::progress::Progress),
     /// An install ended; the key names the outcome.
     Done(Result<&'static str, &'static str>),
     /// A module was updated on its own: its id and new version.

@@ -42,6 +42,8 @@ pub struct Modules {
     pub wanted: String,
     /// An install runs.
     pub working: bool,
+    /// The running install's progress, for its window.
+    pub progress: Option<crate::progress::Progress>,
     /// The list item a detail page is about (API 3): its actions carry it,
     /// and the page shows only what the module sent for it.
     pub item: Option<String>,
@@ -840,6 +842,7 @@ impl Settings {
                     self.fail(None, blocked.into());
                 } else if offer.installed.as_deref() != Some(offer.version.as_str()) {
                     self.modules.working = true;
+                    self.modules.progress = Some(crate::progress::Progress::default());
                     return Effect::Module(Request::Store(StoreAction::Install(Box::new(offer))));
                 }
                 Effect::None
@@ -979,8 +982,14 @@ impl Settings {
                 }
             }
             StoreReply::Updated(..) | StoreReply::Checked(_) => {}
+            StoreReply::Progress(progress) => {
+                if modules.working {
+                    modules.progress = Some(progress);
+                }
+            }
             StoreReply::Done(result) => {
                 modules.working = false;
+                modules.progress = None;
                 let key = match result {
                     Ok(key) => {
                         if let Some(offer) = &mut modules.offer {
