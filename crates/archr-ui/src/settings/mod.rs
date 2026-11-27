@@ -1747,6 +1747,7 @@ impl Settings {
                 | Id::LauncherLink
                 | Id::HotkeysLink
                 | Id::ThemeStore
+                | Id::ThemeOptionsLink
                 | Id::ModulesLink
                 | Id::ModuleStoreLink
                 | Id::RaImportLink
@@ -2837,6 +2838,16 @@ mod appearance_tests {
         assert_eq!(state.value(Id::View), "grid");
         state.theme_loaded(crate::Theme::builtin(), None);
         assert_eq!(state.value(Id::View), "lista");
+    }
+    /// "Theme options" opens its page: a chevron, as the store's row.
+    #[test]
+    fn the_theme_options_row_shows_it_opens_a_page() {
+        let state = page();
+        let catalog = crate::i18n::I18n::default();
+        assert_eq!(
+            state.display_value(Id::ThemeOptionsLink, &catalog),
+            state.display_value(Id::ThemeStore, &catalog)
+        );
     }
     #[test]
     fn choices_are_a_draft_until_the_page_is_left() {
