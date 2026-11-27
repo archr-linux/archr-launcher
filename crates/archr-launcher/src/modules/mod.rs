@@ -1631,6 +1631,11 @@ impl Host {
                 "screen.busy",
                 "screen.offline",
                 "screen.qr",
+                // Detail screens: `transfer` (steps and bytes by the
+                // buttons), a button's `hint` for A and `disabled`.
+                "screen.transfer",
+                "button.hint",
+                "button.disabled",
                 "rom.install",
                 // `replace`: a new version of the module's own game.
                 "rom.install.replace",

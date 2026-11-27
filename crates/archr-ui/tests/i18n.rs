@@ -433,6 +433,10 @@ const CONFIG_KEYS: &[&str] = &[
     "screen.toast",
     "rom.install",
     "rom.install.replace",
+    // Detail screens' wait and buttons (API capabilities).
+    "screen.transfer",
+    "button.hint",
+    "button.disabled",
     "rom.list",
     "rom.remove",
     "port.install",

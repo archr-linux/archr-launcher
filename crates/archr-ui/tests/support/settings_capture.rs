@@ -3941,7 +3941,9 @@ fn golden_frames_at_640x480() {
     // An app (API 4): its catalog in the games layout, an item's detail in
     // the details layout, with the module's own picture.
     {
-        use crate::apps::{Action, Chip, Fact, Item, Layout, Message, Screen as Page, Session};
+        use crate::apps::{
+            Action, Chip, Fact, Item, Layout, Message, Prep, Screen as Page, Session, Transfer,
+        };
         use crate::modules::Tone;
         let mut session = Session::new("demo", "Demo catalog", true);
         let items = ["Pixel Hop", "Blue Lines", "Red Shift", "Violet Sky"]
@@ -4020,13 +4022,39 @@ fn golden_frames_at_640x480() {
         ui.app
             .as_mut()
             .unwrap()
-            .apply(Message::Show(Box::new(detail)));
+            .apply(Message::Show(Box::new(detail.clone())));
         let shot = crate::render::Art {
             shot: Some(&cover),
             ..Default::default()
         };
         browse(&mut ui, &app, &theme, shot);
         keep(&mut ui, "app-detail");
+        // Downloading (Progresso-itch-baixando): the steps above the
+        // buttons, the bytes below, three buttons on one line and A's hint.
+        let mut busy = detail;
+        busy.buttons[0].hint = Some("Cancelar download".into());
+        busy.buttons.insert(
+            1,
+            Action {
+                id: "delete".into(),
+                label: "Apagar download".into(),
+                action: "delete".into(),
+                disabled: true,
+                ..Action::default()
+            },
+        );
+        busy.transfer = Some(Transfer::new(Prep {
+            steps: vec!["Baixar".into(), "Instalar em Game Boy".into()],
+            step: 0,
+            done: 16_462_643,
+            total: 28_311_552,
+        }));
+        ui.app
+            .as_mut()
+            .unwrap()
+            .apply(Message::Show(Box::new(busy)));
+        browse(&mut ui, &app, &theme, shot);
+        keep(&mut ui, "app-detail-transfer");
         ui.app = None;
     }
     app.screen = crate::state::Screen::StartHub {

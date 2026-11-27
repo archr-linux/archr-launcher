@@ -24,6 +24,36 @@ impl Transfer {
     }
 }
 
+/// "9,4 de 17,5 MB · 2,6 MB/s" and "faltam ~4 s" when the speed is known,
+/// as every page of the launcher writes a transfer.
+pub fn describe(catalog: &crate::i18n::I18n, transfer: Transfer) -> (String, Option<String>) {
+    let mut text = if transfer.total > 0 {
+        let (done, total) = catalog.sizes(transfer.done, transfer.total);
+        catalog.format("updates.of", &[("done", &done), ("total", &total)])
+    } else {
+        catalog.size(transfer.done)
+    };
+    if transfer.per_second > 0 {
+        let speed = catalog.format(
+            "updates.per_second",
+            &[("size", &catalog.size(transfer.per_second))],
+        );
+        text = format!("{text} · {speed}");
+    }
+    let left = transfer.seconds_left().map(|seconds| {
+        let time = if seconds < 60 {
+            catalog.format("progress.seconds", &[("count", &seconds.to_string())])
+        } else {
+            catalog.format(
+                "progress.minutes",
+                &[("count", &seconds.div_ceil(60).to_string())],
+            )
+        };
+        catalog.format("progress.left", &[("time", &time)])
+    });
+    (text, left)
+}
+
 /// Where a wait is: the step running (an index into the steps its screen
 /// names) and, while that step moves bytes, how many.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -34,7 +64,7 @@ pub struct Progress {
 
 /// Turns byte counts sampled over time into a `Transfer` with its speed,
 /// averaged over the last few seconds so it does not jump with every read.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Meter {
     total: u64,
     samples: Vec<(Instant, u64)>,

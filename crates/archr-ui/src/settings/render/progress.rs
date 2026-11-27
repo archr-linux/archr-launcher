@@ -116,32 +116,7 @@ impl View<'_, '_, '_> {
     }
     /// "9,4 de 17,5 MB · 2,6 MB/s" and "faltam ~4 s" when the speed is known.
     fn transfer_text(&self, transfer: Transfer) -> (String, Option<String>) {
-        let catalog = &self.ui.catalog;
-        let mut text = if transfer.total > 0 {
-            let (done, total) = catalog.sizes(transfer.done, transfer.total);
-            catalog.format("updates.of", &[("done", &done), ("total", &total)])
-        } else {
-            catalog.size(transfer.done)
-        };
-        if transfer.per_second > 0 {
-            let speed = catalog.format(
-                "updates.per_second",
-                &[("size", &catalog.size(transfer.per_second))],
-            );
-            text = format!("{text} · {speed}");
-        }
-        let left = transfer.seconds_left().map(|seconds| {
-            let time = if seconds < 60 {
-                catalog.format("progress.seconds", &[("count", &seconds.to_string())])
-            } else {
-                catalog.format(
-                    "progress.minutes",
-                    &[("count", &seconds.div_ceil(60).to_string())],
-                )
-            };
-            catalog.format("progress.left", &[("time", &time)])
-        });
-        (text, left)
+        crate::progress::describe(&self.ui.catalog, transfer)
     }
     /// A row that carries its own wait (Progresso-linha): the title and the
     /// percent, a thin bar, then what it is doing with the bytes and the

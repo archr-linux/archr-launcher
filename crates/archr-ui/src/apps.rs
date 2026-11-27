@@ -76,6 +76,51 @@ pub struct Action {
     pub action: String,
     /// 0–100 while the module works on it.
     pub progress: Option<u8>,
+    /// What A says on it, when not its label ("Cancel download" on a
+    /// button that reads "Downloading 58%").
+    pub hint: Option<String>,
+    /// Shown dimmed, A does nothing: it keeps its place while a wait runs.
+    pub disabled: bool,
+}
+
+/// A detail screen's wait as the module tells it (`transfer`): its steps,
+/// the one running and, while it moves bytes, how many of how many.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Prep {
+    pub steps: Vec<String>,
+    pub step: usize,
+    pub done: u64,
+    pub total: u64,
+}
+/// The wait as drawn: the module's numbers with the speed worked out here.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Transfer {
+    pub steps: Vec<String>,
+    pub step: usize,
+    pub now: crate::progress::Transfer,
+    meter: crate::progress::Meter,
+}
+impl Transfer {
+    pub fn new(prep: Prep) -> Self {
+        let mut meter = crate::progress::Meter::new(prep.total);
+        let now = meter.read(prep.done);
+        Self {
+            steps: prep.steps,
+            step: prep.step,
+            now,
+            meter,
+        }
+    }
+    /// The next reading: the same step goes on measuring; another step or
+    /// fewer bytes (a new file) starts again.
+    fn update(&mut self, prep: Prep) {
+        if prep.step != self.step || prep.done < self.now.done || prep.total != self.now.total {
+            *self = Self::new(prep);
+            return;
+        }
+        self.steps = prep.steps;
+        self.now = self.meter.read(prep.done);
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -102,6 +147,8 @@ pub struct Screen {
     pub facts: Vec<Fact>,
     pub text: String,
     pub buttons: Vec<Action>,
+    /// A wait shown by the buttons: its steps above, its bytes below.
+    pub transfer: Option<Transfer>,
     /// The selected item, the focused button, the text's first line and
     /// the picture shown (0 is `image`, then the gallery).
     pub cursor: usize,
@@ -157,6 +204,9 @@ pub struct Change {
     /// `Some(None)` takes the bar away.
     pub progress: Option<Option<u8>>,
     pub action: Option<String>,
+    /// `Some(None)` takes the hint away.
+    pub hint: Option<Option<String>>,
+    pub disabled: Option<bool>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Target {
@@ -172,6 +222,8 @@ pub struct Patch {
     pub chips: Option<Vec<Chip>>,
     pub footer: Option<String>,
     pub target: Option<(Target, Change)>,
+    /// `Some(None)` takes the wait away.
+    pub transfer: Option<Option<Prep>>,
 }
 
 /// What the module sends, checked by the host.
@@ -342,6 +394,11 @@ impl Session {
         if let Some(footer) = patch.footer {
             screen.footer = footer;
         }
+        match (patch.transfer, &mut screen.transfer) {
+            (Some(Some(prep)), Some(shown)) => shown.update(prep),
+            (Some(prep), _) => screen.transfer = prep.map(Transfer::new),
+            (None, _) => {}
+        }
         match patch.target {
             Some((Target::Item(id), change)) => {
                 if let Some(at) = screen.items.iter().position(|i| i.id == id) {
@@ -380,6 +437,12 @@ impl Session {
                     }
                     if let Some(progress) = change.progress {
                         button.progress = progress;
+                    }
+                    if let Some(hint) = &change.hint {
+                        button.hint.clone_from(hint);
+                    }
+                    if let Some(disabled) = change.disabled {
+                        button.disabled = disabled;
                     }
                 }
             }
@@ -547,7 +610,7 @@ impl Session {
                         screen.picture = (screen.picture + 1) % screen.pictures();
                     }
                     Button::A => {
-                        let action = screen.buttons.get(screen.focus)?;
+                        let action = screen.buttons.get(screen.focus).filter(|b| !b.disabled)?;
                         let (name, button) = (action.action.clone(), action.id.clone());
                         return Some(Effect::Invoke(name, call(None, Some(button))));
                     }
@@ -652,11 +715,20 @@ mod tests {
             Some(Effect::Event("screen.dismissed", json!({"id": "page"})))
         );
         // A question asked over the code is answered first.
-        session.apply(Message::Qr(Qr { id: "again".into(), ..Qr::default() }));
-        session.apply(Message::Confirm(Ask { id: "q".into(), ..Ask::default() }));
+        session.apply(Message::Qr(Qr {
+            id: "again".into(),
+            ..Qr::default()
+        }));
+        session.apply(Message::Confirm(Ask {
+            id: "q".into(),
+            ..Ask::default()
+        }));
         assert_eq!(
             session.handle(Button::B, 5),
-            Some(Effect::Event("screen.answer", json!({"id": "q", "yes": false})))
+            Some(Effect::Event(
+                "screen.answer",
+                json!({"id": "q", "yes": false})
+            ))
         );
         assert!(session.qr.is_some());
     }
@@ -715,6 +787,48 @@ mod tests {
             Some(Effect::Event(name, data)) => (name, data),
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn a_wait_measures_its_bytes_and_a_disabled_button_does_nothing() {
+        let mut session = Session::new("demo", "Demo", false);
+        let mut screen = detail();
+        screen.buttons[1].disabled = true;
+        screen.transfer = Some(Transfer::new(Prep {
+            steps: vec!["Baixar".into(), "Instalar".into()],
+            step: 0,
+            done: 0,
+            total: 100,
+        }));
+        session.apply(Message::Show(Box::new(screen)));
+        let prep = |step, done| Patch {
+            transfer: Some(Some(Prep {
+                steps: vec!["Baixar".into(), "Instalar".into()],
+                step,
+                done,
+                total: 100,
+            })),
+            ..Patch::default()
+        };
+        session.apply(Message::Patch(Box::new(prep(0, 40))));
+        let shown = session.top().unwrap().transfer.clone().unwrap();
+        assert_eq!((shown.step, shown.now.done, shown.now.total), (0, 40, 100));
+        // Another step starts measuring again.
+        session.apply(Message::Patch(Box::new(prep(1, 0))));
+        assert_eq!(session.top().unwrap().transfer.as_ref().unwrap().step, 1);
+        session.apply(Message::Patch(Box::new(Patch {
+            transfer: Some(None),
+            ..Patch::default()
+        })));
+        assert!(session.top().unwrap().transfer.is_none());
+        // A on the dimmed button: nothing for the module.
+        session.handle(Button::R, 8);
+        assert_eq!(session.handle(Button::A, 8), None);
+        session.handle(Button::L, 8);
+        assert!(matches!(
+            session.handle(Button::A, 8),
+            Some(Effect::Invoke(..))
+        ));
     }
 
     #[test]

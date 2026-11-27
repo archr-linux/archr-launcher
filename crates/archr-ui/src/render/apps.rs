@@ -312,16 +312,23 @@ impl Ui<'_, '_> {
                 .buttons
                 .iter()
                 .map(|b| SheetButton {
-                    label: b.label.clone(),
+                    // Work in progress reads its percent: "Downloading 58%".
+                    label: match b.progress {
+                        Some(p) if !b.label.contains('%') => {
+                            format!("{} {p}%", b.label.trim_end_matches(['…', '.']))
+                        }
+                        _ => b.label.clone(),
+                    },
                     icon: b.icon.as_deref().map(Icon::Svg),
                     busy: None,
                     working: false,
-                    disabled: false,
+                    disabled: b.disabled,
                     progress: b.progress,
                 })
                 .collect(),
             focus: screen.focus,
             scroll: screen.scroll,
+            transfer: screen.transfer.as_ref(),
         };
         // Only the module's own picture: never a logo, cover or video.
         let art = Art {
@@ -362,8 +369,9 @@ impl Ui<'_, '_> {
                 hints.push((HintButton::Select, text(self, "apps.search")));
             }
             Some(s) => {
-                if let Some(button) = s.buttons.get(s.focus) {
-                    hints.push(('A'.into(), button.label.clone()));
+                if let Some(button) = s.buttons.get(s.focus).filter(|b| !b.disabled) {
+                    let label = button.hint.as_ref().unwrap_or(&button.label);
+                    hints.push(('A'.into(), label.clone()));
                 }
                 if self.details_overflow > 0 {
                     hints.push(('↕'.into(), text(self, "details.scroll")));

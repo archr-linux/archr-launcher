@@ -5,8 +5,8 @@
 use super::registry::Installed;
 use archr_index::SystemDef;
 use archr_ui::apps::{
-    Action, Ask, Change, Chip, Fact, Item, Layout, Message, Patch, Screen, Target, BUTTONS, CHIPS,
-    FACTS, GALLERY, PAGE,
+    Action, Ask, Change, Chip, Fact, Item, Layout, Message, Patch, Prep, Screen, Target, Transfer,
+    BUTTONS, CHIPS, FACTS, GALLERY, PAGE,
 };
 use archr_ui::modules::Tone;
 use serde::{Deserialize, Serialize};
@@ -283,6 +283,20 @@ impl Reader<'_> {
             icon,
             action: name(&value["action"])?,
             progress: percent(&value["progress"]),
+            hint: Some(self.text(&value["hint"])).filter(|h| !h.is_empty()),
+            disabled: value["disabled"] == true,
+        })
+    }
+    /// A detail screen's `transfer`: up to 4 steps, the one running, the
+    /// bytes so far and expected (0: unknown).
+    fn prep(&mut self, value: &Json) -> Option<Prep> {
+        let steps: Vec<String> = list(&value["steps"], 4).map(|s| self.text(s)).collect();
+        let step = usize::try_from(value["step"].as_u64()?).ok()?;
+        (step < steps.len()).then(|| Prep {
+            steps,
+            step,
+            done: value["done"].as_u64().unwrap_or(0),
+            total: value["total"].as_u64().unwrap_or(0),
         })
     }
     fn screen(&mut self, params: &Json) -> Option<Screen> {
@@ -332,6 +346,7 @@ impl Reader<'_> {
                 .collect(),
             text: self.long(&params["text"]),
             buttons,
+            transfer: self.prep(&params["transfer"]).map(Transfer::new),
             ..Screen::default()
         })
     }
@@ -348,6 +363,10 @@ impl Reader<'_> {
             // `null` takes the bar away; absent leaves it.
             progress: params.get("progress").map(percent),
             action: given("action").and_then(name),
+            hint: params
+                .get("hint")
+                .map(|v| Some(self.text(v)).filter(|h| !h.is_empty())),
+            disabled: params.get("disabled").map(|v| *v == true),
         };
         let target = params["target"]
             .as_str()
@@ -363,6 +382,8 @@ impl Reader<'_> {
             chips: given("chips").map(|v| self.chips(v)),
             footer: given("footer").map(|v| self.text(v)),
             target: target.map(|t| (t, change)),
+            // `null` (or a wait that does not read) takes it away.
+            transfer: params.get("transfer").map(|v| self.prep(v)),
         }
     }
     /// A `screen.*` notification as the screens take it.

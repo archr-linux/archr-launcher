@@ -54,6 +54,8 @@ pub(super) struct Sheet<'s> {
     pub buttons: Vec<Button<'s>>,
     pub focus: usize,
     pub scroll: usize,
+    /// A wait shown by the buttons: its steps above them, its bytes below.
+    pub transfer: Option<&'s crate::apps::Transfer>,
 }
 pub(super) struct Button<'s> {
     pub label: String,
@@ -372,6 +374,7 @@ impl Ui<'_, '_> {
             buttons,
             focus: app.details_focus,
             scroll: app.details_scroll,
+            transfer: None,
         };
         self.sheet(&sheet, theme, art)
     }
@@ -581,9 +584,102 @@ impl Ui<'_, '_> {
             parts.pop();
         }
 
-        self.details_text(sheet.text, sheet.scroll, rect(theme.details_text), theme)?;
-        let area = rect(theme.details_actions);
+        let (mut text, mut area) = (rect(theme.details_text), rect(theme.details_actions));
+        // A wait (Progresso-itch-baixando): its steps, the buttons, then its
+        // bytes, ending where the buttons did; the text gives up the room.
+        let below = sheet.transfer.map(|transfer| {
+            let (line, gap) = (self.px(18.), self.px(6.));
+            let buttons = area.y() - line - gap;
+            let steps = Rect::new(area.x(), buttons - gap - line, area.width(), line as u32);
+            let bottom = (steps.y() - gap).max(text.y() + 1);
+            text.set_height((bottom - text.y()) as u32);
+            area.set_y(buttons);
+            let bytes = Rect::new(area.x(), area.bottom() + gap, area.width(), line as u32);
+            (transfer, steps, bytes)
+        });
+        self.details_text(sheet.text, sheet.scroll, text, theme)?;
+        if let Some((transfer, steps, bytes)) = below {
+            self.details_steps(transfer, steps, theme)?;
+            self.details_bytes(transfer, bytes, theme)?;
+        }
         self.details_actions((&sheet.buttons, sheet.focus), area, theme)
+    }
+
+    /// The wait's steps in a row: done and running lit, numbered.
+    fn details_steps(
+        &mut self,
+        transfer: &crate::apps::Transfer,
+        area: Rect,
+        theme: &Theme,
+    ) -> Result<(), String> {
+        let disc = self.px(16.);
+        let mut x = area.x();
+        for (n, step) in transfer.steps.iter().enumerate() {
+            let lit = n <= transfer.step;
+            let at = Rect::new(
+                x,
+                area.y() + (area.height() as i32 - disc) / 2,
+                disc as u32,
+                disc as u32,
+            );
+            let fill = if lit {
+                theme.highlight_bg
+            } else {
+                theme.border
+            };
+            self.rounded(at, disc as f32 / 2., fill, None)?;
+            let ink = if lit {
+                theme.highlight_text
+            } else {
+                theme.muted
+            };
+            self.label_aligned(
+                &(n + 1).to_string(),
+                (Face::Semibold, 9., ink),
+                at,
+                Align::Center,
+            )?;
+            x += disc + self.px(6.);
+            let ink = if n == transfer.step {
+                theme.text
+            } else {
+                theme.muted
+            };
+            let width = self.measure(step, Face::Semibold, 12.)? as i32;
+            let room = (area.right() - x).max(1) as u32;
+            self.label(
+                step,
+                (Face::Semibold, 12., ink),
+                Rect::new(x, area.y(), room, area.height()),
+            )?;
+            x += width + self.px(18.);
+            if x >= area.right() {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    /// "15,7 de 27,0 MB · 1,8 MB/s" on the left, "faltam ~6 s" on the right.
+    fn details_bytes(
+        &mut self,
+        transfer: &crate::apps::Transfer,
+        area: Rect,
+        theme: &Theme,
+    ) -> Result<(), String> {
+        if transfer.now.done == 0 && transfer.now.total == 0 {
+            return Ok(());
+        }
+        let (text, left) = crate::progress::describe(&self.catalog, transfer.now);
+        let mut room = area.width();
+        if let Some(left) = left {
+            let width = self.measure(&left, Face::Regular, 12.)?;
+            let at = Rect::new(area.right() - width as i32, area.y(), width, area.height());
+            self.label(&left, (Face::Regular, 12., theme.muted), at)?;
+            room = room.saturating_sub(width + self.px(12.) as u32);
+        }
+        let at = Rect::new(area.x(), area.y(), room.max(1), area.height());
+        self.label(&text, (Face::Regular, 12., theme.muted), at)
     }
 
     fn details_text(
@@ -663,7 +759,8 @@ impl Ui<'_, '_> {
         // Shrink text and padding together until the buttons fit.
         let icon = |n: usize| buttons[n].icon.is_some();
         let mut size = 14.;
-        let floor = self.frame.min_size().max(10. / self.frame.font.max(1.));
+        // Never under 12 px on screen: past that the labels are cut ("…").
+        let floor = self.frame.min_size().max(12. / self.frame.font.max(1.));
         let mut gap = self.px(8.);
         let between = labels.len().saturating_sub(1) as i32;
         let (mut widths, mut pad) = loop {
@@ -691,35 +788,16 @@ impl Ui<'_, '_> {
             }
             size -= 1.;
         };
-        // Still too wide at the floor: labels break between words. Each
-        // button holds its longest word, and the room left is shared; when
-        // even that is too wide, the buttons share the row equally and words
-        // break. A button never leaves its row.
+        // Still too wide at the floor: a button that fits its share keeps
+        // its width, the room left is shared by the others, and a label
+        // that still does not fit stays on one line, cut with "…"
+        // (Progresso-itch-1024).
         let total: i32 = widths.iter().sum::<i32>() + gap * between;
         if total > area.width() as i32 {
-            (pad, gap) = (self.px(6.), self.px(4.));
-            let mut least = Vec::new();
-            for (n, label) in labels.iter().enumerate() {
-                // In the face it is drawn with: semibold only when focused.
-                let face = if n == focus {
-                    Face::Semibold
-                } else {
-                    Face::Regular
-                };
-                let mut word = 0;
-                for w in label.split_whitespace() {
-                    word = word.max(self.measure(w, face, size)? as i32);
-                }
-                least.push(word + pad * 2 + if icon(n) { self.px(size + 6.) } else { 0 });
-            }
-            let count = labels.len().max(1) as i32;
-            let room = area.width() as i32 - gap * between;
-            let spare = (room - least.iter().sum::<i32>()) / count;
-            widths = if spare >= 0 {
-                least.iter().map(|w| w + spare).collect()
-            } else {
-                vec![(room / count).max(1); labels.len()]
-            };
+            let tighter = self.px(8.);
+            widths = widths.iter().map(|w| w - 2 * (pad - tighter)).collect();
+            (pad, gap) = (tighter, self.px(6.));
+            widths = share(&widths, area.width() as i32 - gap * between);
         }
         let mut x = area.x();
         for (n, (label, button)) in labels.iter().zip(buttons).enumerate() {
@@ -779,19 +857,11 @@ impl Ui<'_, '_> {
                 text_x += side + self.px(6.);
             }
             let room = (rect.right() - text_x - pad.min(text_x - rect.x())).max(1) as u32;
-            let lines = if self.measure(label, face, size)? > room {
-                self.wrap(label, face, size, room)?
-            } else {
-                vec![(*label).clone()]
-            };
-            let step = rect.height() as i32 / lines.len().max(1) as i32;
-            for (k, line) in lines.iter().enumerate() {
-                self.label(
-                    line,
-                    (face, size, ink),
-                    Rect::new(text_x, rect.y() + step * k as i32, room, step.max(1) as u32),
-                )?;
-            }
+            self.label(
+                label,
+                (face, size, ink),
+                Rect::new(text_x, rect.y(), room, rect.height()),
+            )?;
             x += widths[n] + gap;
         }
         Ok(())
@@ -846,5 +916,45 @@ impl Ui<'_, '_> {
             self.label(text, (face, size, ink), area)?;
         }
         Ok(())
+    }
+}
+
+/// Widths that fit `room`: the narrow ones keep theirs, the rest share
+/// what is left equally.
+fn share(wanted: &[i32], room: i32) -> Vec<i32> {
+    let mut fixed = vec![false; wanted.len()];
+    loop {
+        let left = wanted.len() - fixed.iter().filter(|f| **f).count();
+        let kept: i32 = wanted
+            .iter()
+            .zip(&fixed)
+            .filter(|(_, f)| **f)
+            .map(|(w, _)| w)
+            .sum();
+        let each = (room - kept) / left.max(1) as i32;
+        let mut changed = false;
+        for (n, w) in wanted.iter().enumerate() {
+            if !fixed[n] && *w <= each {
+                fixed[n] = true;
+                changed = true;
+            }
+        }
+        if !changed || left == 0 {
+            return wanted
+                .iter()
+                .zip(&fixed)
+                .map(|(w, f)| if *f { *w } else { each.max(1) })
+                .collect();
+        }
+    }
+}
+
+#[cfg(test)]
+mod share_tests {
+    #[test]
+    fn narrow_buttons_keep_their_width_and_the_rest_share() {
+        assert_eq!(super::share(&[120, 160, 70], 330), [120, 140, 70]);
+        assert_eq!(super::share(&[100, 100], 300), [100, 100]);
+        assert_eq!(super::share(&[300, 300, 300], 300), [100, 100, 100]);
     }
 }
