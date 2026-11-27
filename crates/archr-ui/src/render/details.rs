@@ -757,8 +757,8 @@ impl Ui<'_, '_> {
     ) -> Result<(), String> {
         let labels: Vec<&String> = buttons.iter().map(|b| &b.label).collect();
         // Shrink text and padding together until the buttons fit.
-        // Icons go before the text shrinks much: a row of three buttons
-        // keeps its words whole (Progresso-itch-1024 has none).
+        // The icons go before a word is cut: a row of three buttons keeps
+        // its words whole (Progresso-itch-1024 has none).
         let mut icons = true;
         let icon = |n: usize, icons: bool| icons && buttons[n].icon.is_some();
         let mut size = 14.;
@@ -790,12 +790,17 @@ impl Ui<'_, '_> {
             }
             let total: i32 = widths.iter().sum::<i32>() + gap * between;
             // The floor: 10 px on screen and the theme's smallest text.
-            if total <= area.width() as i32 || size <= floor {
+            if total <= area.width() as i32 {
                 break (widths, pad);
             }
-            if icons && size <= 13. {
-                (icons, size) = (false, 14.);
-                continue;
+            if size <= floor {
+                // Cut at the smallest text even with its icons: without
+                // them, from the largest again.
+                if icons && buttons.iter().any(|b| b.icon.is_some()) {
+                    (icons, size) = (false, 14.);
+                    continue;
+                }
+                break (widths, pad);
             }
             size -= 1.;
         };
