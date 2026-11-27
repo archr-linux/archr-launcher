@@ -1618,6 +1618,14 @@
 "osd.disc_start" = "正在从压缩包解压，仅首次需要。"
 "osd.disc_nospace_title" = "空间不足，无法解压光盘"
 "osd.disc_nospace" = "请释放存储卡空间，或在电脑上解压。"
+"osd.prepare_subtitle" = "正在准备启动 · 仅首次"
+"osd.prepare_debian" = "兼容模式（Debian）"
+"osd.prepare_runtime" = "运行库 {name}"
+"osd.prepare_rtp" = "RPG Maker {name} 文件"
+"osd.prepare_disc" = "游戏光盘"
+"osd.prepare_downloading" = "正在下载"
+"osd.prepare_unpacking" = "正在解压"
+"osd.prepare_cancel" = "取消并返回"
 
 # 错误报告
 "reports.title" = "错误报告"

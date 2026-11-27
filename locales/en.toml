@@ -1705,6 +1705,14 @@
 "osd.disc_start" = "Extracting it from the archive, only the first time."
 "osd.disc_nospace_title" = "No room for the disc"
 "osd.disc_nospace" = "Free space on the card, or extract the archive on a PC."
+"osd.prepare_subtitle" = "Getting ready to open · only the first time"
+"osd.prepare_debian" = "Compatibility mode (Debian)"
+"osd.prepare_runtime" = "Runtime {name}"
+"osd.prepare_rtp" = "RPG Maker {name} files"
+"osd.prepare_disc" = "Game disc"
+"osd.prepare_downloading" = "Downloading"
+"osd.prepare_unpacking" = "Unpacking"
+"osd.prepare_cancel" = "Cancel and go back"
 
 # System › Error reports (Relatorios-ajustes, Relatorios-ver, Relatorios-aviso)
 "reports.title" = "Error reports"

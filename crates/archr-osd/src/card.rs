@@ -100,7 +100,11 @@ impl Assets {
         );
         (self.regular, self.semibold) = (regular, semibold);
     }
-    fn tr(&self, key: &str, english: &str, values: &[(&str, String)]) -> String {
+    /// The regular and semibold faces, once loaded.
+    pub(crate) fn fonts(&self) -> Option<(&FontArc, &FontArc)> {
+        Some((self.regular.as_ref()?, self.semibold.as_ref()?))
+    }
+    pub(crate) fn tr(&self, key: &str, english: &str, values: &[(&str, String)]) -> String {
         let mut text = self
             .text
             .get(key)
@@ -269,7 +273,7 @@ pub struct Card {
     pub accent: [u8; 3],
 }
 
-fn paint(color: [u8; 3], alpha: u8) -> sk::Paint<'static> {
+pub(crate) fn paint(color: [u8; 3], alpha: u8) -> sk::Paint<'static> {
     let mut paint = sk::Paint {
         anti_alias: true,
         ..Default::default()
@@ -278,7 +282,12 @@ fn paint(color: [u8; 3], alpha: u8) -> sk::Paint<'static> {
     paint
 }
 
-fn rounded(out: &mut sk::Pixmap, (x, y, w, h): (f32, f32, f32, f32), r: f32, p: &sk::Paint) {
+pub(crate) fn rounded(
+    out: &mut sk::Pixmap,
+    (x, y, w, h): (f32, f32, f32, f32),
+    r: f32,
+    p: &sk::Paint,
+) {
     let path = crate::pill::rounded_rect((x, y, w, h), r);
     out.fill_path(
         &path,
@@ -313,7 +322,7 @@ fn scale(font: &FontArc, px: f32) -> PxScale {
     font.pt_to_px_scale(px * 0.75).unwrap_or(PxScale::from(px))
 }
 
-fn width(font: &FontArc, px: f32, text: &str) -> f32 {
+pub(crate) fn width(font: &FontArc, px: f32, text: &str) -> f32 {
     let mut last = None;
     let mut w = 0.0;
     for c in text.chars() {
@@ -360,7 +369,7 @@ fn wrap(font: &FontArc, px: f32, text: &str, max: f32) -> Vec<String> {
 }
 
 /// Draws `text` with its baseline at `y`.
-fn text(
+pub(crate) fn text(
     out: &mut sk::Pixmap,
     font: &FontArc,
     px: f32,
@@ -408,7 +417,7 @@ fn text(
     }
 }
 
-fn icon(out: &mut sk::Pixmap, svg: &str, color: [u8; 3], size: u32, (x, y): (i32, i32)) {
+pub(crate) fn icon(out: &mut sk::Pixmap, svg: &str, color: [u8; 3], size: u32, (x, y): (i32, i32)) {
     let hex = format!("#{:02X}{:02X}{:02X}", color[0], color[1], color[2]);
     let pixmap = crate::pill::rasterize(svg, &hex, size);
     out.draw_pixmap(
@@ -423,7 +432,7 @@ fn icon(out: &mut sk::Pixmap, svg: &str, color: [u8; 3], size: u32, (x, y): (i32
 
 /// No text under this many pixels, as in the launcher: on a small screen
 /// the text keeps it while the card shrinks around it.
-const MIN_TEXT: f32 = 10.0;
+pub(crate) const MIN_TEXT: f32 = 10.0;
 
 /// One frame of the card over a `width` x `height` surface.
 pub fn render(

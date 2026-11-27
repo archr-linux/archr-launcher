@@ -1705,6 +1705,14 @@
 "osd.disc_start" = "Распаковка из архива, только в первый раз."
 "osd.disc_nospace_title" = "Нет места для диска"
 "osd.disc_nospace" = "Освободите место на карте или распакуйте архив на ПК."
+"osd.prepare_subtitle" = "Подготовка к запуску · только в первый раз"
+"osd.prepare_debian" = "Режим совместимости (Debian)"
+"osd.prepare_runtime" = "Среда {name}"
+"osd.prepare_rtp" = "Файлы RPG Maker {name}"
+"osd.prepare_disc" = "Диск игры"
+"osd.prepare_downloading" = "Загрузка"
+"osd.prepare_unpacking" = "Распаковка"
+"osd.prepare_cancel" = "Отменить и вернуться"
 
 # System › Error reports (Relatorios-ajustes, Relatorios-ver, Relatorios-aviso)
 "reports.title" = "Отчёты об ошибках"

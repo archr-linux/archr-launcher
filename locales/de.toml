@@ -1611,6 +1611,14 @@
 "osd.disc_start" = "Wird aus dem Archiv entpackt, nur beim ersten Mal."
 "osd.disc_nospace_title" = "Kein Platz für die Disc"
 "osd.disc_nospace" = "Schaffe Platz auf der Karte oder entpacke das Archiv am PC."
+"osd.prepare_subtitle" = "Wird zum Start vorbereitet · nur beim ersten Mal"
+"osd.prepare_debian" = "Kompatibilitätsmodus (Debian)"
+"osd.prepare_runtime" = "Laufzeit {name}"
+"osd.prepare_rtp" = "RPG-Maker-{name}-Dateien"
+"osd.prepare_disc" = "Spieldisc"
+"osd.prepare_downloading" = "Wird geladen"
+"osd.prepare_unpacking" = "Wird entpackt"
+"osd.prepare_cancel" = "Abbrechen und zurück"
 
 # System › Fehlerberichte
 "reports.title" = "Fehlerberichte"

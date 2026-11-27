@@ -1705,6 +1705,14 @@
 "osd.disc_start" = "Extraindo do arquivo compactado, só na primeira vez."
 "osd.disc_nospace_title" = "Sem espaço para o disco"
 "osd.disc_nospace" = "Libere espaço no cartão ou descompacte o arquivo no PC."
+"osd.prepare_subtitle" = "Preparando para abrir · só na primeira vez"
+"osd.prepare_debian" = "Modo de compatibilidade (Debian)"
+"osd.prepare_runtime" = "Runtime {name}"
+"osd.prepare_rtp" = "Arquivos do RPG Maker {name}"
+"osd.prepare_disc" = "Disco do jogo"
+"osd.prepare_downloading" = "Baixando"
+"osd.prepare_unpacking" = "Extraindo"
+"osd.prepare_cancel" = "Cancelar e voltar"
 
 # System › Error reports (Relatorios-ajustes, Relatorios-ver, Relatorios-aviso)
 "reports.title" = "Relatórios de erro"

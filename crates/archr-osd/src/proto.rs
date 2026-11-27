@@ -133,8 +133,104 @@ fn volume_icon(level: u8, muted: bool) -> Icon {
     }
 }
 
+/// The screen before a game while it fetches or unpacks what it needs the
+/// first time (archr-prepare): `prepare TITLE STEPS CURRENT DONE TOTAL
+/// SPEED CANCEL`, tab separated, sent whole every half second. STEPS are
+/// `|` separated: `debian`, `runtime:NAME`, `rtp:VERSION`, `disc`; the ones
+/// before CURRENT are done. `prepare end` takes the screen away.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Prepare {
+    pub title: String,
+    pub steps: Vec<Step>,
+    pub current: usize,
+    /// Bytes so far and expected (0: unknown), and per second (0: not yet).
+    pub done: u64,
+    pub total: u64,
+    pub per_second: u64,
+    /// B stops it and goes back to the launcher.
+    pub cancel: bool,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Step {
+    Debian,
+    Runtime(String),
+    Rtp(String),
+    Disc,
+}
+impl Step {
+    fn parse(word: &str) -> Option<Self> {
+        // A long name is cut, not refused: the screen still shows.
+        let named =
+            |name: &str| Some(name.chars().take(40).collect::<String>()).filter(|n| !n.is_empty());
+        match word.split_once(':') {
+            None if word == "debian" => Some(Self::Debian),
+            None if word == "disc" => Some(Self::Disc),
+            Some(("runtime", name)) => named(name).map(Self::Runtime),
+            Some(("rtp", name)) => named(name).map(Self::Rtp),
+            _ => None,
+        }
+    }
+    /// It unpacks instead of downloading.
+    pub fn unpacks(&self) -> bool {
+        matches!(self, Self::Disc)
+    }
+}
+
+/// `Some(None)` takes the screen away; `None` is not a prepare message.
+pub fn parse_prepare(text: &str) -> Option<Option<Prepare>> {
+    if text.trim() == "prepare end" {
+        return Some(None);
+    }
+    let fields: Vec<&str> = text.strip_prefix("prepare\t")?.split('\t').collect();
+    let [title, steps, current, done, total, speed, cancel] = fields[..] else {
+        return None;
+    };
+    let steps: Vec<Step> = steps.split('|').map(Step::parse).collect::<Option<_>>()?;
+    let current: usize = current.parse().ok()?;
+    if steps.is_empty() || steps.len() > 6 || current >= steps.len() {
+        return None;
+    }
+    let title: String = title.chars().filter(|c| !c.is_control()).take(80).collect();
+    Some(Some(Prepare {
+        title,
+        steps,
+        current,
+        done: done.parse().ok()?,
+        total: total.parse().ok()?,
+        per_second: speed.parse().ok()?,
+        cancel: cancel == "1",
+    }))
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn prepare_messages_carry_the_whole_screen() {
+        let text = "prepare\tThe Binding of Isaac\tdebian|runtime:mono-6.12\t0\t45000000\t72839168\t2100000\t1";
+        let shown = parse_prepare(text).unwrap().unwrap();
+        assert_eq!(shown.title, "The Binding of Isaac");
+        assert_eq!(
+            shown.steps,
+            [Step::Debian, Step::Runtime("mono-6.12".into())]
+        );
+        assert_eq!(
+            (shown.current, shown.done, shown.total),
+            (0, 45000000, 72839168)
+        );
+        assert!(shown.cancel);
+        assert_eq!(parse_prepare("prepare end"), Some(None));
+        for bad in [
+            "prepare\tX\tdebian\t1\t0\t0\t0\t1",
+            "prepare\tX\tnetflix\t0\t0\t0\t0\t1",
+            "prepare\tX\truntime:\t0\t0\t0\t0\t1",
+            "prepare\tX\tdisc\t0\t-1\t0\t0\t0",
+            "prepare X disc 0 0 0 0 0",
+            "volume 10",
+        ] {
+            assert_eq!(parse_prepare(bad), None, "{bad}");
+        }
+    }
+
     use super::*;
 
     fn msg(icon: Icon, level: u8) -> Option<Message> {

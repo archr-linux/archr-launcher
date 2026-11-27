@@ -11,6 +11,7 @@ mod card;
 mod look;
 mod overlay;
 mod pill;
+mod prepare;
 mod proto;
 
 use smithay_client_toolkit::reexports::client::{
@@ -45,7 +46,9 @@ fn main() -> ExitCode {
 }
 
 fn send(text: &str) -> Result<(), String> {
-    proto::parse_notice(text).ok_or_else(|| format!("malformed message {text:?}"))?;
+    if proto::parse_notice(text).is_none() && proto::parse_prepare(text).is_none() {
+        return Err(format!("malformed message {text:?}"));
+    }
     let path = socket_path();
     let socket = UnixDatagram::unbound().map_err(|e| e.to_string())?;
     socket
@@ -70,19 +73,29 @@ fn bind() -> Result<UnixDatagram, String> {
     Ok(socket)
 }
 
-/// The latest well-formed pill and card messages waiting on the socket.
-fn drain(socket: &UnixDatagram) -> (Option<proto::Message>, Option<proto::Alert>) {
-    let mut buf = [0u8; 64];
-    let (mut pill, mut card) = (None, None);
+/// The latest well-formed messages waiting on the socket, as their parts.
+type Drained = (
+    Option<proto::Message>,
+    Option<proto::Alert>,
+    Option<Option<proto::Prepare>>,
+);
+/// The latest well-formed pill, card and prepare messages on the socket.
+fn drain(socket: &UnixDatagram) -> Drained {
+    let mut buf = [0u8; 1024];
+    let (mut pill, mut card, mut prepare) = (None, None, None);
     while let Ok(n) = socket.recv(&mut buf) {
         let text = std::str::from_utf8(&buf[..n]).unwrap_or("");
         match proto::parse_notice(text) {
             Some(proto::Notice::Level(m)) => pill = Some(m),
             Some(proto::Notice::Alert(a)) => card = Some(a),
-            None => {}
+            None => {
+                if let Some(screen) = proto::parse_prepare(text) {
+                    prepare = Some(screen);
+                }
+            }
         }
     }
-    (pill, card)
+    (pill, card, prepare)
 }
 
 fn serve() -> Result<(), String> {
@@ -123,9 +136,12 @@ fn serve() -> Result<(), String> {
             .dispatch_pending(&mut overlay)
             .map_err(|e| e.to_string())?;
         if ready > 0 && fds[1].revents != 0 {
-            let (pill, card) = drain(&socket);
+            let (pill, card, prepare) = drain(&socket);
             if let Some(message) = pill {
                 overlay.show(message, &qh);
+            }
+            if let Some(screen) = prepare {
+                overlay.show_prepare(screen, &qh);
             }
             if let Some(alert) = card {
                 overlay.show_card(alert, &qh);
@@ -143,7 +159,7 @@ mod tests {
     fn drain_keeps_the_latest_valid_message() {
         let (a, b) = UnixDatagram::pair().unwrap();
         b.set_nonblocking(true).unwrap();
-        assert_eq!(drain(&b), (None, None));
+        assert_eq!(drain(&b), (None, None, None));
         for text in [
             "volume 10",
             "garbage",
@@ -154,12 +170,21 @@ mod tests {
             a.send(text.as_bytes()).unwrap();
         }
         a.send(&[0xff, 0xfe]).unwrap();
-        assert_eq!(drain(&b), (proto::parse("brightness 40"), None));
-        assert_eq!(drain(&b), (None, None));
+        assert_eq!(drain(&b), (proto::parse("brightness 40"), None, None));
+        assert_eq!(drain(&b), (None, None, None));
         a.send(b"battery 3 2 8 game").unwrap();
         assert!(matches!(
             drain(&b),
-            (None, Some(proto::Alert::Battery(c))) if c.level == 3
+            (None, Some(proto::Alert::Battery(c)), None) if c.level == 3
         ));
+        // A prepare screen is longer than the other messages.
+        let long = format!(
+            "prepare\t{}\tdebian|runtime:mono-6.12\t1\t1\t2\t3\t1",
+            "A long game name ".repeat(4)
+        );
+        a.send(long.as_bytes()).unwrap();
+        assert!(matches!(drain(&b), (None, None, Some(Some(p))) if p.current == 1));
+        a.send(b"prepare end").unwrap();
+        assert_eq!(drain(&b), (None, None, Some(None)));
     }
 }

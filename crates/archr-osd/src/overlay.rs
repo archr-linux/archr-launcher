@@ -3,7 +3,7 @@
 use crate::card::{self, Assets, Card};
 use crate::look::{self, Edge, Look};
 use crate::pill::{self, Geometry, Painter, Timeline};
-use crate::proto::{Alert, Icon, Message};
+use crate::proto::{Alert, Icon, Message, Prepare};
 use smithay_client_toolkit::reexports::client::{
     globals::GlobalList,
     protocol::{wl_output, wl_shm, wl_surface},
@@ -36,10 +36,16 @@ struct Shown {
     drawn: Option<(Icon, u32, u8)>,
 }
 
+/// What the full-screen surface shows.
+enum Content {
+    Card(Card),
+    Prepare(Prepare),
+}
+
 struct CardShown {
     layer: LayerSurface,
     configured: bool,
-    card: Card,
+    card: Content,
     hold: Duration,
     shown_at: Instant,
     changed_at: Instant,
@@ -152,7 +158,6 @@ impl Overlay {
     /// The battery card, centered over the whole output; a new message
     /// replaces its text and keeps it up.
     pub fn show_card(&mut self, alert: Alert, qh: &QueueHandle<Self>) {
-        let now = Instant::now();
         if self.card.is_none() {
             self.restyle();
         }
@@ -162,6 +167,33 @@ impl Overlay {
         } else {
             card::HOLD_LOW
         };
+        self.show_content(Content::Card(card), hold, qh);
+    }
+
+    /// The screen before a game; `None` takes it away (it fades).
+    pub fn show_prepare(&mut self, prepare: Option<Prepare>, qh: &QueueHandle<Self>) {
+        match prepare {
+            Some(prepare) => {
+                self.show_content(Content::Prepare(prepare), crate::prepare::HOLD, qh);
+            }
+            None => {
+                if let Some(shown) = self
+                    .card
+                    .as_mut()
+                    .filter(|s| matches!(s.card, Content::Prepare(_)))
+                {
+                    shown.hold = Duration::ZERO;
+                    shown.changed_at = Instant::now();
+                }
+            }
+        }
+    }
+
+    fn show_content(&mut self, card: Content, hold: Duration, qh: &QueueHandle<Self>) {
+        let now = Instant::now();
+        if self.card.is_none() {
+            self.restyle();
+        }
         if let Some(shown) = &mut self.card {
             shown.card = card;
             shown.hold = hold;
@@ -215,12 +247,13 @@ impl Overlay {
         let fade_in = since_shown.as_secs_f32() / pill::FADE_IN.as_secs_f32();
         let fade_out = 1.0
             - since_change.saturating_sub(shown.hold).as_secs_f32() / pill::FADE_OUT.as_secs_f32();
-        let frame = card::render(
-            &shown.card,
-            &self.assets,
-            shown.size,
-            fade_in.min(fade_out).clamp(0.0, 1.0),
-        );
+        let opacity = fade_in.min(fade_out).clamp(0.0, 1.0);
+        let frame = match &shown.card {
+            Content::Card(card) => card::render(card, &self.assets, shown.size, opacity),
+            Content::Prepare(screen) => {
+                crate::prepare::render(screen, &self.assets, shown.size, opacity)
+            }
+        };
         let (w, h) = shown.size;
         let pool = match &mut self.card_pool {
             Some(pool) => pool,
