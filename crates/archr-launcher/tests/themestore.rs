@@ -354,6 +354,29 @@ fn an_update_replaces_the_folder_and_a_hand_made_one_is_never_overwritten() {
 }
 
 #[test]
+fn an_install_reports_download_then_check_then_install() {
+    let root = tempfile::tempdir().unwrap();
+    let fake = Fake::default();
+    let detail = detail(root.path(), &fake);
+    fake.answer(
+        "https://codeload.github.com/kaio-dev/neon/tar.gz/v1.2.0",
+        200,
+        Tarball::theme().bytes(),
+    );
+    let store = shop(root.path(), &fake);
+    let mut seen = Vec::new();
+    store
+        .install_watched(&detail, &mut |progress| seen.push(progress))
+        .unwrap();
+    let steps: Vec<usize> = seen.iter().map(|p| p.step).collect();
+    assert_eq!(steps, [0, 1, 2], "{seen:?}");
+    // The download starts at zero bytes against the details' size.
+    let first = seen[0].transfer.unwrap();
+    assert_eq!((first.done, first.total), (0, detail.size));
+    assert!(seen[1].transfer.is_none() && seen[2].transfer.is_none());
+}
+
+#[test]
 fn a_path_leaving_the_theme_refuses_the_whole_archive() {
     let root = tempfile::tempdir().unwrap();
     let into = root.path().join("into");

@@ -64,14 +64,16 @@ pub struct GitHub {
     http: Box<dyn Http>,
     /// Saved answers and pictures.
     pub cache: PathBuf,
-    pub cancel: AtomicBool,
+    /// Raised to stop the download under way (a store's B); shared, since
+    /// the downloading thread is busy until it returns.
+    pub cancel: std::sync::Arc<AtomicBool>,
 }
 impl GitHub {
     pub fn new(http: Box<dyn Http>, cache: PathBuf) -> Self {
         Self {
             http,
             cache,
-            cancel: AtomicBool::new(false),
+            cancel: std::sync::Arc::new(AtomicBool::new(false)),
         }
     }
     /// The system `curl`, hardened as for the scraper, held to `hosts`.
@@ -84,13 +86,24 @@ impl GitHub {
     }
     /// The body, `None` for 404; failures as locale keys.
     pub fn get(&self, url: &str, limit: u64) -> Result<Option<Vec<u8>>, &'static str> {
-        match self.http.get(url, limit, &self.cancel) {
+        self.get_watched(url, limit, &mut |_| {})
+    }
+    /// As `get`, telling `seen` the bytes received so far; a raised `cancel`
+    /// ends it as "store.cancelled".
+    pub fn get_watched(
+        &self,
+        url: &str,
+        limit: u64,
+        seen: &mut dyn FnMut(u64),
+    ) -> Result<Option<Vec<u8>>, &'static str> {
+        match self.http.get_watched(url, limit, &self.cancel, seen) {
             Ok(reply) if reply.status == 200 => Ok(Some(reply.body)),
             Ok(reply) if reply.status == 404 => Ok(None),
             Ok(reply) if matches!(reply.status, 403 | 429) && url.starts_with(API) => {
                 Err("store.rate_limited")
             }
             Ok(_) => Err("store.failed"),
+            Err(archr_scraper::NetError::Cancelled) => Err("store.cancelled"),
             Err(_) => Err("store.offline"),
         }
     }

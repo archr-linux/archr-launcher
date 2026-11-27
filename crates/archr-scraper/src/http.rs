@@ -26,6 +26,18 @@ pub trait Http: Send + Sync {
     /// Must return promptly with `Cancelled` once `cancel` is raised.
     /// Implementations must never log or return the URL: it carries credentials.
     fn get(&self, url: &str, limit: u64, cancel: &AtomicBool) -> Result<Response, NetError>;
+    /// GET as `get`, telling `seen` now and then how many bytes have arrived
+    /// (a progress bar's). One that cannot tell only answers.
+    fn get_watched(
+        &self,
+        url: &str,
+        limit: u64,
+        cancel: &AtomicBool,
+        seen: &mut dyn FnMut(u64),
+    ) -> Result<Response, NetError> {
+        let _ = seen;
+        self.get(url, limit, cancel)
+    }
     /// POST `form` (already URL-encoded) to `url`; no redirects. The form may
     /// carry passwords: the same never-log rule applies.
     fn post(
@@ -124,6 +136,7 @@ impl Curl {
         form: Option<&str>,
         limit: u64,
         cancel: &AtomicBool,
+        seen: &mut dyn FnMut(u64),
     ) -> Result<(u16, String, Vec<u8>), NetError> {
         if !trusted_on(url, self.hosts) {
             return Err(NetError::Failed);
@@ -182,13 +195,25 @@ impl Curl {
         let mut stdin = child.0.stdin.take().ok_or(NetError::Failed)?;
         stdin.write_all(config.as_bytes()).map_err(fail)?;
         drop(stdin);
+        // What curl wrote so far, for a progress bar: read a few times a
+        // second, told only when it grew.
+        let mut told = (0u64, std::time::Instant::now());
         let code = loop {
             if cancel.load(Relaxed) {
                 return Err(NetError::Cancelled);
             }
             match child.0.try_wait().map_err(fail)? {
                 Some(status) => break status.code(),
-                None => thread::sleep(Duration::from_millis(50)),
+                None => {
+                    if told.1.elapsed() >= Duration::from_millis(250) {
+                        let now = out.as_file().metadata().map_or(0, |m| m.len());
+                        if now > told.0 {
+                            seen(now);
+                        }
+                        told = (now.max(told.0), std::time::Instant::now());
+                    }
+                    thread::sleep(Duration::from_millis(50));
+                }
             }
         };
         match code {
@@ -210,9 +235,18 @@ impl Curl {
 
 impl Http for Curl {
     fn get(&self, url: &str, limit: u64, cancel: &AtomicBool) -> Result<Response, NetError> {
+        self.get_watched(url, limit, cancel, &mut |_| {})
+    }
+    fn get_watched(
+        &self,
+        url: &str,
+        limit: u64,
+        cancel: &AtomicBool,
+        seen: &mut dyn FnMut(u64),
+    ) -> Result<Response, NetError> {
         let mut url = url.to_owned();
         for _ in 0..4 {
-            let (status, location, body) = self.once(&url, None, limit, cancel)?;
+            let (status, location, body) = self.once(&url, None, limit, cancel, seen)?;
             if !matches!(status, 301 | 302 | 303 | 307 | 308) {
                 return Ok(Response { status, body });
             }
@@ -227,7 +261,7 @@ impl Http for Curl {
         limit: u64,
         cancel: &AtomicBool,
     ) -> Result<Response, NetError> {
-        let (status, _, body) = self.once(url, Some(form), limit, cancel)?;
+        let (status, _, body) = self.once(url, Some(form), limit, cancel, &mut |_| {})?;
         Ok(Response { status, body })
     }
 }

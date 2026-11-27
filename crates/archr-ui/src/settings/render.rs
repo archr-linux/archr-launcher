@@ -13,6 +13,8 @@ use crate::settings::{
 mod appearance;
 #[path = "render/bios.rs"]
 mod bios;
+#[path = "render/progress.rs"]
+mod progress;
 #[path = "render/cheevos.rs"]
 mod cheevos;
 #[path = "render/controls.rs"]
@@ -1205,6 +1207,21 @@ impl View<'_, '_, '_> {
         }
         if let Some(offer) = &state.convert {
             return self.ui.convert_question(offer, self.theme);
+        }
+        // A theme install shows its progress, not a question.
+        if let (Some("store.installing"), Some(progress), Some(detail)) = (
+            state.store.working,
+            state.store.progress.as_ref(),
+            state.store.detail.as_ref(),
+        ) {
+            let name = detail.card.title(self.ui.catalog.language()).to_owned();
+            let title = self.ui.catalog.format("store.installing", &[("name", &name)]);
+            return self.progress_window(
+                &title,
+                &crate::settings::store::INSTALL_STEPS,
+                progress,
+                state.store.cancelling,
+            );
         }
         use crate::HintButton::Key;
         type Hints = &'static [(crate::HintButton, &'static str)];

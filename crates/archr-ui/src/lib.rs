@@ -23,6 +23,7 @@ pub mod folders;
 
 pub mod input;
 pub mod pad;
+pub mod progress;
 pub mod state;
 
 pub mod controllers;

@@ -5,6 +5,7 @@ use crate::github::{day, name_ok, owner_ok, unpack, GitHub, Rules, API, LOOKED, 
 use archr_io::{atomic_publish, read_utf8, Symlinks};
 use archr_scraper::Http;
 use archr_ui::{
+    progress::{Meter, Progress},
     settings::store::{allowed, Action, Card, Detail, Reply, Tab, TOPIC},
     Theme,
 };
@@ -146,7 +147,7 @@ fn files(dir: &Path) -> Vec<(String, u64)> {
 }
 
 pub struct Shop {
-    github: GitHub,
+    pub github: GitHub,
     /// User themes: /storage/.config/archr-launcher/themes.
     themes: PathBuf,
 }
@@ -400,6 +401,16 @@ impl Shop {
     /// Downloads the release (or branch) the details showed, checks it and
     /// swaps it into the themes folder in one rename.
     pub fn install(&self, detail: &Detail) -> Result<(), &'static str> {
+        self.install_watched(detail, &mut |_| {})
+    }
+    /// As `install`, telling `report` where it is: the download with its
+    /// bytes (the details' size as the total, the tarball being close to
+    /// it), then checking, then installing.
+    pub fn install_watched(
+        &self,
+        detail: &Detail,
+        report: &mut dyn FnMut(Progress),
+    ) -> Result<(), &'static str> {
         let card = &detail.card;
         if !card_ok(card) || !name_ok(&detail.reference) {
             return Err("store.invalid");
@@ -413,11 +424,27 @@ impl Shop {
             "{CODELOAD}/{}/{}/tar.gz/{}",
             card.owner, card.repo, detail.reference
         );
-        let tarball = match self.github.get(&url, TARBALL_LIMIT) {
+        self.github.cancel.store(false, std::sync::atomic::Ordering::Relaxed);
+        let mut meter = Meter::new(detail.size);
+        report(Progress {
+            step: 0,
+            transfer: Some(meter.read(0)),
+        });
+        let tarball = match self.github.get_watched(&url, TARBALL_LIMIT, &mut |bytes| {
+            report(Progress {
+                step: 0,
+                transfer: Some(meter.read(bytes)),
+            })
+        }) {
             Ok(Some(body)) => body,
+            Err("store.cancelled") => return Err("store.cancelled"),
             Err("store.offline") => return Err("store.download_failed"),
             _ => return Err("store.failed"),
         };
+        report(Progress {
+            step: 1,
+            transfer: None,
+        });
         let fail = |_: io::Error| "store.failed";
         fs::create_dir_all(&self.themes).map_err(fail)?;
         let staging = tempfile::Builder::new()
@@ -447,6 +474,10 @@ impl Shop {
             stars: card.stars,
         };
         let text = toml::to_string(&manifest).map_err(|_| "store.failed")?;
+        report(Progress {
+            step: 2,
+            transfer: None,
+        });
         fs::write(staging.path().join(MANIFEST), text).map_err(fail)?;
         // The old version moves aside (onto an empty folder) and goes away
         // only once the new one is in place.
@@ -481,6 +512,16 @@ impl Shop {
     /// One request of the store lane. `active` is the saved theme, which
     /// cannot be removed; `queue` collects cards still to decorate.
     pub fn handle(&self, action: Action, active: &str, queue: &mut VecDeque<Card>) -> Vec<Reply> {
+        self.handle_watched(action, active, queue, &mut |_| {})
+    }
+    /// As `handle`; an install tells `report` its progress while it runs.
+    pub fn handle_watched(
+        &self,
+        action: Action,
+        active: &str,
+        queue: &mut VecDeque<Card>,
+        report: &mut dyn FnMut(Reply),
+    ) -> Vec<Reply> {
         match action {
             Action::List(Tab::Installed, _) => vec![self.installed()],
             Action::List(tab, refresh) => {
@@ -497,8 +538,10 @@ impl Shop {
                 )]
             }
             Action::Install(detail) => {
-                let done = self.install(&detail).map(|()| "store.installed_ok");
-                if let Err(problem) = done {
+                let done = self
+                    .install_watched(&detail, &mut |progress| report(Reply::Progress(progress)))
+                    .map(|()| "store.installed_ok");
+                if let Some(problem) = done.err().filter(|p| *p != "store.cancelled") {
                     log::warn!(
                         "Theme store install of {} failed: {problem}",
                         detail.card.folder()
@@ -506,6 +549,8 @@ impl Shop {
                 }
                 vec![self.installed(), Reply::Done(done)]
             }
+            // Raised by the settings worker on its own: never queued here.
+            Action::Cancel => Vec::new(),
             Action::Remove(folder) if folder == active => {
                 vec![Reply::Done(Err("store.active_theme"))]
             }

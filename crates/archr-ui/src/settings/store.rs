@@ -183,7 +183,16 @@ pub enum Action {
     Install(Box<Detail>),
     /// Remove the theme folder.
     Remove(String),
+    /// Stop the install under way (its download).
+    Cancel,
 }
+
+/// An install's steps, as its progress window names them.
+pub const INSTALL_STEPS: [&str; 3] = [
+    "store.step_download",
+    "store.step_check",
+    "store.step_install",
+];
 
 /// Host answers.
 #[derive(Clone, Debug)]
@@ -201,6 +210,8 @@ pub enum Reply {
     Detail(String, Result<Box<Detail>, &'static str>),
     /// Themes installed by the store, by folder with their content id.
     Installed(BTreeMap<String, String>, Vec<Card>),
+    /// Where a running install is (step, bytes).
+    Progress(crate::progress::Progress),
     /// An install or removal ended; the key names the outcome.
     Done(Result<&'static str, &'static str>),
     /// The installed store themes (as `Installed`) and the newest content
@@ -226,6 +237,10 @@ pub struct Store {
     pub image: usize,
     /// Locale key while an install or removal runs.
     pub working: Option<&'static str>,
+    /// The running install's progress, for its window.
+    pub progress: Option<crate::progress::Progress>,
+    /// B was pressed: the download stops, the window says so until it ends.
+    pub cancelling: bool,
     pub confirm_remove: bool,
     /// The newest content id the store last showed for installed themes.
     pub latest: BTreeMap<String, String>,
@@ -280,6 +295,10 @@ impl Settings {
     pub(super) fn store_input(&mut self, button: Button) -> Option<Effect> {
         let store = &mut self.store;
         if store.working.is_some() {
+            if button == Button::B && store.working == Some("store.installing") && !store.cancelling {
+                store.cancelling = true;
+                return Some(Effect::Store(Action::Cancel));
+            }
             return Some(Effect::None);
         }
         if store.confirm_remove {
@@ -360,6 +379,8 @@ impl Settings {
                 _ if detail.too_new => self.fail(None, "store.too_new".into()),
                 _ => {
                     self.store.working = Some("store.installing");
+                    self.store.progress = Some(crate::progress::Progress::default());
+                    self.store.cancelling = false;
                     return Effect::Store(Action::Install(Box::new(detail)));
                 }
             },
@@ -378,6 +399,9 @@ impl Settings {
     pub(super) fn store_hints(&self) -> &'static [(HintButton, &'static str)] {
         use HintButton::{Key, Pair};
         let store = &self.store;
+        if store.working == Some("store.installing") && !store.cancelling {
+            return &[(Key('B'), "hint.cancel")];
+        }
         if store.working.is_some() {
             return &[];
         }
@@ -482,8 +506,15 @@ impl Settings {
                 store.installed = installed;
                 store.latest = latest;
             }
+            Reply::Progress(progress) => {
+                if store.working.is_some() {
+                    store.progress = Some(progress);
+                }
+            }
             Reply::Done(result) => {
                 store.working = None;
+                store.progress = None;
+                store.cancelling = false;
                 match result {
                     Ok(key) => {
                         self.fail(None, key.into());
@@ -592,15 +623,32 @@ mod tests {
             state.handle(Button::A),
             Effect::Store(Action::Install(Box::new(detail.clone())))
         );
+        assert_eq!(state.handle(Button::A), Effect::None, "busy while installing");
         assert_eq!(
-            state.handle(Button::B),
-            Effect::None,
-            "busy while installing"
+            state.store.progress,
+            Some(crate::progress::Progress::default())
         );
+        let moving = crate::progress::Progress {
+            step: 0,
+            transfer: Some(crate::progress::Transfer {
+                done: 10,
+                total: 40,
+                per_second: 5,
+            }),
+        };
+        state.store_reply(Reply::Progress(moving));
+        assert_eq!(state.store.progress, Some(moving));
+        // B stops the download once; the window stays until the host answers.
+        assert_eq!(state.store_hints(), &[(HintButton::Key('B'), "hint.cancel")]);
+        assert_eq!(state.handle(Button::B), Effect::Store(Action::Cancel));
+        assert!(state.store.cancelling);
+        assert_eq!(state.handle(Button::B), Effect::None);
         let mut installed = BTreeMap::new();
         installed.insert("kaio-neon".to_owned(), "t1".to_owned());
         state.store_reply(Reply::Installed(installed, vec![detail.card.clone()]));
         state.store_reply(Reply::Done(Ok("store.installed_ok")));
+        assert_eq!(state.store.progress, None);
+        assert!(!state.store.cancelling);
         assert!(state.options[&Id::Theme].contains(&"kaio-neon".to_owned()));
         assert_eq!(state.store.action(), Some("store.use"));
         // Installed and used: it comes whole, the last theme's accent gone.

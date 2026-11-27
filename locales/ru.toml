@@ -889,6 +889,15 @@
 "store.installing" = "Установка: {name}"
 "store.removing" = "Удаление: {name}"
 "store.wait" = "Загрузка с GitHub. Не выключайте устройство."
+"store.step_download" = "Загрузка"
+"store.step_check" = "Проверка"
+"store.step_install" = "Установка"
+"store.cancelled" = "Установка отменена"
+"progress.cancelling" = "Отмена…"
+"progress.keep_on" = "Не выключайте устройство."
+"progress.left" = "осталось ~{time}"
+"progress.seconds" = "{count} с"
+"progress.minutes" = "{count} мин"
 "store.remove_question" = "Удалить тему {name}?"
 "store.remove_detail" = "Папка темы удаляется с устройства. Её можно снова установить из магазина."
 "store.installed_ok" = "Тема установлена. Выберите «Применить», чтобы увидеть её."
@@ -898,7 +907,7 @@
 "store.invalid" = "Тема не соответствует правилам магазина и не установлена."
 "store.too_big" = "Тема больше, чем допускает магазин."
 "store.name_taken" = "Уже есть папка темы с таким именем не из магазина."
-"store.download_failed" = "Загрузка не завершилась. Проверьте сеть; магазин принимает темы до 25 МБ."
+"store.download_failed" = "Загрузка не завершилась. Проверьте сеть; магазин принимает темы до 128 МБ."
 # System updates (Settings › System › Updates)
 "start.update_ready" = { one = "Обновление · {count} пакет", few = "Обновление · {count} пакета", many = "Обновление · {count} пакетов", other = "Обновление · {count} пакета" }
 "start.store_updates" = { one = "{name} · {count} обновление", few = "{name} · {count} обновления", many = "{name} · {count} обновлений", other = "{name} · {count} обновления" }

@@ -889,6 +889,15 @@
 "store.installing" = "{name} wird installiert"
 "store.removing" = "{name} wird entfernt"
 "store.wait" = "Download von GitHub. Lass das Gerät eingeschaltet."
+"store.step_download" = "Laden"
+"store.step_check" = "Prüfen"
+"store.step_install" = "Installieren"
+"store.cancelled" = "Installation abgebrochen"
+"progress.cancelling" = "Wird abgebrochen…"
+"progress.keep_on" = "Lass das Gerät eingeschaltet."
+"progress.left" = "noch ~{time}"
+"progress.seconds" = "{count} s"
+"progress.minutes" = "{count} Min."
 "store.remove_question" = "Theme {name} entfernen?"
 "store.remove_detail" = "Sein Ordner wird von diesem Gerät gelöscht. Du kannst es im Store erneut installieren."
 "store.installed_ok" = "Theme installiert. Wähle Jetzt verwenden, um es anzuzeigen."
@@ -898,7 +907,7 @@
 "store.invalid" = "Dieses Theme entspricht nicht den Store-Regeln und wurde nicht installiert."
 "store.too_big" = "Dieses Theme überschreitet die erlaubte Größe im Store."
 "store.name_taken" = "Ein Theme-Ordner mit diesem Namen existiert bereits und stammt nicht aus dem Store."
-"store.download_failed" = "Download unvollständig. Prüfe das Netzwerk; der Store akzeptiert Themes bis 25 MB."
+"store.download_failed" = "Download unvollständig. Prüfe das Netzwerk; der Store akzeptiert Themes bis 128 MB."
 
 # Systemupdates
 "start.update_ready" = { one = "Updates · {count} Paket", other = "Updates · {count} Pakete" }

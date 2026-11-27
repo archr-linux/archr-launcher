@@ -607,6 +607,8 @@ pub struct Worker {
     bt_scans: mpsc::Sender<()>,
     profiles: mpsc::Sender<()>,
     store: mpsc::Sender<archr_ui::settings::store::Action>,
+    /// Stops the theme store's download under way (its lane is busy then).
+    store_cancel: std::sync::Arc<AtomicBool>,
     slow: mpsc::Sender<diag::Slow>,
     joypad: mpsc::Sender<archr_ui::settings::joypad::Command>,
     rx: mpsc::Receiver<Reply>,
@@ -641,6 +643,11 @@ impl Worker {
         let profile_paths = paths.clone();
         let (store, store_requests) = mpsc::channel();
         let (store_results, store_paths) = (results.clone(), paths.clone());
+        let store_shop = crate::themestore::Shop::production(
+            paths.cache.join("store"),
+            paths.at(crate::appearance::USER_THEMES),
+        );
+        let store_cancel = store_shop.github.cancel.clone();
         let (slow, slow_requests) = mpsc::channel();
         let (slow_results, slow_paths) = (results.clone(), paths.clone());
         let (joypad, joypad_requests) = mpsc::channel();
@@ -695,7 +702,7 @@ impl Worker {
             .map_err(|e| e.to_string())?;
         thread::Builder::new()
             .name("launcher-store".into())
-            .spawn(move || store_lane(&store_paths, &store_requests, &store_results))
+            .spawn(move || store_lane(&store_paths, &store_shop, &store_requests, &store_results))
             .map_err(|e| e.to_string())?;
         thread::Builder::new()
             .name("launcher-cheevos".into())
@@ -836,6 +843,7 @@ impl Worker {
             bt_scans,
             profiles,
             store,
+            store_cancel,
             slow,
             joypad,
             rx,
@@ -891,6 +899,10 @@ impl Worker {
             return self.profiles.send(()).map_err(|e| e.to_string());
         }
         if let Work::Store(action) = work {
+            if matches!(action, archr_ui::settings::store::Action::Cancel) {
+                self.store_cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+                return Ok(());
+            }
             return self.store.send(action).map_err(|e| e.to_string());
         }
         if let Work::Joypad(command) = work {
@@ -1391,13 +1403,10 @@ impl Worker {
 /// Covers are fetched between requests, a new request always first.
 fn store_lane(
     paths: &Paths,
+    shop: &crate::themestore::Shop,
     requests: &mpsc::Receiver<archr_ui::settings::store::Action>,
     results: &mpsc::Sender<Reply>,
 ) {
-    let shop = crate::themestore::Shop::production(
-        paths.cache.join("store"),
-        paths.at(crate::appearance::USER_THEMES),
-    );
     let mut queue = std::collections::VecDeque::new();
     let mut next = None;
     loop {
@@ -1413,7 +1422,9 @@ fn store_lane(
                     .ok()
                     .and_then(|cfg| cfg.get_setting(Id::Theme.key(), None, None))
                     .unwrap_or_default();
-                shop.handle(action, &active, &mut queue)
+                shop.handle_watched(action, &active, &mut queue, &mut |reply| {
+                    let _ = results.send(Reply::Store(reply));
+                })
             }
             (None, Some(card)) => shop
                 .decorate(&card)

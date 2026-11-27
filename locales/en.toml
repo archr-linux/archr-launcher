@@ -889,6 +889,15 @@
 "store.installing" = "Installing {name}"
 "store.removing" = "Removing {name}"
 "store.wait" = "Downloading from GitHub. Keep the device on."
+"store.step_download" = "Download"
+"store.step_check" = "Check"
+"store.step_install" = "Install"
+"store.cancelled" = "Install cancelled"
+"progress.cancelling" = "Cancelling…"
+"progress.keep_on" = "Keep the device on."
+"progress.left" = "about {time} left"
+"progress.seconds" = "{count} s"
+"progress.minutes" = "{count} min"
 "store.remove_question" = "Remove the theme {name}?"
 "store.remove_detail" = "Its folder is deleted from this device. You can install it again from the store."
 "store.installed_ok" = "Theme installed. Choose Use now to see it."
@@ -898,7 +907,7 @@
 "store.invalid" = "This theme does not follow the store rules and was not installed."
 "store.too_big" = "This theme is larger than the store allows."
 "store.name_taken" = "A theme folder with this name, not from the store, already exists."
-"store.download_failed" = "The download did not finish. Check the network; the store takes themes up to 25 MB."
+"store.download_failed" = "The download did not finish. Check the network; the store takes themes up to 128 MB."
 # System updates (Settings › System › Updates)
 "start.update_ready" = { one = "Updates · {count} package", other = "Updates · {count} packages" }
 "start.store_updates" = { one = "{name} · {count} update", other = "{name} · {count} updates" }

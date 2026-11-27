@@ -888,6 +888,15 @@
 "store.installing" = "正在安装 {name}"
 "store.removing" = "正在移除 {name}"
 "store.wait" = "正在从 GitHub 下载，请保持设备开机。"
+"store.step_download" = "下载"
+"store.step_check" = "校验"
+"store.step_install" = "安装"
+"store.cancelled" = "已取消安装"
+"progress.cancelling" = "正在取消…"
+"progress.keep_on" = "请保持设备开机。"
+"progress.left" = "剩余约 {time}"
+"progress.seconds" = "{count} 秒"
+"progress.minutes" = "{count} 分钟"
 "store.remove_question" = "移除主题 {name}？"
 "store.remove_detail" = "将从设备中删除该主题文件夹。你可随时从商店重新安装。"
 "store.installed_ok" = "主题已安装。选择“立即使用”即可查看。"
@@ -897,7 +906,7 @@
 "store.invalid" = "此主题不符合商店规则，未安装。"
 "store.too_big" = "此主题超出商店允许的大小。"
 "store.name_taken" = "已有同名主题文件夹，且并非来自商店。"
-"store.download_failed" = "下载未完成。请检查网络。商店支持最大 25 MB 的主题。"
+"store.download_failed" = "下载未完成。请检查网络。商店支持最大 128 MB 的主题。"
 
 # 系统更新
 "start.update_ready" = { other = "更新 · {count} 个软件包" }
