@@ -757,7 +757,10 @@ impl Ui<'_, '_> {
     ) -> Result<(), String> {
         let labels: Vec<&String> = buttons.iter().map(|b| &b.label).collect();
         // Shrink text and padding together until the buttons fit.
-        let icon = |n: usize| buttons[n].icon.is_some();
+        // Icons go before the text shrinks much: a row of three buttons
+        // keeps its words whole (Progresso-itch-1024 has none).
+        let mut icons = true;
+        let icon = |n: usize, icons: bool| icons && buttons[n].icon.is_some();
         let mut size = 14.;
         // Never under 12 px on screen: past that the labels are cut ("…").
         let floor = self.frame.min_size().max(12. / self.frame.font.max(1.));
@@ -767,7 +770,11 @@ impl Ui<'_, '_> {
             let pad = self.px(size + 1.);
             let mut widths = Vec::new();
             for (n, label) in labels.iter().enumerate() {
-                let extra = if icon(n) { self.px(size + 6.) } else { 0 };
+                let extra = if icon(n, icons) {
+                    self.px(size + 6.)
+                } else {
+                    0
+                };
                 // Drawn semibold when focused, regular otherwise; small
                 // hinted sizes can make either one the wider.
                 let mut text = self.measure(label, Face::Semibold, size)?.max(self.measure(
@@ -785,6 +792,10 @@ impl Ui<'_, '_> {
             // The floor: 10 px on screen and the theme's smallest text.
             if total <= area.width() as i32 || size <= floor {
                 break (widths, pad);
+            }
+            if icons && size <= 13. {
+                (icons, size) = (false, 14.);
+                continue;
             }
             size -= 1.;
         };
@@ -839,7 +850,7 @@ impl Ui<'_, '_> {
                 continue;
             }
             let mut text_x = rect.x() + pad;
-            if let Some(glyph) = &button.icon {
+            if let Some(glyph) = button.icon.as_ref().filter(|_| icons) {
                 let side = self.px(size);
                 let at = Rect::new(
                     text_x,
