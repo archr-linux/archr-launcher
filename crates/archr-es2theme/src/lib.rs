@@ -624,7 +624,20 @@ fn report(
     if noncommercial(license) {
         let _ = writeln!(
             r,
-            "- **Uso não comercial.** Não pode ir nas imagens do Arch R nem na Loja de temas sem autorização por escrito do autor."
+            "- **Uso não comercial.** Pode ser distribuído de graça, inclusive na Loja de temas, \
+             com os créditos dos autores, o texto da licença (`LICENSE`) e a lista do que mudou \
+             em relação ao original (no README)."
+        );
+        if license.contains("SA") {
+            let _ = writeln!(
+                r,
+                "- **Mesma licença (SA).** O tema convertido e qualquer versão dele ficam na licença do original."
+            );
+        }
+        let _ = writeln!(
+            r,
+            "- **Fora das imagens do Arch R.** Lojas vendem consoles com o sistema já gravado, \
+             e um tema não comercial dentro da imagem iria junto numa venda."
         );
     }
     let _ = writeln!(r, "\n## Resultado\n");
