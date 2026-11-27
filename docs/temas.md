@@ -905,7 +905,7 @@ vale.
 
 | dado | o que é |
 |---|---|
-| `${system}` | o id do sistema em foco (`snes`; uma coleção sem o `@`: `favorites`) |
+| `${system}` | o id do sistema em foco (`snes`; uma coleção sem o `@`: `favorites`; um app, o id do módulo: `itchio`) |
 | `${system.name}` | o nome dele ("Super Nintendo") |
 | `${system.maker}`, `${system.year}` | fabricante e ano, do catálogo de sistemas |
 | `${system.count}`, `${system.games}` | quantos jogos: "213" e "213 jogos" (no idioma) |
