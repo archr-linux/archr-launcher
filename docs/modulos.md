@@ -1035,8 +1035,30 @@ do `tone` (`good`, `info`, `bad`, `muted`).
 **Detalhe** (`layout = "detail"`), desenhado com os retângulos `details_*`:
 `image`, `gallery` (até 8), `subtitle`, `facts` (até 8, `{title, value,
 tone?}`), `text` (até 4000 caracteres, com quebras de linha; rola com ↑↓) e
-`buttons` (até 4, `{id, label, icon?, action, progress?}`; `progress` 0–100
-preenche o botão).
+`buttons` (até 4, `{id, label, icon?, action, progress?, hint?, disabled?}`;
+`progress` 0–100 preenche o botão e entra no rótulo, "Baixando 58%"; `hint` é
+o que a dica do A diz nele, quando não é o rótulo, "Cancelar download";
+`disabled: true` desenha o botão apagado e o A não faz nada nele, para ele
+ficar no lugar durante uma espera) e `transfer` (abaixo).
+
+Os botões ficam sempre numa linha: o launcher diminui o texto, tira os ícones
+antes de cortar uma palavra e, se ainda faltar espaço, corta o rótulo com "…";
+um rótulo nunca quebra em duas linhas. Rótulos curtos ("Apagar", "Página")
+cabem inteiros com três botões em qualquer tela.
+
+**Espera no detalhe** (`transfer`, launcher 0.5.0 com `screen.transfer` em
+`capabilities`): `{steps, step, done?, total?}`, `steps` até 4 textos
+(texto ou `{key, args}`), `step` o que está rodando (0 é o primeiro), `done` e
+`total` em bytes (`total` 0: desconhecido). O launcher desenha as etapas
+numeradas acima dos botões e, embaixo, "15,7 de 27,0 MB · 1,8 MB/s" e "faltam
+~6 s", com a velocidade medida por ele entre as mensagens; o texto da tela
+cede o espaço. Mande o `transfer` inteiro a cada mudança (no `screen.show` ou
+num `screen.patch` com `transfer`); outro `step`, menos bytes ou outro `total`
+recomeçam a medida; `transfer: null` tira a espera. Uma espera típica
+(maquete Progresso-itch-baixando): `step` 0 "Baixar" com os bytes, `step` 1
+"Instalar em Mega Drive" enquanto o `rom.install` roda; o primeiro botão com
+`progress`, `action` que cancela e `hint: "Cancelar download"`, os outros
+`disabled` no mesmo lugar.
 
 Um `screen.show` com o id de uma tela que já está na pilha a **substitui no
 lugar**, mantendo a posição do usuário e as telas acima dela (para atualizar
@@ -1046,8 +1068,9 @@ disso, a nova toma o lugar do topo).
 `screen.patch` muda a tela `screen` (o id; sem ele, a do topo): `append`
 acrescenta itens, `more` e `footer` trocam, `chips` substitui os chips, e
 `target` muda uma parte: `"item:<id>"` com `title`/`label`, `subtitle`,
-`badge`, `tone`, `image`; `"button:<id>"` com `label`, `action` e
-`progress` (`null` tira a barra). Patches e shows chegam à tela no máximo 4
+`badge`, `tone`, `image`; `"button:<id>"` com `label`, `action`,
+`progress` (`null` tira a barra), `hint` e `disabled`. `transfer` (sem
+`target`) troca a espera do detalhe; `null` a tira. Patches e shows chegam à tela no máximo 4
 vezes por segundo (juntos com os `ui.update`); mais de 256 esperando são
 descartados com aviso no log. Um patch só refaz os itens que mudou ou
 acrescentou; de vários `screen.toast` juntos, só o último aparece.
@@ -1216,4 +1239,7 @@ quebra de protocolo e o processo para); as cópias das imagens, como em 10.3
 (uma imagem já vista, pelo mesmo arquivo, não é lida de novo). O `initialize` lista em `capabilities` os métodos `screen.*` que o
 launcher desenha; um método que não está lá (um launcher antigo sem
 `screen.qr`, por exemplo) é recusado com aviso no log, e o app deve seguir sem
-ele.
+ele. Desde o launcher 0.5.0 a lista traz também `screen.transfer` (a espera no
+detalhe), `button.hint` e `button.disabled`: um launcher anterior ignora esses
+campos, então o app só deve contar com eles (mudar os botões durante uma
+espera, por exemplo) quando estão na lista.
