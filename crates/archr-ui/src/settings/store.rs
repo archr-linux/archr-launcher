@@ -705,4 +705,24 @@ mod tests {
         }
         assert!(newer("0.2", "0.1.9") && !newer("0.1", "0.1.0") && !newer("", "0.1.0"));
     }
+    /// A theme made for the 0.2.0 launcher (Albedo: frame tint, default_view)
+    /// is refused by an older one, which would draw it broken, and taken by
+    /// this one.
+    #[test]
+    fn a_theme_for_a_newer_launcher_is_refused_by_an_older_one() {
+        let toml = "name = \"Albedo\"\nmin_launcher = \"0.2.0\"\n";
+        let card = || Card {
+            owner: "archr-linux".into(),
+            repo: "archr-theme-albedo".into(),
+            branch: "main".into(),
+            ..Card::default()
+        };
+        assert!(
+            Detail::describe(card(), toml, &[], "0.1.0")
+                .unwrap()
+                .too_new
+        );
+        let ours = env!("CARGO_PKG_VERSION");
+        assert!(!Detail::describe(card(), toml, &[], ours).unwrap().too_new);
+    }
 }

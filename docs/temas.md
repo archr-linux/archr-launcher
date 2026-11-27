@@ -2645,15 +2645,22 @@ description = { en = "Neon pink over deep purple.", pt_BR = "Rosa neon sobre rox
 author = "kaio-dev"          # sem autor, aparece o dono do repositório
 version = "1.2.0"            # sem versão, aparece a tag da release
 license = "CC BY 4.0"        # texto curto; o arquivo LICENSE também é instalado
-min_launcher = "0.1.0"       # versão mínima do launcher; abaixo dela não instala
+min_launcher = "0.2.0"       # versão mínima do launcher; abaixo dela não instala
 ```
 
-`min_launcher` compara com a versão do **pacote** do launcher (hoje `0.1.0`),
+`min_launcher` compara com a versão do **pacote** do launcher (hoje `0.2.0`),
 não com a versão do sistema que as Configurações mostram (`v3.1.0 · …`) nem
 com o número da API de temas (3.1). Um valor acima da versão do launcher
 instalado faz a Loja recusar o tema ("Este tema pede uma versão mais nova do
-launcher."): use `0.1.0`
+launcher."): use a versão de que o tema precisa (tabela abaixo)
 ou deixe a chave de fora.
+
+| `min_launcher` | o launcher que a partir dele tem |
+|---|---|
+| `0.1.0` | temas até a API 3.1 (cores, fontes, visualizações, telas livres fases 1–8) |
+| `0.2.0` | update 20261126.6: `tint` em `frame`, `default_view`, ladrilhado em uma cópia, `${system}` de app pelo id do módulo |
+
+Um tema que usa algo da tabela precisa declarar a versão da linha: um launcher mais antigo o desenharia quebrado, e com o `min_launcher` ele recusa a instalação. O `archr-es2theme` grava a versão do launcher em que converteu.
 
 `description` aceita texto ou tabela por idioma, como `name`, até 200
 caracteres. "Inclui" nos detalhes é calculado pelos arquivos: cores sempre;

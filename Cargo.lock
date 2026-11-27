@@ -26,7 +26,7 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
 name = "archr-cheevos"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "archr-io",
  "archr-scraper",
@@ -40,7 +40,7 @@ dependencies = [
 
 [[package]]
 name = "archr-config"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "archr-io",
  "tempfile",
@@ -48,7 +48,7 @@ dependencies = [
 
 [[package]]
 name = "archr-es2theme"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "archr-index",
  "archr-ui",
@@ -62,7 +62,7 @@ dependencies = [
 
 [[package]]
 name = "archr-index"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "archr-io",
  "bincode",
@@ -74,7 +74,7 @@ dependencies = [
 
 [[package]]
 name = "archr-io"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "libc",
  "tempfile",
@@ -82,7 +82,7 @@ dependencies = [
 
 [[package]]
 name = "archr-launcher"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "archr-cheevos",
  "archr-config",
@@ -107,7 +107,7 @@ dependencies = [
 
 [[package]]
 name = "archr-osd"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ab_glyph",
  "libc",
@@ -118,7 +118,7 @@ dependencies = [
 
 [[package]]
 name = "archr-scraper"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "archr-index",
  "archr-io",
@@ -135,7 +135,7 @@ dependencies = [
 
 [[package]]
 name = "archr-ui"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "archr-config",
  "archr-index",

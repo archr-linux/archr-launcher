@@ -345,6 +345,9 @@ fn write_toml(b: &Built, name: &str, src: &Path, license: &str) -> Vec<(String, 
         )))
     );
     let _ = writeln!(top, "version = \"1.0.0\"");
+    // The launcher it was converted for: the features it uses (frame tint,
+    // default_view...) draw broken on an older one, which refuses it then.
+    let _ = writeln!(top, "min_launcher = \"{}\"", env!("CARGO_PKG_VERSION"));
     let _ = writeln!(top, "license = {}", inline(&Value::String(license.into())));
     for (k, v) in &b.top {
         let _ = writeln!(top, "{} = {}", key(k), inline(v));
