@@ -1082,25 +1082,7 @@ impl View<'_, '_, '_> {
             )?;
             let (x, y, w, h) = bounds;
             // Known failures arrive as locale keys; anything else stays generic.
-            let message = if [
-                "settings.",
-                "cheevos.",
-                "store.",
-                "updates.",
-                "modules.",
-                "raimport.",
-                "roms.",
-                "convert.",
-                "usb.",
-                "diag.",
-                "bios.",
-                "shortcuts.",
-                "pad.",
-                "launcher.",
-            ]
-            .iter()
-            .any(|prefix| error.starts_with(prefix))
-            {
+            let message = if translated(&error) {
                 self.tr(&error)
             } else {
                 log::debug!("Settings error on {id:?}: {error}");
@@ -2454,11 +2436,49 @@ mod capture_tests;
 #[cfg(test)]
 #[path = "../../tests/support/settings_scroll.rs"]
 mod scroll_tests;
+/// Pages whose messages arrive as locale keys; anything else (a raw error
+/// from a tool) shows as the generic failure.
+const TRANSLATED: &[&str] = &[
+    "settings.",
+    "cheevos.",
+    "store.",
+    "updates.",
+    "modules.",
+    "raimport.",
+    "roms.",
+    "convert.",
+    "usb.",
+    "diag.",
+    "bios.",
+    "shortcuts.",
+    "pad.",
+    "launcher.",
+    "compat.",
+    "savesync.",
+    "controls.",
+];
+fn translated(message: &str) -> bool {
+    TRANSLATED.iter().any(|prefix| message.starts_with(prefix))
+}
+
 #[cfg(test)]
 mod banner_tests {
     use super::*;
     fn error(text: &str) -> Option<(Option<Id>, String)> {
         Some((None, text.into()))
+    }
+    #[test]
+    fn every_page_s_own_messages_are_translated() {
+        for key in [
+            "compat.downloaded",
+            "compat.download_cancelled",
+            "savesync.done",
+            "controls.apply_failed",
+            "store.cancelled",
+        ] {
+            assert!(translated(key), "{key}");
+        }
+        assert!(!translated("Permission denied (os error 13)"));
     }
     #[test]
     fn message_fades_after_four_seconds_and_a_new_one_restarts_the_timer() {
