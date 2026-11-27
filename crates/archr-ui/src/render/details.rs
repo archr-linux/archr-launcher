@@ -770,8 +770,9 @@ impl Ui<'_, '_> {
             let pad = self.px(size + 1.);
             let mut widths = Vec::new();
             for (n, label) in labels.iter().enumerate() {
+                // As drawn: the icon's side, then its gap (rounded apart).
                 let extra = if icon(n, icons) {
-                    self.px(size + 6.)
+                    self.px(size) + self.px(6.)
                 } else {
                     0
                 };
