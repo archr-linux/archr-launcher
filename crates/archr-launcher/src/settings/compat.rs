@@ -48,32 +48,88 @@ impl Backend {
         )
     }
     /// The action, then the page's readings, and what the banner says.
-    pub(super) fn compat(&self, action: Action) -> Reply {
+    pub(super) fn compat(
+        &self,
+        action: Action,
+        report: &(dyn Fn(archr_ui::progress::Progress) + Sync),
+        cancel: &AtomicBool,
+    ) -> Reply {
         let said = match action {
-            Action::Look => Ok(None),
-            Action::Download => match self.compat_code("ensure", DOWNLOAD_TIME) {
-                Ok(0) => Ok(Some("compat.downloaded")),
-                Ok(2) => Err("compat.download_offline"),
-                _ => Err("compat.download_failed"),
-            },
-            Action::Reset => match self.compat_code("reset", Duration::from_secs(120)) {
-                Ok(0) => Ok(Some("compat.reset_done")),
-                _ => Err("compat.reset_failed"),
-            },
+            // The worker raises the flag itself; nothing comes here.
+            Action::Look | Action::Cancel => Ok(None),
+            Action::Download => {
+                cancel.store(false, Ordering::Relaxed);
+                let code = self.compat_download(report, cancel);
+                match code {
+                    _ if cancel.swap(false, Ordering::Relaxed) => {
+                        Ok(Some("compat.download_cancelled"))
+                    }
+                    Ok(0) => Ok(Some("compat.downloaded")),
+                    Ok(2) => Err("compat.download_offline"),
+                    _ => Err("compat.download_failed"),
+                }
+            }
+            Action::Reset => {
+                match self.compat_code("reset", Duration::from_secs(120), &AtomicBool::new(false)) {
+                    Ok(0) => Ok(Some("compat.reset_done")),
+                    _ => Err("compat.reset_failed"),
+                }
+            }
         };
         Reply::Compat(said, Box::new(self.compat_facts()))
     }
-    fn compat_code(&self, argument: &str, timeout: Duration) -> Result<i32, String> {
+    /// `ensure`, telling `report` how the download goes: the tool writes
+    /// `<image>.part` until it has the manifest's size, then checks it.
+    fn compat_download(
+        &self,
+        report: &(dyn Fn(archr_ui::progress::Progress) + Sync),
+        cancel: &AtomicBool,
+    ) -> Result<i32, String> {
+        use archr_ui::progress::{Meter, Progress};
+        let manifest = fs::read_to_string(self.paths.at(MANIFEST)).unwrap_or_default();
+        let field = |key: &str| {
+            manifest
+                .lines()
+                .find_map(|line| line.strip_prefix(key))
+                .unwrap_or_default()
+                .trim()
+                .to_owned()
+        };
+        let (file, size) = (field("FILE="), field("SIZE=").parse().unwrap_or(0u64));
+        let part = self.paths.at(&format!("{STATE}/{file}.part"));
+        std::thread::scope(|scope| {
+            let run = scope.spawn(|| self.compat_code("ensure", DOWNLOAD_TIME, cancel));
+            let mut meter = Meter::new(size);
+            while !run.is_finished() {
+                std::thread::sleep(Duration::from_millis(500));
+                match fs::metadata(&part).map(|m| m.len()) {
+                    Ok(done) if size == 0 || done < size => report(Progress {
+                        step: 0,
+                        transfer: Some(meter.read(done)),
+                    }),
+                    Ok(_) => report(Progress {
+                        step: 1,
+                        transfer: None,
+                    }),
+                    // Not started yet, or moved into place.
+                    Err(_) => {}
+                }
+            }
+            run.join()
+                .unwrap_or_else(|_| Err("archr-compat-debian ensure panicked".into()))
+        })
+    }
+    fn compat_code(
+        &self,
+        argument: &str,
+        timeout: Duration,
+        cancel: &AtomicBool,
+    ) -> Result<i32, String> {
         let mut command = self.tool("archr-compat-debian");
         command.arg(argument);
-        let output = crate::process::capture_with_input(
-            &mut command,
-            None,
-            timeout,
-            &AtomicBool::new(false),
-            64 * 1024,
-        )
-        .map_err(|e| format!("archr-compat-debian {argument}: {e}"))?;
+        let output =
+            crate::process::capture_with_input(&mut command, None, timeout, cancel, 64 * 1024)
+                .map_err(|e| format!("archr-compat-debian {argument}: {e}"))?;
         if !output.status.success() {
             log::warn!(
                 "archr-compat-debian {argument}: {}; {}",
@@ -159,6 +215,70 @@ mod tests {
         backend.load_compat(&backend.cfg().unwrap(), &mut state);
         assert_eq!(state.value(Id::CompatTerminal), "0");
         assert_eq!(backend.apply_compat(Id::Volume, "1"), None);
+    }
+
+    /// A tool whose `ensure` runs `body`, and a manifest of a 40-byte image.
+    fn fake_tool(root: &std::path::Path, body: &str) {
+        use std::os::unix::fs::PermissionsExt;
+        let tool = root.join(TOOL.trim_start_matches('/'));
+        fs::create_dir_all(tool.parent().unwrap()).unwrap();
+        let part = format!("$ARCHR_LAUNCHER_ROOT{STATE}/img.squashfs.part");
+        fs::write(
+            &tool,
+            format!(
+                "#!/bin/sh\nPATH=/usr/bin:/bin\n[ \"$1\" = ensure ] || exit 0\nmkdir -p \"$(dirname {part})\"\nP={part}\n{body}\n"
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).unwrap();
+        let manifest = root.join(MANIFEST.trim_start_matches('/'));
+        fs::create_dir_all(manifest.parent().unwrap()).unwrap();
+        fs::write(manifest, "FILE=img.squashfs\nSIZE=40\n").unwrap();
+    }
+
+    #[test]
+    fn the_download_reports_the_part_file_then_the_check() {
+        let (root, backend) = backend("");
+        fake_tool(
+            root.path(),
+            "head -c 20 /dev/zero >\"$P\"; sleep 1.2; head -c 40 /dev/zero >\"$P\"; sleep 1; rm -f \"$P\"",
+        );
+        let seen = std::sync::Mutex::new(Vec::new());
+        let reply = backend.compat(
+            Action::Download,
+            &|progress| seen.lock().unwrap().push(progress),
+            &AtomicBool::new(false),
+        );
+        assert!(matches!(
+            reply,
+            Reply::Compat(Ok(Some("compat.downloaded")), _)
+        ));
+        let seen = seen.into_inner().unwrap();
+        let first = seen.first().expect("progress while it ran");
+        assert_eq!(first.step, 0);
+        assert_eq!(first.transfer.map(|t| (t.done, t.total)), Some((20, 40)));
+        assert_eq!(seen.last().map(|p| p.step), Some(1), "{seen:?}");
+    }
+
+    #[test]
+    fn a_cancelled_download_stops_and_says_so() {
+        let (root, backend) = backend("");
+        fake_tool(root.path(), "head -c 20 /dev/zero >\"$P\"; sleep 30");
+        let cancel = AtomicBool::new(false);
+        let started = std::time::Instant::now();
+        let reply = std::thread::scope(|scope| {
+            scope.spawn(|| {
+                std::thread::sleep(Duration::from_millis(800));
+                cancel.store(true, Ordering::Relaxed);
+            });
+            backend.compat(Action::Download, &|_| {}, &cancel)
+        });
+        assert!(started.elapsed() < Duration::from_secs(10));
+        assert!(matches!(
+            reply,
+            Reply::Compat(Ok(Some("compat.download_cancelled")), _)
+        ));
+        assert!(!cancel.load(Ordering::Relaxed), "ready for the next one");
     }
 
     #[test]

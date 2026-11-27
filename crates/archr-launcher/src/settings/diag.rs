@@ -29,9 +29,28 @@ pub(super) enum Slow {
 }
 
 impl Backend {
+    /// `results` takes what a long piece of work says on the way (a
+    /// download's progress); the answer is the return value.
+    #[cfg(test)]
     pub(super) fn slow(&self, work: Slow) -> Reply {
+        let (results, _) = std::sync::mpsc::channel();
+        self.slow_with(work, &results, &AtomicBool::new(false))
+    }
+    /// `cancel` stops a download the user called off.
+    pub(super) fn slow_with(
+        &self,
+        work: Slow,
+        results: &std::sync::mpsc::Sender<Reply>,
+        cancel: &AtomicBool,
+    ) -> Reply {
         match work {
-            Slow::Compat(action) => self.compat(action),
+            Slow::Compat(action) => self.compat(
+                action,
+                &|progress| {
+                    let _ = results.send(Reply::CompatProgress(progress));
+                },
+                cancel,
+            ),
             Slow::Diag => Reply::Diag(Box::new(self.diag_facts())),
             Slow::Report => Reply::Report(self.report()),
             Slow::Send(name) => Reply::ReportSent(self.send_report(&name)),

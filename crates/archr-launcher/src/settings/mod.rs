@@ -583,6 +583,8 @@ enum Reply {
     BiosInstall(Result<(), String>),
     /// What archr-savesync printed for this action, or why it did not run.
     SaveSync(Box<(archr_ui::settings::savesync::Action, Result<String, String>)>),
+    /// How a compatibility download goes, while it runs.
+    CompatProgress(archr_ui::progress::Progress),
     /// What to say after a compatibility action, and the page's readings.
     Compat(
         Result<Option<&'static str>, &'static str>,
@@ -609,6 +611,8 @@ pub struct Worker {
     store: mpsc::Sender<archr_ui::settings::store::Action>,
     /// Stops the theme store's download under way (its lane is busy then).
     store_cancel: std::sync::Arc<AtomicBool>,
+    /// Raised to stop the compatibility download on the slow lane.
+    compat_cancel: std::sync::Arc<AtomicBool>,
     slow: mpsc::Sender<diag::Slow>,
     joypad: mpsc::Sender<archr_ui::settings::joypad::Command>,
     rx: mpsc::Receiver<Reply>,
@@ -650,6 +654,8 @@ impl Worker {
         let store_cancel = store_shop.github.cancel.clone();
         let (slow, slow_requests) = mpsc::channel();
         let (slow_results, slow_paths) = (results.clone(), paths.clone());
+        let compat_cancel = std::sync::Arc::new(AtomicBool::new(false));
+        let slow_cancel = compat_cancel.clone();
         let (joypad, joypad_requests) = mpsc::channel();
         let (joypad_results, joypad_paths) = (results.clone(), paths.clone());
         thread::Builder::new()
@@ -694,7 +700,10 @@ impl Worker {
             .spawn(move || {
                 let backend = Backend::new(slow_paths);
                 while let Ok(work) = slow_requests.recv() {
-                    if slow_results.send(backend.slow(work)).is_err() {
+                    if slow_results
+                        .send(backend.slow_with(work, &slow_results, &slow_cancel))
+                        .is_err()
+                    {
                         break;
                     }
                 }
@@ -844,6 +853,7 @@ impl Worker {
             profiles,
             store,
             store_cancel,
+            compat_cancel,
             slow,
             joypad,
             rx,
@@ -900,10 +910,19 @@ impl Worker {
         }
         if let Work::Store(action) = work {
             if matches!(action, archr_ui::settings::store::Action::Cancel) {
-                self.store_cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+                self.store_cancel
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
                 return Ok(());
             }
             return self.store.send(action).map_err(|e| e.to_string());
+        }
+        if matches!(
+            work,
+            Work::Compat(archr_ui::settings::compat::Action::Cancel)
+        ) {
+            self.compat_cancel
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+            return Ok(());
         }
         if let Work::Joypad(command) = work {
             return self.joypad.send(command).map_err(|e| e.to_string());
@@ -1208,6 +1227,7 @@ impl Worker {
                     state.savesync_done(&action, result);
                 }
                 Reply::Compat(said, facts) => state.compat_done(said, *facts),
+                Reply::CompatProgress(progress) => state.compat_progress(progress),
                 Reply::JoypadOpened(axes) => state.joypad_opened(axes.map(|a| *a)),
                 Reply::JoypadRead(axes, at) => state.joypad_read(*axes, at),
                 Reply::JoypadDone(command, result) => state.joypad_done(&command, result),

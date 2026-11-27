@@ -37,6 +37,8 @@ pub enum Action {
     Download,
     /// `archr-compat-debian reset`: drop what ports installed inside.
     Reset,
+    /// Stop a download under way; what it got stays for the next one.
+    Cancel,
 }
 
 /// Why runemu.sh sends a port to Debian, or no longer does.
@@ -119,7 +121,20 @@ pub struct CompatPage {
     pub confirm: bool,
     /// The action under way: its row reads "…".
     pub busy: Option<Id>,
+    /// A download's progress: the Debian row shows it (Progresso-linha).
+    pub progress: Option<crate::progress::Progress>,
+    /// A was pressed to cancel and the download has not stopped yet.
+    pub cancelling: bool,
 }
+
+/// What the Debian row says while each step of its download runs.
+pub const DOING: [&str; 2] = ["compat.step_downloading", "compat.step_checking"];
+
+/// While the image downloads, A on its row cancels it.
+pub const DOWNLOAD_HINTS: &[(HintButton, &str)] = &[
+    (HintButton::Key('A'), "compat.cancel_download"),
+    (HintButton::Key('B'), "hint.back"),
+];
 
 pub const CONFIRM_HINTS: &[(HintButton, &str)] = &[
     (HintButton::Key('A'), "compat.reset_yes"),
@@ -136,11 +151,27 @@ impl Settings {
         self.compat.facts = Some(facts);
         self.compat.looking = false;
         self.compat.busy = None;
+        self.compat.progress = None;
+        self.compat.cancelling = false;
         match said {
             Ok(Some(note)) => self.note(note.into()),
             Ok(None) => {}
             Err(error) => self.fail(None, error.into()),
         }
+    }
+    /// How the download goes, while it runs.
+    pub fn compat_progress(&mut self, progress: crate::progress::Progress) {
+        if self.compat_downloading() {
+            self.compat.progress = Some(progress);
+        }
+    }
+    pub fn compat_downloading(&self) -> bool {
+        self.compat.busy == Some(Id::CompatDownload)
+    }
+    /// The download row turns into its cancel button.
+    pub(super) fn compat_download_label(&self) -> Option<&'static str> {
+        self.compat_downloading()
+            .then_some("compat.cancel_download")
     }
     /// The page's rows: its own, then one per port runemu.sh marked.
     pub(super) fn compat_rows(&self) -> Vec<Row> {
@@ -178,7 +209,11 @@ impl Settings {
     /// The reading on the right of a row, as a catalog reference.
     pub(super) fn compat_value(&self, id: Id) -> String {
         if self.compat.busy == Some(id) {
-            return "launcher.working".into();
+            return if id == Id::CompatDownload {
+                String::new()
+            } else {
+                "launcher.working".into()
+            };
         }
         if id == Id::CompatLink {
             return "›".into();
@@ -204,8 +239,15 @@ impl Settings {
         id == Id::CompatDownload && self.compat.busy.is_none()
     }
     pub(super) fn compat_subtitle(&self, row: &Row) -> Option<String> {
-        if self.compat.busy == Some(Id::CompatDownload) && row.id == Id::CompatDownload {
-            return Some("compat.downloading".into());
+        if self.compat_downloading() && row.id == Id::CompatDownload {
+            return Some(
+                if self.compat.cancelling {
+                    "progress.cancelling"
+                } else {
+                    "compat.cancel_detail"
+                }
+                .into(),
+            );
         }
         if let Some(port) = self.compat_port(row.id) {
             return Some(
@@ -240,6 +282,8 @@ impl Settings {
     }
     pub(super) fn compat_disabled(&self, id: Id) -> bool {
         match id {
+            // Downloading, its row cancels.
+            Id::CompatDownload if self.compat_downloading() => false,
             Id::CompatDownload | Id::CompatReset if self.compat.busy.is_some() => true,
             Id::CompatReset => self.compat.facts.as_ref().is_none_or(|f| f.layer == 0),
             _ => false,
@@ -253,9 +297,18 @@ impl Settings {
                 self.open(Page::Compat);
                 Some(Effect::None)
             }
+            Id::CompatDownload if self.compat_downloading() => {
+                if self.compat.cancelling {
+                    return Some(Effect::None);
+                }
+                self.compat.cancelling = true;
+                Some(Effect::Compat(Action::Cancel))
+            }
             _ if self.compat_disabled(id) => Some(Effect::None),
             Id::CompatDownload => {
                 self.compat.busy = Some(id);
+                self.compat.progress = Some(crate::progress::Progress::default());
+                self.compat.cancelling = false;
                 Some(Effect::Compat(Action::Download))
             }
             // What ports installed goes, and comes back only as they run.
@@ -391,7 +444,39 @@ mod tests {
             missing.compat_activate(Id::CompatDownload),
             Some(Effect::Compat(Action::Download))
         );
-        assert!(missing.compat_disabled(Id::CompatDownload), "one at a time");
+        // Downloading, the row cancels (Progresso-linha) and the Debian row
+        // carries the bytes.
+        assert!(!missing.compat_disabled(Id::CompatDownload));
+        assert!(missing.compat_disabled(Id::CompatReset), "one at a time");
+        let moving = crate::progress::Progress {
+            step: 0,
+            transfer: Some(crate::progress::Transfer {
+                done: 10,
+                total: 40,
+                per_second: 5,
+            }),
+        };
+        missing.compat_progress(moving);
+        assert_eq!(missing.compat.progress, Some(moving));
+        assert_eq!(
+            missing.compat_activate(Id::CompatDownload),
+            Some(Effect::Compat(Action::Cancel))
+        );
+        assert!(missing.compat.cancelling);
+        assert_eq!(
+            missing.compat_activate(Id::CompatDownload),
+            Some(Effect::None),
+            "once"
+        );
+        missing.compat_done(
+            Ok(Some("compat.download_cancelled")),
+            facts(false, Vec::new()),
+        );
+        assert_eq!(missing.compat.progress, None);
+        assert!(!missing.compat.cancelling);
+        // Progress after the end is late news.
+        missing.compat_progress(moving);
+        assert_eq!(missing.compat.progress, None);
         let mut ready = open(facts(true, Vec::new()));
         assert_eq!(ready.compat_activate(Id::CompatReset), Some(Effect::None));
         assert!(ready.compat_question().is_some());

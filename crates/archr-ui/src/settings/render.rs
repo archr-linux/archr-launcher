@@ -13,8 +13,6 @@ use crate::settings::{
 mod appearance;
 #[path = "render/bios.rs"]
 mod bios;
-#[path = "render/progress.rs"]
-mod progress;
 #[path = "render/cheevos.rs"]
 mod cheevos;
 #[path = "render/controls.rs"]
@@ -37,6 +35,8 @@ mod network;
 mod picker;
 #[path = "render/picture.rs"]
 mod picture;
+#[path = "render/progress.rs"]
+mod progress;
 #[path = "render/raimport.rs"]
 mod raimport;
 #[path = "render/reports.rs"]
@@ -1215,7 +1215,10 @@ impl View<'_, '_, '_> {
             state.store.detail.as_ref(),
         ) {
             let name = detail.card.title(self.ui.catalog.language()).to_owned();
-            let title = self.ui.catalog.format("store.installing", &[("name", &name)]);
+            let title = self
+                .ui
+                .catalog
+                .format("store.installing", &[("name", &name)]);
             return self.progress_window(
                 &title,
                 &crate::settings::store::INSTALL_STEPS,
@@ -1840,6 +1843,24 @@ impl View<'_, '_, '_> {
         right: f32,
         selected: bool,
     ) -> Result<(), String> {
+        // The Debian row carries its download (Progresso-linha).
+        if let (Id::CompatRuntime, true, Some(progress)) = (
+            row.id,
+            state.compat_downloading(),
+            state.compat.progress.as_ref(),
+        ) {
+            let label = self.tr(&state.label(row));
+            return self.progress_row(
+                &label,
+                (y, height),
+                right,
+                (
+                    progress,
+                    &crate::settings::compat::DOING,
+                    state.compat.cancelling,
+                ),
+            );
+        }
         // Signing out is a quiet action (Config-ra).
         let ink = if state.disabled(row.id) || (row.id == Id::CheevosLogout && !selected) {
             selection(selected, self.theme.muted, self.theme.accent_text_secondary)

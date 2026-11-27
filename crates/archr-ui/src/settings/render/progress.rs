@@ -2,7 +2,7 @@
 //! speed, and the steps in order. The launcher draws it the same on every page
 //! and in every theme; a theme only gives the colours.
 use super::*;
-use crate::progress::Progress;
+use crate::progress::{Progress, Transfer};
 
 impl View<'_, '_, '_> {
     /// `steps` are locale keys, `progress.step` the one running; `cancelling`
@@ -56,31 +56,7 @@ impl View<'_, '_, '_> {
                 .rounded(bar, self.ui.px(4.) as f32, theme.highlight_bg, None)?;
         }
         if let Some(transfer) = progress.transfer {
-            let catalog = &self.ui.catalog;
-            let mut text = if transfer.total > 0 {
-                let (done, total) = catalog.sizes(transfer.done, transfer.total);
-                catalog.format("updates.of", &[("done", &done), ("total", &total)])
-            } else {
-                catalog.size(transfer.done)
-            };
-            if transfer.per_second > 0 {
-                let speed = catalog.format(
-                    "updates.per_second",
-                    &[("size", &catalog.size(transfer.per_second))],
-                );
-                text = format!("{text} · {speed}");
-            }
-            let left_text = transfer.seconds_left().map(|seconds| {
-                let time = if seconds < 60 {
-                    catalog.format("progress.seconds", &[("count", &seconds.to_string())])
-                } else {
-                    catalog.format(
-                        "progress.minutes",
-                        &[("count", &seconds.div_ceil(60).to_string())],
-                    )
-                };
-                catalog.format("progress.left", &[("time", &time)])
-            });
+            let (text, left_text) = self.transfer_text(transfer);
             self.text_face(
                 (left, y + 90., inner - 112., 16.),
                 &text,
@@ -137,5 +113,105 @@ impl View<'_, '_, '_> {
         }
         let keep_on = self.tr("progress.keep_on");
         self.note((left, top + 42., inner, 16.), &keep_on, 11.)
+    }
+    /// "9,4 de 17,5 MB · 2,6 MB/s" and "faltam ~4 s" when the speed is known.
+    fn transfer_text(&self, transfer: Transfer) -> (String, Option<String>) {
+        let catalog = &self.ui.catalog;
+        let mut text = if transfer.total > 0 {
+            let (done, total) = catalog.sizes(transfer.done, transfer.total);
+            catalog.format("updates.of", &[("done", &done), ("total", &total)])
+        } else {
+            catalog.size(transfer.done)
+        };
+        if transfer.per_second > 0 {
+            let speed = catalog.format(
+                "updates.per_second",
+                &[("size", &catalog.size(transfer.per_second))],
+            );
+            text = format!("{text} · {speed}");
+        }
+        let left = transfer.seconds_left().map(|seconds| {
+            let time = if seconds < 60 {
+                catalog.format("progress.seconds", &[("count", &seconds.to_string())])
+            } else {
+                catalog.format(
+                    "progress.minutes",
+                    &[("count", &seconds.div_ceil(60).to_string())],
+                )
+            };
+            catalog.format("progress.left", &[("time", &time)])
+        });
+        (text, left)
+    }
+    /// A row that carries its own wait (Progresso-linha): the title and the
+    /// percent, a thin bar, then what it is doing with the bytes and the
+    /// time left. `doing` names each step as it runs.
+    pub(super) fn progress_row(
+        &mut self,
+        label: &str,
+        (y, height): (f32, f32),
+        right: f32,
+        (progress, doing, cancelling): (&Progress, &[&str], bool),
+    ) -> Result<(), String> {
+        let theme = self.theme;
+        let (left, inner) = (30., right - 60.);
+        let top = y + (height - 42.).max(0.) / 2.;
+        let percent = progress.transfer.and_then(|t| t.percent());
+        self.text_face(
+            (left, top, inner - 60., 18.),
+            label,
+            (15., theme.text, Align::Left),
+            Face::Semibold,
+        )?;
+        if let Some(percent) = percent {
+            self.text_face(
+                (left + inner - 60., top, 60., 18.),
+                &format!("{percent}%"),
+                (14., theme.text, Align::Right),
+                Face::Mono,
+            )?;
+        }
+        let fill = match percent {
+            Some(percent) => f32::from(percent),
+            None if progress.step > 0 => 100.,
+            None => 0.,
+        };
+        let track = self.rect((left, top + 22., inner, 5.));
+        self.ui
+            .rounded(track, self.ui.px(2.5) as f32, theme.border, None)?;
+        if fill > 0. {
+            let bar = self.rect((left, top + 22., (inner * fill / 100.).max(5.), 5.));
+            self.ui
+                .rounded(bar, self.ui.px(2.5) as f32, theme.highlight_bg, None)?;
+        }
+        let now = if cancelling {
+            self.tr("progress.cancelling")
+        } else {
+            doing
+                .get(progress.step)
+                .map_or_else(String::new, |key| self.tr(key))
+        };
+        let (text, time_left) = match progress.transfer {
+            Some(transfer) if !cancelling => {
+                let (bytes, left) = self.transfer_text(transfer);
+                (format!("{now} · {bytes}"), left)
+            }
+            _ => (now, None),
+        };
+        self.text_face(
+            (left, top + 30., inner - 100., 15.),
+            &text,
+            (11., theme.muted, Align::Left),
+            Face::Mono,
+        )?;
+        if let Some(time_left) = time_left {
+            self.text_face(
+                (left + inner - 100., top + 30., 100., 15.),
+                &time_left,
+                (11., theme.muted, Align::Right),
+                Face::Mono,
+            )?;
+        }
+        Ok(())
     }
 }

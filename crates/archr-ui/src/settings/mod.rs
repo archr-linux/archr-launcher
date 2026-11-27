@@ -1933,6 +1933,9 @@ impl Settings {
             }
             id if id.roms() => return self.roms_label(id).unwrap_or(row.label).into(),
             Id::CompatPort(_) => return self.compat_label(row.id).unwrap_or_default(),
+            Id::CompatDownload if self.compat_downloading() => {
+                return self.compat_download_label().unwrap_or(row.label).into()
+            }
             Id::ReportsLatest => {
                 return self
                     .reports_last()
@@ -2104,6 +2107,16 @@ impl Settings {
         }
         if self.compat.confirm {
             return compat::CONFIRM_HINTS;
+        }
+        if self.page() == Page::Compat
+            && self.compat_downloading()
+            && !self.compat.cancelling
+            && self
+                .visible_rows()
+                .get(self.cursor)
+                .is_some_and(|r| r.id == Id::CompatDownload)
+        {
+            return compat::DOWNLOAD_HINTS;
         }
         if let Some(hints) = self.modules_hints() {
             return hints;
