@@ -36,6 +36,8 @@ const IMAGE_ALIASES: &[(&str, &str)] = &[
     ("megadrive", "genesis"),
     ("megadrive-japan", "genesis"),
     ("megadriveh", "genesis"),
+    // EmulationStation themes call the music player mplayer.
+    ("music", "mplayer"),
     ("naomi", "dreamcast"),
     ("neocd", "neogeo"),
     ("nesh", "nes"),
