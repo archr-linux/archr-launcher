@@ -120,6 +120,8 @@ grep -q "^is-active --quiet $ARCHR_TEST_SCOPE active$" "$CASE_DIR/scope-calls" |
   : >"$CASE_DIR/go-before-active"
 # Nothing of the gate reaches the game, neither end.
 ! ls -l /proc/$$/fd 2>/dev/null | grep -q game-gate || : >"$CASE_DIR/gate-fd-leak"
+# Out of memory the game goes first, whatever starts it.
+[ "$(cat /proc/$$/oom_score_adj)" = 300 ] || : >"$CASE_DIR/oom-not-raised"
 # The next instruction must be consumed before starting any game.
 [ ! -e "$ARCHR_SESSION_RUN_DIR/next" ]
 # Do not target the wrapper: it must survive to restore services/governors.
@@ -400,6 +402,8 @@ run_case() {
     { echo "FAIL: $name: game started before its scope was seen" >&2; exit 1; }
   [ ! -f "$CASE_DIR/gate-fd-leak" ] ||
     { echo "FAIL: $name: the game inherited the gate" >&2; exit 1; }
+  [ ! -f "$CASE_DIR/oom-not-raised" ] ||
+    { echo "FAIL: $name: the game kept the session's OOM score" >&2; exit 1; }
 }
 
 run_case game 'game runemu.sh /roms/demo.zip -Pnes --core=auto --emulator=retroarch --controllers=
