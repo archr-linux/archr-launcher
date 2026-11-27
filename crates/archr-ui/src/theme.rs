@@ -1656,8 +1656,11 @@ fn frames(value: &toml::Value, dir: Option<&Path>) -> Vec<(String, Frame9)> {
             log::warn!("Unknown theme frame {name}; ignored");
             continue;
         }
+        // Read without its folder (the store's list, for a name) a frame's
+        // image cannot be found: that is no fault of the theme.
+        let Some(dir) = dir else { continue };
         let frame = value.as_table().and_then(|t| {
-            let image = resolve_file(dir?, t.get("image")?.as_str()?)?;
+            let image = resolve_file(dir, t.get("image")?.as_str()?)?;
             let slice = sides(t.get("slice"), 256.)?.map(|n| n as u32);
             let scale = t.get("scale").map_or(Some(1.), number)?;
             let pad = sides(t.get("pad"), 64.)?;

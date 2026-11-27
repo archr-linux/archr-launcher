@@ -2505,3 +2505,15 @@ fn a_tiled_frame_keeps_its_pattern_in_one_copy() {
         );
     }
 }
+
+#[test]
+fn a_theme_read_for_its_name_alone_does_not_warn_of_its_frames() {
+    // The store lists installed themes by Theme::parse, without their folder:
+    // a frame's image cannot be found there, and is no fault of the theme.
+    let table: toml::Table = toml::from_str(
+        "[frames.header]\nimage = \"frames/header.png\"\nslice = 12\n[frames.nope]\nimage = \"x.png\"\n",
+    )
+    .unwrap();
+    let said = warnings(|| drop(Theme::parse(&table)));
+    assert_eq!(said, ["Unknown theme frame nope; ignored"]);
+}
