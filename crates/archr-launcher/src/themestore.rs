@@ -27,8 +27,11 @@ pub const HOSTS: &[&str] = &[
 const RAW: &str = "https://raw.githubusercontent.com";
 const CODELOAD: &str = "https://codeload.github.com";
 const TOML_LIMIT: u64 = 64 << 10;
-pub const TARBALL_LIMIT: u64 = 25 << 20;
-pub const EXTRACTED_LIMIT: u64 = 60 << 20;
+// A theme with art for every system weighs: Solo is 70 MB packed and 71 MB
+// unpacked (25 and 60 MB refused it). The download goes to a file first and
+// is read once; the unpacked limit still keeps a bomb off the card.
+pub const TARBALL_LIMIT: u64 = 128 << 20;
+pub const EXTRACTED_LIMIT: u64 = 192 << 20;
 const MAX_ENTRIES: usize = 5000;
 const MAX_DEPTH: usize = 8;
 const SCREENSHOTS: usize = 3;

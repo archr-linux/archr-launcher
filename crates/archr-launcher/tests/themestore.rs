@@ -1,6 +1,6 @@
 //! Theme store against canned GitHub answers and hand-made tarballs: no test
 //! ever reaches the network.
-use archr_launcher::themestore::{extract, Shop, HOSTS};
+use archr_launcher::themestore::{extract, Shop, EXTRACTED_LIMIT, HOSTS, TARBALL_LIMIT};
 use archr_scraper::{trusted_on, Http, NetError, Response};
 use archr_ui::settings::store::{Action, Card, Detail, Reply, Tab};
 use std::{
@@ -413,12 +413,12 @@ fn oversized_archives_stop_before_filling_the_card() {
     let root = tempfile::tempdir().unwrap();
     let into = root.path().join("into");
     fs::create_dir(&into).unwrap();
-    // 61 MiB of zeros: a few kilobytes compressed, too much unpacked.
+    // One byte past the unpacked limit, in zeros: a few kilobytes compressed.
     let mut header = tar::Header::new_gnu();
     header
         .set_path("kaio-dev-neon-abc123/sounds/huge.wav")
         .unwrap();
-    header.set_size(61 << 20);
+    header.set_size(EXTRACTED_LIMIT + 1);
     header.set_mode(0o644);
     header.set_cksum();
     let mut builder = tar::Builder::new(flate2::write::GzEncoder::new(
@@ -426,15 +426,18 @@ fn oversized_archives_stop_before_filling_the_card() {
         flate2::Compression::fast(),
     ));
     builder
-        .append(&header, std::io::Read::take(std::io::repeat(0), 61 << 20))
+        .append(
+            &header,
+            std::io::Read::take(std::io::repeat(0), EXTRACTED_LIMIT + 1),
+        )
         .unwrap();
     let tarball = builder.into_inner().unwrap().finish().unwrap();
-    assert!(tarball.len() < 1 << 20);
+    assert!(tarball.len() < 2 << 20);
     assert_eq!(extract(&tarball, &into), Err("store.too_big"));
     assert!(!into.join("sounds/huge.wav").exists());
     // A download over the tarball limit never arrives (curl stops it).
     let fake = Fake::default();
-    let big = vec![0u8; (25 << 20) + 1];
+    let big = vec![0u8; TARBALL_LIMIT as usize + 1];
     fake.answer(
         "https://codeload.github.com/kaio-dev/neon/tar.gz/main",
         200,
