@@ -2672,7 +2672,9 @@ fn system_vars_draw_each_systems_own_color() {
         .unwrap();
     let mut app = App::new(10);
     app.set_view(&theme.view("sv"));
-    let mut at = |cursor: usize| -> [u8; 3] {
+    // The box's color, and how many pixels of the text's line differ
+    // from its first one.
+    let mut at = |cursor: usize| -> ([u8; 3], usize) {
         app.cursor = cursor;
         ui.tick();
         ui.snap_animations();
@@ -2683,10 +2685,21 @@ fn system_vars_draw_each_systems_own_color() {
             .read_pixels(None, sdl2::pixels::PixelFormatEnum::RGBA32)
             .unwrap();
         let i = ((0.25 * 480.) as usize * 640 + (0.25 * 640.) as usize) * 4;
-        [pixels[i], pixels[i + 1], pixels[i + 2]]
+        let line = |y: usize| &pixels[y * 640 * 4 + 40 * 4..y * 640 * 4 + 400 * 4];
+        let first = line(260)[..4].to_vec();
+        let ink = (245..275)
+            .flat_map(|y| line(y).chunks(4))
+            .filter(|p| *p != first.as_slice())
+            .count();
+        ([pixels[i], pixels[i + 1], pixels[i + 2]], ink)
     };
-    // The library's order: snes, megadrive (genesis's), gba.
-    assert_eq!(at(0), [0, 255, 0]);
-    assert_eq!(at(1), [0, 0, 255]);
-    assert_eq!(at(2), [255, 0, 0]);
+    // The library's order: snes, megadrive (genesis's), gba. The text is
+    // at opacity 1 on the Super Nintendo alone: elsewhere it is not drawn.
+    let snes = at(0);
+    assert_eq!(snes.0, [0, 255, 0]);
+    assert!(snes.1 > 50, "{snes:?}");
+    let megadrive = at(1);
+    assert_eq!(megadrive.0, [0, 0, 255]);
+    assert_eq!(megadrive.1, 0);
+    assert_eq!(at(2).0, [255, 0, 0]);
 }

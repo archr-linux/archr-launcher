@@ -415,8 +415,14 @@ impl<'t> Ui<'_, 't> {
                 hidden,
             } = at;
             // Not in yet: nothing to draw (the list and the clip keep
-            // their state, so they always draw).
-            if hidden && !matches!(element.kind, Kind::List(_) | Kind::Video(_)) {
+            // their state, so they always draw). An element at opacity 0
+            // (a choice turned it off) is not drawn at all: text would
+            // come out whole.
+            let stateful = matches!(
+                element.kind,
+                Kind::List(_) | Kind::Video(_) | Kind::Collection(_)
+            );
+            if (hidden || element.opacity <= 0.) && !stateful {
                 continue;
             }
             let turn = (element.rotate != 0.).then(|| {
