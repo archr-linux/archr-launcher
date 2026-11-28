@@ -758,7 +758,8 @@ fn on_screen(t: &Table) -> Option<Table> {
         _ => (0., 0.),
     };
     let (x0, y0) = ((x - ax * w).max(0.), (y - ay * h).max(0.));
-    let (x1, y1) = ((x - ax * w + w).min(1.), (y - ay * h + h).min(1.));
+    // Above the button hints' row, which the screen keeps at the bottom.
+    let (x1, y1) = ((x - ax * w + w).min(1.), (y - ay * h + h).min(0.92));
     let mut out = Table::new();
     let (w, h) = (x1 - x0, y1 - y0);
     let (x0, y0, w, h) = if w < 0.25 || h < 0.35 {
