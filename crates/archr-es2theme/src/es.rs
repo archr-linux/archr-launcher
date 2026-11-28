@@ -124,6 +124,9 @@ pub struct Es {
     pub esde: bool,
     /// The theme's variables as the files left them.
     pub vars: BTreeMap<String, String>,
+    /// ES-DE files included per system (`metadata/${system.theme}.xml`),
+    /// from the theme's root: read again for each system (`load_for`).
+    pub per_system: Vec<String>,
 }
 impl Es {
     pub fn view(&self, name: &str) -> Option<&View> {
@@ -162,6 +165,17 @@ impl Es {
 /// Read the theme in `root` with `picked` choices (subset → choice) in the
 /// language `lang` (`en`, `pt`...). Choices left out are the first one.
 pub fn load(root: &Path, lang: &str, picked: &BTreeMap<String, String>) -> Result<Es, String> {
+    load_for(root, lang, picked, None)
+}
+/// `load` as one system sees it: `${system.theme}` in an include is that
+/// system's id. Without a system, those includes are only listed in
+/// `per_system`.
+pub fn load_for(
+    root: &Path,
+    lang: &str,
+    picked: &BTreeMap<String, String>,
+    system: Option<&str>,
+) -> Result<Es, String> {
     let entry = root.join("theme.xml");
     if !entry.is_file() {
         return Err(format!("{} has no theme.xml", root.display()));
@@ -170,6 +184,7 @@ pub fn load(root: &Path, lang: &str, picked: &BTreeMap<String, String>) -> Resul
         root: root.to_path_buf(),
         lang: lang.to_lowercase(),
         picked: picked.clone(),
+        system: system.map(str::to_owned),
         vars: BTreeMap::new(),
         es: Es::default(),
         open: Vec::new(),
@@ -184,6 +199,7 @@ struct Loader {
     root: PathBuf,
     lang: String,
     picked: BTreeMap<String, String>,
+    system: Option<String>,
     vars: BTreeMap<String, String>,
     es: Es,
     open: Vec<PathBuf>,
@@ -217,9 +233,10 @@ impl Loader {
         for (tag, subset) in [
             ("variant", "variant"),
             ("colorScheme", "colorScheme"),
+            ("fontSize", "fontSize"),
             ("aspectRatio", "aspectRatio"),
         ] {
-            let choices: Vec<Choice> = node
+            let mut choices: Vec<Choice> = node
                 .children
                 .iter()
                 .filter(|c| c.name == tag)
@@ -238,6 +255,13 @@ impl Loader {
                     })
                 })
                 .collect();
+            // ES-DE's font size is "medium" until the user picks another.
+            if tag == "fontSize" {
+                if let Some(at) = choices.iter().position(|c| c.name == "medium") {
+                    let medium = choices.remove(at);
+                    choices.insert(0, medium);
+                }
+            }
             if !choices.is_empty() {
                 self.es.subsets.push(Subset {
                     name: subset.into(),
@@ -336,9 +360,33 @@ impl Loader {
             .replace('\\', "/")
     }
 
-    /// The children of `<theme>` (and of wrappers inside it).
+    /// The children of `<theme>` (and of wrappers inside it). ES-DE reads
+    /// a file in passes: its variables (and the wrappers that only hold
+    /// variables) first, then the includes, the views, the variants and
+    /// the aspect ratios; the other dialects, in the file's order.
     fn theme(&mut self, node: &Node, dir: &Path) {
+        if !self.es.esde {
+            return self.children(node, dir, None);
+        }
+        for pass in 0..5 {
+            self.children(node, dir, Some(pass));
+        }
+    }
+    fn children(&mut self, node: &Node, dir: &Path, pass: Option<u8>) {
         for child in &node.children {
+            if let Some(pass) = pass {
+                let at = match child.name.as_str() {
+                    "variables" | "colorScheme" | "fontSize" | "language" => 0,
+                    "include" | "subset" => 1,
+                    "view" | "customView" | "feature" => 2,
+                    "variant" => 3,
+                    "aspectRatio" => 4,
+                    _ => 0,
+                };
+                if at != pass {
+                    continue;
+                }
+            }
             match child.name.as_str() {
                 "include" => self.include(child, dir),
                 "subset" => self.subset(child, dir),
@@ -355,7 +403,7 @@ impl Loader {
                 "view" => self.view(child, dir, false),
                 "customView" => self.view(child, dir, true),
                 "feature" => self.theme(child, dir),
-                "variant" | "colorScheme" | "aspectRatio" => {
+                "variant" | "colorScheme" | "fontSize" | "aspectRatio" | "language" => {
                     if self.wrapper(child) {
                         self.theme(child, dir);
                     }
@@ -370,9 +418,16 @@ impl Loader {
             }
         }
     }
-    /// An ES-DE wrapper: does its `name` list the choice in effect?
+    /// An ES-DE wrapper: does its `name` list the choice in effect (for
+    /// `<language>`, the conversion's language)?
     fn wrapper(&mut self, node: &Node) -> bool {
         let subset = node.name.as_str();
+        if subset == "language" {
+            let locale = locale(&self.lang);
+            return split_names(node.attr("name").unwrap_or(""))
+                .iter()
+                .any(|n| n.eq_ignore_ascii_case(&locale));
+        }
         let names = split_names(node.attr("name").unwrap_or(""));
         let chosen = self.chosen(subset).map(str::to_owned);
         names
@@ -404,7 +459,24 @@ impl Loader {
         if file.is_empty() {
             return;
         }
-        let file = self.fill(file).0;
+        let mut file = self.fill(file).0;
+        if file.contains("${system.theme}") {
+            match &self.system {
+                Some(system) => file = file.replace("${system.theme}", system),
+                None => {
+                    let rel = self.rel(&normalize(&dir.join(&file)));
+                    if !self.es.per_system.contains(&rel) {
+                        self.es.per_system.push(rel);
+                    }
+                    return;
+                }
+            }
+            // A system without a file of its own keeps the defaults, as
+            // ES-DE does for an include written with a variable.
+            if !normalize(&dir.join(&file)).is_file() {
+                return;
+            }
+        }
         let path = normalize(&dir.join(&file));
         if !path.starts_with(&self.root) || !path.is_file() {
             self.note(format!("include que não existe: {file}"));
@@ -507,7 +579,7 @@ impl Loader {
             }
             if matches!(
                 child.name.as_str(),
-                "variant" | "colorScheme" | "aspectRatio"
+                "variant" | "colorScheme" | "fontSize" | "aspectRatio" | "language"
             ) {
                 if self.wrapper(child) {
                     self.elements(view, child, dir);
@@ -652,6 +724,31 @@ impl Loader {
             .to_string_lossy()
             .replace('\\', "/");
         Some(rel)
+    }
+}
+
+/// The ES-DE locale a conversion language reads: `pt` is `pt_BR`, `en`
+/// `en_US`, `de` `de_DE`; one with its region stays as it is.
+fn locale(lang: &str) -> String {
+    let lang = lang.replace('-', "_");
+    if let Some((l, r)) = lang.split_once('_') {
+        return format!("{}_{}", l.to_lowercase(), r.to_uppercase());
+    }
+    let l = lang.to_lowercase();
+    match l.as_str() {
+        "pt" => "pt_BR".into(),
+        "en" => "en_US".into(),
+        "zh" => "zh_CN".into(),
+        "ja" => "ja_JP".into(),
+        "ko" => "ko_KR".into(),
+        "sv" => "sv_SE".into(),
+        "ar" => "ar_SA".into(),
+        "sr" => "sr_RS".into(),
+        "bs" => "bs_BA".into(),
+        "ca" => "ca_ES".into(),
+        "hr" => "hr_HR".into(),
+        "vi" => "vi_VN".into(),
+        _ => format!("{l}_{}", l.to_uppercase()),
     }
 }
 

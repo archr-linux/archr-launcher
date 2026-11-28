@@ -211,3 +211,210 @@ fn albedo_converts_without_warnings() {
     assert!(c.options.iter().any(|o| o == "colorscheme"));
     assert!(out.path().join("original/LICENSE").is_file());
 }
+
+fn convert_pt(dir: &Path) -> archr_es2theme::Conversion {
+    let opts = archr_es2theme::Options {
+        lang: "pt".into(),
+        name: None,
+    };
+    archr_es2theme::convert(&dir.join("es"), &dir.join("out"), &opts).unwrap()
+}
+const CAPABILITIES: &str = r#"<themeCapabilities>
+  <aspectRatio>16:9</aspectRatio><aspectRatio>4:3</aspectRatio>
+  <fontSize>small</fontSize><fontSize>medium</fontSize>
+  <variant name="lista"><label>Lista</label></variant>
+</themeCapabilities>"#;
+const GAMELIST: &str = r#"<view name="gamelist">
+    <textlist name="gamelist"><pos>0 0.15</pos><size>0.45 0.7</size><fontSize>0.04</fontSize></textlist>
+  </view>"#;
+
+/// ES-DE reads a file's variables before its includes, and each system's
+/// own file (`${system.theme}.xml`) after the defaults: what a system
+/// changes becomes a system variable, in the conversion's language.
+#[test]
+fn esde_system_files_become_system_vars() {
+    let dir = theme(&[
+        ("capabilities.xml", CAPABILITIES),
+        (
+            "theme.xml",
+            &format!(
+                r#"<theme>
+  <include>${{root}}/meta/_default.xml</include>
+  <include>${{root}}/meta/${{system.theme}}.xml</include>
+  <variables><root>.</root></variables>
+  <variant name="lista">
+  <view name="system">
+    <text name="descricao"><pos>0.05 0.6</pos><size>0.5 0.2</size><fontSize>0.03</fontSize>
+      <text>${{systemDescription}}</text></text>
+    <image name="faixa"><pos>0 0</pos><size>1 0.1</size><path>./faixa.png</path>
+      <color>${{systemColor}}</color></image>
+    <text name="ano"><pos>0.05 0.85</pos><size>0.3 0.05</size><fontSize>0.03</fontSize>
+      <text>${{systemReleaseYear}}</text></text>
+  </view>
+  {GAMELIST}
+  </variant>
+</theme>"#
+            ),
+        ),
+        (
+            "meta/_default.xml",
+            "<theme><variables><systemDescription>Jogue os jogos de ${system.fullName}</systemDescription>\
+             <systemColor>333333</systemColor><systemReleaseYear></systemReleaseYear></variables></theme>",
+        ),
+        (
+            "meta/snes.xml",
+            r#"<theme><variables><systemDescription>A 16-bit console.</systemDescription>
+  <systemColor>DF5142</systemColor><systemReleaseYear>1990</systemReleaseYear></variables>
+  <language name="pt_BR"><variables><systemDescription>Um console de 16 bits.</systemDescription></variables></language>
+  <language name="pt_PT"><variables><systemDescription>Uma consola.</systemDescription></variables></language>
+</theme>"#,
+        ),
+        (
+            "meta/genesis.xml",
+            "<theme><variables><systemColor>2040C0</systemColor><systemReleaseYear>1988</systemReleaseYear></variables></theme>",
+        ),
+    ]);
+    png(&dir.path().join("es/faixa.png"), (64, 8));
+    let c = convert_pt(dir.path());
+    assert!(c.warnings.is_empty(), "{:#?}", c.warnings);
+    let t = read(dir.path());
+    assert_eq!(t["min_launcher"].as_str(), Some("0.6.0"));
+    let view = "lista-gamelist";
+    let var = |e: &Table, key: &str| e[key].as_str().unwrap().trim_start_matches('$').to_owned();
+    let text = element(&t, view, "systems", "descricao");
+    let text_var = var(text, "text");
+    assert_eq!(
+        t["vars"][&text_var].as_str(),
+        Some("Jogue os jogos de ${system.name}")
+    );
+    let snes = &t["system"]["snes"]["vars"];
+    assert_eq!(snes[&text_var].as_str(), Some("Um console de 16 bits."));
+    let tint = var(element(&t, view, "systems", "faixa"), "tint");
+    assert_eq!(t["vars"][&tint].as_str(), Some("#333333FF"));
+    assert_eq!(snes[&tint].as_str(), Some("#DF5142FF"));
+    assert_eq!(
+        t["system"]["genesis"]["vars"][&tint].as_str(),
+        Some("#2040C0FF")
+    );
+    // The year the defaults leave empty: there only for the systems with one.
+    let year = element(&t, view, "systems", "ano");
+    let shown = var(year, "opacity");
+    assert_eq!(t["vars"][&shown].as_float(), Some(0.));
+    assert_eq!(snes[&shown].as_float(), Some(1.));
+    assert!(
+        !std::fs::read_to_string(dir.path().join("out/CONVERSAO.md"))
+            .unwrap()
+            .contains("include que não existe")
+    );
+}
+
+/// ES-DE's names shown only on some systems: the systems', the automatic
+/// collections' (favorites, recent) and the user's own (none here).
+#[test]
+fn esde_collection_names_show_by_when_collection() {
+    let dir = theme(&[
+        ("capabilities.xml", CAPABILITIES),
+        (
+            "theme.xml",
+            &format!(
+                r#"<theme><variant name="lista">
+  <view name="system">
+    <text name="sistema"><pos>0.1 0.1</pos><size>0.5 0.05</size><text>${{system.fullName.noCollections}}</text></text>
+    <text name="auto"><pos>0.1 0.2</pos><size>0.5 0.05</size><text>${{system.fullName.autoCollections}}</text></text>
+    <text name="propria"><pos>0.1 0.3</pos><size>0.5 0.05</size><text>${{system.fullName.customCollections}}</text></text>
+  </view>
+  {GAMELIST}
+</variant></theme>"#
+            ),
+        ),
+    ]);
+    let c = convert(dir.path());
+    assert!(c.warnings.is_empty(), "{:#?}", c.warnings);
+    let t = read(dir.path());
+    let view = "lista-gamelist";
+    let sistema = element(&t, view, "systems", "sistema");
+    assert_eq!(sistema["text"].as_str(), Some("${system.name}"));
+    assert_eq!(sistema["when"]["collection"].as_bool(), Some(false));
+    let auto = element(&t, view, "systems", "auto");
+    assert_eq!(auto["when"]["collection"].as_bool(), Some(true));
+    let els = t["view"][view]["systems"]["el"].as_array().unwrap();
+    assert!(!els.iter().any(|e| e["id"].as_str() == Some("propria")));
+    assert_eq!(t["min_launcher"].as_str(), Some("0.6.0"));
+}
+
+/// ES-DE's font sizes are a theme option, "medium" first; a screen keeps
+/// one clip (the game's), the background clip stands still and the
+/// background music goes; the clock and battery are one status pill; a
+/// GIF is its first frame. Nothing new for the launcher: 0.5.0.
+#[test]
+fn esde_font_sizes_clips_status_and_gifs() {
+    let dir = theme(&[
+        ("capabilities.xml", CAPABILITIES),
+        (
+            "theme.xml",
+            r#"<theme>
+  <fontSize name="small"><variables><tamanho>0.03</tamanho></variables></fontSize>
+  <fontSize name="medium"><variables><tamanho>0.05</tamanho></variables></fontSize>
+  <variant name="lista">
+  <view name="system">
+    <text name="rotulo"><pos>0.1 0.1</pos><size>0.5 0.08</size><fontSize>${tamanho}</fontSize>
+      <text>OI</text><horizontalAlignment>right</horizontalAlignment></text>
+    <clock name="relogio"><pos>0.98 0.02</pos><origin>1 0</origin><fontSize>0.03</fontSize></clock>
+    <systemstatus name="status"><pos>0.8 0.02</pos><origin>1 0</origin><height>0.03</height></systemstatus>
+    <animation name="anim"><pos>0 0</pos><size>0.2 0.2</size><path>./anim.gif</path></animation>
+  </view>
+  <view name="gamelist">
+    <textlist name="gamelist"><pos>0 0.15</pos><size>0.45 0.7</size><fontSize>0.04</fontSize></textlist>
+    <video name="fundo"><pos>0 0</pos><size>1 1</size><path>./fundo.mp4</path><audio>false</audio></video>
+    <video name="musica"><pos>0 0</pos><size>0.1 0.1</size><path>./musica.mp4</path></video>
+    <video name="jogo"><pos>0.5 0.2</pos><size>0.4 0.4</size></video>
+  </view>
+  </variant>
+</theme>"#,
+        ),
+        ("fundo.mp4", "not a clip"),
+        ("musica.mp4", "not a clip"),
+        ("anim.gif", "not a picture"),
+    ]);
+    let c = convert(dir.path());
+    assert!(c.warnings.is_empty(), "{:#?}", c.warnings);
+    let t = read(dir.path());
+    assert_eq!(t["min_launcher"].as_str(), Some("0.5.0"));
+    let option = &t["options"]["fontsize"];
+    assert_eq!(option["default"].as_str(), Some("medium"));
+    let view = "lista-gamelist";
+    let rotulo = element(&t, view, "systems", "rotulo");
+    assert_eq!(rotulo["align"].as_str(), Some("right"));
+    let size = rotulo["size"].as_str().unwrap().trim_start_matches('$');
+    assert_eq!(t["vars"][size].as_float(), Some(0.05));
+    assert_eq!(
+        option["choices"]["small"]["vars"][size].as_float(),
+        Some(0.03)
+    );
+    let els = |screen: &str| -> Vec<Table> {
+        t["view"][view][screen]["el"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e.as_table().unwrap().clone())
+            .collect()
+    };
+    let kinds = |screen: &str, kind: &str| {
+        els(screen)
+            .iter()
+            .filter(|e| e["kind"].as_str() == Some(kind))
+            .count()
+    };
+    assert_eq!(kinds("systems", "status"), 1);
+    assert_eq!(kinds("games", "video"), 1);
+    let jogo = element(&t, view, "games", "jogo");
+    assert_eq!(jogo["src"].as_str(), Some("game.video"));
+    let fundo = element(&t, view, "games", "fundo");
+    assert_eq!(fundo["kind"].as_str(), Some("image"));
+    assert_eq!(fundo["src"].as_str(), Some("fundo-still.jpg"));
+    assert!(!els("games")
+        .iter()
+        .any(|e| e["id"].as_str() == Some("musica")));
+    let anim = element(&t, view, "systems", "anim");
+    assert_eq!(anim["src"].as_str(), Some("anim-still.png"));
+}

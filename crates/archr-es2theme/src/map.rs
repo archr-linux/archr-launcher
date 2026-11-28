@@ -35,6 +35,9 @@ pub struct Model {
     pub mapped: BTreeSet<String>,
     /// Picture patterns to copy: from the source's root, to the output's.
     pub files: BTreeSet<(String, String)>,
+    /// Clips whose first frame is written as a picture: the clip from the
+    /// source's root, the picture in the output's.
+    pub stills: BTreeSet<(String, String)>,
 }
 
 /// The screen a read is measured for: width over height.
@@ -44,6 +47,8 @@ pub struct Shape {
 }
 
 const HINTS_Z: i64 = 995;
+/// A mark on a video table while a screen is made: ES plays its sound.
+const AUDIO: &str = "\u{0}audio";
 const STATUS_Z: i64 = 996;
 
 pub fn model(es: &Es, root: &Path, shape: Shape) -> Model {
@@ -152,7 +157,7 @@ fn anchor(ox: f32, oy: f32) -> Option<Value> {
 }
 /// `${system.theme}` and friends as the launcher's data; in an item of a
 /// collection, the item's.
-fn data(text: &str, item: bool) -> String {
+pub(crate) fn data(text: &str, item: bool) -> String {
     let id = if item { "${item}" } else { "${system}" };
     let name = if item {
         "${item.name}"
@@ -163,6 +168,28 @@ fn data(text: &str, item: bool) -> String {
         .replace("${system.name}", id)
         .replace("${system.fullName}", name)
         .replace("${system.fullname}", name)
+}
+/// ES-DE's names shown only for some systems: `.noCollections` on the
+/// systems, `.autoCollections` on the automatic collections (the
+/// launcher's favorites and recent), `.customCollections` on the user's
+/// own (the launcher has none: never). The text with plain names, and
+/// `when.collection`; None when it never shows.
+fn collection_name(text: &str) -> Option<(String, Option<bool>)> {
+    let mut only = None;
+    let mut out = text.to_owned();
+    for field in ["fullName", "name"] {
+        for (suffix, shows) in [("noCollections", false), ("autoCollections", true)] {
+            let from = format!("${{system.{field}.{suffix}}}");
+            if out.contains(&from) {
+                out = out.replace(&from, &format!("${{system.{field}}}"));
+                only = Some(shows);
+            }
+        }
+        if out.contains(&format!("${{system.{field}.customCollections}}")) {
+            return None;
+        }
+    }
+    Some((out, only))
 }
 fn slug(name: &str) -> String {
     let mut out = String::new();
@@ -477,9 +504,19 @@ impl Mapper<'_> {
             },
             None => None,
         };
+        let (text, collection) = collection_name(text)?;
         let mut t = Table::new();
         t.insert("kind".into(), s("text"));
-        t.insert("text".into(), s(data(text, false)));
+        t.insert("text".into(), s(data(&text, false)));
+        if let Some(collection) = collection {
+            let mut when = Table::new();
+            when.insert("collection".into(), Value::Boolean(collection));
+            t.insert("when".into(), Value::Table(when));
+            self.mapped(
+                "${system.fullName.noCollections} / .autoCollections",
+                "`${system.name}` com `when.collection`",
+            );
+        }
         let mut g = self.geo(el, pos, size, (0., 0.), None);
         // A size 0 is as wide as the text: from the origin to the edge.
         let auto_w = el.get("size").and_then(pair).is_none_or(|(w, _)| w <= 0.)
@@ -507,7 +544,12 @@ impl Mapper<'_> {
         if let Some((c, _)) = ink {
             t.insert("color".into(), s(c));
         }
-        let align = match el.get("alignment").map(str::trim) {
+        // `horizontalAlignment` is ES-DE's spelling.
+        let align = match el
+            .get("alignment")
+            .or_else(|| el.get("horizontalAlignment"))
+            .map(str::trim)
+        {
             Some("center") => Some("center"),
             Some("right") => Some("right"),
             Some("left") | Some("justify") => None,
@@ -531,7 +573,9 @@ impl Mapper<'_> {
             }
             _ => {}
         }
-        if flag(el.get("forceUppercase")) == Some(true) {
+        if flag(el.get("forceUppercase")) == Some(true)
+            || el.get("letterCase").map(str::trim) == Some("uppercase")
+        {
             t.insert("upper".into(), Value::Boolean(true));
         }
         if wrap {
@@ -858,6 +902,9 @@ impl Mapper<'_> {
             }
         }
         self.screen_view(screen, &mut out);
+        self.one_video(&mut out, "sistemas");
+        self.gif_stills(&mut out);
+        self.one_status(&mut out);
         out
     }
 
@@ -1202,6 +1249,9 @@ impl Mapper<'_> {
             })
             .map(|e| e.id.clone());
         self.screen_view(screen, &mut out);
+        self.one_video(&mut out, "jogos");
+        self.gif_stills(&mut out);
+        self.one_status(&mut out);
         (out, collection, description)
     }
 
@@ -1236,7 +1286,11 @@ impl Mapper<'_> {
         if let Some((c, _)) = el.get("primaryColor").and_then(color) {
             t.insert("color".into(), s(c));
         }
-        match el.get("alignment").map(str::trim) {
+        match el
+            .get("alignment")
+            .or_else(|| el.get("horizontalAlignment"))
+            .map(str::trim)
+        {
             Some("center") => {
                 t.insert("align".into(), s("center"));
             }
@@ -1261,6 +1315,33 @@ impl Mapper<'_> {
         if let Some((c, _)) = el.get("selectedColor").and_then(color) {
             sel.insert("color".into(), s(c));
         }
+        // ES-DE's picture for the selected row, in place of the bar: a
+        // nine-slice frame whose corners are half the bar tall.
+        if let Some(p) = el
+            .get("selectorImagePath")
+            .filter(|p| !p.is_empty() && !p.contains("${") && self.root.join(p).is_file())
+        {
+            let p = p.to_owned();
+            self.file(&p, &p);
+            let bar = sel
+                .get("height")
+                .and_then(Value::as_float)
+                .unwrap_or(f64::from(row)) as f32;
+            let mut frame = Table::new();
+            frame.insert("image".into(), s(p.clone()));
+            match picture_pixels(self.root, &p) {
+                Some((pw, ph)) if pw.min(ph) >= 3. => {
+                    let slice = (pw.min(ph) / 3.).round();
+                    frame.insert("slice".into(), Value::Integer(slice as i64));
+                    frame.insert("scale".into(), f(bar * 480. / 2. / slice));
+                }
+                _ => {
+                    frame.insert("slice".into(), Value::Integer(0));
+                }
+            }
+            sel.insert("frame".into(), Value::Table(frame));
+            sel.insert("fill".into(), s("#00000000"));
+        }
         if !sel.is_empty() {
             t.insert("selected".into(), Value::Table(sel));
         }
@@ -1270,7 +1351,6 @@ impl Mapper<'_> {
         self.common(&mut t, el, 20.);
         for key in [
             "horizontalMargin",
-            "selectorImagePath",
             "selectorColorEnd",
             "scrollSound",
             "selectorOffsetY",
@@ -1688,8 +1768,125 @@ impl Mapper<'_> {
             t.insert("delay".into(), f(d.clamp(0., 10.)));
         }
         self.common(&mut t, el, z);
+        // ES-DE plays a clip's sound unless it says no; `one_video` reads
+        // this mark and takes it away.
+        if flag(el.get("audio")) != Some(false) {
+            t.insert(AUDIO.into(), Value::Boolean(true));
+        }
         self.mapped(&format!("video {}", el.name), "video");
         Some(t)
+    }
+
+    /// A launcher screen plays one clip (one decoder on a 1.4 GHz
+    /// handheld). With more, the game's or system's clip stays, else the
+    /// first silent one; the others become their still picture (their
+    /// `fallback`, or the clip's first frame), and a clip with sound
+    /// under another, ES's background music, goes: the launcher is mute.
+    fn one_video(&mut self, out: &mut Vec<OutEl>, screen: &str) {
+        let is_video = |e: &OutEl| e.t.get("kind").and_then(Value::as_str) == Some("video");
+        let item = |t: &Table| {
+            let src = t.get("src").map(Value::to_string).unwrap_or_default();
+            src.contains("game.video") || src.contains("system.video")
+        };
+        let rank = |t: &Table| {
+            if item(t) {
+                0
+            } else if t.contains_key(AUDIO) {
+                2
+            } else {
+                1
+            }
+        };
+        let videos: Vec<usize> = (0..out.len()).filter(|&i| is_video(&out[i])).collect();
+        let keep = videos.iter().copied().min_by_key(|&i| rank(&out[i].t));
+        for &i in videos.iter().rev() {
+            if Some(i) == keep {
+                continue;
+            }
+            let id = out[i].id.clone();
+            let t = &mut out[i].t;
+            let still = match t.get("fallback").cloned() {
+                Some(fallback) => Some(fallback),
+                None if rank(t) == 2 => None,
+                None => t
+                    .get("src")
+                    .and_then(Value::as_str)
+                    .filter(|p| !p.contains("${"))
+                    .map(|clip| {
+                        let stem = clip.rsplit_once('.').map_or(clip, |(s, _)| s);
+                        let picture = format!("{stem}-still.jpg");
+                        self.out.stills.insert((clip.to_owned(), picture.clone()));
+                        s(picture)
+                    }),
+            };
+            match still {
+                Some(src) => {
+                    for k in ["delay", "loop", "mute", "fallback", AUDIO] {
+                        t.remove(k);
+                    }
+                    t.insert("kind".into(), s("image"));
+                    t.insert("src".into(), src);
+                    self.note(format!(
+                        "um segundo vídeo na tela de {screen} (`{id}`) vira a imagem parada dele: o launcher toca um vídeo por tela"
+                    ));
+                }
+                None => {
+                    out.remove(i);
+                    self.note(format!(
+                        "vídeo com som por baixo de outro na tela de {screen} (`{id}`, música de fundo) fica de fora: o launcher é mudo"
+                    ));
+                }
+            }
+        }
+        for e in out.iter_mut() {
+            e.t.remove(AUDIO);
+        }
+    }
+
+    /// GIF pictures (ES-DE draws them, and plays an `animation`): the
+    /// launcher reads PNG, JPG, WebP and SVG, so the first frame as a PNG.
+    fn gif_stills(&mut self, out: &mut [OutEl]) {
+        let swap = |v: &mut Value, stills: &mut BTreeSet<(String, String)>| {
+            if let Value::String(p) = v {
+                if p.to_lowercase().ends_with(".gif") && !p.contains("${") {
+                    let picture = format!("{}-still.png", &p[..p.len() - 4]);
+                    stills.insert((p.clone(), picture.clone()));
+                    *p = picture;
+                }
+            }
+        };
+        for e in out.iter_mut() {
+            for key in ["src", "image"] {
+                match e.t.get_mut(key) {
+                    Some(Value::Array(items)) => {
+                        items.iter_mut().for_each(|v| swap(v, &mut self.out.stills))
+                    }
+                    Some(v) => swap(v, &mut self.out.stills),
+                    None => {}
+                }
+            }
+        }
+    }
+
+    /// One status pill per screen: ES-DE's clock and system status (battery,
+    /// radios) are the launcher's one `status`, in the system status's place.
+    fn one_status(&mut self, out: &mut Vec<OutEl>) {
+        let status: Vec<usize> = (0..out.len())
+            .filter(|&i| out[i].t.get("kind").and_then(Value::as_str) == Some("status"))
+            .collect();
+        if status.len() < 2 {
+            return;
+        }
+        let keep = status
+            .iter()
+            .copied()
+            .find(|&i| out[i].id.contains("status"))
+            .unwrap_or(status[0]);
+        for &i in status.iter().rev() {
+            if i != keep {
+                out.remove(i);
+            }
+        }
     }
 
     fn rating(&mut self, el: &El) -> Option<Table> {
@@ -1827,6 +2024,59 @@ impl Mapper<'_> {
                 }
             }
             "rating" => out.extend(self.rating(el)),
+            // A GIF plays in ES-DE; here it stands still (`gif_stills`).
+            "animation" => {
+                let src: Vec<String> = self
+                    .picture_sources(el)
+                    .into_iter()
+                    .filter(|p| p.to_lowercase().ends_with(".gif"))
+                    .collect();
+                if src.is_empty() {
+                    if !self.hidden(el) && !el.paths.is_empty() {
+                        self.note("animação Lottie (`animation` .json) não existe no launcher; ignorada");
+                    }
+                    return out;
+                }
+                let first = src.first().cloned();
+                out.extend(self.image(el, src, (0., 0.), (0., 0.), (0., 0.), z, first.as_deref()));
+                self.mapped("animation (GIF)", "image parada (o primeiro quadro)");
+            }
+            // ES-DE's clock and battery/radio icons: the launcher's pill.
+            "clock" | "systemstatus" => {
+                if self.hidden(el) {
+                    return out;
+                }
+                let g = self.geo(el, (0.98, 0.02), (0.2, 0.04), (1., 0.), None);
+                let (w, h) = (g.w.clamp(0.12, 0.5), g.h.clamp(0.03, 0.1));
+                let (x, y) = (g.x - g.ox * w, g.y - g.oy * h);
+                let mut t = Table::new();
+                t.insert("kind".into(), s("status"));
+                t.insert("rect".into(), rect(x, y, w, h));
+                let ink = el.get("color").or_else(|| el.get("textColor"));
+                if let Some((c, _)) = ink.and_then(color) {
+                    t.insert("color".into(), s(c));
+                }
+                t.insert("z".into(), Value::Integer(STATUS_Z));
+                self.mapped(
+                    "clock / systemstatus",
+                    "status (relógio, bateria e rádios do launcher)",
+                );
+                out.push(t);
+            }
+            // "12 / 345": the focused game's place in the list.
+            "gamelistinfo" => {
+                if let Some(t) = self.text(
+                    el,
+                    "${list.index} / ${list.total}",
+                    (0., 0.),
+                    (0., 0.),
+                    z,
+                    Some(false),
+                ) {
+                    out.push(t);
+                    self.mapped("gamelistinfo", "text `${list.index} / ${list.total}`");
+                }
+            }
             "ninepatch" => {
                 let src = self.sources(el);
                 if let Some(p) = src.first().cloned() {

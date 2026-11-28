@@ -7,7 +7,8 @@
 //! `:`, and `ARCHR_ES2THEME_SHOTS` is where the PNGs go. Without them the
 //! test draws a small theme converted from the XML written here.
 //! `ARCHR_ES2THEME_CHOICES=<opção>=<escolha>,...` draws them with those
-//! choices of their options.
+//! choices of their options; `ARCHR_ES2THEME_VIEW=<id>` (or `default`)
+//! draws one view.
 use archr_index::{cache::SystemEntry, Game};
 use archr_ui::{
     render::Ui,
@@ -170,8 +171,17 @@ fn draw(dir: &Path, prefix: &str, shots: Option<&Path>) {
         loaded = loaded.with_options(&chosen);
     }
     let own: Vec<String> = default.views().into_iter().map(|(id, _)| id).collect();
+    // `ARCHR_ES2THEME_VIEW=<id>` draws that view alone; `default`, the one
+    // the theme opens with.
+    let only = std::env::var("ARCHR_ES2THEME_VIEW").ok().map(|v| {
+        if v == "default" {
+            loaded.default_view.clone()
+        } else {
+            v
+        }
+    });
     for (view_id, _) in loaded.views() {
-        if own.contains(&view_id) {
+        if own.contains(&view_id) || only.as_ref().is_some_and(|v| *v != view_id) {
             continue;
         }
         let mut theme = loaded.clone();

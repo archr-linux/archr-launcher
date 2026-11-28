@@ -1032,6 +1032,49 @@ inclusive nas chaves do topo, e uma tabela `[aspect.square.vars]` troca
 variáveis só nesse formato de tela. Variável que não existe gera aviso e o
 valor fica como está.
 
+### Variáveis por sistema: `[system.<id>.vars]`
+
+```toml
+[vars]
+faixa = "#333333"
+texto = "Jogue os seus jogos"
+
+[system.snes.vars]
+faixa = "#DF5142"
+texto = "O console de 16 bits da Nintendo, de 1990."
+
+[system.genesis.vars]
+faixa = "#2040C0"
+
+[[view.cores.systems.el]]
+kind = "rect"
+fill = "$faixa"                           # a cor do sistema em foco
+rect = { x = 0, y = 0, w = 1, h = 0.12 }
+
+[[view.cores.systems.el]]
+kind = "text"
+text = "${texto}"
+wrap = true
+rect = { x = 0.05, y = 0.6, w = 0.5, h = 0.25 }
+size = 0.03
+
+[[view.cores.systems.el]]
+kind = "list"
+rect = { x = 0.6, y = 0.15, w = 0.36, h = 0.7 }
+```
+
+Uma variável que algum `[system.<id>.vars]` diz muda com o sistema em foco
+nas telas livres (sistemas, jogos e detalhes): vale a do sistema, senão a
+do sistema cujo nome ele divide (`megadrive` acha `genesis`, como os logos),
+senão a do `[vars]` (com o formato e as opções). Vale em qualquer campo de
+um elemento (cor, texto, caminho, número, `opacity`), inclusive no que ele
+herda com `base`; uma coleção (`list`, `carousel`, `grid`) é a mesma em
+todos os sistemas e fica com o `[vars]`, com aviso. Fora dos `el` (as chaves
+do topo, as tabelas fixas) vale sempre o `[vars]`. As coleções usam o id sem
+o `@` (`[system.favorites.vars]`). Só `vars` muda por sistema; outra chave
+em `[system.<id>]` gera aviso. Muitos sistemas cabem em vários arquivos com
+`include` (cada arquivo até 64 KiB). Desde o launcher 0.6.0.
+
 ### Condições: `when`
 
 ```toml
@@ -1055,7 +1098,10 @@ when = { has = "game.developer" }          # só quando o jogo tem o dado
 ```
 
 Uma tabela simples, sem expressões. `system`, `aspect` e `has` aceitam um
-nome ou uma lista; com mais de uma chave, todas precisam valer. O elemento
+nome ou uma lista; com mais de uma chave, todas precisam valer.
+`collection = true` desenha o elemento só nas coleções (favoritos,
+recentes) e `collection = false` só nos sistemas e apps (desde o launcher
+0.6.0). O elemento
 que não vale não é desenhado nem pede imagem. Prefira `when.aspect` a uma
 tabela `[aspect.<formato>]`: lá, um `el` substitui a lista inteira da tela.
 
@@ -1422,7 +1468,9 @@ loop = false                              # toca uma vez e volta à imagem
 | `mute` | `true` | `true` | o vídeo é sempre sem som, como nos detalhes; `false` gera aviso e fica mudo |
 
 - Um vídeo por tela, na tela de sistemas, de jogos ou de detalhes; um segundo `video`
-  gera aviso e fica de fora.
+  gera aviso e fica de fora. Não contam um vídeo de outro formato de tela
+  (`when.aspect`) nem um com `opacity = 0` (uma opção que o desliga): esse
+  nunca é decodificado (desde o launcher 0.6.0).
 - Toca com o mesmo tocador da prévia dos detalhes (o ffmpeg num processo à
   parte, uma linha de decodificação, 25 quadros por segundo) e segue a opção
   **Vídeo de prévia** das Configurações: desligada, só aparece o
@@ -1650,8 +1698,9 @@ aviso.
 O `archr-es2theme` converte um tema do EmulationStation no formato do
 Batocera/ArkOS (`theme.xml`, `formatVersion 7`, subsets, `customView`) num
 tema de telas livres. Ele roda no PC; o launcher nunca lê XML. Temas do
-ES-DE (`capabilities.xml`, `variant`, `colorScheme`, `aspectRatio`) são lidos
-pelo mesmo caminho, com menos cobertura.
+ES-DE (`capabilities.xml`, `variant`, `colorScheme`, `fontSize`,
+`aspectRatio`, `language`) são lidos pelo mesmo caminho (veja
+[Temas do ES-DE](#temas-do-es-de)).
 
 ```sh
 cargo run --release -p archr-es2theme -- \
@@ -1668,6 +1717,7 @@ saída fica pronta para copiar para
 | `theme.toml` | nome, licença, cores do topo e o `include` das partes |
 | `parts/vars.toml` | as variáveis e o que muda em cada formato de tela (`[aspect.<formato>.vars]`) |
 | `parts/options.toml` | as opções do tema, uma por subset que muda algo |
+| `parts/systems-<n>.toml` | o que cada sistema mostra do seu jeito (`[system.<id>.vars]`), dos arquivos por sistema do ES-DE |
 | `parts/view-<id>.toml` | uma visualização por view do ES (`detailed`, `grid`, cada `customView`) |
 | `assets/`, `_inc/`... | as imagens e fontes que o tema usa, nos mesmos caminhos do original |
 | `logos/` | os logos de sistema, para o `system.logo` achar também o nome que o sistema divide |
@@ -1705,7 +1755,9 @@ formato (`when.aspect`).
 | `ninepatch` | `frame` |
 
 A tela de detalhes de cada visualização é a de jogos com a capa, a ficha
-e os botões no lugar da lista, e a descrição rolando com ↑/↓.
+e os botões no lugar da lista (a parte dela que fica na tela; um carrossel
+que passa das bordas dá o lugar padrão, à esquerda), e a descrição rolando
+com ↑/↓.
 
 **O que fica de fora** (e está no relatório): sons e música de fundo, a
 tela `menu` do ES, `splash`, vídeo ou imagem aleatória (`{random}`),
@@ -1736,6 +1788,45 @@ créditos em `original/`; a `license` do `theme.toml` diz a do original. Um
 tema com licença não comercial (CC BY-NC, CC BY-NC-SA) não pode ir nas
 imagens do Arch R nem na Loja sem autorização por escrito do autor; o
 relatório avisa. Logos de sistemas são marcas dos fabricantes.
+
+### Temas do ES-DE
+
+- **Ordem de leitura**: como o ES-DE, cada arquivo lê primeiro as
+  variáveis (e os blocos que só têm variáveis: `colorScheme`, `fontSize`,
+  `language`), depois os `include`, as views, os `variant` e os
+  `aspectRatio`. Uma variável escrita depois do `include` que a usa
+  (`${rootpath}`) vale.
+- **Arquivos por sistema** (`<include>./metadata/${system.theme}.xml</include>`,
+  depois do `_default.xml`): o tema é lido de novo para cada sistema que tem
+  arquivo, no formato 4:3 e com as escolhas padrão; o que muda vira
+  variável por sistema (`[system.<id>.vars]` em `parts/systems-<n>.toml`):
+  a descrição, o ano, a cor do sistema. Um elemento que só alguns sistemas
+  mostram (um texto vazio no padrão) fica com `opacity` 0 no `[vars]` e 1
+  neles. Um texto que só aparece em outro formato ou escolha também vira
+  variável quando é exatamente o texto de uma variável que os sistemas
+  mudam. O que muda a forma de uma coleção por sistema (o tamanho da capa da
+  grade) fica com o padrão.
+- **`fontSize`** vira a opção do tema `fontsize`, com `medium` de padrão,
+  como no ES-DE. **`language`**: vale o bloco do idioma de `--lang` (`pt` é
+  `pt_BR`).
+- **Nomes por tipo de sistema**: `${system.fullName.noCollections}` vira
+  `${system.name}` com `when.collection = false`,
+  `.autoCollections` com `when.collection = true`; `.customCollections`
+  fica de fora (o launcher não tem coleções do usuário).
+- **Vídeos**: o launcher toca um vídeo por tela (um decodificador num
+  RK3326). Com mais de um, fica o do jogo ou do sistema; um vídeo de
+  fundo vira a imagem parada dele (o primeiro quadro, tirado com o `ffmpeg`
+  do PC, em `<nome>-still.jpg`) e um vídeo com som por baixo de outro (a
+  música de fundo) fica de fora, porque o launcher é mudo.
+- **GIF** (`animation`, ou imagem `.gif`): o primeiro quadro, em
+  `<nome>-still.png` (também com o `ffmpeg`). Animação Lottie fica de fora.
+- `clock` e `systemstatus` viram um `status` (relógio, bateria e rádios),
+  no lugar do `systemstatus`; `gamelistinfo` vira o texto
+  `${list.index} / ${list.total}`; `horizontalAlignment` e `letterCase`
+  valem nos textos; `selectorImagePath` da lista vira o `selected.frame`,
+  com os cantos da metade da altura da faixa.
+- `min_launcher`: `0.5.0`, ou `0.6.0` quando o tema usa variáveis por
+  sistema ou `when.collection`.
 
 ## Uma tabela por tela
 
@@ -2648,7 +2739,7 @@ license = "CC BY 4.0"        # texto curto; o arquivo LICENSE também é instala
 min_launcher = "0.2.0"       # versão mínima do launcher; abaixo dela não instala
 ```
 
-`min_launcher` compara com a versão do **pacote** do launcher (hoje `0.5.0`),
+`min_launcher` compara com a versão do **pacote** do launcher (hoje `0.6.0`),
 não com a versão do sistema que as Configurações mostram (`v3.1.0 · …`) nem
 com o número da API de temas (3.1). Um valor acima da versão do launcher
 instalado faz a Loja recusar o tema ("Este tema pede uma versão mais nova do
@@ -2659,8 +2750,9 @@ ou deixe a chave de fora.
 |---|---|
 | `0.1.0` | temas até a API 3.1 (cores, fontes, visualizações, telas livres fases 1–8) |
 | `0.2.0` | update 20261126.6: `tint` em `frame`, `default_view`, ladrilhado em uma cópia, `${system}` de app pelo id do módulo |
+| `0.6.0` | variáveis por sistema (`[system.<id>.vars]`), `when.collection`; um vídeo de outro formato ou com `opacity = 0` não conta como o segundo da tela |
 
-Um tema que usa algo da tabela precisa declarar a versão da linha: um launcher mais antigo o desenharia quebrado, e com o `min_launcher` ele recusa a instalação. O `archr-es2theme` grava a versão do launcher em que converteu.
+Um tema que usa algo da tabela precisa declarar a versão da linha: um launcher mais antigo o desenharia quebrado, e com o `min_launcher` ele recusa a instalação. O `archr-es2theme` grava `0.5.0`, ou `0.6.0` quando o tema convertido usa algo dessa linha.
 
 `description` aceita texto ou tabela por idioma, como `name`, até 200
 caracteres. "Inclui" nos detalhes é calculado pelos arquivos: cores sempre;

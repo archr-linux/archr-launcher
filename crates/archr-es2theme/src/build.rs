@@ -35,6 +35,8 @@ pub struct Built {
     pub views: Vec<BuiltView>,
     pub vars: Vec<(String, Value)>,
     pub aspect_vars: BTreeMap<&'static str, Vec<(String, Value)>>,
+    /// `[system.<id>.vars]`: what a system shows its own way (`per_system`).
+    pub system_vars: BTreeMap<String, Vec<(String, Value)>>,
     pub options: Vec<BuiltOption>,
     pub top: Table,
     /// Elements written once per shape: what they show changes with the
@@ -338,6 +340,7 @@ pub fn build(
         views: Vec::new(),
         vars: Vec::new(),
         aspect_vars: BTreeMap::new(),
+        system_vars: BTreeMap::new(),
         options: Vec::new(),
         top: Table::new(),
         split: 0,
@@ -360,7 +363,7 @@ pub fn build(
             .collection
             .as_ref()
             .and_then(|c| view.games.iter().find(|e| &e.id == c));
-        let collection_rect = base_list.and_then(|e| e.t.get("rect")?.as_table().cloned());
+        let collection_rect = base_list.and_then(|e| on_screen(&e.t));
         let mut list_ink = Table::new();
         if let Some(l) = base_list {
             for k in ["font", "color", "size"] {
@@ -520,6 +523,315 @@ pub fn build(
         o.choices.truncate(24);
     }
     built
+}
+
+fn get_leaf<'v>(v: &'v Value, path: &str) -> Option<&'v Value> {
+    let mut at = v;
+    let mut rest = path;
+    while !rest.is_empty() {
+        if let Some(r) = rest.strip_prefix('[') {
+            let end = r.find(']')?;
+            at = at.as_array()?.get(r[..end].parse::<usize>().ok()?)?;
+            rest = r[end + 1..].trim_start_matches('.');
+        } else {
+            let end = rest.find(['.', '[']).unwrap_or(rest.len());
+            at = at.as_table()?.get(&rest[..end])?;
+            rest = rest[end..].strip_prefix('.').unwrap_or(&rest[end..]);
+        }
+    }
+    Some(at)
+}
+
+/// What changes from system to system (an ES-DE theme's files included
+/// per system, `metadata/${system.theme}.xml`): each such field of an
+/// element becomes a variable, its value without a system in `[vars]` and
+/// each system's own in `[system.<id>.vars]`; an element a system leaves
+/// out gets opacity 0 there. `base` is the classic read with the
+/// defaults; `systems` the same read for each system. A field that already
+/// changes with the shape or a choice keeps that.
+pub fn per_system(
+    built: &mut Built,
+    base: &Model,
+    systems: &[(String, Model)],
+    notes: &mut BTreeSet<String>,
+) {
+    let mut taken: BTreeSet<String> = built.vars.iter().map(|(n, _)| n.clone()).collect();
+    let mut by_values: BTreeMap<String, String> = BTreeMap::new();
+    let mut new_vars: Vec<(String, Value)> = Vec::new();
+    let mut per: BTreeMap<String, Vec<(String, Value)>> = BTreeMap::new();
+    for view in &mut built.views {
+        let Some(base_view) = base.views.iter().find(|v| v.id == view.id) else {
+            continue;
+        };
+        for games in [false, true] {
+            let (els, base_els) = if games {
+                (&mut view.games, &base_view.games)
+            } else {
+                (&mut view.systems, &base_view.systems)
+            };
+            let screen = if games { "jogos" } else { "sistemas" };
+            let screen_of = |m: &Model| -> Vec<OutEl> {
+                m.views
+                    .iter()
+                    .find(|v| v.id == view.id)
+                    .map(|v| {
+                        if games {
+                            v.games.clone()
+                        } else {
+                            v.systems.clone()
+                        }
+                    })
+                    .unwrap_or_default()
+            };
+            // An element only some systems show (a text of a variable the
+            // defaults leave empty): written as the first one draws it.
+            let mut added: Vec<OutEl> = Vec::new();
+            for (_, m) in systems {
+                for o in screen_of(m) {
+                    if !base_els.iter().any(|b| b.id == o.id)
+                        && !els.iter().any(|e| e.id == o.id)
+                        && !added.iter().any(|a| a.id == o.id)
+                    {
+                        added.push(o);
+                    }
+                }
+            }
+            els.extend(added.iter().cloned());
+            for e in els.iter_mut() {
+                let Some((b, in_base)) = base_els
+                    .iter()
+                    .find(|b| b.id == e.id)
+                    .map(|b| (b, true))
+                    .or_else(|| added.iter().find(|a| a.id == e.id).map(|a| (a, false)))
+                else {
+                    continue;
+                };
+                let kind = b.t.get("kind").and_then(Value::as_str).unwrap_or("");
+                let collection = matches!(kind, "list" | "carousel" | "grid");
+                let mut tables: Vec<Option<Table>> = vec![in_base.then(|| b.t.clone())];
+                for (_, m) in systems {
+                    let found = m
+                        .views
+                        .iter()
+                        .find(|v| v.id == view.id)
+                        .and_then(|v| {
+                            let list = if games { &v.games } else { &v.systems };
+                            list.iter().find(|o| o.id == e.id)
+                        })
+                        .map(|o| o.t.clone());
+                    tables.push(found);
+                }
+                let gone: Vec<bool> = tables.iter().map(Option::is_none).collect();
+                if tables
+                    .iter()
+                    .flatten()
+                    .any(|t| t.get("kind") != b.t.get("kind"))
+                {
+                    notes.insert(format!(
+                        "o elemento `{}` (tela de {screen}) muda de tipo conforme o sistema; vale o padrão",
+                        e.id
+                    ));
+                    continue;
+                }
+                normalize(&mut tables);
+                let base_leaves = leaf_map(&b.t);
+                let mut paths: Vec<String> = base_leaves.keys().cloned().collect();
+                if gone.iter().any(|g| *g) && !paths.iter().any(|p| p == "opacity") {
+                    paths.push("opacity".into());
+                }
+                for path in paths {
+                    let default = if !in_base && path == "opacity" {
+                        Value::Float(0.)
+                    } else {
+                        base_leaves.get(&path).cloned().unwrap_or(Value::Float(1.))
+                    };
+                    let values: Vec<Value> = tables
+                        .iter()
+                        .zip(&gone)
+                        .map(|(t, gone)| {
+                            if *gone && path == "opacity" {
+                                return Value::Float(0.);
+                            }
+                            t.as_ref()
+                                .and_then(|t| leaf_map(t).get(&path).cloned())
+                                .unwrap_or_else(|| {
+                                    if path == "opacity" {
+                                        Value::Float(1.)
+                                    } else {
+                                        default.clone()
+                                    }
+                                })
+                        })
+                        .collect();
+                    if values.iter().all(|v| key_of(v) == key_of(&default)) {
+                        continue;
+                    }
+                    if collection {
+                        notes.insert(format!(
+                            "a coleção `{}` (tela de {screen}) muda conforme o sistema; vale a do padrão em todos",
+                            e.id
+                        ));
+                        continue;
+                    }
+                    let here = get_leaf(&Value::Table(e.t.clone()), &path).cloned();
+                    match &here {
+                        Some(Value::String(v)) if v.starts_with('$') => {
+                            notes.insert(format!(
+                                "`{}` do elemento `{}` (tela de {screen}) muda conforme o sistema e também com o formato ou uma opção; vale o do formato ou da opção",
+                                path, e.id
+                            ));
+                            continue;
+                        }
+                        None if path != "opacity" => continue,
+                        _ => {}
+                    }
+                    let key = values.iter().map(key_of).collect::<Vec<_>>().join("\u{1}");
+                    let name = match by_values.get(&key) {
+                        Some(name) => name.clone(),
+                        None => {
+                            let hint = var_name(&format!(
+                                "{}_{}",
+                                e.id,
+                                path.replace(['.', '['], "_").replace(']', "")
+                            ));
+                            let mut name = hint.clone();
+                            let mut n = 2;
+                            while taken.contains(&name) {
+                                name = format!("{hint}_{n}");
+                                n += 1;
+                            }
+                            taken.insert(name.clone());
+                            by_values.insert(key, name.clone());
+                            new_vars.push((name.clone(), default.clone()));
+                            for ((system, _), v) in systems.iter().zip(&values[1..]) {
+                                if key_of(v) != key_of(&default) {
+                                    per.entry(system.clone())
+                                        .or_default()
+                                        .push((name.clone(), v.clone()));
+                                }
+                            }
+                            name
+                        }
+                    };
+                    let var = Value::String(format!("${name}"));
+                    if here.is_none() {
+                        e.t.insert(path.clone(), var);
+                    } else {
+                        let mut t = Value::Table(std::mem::take(&mut e.t));
+                        set_leaf(&mut t, &path, var);
+                        let Value::Table(t) = t else { unreachable!() };
+                        e.t = t;
+                    }
+                }
+            }
+        }
+    }
+    built.vars.extend(new_vars);
+    for (system, vars) in per {
+        built.system_vars.entry(system).or_default().extend(vars);
+    }
+}
+
+/// The part of an element's box on the screen, its anchor applied: where
+/// the details put the game's facts in place of the list. None when too
+/// little of it shows (a carousel reaching past the screen's edges).
+fn on_screen(t: &Table) -> Option<Table> {
+    let r = t.get("rect")?.as_table()?;
+    let get = |k: &str, d: f64| r.get(k).and_then(Value::as_float).unwrap_or(d);
+    let (x, y, w, h) = (get("x", 0.), get("y", 0.15), get("w", 0.45), get("h", 0.75));
+    let (ax, ay) = match t.get("anchor") {
+        Some(Value::String(a)) => match a.as_str() {
+            "top" => (0.5, 0.),
+            "top-right" => (1., 0.),
+            "left" => (0., 0.5),
+            "center" => (0.5, 0.5),
+            "right" => (1., 0.5),
+            "bottom-left" => (0., 1.),
+            "bottom" => (0.5, 1.),
+            "bottom-right" => (1., 1.),
+            _ => (0., 0.),
+        },
+        Some(Value::Array(a)) => (
+            a.first().and_then(Value::as_float).unwrap_or(0.),
+            a.get(1).and_then(Value::as_float).unwrap_or(0.),
+        ),
+        _ => (0., 0.),
+    };
+    let (x0, y0) = ((x - ax * w).max(0.), (y - ay * h).max(0.));
+    let (x1, y1) = ((x - ax * w + w).min(1.), (y - ay * h + h).min(1.));
+    let mut out = Table::new();
+    let (w, h) = (x1 - x0, y1 - y0);
+    let (x0, y0, w, h) = if w < 0.25 || h < 0.35 {
+        (0.04, 0.15, 0.45, 0.75)
+    } else {
+        (x0, y0, w, h)
+    };
+    for (k, v) in [("x", x0), ("y", y0), ("w", w), ("h", h)] {
+        out.insert(k.into(), Value::Float(map::r5(v as f32)));
+    }
+    Some(out)
+}
+
+/// A system variable's text where the classic read with the defaults does
+/// not show it (an element of another shape or choice): a `text` that is
+/// exactly what a theme variable the systems change writes with the
+/// defaults becomes that variable. `base` is the theme's variables with
+/// the defaults, `systems` each system's.
+pub fn per_system_text(
+    built: &mut Built,
+    base: &BTreeMap<String, String>,
+    systems: &[(String, BTreeMap<String, String>)],
+) {
+    let mut taken: BTreeSet<String> = built.vars.iter().map(|(n, _)| n.clone()).collect();
+    for (name, raw) in base {
+        let default = map::data(raw, false);
+        // Short values ("1992", "Console") could be any text.
+        if default.chars().count() < 12 || default.starts_with('$') {
+            continue;
+        }
+        let own: Vec<(&String, String)> = systems
+            .iter()
+            .filter_map(|(system, vars)| {
+                let v = map::data(vars.get(name)?, false);
+                (v != default).then_some((system, v))
+            })
+            .collect();
+        if own.is_empty() {
+            continue;
+        }
+        let mut var = None;
+        for view in &mut built.views {
+            for e in view.systems.iter_mut().chain(view.games.iter_mut()) {
+                if e.t.get("text").and_then(Value::as_str) != Some(default.as_str()) {
+                    continue;
+                }
+                let var = var.get_or_insert_with(|| {
+                    let hint = var_name(name);
+                    let mut v = hint.clone();
+                    let mut n = 2;
+                    while taken.contains(&v) {
+                        v = format!("{hint}_{n}");
+                        n += 1;
+                    }
+                    taken.insert(v.clone());
+                    v
+                });
+                e.t.insert("text".into(), Value::String(format!("${var}")));
+            }
+        }
+        if let Some(var) = var {
+            built
+                .vars
+                .push((var.clone(), Value::String(default.clone())));
+            for (system, v) in own {
+                built
+                    .system_vars
+                    .entry(system.clone())
+                    .or_default()
+                    .push((var.clone(), Value::String(v)));
+            }
+        }
+    }
 }
 
 /// "colorset" → "Colorset": a subset without a displayName.

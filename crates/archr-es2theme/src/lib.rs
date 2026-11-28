@@ -115,6 +115,7 @@ pub fn convert(src: &Path, out: &Path, opts: &Options) -> Result<Conversion, Str
                 model.notes.extend(es.notes);
                 model.mapped.extend(m.mapped);
                 model.files.extend(m.files);
+                model.stills.extend(m.stills);
             }
             at.push(build::Read { model, vars });
         }
@@ -127,15 +128,56 @@ pub fn convert(src: &Path, out: &Path, opts: &Options) -> Result<Conversion, Str
     let mut notes: BTreeSet<String> = BTreeSet::new();
     let mut files = BTreeSet::new();
     let mut mapped = BTreeSet::new();
+    let mut stills = BTreeSet::new();
     for r in &reads.at {
+        stills.extend(r.model.stills.iter().cloned());
         notes.extend(r.model.notes.iter().cloned());
         files.extend(r.model.files.iter().cloned());
         mapped.extend(r.model.mapped.iter().cloned());
     }
-    let built = build::build(&reads, &optional, en.as_ref(), pt.as_ref(), &mut notes);
+    let mut built = build::build(&reads, &optional, en.as_ref(), pt.as_ref(), &mut notes);
+    // ES-DE files read per system: the classic read with the defaults
+    // again for each system, what differs carried as system variables.
+    if !probe.per_system.is_empty() {
+        let classic = SHAPES[0].1;
+        let mut models = Vec::new();
+        let mut system_es_vars = Vec::new();
+        for system in systems_of(src, &probe.per_system) {
+            let mut model = Model::default();
+            let mut es_vars = None;
+            for variant in &variants {
+                let mut picked = BTreeMap::new();
+                if let Some(r) = &ratio {
+                    if let Some(c) = r.nearest(classic) {
+                        picked.insert(r.name.clone(), c.to_owned());
+                    }
+                }
+                if let Some(v) = variant {
+                    picked.insert("variant".into(), v.clone());
+                }
+                let es = es::load_for(src, &opts.lang, &picked, Some(&system))?;
+                if es_vars.is_none() {
+                    es_vars = Some(es.vars.clone());
+                }
+                let mut m = map::model(&es, src, Shape { ratio: classic });
+                if let Some(v) = variant {
+                    for view in &mut m.views {
+                        view.id = format!("{}-{}", map::id_of(v), view.id);
+                    }
+                }
+                model.views.extend(m.views);
+                files.extend(m.files);
+            }
+            system_es_vars.push((system.clone(), es_vars.unwrap_or_default()));
+            models.push((system, model));
+        }
+        build::per_system(&mut built, reads.base(), &models, &mut notes);
+        build::per_system_text(&mut built, &reads.at[0].vars, &system_es_vars);
+    }
 
     std::fs::create_dir_all(out).map_err(|e| format!("{}: {e}", out.display()))?;
     let (count, bytes) = copy_files(src, out, &files, &mut notes)?;
+    write_stills(src, out, &stills, &mut notes);
     let license = license_of(src);
     let name = opts.name.clone().unwrap_or_else(|| {
         src.file_name()
@@ -173,6 +215,56 @@ pub fn convert(src: &Path, out: &Path, opts: &Options) -> Result<Conversion, Str
     );
     std::fs::write(out.join("CONVERSAO.md"), report).map_err(|e| e.to_string())?;
     Ok(conversion)
+}
+
+/// The systems an ES-DE theme has files for: the names in the folders of
+/// its per-system includes (`_default` and the like left out).
+fn systems_of(src: &Path, patterns: &[String]) -> Vec<String> {
+    let mut found = BTreeSet::new();
+    for pattern in patterns {
+        let (dir, name) = pattern.rsplit_once('/').unwrap_or(("", pattern));
+        let Some((prefix, suffix)) = name.split_once("${system.theme}") else {
+            continue;
+        };
+        let Ok(entries) = std::fs::read_dir(src.join(dir)) else {
+            continue;
+        };
+        for e in entries.flatten() {
+            let file = e.file_name().to_string_lossy().into_owned();
+            let Some(system) = file
+                .strip_prefix(prefix)
+                .and_then(|f| f.strip_suffix(suffix))
+            else {
+                continue;
+            };
+            if !system.is_empty()
+                && !system.starts_with('_')
+                && system
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || "-_+.".contains(c))
+            {
+                found.insert(system.to_owned());
+            }
+        }
+    }
+    found.into_iter().collect()
+}
+
+/// The oldest launcher that draws what the theme uses: 0.5.0 for free
+/// screens; 0.6.0 when it has system variables or shows an element only
+/// on collections or only on systems (`when.collection`).
+fn min_launcher(b: &Built) -> &'static str {
+    let collection = b.views.iter().any(|v| {
+        v.systems
+            .iter()
+            .chain(&v.games)
+            .any(|e| e.t.get("when").and_then(|w| w.get("collection")).is_some())
+    });
+    if !b.system_vars.is_empty() || collection {
+        "0.6.0"
+    } else {
+        "0.5.0"
+    }
 }
 
 // ---------------------------------------------------------------- TOML
@@ -256,6 +348,29 @@ fn write_toml(b: &Built, name: &str, src: &Path, license: &str) -> Vec<(String, 
     }
     if !vars.is_empty() {
         parts.push(("parts/vars.toml".into(), vars));
+    }
+    // System variables, in files under the launcher's 64 KiB each.
+    let mut chunk = String::new();
+    let mut n = 1;
+    for (system, list) in &b.system_vars {
+        let mut table = format!("\n[system.{}.vars]\n", key(system));
+        for (k, v) in list {
+            let _ = writeln!(table, "{} = {}", key(k), inline(v));
+        }
+        if !chunk.is_empty() && chunk.len() + table.len() > 60 * 1024 {
+            parts.push((
+                format!("parts/systems-{n}.toml"),
+                std::mem::take(&mut chunk),
+            ));
+            n += 1;
+        }
+        if chunk.is_empty() {
+            chunk.push_str("# O que cada sistema mostra do seu jeito (os arquivos por sistema do tema original).\n");
+        }
+        chunk.push_str(&table);
+    }
+    if !chunk.is_empty() {
+        parts.push((format!("parts/systems-{n}.toml"), chunk));
     }
     let mut options = String::new();
     for o in &b.options {
@@ -347,7 +462,7 @@ fn write_toml(b: &Built, name: &str, src: &Path, license: &str) -> Vec<(String, 
     let _ = writeln!(top, "version = \"1.0.0\"");
     // The launcher it was converted for: the features it uses (frame tint,
     // default_view...) draw broken on an older one, which refuses it then.
-    let _ = writeln!(top, "min_launcher = \"{}\"", env!("CARGO_PKG_VERSION"));
+    let _ = writeln!(top, "min_launcher = \"{}\"", min_launcher(b));
     let _ = writeln!(top, "license = {}", inline(&Value::String(license.into())));
     for (k, v) in &b.top {
         let _ = writeln!(top, "{} = {}", key(k), inline(v));
@@ -504,6 +619,34 @@ fn copy_files(
         }
     }
     Ok((count, bytes))
+}
+
+/// The first frame of each clip a screen shows as a picture (the launcher
+/// plays one clip per screen), written with ffmpeg when the PC has it.
+fn write_stills(
+    src: &Path,
+    out: &Path,
+    stills: &BTreeSet<(String, String)>,
+    notes: &mut BTreeSet<String>,
+) {
+    for (clip, picture) in stills {
+        let to = out.join(picture);
+        if let Some(dir) = to.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let made = std::process::Command::new("ffmpeg")
+            .args(["-v", "error", "-y", "-i"])
+            .arg(src.join(clip))
+            .args(["-frames:v", "1", "-q:v", "3"])
+            .arg(&to)
+            .status()
+            .is_ok_and(|s| s.success());
+        if !made {
+            notes.insert(format!(
+                "não deu para tirar a imagem parada de `{clip}` (precisa do ffmpeg no PC); o elemento fica sem imagem"
+            ));
+        }
+    }
 }
 
 /// The original's license, as the theme.toml says it.
