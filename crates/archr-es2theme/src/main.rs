@@ -4,7 +4,7 @@
 //! ready to copy to /storage/.config/archr-launcher/themes/ or publish.
 use std::path::PathBuf;
 
-const USAGE: &str = "uso: archr-es2theme <pasta do tema do ES> <pasta de saída> [--lang en|pt|es...] [--name \"Nome\"]";
+const USAGE: &str = "uso: archr-es2theme <pasta do tema do ES> <pasta de saída> [--lang en|pt|es...] [--name \"Nome\"] [--author \"Autores\"] [--license \"Licença\"] [--description \"en\" \"pt\"] [--store]";
 
 fn main() {
     let mut args = std::env::args().skip(1);
@@ -14,6 +14,14 @@ fn main() {
         match arg.as_str() {
             "--lang" => opts.lang = args.next().unwrap_or_else(|| fail(USAGE)),
             "--name" => opts.name = Some(args.next().unwrap_or_else(|| fail(USAGE))),
+            "--author" => opts.author = Some(args.next().unwrap_or_else(|| fail(USAGE))),
+            "--license" => opts.license = Some(args.next().unwrap_or_else(|| fail(USAGE))),
+            "--description" => {
+                let en = args.next().unwrap_or_else(|| fail(USAGE));
+                let pt = args.next().unwrap_or_else(|| fail(USAGE));
+                opts.description = Some((en, pt));
+            }
+            "--store" => opts.store = true,
             "-h" | "--help" => {
                 println!("{USAGE}");
                 return;

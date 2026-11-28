@@ -11,6 +11,7 @@
 pub mod build;
 pub mod es;
 pub mod map;
+pub mod store;
 pub mod xml;
 
 use build::{Built, SHAPES};
@@ -28,12 +29,25 @@ pub struct Options {
     pub lang: String,
     /// The converted theme's name; the source folder's when None.
     pub name: Option<String>,
+    /// The store's metadata, over what the converter writes: authors,
+    /// the description in English and Portuguese, the short license.
+    pub author: Option<String>,
+    pub description: Option<(String, String)>,
+    pub license: Option<String>,
+    /// Made for the theme store (`--store`): only the files the theme
+    /// names, pictures no larger than a 1024x768 screen draws them, clips
+    /// re-encoded small or, past the budget, left to their stills.
+    pub store: bool,
 }
 impl Default for Options {
     fn default() -> Self {
         Self {
             lang: "en".into(),
             name: None,
+            author: None,
+            description: None,
+            license: None,
+            store: false,
         }
     }
 }
@@ -184,7 +198,9 @@ pub fn convert(src: &Path, out: &Path, opts: &Options) -> Result<Conversion, Str
         src.file_name()
             .map_or("ES theme".into(), |n| n.to_string_lossy().into_owned())
     });
-    for (file, text) in write_toml(&built, &name, src, &license) {
+    let license = opts.license.clone().unwrap_or(license);
+    let written = write_toml(&built, &name, src, &license, opts);
+    for (file, text) in &written {
         let path = out.join(&file);
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
@@ -196,6 +212,11 @@ pub fn convert(src: &Path, out: &Path, opts: &Options) -> Result<Conversion, Str
         }
         std::fs::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))?;
     }
+    let (count, bytes) = if opts.store {
+        store::prepare(out, &written, &mut notes)?
+    } else {
+        (count, bytes)
+    };
     let warnings = check(out);
     let conversion = Conversion {
         views: built.views.iter().map(|v| v.id.clone()).collect(),
@@ -364,7 +385,13 @@ fn element(out: &mut String, at: &str, e: &OutEl) {
 
 /// The theme's files: `theme.toml` with the top keys and the includes,
 /// then `parts/*.toml` (each file of a theme is read up to 64 KiB).
-fn write_toml(b: &Built, name: &str, src: &Path, license: &str) -> Vec<(String, String)> {
+fn write_toml(
+    b: &Built,
+    name: &str,
+    src: &Path,
+    license: &str,
+    opts: &Options,
+) -> Vec<(String, String)> {
     let folder = src
         .file_name()
         .map_or(String::new(), |n| n.to_string_lossy().into_owned());
@@ -483,21 +510,18 @@ fn write_toml(b: &Built, name: &str, src: &Path, license: &str) -> Vec<(String, 
             inline(&Value::String(v.id.clone()))
         );
     }
-    let _ = writeln!(
-        top,
-        "description = {}",
-        names(
-            &format!("Converted from the EmulationStation theme \"{folder}\"."),
-            &format!("Convertido do tema \"{folder}\" do EmulationStation.")
+    let (en, pt) = opts.description.clone().unwrap_or_else(|| {
+        (
+            format!("Converted from the EmulationStation theme \"{folder}\"."),
+            format!("Convertido do tema \"{folder}\" do EmulationStation."),
         )
-    );
-    let _ = writeln!(
-        top,
-        "author = {}",
-        inline(&Value::String(format!(
-            "{folder} (original); converted by archr-es2theme"
-        )))
-    );
+    });
+    let _ = writeln!(top, "description = {}", names(&en, &pt));
+    let author = opts
+        .author
+        .clone()
+        .unwrap_or_else(|| format!("{folder} (original); converted by archr-es2theme"));
+    let _ = writeln!(top, "author = {}", inline(&Value::String(author)));
     let _ = writeln!(top, "version = \"1.0.0\"");
     // The launcher it was converted for: the features it uses (frame tint,
     // default_view...) draw broken on an older one, which refuses it then.

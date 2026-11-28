@@ -204,6 +204,7 @@ fn albedo_converts_without_warnings() {
     let opts = archr_es2theme::Options {
         lang: "pt".into(),
         name: Some("Albedo".into()),
+        ..Default::default()
     };
     let c = archr_es2theme::convert(&src, out.path(), &opts).unwrap();
     assert!(c.warnings.is_empty(), "{:#?}", c.warnings);
@@ -215,7 +216,7 @@ fn albedo_converts_without_warnings() {
 fn convert_pt(dir: &Path) -> archr_es2theme::Conversion {
     let opts = archr_es2theme::Options {
         lang: "pt".into(),
-        name: None,
+        ..Default::default()
     };
     archr_es2theme::convert(&dir.join("es"), &dir.join("out"), &opts).unwrap()
 }
