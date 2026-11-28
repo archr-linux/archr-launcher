@@ -38,6 +38,9 @@ pub struct Options {
     /// names, pictures no larger than a 1024x768 screen draws them, clips
     /// re-encoded small or, past the budget, left to their stills.
     pub store: bool,
+    /// The systems the console runs (`--systems <es_systems.cfg>`): with
+    /// `store`, pictures of other systems are left out.
+    pub systems: Option<BTreeSet<String>>,
 }
 impl Default for Options {
     fn default() -> Self {
@@ -48,6 +51,7 @@ impl Default for Options {
             description: None,
             license: None,
             store: false,
+            systems: None,
         }
     }
 }
@@ -213,7 +217,7 @@ pub fn convert(src: &Path, out: &Path, opts: &Options) -> Result<Conversion, Str
         std::fs::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))?;
     }
     let (count, bytes) = if opts.store {
-        store::prepare(out, &written, &mut notes)?
+        store::prepare(out, &written, opts.systems.as_ref(), &mut notes)?
     } else {
         (count, bytes)
     };

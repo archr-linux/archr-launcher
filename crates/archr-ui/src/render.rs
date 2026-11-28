@@ -57,7 +57,7 @@ use std::{
 
 mod system_art;
 /// The name a system shares its pictures with (`megadrive` → `genesis`).
-pub(crate) fn shared_system(name: &str) -> Option<&'static str> {
+pub fn shared_system(name: &str) -> Option<&'static str> {
     system_art::shared(name)
 }
 use system_art::SystemArt;

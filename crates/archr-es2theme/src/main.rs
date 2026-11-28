@@ -4,7 +4,7 @@
 //! ready to copy to /storage/.config/archr-launcher/themes/ or publish.
 use std::path::PathBuf;
 
-const USAGE: &str = "uso: archr-es2theme <pasta do tema do ES> <pasta de saída> [--lang en|pt|es...] [--name \"Nome\"] [--author \"Autores\"] [--license \"Licença\"] [--description \"en\" \"pt\"] [--store]";
+const USAGE: &str = "uso: archr-es2theme <pasta do tema do ES> <pasta de saída> [--lang en|pt|es...] [--name \"Nome\"] [--author \"Autores\"] [--license \"Licença\"] [--description \"en\" \"pt\"] [--store [--systems es_systems.cfg]]";
 
 fn main() {
     let mut args = std::env::args().skip(1);
@@ -22,6 +22,11 @@ fn main() {
                 opts.description = Some((en, pt));
             }
             "--store" => opts.store = true,
+            "--systems" => {
+                let file = args.next().unwrap_or_else(|| fail(USAGE));
+                let text = std::fs::read_to_string(&file).unwrap_or_else(|e| fail(&e.to_string()));
+                opts.systems = Some(archr_es2theme::store::system_names(&text));
+            }
             "-h" | "--help" => {
                 println!("{USAGE}");
                 return;
