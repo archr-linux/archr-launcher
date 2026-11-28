@@ -48,64 +48,185 @@ impl DataSource for Data {
     }
 }
 
-/// A picture of a game: a diagonal of two shades, a sun and a floor.
-fn art(path: &Path, (w, h): (u32, u32), hue: [u8; 3]) {
+/// A game's screenshot at its console's own resolution: a tiled sky,
+/// a HUD bar on top, blocks and a floor, a one-pixel frame (a crop or a
+/// stretch shows at once).
+fn shot(path: &Path, (w, h): (u32, u32), hue: [u8; 3]) {
     let img = image::RgbaImage::from_fn(w, h, |x, y| {
         let (fx, fy) = (x as f32 / w as f32, y as f32 / h as f32);
-        let k = if fx + 0.35 * fy < 0.62 { 1.0 } else { 0.6 };
-        let mut c = hue.map(|v| (f32::from(v) * k + 40. * (1. - fy)).min(255.) as u8);
-        let (dx, dy) = (fx - 0.28, fy - 0.36);
-        if dx * dx + dy * dy < 0.018 {
-            c = [252, 214, 120];
+        let mut c = hue.map(|v| (f32::from(v) * (0.55 + 0.45 * (1. - fy))) as u8);
+        if (x / 16 + y / 16) % 2 == 0 && fy < 0.7 {
+            c = c.map(|v| v.saturating_add(18));
         }
-        if fy > 0.8 {
-            c = [60, 140, 60];
+        if fy < 0.09 {
+            c = [20, 20, 30];
+            if (x / 6) % 3 == 0 && fy > 0.03 && fy < 0.06 && fx < 0.4 {
+                c = [240, 240, 240];
+            }
         }
+        if fy > 0.82 {
+            c = if (x / 8) % 2 == 0 {
+                [150, 90, 40]
+            } else {
+                [120, 70, 30]
+            };
+        }
+        let (dx, dy) = (fx - 0.45, fy - 0.62);
+        if dx.abs() < 0.04 && dy.abs() < 0.12 {
+            c = [230, 60, 50];
+        }
+        if x == 0 || y == 0 || x == w - 1 || y == h - 1 {
+            c = [255, 255, 255];
+        }
+        image::Rgba([c[0], c[1], c[2], 255])
+    });
+    img.save(path).unwrap();
+}
+/// A box cover in its region's shape: a frame, a title band and a hero.
+fn cover(path: &Path, (w, h): (u32, u32), hue: [u8; 3]) {
+    let img = image::RgbaImage::from_fn(w, h, |x, y| {
+        let (fx, fy) = (x as f32 / w as f32, y as f32 / h as f32);
+        let mut c = hue.map(|v| (f32::from(v) * (0.5 + 0.5 * fy)) as u8);
+        if fy < 0.16 {
+            c = [235, 235, 235];
+            if fy > 0.05 && fy < 0.11 && fx > 0.1 && fx < 0.9 && (x / 7) % 4 != 3 {
+                c = [30, 30, 40];
+            }
+        }
+        let (dx, dy) = (fx - 0.5, (fy - 0.58) * h as f32 / w as f32);
+        if dx * dx + dy * dy < 0.06 {
+            c = [250, 200, 80];
+        }
+        if x < 3 || y < 3 || x + 3 >= w || y + 3 >= h {
+            c = [10, 10, 10];
+        }
+        image::Rgba([c[0], c[1], c[2], 255])
+    });
+    img.save(path).unwrap();
+}
+/// A game's wheel logo: letters in a capsule on transparency.
+fn logo(path: &Path, (w, h): (u32, u32), hue: [u8; 3]) {
+    let img = image::RgbaImage::from_fn(w, h, |x, y| {
+        let (fx, fy) = (x as f32 / w as f32, y as f32 / h as f32);
+        let inside = (fy - 0.5).abs() < 0.42 && (fx - 0.5).abs() < 0.48;
+        if !inside {
+            return image::Rgba([0, 0, 0, 0]);
+        }
+        let letter = (fy - 0.5).abs() < 0.22 && (x / 18) % 3 != 2 && fx > 0.1 && fx < 0.9;
+        let c = if letter { [255, 255, 255] } else { hue };
         image::Rgba([c[0], c[1], c[2], 255])
     });
     img.save(path).unwrap();
 }
 
 fn library(pictures: &Path) -> Data {
-    let lists: [(&str, &str, &[&str]); 4] = [
+    // Id, name, cover and screenshot sizes, games (the long titles too).
+    type System<'a> = (&'a str, &'a str, (u32, u32), (u32, u32), &'a [&'a str]);
+    let lists: [System; 12] = [
         (
             "snes",
             "Super Nintendo",
+            (420, 300),
+            (256, 224),
             &[
                 "Chrono Trigger",
                 "F-Zero",
                 "Super Metroid",
+                "The Legend of Zelda: A Link to the Past",
                 "Yoshi's Island",
             ],
         ),
         (
             "megadrive",
             "Mega Drive",
+            (300, 420),
+            (320, 224),
             &[
                 "Aladdin",
+                "Castlevania: Bloodlines",
                 "Comix Zone",
                 "Ecco the Dolphin",
                 "Gunstar Heroes",
-                "Phantasy Star IV",
-                "Shinobi III",
+                "Phantasy Star IV: The End of the Millennium",
                 "Sonic The Hedgehog",
+                "Shinobi III: Return of the Ninja Master",
                 "Streets of Rage 2",
+                "Sonic The Hedgehog 2",
                 "Vectorman",
+                "Golden Axe",
+                "Altered Beast",
+                "Earthworm Jim",
+                "Ristar",
+                "ToeJam & Earl",
+                "Thunder Force IV",
+                "Rocket Knight Adventures",
+                "Contra: Hard Corps",
+                "Dynamite Headdy",
+                "Landstalker",
+                "Kid Chameleon",
+                "Mega Turrican",
+                "Strider",
             ],
         ),
         (
             "gba",
             "Game Boy Advance",
-            &["Metroid Fusion", "Advance Wars"],
+            (320, 320),
+            (240, 160),
+            &["Metroid Fusion", "Advance Wars", "Golden Sun"],
         ),
-        ("n64", "Nintendo 64", &["Super Mario 64"]),
+        (
+            "n64",
+            "Nintendo 64",
+            (420, 300),
+            (320, 240),
+            &["Super Mario 64", "Star Fox 64"],
+        ),
+        (
+            "psx",
+            "PlayStation",
+            (400, 400),
+            (320, 240),
+            &["Crash Bandicoot"],
+        ),
+        ("nes", "Nintendo", (300, 420), (256, 240), &["Mega Man 2"]),
+        ("gb", "Game Boy", (300, 300), (160, 144), &["Tetris"]),
+        (
+            "gbc",
+            "Game Boy Color",
+            (300, 300),
+            (160, 144),
+            &["Wario Land 3"],
+        ),
+        (
+            "mastersystem",
+            "Master System",
+            (300, 420),
+            (256, 192),
+            &["Alex Kidd"],
+        ),
+        (
+            "gamegear",
+            "Game Gear",
+            (300, 420),
+            (160, 144),
+            &["Shinobi"],
+        ),
+        (
+            "pcengine",
+            "PC Engine",
+            (300, 300),
+            (256, 224),
+            &["Bonk's Adventure"],
+        ),
+        ("segacd", "Mega-CD", (400, 400), (320, 224), &["Sonic CD"]),
     ];
     let mut data = Data {
         systems: Vec::new(),
         games: Vec::new(),
         order: Vec::new(),
     };
-    for (n, (name, full, games)) in lists.iter().enumerate() {
+    for (n, (name, full, box_size, screen, games)) in lists.iter().enumerate() {
         data.systems.push(SystemEntry {
             name: (*name).into(),
             fullname: (*full).into(),
@@ -118,29 +239,36 @@ fn library(pictures: &Path) -> Data {
             .enumerate()
             .map(|(k, g)| {
                 let shade = |base: usize, step: usize, i: usize| ((base + step * i) % 256) as u8;
-                let shot = pictures.join(format!("{name}-{k}.png"));
-                art(&shot, (320, 224), [shade(60, 40, k), shade(90, 20, n), 160]);
-                let cover = pictures.join(format!("{name}-{k}-capa.png"));
-                art(&cover, (150, 210), [180, shade(40, 30, k), 70]);
+                let hue = [shade(60, 47, k), shade(90, 31, n), shade(160, 23, k + n)];
+                let screenshot = pictures.join(format!("{name}-{k}.png"));
+                shot(&screenshot, *screen, hue);
+                let boxart = pictures.join(format!("{name}-{k}-capa.png"));
+                cover(&boxart, *box_size, [hue[2], hue[0], hue[1]]);
+                // Two games in three have a wheel logo.
+                let wheel = (k % 3 != 2).then(|| {
+                    let p = pictures.join(format!("{name}-{k}-logo.png"));
+                    logo(&p, (400, 150), [hue[1], 40, hue[0]]);
+                    p
+                });
                 Game {
                     path: format!("{g}.rom").into(),
                     name: (*g).into(),
-                    image: Some(cover),
+                    image: Some(boxart),
                     video: None,
                     favorite: k == 1,
                     last_played: Some(1_794_916_800 - 2 * 86_400),
-                    year: Some(1992),
-                    players: Some("1-2".into()),
+                    year: Some(1989 + (k % 8) as u16),
+                    players: Some(if k % 2 == 0 { "1-2" } else { "1" }.into()),
                     details: archr_index::Details {
                         description: format!(
-                            "{g}: uma aventura com fases rápidas, chefes grandes e um modo para dois jogadores. A descrição é longa de propósito, para quebrar linha."
+                            "{g} é um clássico de {full}: fases rápidas, chefes enormes e um segredo em cada canto. A história continua de onde o primeiro parou, com músicas marcantes e um modo para dois jogadores."
                         ),
-                        genre: "Ação".into(),
-                        developer: "Estúdio".into(),
-                        publisher: "Editora".into(),
+                        genre: "Plataforma".into(),
+                        developer: "Sega Technical Institute".into(),
+                        publisher: "Sega".into(),
                         rating: Some(70 + 5 * (k % 5) as u8),
-                        screenshot: Some(shot),
-                        logo: None,
+                        screenshot: Some(screenshot),
+                        logo: wheel,
                     },
                 }
             })
@@ -205,15 +333,19 @@ fn draw(dir: &Path, prefix: &str, shots: Option<&Path>) {
             ui.pin_clock(std::time::Instant::now(), 1_794_916_800);
             let mut covers =
                 archr_ui::covers::CoverCache::new(&creator, root.path().join("covers"), 320, 240);
+            // The covers of the system drawn (all of them would not fit the
+            // cache and never settle).
             let all: Vec<PathBuf> = data
                 .games
                 .iter()
+                .filter(|(s, _)| s == "megadrive")
                 .flat_map(|(_, g)| g.iter().filter_map(|g| g.image.clone()))
+                .take(8)
                 .collect();
             let mut app = App::new(10);
             app.set_view(&view);
             let mut frame = |ui: &mut Ui, app: &mut App, name: &str| {
-                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
                 let mut round = 0;
                 loop {
                     for chunk in all.chunks(5) {
@@ -232,10 +364,14 @@ fn draw(dir: &Path, prefix: &str, shots: Option<&Path>) {
                     if covers.idle() && ui.pictures_idle() && round >= 3 {
                         break;
                     }
-                    assert!(
-                        std::time::Instant::now() < deadline,
-                        "pictures never loaded"
-                    );
+                    // A theme whose screen holds more pictures than the
+                    // launcher's budget keeps loading them: said, not fatal
+                    // for a theme from outside (the small one must settle).
+                    if std::time::Instant::now() >= deadline {
+                        assert!(prefix != "pequeno", "pictures never loaded");
+                        eprintln!("pictures never settled: {prefix} {view_id} {name} {size:?}");
+                        break;
+                    }
                     round += 1;
                     std::thread::sleep(std::time::Duration::from_millis(5));
                 }

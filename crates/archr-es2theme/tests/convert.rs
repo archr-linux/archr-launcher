@@ -563,3 +563,81 @@ fn esde_grids_carousels_z_and_scopes() {
     assert_eq!(tela["rect"]["w"].as_float(), Some(0.3));
     assert_eq!(tela["radius"].as_float(), Some(0.01));
 }
+
+/// Round two of ES-DE: a container's text from the top; a carousel moved
+/// off the middle moves its box; labels of facts the launcher lacks go; a
+/// text as wide as its words stops at the next one on its line; players
+/// as the list says them; the theme's clock places the status and its art
+/// goes; a system's clip has the theme's picture of it as its still; a
+/// light theme's details card is light, and only the cover and buttons
+/// when its games screen already shows the facts.
+#[test]
+fn esde_round_two_layout() {
+    let dir = theme(&[
+        ("capabilities.xml", CAPABILITIES),
+        (
+            "theme.xml",
+            r#"<theme><variant name="lista">
+  <view name="system">
+    <carousel name="roda"><pos>0 0.3</pos><size>1 0.3</size><type>horizontal</type>
+      <horizontalOffset>-0.25</horizontalOffset></carousel>
+    <video name="fundo"><pos>0 0</pos><size>1 1</size><path>./clips/${system.theme}.mp4</path>
+      <audio>false</audio></video>
+    <clock name="relogio"><pos>0.99 0.99</pos><origin>1 1</origin><fontSize>0.05</fontSize></clock>
+    <systemstatus name="status"><pos>0.01 0.95</pos></systemstatus>
+    <image name="clockBG"><pos>0 0</pos><size>1 1</size><path>./lcd.png</path></image>
+  </view>
+  <view name="gamelist">
+    <textlist name="gamelist"><pos>0.5 0.15</pos><size>0.45 0.7</size><fontSize>0.04</fontSize></textlist>
+    <text name="titulo"><pos>0.05 0.1</pos><size>0.4 0.2</size><metadata>name</metadata>
+      <verticalAlignment>bottom</verticalAlignment><container>true</container><color>222222</color>
+      <fontSize>0.05</fontSize></text>
+    <text name="descricao"><pos>0.05 0.5</pos><size>0.4 0.2</size><metadata>description</metadata><color>222222</color></text>
+    <text name="jogadores"><pos>0.05 0.4</pos><origin>0 0</origin><metadata>players</metadata><fontSize>0.03</fontSize></text>
+    <text name="editora"><pos>0.2 0.4</pos><size>0.2 0.04</size><metadata>publisher</metadata><fontSize>0.03</fontSize></text>
+    <text name="genero"><pos>0.05 0.45</pos><size>0.2 0.04</size><metadata>genre</metadata></text>
+    <text name="ano"><pos>0.25 0.45</pos><size>0.2 0.04</size><metadata>releasedate</metadata></text>
+    <text name="tempoLabel"><pos>0.05 0.3</pos><size>0.2 0.04</size><text>PLAY TIME</text></text>
+  </view>
+</variant></theme>"#,
+        ),
+        ("clips/megadrive.mp4", "x"),
+    ]);
+    png(&dir.path().join("es/images/megadrive.png"), (64, 48));
+    png(&dir.path().join("es/lcd.png"), (64, 48));
+    let c = convert(dir.path());
+    assert!(c.warnings.is_empty(), "{:#?}", c.warnings);
+    let t = read(dir.path());
+    let view = "lista-gamelist";
+    let roda = element(&t, view, "systems", "roda");
+    assert_eq!(roda["rect"]["x"].as_float(), Some(-0.25));
+    let fundo = element(&t, view, "systems", "fundo");
+    assert_eq!(fundo["fallback"][0].as_str(), Some("images/${system}.png"));
+    let systems = t["view"][view]["systems"]["el"].as_array().unwrap();
+    let status: Vec<&Value> = systems
+        .iter()
+        .filter(|e| e["kind"].as_str() == Some("status"))
+        .collect();
+    assert_eq!(status.len(), 1);
+    assert_eq!(status[0]["id"].as_str(), Some("relogio"));
+    assert!(systems.iter().all(|e| e["id"].as_str() != Some("clockBG")));
+    let titulo = element(&t, view, "games", "titulo");
+    assert_ne!(titulo.get("valign").and_then(Value::as_str), Some("bottom"));
+    let jogadores = element(&t, view, "games", "jogadores");
+    assert_eq!(jogadores["text"].as_str(), Some("${game.players.count}"));
+    let w = jogadores["rect"]["w"].as_float().unwrap();
+    assert!(w < 0.15, "{w}");
+    assert_eq!(jogadores["fit_text"].as_str(), Some("shrink"));
+    let games = t["view"][view]["games"]["el"].as_array().unwrap();
+    assert!(games
+        .iter()
+        .all(|e| e["id"].as_str() != Some("tempolabel") && e["id"].as_str() != Some("tempoLabel")));
+    let details = t["view"][view]["details"]["el"].as_array().unwrap();
+    let card = details
+        .iter()
+        .find(|e| e["id"].as_str() == Some("fundo-ficha"))
+        .unwrap();
+    assert_eq!(card["fill"].as_str(), Some("#FFFFFFE6"));
+    assert!(details.iter().all(|e| e["id"].as_str() != Some("ficha")));
+    assert_eq!(t["min_launcher"].as_str(), Some("0.6.0"));
+}

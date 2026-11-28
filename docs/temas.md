@@ -914,6 +914,7 @@ vale.
 | `${system.favorites}` | quantos favoritos |
 | `${game.name}`, `${game.description}`, `${game.genre}`, `${game.developer}`, `${game.publisher}` | do jogo em foco (tela de jogos) ou aberto (tela de detalhes) |
 | `${game.year}`, `${game.players}` | ano e jogadores ("1 a 2 jogadores") |
+| `${game.players.count}` | os jogadores como a lista de jogos diz ("1-2"), sem palavras (desde o launcher 0.6.0) |
 | `${game.rating}` | a nota de 0 a 5, com uma casa ("4,5") |
 | `${game.last_played}` | quando foi jogado ("há 2 dias") |
 | `${list.index}`, `${list.total}` | a posição do item em foco, a partir de 1, e quantos há |
@@ -2751,7 +2752,7 @@ ou deixe a chave de fora.
 |---|---|
 | `0.1.0` | temas até a API 3.1 (cores, fontes, visualizações, telas livres fases 1–8) |
 | `0.2.0` | update 20261126.6: `tint` em `frame`, `default_view`, ladrilhado em uma cópia, `${system}` de app pelo id do módulo |
-| `0.6.0` | variáveis por sistema (`[system.<id>.vars]`), `when.collection`; um vídeo de outro formato ou com `opacity = 0` não conta como o segundo da tela; um elemento com `opacity = 0` não é desenhado (antes um texto aparecia inteiro) |
+| `0.6.0` | variáveis por sistema (`[system.<id>.vars]`), `when.collection`; um vídeo de outro formato ou com `opacity = 0` não conta como o segundo da tela; um elemento com `opacity = 0` não é desenhado (antes um texto aparecia inteiro); `${game.players.count}` |
 
 Um tema que usa algo da tabela precisa declarar a versão da linha: um launcher mais antigo o desenharia quebrado, e com o `min_launcher` ele recusa a instalação. O `archr-es2theme` grava `0.5.0`, ou `0.6.0` quando o tema convertido usa algo dessa linha.
 

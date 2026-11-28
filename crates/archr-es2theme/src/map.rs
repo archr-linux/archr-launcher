@@ -49,15 +49,20 @@ pub struct Shape {
 const HINTS_Z: i64 = 995;
 /// A mark on a video table while a screen is made: ES plays its sound.
 const AUDIO: &str = "\u{0}audio";
+/// A mark on a text as wide as its words in ES (no width): `fit_widths`
+/// stops it at the next element on its line and takes it away.
+const AUTO_W: &str = "\u{0}auto_w";
+/// A mark on the status made from ES-DE's clock (`one_status`).
+const CLOCK: &str = "\u{0}clock";
 const STATUS_Z: i64 = 996;
 
-pub fn model(es: &Es, root: &Path, shape: Shape) -> Model {
+pub fn model(es: &Es, root: &Path, shape: Shape, logo_dir: Option<&str>) -> Model {
     let mut m = Mapper {
         root,
         shape,
         out: Model::default(),
         esde: es.esde,
-        logo: None,
+        logo: logo_dir.map(str::to_owned),
     };
     m.run(es);
     m.out
@@ -155,6 +160,163 @@ fn anchor(ox: f32, oy: f32) -> Option<Value> {
         None => Some(Value::Array(vec![f(ox), f(oy)])),
     }
 }
+/// An element's box on the screen (its anchor applied), when its rect is
+/// numbers.
+fn bounds(t: &Table) -> Option<(f32, f32, f32, f32)> {
+    let r = t.get("rect")?.as_table()?;
+    let n = |k: &str| r.get(k).and_then(Value::as_float).map(|v| v as f32);
+    let (x, y, w, h) = (n("x")?, n("y")?, n("w")?, n("h")?);
+    let (ax, ay) = match t.get("anchor") {
+        Some(Value::String(a)) => match a.as_str() {
+            "top" => (0.5, 0.),
+            "top-right" => (1., 0.),
+            "left" => (0., 0.5),
+            "center" => (0.5, 0.5),
+            "right" => (1., 0.5),
+            "bottom-left" => (0., 1.),
+            "bottom" => (0.5, 1.),
+            "bottom-right" => (1., 1.),
+            _ => (0., 0.),
+        },
+        Some(Value::Array(a)) => (
+            a.first().and_then(Value::as_float).unwrap_or(0.) as f32,
+            a.get(1).and_then(Value::as_float).unwrap_or(0.) as f32,
+        ),
+        _ => (0., 0.),
+    };
+    let (x0, y0) = (x - ax * w, y - ay * h);
+    Some((x0, y0, x0 + w, y0 + h))
+}
+
+/// A text ES sizes to its words (no width) reaches to the screen's edge
+/// here; the launcher's words are longer ("1 a 2 jogadores" for "1-2"), so
+/// it stops short of the next element on its line that shows with it (the
+/// same opacity) and shrinks to fit there.
+fn fit_widths(out: &mut [OutEl]) {
+    let boxes: Vec<Option<(f32, f32, f32, f32)>> = out.iter().map(|e| bounds(&e.t)).collect();
+    let shown = |t: &Table| t.get("opacity").map(Value::to_string).unwrap_or_default();
+    let mut limits = Vec::new();
+    for (i, e) in out.iter().enumerate() {
+        if e.t.get(AUTO_W).is_none() {
+            continue;
+        }
+        let Some((x0, y0, x1, y1)) = boxes[i] else {
+            continue;
+        };
+        // Only a text that grows from one side: its box starts at its
+        // anchor (left) or ends there (right).
+        let align = e.t.get("align").and_then(Value::as_str).unwrap_or("left");
+        let anchor_x = match e.t.get("anchor") {
+            None => 0.,
+            Some(Value::String(a)) if a.ends_with("left") => 0.,
+            Some(Value::String(a)) if a.ends_with("right") => 1.,
+            Some(Value::String(a)) if a == "top" || a == "bottom" || a == "center" => 0.5,
+            Some(Value::Array(a)) => a.first().and_then(Value::as_float).unwrap_or(0.) as f32,
+            Some(_) => 0.,
+        };
+        let right = match (anchor_x, align) {
+            (x, "left") if x < 0.01 => false,
+            (x, "right") if x > 0.99 => true,
+            _ => continue,
+        };
+        let mut edge: Option<f32> = None;
+        for (j, other) in out.iter().enumerate() {
+            let Some((ox0, oy0, ox1, oy1)) = boxes[j].filter(|_| j != i) else {
+                continue;
+            };
+            let overlap = (y1.min(oy1) - y0.max(oy0)) / (y1 - y0).max(1e-3);
+            if overlap < 0.3 || shown(&other.t) != shown(&e.t) || ox1 - ox0 > 0.9 {
+                continue;
+            }
+            if !right && ox0 > x0 + 0.01 && ox0 < x1 {
+                edge = Some(edge.map_or(ox0, |v| v.min(ox0)));
+            }
+            if right && ox1 < x1 - 0.01 && ox1 > x0 {
+                edge = Some(edge.map_or(ox1, |v| v.max(ox1)));
+            }
+        }
+        if let Some(edge) = edge {
+            limits.push((i, edge, right));
+        }
+    }
+    for (i, edge, right) in limits {
+        let Some((x0, _, x1, _)) = boxes[i] else {
+            continue;
+        };
+        let t = &mut out[i].t;
+        let w = if right {
+            x1 - edge - 0.008
+        } else {
+            edge - x0 - 0.008
+        }
+        .max(0.02);
+        let shift = if right { x1 - w } else { x0 };
+        if let Some(Value::Table(r)) = t.get_mut("rect") {
+            let ax = r.get("w").and_then(Value::as_float).map_or(0., |old| {
+                let x = r.get("x").and_then(Value::as_float).unwrap_or(0.) as f32;
+                (x - x0) / (old as f32).max(1e-3)
+            });
+            r.insert("w".into(), Value::Float(r5(w)));
+            r.insert("x".into(), Value::Float(r5(shift + ax * w)));
+        }
+        t.insert("fit_text".into(), s("shrink"));
+    }
+    for e in out.iter_mut() {
+        e.t.remove(AUTO_W);
+    }
+}
+
+/// A theme's own label of a game fact the launcher does not keep (play
+/// time, play count, badges, kid-friendly, completed...): by its element's
+/// name or its words. Its value is left out, so the label would stand
+/// alone over nothing.
+fn missing_label(name: &str, text: &str) -> bool {
+    let squash = |t: &str| -> String {
+        t.to_lowercase()
+            .chars()
+            .filter(|c| c.is_alphanumeric())
+            .collect()
+    };
+    let (name, text) = (squash(name), squash(text));
+    [
+        "playtime",
+        "playcount",
+        "timesplayed",
+        "kidgame",
+        "kidfriendly",
+        "badge",
+        "completed",
+        "broken",
+        "altemulator",
+    ]
+    .iter()
+    .any(|k| name.contains(k) || text.contains(k))
+}
+
+/// The folder of the systems' logos: the first `${system.theme}` picture
+/// of the systems screen's carousel or grid (`staticImage`, `logo`).
+pub fn logo_dir(es: &Es) -> Option<String> {
+    let view = es.view("system")?;
+    let paths = view.els.iter().flat_map(|e| {
+        let own: Vec<String> = match e.kind.as_str() {
+            "carousel" | "grid" => ["staticImage", "defaultImage"]
+                .iter()
+                .filter_map(|k| e.get(k).map(str::to_owned))
+                .collect(),
+            "image" if e.name == "logo" => e.paths.clone(),
+            _ => Vec::new(),
+        };
+        own
+    });
+    paths
+        .filter_map(|p| {
+            let (dir, name) = p.rsplit_once('/')?;
+            (name.starts_with("${system.theme}.") || name.starts_with("${system.name}."))
+                .then(|| dir.to_owned())
+        })
+        .next()
+}
+
 /// `${system.theme}` and friends as the launcher's data; in an item of a
 /// collection, the item's.
 pub(crate) fn data(text: &str, item: bool) -> String {
@@ -563,6 +725,9 @@ impl Mapper<'_> {
             .max(0.05);
         }
         self.place(&mut t, &g);
+        if auto_w {
+            t.insert(AUTO_W.into(), Value::Boolean(true));
+        }
         if let Some(font) = el.get("fontPath").filter(|f| !f.is_empty()) {
             t.insert("font".into(), s(font));
             self.file(font, font);
@@ -588,7 +753,15 @@ impl Mapper<'_> {
             t.insert("align".into(), s(a));
         }
         let wrap = wrap.unwrap_or(g.h >= font_size * 2.4);
-        match el.get("verticalAlignment").map(str::trim) {
+        // An ES-DE container scrolls its text from the top: its
+        // verticalAlignment does not apply.
+        let container = self.esde && flag(el.get("container")) == Some(true);
+        let valign = if container {
+            Some("top")
+        } else {
+            el.get("verticalAlignment").map(str::trim)
+        };
+        match valign {
             Some("top") if !wrap => {
                 t.insert("valign".into(), s("top"));
             }
@@ -608,7 +781,11 @@ impl Mapper<'_> {
         if wrap {
             t.insert("wrap".into(), Value::Boolean(true));
             if let Some(ls) = el.get("lineSpacing").and_then(num) {
-                t.insert("line".into(), f((ls * 1.1).clamp(0.8, 3.)));
+                // ES-DE's lineSpacing is the line's height in font sizes,
+                // as the launcher's `line`; the older ES's runs a little
+                // tighter.
+                let k = if self.esde { 1. } else { 1.1 };
+                t.insert("line".into(), f((ls * k).clamp(0.8, 3.)));
             }
         }
         if let Some((glow, a)) = el.get("glowColor").and_then(color) {
@@ -945,6 +1122,7 @@ impl Mapper<'_> {
             }
         }
         self.screen_view(screen, &mut out);
+        fit_widths(&mut out);
         self.one_video(&mut out, "sistemas");
         self.gif_stills(&mut out);
         self.one_status(&mut out);
@@ -967,8 +1145,14 @@ impl Mapper<'_> {
             s(if vertical { "vertical" } else { "horizontal" }),
         );
         let g = self.geo(el, (0., 0.38375), (1., 0.2325), (0., 0.), None);
+        // ES-DE moves the items off the middle by a fraction of the box
+        // (`horizontalOffset`, `verticalOffset`, along and across): the
+        // launcher keeps them in the middle, so the box moves instead.
+        let shift = |key: &str| el.get(key).and_then(num).unwrap_or(0.).clamp(-1., 1.);
         let g = Geo {
             fit: "contain",
+            x: g.x + shift("horizontalOffset") * g.w,
+            y: g.y + shift("verticalOffset") * g.h,
             ..g
         };
         self.place(&mut t, &g);
@@ -1086,7 +1270,11 @@ impl Mapper<'_> {
             self.file(path, path);
             return data(path, true);
         };
-        if name.starts_with("${system.theme}.") || name.starts_with("${system.name}.") {
+        // One folder of logos becomes `logos/` (`logo_dir`, the systems
+        // carousel's of the theme's first read); another folder (a variant's
+        // own drawings) keeps its path, or the two would mix in `logos/`.
+        let ours = self.logo.as_deref().is_none_or(|d| d == dir);
+        if ours && (name.starts_with("${system.theme}.") || name.starts_with("${system.name}.")) {
             let ext = name.rsplit_once('.').map_or("png", |(_, e)| e);
             self.file(path, &format!("logos/${{system.theme}}.{ext}"));
             if self.logo.is_none() {
@@ -1121,7 +1309,10 @@ impl Mapper<'_> {
         };
         let mut t = Table::new();
         t.insert("kind".into(), s("hints"));
-        t.insert("rect".into(), rect(rx.max(0.), y - oy * h, w, h));
+        // Inside the screen: ES-DE's help may hang below its edge, where the
+        // launcher's would be cut.
+        let top = (y - oy * h).clamp(0., 1. - h);
+        t.insert("rect".into(), rect(rx.max(0.), top, w, h));
         t.insert("align".into(), s(align));
         if let Some((c, _)) = el.get("textColor").and_then(color) {
             t.insert("color".into(), s(c));
@@ -1300,6 +1491,7 @@ impl Mapper<'_> {
             })
             .map(|e| e.id.clone());
         self.screen_view(screen, &mut out);
+        fit_widths(&mut out);
         self.one_video(&mut out, "jogos");
         self.gif_stills(&mut out);
         self.one_status(&mut out);
@@ -1479,13 +1671,33 @@ impl Mapper<'_> {
         t.insert("kind".into(), s("grid"));
         t.insert("of".into(), s(if systems { "systems" } else { "games" }));
         let g = self.geo(el, (0., 0.1), (1., 0.8), (0., 0.), None);
-        let (iw, ih) = el.get("itemSize").and_then(pair).unwrap_or((0.15, 0.25));
-        let (gx, gy) = el.get("itemSpacing").and_then(pair).unwrap_or((0.02, 0.03));
-        let fit = |room: f32, item: f32, gap: f32| {
-            (((room + gap) / (item + gap).max(0.01)).floor() as i64).clamp(1, 8)
+        // ES-DE: -1 on one side makes it as long as the other, in pixels.
+        let sr = self.shape.ratio;
+        let square = |(w, h): (f32, f32)| match (w < 0., h < 0.) {
+            (true, false) => (h / sr, h),
+            (false, true) => (w, w * sr),
+            _ => (w.max(0.), h.max(0.)),
         };
-        t.insert("columns".into(), Value::Integer(fit(g.w, iw, gx)));
-        t.insert("rows".into(), Value::Integer(fit(g.h, ih, gy)));
+        let (iw, ih) = square(el.get("itemSize").and_then(pair).unwrap_or((0.15, 0.25)));
+        let (gx, gy) = square(el.get("itemSpacing").and_then(pair).unwrap_or((0.02, 0.03)));
+        let fit = |room: f32, item: f32, gap: f32| {
+            // A hair over: 0.85 / 0.28333 is three rows, not two.
+            (((room + gap) / (item + gap).max(0.01) + 1e-3).floor() as i64).clamp(1, 8)
+        };
+        let (columns, rows) = (fit(g.w, iw, gx), fit(g.h, ih, gy));
+        t.insert("columns".into(), Value::Integer(columns));
+        t.insert("rows".into(), Value::Integer(rows));
+        // The launcher shares its box among the cells: the box is made as
+        // large as ES-DE's items and gaps, from its top left corner.
+        let used = |n: i64, item: f32, gap: f32| n as f32 * item + (n - 1) as f32 * gap;
+        let (w, h) = (used(columns, iw, gx).min(g.w), used(rows, ih, gy).min(g.h));
+        let g = Geo {
+            x: g.x - g.ox * g.w + g.ox * w,
+            y: g.y - g.oy * g.h + g.oy * h,
+            w,
+            h,
+            ..g
+        };
         self.place(&mut t, &g);
         t.insert("spacing".into(), f(gy.clamp(0., 0.5)));
         let mut item = Table::new();
@@ -1926,15 +2138,34 @@ impl Mapper<'_> {
         t.insert("kind".into(), s("video"));
         let own = self.sources(el);
         let mut clips: Vec<String> = src.iter().map(|c| (*c).to_owned()).collect();
-        for p in own
-            .iter()
-            .filter(|p| p.ends_with(".mp4") || p.ends_with(".mkv") || p.ends_with(".avi"))
-        {
+        let is_clip = |p: &str| p.ends_with(".mp4") || p.ends_with(".mkv") || p.ends_with(".avi");
+        // ES-DE's `default`: the clip of a system without its own.
+        let default = el
+            .get("default")
+            .filter(|p| is_clip(p) && !p.contains("${") && self.has(p))
+            .map(str::to_owned);
+        for p in own.iter().filter(|p| is_clip(p)).chain(default.iter()) {
             self.file(p, p);
             clips.push(data(p, false));
         }
         if clips.is_empty() {
             return None;
+        }
+        // A theme's clip still has a picture until it plays and with the
+        // clips off: the theme's own picture of each system (a folder of
+        // pictures beside the clips', by the same names), then ES-DE's
+        // `defaultImage`.
+        let mut stills: Vec<String> = Vec::new();
+        for p in own.iter().filter(|p| is_clip(p) && p.contains("${")) {
+            stills.extend(self.sibling_pictures(p));
+        }
+        if let Some(p) = el
+            .get("defaultImage")
+            .filter(|p| !p.contains("${") && self.has(p))
+            .map(str::to_owned)
+        {
+            self.file(&p, &p);
+            stills.push(p);
         }
         t.insert(
             "src".into(),
@@ -1949,10 +2180,15 @@ impl Mapper<'_> {
             Some("marquee") => vec!["game.logo"],
             _ => vec!["game.screenshot", "game.cover"],
         };
+        let mut fallback: Vec<String> = Vec::new();
         if flag(el.get("showSnapshotNoVideo")) != Some(false) && src.contains(&"game.video") {
+            fallback.extend(snapshot.into_iter().map(str::to_owned));
+        }
+        fallback.extend(stills);
+        if !fallback.is_empty() {
             t.insert(
                 "fallback".into(),
-                Value::Array(snapshot.into_iter().map(s).collect()),
+                Value::Array(fallback.into_iter().map(s).collect()),
             );
         }
         // ES centers the game's clip on its pos.
@@ -2006,6 +2242,52 @@ impl Mapper<'_> {
         }
         self.mapped(&format!("video {}", el.name), "video");
         Some(t)
+    }
+
+    /// Pictures named as the clips of `clip` (`a/1080p/${system.theme}.mp4`)
+    /// in a folder beside theirs (`a/images/<system>.webp`), as the
+    /// launcher's sources.
+    fn sibling_pictures(&mut self, clip: &str) -> Vec<String> {
+        let Some((dir, name)) = clip.rsplit_once('/') else {
+            return Vec::new();
+        };
+        let parent = dir.rsplit_once('/').map_or("", |(p, _)| p);
+        let Some(stem) = name.rsplit_once('.').map(|(s, _)| s) else {
+            return Vec::new();
+        };
+        let folder = if parent.is_empty() {
+            Some(self.root.to_path_buf())
+        } else {
+            crate::es::contained(self.root, parent)
+        };
+        let Some(Ok(entries)) = folder.map(std::fs::read_dir) else {
+            return Vec::new();
+        };
+        let mut folders: Vec<String> = entries
+            .flatten()
+            .filter(|e| e.path().is_dir())
+            .map(|e| {
+                let name = e.file_name().to_string_lossy().into_owned();
+                if parent.is_empty() {
+                    name
+                } else {
+                    format!("{parent}/{name}")
+                }
+            })
+            .filter(|d| d != dir)
+            .collect();
+        folders.sort();
+        let mut out = Vec::new();
+        for folder in folders {
+            for ext in ["webp", "png", "jpg"] {
+                let pattern = format!("{folder}/{stem}.{ext}");
+                if !matches(self.root, &pattern).is_empty() {
+                    self.file(&pattern, &pattern);
+                    out.push(data(&pattern, false));
+                }
+            }
+        }
+        out
     }
 
     /// A launcher screen plays one clip (one decoder on a 1.4 GHz
@@ -2100,23 +2382,42 @@ impl Mapper<'_> {
     }
 
     /// One status pill per screen: ES-DE's clock and system status (battery,
-    /// radios) are the launcher's one `status`, in the system status's place.
+    /// radios) are the launcher's one `status`. It goes where the theme's
+    /// clock is, when it shows one: there it has room (a system status is
+    /// a few icons, the pill is longer), and the clock's own art (an LCD
+    /// "88:88" under the digits) goes, since the pill draws the time its
+    /// own way.
     fn one_status(&mut self, out: &mut Vec<OutEl>) {
         let status: Vec<usize> = (0..out.len())
             .filter(|&i| out[i].t.get("kind").and_then(Value::as_str) == Some("status"))
             .collect();
-        if status.len() < 2 {
-            return;
-        }
-        let keep = status
+        let off = |t: &Table| t.get("opacity").and_then(Value::as_float) == Some(0.);
+        let clock = status
             .iter()
             .copied()
-            .find(|&i| out[i].id.contains("status"))
-            .unwrap_or(status[0]);
-        for &i in status.iter().rev() {
-            if i != keep {
-                out.remove(i);
-            }
+            .find(|&i| out[i].t.contains_key(CLOCK) && !off(&out[i].t));
+        let keep = clock
+            .or_else(|| {
+                status
+                    .iter()
+                    .copied()
+                    .find(|&i| out[i].id.contains("status"))
+            })
+            .or_else(|| status.first().copied());
+        let Some(keep) = keep else { return };
+        for e in out.iter_mut() {
+            e.t.remove(CLOCK);
+        }
+        let keep_id = out[keep].id.clone();
+        out.retain(|e| {
+            let kind = e.t.get("kind").and_then(Value::as_str);
+            let art = clock.is_some()
+                && matches!(kind, Some("image" | "frame"))
+                && e.id.to_lowercase().contains("clock");
+            !(kind == Some("status") && e.id != keep_id) && !art
+        });
+        if clock.is_some() {
+            self.note("o relógio do tema vira a pílula de relógio e bateria do launcher; o desenho de fundo dele (`clock...`) fica de fora");
         }
     }
 
@@ -2216,6 +2517,8 @@ impl Mapper<'_> {
                         "developer" => "${game.developer}".into(),
                         "publisher" => "${game.publisher}".into(),
                         "genre" => "${game.genre}".into(),
+                        // ES-DE writes the list's own "1-2", no words.
+                        "players" if self.esde => "${game.players.count}".into(),
                         "players" => "${game.players}".into(),
                         "releasedate" => "${game.year}".into(),
                         "lastplayed" => "${game.last_played}".into(),
@@ -2235,7 +2538,14 @@ impl Mapper<'_> {
                     }
                 } else {
                     match el.get("text") {
-                        Some(t) if !t.trim().is_empty() => t.to_owned(),
+                        Some(t) if !t.trim().is_empty() => {
+                            if missing_label(&el.name, t) {
+                                let name = el.name.clone();
+                                self.note(format!("rótulo `{name}` de um dado que o launcher não tem (tempo de jogo, partidas, selos...); fica de fora"));
+                                return out;
+                            }
+                            t.to_owned()
+                        }
                         _ => return out,
                     }
                 };
@@ -2282,7 +2592,13 @@ impl Mapper<'_> {
                     return out;
                 }
                 let g = self.geo(el, (0.98, 0.02), (0.2, 0.04), (1., 0.), None);
-                let (w, h) = (g.w.clamp(0.12, 0.5), g.h.clamp(0.03, 0.1));
+                // A clock is as tall as its digits; the pill, a quarter of
+                // the screen wide at most.
+                let tall = el.get("fontSize").and_then(num).map(|f| f * 1.3);
+                let (w, h) = (
+                    g.w.clamp(0.12, 0.25),
+                    tall.unwrap_or(g.h).clamp(0.03, 0.08),
+                );
                 let (x, y) = (g.x - g.ox * w, g.y - g.oy * h);
                 let mut t = Table::new();
                 t.insert("kind".into(), s("status"));
@@ -2292,6 +2608,9 @@ impl Mapper<'_> {
                     t.insert("color".into(), s(c));
                 }
                 t.insert("z".into(), Value::Integer(STATUS_Z));
+                if el.kind == "clock" {
+                    t.insert(CLOCK.into(), Value::Boolean(true));
+                }
                 self.mapped(
                     "clock / systemstatus",
                     "status (relógio, bateria e rádios do launcher)",

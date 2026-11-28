@@ -509,6 +509,8 @@ pub enum Data {
     GamePublisher,
     GameYear,
     GamePlayers,
+    /// The players as the game list says them ("1-2"), without words.
+    GamePlayersCount,
     GameRating,
     GameLastPlayed,
     /// The game's pictures: in `src`, the files; in text, nothing.
@@ -559,6 +561,7 @@ impl Data {
             ("game", "publisher") => Self::GamePublisher,
             ("game", "year") => Self::GameYear,
             ("game", "players") => Self::GamePlayers,
+            ("game", field) if field.split('.').eq(["players", "count"]) => Self::GamePlayersCount,
             ("game", "rating") => Self::GameRating,
             ("game", "last_played") => Self::GameLastPlayed,
             ("game", "cover") => Self::GameCover,
@@ -2184,6 +2187,19 @@ mod tests {
         assert_eq!(
             Template::parse("@ home", "t").0,
             vec![Piece::Text("@ home".into())]
+        );
+    }
+
+    #[test]
+    fn the_players_as_the_list_says_them_are_data() {
+        let name = |parts: &[&str]| parts.join(".");
+        assert_eq!(
+            Data::parse(&name(&["game", "players", "count"])),
+            Some(Data::GamePlayersCount)
+        );
+        assert_eq!(
+            Data::parse(&name(&["game", "players"])),
+            Some(Data::GamePlayers)
         );
     }
 

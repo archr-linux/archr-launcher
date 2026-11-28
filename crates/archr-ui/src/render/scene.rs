@@ -109,6 +109,7 @@ impl Facts<'_> {
             Data::GamePublisher => game(&|g| g.details.publisher.clone()),
             Data::GameYear => game(&|g| g.year.map(|y| y.to_string()).unwrap_or_default()),
             Data::GamePlayers => self.players.clone(),
+            Data::GamePlayersCount => game(&|g| g.players.clone().unwrap_or_default()),
             Data::GameRating => self.rating.clone(),
             Data::GameLastPlayed => self.played.clone(),
             Data::GameCover

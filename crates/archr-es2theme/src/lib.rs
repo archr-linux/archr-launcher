@@ -56,6 +56,7 @@ pub const SIZES: [(u32, u32); 4] = [(640, 480), (720, 720), (1024, 768), (854, 4
 pub fn convert(src: &Path, out: &Path, opts: &Options) -> Result<Conversion, String> {
     let probe = es::load(src, &opts.lang, &BTreeMap::new())?;
     let subsets = probe.subsets.clone();
+    let logos = map::logo_dir(&probe);
     let ratio = subsets
         .iter()
         .find(|s| s.is_ratio() || s.name == "aspectRatio")
@@ -101,7 +102,7 @@ pub fn convert(src: &Path, out: &Path, opts: &Options) -> Result<Conversion, Str
                 if vars.is_empty() {
                     vars.clone_from(&es.vars);
                 }
-                let mut m = map::model(&es, src, Shape { ratio: shape_ratio });
+                let mut m = map::model(&es, src, Shape { ratio: shape_ratio }, logos.as_deref());
                 if let Some(v) = variant {
                     for view in &mut m.views {
                         view.id = format!("{}-{}", map::id_of(v), view.id);
@@ -159,7 +160,7 @@ pub fn convert(src: &Path, out: &Path, opts: &Options) -> Result<Conversion, Str
                 if es_vars.is_none() {
                     es_vars = Some(es.vars.clone());
                 }
-                let mut m = map::model(&es, src, Shape { ratio: classic });
+                let mut m = map::model(&es, src, Shape { ratio: classic }, logos.as_deref());
                 if let Some(v) = variant {
                     for view in &mut m.views {
                         view.id = format!("{}-{}", map::id_of(v), view.id);
@@ -292,7 +293,13 @@ fn min_launcher(b: &Built) -> &'static str {
                 None => false,
             })
     });
-    if !b.system_vars.is_empty() || collection || hidden {
+    let count = b.views.iter().any(|v| {
+        v.systems.iter().chain(&v.games).any(|e| {
+            e.t.values()
+                .any(|x| x.to_string().contains("${game.players.count}"))
+        })
+    });
+    if !b.system_vars.is_empty() || collection || hidden || count {
         "0.6.0"
     } else {
         "0.5.0"
@@ -441,7 +448,7 @@ fn write_toml(b: &Built, name: &str, src: &Path, license: &str) -> Vec<(String, 
             element(&mut out, &format!("view.{}.games", key(&v.id)), e);
         }
         if !v.games.is_empty() {
-            details(&mut out, v);
+            details(&mut out, v, &b.vars);
         }
         parts.push((format!("parts/view-{}.toml", v.id), out));
     }
@@ -504,8 +511,11 @@ fn write_toml(b: &Built, name: &str, src: &Path, license: &str) -> Vec<(String, 
 }
 
 /// The details screen: the games screen, with the game's cover, facts and
-/// buttons where its list was, and the description scrolling.
-fn details(out: &mut String, v: &build::BuiltView) {
+/// buttons where its list was, and the description scrolling. It is drawn
+/// in the theme's own style: the card in its tone (light on a theme with
+/// dark text), the facts in its text's face and colors; and when the games
+/// screen already shows the facts, only the cover and the buttons.
+fn details(out: &mut String, v: &build::BuiltView, vars: &[(String, Value)]) {
     let at = format!("view.{}.details", key(&v.id));
     let _ = writeln!(
         out,
@@ -529,6 +539,62 @@ fn details(out: &mut String, v: &build::BuiltView) {
         );
     }
     let Some(r) = &v.collection_rect else { return };
+    // The value a field has with the defaults: its own, or its variable's.
+    let value = |v: &Value| -> Value {
+        match v.as_str().and_then(|s| s.strip_prefix('$')) {
+            Some(name) => vars
+                .iter()
+                .find(|(n, _)| n == name)
+                .map_or(v.clone(), |(_, v)| v.clone()),
+            None => v.clone(),
+        }
+    };
+    let texts: Vec<&map::OutEl> = v
+        .games
+        .iter()
+        .filter(|e| {
+            e.t.get("kind").and_then(Value::as_str) == Some("text")
+                && e.t.get("opacity").map(&value).and_then(|o| o.as_float()) != Some(0.)
+        })
+        .collect();
+    let says = |data: &str| {
+        texts.iter().any(|e| {
+            e.t.get("text")
+                .and_then(Value::as_str)
+                .is_some_and(|t| t.contains(data))
+        })
+    };
+    // The theme's reading text: the description's, else the game's name's.
+    let body = texts
+        .iter()
+        .find(|e| e.t.get("text").and_then(Value::as_str) == Some("${game.description}"))
+        .or_else(|| {
+            texts
+                .iter()
+                .find(|e| e.t.get("text").and_then(Value::as_str) == Some("${game.name}"))
+        });
+    let ink = body.and_then(|e| e.t.get("color")).cloned();
+    let face = body.and_then(|e| e.t.get("font")).cloned();
+    let light = ink
+        .as_ref()
+        .map(&value)
+        .and_then(|c| c.as_str().and_then(map::color).map(|(c, _)| c))
+        .and_then(|c| {
+            let n = |i: usize| u8::from_str_radix(&c[i..i + 2], 16).ok().map(f32::from);
+            Some(0.299 * n(1)? + 0.587 * n(3)? + 0.114 * n(5)?)
+        })
+        .is_some_and(|l| l < 110.);
+    let facts = [
+        "${game.genre}",
+        "${game.players}",
+        "${game.developer}",
+        "${game.publisher}",
+        "${game.year}",
+    ]
+    .iter()
+    .filter(|d| says(d))
+    .count();
+    let shown = facts >= 3;
     let get = |k: &str, d: f64| r.get(k).and_then(Value::as_float).unwrap_or(d);
     let (x, y, w, h) = (get("x", 0.), get("y", 0.15), get("w", 0.45), get("h", 0.75));
     let pad = (w * 0.06).min(0.03);
@@ -541,16 +607,17 @@ fn details(out: &mut String, v: &build::BuiltView) {
         t.insert("h".into(), Value::Float(map::r5(h0 as f32)));
         inline(&Value::Table(t))
     };
-    let ink = |k: &str| v.list_ink.get(k).map(inline);
-    // A dark card behind them, for any art under the list's place.
+    let ink_of = |k: &str| v.list_ink.get(k).map(inline);
+    // A card behind them in the theme's tone, for any art under the list.
     let mut card = Table::new();
     card.insert("x".into(), Value::Float(map::r5((x - pad / 2.) as f32)));
     card.insert("y".into(), Value::Float(map::r5((y - pad / 2.) as f32)));
     card.insert("w".into(), Value::Float(map::r5((w + pad) as f32)));
     card.insert("h".into(), Value::Float(map::r5((h + pad) as f32)));
+    let fill = if light { "#FFFFFFE6" } else { "#00000099" };
     let _ = writeln!(
         out,
-        "\n[[{at}.el]]\nid = \"fundo-ficha\"\nkind = \"rect\"\nrect = {}\nfill = \"#00000099\"\nradius = 0.012\nz = 899",
+        "\n[[{at}.el]]\nid = \"fundo-ficha\"\nkind = \"rect\"\nrect = {}\nfill = \"{fill}\"\nradius = 0.012\nz = 899",
         inline(&Value::Table(card))
     );
     let size = v
@@ -559,24 +626,28 @@ fn details(out: &mut String, v: &build::BuiltView) {
         .and_then(Value::as_float)
         .unwrap_or(0.035)
         .clamp(0.025, 0.045);
+    // The facts already on the games screen: the cover takes their room.
+    let cover_h = if shown { h * 0.84 } else { h * 0.5 };
     let _ = writeln!(
         out,
         "\n[[{at}.el]]\nid = \"capa\"\nkind = \"image\"\nsrc = [\"game.cover\", \"game.screenshot\"]\nrect = {}\nradius = 0.01\nz = 900",
-        box_of(y, h * 0.5)
+        box_of(y, cover_h)
     );
-    let _ = writeln!(
-        out,
-        "\n[[{at}.el]]\nid = \"ficha\"\nkind = \"fields\"\nrows = [\n  {{ label = \"@genre\", value = \"${{game.genre}}\" }},\n  {{ label = \"@players\", value = \"${{game.players}}\" }},\n  {{ label = \"@developer\", value = \"${{game.developer}}\" }},\n  {{ label = \"@last_played\", value = \"${{game.last_played}}\" }},\n]\nrect = {}\nsize = {}\nupper_labels = true\nz = 900",
-        box_of(y + h * 0.53, h * 0.32),
-        inline(&Value::Float(map::r5((size * 0.85) as f32)))
-    );
-    for (k, field) in [
-        ("font", "font"),
-        ("color", "color"),
-        ("accent", "label_color"),
-    ] {
-        if let Some(value) = ink(k) {
-            let _ = writeln!(out, "{field} = {value}");
+    if !shown {
+        let _ = writeln!(
+            out,
+            "\n[[{at}.el]]\nid = \"ficha\"\nkind = \"fields\"\nrows = [\n  {{ label = \"@genre\", value = \"${{game.genre}}\" }},\n  {{ label = \"@players\", value = \"${{game.players}}\" }},\n  {{ label = \"@developer\", value = \"${{game.developer}}\" }},\n  {{ label = \"@last_played\", value = \"${{game.last_played}}\" }},\n]\nrect = {}\nsize = {}\nupper_labels = true\nz = 900",
+            box_of(y + h * 0.53, h * 0.32),
+            inline(&Value::Float(map::r5((size * 0.85) as f32)))
+        );
+        // The theme's text, else the list's.
+        let font = face.as_ref().map(inline).or_else(|| ink_of("font"));
+        let color = ink.as_ref().map(inline).or_else(|| ink_of("color"));
+        let label = ink_of("accent").or_else(|| light.then(|| "\"#555555FF\"".to_owned()));
+        for (field, v) in [("font", font), ("color", color), ("label_color", label)] {
+            if let Some(v) = v {
+                let _ = writeln!(out, "{field} = {v}");
+            }
         }
     }
     let _ = writeln!(
@@ -594,6 +665,8 @@ fn copy_files(
     files: &BTreeSet<(String, String)>,
     notes: &mut BTreeSet<String>,
 ) -> Result<(usize, u64), String> {
+    // By where each copy goes: one file may go to two places (a logo folder
+    // read as `logos/` and by its own path too).
     let mut pairs: BTreeMap<PathBuf, PathBuf> = BTreeMap::new();
     for (from, to) in files {
         if from.contains("${") {
@@ -621,14 +694,14 @@ fn copy_files(
                 .is_some()
                     && safe_out(&dest)
                 {
-                    pairs.insert(file, out.join(dest));
+                    pairs.insert(out.join(dest), file);
                 } else {
                     notes.insert(format!("caminho fora do tema recusado: `{from}`"));
                 }
             }
         } else if let Some(file) = es::contained(src, from).filter(|f| f.is_file()) {
             if safe_out(to) {
-                pairs.insert(file, out.join(to));
+                pairs.insert(out.join(to), file);
             } else {
                 notes.insert(format!("caminho fora do tema recusado: `{to}`"));
             }
@@ -650,12 +723,12 @@ fn copy_files(
             let inside = es::contained(src, &e.file_name().to_string_lossy()).is_some();
             if keep && inside && e.path().is_file() {
                 let dest = out.join("original").join(e.file_name());
-                pairs.insert(e.path(), dest);
+                pairs.insert(dest, e.path());
             }
         }
     }
     let (mut count, mut bytes) = (0, 0);
-    for (from, to) in &pairs {
+    for (to, from) in &pairs {
         if let Some(dir) = to.parent() {
             std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         }
