@@ -385,7 +385,21 @@ pub fn build(
                     })
                     .and_then(|v| v.display.clone())
             });
-            found.unwrap_or_else(|| builtin_name(&view.id, pt).unwrap_or_else(|| view.name.clone()))
+            // An ES-DE variant's view: its label in that language.
+            let variant = es.and_then(|es| {
+                es.subsets
+                    .iter()
+                    .find(|s| s.name == "variant")?
+                    .choices
+                    .iter()
+                    .filter(|c| view.id.starts_with(&format!("{}-", map::id_of(&c.name))))
+                    .max_by_key(|c| c.name.len())
+                    .map(|c| c.display.clone())
+                    .filter(|d| !d.is_empty())
+            });
+            found
+                .or(variant)
+                .unwrap_or_else(|| builtin_name(&view.id, pt).unwrap_or_else(|| view.name.clone()))
         };
         built.views.push(BuiltView {
             id: view.id.clone(),
@@ -451,8 +465,10 @@ pub fn build(
             id: map::id_of(&subset.name),
             subset: subset.name.clone(),
             name: (
-                label(en, None).map_or_else(|| title(&subset.display), |l| title(&l)),
-                label(pt, None).map_or_else(|| title(&subset.display), |l| title(&l)),
+                label(en, None)
+                    .map_or_else(|| readable(&subset.display, false), |l| readable(&l, false)),
+                label(pt, None)
+                    .map_or_else(|| readable(&subset.display, true), |l| readable(&l, true)),
             ),
             choices: Vec::new(),
         };
@@ -480,8 +496,14 @@ pub fn build(
             option.choices.push((
                 id,
                 (
-                    label(en, Some(&choice.name)).unwrap_or_else(|| choice.display.clone()),
-                    label(pt, Some(&choice.name)).unwrap_or_else(|| choice.display.clone()),
+                    readable(
+                        &label(en, Some(&choice.name)).unwrap_or_else(|| choice.display.clone()),
+                        false,
+                    ),
+                    readable(
+                        &label(pt, Some(&choice.name)).unwrap_or_else(|| choice.display.clone()),
+                        true,
+                    ),
                 ),
                 set,
             ));
@@ -835,6 +857,51 @@ pub fn per_system_text(
     }
 }
 
+/// A name as Appearance shows it: the ES names a theme leaves without a
+/// label in words (`colorScheme` → "Color scheme" / "Esquema de cores",
+/// `medium` → "Medium" / "Médio"), anything else with its first letter
+/// up and its dashes as spaces. A label the theme wrote stays as it is.
+pub fn readable(name: &str, pt: bool) -> String {
+    let key: String = name
+        .chars()
+        .filter(|c| c.is_alphanumeric())
+        .collect::<String>()
+        .to_lowercase();
+    let known = match key.as_str() {
+        "colorscheme" | "colorset" => Some(("Color scheme", "Esquema de cores")),
+        "fontsize" => Some(("Font size", "Tamanho da fonte")),
+        "variant" => Some(("Layout", "Visualização")),
+        "iconset" | "systemlogos" => Some(("Icons", "Ícones")),
+        "xsmall" | "extrasmall" => Some(("Extra small", "Muito pequeno")),
+        "small" => Some(("Small", "Pequeno")),
+        "medium" => Some(("Medium", "Médio")),
+        "large" => Some(("Large", "Grande")),
+        "xlarge" | "extralarge" => Some(("Extra large", "Muito grande")),
+        "light" => Some(("Light", "Claro")),
+        "dark" => Some(("Dark", "Escuro")),
+        _ => None,
+    };
+    if let Some((en, pt_name)) = known {
+        return if pt { pt_name } else { en }.into();
+    }
+    // camelCase and dashes as words, unless the theme already spaced it.
+    if name.contains(' ') || name.chars().any(|c| !c.is_ascii()) {
+        return name.to_owned();
+    }
+    let mut out = String::new();
+    for (i, c) in name.chars().enumerate() {
+        if c == '-' || c == '_' {
+            out.push(' ');
+        } else if c.is_uppercase() && i > 0 && !out.ends_with(' ') {
+            out.push(' ');
+            out.extend(c.to_lowercase());
+        } else {
+            out.push(c);
+        }
+    }
+    title(&out)
+}
+
 /// "colorset" → "Colorset": a subset without a displayName.
 fn title(name: &str) -> String {
     let mut c = name.chars();
@@ -1092,6 +1159,16 @@ fn element(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn option_names_read_as_words() {
+        assert_eq!(readable("colorScheme", false), "Color scheme");
+        assert_eq!(readable("fontSize", true), "Tamanho da fonte");
+        assert_eq!(readable("x-large", true), "Muito grande");
+        assert_eq!(readable("medium", false), "Medium");
+        assert_eq!(readable("[Capsule] Dark", false), "[Capsule] Dark");
+        assert_eq!(readable("dark-original", false), "Dark original");
+    }
 
     #[test]
     fn leaves_are_set_by_path() {

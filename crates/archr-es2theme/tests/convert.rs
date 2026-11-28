@@ -275,7 +275,10 @@ fn esde_system_files_become_system_vars() {
             "<theme><variables><systemColor>2040C0</systemColor><systemReleaseYear>1988</systemReleaseYear></variables></theme>",
         ),
     ]);
-    png(&dir.path().join("es/faixa.png"), (64, 8));
+    // Two tones: a picture, not a box of one color.
+    image::RgbaImage::from_fn(64, 8, |x, _| image::Rgba([200, 30, (x * 3) as u8, 255]))
+        .save(dir.path().join("es/faixa.png"))
+        .unwrap();
     let c = convert_pt(dir.path());
     assert!(c.warnings.is_empty(), "{:#?}", c.warnings);
     let t = read(dir.path());
@@ -641,4 +644,37 @@ fn esde_round_two_layout() {
     assert_eq!(card["fill"].as_str(), Some("#FFFFFFE6"));
     assert!(details.iter().all(|e| e["id"].as_str() != Some("ficha")));
     assert_eq!(t["min_launcher"].as_str(), Some("0.6.0"));
+}
+
+/// A picture of one solid color, tinted and rounded (ES-DE's 1-pixel
+/// "pixel.png" stretched over a card), is a box of that color: drawn the
+/// same on every launcher.
+#[test]
+fn a_solid_picture_is_a_box_of_its_color() {
+    let dir = theme(&[
+        ("capabilities.xml", CAPABILITIES),
+        (
+            "theme.xml",
+            &format!(
+                r#"<theme><variant name="lista">
+  <view name="system">
+    <image name="cartao"><pos>0.1 0.1</pos><size>0.4 0.3</size><path>./pixel.png</path>
+      <color>181716</color><cornerRadius>0.01</cornerRadius></image>
+  </view>
+  {GAMELIST}
+</variant></theme>"#
+            ),
+        ),
+    ]);
+    image::RgbaImage::from_pixel(4, 4, image::Rgba([255, 255, 255, 255]))
+        .save(dir.path().join("es/pixel.png"))
+        .unwrap();
+    let c = convert(dir.path());
+    assert!(c.warnings.is_empty(), "{:#?}", c.warnings);
+    let t = read(dir.path());
+    let card = element(&t, "lista-gamelist", "systems", "cartao");
+    assert_eq!(card["kind"].as_str(), Some("rect"));
+    assert_eq!(card["fill"].as_str(), Some("#181716FF"));
+    assert_eq!(card["radius"].as_float(), Some(0.01));
+    assert_eq!(t["min_launcher"].as_str(), Some("0.5.0"));
 }

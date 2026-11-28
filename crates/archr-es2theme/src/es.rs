@@ -244,10 +244,19 @@ impl Loader {
                     let name = c
                         .attr("name")
                         .map_or_else(|| c.text.trim().to_owned(), str::to_owned);
-                    let label = c
-                        .children
+                    // The label in the conversion's language, else en_US's,
+                    // else the first.
+                    let labels: Vec<&Node> =
+                        c.children.iter().filter(|l| l.name == "label").collect();
+                    let wanted = locale(&self.lang);
+                    let label = labels
                         .iter()
-                        .find(|l| l.name == "label")
+                        .find(|l| {
+                            l.attr("language")
+                                .is_some_and(|x| x.eq_ignore_ascii_case(&wanted))
+                        })
+                        .or_else(|| labels.iter().find(|l| l.attr("language") == Some("en_US")))
+                        .or_else(|| labels.first())
                         .map_or_else(|| name.clone(), |l| l.text.trim().to_owned());
                     (!name.is_empty()).then_some(Choice {
                         name,

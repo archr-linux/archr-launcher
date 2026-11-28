@@ -275,6 +275,13 @@ fn library(pictures: &Path) -> Data {
             .collect();
         data.games.push(((*name).into(), list));
     }
+    // A game the scraper found nothing for: no cover, screenshot or logo.
+    if let Some((_, games)) = data.games.iter_mut().find(|(s, _)| s == "megadrive") {
+        let bare = &mut games[2];
+        bare.image = None;
+        bare.details.screenshot = None;
+        bare.details.logo = None;
+    }
     data
 }
 
@@ -400,6 +407,9 @@ fn draw(dir: &Path, prefix: &str, shots: Option<&Path>) {
             frame(&mut ui, &mut app, "sistemas");
             app.handle(Button::A, &data);
             assert!(matches!(app.screen, Screen::Games { .. }));
+            // The game without pictures first, then the one with them.
+            app.cursor = 2;
+            frame(&mut ui, &mut app, "semcapa");
             app.cursor = 6;
             frame(&mut ui, &mut app, "jogos");
             app.screen = Screen::Details {

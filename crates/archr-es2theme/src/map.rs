@@ -345,6 +345,21 @@ fn missing_label(name: &str, text: &str) -> bool {
     .any(|k| name.contains(k) || text.contains(k))
 }
 
+/// The color of a picture that is one opaque color (a small PNG), else
+/// None.
+fn solid(root: &Path, rel: &str) -> Option<[u8; 3]> {
+    if rel.contains("${") || !rel.to_lowercase().ends_with(".png") {
+        return None;
+    }
+    let path = crate::es::contained(root, rel)?;
+    if std::fs::metadata(&path).ok()?.len() > 4096 {
+        return None;
+    }
+    let img = image::open(path).ok()?.to_rgba8();
+    let first = *img.pixels().next()?;
+    (first[3] == 255 && img.pixels().all(|p| *p == first)).then_some([first[0], first[1], first[2]])
+}
+
 /// The folder of the systems' logos: the first `${system.theme}` picture
 /// of the systems screen's carousel or grid (`staticImage`, `logo`).
 pub fn logo_dir(es: &Es) -> Option<String> {
@@ -928,6 +943,39 @@ impl Mapper<'_> {
             .unwrap_or(("#FFFFFFFF".into(), 255));
         if alpha == 0 {
             return None;
+        }
+        // A picture of one solid color (a theme's 1-pixel "pixel.png"
+        // stretched over a box, tinted): a box of that color, drawn the
+        // same on every launcher, rounded corners and all.
+        if let Some(rgb) = (src.len() == 1)
+            .then(|| solid(self.root, &src[0]))
+            .flatten()
+        {
+            let k = |i: usize, c: u8| {
+                let t = u8::from_str_radix(&tint[1 + 2 * i..3 + 2 * i], 16).unwrap_or(255);
+                (u16::from(c) * u16::from(t) / 255) as u8
+            };
+            let fill = format!(
+                "#{:02X}{:02X}{:02X}{:02X}",
+                k(0, rgb[0]),
+                k(1, rgb[1]),
+                k(2, rgb[2]),
+                alpha
+            );
+            t.insert("kind".into(), s("rect"));
+            t.insert("fill".into(), s(fill));
+            if let Some(r) = el
+                .get("roundCorners")
+                .or_else(|| el.get("cornerRadius"))
+                .and_then(num)
+                .filter(|r| *r > 0.)
+            {
+                t.insert("radius".into(), f(r.min(0.5)));
+            }
+            self.place(&mut t, &g);
+            self.common(&mut t, el, z);
+            self.mapped("image de uma cor só", "rect (fill)");
+            return Some(t);
         }
         if tile {
             // A tiled picture: a frame with no edges, repeated.

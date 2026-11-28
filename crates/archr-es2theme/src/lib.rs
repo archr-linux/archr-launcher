@@ -124,6 +124,10 @@ pub fn convert(src: &Path, out: &Path, opts: &Options) -> Result<Conversion, Str
                 if let Some(v) = variant {
                     for view in &mut m.views {
                         view.id = format!("{}-{}", map::id_of(v), view.id);
+                        // The variant's label in the theme's capabilities.
+                        if let Some(label) = variant_label(&subsets, v) {
+                            view.name = label;
+                        }
                     }
                 }
                 model.views.extend(m.views);
@@ -182,6 +186,10 @@ pub fn convert(src: &Path, out: &Path, opts: &Options) -> Result<Conversion, Str
                 if let Some(v) = variant {
                     for view in &mut m.views {
                         view.id = format!("{}-{}", map::id_of(v), view.id);
+                        // The variant's label in the theme's capabilities.
+                        if let Some(label) = variant_label(&subsets, v) {
+                            view.name = label;
+                        }
                     }
                 }
                 model.views.extend(m.views);
@@ -241,6 +249,18 @@ pub fn convert(src: &Path, out: &Path, opts: &Options) -> Result<Conversion, Str
     );
     std::fs::write(out.join("CONVERSAO.md"), report).map_err(|e| e.to_string())?;
     Ok(conversion)
+}
+
+/// A variant's label (capabilities.xml), when it has one of its own.
+fn variant_label(subsets: &[es::Subset], name: &str) -> Option<String> {
+    subsets
+        .iter()
+        .find(|s| s.name == "variant")?
+        .choices
+        .iter()
+        .find(|c| c.name == name)
+        .map(|c| c.display.clone())
+        .filter(|d| !d.is_empty() && d != name)
 }
 
 /// The systems an ES-DE theme has files for: the names in the folders of
@@ -324,6 +344,17 @@ fn min_launcher(b: &Built) -> &'static str {
                 .any(|x| x.to_string().contains("${game.players.count}"))
         })
     });
+    // A tinted picture with rounded corners kept its own colors before.
+    let rounded_tint = b.views.iter().any(|v| {
+        v.systems.iter().chain(&v.games).any(|e| {
+            e.t.get("kind").and_then(Value::as_str) == Some("image")
+                && e.t.contains_key("tint")
+                && e.t.get("radius").is_some_and(|r| r.as_float() != Some(0.))
+        })
+    });
+    if rounded_tint {
+        return "0.6.1";
+    }
     if !b.system_vars.is_empty() || collection || hidden || count {
         "0.6.0"
     } else {
