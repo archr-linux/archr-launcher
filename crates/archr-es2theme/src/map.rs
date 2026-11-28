@@ -259,8 +259,10 @@ pub fn first_file(root: &Path, rel: &str) -> Option<PathBuf> {
 /// Every file a path with `${...}` in its file name matches, sorted.
 pub fn matches(root: &Path, rel: &str) -> Vec<PathBuf> {
     let Some(at) = rel.find("${") else {
-        let p = root.join(rel);
-        return if p.is_file() { vec![p] } else { Vec::new() };
+        return crate::es::contained(root, rel)
+            .filter(|p| p.is_file())
+            .into_iter()
+            .collect();
     };
     let (dir, name) = rel.rsplit_once('/').unwrap_or(("", rel));
     if dir.contains("${") || at < dir.len() {
@@ -269,14 +271,23 @@ pub fn matches(root: &Path, rel: &str) -> Vec<PathBuf> {
     let start = name.find("${").unwrap_or(0);
     let end = name.rfind('}').map_or(name.len(), |e| e + 1);
     let (prefix, suffix) = (&name[..start], &name[end..]);
-    let Ok(entries) = std::fs::read_dir(root.join(dir)) else {
+    let folder = if dir.is_empty() {
+        Some(root.to_path_buf())
+    } else {
+        crate::es::contained(root, dir)
+    };
+    let Some(Ok(entries)) = folder.map(std::fs::read_dir) else {
         return Vec::new();
     };
     let mut found: Vec<PathBuf> = entries
         .flatten()
         .map(|e| e.path())
         .filter(|p| {
-            p.is_file()
+            p.strip_prefix(root)
+                .ok()
+                .and_then(|r| crate::es::contained(root, &r.to_string_lossy()))
+                .is_some()
+                && p.is_file()
                 && p.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
                     n.len() > prefix.len() + suffix.len()
                         && n.starts_with(prefix)
@@ -303,6 +314,10 @@ struct Geo {
 impl Mapper<'_> {
     fn note(&mut self, text: impl Into<String>) {
         self.out.notes.insert(text.into());
+    }
+    /// A file of the theme's, inside its folder (`es::contained`).
+    fn has(&self, rel: &str) -> bool {
+        crate::es::contained(self.root, rel).is_some_and(|f| f.is_file())
     }
     fn mapped(&mut self, what: &str, became: &str) {
         self.out.mapped.insert(format!("`{what}` → {became}"));
@@ -630,7 +645,7 @@ impl Mapper<'_> {
             if out.contains(p) {
                 continue;
             }
-            if p.contains("${") || self.root.join(p).is_file() {
+            if p.contains("${") || self.has(p) {
                 out.push(p.clone());
             } else {
                 let p = p.clone();
@@ -1319,7 +1334,8 @@ impl Mapper<'_> {
         // nine-slice frame whose corners are half the bar tall.
         if let Some(p) = el
             .get("selectorImagePath")
-            .filter(|p| !p.is_empty() && !p.contains("${") && self.root.join(p).is_file())
+            .filter(|p| !p.contains("${"))
+            .filter(|p| self.has(p))
         {
             let p = p.to_owned();
             self.file(&p, &p);
@@ -1415,7 +1431,7 @@ impl Mapper<'_> {
         let mut images: Vec<String> = images.into_iter().map(str::to_owned).collect();
         if let Some(icon) = el
             .get("gameImage")
-            .filter(|p| self.root.join(p).is_file())
+            .filter(|p| self.has(p))
             .map(str::to_owned)
         {
             self.file(&icon, &icon);
@@ -1518,12 +1534,7 @@ impl Mapper<'_> {
         }
         if let Some(fav) = tile("gridtile.favorite") {
             let mut fv = Table::new();
-            if let Some(p) = fav
-                .paths
-                .last()
-                .filter(|p| self.root.join(p).is_file())
-                .cloned()
-            {
+            if let Some(p) = fav.paths.last().filter(|p| self.has(p)).cloned() {
                 self.file(&p, &p);
                 fv.insert("image".into(), s(p));
             }
@@ -1922,13 +1933,13 @@ impl Mapper<'_> {
             .filter(|p| !p.is_empty())
             .map(str::to_owned);
         if let Some(p) = &filled {
-            if self.root.join(p).is_file() {
+            if self.has(p) {
                 self.file(p, p);
                 t.insert("star".into(), s(p.clone()));
             }
         }
         if let (Some(u), Some(fl)) = (&unfilled, &filled) {
-            if u != fl && self.root.join(u).is_file() {
+            if u != fl && self.has(u) {
                 self.file(u, u);
                 t.insert("star_empty".into(), s(u.clone()));
             }

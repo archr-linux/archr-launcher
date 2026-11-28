@@ -226,7 +226,7 @@ fn systems_of(src: &Path, patterns: &[String]) -> Vec<String> {
         let Some((prefix, suffix)) = name.split_once("${system.theme}") else {
             continue;
         };
-        let Ok(entries) = std::fs::read_dir(src.join(dir)) else {
+        let Some(Ok(entries)) = es::contained(src, dir).map(std::fs::read_dir) else {
             continue;
         };
         for e in entries.flatten() {
@@ -582,10 +582,28 @@ fn copy_files(
                     (Some(a), Some(e)) => format!("{}{}{}", &to[..a], middle, &to[e + 1..]),
                     _ => to.clone(),
                 };
-                pairs.insert(file, out.join(dest));
+                if es::contained(
+                    src,
+                    &file.strip_prefix(src).unwrap_or(&file).to_string_lossy(),
+                )
+                .is_some()
+                    && safe_out(&dest)
+                {
+                    pairs.insert(file, out.join(dest));
+                } else {
+                    notes.insert(format!("caminho fora do tema recusado: `{from}`"));
+                }
             }
-        } else if src.join(from).is_file() {
-            pairs.insert(src.join(from), out.join(to));
+        } else if let Some(file) = es::contained(src, from).filter(|f| f.is_file()) {
+            if safe_out(to) {
+                pairs.insert(file, out.join(to));
+            } else {
+                notes.insert(format!("caminho fora do tema recusado: `{to}`"));
+            }
+        } else if !src.join(from).is_file() {
+            // Not there: the report says so where the element is made.
+        } else {
+            notes.insert(format!("caminho fora do tema recusado: `{from}`"));
         }
     }
     // The original's license and credits go with it.
@@ -597,7 +615,8 @@ fn copy_files(
             ]
             .iter()
             .any(|k| name.starts_with(k));
-            if keep && e.path().is_file() {
+            let inside = es::contained(src, &e.file_name().to_string_lossy()).is_some();
+            if keep && inside && e.path().is_file() {
                 let dest = out.join("original").join(e.file_name());
                 pairs.insert(e.path(), dest);
             }
@@ -621,6 +640,18 @@ fn copy_files(
     Ok((count, bytes))
 }
 
+/// A path the output is written at: relative, without `..`.
+fn safe_out(rel: &str) -> bool {
+    let rel = Path::new(rel);
+    !rel.as_os_str().is_empty()
+        && rel.components().all(|c| {
+            matches!(
+                c,
+                std::path::Component::Normal(_) | std::path::Component::CurDir
+            )
+        })
+}
+
 /// The first frame of each clip a screen shows as a picture (the launcher
 /// plays one clip per screen), written with ffmpeg when the PC has it.
 fn write_stills(
@@ -630,15 +661,25 @@ fn write_stills(
     notes: &mut BTreeSet<String>,
 ) {
     for (clip, picture) in stills {
-        let to = out.join(picture);
-        if let Some(dir) = to.parent() {
-            let _ = std::fs::create_dir_all(dir);
+        // The picture's folder made first, inside the output, so the
+        // check below can see where it is.
+        if let Some(dir) = Path::new(picture).parent() {
+            if safe_out(&dir.to_string_lossy()) {
+                let _ = std::fs::create_dir_all(out.join(dir));
+            }
         }
+        let (Some(from), Some(to)) = (es::contained(src, clip), es::contained(out, picture)) else {
+            notes.insert(format!(
+                "caminho fora do tema recusado: `{clip}`; o elemento fica sem imagem"
+            ));
+            continue;
+        };
         let made = std::process::Command::new("ffmpeg")
             .args(["-v", "error", "-y", "-i"])
-            .arg(src.join(clip))
+            .arg(from)
             .args(["-frames:v", "1", "-q:v", "3"])
             .arg(&to)
+            .stderr(std::process::Stdio::null())
             .status()
             .is_ok_and(|s| s.success());
         if !made {
@@ -659,7 +700,9 @@ fn license_of(src: &Path) -> String {
                 .iter()
                 .any(|k| name.starts_with(k))
             {
-                text.push_str(&std::fs::read_to_string(e.path()).unwrap_or_default());
+                if let Some(file) = es::contained(src, &e.file_name().to_string_lossy()) {
+                    text.push_str(&std::fs::read_to_string(file).unwrap_or_default());
+                }
             }
         }
     }

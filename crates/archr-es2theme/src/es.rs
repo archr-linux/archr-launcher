@@ -478,7 +478,12 @@ impl Loader {
             }
         }
         let path = normalize(&dir.join(&file));
-        if !path.starts_with(&self.root) || !path.is_file() {
+        let inside = path
+            .strip_prefix(&self.root)
+            .ok()
+            .and_then(|rel| contained(&self.root, &rel.to_string_lossy()))
+            .is_some();
+        if !inside || !path.is_file() {
             self.note(format!("include que não existe: {file}"));
             return;
         }
@@ -807,6 +812,50 @@ fn is_path(key: &str) -> bool {
         key,
         "path" | "default" | "staticImage" | "defaultImage" | "gameImage" | "folderImage"
     ) || key.ends_with("Path")
+}
+
+/// `rel` (a path a theme names) inside `root`, or None: an absolute path,
+/// a `..` or a link that leads out of `root` is refused. A file that does
+/// not exist yet (an output) is checked by the folder it goes in, which
+/// must exist. Every path a theme names is read or written through this.
+pub fn contained(root: &Path, rel: &str) -> Option<PathBuf> {
+    let rel = Path::new(rel);
+    if rel.as_os_str().is_empty()
+        || !rel
+            .components()
+            .all(|c| matches!(c, Component::Normal(_) | Component::CurDir))
+    {
+        return None;
+    }
+    let path = root.join(rel);
+    let root = canonical(root)?;
+    let real = match path.canonicalize() {
+        Ok(real) => real,
+        Err(_) => {
+            let parent = path.parent()?.canonicalize().ok()?;
+            parent.join(path.file_name()?)
+        }
+    };
+    real.starts_with(&root).then_some(path)
+}
+
+/// A root folder's real path, found once: `contained` asks it for every file.
+fn canonical(root: &Path) -> Option<PathBuf> {
+    thread_local! {
+        static SEEN: std::cell::RefCell<Vec<(PathBuf, PathBuf)>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
+    if let Some(real) = SEEN.with(|s| {
+        s.borrow()
+            .iter()
+            .find(|(p, _)| p == root)
+            .map(|(_, r)| r.clone())
+    }) {
+        return Some(real);
+    }
+    let real = root.canonicalize().ok()?;
+    SEEN.with(|s| s.borrow_mut().push((root.to_path_buf(), real.clone())));
+    Some(real)
 }
 
 /// The path without `.` and `..`.

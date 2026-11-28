@@ -418,3 +418,74 @@ fn esde_font_sizes_clips_status_and_gifs() {
     let anim = element(&t, view, "systems", "anim");
     assert_eq!(anim["src"].as_str(), Some("anim-still.png"));
 }
+
+/// Paths a theme names that lead out of it (`../`, absolute, a link out)
+/// are refused: nothing outside the theme is read into the output, and
+/// nothing is written outside the output folder.
+#[test]
+fn paths_out_of_the_theme_are_refused() {
+    let dir = theme(&[
+        ("capabilities.xml", CAPABILITIES),
+        (
+            "theme.xml",
+            &format!(
+                r#"<theme><variant name="lista">
+  <view name="system">
+    <image name="fora"><pos>0 0</pos><size>0.2 0.2</size><path>../segredo.png</path></image>
+    <image name="absoluta"><pos>0 0</pos><size>0.2 0.2</size><path>/etc/hostname</path></image>
+    <image name="elo"><pos>0 0</pos><size>0.2 0.2</size><path>./elo.png</path></image>
+    <animation name="gif"><pos>0 0</pos><size>0.2 0.2</size><path>../../fora.gif</path></animation>
+  </view>
+  <view name="gamelist">
+    <textlist name="gamelist"><pos>0 0.15</pos><size>0.45 0.7</size><fontSize>0.04</fontSize>
+      <selectorImagePath>../segredo.png</selectorImagePath></textlist>
+    <video name="fundo"><pos>0 0</pos><size>1 1</size><path>../fora.mp4</path></video>
+    <video name="jogo"><pos>0.5 0.2</pos><size>0.4 0.4</size></video>
+  </view>
+</variant></theme>"#
+            ),
+        ),
+    ]);
+    png(&dir.path().join("segredo.png"), (8, 8));
+    std::fs::write(dir.path().join("fora.mp4"), "x").unwrap();
+    std::fs::write(dir.path().join("es/LICENSE-elo"), "x").unwrap();
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(
+            dir.path().join("segredo.png"),
+            dir.path().join("es/elo.png"),
+        )
+        .unwrap();
+        std::fs::remove_file(dir.path().join("es/LICENSE-elo")).unwrap();
+        std::os::unix::fs::symlink("/etc/hostname", dir.path().join("es/LICENSE-elo")).unwrap();
+    }
+    let c = convert(dir.path());
+    assert!(c.warnings.is_empty(), "{:#?}", c.warnings);
+    let out = dir.path().join("out");
+    let mut files = Vec::new();
+    let mut stack = vec![out.clone()];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(d).unwrap().flatten() {
+            if e.path().is_dir() {
+                stack.push(e.path());
+            } else {
+                files.push(e.path());
+            }
+        }
+    }
+    let names: Vec<String> = files
+        .iter()
+        .map(|f| f.strip_prefix(&out).unwrap().to_string_lossy().into_owned())
+        .collect();
+    assert!(
+        !names.iter().any(|n| n.contains("segredo")
+            || n.contains("elo")
+            || n.contains("hostname")
+            || n.contains("fora")),
+        "{names:?}"
+    );
+    assert!(!dir.path().join("fora-still.jpg").exists());
+    let t = read(dir.path());
+    let list = element(&t, "lista-gamelist", "games", "gamelist");
+    assert!(list.get("selected").and_then(|s| s.get("frame")).is_none());
+}
