@@ -2783,7 +2783,7 @@ ou deixe a chave de fora.
 | `0.1.0` | temas até a API 3.1 (cores, fontes, visualizações, telas livres fases 1–8) |
 | `0.2.0` | update 20261126.6: `tint` em `frame`, `default_view`, ladrilhado em uma cópia, `${system}` de app pelo id do módulo |
 | `0.6.0` | variáveis por sistema (`[system.<id>.vars]`), `when.collection`; um vídeo de outro formato ou com `opacity = 0` não conta como o segundo da tela; um elemento com `opacity = 0` não é desenhado (antes um texto aparecia inteiro); `${game.players.count}` |
-| `0.6.1` | a Loja instala os vídeos do tema (`.mp4` até 8 MB cada) |
+| `0.6.1` | a Loja instala os vídeos do tema (`.mp4` até 8 MB cada); uma imagem com `tint` e `radius` sai na cor do `tint` (antes saía na cor da própria imagem) |
 
 Um tema que usa algo da tabela precisa declarar a versão da linha: um launcher mais antigo o desenharia quebrado, e com o `min_launcher` ele recusa a instalação. O `archr-es2theme` grava `0.5.0`, ou `0.6.0` quando o tema convertido usa algo dessa linha.
 

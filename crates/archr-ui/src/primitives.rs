@@ -482,6 +482,19 @@ impl Geometry {
         alpha: u8,
         crop: [f32; 4],
     ) -> Result<(), String> {
+        self.cover_tinted(canvas, texture, (rect, radius), (alpha, None), crop)
+    }
+    /// `cover`, the picture multiplied by `tint`: a texture's color mod
+    /// does not reach geometry (SDL takes the vertices' color), so the tint
+    /// goes into the vertices.
+    pub fn cover_tinted(
+        &mut self,
+        canvas: &mut Canvas<Window>,
+        texture: &Texture<'_>,
+        (rect, radius): (Rect, f32),
+        (alpha, tint): (u8, Option<Rgba>),
+        crop: [f32; 4],
+    ) -> Result<(), String> {
         let radius = radius * self.corners;
         if alpha == 0 {
             return Ok(());
@@ -490,6 +503,11 @@ impl Geometry {
         // The rim stays clear: only what is drawn takes the alpha.
         for vertex in mesh.vertices.iter_mut().filter(|v| v.color.a != 0) {
             vertex.color.a = alpha;
+            if let Some(t) = tint {
+                (vertex.color.r, vertex.color.g, vertex.color.b) = (t.r, t.g, t.b);
+            } else {
+                (vertex.color.r, vertex.color.g, vertex.color.b) = (255, 255, 255);
+            }
         }
         mesh.draw(canvas, Some(texture))
     }

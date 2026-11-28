@@ -102,18 +102,22 @@ pub fn allowed(path: &str, size: u64) -> bool {
             }))
 }
 
-/// Short printable metadata text.
+/// Short printable metadata text: at most `limit` characters, a longer
+/// one cut to end in "…".
 fn short(table: &toml::Table, key: &str, limit: usize) -> String {
-    table
+    let text: Vec<char> = table
         .get(key)
         .and_then(toml::Value::as_str)
         .unwrap_or("")
         .chars()
         .filter(|c| !c.is_control())
-        .take(limit)
-        .collect::<String>()
-        .trim()
-        .to_owned()
+        .collect();
+    let text: String = text.iter().collect::<String>().trim().to_owned();
+    if text.chars().count() <= limit {
+        return text;
+    }
+    let cut: String = text.chars().take(limit.saturating_sub(1)).collect();
+    format!("{}…", cut.trim_end())
 }
 
 /// `wanted` (as `1.2` or `1.2.3`) is newer than `ours`.
@@ -168,13 +172,13 @@ impl Detail {
                 ..card
             },
             description: Names::parse(table.get("description"), "description").truncated(200),
-            author: short(&table, "author", 40),
+            author: short(&table, "author", 120),
             version: short(&table, "version", 24),
             date: String::new(),
             views: theme.views().into_iter().map(|(_, names)| names).collect(),
             includes,
             size: kept.iter().map(|(_, size)| size).sum(),
-            license: short(&table, "license", 40),
+            license: short(&table, "license", 80),
             images: Vec::new(),
             reference: String::new(),
             tree: String::new(),
@@ -767,6 +771,17 @@ mod tests {
         ] {
             assert!(!allowed(no, 1), "{no}");
         }
+        // Metadata longer than its room ends in "…", never cut mid-word
+        // without a mark; an author with roles fits whole.
+        let table: toml::Table = toml::from_str(
+            "author = \"gerrykeys (original); Arch R (conversion)\"\nlicense = \"x\"",
+        )
+        .unwrap();
+        assert_eq!(
+            short(&table, "author", 120),
+            "gerrykeys (original); Arch R (conversion)"
+        );
+        assert_eq!(short(&table, "author", 10), "gerrykeys…");
         // A theme's clip up to 8 MiB; a larger one is left out.
         assert!(allowed("videos/snes.mp4", CLIP_LIMIT));
         assert!(!allowed("videos/snes.mp4", CLIP_LIMIT + 1));

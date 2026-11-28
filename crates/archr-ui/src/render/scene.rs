@@ -460,6 +460,8 @@ impl<'t> Ui<'_, 't> {
                 ),
                 Kind::Collection(c) => ui.collection(c, &spots, rect, theme),
                 Kind::Video(video) => ui.scene_video(video, (rect, inner), &facts, theme, art),
+                // The quick menu brings its own hints, in the footer.
+                Kind::Hints(_) if matches!(app.screen, Screen::QuickMenu { .. }) => Ok(()),
                 Kind::Hints(hints) => ui.scene_hints(app, data, theme, layout, (hints, rect)),
                 Kind::Status(plain) => ui.status_pill(theme, Some(rect), *plain).map(|_| ()),
                 Kind::Actions => match facts.game {
@@ -866,7 +868,7 @@ impl<'t> Ui<'_, 't> {
                 texture.set_color_mod(tint.r, tint.g, tint.b);
             }
             let drawn = if radius > 0. {
-                geometry.cover(canvas, texture, dst, radius, alpha, part)
+                geometry.cover_tinted(canvas, texture, (dst, radius), (alpha, image.tint), part)
             } else {
                 let src = Rect::new(
                     (part[0] * tw) as i32,
