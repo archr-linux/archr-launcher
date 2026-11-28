@@ -763,7 +763,7 @@ não se misturam entre arquivos: a do seu tema substitui a herdada inteira, e
 | `rect` | `{ x, y, w, h }` | a tela inteira | o retângulo, em frações da tela (`x`, `w` da largura; `y`, `h` da altura). Pode passar da tela: o que sobra não aparece |
 | `anchor` | `top-left`, `top`, `top-right`, `left`, `center`, `right`, `bottom-left`, `bottom`, `bottom-right` ou `[x, y]` | `top-left` | o ponto do retângulo que fica em `x`, `y` (`center` põe o meio dele lá, como o `origin 0.5 0.5` do ES) |
 | `z` | inteiro, -1000 a 1000 | `0` | a camada |
-| `opacity` | 0 a 1 | `1` | transparência do elemento inteiro |
+| `opacity` | 0 a 1 | `1` | transparência do elemento inteiro; com `0` ele não é desenhado (a lista e o vídeo seguem com o seu estado) |
 | `rotate` | graus, -360 a 360 | `0` | giro no sentido do relógio |
 | `pivot` | `[x, y]`, frações do retângulo | `[0.5, 0.5]` | o centro do giro (`[0, 0.5]` é o meio da borda esquerda) |
 | `id` | texto | | o nome, para `base` e para ler o tema |
@@ -1826,7 +1826,8 @@ relatório avisa. Logos de sistemas são marcas dos fabricantes.
   valem nos textos; `selectorImagePath` da lista vira o `selected.frame`,
   com os cantos da metade da altura da faixa.
 - `min_launcher`: `0.5.0`, ou `0.6.0` quando o tema usa variáveis por
-  sistema ou `when.collection`.
+  sistema, `when.collection` ou esconde um elemento com `opacity` 0 numa
+  escolha, formato ou sistema.
 
 ## Uma tabela por tela
 
@@ -2750,7 +2751,7 @@ ou deixe a chave de fora.
 |---|---|
 | `0.1.0` | temas até a API 3.1 (cores, fontes, visualizações, telas livres fases 1–8) |
 | `0.2.0` | update 20261126.6: `tint` em `frame`, `default_view`, ladrilhado em uma cópia, `${system}` de app pelo id do módulo |
-| `0.6.0` | variáveis por sistema (`[system.<id>.vars]`), `when.collection`; um vídeo de outro formato ou com `opacity = 0` não conta como o segundo da tela |
+| `0.6.0` | variáveis por sistema (`[system.<id>.vars]`), `when.collection`; um vídeo de outro formato ou com `opacity = 0` não conta como o segundo da tela; um elemento com `opacity = 0` não é desenhado (antes um texto aparecia inteiro) |
 
 Um tema que usa algo da tabela precisa declarar a versão da linha: um launcher mais antigo o desenharia quebrado, e com o `min_launcher` ele recusa a instalação. O `archr-es2theme` grava `0.5.0`, ou `0.6.0` quando o tema convertido usa algo dessa linha.
 

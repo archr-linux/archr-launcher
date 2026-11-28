@@ -251,8 +251,9 @@ fn systems_of(src: &Path, patterns: &[String]) -> Vec<String> {
 }
 
 /// The oldest launcher that draws what the theme uses: 0.5.0 for free
-/// screens; 0.6.0 when it has system variables or shows an element only
-/// on collections or only on systems (`when.collection`).
+/// screens; 0.6.0 when it has system variables, shows an element only on
+/// collections or only on systems (`when.collection`) or hides one with
+/// opacity 0 (a choice, shape or system that leaves it out).
 fn min_launcher(b: &Built) -> &'static str {
     let collection = b.views.iter().any(|v| {
         v.systems
@@ -260,7 +261,38 @@ fn min_launcher(b: &Built) -> &'static str {
             .chain(&v.games)
             .any(|e| e.t.get("when").and_then(|w| w.get("collection")).is_some())
     });
-    if !b.system_vars.is_empty() || collection {
+    // An element at opacity 0 in some choice, shape or system: before
+    // 0.6.0 a text drew whole there.
+    let zero = |v: &Value| v.as_float() == Some(0.) || v.as_integer() == Some(0);
+    let values_of = |name: &str| -> Vec<Value> {
+        let mut out: Vec<Value> = Vec::new();
+        let lists = b.aspect_vars.values().chain(b.system_vars.values()).chain(
+            b.options
+                .iter()
+                .flat_map(|o| o.choices.iter().map(|c| &c.2)),
+        );
+        for list in std::iter::once(&b.vars).chain(lists) {
+            out.extend(
+                list.iter()
+                    .filter(|(n, _)| n == name)
+                    .map(|(_, v)| v.clone()),
+            );
+        }
+        out
+    };
+    let hidden = b.views.iter().any(|v| {
+        v.systems
+            .iter()
+            .chain(&v.games)
+            .any(|e| match e.t.get("opacity") {
+                Some(Value::String(var)) => var
+                    .strip_prefix('$')
+                    .is_some_and(|n| values_of(n).iter().any(zero)),
+                Some(v) => zero(v),
+                None => false,
+            })
+    });
+    if !b.system_vars.is_empty() || collection || hidden {
         "0.6.0"
     } else {
         "0.5.0"

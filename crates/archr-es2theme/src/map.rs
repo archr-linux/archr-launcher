@@ -335,11 +335,18 @@ impl Mapper<'_> {
     ) -> Geo {
         let (x, y) = el.get("pos").and_then(pair).unwrap_or(pos);
         let (ox, oy) = el.get("origin").and_then(pair).unwrap_or(origin);
-        let ar = picture.and_then(|p| picture_ratio(self.root, p));
+        let ar = picture
+            .and_then(|p| picture_ratio(self.root, p))
+            .or_else(|| media_ratio(el));
         let sr = self.shape.ratio;
         let (mut w, mut h, mut fit) = if let Some((w, h)) = el.get("maxSize").and_then(pair) {
             (w, h, "contain")
-        } else if let Some((w, h)) = el.get("minSize").and_then(pair) {
+        } else if let Some((w, h)) = el
+            .get("minSize")
+            .or_else(|| el.get("cropSize"))
+            .and_then(pair)
+        {
+            // ES-DE's `cropSize`: the box filled, the picture cut.
             (w, h, "cover")
         } else if let Some((w, h)) = el.get("size").and_then(pair) {
             (w, h, "stretch")
@@ -481,6 +488,11 @@ impl Mapper<'_> {
 
     fn hidden(&self, el: &El) -> bool {
         if flag(el.get("visible")) == Some(false) {
+            return true;
+        }
+        // ES-DE's help, clock and status for its menus (`menu`) or for no
+        // screen (`none`): the launcher's screens show the `view` ones.
+        if matches!(el.get("scope").map(str::trim), Some("menu" | "none")) {
             return true;
         }
         if let Some((x, y)) = el.get("pos").and_then(pair) {
@@ -730,7 +742,14 @@ impl Mapper<'_> {
             if !tint.starts_with("#FFFFFF") {
                 t.insert("tint".into(), s(format!("{}FF", &tint[..7])));
             }
-            if let Some(r) = el.get("roundCorners").and_then(num).filter(|r| *r > 0.) {
+            if let Some(r) = el
+                .get("roundCorners")
+                .or_else(|| el.get("cornerRadius"))
+                .or_else(|| el.get("imageCornerRadius"))
+                .or_else(|| el.get("videoCornerRadius"))
+                .and_then(num)
+                .filter(|r| *r > 0.)
+            {
                 t.insert("radius".into(), f(r.min(0.5)));
             }
         }
@@ -867,6 +886,15 @@ impl Mapper<'_> {
                         .into_iter()
                         .collect()
                 }
+                // ES-DE's systems as a grid of logos, or as a list.
+                ("grid", _) if self.esde && !carousel => {
+                    carousel = true;
+                    self.esde_grid(el, true).into_iter().collect()
+                }
+                ("textlist", _) if self.esde && !carousel => {
+                    carousel = true;
+                    self.list(el, false).into_iter().collect()
+                }
                 ("text", "systemInfo") => {
                     self.mapped("systemInfo", "text `${system.games}`");
                     let mut v = Vec::new();
@@ -885,7 +913,7 @@ impl Mapper<'_> {
                 }
                 ("image", "logo") | ("text", "logoText") => Vec::new(),
                 ("helpsystem", _) => self.hints(el).into_iter().collect(),
-                _ if el.extra || self.esde => self.extra(el, 10.),
+                _ if el.extra || self.esde => self.extra(el, esde_z(&el.kind, self.esde)),
                 // A gamelist's element written for every view: ES skips it here.
                 (_, name) if crate::es::builtin_kind(name).is_some() => Vec::new(),
                 (kind, name) => {
@@ -971,12 +999,16 @@ impl Mapper<'_> {
         let mut item = Table::new();
         let mut images = Vec::new();
         let logo_paths = logo.map(|l| self.sources(l)).unwrap_or_default();
-        let static_image = el
-            .get("staticImage")
-            .filter(|p| !p.is_empty())
-            .map(str::to_owned);
+        // ES-DE shows `defaultImage` where `staticImage` has no file.
+        let static_image: Vec<String> = ["staticImage", "defaultImage"]
+            .iter()
+            .filter_map(|k| el.get(k).filter(|p| !p.is_empty()).map(str::to_owned))
+            .collect();
         for p in logo_paths.iter().chain(static_image.iter()) {
-            images.push(self.logo_source(p));
+            let src = self.logo_source(p);
+            if !images.contains(&src) {
+                images.push(src);
+            }
         }
         if images.is_empty() {
             images.push("system.logo".into());
@@ -1032,7 +1064,7 @@ impl Mapper<'_> {
             }
         }
         t.insert("loop".into(), Value::Boolean(true));
-        self.common(&mut t, el, 40.);
+        self.common(&mut t, el, if self.esde { 50. } else { 40. });
         for key in ["logoPos", "colorEnd", "gradientType"] {
             if el.get(key).is_some() {
                 self.note(format!(
@@ -1169,6 +1201,10 @@ impl Mapper<'_> {
                 {
                     let made = if el.kind == "textlist" {
                         self.list(el, detailed)
+                    } else if self.esde && el.kind == "grid" {
+                        self.esde_grid(el, false)
+                    } else if self.esde && el.kind == "carousel" {
+                        self.esde_carousel(el)
                     } else {
                         self.grid(el, &tiles)
                     };
@@ -1232,7 +1268,7 @@ impl Mapper<'_> {
                     }
                     made
                 }
-                _ if el.extra || self.esde => self.extra(el, 10.),
+                _ if el.extra || self.esde => self.extra(el, esde_z(&el.kind, self.esde)),
                 (_, "systemcarousel" | "systemInfo") => Vec::new(),
                 (_, "gamelist" | "gamegrid") => Vec::new(),
                 (kind, name) => {
@@ -1332,29 +1368,11 @@ impl Mapper<'_> {
         }
         // ES-DE's picture for the selected row, in place of the bar: a
         // nine-slice frame whose corners are half the bar tall.
-        if let Some(p) = el
-            .get("selectorImagePath")
-            .filter(|p| !p.contains("${"))
-            .filter(|p| self.has(p))
-        {
-            let p = p.to_owned();
-            self.file(&p, &p);
-            let bar = sel
-                .get("height")
-                .and_then(Value::as_float)
-                .unwrap_or(f64::from(row)) as f32;
-            let mut frame = Table::new();
-            frame.insert("image".into(), s(p.clone()));
-            match picture_pixels(self.root, &p) {
-                Some((pw, ph)) if pw.min(ph) >= 3. => {
-                    let slice = (pw.min(ph) / 3.).round();
-                    frame.insert("slice".into(), Value::Integer(slice as i64));
-                    frame.insert("scale".into(), f(bar * 480. / 2. / slice));
-                }
-                _ => {
-                    frame.insert("slice".into(), Value::Integer(0));
-                }
-            }
+        let bar = sel
+            .get("height")
+            .and_then(Value::as_float)
+            .unwrap_or(f64::from(row)) as f32;
+        if let Some(frame) = self.selector_frame(el, "selectorImagePath", bar) {
             sel.insert("frame".into(), Value::Table(frame));
             sel.insert("fill".into(), s("#00000000"));
         }
@@ -1364,7 +1382,7 @@ impl Mapper<'_> {
         t.insert("scroll".into(), s("center"));
         // ES's selector bar has square corners.
         t.insert("radius".into(), f(0.));
-        self.common(&mut t, el, 20.);
+        self.common(&mut t, el, if self.esde { 50. } else { 20. });
         for key in [
             "horizontalMargin",
             "selectorColorEnd",
@@ -1376,6 +1394,196 @@ impl Mapper<'_> {
             }
         }
         self.mapped(&format!("textlist {}", el.name), "list");
+        Some(t)
+    }
+
+    /// ES-DE's picture for the selection (`key`), tinted by
+    /// `selectorColor`: a nine-slice frame whose corners are half of
+    /// `tall` (a fraction of the screen height).
+    fn selector_frame(&mut self, el: &El, key: &str, tall: f32) -> Option<Table> {
+        let p = el
+            .get(key)
+            .filter(|p| !p.contains("${") && self.has(p))?
+            .to_owned();
+        self.file(&p, &p);
+        let mut frame = Table::new();
+        frame.insert("image".into(), s(p.clone()));
+        match picture_pixels(self.root, &p) {
+            Some((pw, ph)) if pw.min(ph) >= 3. => {
+                // Drawn at least a quarter of their pixels (the launcher's
+                // smallest scale).
+                let half = tall * 480. / 2.;
+                let slice = (pw.min(ph) / 3.).min(half / 0.25).round().max(1.);
+                frame.insert("slice".into(), Value::Integer(slice as i64));
+                frame.insert("scale".into(), f((half / slice).clamp(0.25, 4.)));
+            }
+            _ => {
+                frame.insert("slice".into(), Value::Integer(0));
+            }
+        }
+        if let Some((c, _)) = el.get("selectorColor").and_then(color) {
+            if !c.starts_with("#FFFFFF") {
+                frame.insert("tint".into(), s(c));
+            }
+        }
+        Some(frame)
+    }
+
+    /// The pictures of an ES-DE collection's items: on the systems screen
+    /// the theme's (`staticImage`, `defaultImage`) and the system's logo;
+    /// on the games screen the game's (`imageType`) and the theme's
+    /// `defaultImage`.
+    fn esde_items(&mut self, el: &El, systems: bool) -> Vec<String> {
+        let mut images = Vec::new();
+        if systems {
+            for key in ["staticImage", "defaultImage"] {
+                if let Some(p) = el.get(key).filter(|p| !p.is_empty()).map(str::to_owned) {
+                    images.push(self.logo_source(&p));
+                }
+            }
+            if !images.iter().any(|i| i == "system.logo") {
+                images.insert(usize::from(!images.is_empty()), "system.logo".into());
+            }
+        } else {
+            let kinds = el.get("imageType").unwrap_or("marquee").to_owned();
+            for kind in kinds.split(',').map(str::trim) {
+                let src = match kind {
+                    "cover" | "backcover" | "3dbox" | "physicalmedia" => "game.cover",
+                    "marquee" => "game.logo",
+                    "none" => continue,
+                    _ => "game.screenshot",
+                };
+                if !images.iter().any(|i| i == src) {
+                    images.push(src.into());
+                }
+            }
+            if let Some(p) = el
+                .get("defaultImage")
+                .filter(|p| !p.contains("${") && self.has(p))
+                .map(str::to_owned)
+            {
+                self.file(&p, &p);
+                images.push(p);
+            }
+        }
+        images
+    }
+
+    /// An ES-DE `grid` (systems or games): its columns and rows from its
+    /// size, the items' size and the room between them, as ES-DE lays it.
+    fn esde_grid(&mut self, el: &El, systems: bool) -> Option<Table> {
+        if self.hidden(el) {
+            return None;
+        }
+        let mut t = Table::new();
+        t.insert("kind".into(), s("grid"));
+        t.insert("of".into(), s(if systems { "systems" } else { "games" }));
+        let g = self.geo(el, (0., 0.1), (1., 0.8), (0., 0.), None);
+        let (iw, ih) = el.get("itemSize").and_then(pair).unwrap_or((0.15, 0.25));
+        let (gx, gy) = el.get("itemSpacing").and_then(pair).unwrap_or((0.02, 0.03));
+        let fit = |room: f32, item: f32, gap: f32| {
+            (((room + gap) / (item + gap).max(0.01)).floor() as i64).clamp(1, 8)
+        };
+        t.insert("columns".into(), Value::Integer(fit(g.w, iw, gx)));
+        t.insert("rows".into(), Value::Integer(fit(g.h, ih, gy)));
+        self.place(&mut t, &g);
+        t.insert("spacing".into(), f(gy.clamp(0., 0.5)));
+        let mut item = Table::new();
+        let images = self.esde_items(el, systems);
+        item.insert(
+            "image".into(),
+            Value::Array(images.into_iter().map(s).collect()),
+        );
+        item.insert("text".into(), s("${item.name}"));
+        if let Some(fit) = match el.get("imageFit").map(str::trim) {
+            Some("cover") => Some("cover"),
+            Some("fill") => Some("stretch"),
+            _ => None,
+        } {
+            item.insert("fit".into(), s(fit));
+        }
+        if let Some(r) = el
+            .get("imageCornerRadius")
+            .and_then(num)
+            .filter(|r| *r > 0.)
+        {
+            item.insert("radius".into(), f(r.clamp(0., 0.5)));
+        }
+        if let Some((c, a)) = el.get("backgroundColor").and_then(color) {
+            if a > 0 {
+                item.insert("fill".into(), s(c));
+            }
+        }
+        if let Some(font) = el.get("fontPath").filter(|f| !f.is_empty()) {
+            item.insert("font".into(), s(font));
+            self.file(font, font);
+        }
+        if let Some((c, _)) = el.get("textColor").and_then(color) {
+            item.insert("color".into(), s(c));
+        }
+        t.insert("item".into(), Value::Table(item));
+        let mut sel = Table::new();
+        let scale = el
+            .get("itemScale")
+            .and_then(num)
+            .unwrap_or(1.05)
+            .clamp(0.25, 4.);
+        sel.insert("scale".into(), f(scale));
+        sel.insert("opacity".into(), f(1.));
+        // ES-DE draws its selector picture behind the item, larger: the
+        // launcher's frame goes around it, so the color's ring instead.
+        if let Some((c, a)) = el.get("selectorColor").and_then(color) {
+            if a > 0 {
+                let mut ring = Table::new();
+                ring.insert("color".into(), s(c));
+                ring.insert("width".into(), f(0.006));
+                ring.insert("radius".into(), f(0.012));
+                sel.insert("frame".into(), Value::Table(ring));
+            }
+        }
+        t.insert("selected".into(), Value::Table(sel));
+        if let Some(o) = el.get("unfocusedItemOpacity").and_then(num) {
+            t.insert("opacity".into(), f(o.clamp(0., 1.)));
+        }
+        t.insert("loop".into(), Value::Boolean(false));
+        self.common(&mut t, el, 50.);
+        self.mapped(
+            &format!("grid {} (ES-DE)", el.name),
+            if systems {
+                "grid de sistemas"
+            } else {
+                "grid de jogos"
+            },
+        );
+        Some(t)
+    }
+
+    /// An ES-DE `carousel` of games: the systems' carousel with the
+    /// game's pictures (`imageType`) for items.
+    fn esde_carousel(&mut self, el: &El) -> Option<Table> {
+        if self.hidden(el) {
+            return None;
+        }
+        let mut t = self.carousel(el, None, None)?;
+        t.insert("of".into(), s("games"));
+        let images = self.esde_items(el, false);
+        if let Some(Value::Table(item)) = t.get_mut("item") {
+            item.insert(
+                "image".into(),
+                Value::Array(images.into_iter().map(s).collect()),
+            );
+        }
+        if flag(el.get("reflections")) == Some(true) {
+            let o = el.get("reflectionsOpacity").and_then(num).unwrap_or(0.5);
+            t.insert("reflection".into(), f(o.clamp(0., 1.)));
+        }
+        if let Some(l) = el.get("wrapAround").and_then(|w| flag(Some(w))) {
+            t.insert("loop".into(), Value::Boolean(l));
+        }
+        self.mapped(
+            &format!("carousel {} (ES-DE)", el.name),
+            "carousel de jogos",
+        );
         Some(t)
     }
 
@@ -1772,7 +1980,14 @@ impl Mapper<'_> {
                 _ => "contain",
             }),
         );
-        if let Some(r) = el.get("roundCorners").and_then(num).filter(|r| *r > 0.) {
+        if let Some(r) = el
+            .get("roundCorners")
+            .or_else(|| el.get("cornerRadius"))
+            .or_else(|| el.get("imageCornerRadius"))
+            .or_else(|| el.get("videoCornerRadius"))
+            .and_then(num)
+            .filter(|r| *r > 0.)
+        {
             t.insert("radius".into(), f(r.min(0.5)));
         }
         if let Some(d) = el.get("delay").and_then(num) {
@@ -2002,11 +2217,15 @@ impl Mapper<'_> {
                         _ => return out,
                     }
                 } else if let Some(sd) = el.get("systemdata") {
+                    // ES's own names: `data` makes them the launcher's.
                     match sd.trim() {
-                        "name" => "${system}".to_owned(),
-                        "fullname" => "${system.name}".into(),
+                        "name" => "${system.name}".to_owned(),
+                        "fullname" => "${system.fullName}".into(),
                         "gamecount" | "gamecountGames" => "${system.games}".into(),
-                        "gamecountFavorites" => "${system.favorites}".into(),
+                        "gamecountGamesNoText" => "${system.count}".into(),
+                        "gamecountFavorites" | "gamecountFavoritesNoText" => {
+                            "${system.favorites}".into()
+                        }
                         _ => "${system.games}".into(),
                     }
                 } else {
@@ -2113,6 +2332,43 @@ impl Mapper<'_> {
             }
         }
         out
+    }
+}
+
+/// The usual shape of a game's picture or clip (ES-DE `imageType`), for
+/// a size given on one side only (`<size>0 1</size>`: as tall as the
+/// screen, as wide as the picture).
+fn media_ratio(el: &El) -> Option<f32> {
+    let kind = el
+        .get("imageType")
+        .map(|k| k.split(',').next().unwrap_or("").trim());
+    Some(match (el.kind.as_str(), kind) {
+        (_, Some("fanart")) => 16. / 9.,
+        (_, Some("screenshot" | "titlescreen" | "miximage")) => 4. / 3.,
+        (_, Some("cover" | "backcover")) => 0.7,
+        (_, Some("3dbox")) => 0.8,
+        (_, Some("physicalmedia")) => 1.,
+        (_, Some("marquee")) => 2.5,
+        ("video", _) => 4. / 3.,
+        _ => return None,
+    })
+}
+
+/// The z an element has when the theme gives none: ES-DE's defaults per
+/// type (text 40, image 30...); 10 for the other dialects' extras.
+fn esde_z(kind: &str, esde: bool) -> f32 {
+    if !esde {
+        return 10.;
+    }
+    match kind {
+        "image" | "video" => 30.,
+        "animation" | "badges" => 35.,
+        "text" | "datetime" => 40.,
+        "rating" | "gamelistinfo" => 45.,
+        "carousel" | "grid" | "textlist" | "helpsystem" => 50.,
+        "clock" => 80.,
+        "systemstatus" => 85.,
+        _ => 10.,
     }
 }
 

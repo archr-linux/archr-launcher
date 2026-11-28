@@ -258,8 +258,9 @@ fn draw(dir: &Path, prefix: &str, shots: Option<&Path>) {
                         .unwrap();
                 }
             };
-            // The Mega Drive: the second system.
-            app.handle(Button::Down, &data);
+            // The Mega Drive: the second system (set, not stepped to: in a
+            // grid of systems ↓ goes to the next row).
+            app.cursor = 1;
             frame(&mut ui, &mut app, "sistemas");
             app.handle(Button::A, &data);
             assert!(matches!(app.screen, Screen::Games { .. }));

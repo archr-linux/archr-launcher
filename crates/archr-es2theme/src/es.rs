@@ -810,7 +810,15 @@ pub fn builtin_kind(name: &str) -> Option<&'static str> {
 fn is_path(key: &str) -> bool {
     matches!(
         key,
-        "path" | "default" | "staticImage" | "defaultImage" | "gameImage" | "folderImage"
+        "path"
+            | "default"
+            | "staticImage"
+            | "defaultImage"
+            | "defaultFolderImage"
+            | "gameImage"
+            | "folderImage"
+            | "selectorImage"
+            | "backgroundImage"
     ) || key.ends_with("Path")
 }
 
