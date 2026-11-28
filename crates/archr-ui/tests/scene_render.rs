@@ -2517,3 +2517,176 @@ fn a_theme_read_for_its_name_alone_does_not_warn_of_its_frames() {
     let said = warnings(|| drop(Theme::parse(&table)));
     assert_eq!(said, ["Unknown theme frame nope; ignored"]);
 }
+
+/// A theme of one free view, `sv`, written in `dir`: a box in each system's
+/// own color (`[system.<id>.vars]`), its own text, a mark only for
+/// collections, and a second clip for another shape or turned off.
+fn system_vars_theme(dir: &Path) {
+    std::fs::create_dir_all(dir.join("parts")).unwrap();
+    std::fs::write(
+        dir.join("theme.toml"),
+        r##"include = ["parts/sistemas.toml"]
+name = "Por sistema"
+default_view = "sv"
+
+[vars]
+cor = "#FF0000"
+texto = "Sem descrição"
+mostra = 0.0
+
+[view.sv]
+name = "Por sistema"
+
+[[view.sv.systems.el]]
+id = "caixa"
+kind = "rect"
+fill = "$cor"
+rect = { x = 0.05, y = 0.1, w = 0.4, h = 0.3 }
+
+[[view.sv.systems.el]]
+id = "texto"
+kind = "text"
+text = "${texto} · ${system.name}"
+opacity = "$mostra"
+rect = { x = 0.05, y = 0.5, w = 0.6, h = 0.08 }
+
+[[view.sv.systems.el]]
+id = "herdada"
+base = "caixa"
+rect = { x = 0.55, y = 0.1, w = 0.4, h = 0.3 }
+
+[[view.sv.systems.el]]
+id = "colecao"
+kind = "rect"
+fill = "#FFFFFF"
+rect = { x = 0.05, y = 0.7, w = 0.2, h = 0.1 }
+when = { collection = true }
+
+[[view.sv.systems.el]]
+id = "lista"
+kind = "list"
+rect = { x = 0.7, y = 0.5, w = 0.28, h = 0.4 }
+
+[[view.sv.games.el]]
+id = "clipe"
+kind = "video"
+src = "game.video"
+rect = { x = 0, y = 0, w = 0.5, h = 0.5 }
+when = { aspect = ["classic", "wide"] }
+
+[[view.sv.games.el]]
+id = "clipe-quadrado"
+kind = "video"
+src = "game.video"
+rect = { x = 0, y = 0, w = 0.5, h = 0.5 }
+when = { aspect = "square" }
+
+[[view.sv.games.el]]
+id = "clipe-desligado"
+kind = "video"
+src = "videos/fundo.mp4"
+opacity = 0
+rect = { x = 0.5, y = 0, w = 0.5, h = 0.5 }
+
+[[view.sv.games.el]]
+id = "lista"
+kind = "list"
+rect = { x = 0, y = 0.5, w = 1, h = 0.5 }
+"##,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("parts/sistemas.toml"),
+        r##"[system.snes.vars]
+cor = "#00FF00"
+texto = "16 bits"
+mostra = 1.0
+
+[system.genesis.vars]
+cor = "#0000FF"
+"##,
+    )
+    .unwrap();
+}
+
+#[test]
+fn system_vars_read_without_warnings_and_make_each_systems_element() {
+    let dir = tempfile::tempdir().unwrap();
+    system_vars_theme(dir.path());
+    for (w, h) in SIZES {
+        let theme = load(dir.path(), "sv").fitted(w, h);
+        let mut view = View::lista(&theme);
+        let said = warnings(|| view = theme.view("sv"));
+        assert!(said.is_empty(), "{w}x{h}: {said:#?}");
+        let scene = view.systems.scene.as_ref().unwrap();
+        let fill = |id: &str, system: &str| {
+            let e = scene.elements.iter().find(|e| e.id == id).unwrap();
+            match &e.for_system(system).kind {
+                Kind::Fill(f) => (f.fill.r, f.fill.g, f.fill.b),
+                other => panic!("{other:?}"),
+            }
+        };
+        // Its own, the one of the name it shares, the theme's.
+        assert_eq!(fill("caixa", "snes"), (0, 255, 0));
+        assert_eq!(fill("caixa", "megadrive"), (0, 0, 255));
+        assert_eq!(fill("caixa", "gba"), (255, 0, 0));
+        // An element made from it with `base` takes the system's too.
+        assert_eq!(fill("herdada", "snes"), (0, 255, 0));
+        let text = scene.elements.iter().find(|e| e.id == "texto").unwrap();
+        assert_eq!(text.opacity, 0.);
+        assert_eq!(text.for_system("snes").opacity, 1.);
+        let colecao = scene.elements.iter().find(|e| e.id == "colecao").unwrap();
+        assert_eq!(colecao.collection, Some(true));
+        // One clip: the square one counts only on a square screen, and the
+        // one turned off is never a clip of the screen.
+        let games = view.games.scene.as_ref().unwrap();
+        let clips = games
+            .elements
+            .iter()
+            .filter(|e| matches!(e.kind, Kind::Video(_)))
+            .count();
+        assert_eq!(clips, 1, "{w}x{h}");
+    }
+}
+
+#[test]
+fn system_vars_draw_each_systems_own_color() {
+    let _sdl = SDL.lock().unwrap_or_else(|e| e.into_inner());
+    std::env::set_var("SDL_VIDEODRIVER", "offscreen");
+    let dir = tempfile::tempdir().unwrap();
+    system_vars_theme(dir.path());
+    let pictures = tempfile::tempdir().unwrap();
+    let data = library(pictures.path());
+    let size = (640, 480);
+    let root = tempfile::tempdir().unwrap();
+    let (ttf, creator);
+    let mut ui = Ui::new(size.0, size.1, true).unwrap();
+    ttf = sdl2::ttf::init().unwrap();
+    creator = ui.canvas.texture_creator();
+    ui.theme_dir = Some(dir.path().to_path_buf());
+    ui.default_theme_dir = Some(shipped("default"));
+    ui.set_motion(archr_ui::motion::Motion::Off);
+    ui.set_status(archr_ui::status::Status::frozen("14:32"));
+    let theme = load(dir.path(), "sv");
+    ui.configure(&ttf, &creator, &theme, Some(root.path()))
+        .unwrap();
+    let mut app = App::new(10);
+    app.set_view(&theme.view("sv"));
+    let mut at = |cursor: usize| -> [u8; 3] {
+        app.cursor = cursor;
+        ui.tick();
+        ui.snap_animations();
+        ui.draw_with_settings(&app, &data, &theme, Default::default(), None)
+            .unwrap();
+        let pixels = ui
+            .canvas
+            .read_pixels(None, sdl2::pixels::PixelFormatEnum::RGBA32)
+            .unwrap();
+        let i = ((0.25 * 480.) as usize * 640 + (0.25 * 640.) as usize) * 4;
+        [pixels[i], pixels[i + 1], pixels[i + 2]]
+    };
+    // The library's order: snes, megadrive (genesis's), gba.
+    assert_eq!(at(0), [0, 255, 0]);
+    assert_eq!(at(1), [0, 0, 255]);
+    assert_eq!(at(2), [255, 0, 0]);
+}

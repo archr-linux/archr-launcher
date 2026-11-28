@@ -15,7 +15,7 @@ pub(crate) use scene::{safe_path, substitute};
 pub use scene::{
     Anim, Badge, Collection, Data, Ease, Element, Field, Fields, Fill, Focus, Font, HintStyle,
     Hints, Image, ImageFit, Item, Kind, ListInk, ListStyle, Piece, Ring, Scene, Shadow, Shape,
-    Slices, Stars, Template, Text, VAlign, Video, Wheel, ANIM_MAX,
+    Slices, Stars, SystemVars, Template, Text, VAlign, Video, Wheel, ANIM_MAX,
 };
 
 /// Id of the classic list layout, which every theme offers.
@@ -386,7 +386,13 @@ impl View {
         }
     }
     /// Lays the `[view.<id>]` table over this view.
+    #[cfg(test)]
     pub(crate) fn overlay(&mut self, table: &Table, at: &str) {
+        self.overlay_with(table, at, &scene::SystemVars::default());
+    }
+    /// `overlay`, the free screens' elements taking each system's own
+    /// variables from `vars`.
+    pub(crate) fn overlay_with(&mut self, table: &Table, at: &str, vars: &scene::SystemVars) {
         known(table, at, &["name", "systems", "games", "home", "details"]);
         if let Some(value) = table.get("home") {
             Home::overlay(&mut self.home, value, &format!("{at}.home"));
@@ -405,6 +411,7 @@ impl View {
                         screen: key,
                         at: &at,
                         aspect,
+                        vars,
                         tall,
                     };
                     layout.scene = Scene::parse(items, &place, &mut layout.list);
@@ -421,6 +428,7 @@ impl View {
                 screen: "details",
                 at: &at,
                 aspect,
+                vars,
                 tall,
             };
             self.details = Scene::details(table, &place, &mut self.games.list.clone());

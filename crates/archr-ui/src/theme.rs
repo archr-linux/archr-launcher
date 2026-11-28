@@ -323,6 +323,9 @@ pub struct Theme {
     /// `[vars]`: the builtin's, then the theme's own, already written into
     /// every value that names one.
     vars: toml::Table,
+    /// `[system.<id>.vars]`, the builtin's then the theme's own: what the
+    /// free screens draw their own way on each system.
+    system_vars: std::sync::Arc<crate::layout::SystemVars>,
     /// `[app]` tables in the order they apply (the builtin's, then the
     /// theme's own): an app's screens (API 4), whatever the view.
     app: Vec<toml::Table>,
@@ -540,7 +543,9 @@ impl Theme {
         }
         let options = options(&merged, defaults);
         let vars = vars(&merged, defaults, &options, chosen);
-        crate::layout::substitute(&mut merged, &vars);
+        let keep = system_var_names(&merged, defaults);
+        crate::layout::substitute(&mut merged, &vars, &keep);
+        let system_vars = system_vars(&merged, defaults, &vars, keep);
         crate::screens::flatten(&mut merged);
         let table = &merged;
         // One field list serves both the embedded theme and user overrides.
@@ -728,6 +733,7 @@ impl Theme {
             default_view: default_view(table, &views, defaults),
             views,
             vars,
+            system_vars,
             app: app_tables(table, defaults),
             shape,
             options,
@@ -746,7 +752,7 @@ impl Theme {
         let classic = view.games.clone();
         view.id = id.clone();
         for table in &self.view_tables(id, 0) {
-            view.overlay(table, &format!("view.{id}"));
+            view.overlay_with(table, &format!("view.{id}"), &self.system_vars);
         }
         view.games.fit_art(&self.user);
         view.app = crate::layout::app_layout(classic, &self.app);
@@ -929,6 +935,7 @@ pub const KNOWN_KEYS: &[&str] = &[
     "frames",
     "aspect",
     "vars",
+    "system",
     "options",
     "include",
     // Store metadata (docs/temas.md, Publicar na Loja de temas).
@@ -971,6 +978,62 @@ fn merge(base: &mut toml::Table, over: &toml::Table) {
             }
         }
     }
+}
+
+/// The names `[system.<id>.vars]` set, inherited ones too.
+fn system_var_names(
+    table: &toml::Table,
+    defaults: Option<&Theme>,
+) -> std::collections::BTreeSet<String> {
+    let mut names = defaults.map_or_else(Default::default, |d| d.system_vars.names.clone());
+    if let Some(toml::Value::Table(systems)) = table.get("system") {
+        for own in systems.values() {
+            if let Some(toml::Value::Table(vars)) = own.get("vars") {
+                names.extend(vars.keys().cloned());
+            }
+        }
+    }
+    names
+}
+/// `[system.<id>.vars]`: the inherited ones with this theme's over them,
+/// each value with the theme's variables written in; `vars` is the
+/// theme's, what a system without its own value draws.
+fn system_vars(
+    table: &toml::Table,
+    defaults: Option<&Theme>,
+    vars: &toml::Table,
+    names: std::collections::BTreeSet<String>,
+) -> std::sync::Arc<crate::layout::SystemVars> {
+    let mut systems = defaults.map_or_else(Default::default, |d| d.system_vars.systems.clone());
+    match table.get("system") {
+        None => {}
+        Some(toml::Value::Table(own)) => {
+            for (id, value) in own {
+                let at = format!("system.{id}");
+                let Some(t) = value.as_table() else {
+                    log::warn!("Theme {at} must be a table; ignored");
+                    continue;
+                };
+                for key in t.keys().filter(|k| *k != "vars") {
+                    log::warn!("Theme {at}.{key}: only vars change per system; ignored");
+                }
+                match t.get("vars") {
+                    None => {}
+                    Some(toml::Value::Table(v)) => systems
+                        .entry(id.clone())
+                        .or_insert_with(toml::Table::new)
+                        .extend(scalars(v, &format!("{at}.vars"))),
+                    Some(_) => log::warn!("Theme {at}.vars must be a table; ignored"),
+                }
+            }
+        }
+        Some(_) => log::warn!("Theme key system must hold [system.<id>.vars] tables; ignored"),
+    }
+    std::sync::Arc::new(crate::layout::SystemVars {
+        vars: vars.clone(),
+        systems,
+        names,
+    })
 }
 
 /// The inherited `[vars]` with this theme's own over them, then the vars

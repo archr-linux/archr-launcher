@@ -11,7 +11,81 @@
 //! drawn. A bad value is logged and left out, never fatal.
 use super::{known, Align, List, Panel, PanelStyle, Reader};
 use crate::theme::{Aspect, Gradient, Rect01, Rgba};
+use std::collections::{BTreeMap, BTreeSet};
 use toml::{Table, Value};
+
+/// `[system.<id>.vars]`: variables a system has its own value for. In a
+/// free screen's elements they take the focused system's value, else the
+/// theme's (`vars`).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SystemVars {
+    /// The theme's variables, its shape and choices applied.
+    pub vars: Table,
+    /// Each system's own, by its id.
+    pub systems: BTreeMap<String, Table>,
+    /// Every name a system sets.
+    pub names: BTreeSet<String>,
+}
+impl SystemVars {
+    /// The element `table` as each system that sets a variable it names
+    /// draws it, and as the others do; None when it names none.
+    fn variants(&self, table: &Table) -> Option<(Table, Vec<(String, Table)>)> {
+        let mut named = BTreeSet::new();
+        for value in table.values() {
+            names_in(value, &self.names, &mut named);
+        }
+        if named.is_empty() {
+            return None;
+        }
+        let quiet = Subst {
+            keep: None,
+            quiet: true,
+        };
+        let fill = |vars: &Table| {
+            let mut t = table.clone();
+            for (key, value) in t.iter_mut() {
+                substitute_value(value, vars, key, &quiet, false);
+            }
+            t
+        };
+        let base = fill(&self.vars);
+        let own = self
+            .systems
+            .iter()
+            .filter(|(_, vars)| named.iter().any(|n| vars.contains_key(n)))
+            .map(|(system, vars)| {
+                let mut all = self.vars.clone();
+                all.extend(vars.iter().map(|(k, v)| (k.clone(), v.clone())));
+                (system.clone(), fill(&all))
+            })
+            .collect();
+        Some((base, own))
+    }
+}
+/// The system variables `value` names, as `"$name"` or `${name}`.
+fn names_in(value: &Value, names: &BTreeSet<String>, out: &mut BTreeSet<String>) {
+    match value {
+        Value::String(text) => {
+            if let Some(name) = text.strip_prefix('$').filter(|n| names.contains(*n)) {
+                out.insert(name.to_owned());
+            }
+            let mut rest = text.as_str();
+            while let Some(start) = rest.find("${") {
+                let Some(end) = rest[start..].find('}') else {
+                    break;
+                };
+                let name = &rest[start + 2..start + end];
+                if names.contains(name) {
+                    out.insert(name.to_owned());
+                }
+                rest = &rest[start + end + 1..];
+            }
+        }
+        Value::Array(items) => items.iter().for_each(|v| names_in(v, names, out)),
+        Value::Table(table) => table.values().for_each(|v| names_in(v, names, out)),
+        _ => {}
+    }
+}
 
 /// A free screen: its elements, in drawing order (`z`, then file order).
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -38,6 +112,11 @@ pub struct Element {
     pub pivot: (f32, f32),
     /// Drawn only on these systems (`when.system`); empty: on all.
     pub systems: Vec<String>,
+    /// Drawn only on collections (true) or only on systems (false):
+    /// `when.collection`.
+    pub collection: Option<bool>,
+    /// As the systems with their own `[system.<id>.vars]` draw it, by id.
+    pub variants: BTreeMap<String, Element>,
     /// Drawn only when every one of these has a value (`when.has`).
     pub has: Vec<Data>,
     /// How it comes in when the screen opens (`enter`), and again each
@@ -45,6 +124,22 @@ pub struct Element {
     pub enter: Option<Anim>,
     pub select: Option<Anim>,
     pub kind: Kind,
+}
+
+impl Element {
+    /// The element as the system `system` (an id without its `@`) draws
+    /// it: its own variant, the one of the name it shares, or this one.
+    pub fn for_system(&self, system: &str) -> &Self {
+        if self.variants.is_empty() {
+            return self;
+        }
+        self.variants
+            .get(system)
+            .or_else(|| {
+                crate::render::shared_system(system).and_then(|other| self.variants.get(other))
+            })
+            .unwrap_or(self)
+    }
 }
 
 /// The longest an element's motion takes, its delay included: a screen
@@ -582,6 +677,7 @@ pub(super) struct Place<'a> {
     pub screen: &'a str,
     pub at: &'a str,
     pub aspect: Aspect,
+    pub vars: &'a SystemVars,
     /// Reference pixels of the screen's height (480; 640 when square):
     /// a size given as a fraction of the height becomes the list's
     /// fraction of 480.
@@ -628,6 +724,10 @@ impl Scene {
             let Some(table) = resolve(item, place, &at, 0) else {
                 continue;
             };
+            let (table, own) = match place.vars.variants(&table) {
+                Some((base, own)) => (base, own),
+                None => (table, Vec::new()),
+            };
             // One list, carousel or grid: a second one is turned away
             // before it moves the first.
             let kind = table.get("kind").and_then(Value::as_str).unwrap_or("");
@@ -643,11 +743,30 @@ impl Scene {
                 log::warn!("Theme {at}: a screen has one list, carousel or grid; ignored");
                 continue;
             }
-            if kind == "video" && videos > 0 {
-                log::warn!("Theme {at}: a screen plays one video; ignored");
-                continue;
-            }
             if let Some(mut element) = scene.element(&table, place, &at, list) {
+                // A clip nobody sees (opacity 0: a choice turned it off)
+                // is never decoded.
+                if matches!(element.kind, Kind::Video(_)) && element.opacity <= 0. {
+                    continue;
+                }
+                // Counted once `when` holds: a clip for another shape is
+                // not a second one.
+                if matches!(element.kind, Kind::Video(_)) && videos > 0 {
+                    log::warn!("Theme {at}: a screen plays one video; ignored");
+                    continue;
+                }
+                if !own.is_empty() {
+                    if COLLECTIONS.contains(&kind) {
+                        log::warn!("Theme {at}: a list, carousel or grid is the same on every system; system vars ignored");
+                    } else {
+                        for (system, t) in &own {
+                            let at = format!("{at}[system.{system}]");
+                            if let Some(v) = scene.element(t, place, &at, list) {
+                                element.variants.insert(system.clone(), v);
+                            }
+                        }
+                    }
+                }
                 if matches!(element.kind, Kind::List(_) | Kind::Collection(_)) {
                     lists += 1;
                 }
@@ -763,7 +882,19 @@ impl Scene {
                 &when
             }
         };
-        known(when, &format!("{at}.when"), &["system", "aspect", "has"]);
+        known(
+            when,
+            &format!("{at}.when"),
+            &["system", "aspect", "has", "collection"],
+        );
+        let collection = match when.get("collection") {
+            None => None,
+            Some(Value::Boolean(b)) => Some(*b),
+            Some(_) => {
+                log::warn!("Theme {at}.when.collection must be true or false; ignored");
+                None
+            }
+        };
         let aspects = names(when.get("aspect"), &format!("{at}.when.aspect"));
         for aspect in &aspects {
             if !["classic", "square", "wide"].contains(&aspect.as_str()) {
@@ -897,6 +1028,8 @@ impl Scene {
             rotate: r.number("rotate", 0., -360., 360.),
             pivot,
             systems: names(when.get("system"), &format!("{at}.when.system")),
+            collection,
+            variants: BTreeMap::new(),
             has,
             enter: anim(&r, "enter", 0.3),
             select: anim(&r, "select", crate::motion::SELECT.as_secs_f32()),
@@ -1933,44 +2066,61 @@ impl Reader<'_> {
 /// `"$name"` becomes the variable itself (a number stays a number), and
 /// `${name}` inside text its text. Data names (`${system}`) are left for
 /// drawing. The `vars` table itself is left alone.
-pub(crate) fn substitute(table: &mut Table, vars: &Table) {
-    if vars.is_empty() {
+pub(crate) fn substitute(table: &mut Table, vars: &Table, keep: &BTreeSet<String>) {
+    if vars.is_empty() && keep.is_empty() {
         return;
     }
+    let how = Subst {
+        keep: Some(keep),
+        quiet: false,
+    };
     for (key, value) in table.iter_mut() {
         if key != "vars" {
-            substitute_value(value, vars, key);
+            substitute_value(value, vars, key, &how, false);
         }
     }
 }
-fn substitute_value(value: &mut Value, vars: &Table, at: &str) {
+/// How variables are written in: `keep` (the system variables) stays for
+/// the elements (`el`) to fill in per system; `quiet` says nothing of a
+/// name it does not know.
+struct Subst<'a> {
+    keep: Option<&'a BTreeSet<String>>,
+    quiet: bool,
+}
+fn substitute_value(value: &mut Value, vars: &Table, at: &str, how: &Subst<'_>, el: bool) {
+    let kept = |name: &str| el && how.keep.is_some_and(|k| k.contains(name));
     match value {
         Value::String(text) => {
             if let Some(name) = text.strip_prefix('$').filter(|n| var_shaped(n)) {
+                if kept(name) {
+                    return;
+                }
                 match vars.get(name) {
                     Some(var) => *value = var.clone(),
+                    None if how.quiet => {}
                     None => log::warn!("Theme {at}: unknown variable ${name}; written as is"),
                 }
                 return;
             }
             if text.contains("${") {
-                *text = fill_vars(text, vars);
+                *text = fill_vars(text, vars, &kept);
             }
         }
         Value::Array(items) => {
             for item in items {
-                substitute_value(item, vars, at);
+                substitute_value(item, vars, at, how, el);
             }
         }
         Value::Table(table) => {
             for (key, item) in table.iter_mut() {
-                substitute_value(item, vars, &format!("{at}.{key}"));
+                let el = el || key == "el";
+                substitute_value(item, vars, &format!("{at}.{key}"), how, el);
             }
         }
         _ => {}
     }
 }
-fn fill_vars(text: &str, vars: &Table) -> String {
+fn fill_vars(text: &str, vars: &Table, kept: &dyn Fn(&str) -> bool) -> String {
     let mut out = String::new();
     let mut rest = text;
     while let Some(start) = rest.find("${") {
@@ -1979,8 +2129,9 @@ fn fill_vars(text: &str, vars: &Table) -> String {
         };
         let name = &rest[start + 2..start + end];
         out.push_str(&rest[..start]);
-        // Data names are filled in as the screen is drawn, never by a variable.
-        let var = if Data::parse(name).is_some() {
+        // Data names are filled in as the screen is drawn, never by a
+        // variable; system variables, for each system.
+        let var = if Data::parse(name).is_some() || kept(name) {
             None
         } else {
             vars.get(name)
@@ -2043,7 +2194,7 @@ mod tests {
             "accent = '$a'\n[x]\nopacity = '$n'\nsrc = ['${p}/${system}.jpg', '$missing']",
         )
         .unwrap();
-        substitute(&mut t, &vars);
+        substitute(&mut t, &vars, &BTreeSet::new());
         assert_eq!(t["accent"].as_str(), Some("#112233"));
         assert_eq!(t["x"]["opacity"].as_float(), Some(0.4));
         let src = t["x"]["src"].as_array().unwrap();

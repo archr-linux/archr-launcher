@@ -67,6 +67,8 @@ struct Placed {
 /// What the screen knows this frame, for the elements' data.
 struct Facts<'a> {
     system: String,
+    /// A collection (favorites, recent) rather than a system or an app.
+    collection: bool,
     name: String,
     maker: String,
     year: String,
@@ -324,6 +326,7 @@ impl<'t> Ui<'_, 't> {
         let shown: Vec<&Element> = scene
             .elements
             .iter()
+            .map(|e| e.for_system(&facts.system))
             .filter(|e| visible(e, &facts))
             .collect();
         // The details' scrolling text: how far it reaches below its box,
@@ -382,7 +385,11 @@ impl<'t> Ui<'_, 't> {
         if matches!(backdrop, Screen::Systems) && rows.len() > 1 {
             for next in [cursor + 1, cursor + rows.len() - 1] {
                 let facts = self.facts(backdrop, (rows, next % rows.len()), data, theme);
-                let next = scene.elements.iter().filter(|e| visible(e, &facts));
+                let next = scene
+                    .elements
+                    .iter()
+                    .map(|e| e.for_system(&facts.system))
+                    .filter(|e| visible(e, &facts));
                 for paths in self.wanted(next, &facts) {
                     if !wanted.contains(&paths) && !near.contains(&paths) {
                         near.push(paths);
@@ -717,6 +724,7 @@ impl<'t> Ui<'_, 't> {
             total,
             item: item.trim_start_matches('@').to_owned(),
             system: super::system_art::art_key(&system).to_owned(),
+            collection: super::system_art::collection(&system),
             aspect: theme.shape.aspect.name(),
         }
     }
@@ -1550,5 +1558,6 @@ fn visible(element: &Element, facts: &Facts<'_>) -> bool {
             .systems
             .iter()
             .any(|s| s.trim_start_matches('@') == facts.system))
+        && element.collection.is_none_or(|c| c == facts.collection)
         && element.has.iter().all(|data| facts.has(*data))
 }

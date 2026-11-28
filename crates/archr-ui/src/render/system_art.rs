@@ -87,6 +87,11 @@ fn lookup(table: &[(&'static str, &'static str)], name: &str) -> Option<&'static
     table.iter().find(|(key, _)| *key == name).map(|(_, v)| *v)
 }
 
+/// The name a system shares its pictures with (`megadrive` → `genesis`).
+pub(crate) fn shared(name: &str) -> Option<&'static str> {
+    lookup(IMAGE_ALIASES, name)
+}
+
 pub(super) fn short_name(name: &str) -> String {
     lookup(SHORT_NAMES, name).map_or_else(|| name.to_uppercase(), str::to_owned)
 }
@@ -233,7 +238,7 @@ fn has_picture(name: &str) -> bool {
         || crate::apps::module_of(name).is_some()
 }
 /// A collection's glyph; apps draw their own icon instead.
-fn collection(name: &str) -> bool {
+pub(crate) fn collection(name: &str) -> bool {
     name.starts_with('@') && !crate::modules::system_row(name)
 }
 /// Entries `cursor` and its neighbours, the selection first.
