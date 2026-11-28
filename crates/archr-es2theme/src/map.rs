@@ -1869,6 +1869,7 @@ impl Mapper<'_> {
                 if el.get("maxSize").is_none()
                     && el.get("size").is_none()
                     && el.get("minSize").is_none()
+                    && el.get("cropSize").is_none()
                 {
                     el2.props.push((
                         "maxSize".into(),
@@ -1961,7 +1962,11 @@ impl Mapper<'_> {
             (0., 0.)
         };
         let mut el2 = el.clone();
-        if el.get("maxSize").is_none() && el.get("size").is_none() && el.get("minSize").is_none() {
+        if el.get("maxSize").is_none()
+            && el.get("size").is_none()
+            && el.get("minSize").is_none()
+            && el.get("cropSize").is_none()
+        {
             el2.props.push((
                 "maxSize".into(),
                 crate::es::Prop {
