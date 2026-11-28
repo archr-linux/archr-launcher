@@ -115,6 +115,10 @@ impl<'t> Ui<'_, 't> {
         });
         due || loaded || backgrounds
     }
+    /// No theme picture (frames, stars) is still loading.
+    pub(super) fn look_idle(&self) -> bool {
+        self.look.images.as_ref().is_none_or(|(_, _, c)| c.idle())
+    }
     /// The theme picture at `path`, asking the loader for it the first time.
     pub(super) fn picture(
         &mut self,

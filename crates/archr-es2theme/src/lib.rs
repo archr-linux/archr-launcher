@@ -523,13 +523,25 @@ fn details(out: &mut String, v: &build::BuiltView, vars: &[(String, Value)]) {
     );
     let _ = writeln!(out, "[{at}]");
     let _ = writeln!(out, "base = \"games\"");
-    if !v.collection.is_empty() {
-        let ids: Vec<Value> = v
-            .collection
+    // The list goes, and its position ("7 / 24"), which would sit by the
+    // details' longer button hints.
+    let mut gone: Vec<Value> = v
+        .collection
+        .iter()
+        .map(|c| Value::String(c.clone()))
+        .collect();
+    gone.extend(
+        v.games
             .iter()
-            .map(|c| Value::String(c.clone()))
-            .collect();
-        let _ = writeln!(out, "remove = {}", inline(&Value::Array(ids)));
+            .filter(|e| {
+                e.t.get("text")
+                    .and_then(Value::as_str)
+                    .is_some_and(|t| t.contains("${list.index}"))
+            })
+            .map(|e| Value::String(e.id.clone())),
+    );
+    if !gone.is_empty() {
+        let _ = writeln!(out, "remove = {}", inline(&Value::Array(gone)));
     }
     for d in &v.description {
         let _ = writeln!(

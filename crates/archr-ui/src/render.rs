@@ -733,7 +733,7 @@ impl<'font, 'texture> Ui<'font, 'texture> {
     /// The console pictures the screens asked for have all loaded: a
     /// capture taken now shows them. For captures and tests.
     pub fn pictures_idle(&self) -> bool {
-        self.art.as_ref().is_none_or(SystemArt::idle) && self.scene_cache.idle()
+        self.art.as_ref().is_none_or(SystemArt::idle) && self.scene_cache.idle() && self.look_idle()
     }
     /// The time this frame is drawn at: now, or the pinned clock.
     fn now(&self) -> Instant {

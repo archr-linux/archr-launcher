@@ -188,6 +188,58 @@ fn bounds(t: &Table) -> Option<(f32, f32, f32, f32)> {
     Some((x0, y0, x0 + w, y0 + h))
 }
 
+/// A row of items (a horizontal carousel) whose items reach below the top
+/// of the button hints is raised to end there: ES-DE lets such a row run
+/// under its help or off the screen, the launcher's hints would cover it.
+fn lift_over_hints(out: &mut [OutEl]) {
+    let Some(top) = out
+        .iter()
+        .filter(|e| e.t.get("kind").and_then(Value::as_str) == Some("hints"))
+        .filter_map(|e| bounds(&e.t))
+        .map(|(_, y0, _, _)| y0)
+        .reduce(f32::min)
+    else {
+        return;
+    };
+    for e in out.iter_mut() {
+        let t = &mut e.t;
+        if t.get("kind").and_then(Value::as_str) != Some("carousel")
+            || t.get("axis").and_then(Value::as_str) != Some("horizontal")
+        {
+            continue;
+        }
+        let Some((_, y0, _, y1)) = bounds(t) else {
+            continue;
+        };
+        let item = t
+            .get("item")
+            .and_then(|i| i.get("h"))
+            .and_then(Value::as_float)
+            .map_or(y1 - y0, |h| h as f32);
+        let scale = t
+            .get("selected")
+            .and_then(|s| s.get("scale"))
+            .and_then(Value::as_float)
+            .unwrap_or(1.) as f32;
+        // The focused item grows from the row's middle; a row whose box
+        // runs off the screen draws its items down to the box's bottom.
+        let grown = (y0 + y1) / 2. + item * scale.max(1.) / 2.;
+        let bottom = if y1 > 1. {
+            grown.max(y1.min(1.2))
+        } else {
+            grown
+        };
+        if bottom <= top {
+            continue;
+        }
+        if let Some(Value::Table(r)) = t.get_mut("rect") {
+            if let Some(y) = r.get("y").and_then(Value::as_float) {
+                r.insert("y".into(), Value::Float(r5(y as f32 - (bottom - top))));
+            }
+        }
+    }
+}
+
 /// A text ES sizes to its words (no width) reaches to the screen's edge
 /// here; the launcher's words are longer ("1 a 2 jogadores" for "1-2"), so
 /// it stops short of the next element on its line that shows with it (the
@@ -1123,6 +1175,7 @@ impl Mapper<'_> {
         }
         self.screen_view(screen, &mut out);
         fit_widths(&mut out);
+        lift_over_hints(&mut out);
         self.one_video(&mut out, "sistemas");
         self.gif_stills(&mut out);
         self.one_status(&mut out);
@@ -1230,6 +1283,11 @@ impl Mapper<'_> {
             .clamp(0.25, 4.);
         let mut sel = Table::new();
         sel.insert("scale".into(), f(scale));
+        // ES-DE's color for the focused item's picture (a white logo on a
+        // white selector turns black).
+        if let Some((c, _)) = el.get("imageSelectedColor").and_then(color) {
+            sel.insert("tint".into(), s(c));
+        }
         sel.insert("opacity".into(), f(1.));
         t.insert("selected".into(), Value::Table(sel));
         let dim = get("minLogoOpacity", "unfocusedItemOpacity")
@@ -1314,10 +1372,12 @@ impl Mapper<'_> {
         let top = (y - oy * h).clamp(0., 1. - h);
         t.insert("rect".into(), rect(rx.max(0.), top, w, h));
         t.insert("align".into(), s(align));
-        if let Some((c, _)) = el.get("textColor").and_then(color) {
+        // ES-DE's help is gray (777777) where the theme says no color.
+        let gray = self.esde.then_some("777777");
+        if let Some((c, _)) = el.get("textColor").or(gray).and_then(color) {
             t.insert("color".into(), s(c));
         }
-        if let Some((c, _)) = el.get("iconColor").and_then(color) {
+        if let Some((c, _)) = el.get("iconColor").or(gray).and_then(color) {
             t.insert("badge".into(), s(c));
         }
         t.insert("z".into(), Value::Integer(HINTS_Z));
@@ -1492,6 +1552,7 @@ impl Mapper<'_> {
             .map(|e| e.id.clone());
         self.screen_view(screen, &mut out);
         fit_widths(&mut out);
+        lift_over_hints(&mut out);
         self.one_video(&mut out, "jogos");
         self.gif_stills(&mut out);
         self.one_status(&mut out);
@@ -1741,6 +1802,11 @@ impl Mapper<'_> {
             .unwrap_or(1.05)
             .clamp(0.25, 4.);
         sel.insert("scale".into(), f(scale));
+        // ES-DE's color for the focused item's picture (a white logo on a
+        // white selector turns black).
+        if let Some((c, _)) = el.get("imageSelectedColor").and_then(color) {
+            sel.insert("tint".into(), s(c));
+        }
         sel.insert("opacity".into(), f(1.));
         // ES-DE draws its selector picture behind the item, larger: the
         // launcher's frame goes around it, so the color's ring instead.
