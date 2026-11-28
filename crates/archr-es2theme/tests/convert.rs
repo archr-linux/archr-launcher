@@ -489,3 +489,77 @@ fn paths_out_of_the_theme_are_refused() {
     let list = element(&t, "lista-gamelist", "games", "gamelist");
     assert!(list.get("selected").and_then(|s| s.get("frame")).is_none());
 }
+
+/// ES-DE's collections: a grid of systems laid out from its sizes, a
+/// carousel of the games' covers; elements without a zIndex take ES-DE's
+/// defaults; help for its menus is left out; cropSize fills its box.
+#[test]
+fn esde_grids_carousels_z_and_scopes() {
+    let dir = theme(&[
+        ("capabilities.xml", CAPABILITIES),
+        (
+            "theme.xml",
+            r#"<theme><variant name="lista">
+  <view name="system">
+    <grid name="sistemas"><pos>0.05 0.1</pos><size>0.9 0.6</size><itemSize>0.2 0.25</itemSize>
+      <itemSpacing>0.02 0.03</itemSpacing><itemScale>1.1</itemScale><selectorColor>FF8800</selectorColor>
+      <staticImage>./logos/${system.theme}.png</staticImage></grid>
+    <helpsystem name="ajuda-menu"><scope>menu</scope><pos>0 0.95</pos></helpsystem>
+    <helpsystem name="ajuda"><pos>0 0.95</pos></helpsystem>
+    <image name="fundo"><pos>0 0</pos><size>1 1</size><path>./fundo.png</path></image>
+    <text name="titulo"><pos>0.1 0.8</pos><size>0.5 0.05</size><text>OI</text></text>
+  </view>
+  <view name="gamelist">
+    <carousel name="jogos"><pos>0 0.3</pos><size>1 0.4</size><type>horizontal</type>
+      <maxItemCount>5</maxItemCount><itemSize>0.15 0.3</itemSize><imageType>cover</imageType>
+      <reflections>true</reflections><reflectionsOpacity>0.3</reflectionsOpacity></carousel>
+    <image name="tela"><pos>0.6 0.1</pos><cropSize>0.3 0.3</cropSize><imageType>screenshot</imageType>
+      <cornerRadius>0.01</cornerRadius></image>
+  </view>
+</variant></theme>"#,
+        ),
+    ]);
+    png(&dir.path().join("es/fundo.png"), (64, 48));
+    png(&dir.path().join("es/logos/snes.png"), (64, 32));
+    let c = convert(dir.path());
+    assert!(c.warnings.is_empty(), "{:#?}", c.warnings);
+    let t = read(dir.path());
+    let view = "lista-gamelist";
+    let grid = element(&t, view, "systems", "sistemas");
+    assert_eq!(grid["kind"].as_str(), Some("grid"));
+    assert_eq!(grid["of"].as_str(), Some("systems"));
+    // (0.9 + 0.02) / (0.2 + 0.02) = 4 columns; (0.6 + 0.03) / (0.25 + 0.03) = 2 rows.
+    assert_eq!(grid["columns"].as_integer(), Some(4));
+    assert_eq!(grid["rows"].as_integer(), Some(2));
+    assert_eq!(
+        grid["item"]["image"][0].as_str(),
+        Some("system.logo"),
+        "{grid:?}"
+    );
+    assert_eq!(
+        grid["selected"]["frame"]["color"].as_str(),
+        Some("#FF8800FF")
+    );
+    assert!(t["view"][view]["systems"]["el"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|e| e["id"].as_str() != Some("ajuda-menu")
+            && e["id"].as_str() != Some("systemcarousel")));
+    // ES-DE's default zIndex: image 30, text 40, grid 50 (four times here).
+    let z = |id: &str| element(&t, view, "systems", id)["z"].as_integer();
+    assert_eq!(
+        (z("fundo"), z("titulo"), z("sistemas")),
+        (Some(120), Some(160), Some(200))
+    );
+    let jogos = element(&t, view, "games", "jogos");
+    assert_eq!(jogos["kind"].as_str(), Some("carousel"));
+    assert_eq!(jogos["of"].as_str(), Some("games"));
+    assert_eq!(jogos["visible"].as_integer(), Some(5));
+    assert_eq!(jogos["item"]["image"][0].as_str(), Some("game.cover"));
+    assert_eq!(jogos["reflection"].as_float(), Some(0.3));
+    let tela = element(&t, view, "games", "tela");
+    assert_eq!(tela["fit"].as_str(), Some("cover"));
+    assert_eq!(tela["rect"]["w"].as_float(), Some(0.3));
+    assert_eq!(tela["radius"].as_float(), Some(0.01));
+}
