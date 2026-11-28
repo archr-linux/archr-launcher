@@ -2741,7 +2741,7 @@ license = "CC BY 4.0"        # texto curto; o arquivo LICENSE também é instala
 min_launcher = "0.2.0"       # versão mínima do launcher; abaixo dela não instala
 ```
 
-`min_launcher` compara com a versão do **pacote** do launcher (hoje `0.6.0`),
+`min_launcher` compara com a versão do **pacote** do launcher (hoje `0.6.1`),
 não com a versão do sistema que as Configurações mostram (`v3.1.0 · …`) nem
 com o número da API de temas (3.1). Um valor acima da versão do launcher
 instalado faz a Loja recusar o tema ("Este tema pede uma versão mais nova do
@@ -2753,6 +2753,7 @@ ou deixe a chave de fora.
 | `0.1.0` | temas até a API 3.1 (cores, fontes, visualizações, telas livres fases 1–8) |
 | `0.2.0` | update 20261126.6: `tint` em `frame`, `default_view`, ladrilhado em uma cópia, `${system}` de app pelo id do módulo |
 | `0.6.0` | variáveis por sistema (`[system.<id>.vars]`), `when.collection`; um vídeo de outro formato ou com `opacity = 0` não conta como o segundo da tela; um elemento com `opacity = 0` não é desenhado (antes um texto aparecia inteiro); `${game.players.count}` |
+| `0.6.1` | a Loja instala os vídeos do tema (`.mp4` até 8 MB cada) |
 
 Um tema que usa algo da tabela precisa declarar a versão da linha: um launcher mais antigo o desenharia quebrado, e com o `min_launcher` ele recusa a instalação. O `archr-es2theme` grava `0.5.0`, ou `0.6.0` quando o tema convertido usa algo dessa linha.
 
@@ -2777,7 +2778,8 @@ O tarball da versão é baixado de `codeload.github.com` e só estes arquivos
 são copiados:
 
 - extensões `toml`, `png`, `jpg`, `jpeg`, `webp`, `svg`, `ttf`, `otf`, `ogg`, `wav`,
-  `txt`, `md`;
+  `txt`, `md` e `mp4` (desde o launcher 0.6.1: os vídeos do tema, até 8 MB cada;
+  um maior fica de fora e o tema mostra a imagem parada dele no lugar);
 - `LICENSE`, `LICENCE` e `COPYING`.
 
 Qualquer outro arquivo é ignorado, assim como arquivos e pastas que começam
@@ -2785,8 +2787,12 @@ com `.` (`.github/`, `.gitignore`), links simbólicos, hard links e arquivos
 especiais. Um caminho com `..` ou absoluto recusa o tema inteiro. Nada é
 executado.
 
-Limites: download até **25 MB**, conteúdo instalado até **60 MB**, até
-5000 entradas no arquivo e 8 níveis de pasta. Lembre que sons do tema têm
+Limites: download até **128 MB**, conteúdo instalado até **192 MB**, até
+5000 entradas no arquivo e 8 níveis de pasta. Mire bem abaixo: num console
+um tema de 25 MB baixa e instala depressa, e as imagens não precisam passar
+de 1024×768 (o `archr-es2theme --store` já reduz). O vídeo é tocado pelo
+ffmpeg num processo à parte, sem som, como os vídeos dos jogos; um tema com
+vídeo declara `min_launcher = "0.6.1"`. Lembre que sons do tema têm
 limite próprio de 1 MiB cada (ver [Sons](#sons)).
 
 O tema vai para `/storage/.config/archr-launcher/themes/<dono>-<repositório>/`

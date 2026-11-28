@@ -78,11 +78,19 @@ pub struct Detail {
     pub too_new: bool,
 }
 
-/// Files an install keeps; everything else in the repository is ignored.
-pub fn allowed(path: &str) -> bool {
-    const EXTENSIONS: [&str; 12] = [
-        "toml", "png", "jpg", "jpeg", "webp", "svg", "ttf", "otf", "ogg", "wav", "txt", "md",
+/// A theme's clip is kept up to this size; a larger one is left out (the
+/// theme's still picture shows in its place).
+pub const CLIP_LIMIT: u64 = 8 << 20;
+
+/// Files an install keeps, by path and size; everything else in the
+/// repository is ignored.
+pub fn allowed(path: &str, size: u64) -> bool {
+    const EXTENSIONS: [&str; 13] = [
+        "toml", "png", "jpg", "jpeg", "webp", "svg", "ttf", "otf", "ogg", "wav", "txt", "md", "mp4",
     ];
+    if path.to_ascii_lowercase().ends_with(".mp4") && size > CLIP_LIMIT {
+        return false;
+    }
     let name = path.rsplit('/').next().unwrap_or(path);
     let upper = name.to_ascii_uppercase();
     !path
@@ -135,7 +143,7 @@ impl Detail {
         if theme.name.get("en").is_none() {
             return Err("theme.toml has no name".into());
         }
-        let kept: Vec<&(String, u64)> = files.iter().filter(|(p, _)| allowed(p)).collect();
+        let kept: Vec<&(String, u64)> = files.iter().filter(|(p, n)| allowed(p, *n)).collect();
         let has = |test: &dyn Fn(&str) -> bool| kept.iter().any(|(p, _)| test(p));
         let lower = |p: &str| p.to_ascii_lowercase();
         let mut includes = vec!["store.colors"];
@@ -295,7 +303,8 @@ impl Settings {
     pub(super) fn store_input(&mut self, button: Button) -> Option<Effect> {
         let store = &mut self.store;
         if store.working.is_some() {
-            if button == Button::B && store.working == Some("store.installing") && !store.cancelling {
+            if button == Button::B && store.working == Some("store.installing") && !store.cancelling
+            {
                 store.cancelling = true;
                 return Some(Effect::Store(Action::Cancel));
             }
@@ -623,7 +632,11 @@ mod tests {
             state.handle(Button::A),
             Effect::Store(Action::Install(Box::new(detail.clone())))
         );
-        assert_eq!(state.handle(Button::A), Effect::None, "busy while installing");
+        assert_eq!(
+            state.handle(Button::A),
+            Effect::None,
+            "busy while installing"
+        );
         assert_eq!(
             state.store.progress,
             Some(crate::progress::Progress::default())
@@ -639,7 +652,10 @@ mod tests {
         state.store_reply(Reply::Progress(moving));
         assert_eq!(state.store.progress, Some(moving));
         // B stops the download once; the window stays until the host answers.
-        assert_eq!(state.store_hints(), &[(HintButton::Key('B'), "hint.cancel")]);
+        assert_eq!(
+            state.store_hints(),
+            &[(HintButton::Key('B'), "hint.cancel")]
+        );
         assert_eq!(state.handle(Button::B), Effect::Store(Action::Cancel));
         assert!(state.store.cancelling);
         assert_eq!(state.handle(Button::B), Effect::None);
@@ -738,7 +754,7 @@ mod tests {
             "X.jpeg",
             "systems/snes.webp",
         ] {
-            assert!(allowed(ok), "{ok}");
+            assert!(allowed(ok, 1), "{ok}");
         }
         for no in [
             "Run.sh",
@@ -749,8 +765,11 @@ mod tests {
             "a//b.png",
             "Makefile",
         ] {
-            assert!(!allowed(no), "{no}");
+            assert!(!allowed(no, 1), "{no}");
         }
+        // A theme's clip up to 8 MiB; a larger one is left out.
+        assert!(allowed("videos/snes.mp4", CLIP_LIMIT));
+        assert!(!allowed("videos/snes.mp4", CLIP_LIMIT + 1));
         assert!(newer("0.2", "0.1.9") && !newer("0.1", "0.1.0") && !newer("", "0.1.0"));
     }
     /// A theme made for the 0.2.0 launcher (Albedo: frame tint, default_view)

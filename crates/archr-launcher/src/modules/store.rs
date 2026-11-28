@@ -546,12 +546,14 @@ impl Shop {
             step: 0,
             transfer: Some(meter.read(0)),
         });
-        let tarball = match self.github.get_watched(&package.url, TARBALL_LIMIT, &mut |bytes| {
-            report(Progress {
-                step: 0,
-                transfer: Some(meter.read(bytes)),
-            })
-        }) {
+        let tarball = match self
+            .github
+            .get_watched(&package.url, TARBALL_LIMIT, &mut |bytes| {
+                report(Progress {
+                    step: 0,
+                    transfer: Some(meter.read(bytes)),
+                })
+            }) {
             Ok(Some(body)) => body,
             Err("store.offline") => return Err("modules.download_failed"),
             _ => return Err("store.failed"),
@@ -581,7 +583,7 @@ impl Shop {
         let result = (|| {
             let rules = Rules {
                 top: Some(id),
-                keep: &|_| true,
+                keep: &|_, _| true,
                 strict: true,
                 entries: ENTRIES,
                 bytes: EXTRACTED_LIMIT,

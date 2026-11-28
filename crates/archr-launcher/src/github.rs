@@ -212,8 +212,9 @@ impl GitHub {
 pub struct Rules<'a> {
     /// The single top folder's name; `None` accepts any (GitHub's).
     pub top: Option<&'a str>,
-    /// Kept paths (relative to the top folder); others are skipped.
-    pub keep: &'a dyn Fn(&str) -> bool,
+    /// Kept paths (relative to the top folder) by their size in bytes;
+    /// others are skipped.
+    pub keep: &'a dyn Fn(&str, u64) -> bool,
     /// Links, devices and the like refuse the whole archive instead of
     /// being skipped.
     pub strict: bool,
@@ -256,10 +257,11 @@ pub fn unpack(tarball: &[u8], into: &Path, rules: &Rules) -> Result<(), &'static
         if rules.strict && !regular {
             return Err("store.invalid");
         }
-        if !kind.is_file() || parts.len() > rules.depth + 1 || !(rules.keep)(&relative) {
+        let size = entry.header().size().map_err(|_| "store.invalid")?;
+        if !kind.is_file() || parts.len() > rules.depth + 1 || !(rules.keep)(&relative, size) {
             continue;
         }
-        total = total.saturating_add(entry.header().size().map_err(|_| "store.invalid")?);
+        total = total.saturating_add(size);
         if total > rules.bytes {
             return Err("store.too_big");
         }
