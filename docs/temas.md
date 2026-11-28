@@ -1790,6 +1790,36 @@ tema com licença não comercial (CC BY-NC, CC BY-NC-SA) não pode ir nas
 imagens do Arch R nem na Loja sem autorização por escrito do autor; o
 relatório avisa. Logos de sistemas são marcas dos fabricantes.
 
+### Saída para a Loja: `--store`
+
+```sh
+archr-es2theme tema-es-de saida --lang pt --store --systems es_systems.cfg \
+  --name "Nome" --author "Autor (original); Arch R (conversion)" \
+  --license "CC BY-NC-SA 4.0" --description "In English." "Em português."
+```
+
+- Ficam só os arquivos que o `theme.toml` cita (e as pastas que o launcher
+  lê pelo nome: `logos/`, `systems/`, `videos/`...). Com `--systems`, as
+  imagens e vídeos de sistemas que o console não tem ficam de fora (o nome
+  que um sistema divide conta: `genesis` serve ao `megadrive`).
+- Cada imagem fica do tamanho que cobre a maior caixa em que o tema a
+  desenha numa tela de 1024×768, com 25 % de folga, e nunca maior que a
+  tela; é recomprimida (WebP e JPG com qualidade 78; PNG mantém a
+  transparência). Precisa do ImageMagick no PC.
+- Os vídeos são recodificados em até 854×480, sem som (ffmpeg). Se juntos
+  passam de 10 MB, ou um passa de 8 MB, ficam de fora e as telas mostram a
+  imagem parada de cada um; um tema que fica com vídeo pede
+  `min_launcher = "0.6.1"`.
+- `--name`, `--author`, `--license` e `--description` escrevem os
+  metadados da Loja no `theme.toml`.
+
+Para conferir uma pasta com as regras da Loja (empacotada como o GitHub
+empacota, aberta pelo extrator da própria Loja):
+
+```sh
+ARCHR_STORE_CHECK=saida cargo test -p archr-launcher --test store_check -- --nocapture
+```
+
 ### Temas do ES-DE
 
 - **Ordem de leitura**: como o ES-DE, cada arquivo lê primeiro as
